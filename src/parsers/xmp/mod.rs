@@ -31,6 +31,7 @@
 //! assert_eq!(result.len(), 1);
 //! ```
 
+pub mod generic_xml;
 pub mod google_hdrp;
 pub mod history_parser;
 pub mod namespace_mapping;

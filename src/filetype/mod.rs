@@ -395,7 +395,7 @@ fn identify_text(header: &[u8]) -> Option<Identity> {
 /// does not, so the honest answer for a byte string it cannot read as UTF-8 is
 /// "no", not a guess. The leading nulls of a UTF-16BE document are excluded by
 /// the BOM/whitespace skip below and never reach the `<?xml` test.
-fn is_plain_xml(header: &[u8]) -> bool {
+pub(crate) fn is_plain_xml(header: &[u8]) -> bool {
     // `\0{0,3}(\xfe\xff|\xff\xfe|\xef\xbb\xbf)?\0{0,3}\s*<` -- the XMP magic
     // number's own preamble. Only the UTF-8 BOM is stepped over; a UTF-16 BOM
     // means the document is not the UTF-8 this function goes on to read.

@@ -402,6 +402,22 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::XMP);
     }
 
+    // A plain XML document -- not XMP, RDF, SVG, PLIST, INX or RMD, all of
+    // which the gates above have already claimed. ExifTool routes it to
+    // `XMP::ProcessXMP` all the same and walks it as schema-less XMP
+    // (XMP.pm:4425-4427); `filetype::is_plain_xml` is that same decision,
+    // already transcribed for the identification layer, so this reuses it
+    // rather than writing a second copy that could disagree.
+    //
+    // Like the SVG/plist/HTML gates, this must outrank the plain-text
+    // fallback below: an XML document is printable text, so `is_likely_text`
+    // accepts it, and Geotag.gpx/.kml/.xml were parsed as TXT -- four TEXT
+    // statistics ExifTool never reports, and none of the up-to-42 track-point
+    // tags it does.
+    if crate::filetype::is_plain_xml(magic_bytes) {
+        return Ok(FileFormat::XML);
+    }
+
     // Text-based formats need a wider bounded probe for long ICS bodies and EML header blocks.
     let text_probe_len = reader
         .size()

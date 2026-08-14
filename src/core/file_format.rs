@@ -337,6 +337,12 @@ pub enum FileFormat {
     /// XMP Sidecar (.xmp)
     XMP,
 
+    /// A plain XML document that is not XMP, RDF, SVG, PLIST, INX or RMD
+    /// (.xml, .gpx, .kml, ...). ExifTool has no separate module for these:
+    /// `XMP::ProcessXMP` names the type itself (XMP.pm:4425-4427) and then
+    /// walks the document as schema-less XMP.
+    XML,
+
     /// EPS (Encapsulated PostScript) (.eps, .epsf, .ps)
     EPS,
 
@@ -489,6 +495,7 @@ impl FileFormat {
             FileFormat::X509 => "X.509",
             FileFormat::ICC => "ICC",
             FileFormat::XMP => "XMP",
+            FileFormat::XML => "XML",
             FileFormat::EPS => "EPS",
             FileFormat::VRD => "VRD",
             FileFormat::TNEF => "TNEF",
@@ -616,6 +623,10 @@ impl FileFormat {
             FileFormat::X509 => &["crt", "cer", "pem", "der"],
             FileFormat::ICC => &["icc", "icm"],
             FileFormat::XMP => &["xmp"],
+            // The canonical extension ExifTool reports for `FileType: XML`,
+            // whatever the file is actually called: a `.gpx` and a `.kml` both
+            // report `FileTypeExtension: xml`.
+            FileFormat::XML => &["xml"],
             FileFormat::EPS => &["eps", "epsf", "ps"],
             FileFormat::VRD => &["vrd"],
             FileFormat::TNEF => &["tnef", "dat"],

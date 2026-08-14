@@ -4088,7 +4088,7 @@ fn format_xmp_plain_rational(value: &str) -> String {
 /// `%g` picks scientific notation when the decimal exponent is below -4 or at
 /// least the precision, and fixed notation otherwise; either way it keeps 15
 /// significant digits and drops trailing zeros.
-fn format_perl_g15(number: f64) -> String {
+pub(super) fn format_perl_g15(number: f64) -> String {
     const PRECISION: i32 = 15;
 
     if !number.is_finite() || number == 0.0 {

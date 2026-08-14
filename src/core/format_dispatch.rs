@@ -103,6 +103,7 @@ use crate::parsers::video::mkv::parse_mkv_metadata;
 use crate::parsers::video::mts::parse_mts_metadata;
 use crate::parsers::video::mxf::parse_mxf_metadata;
 use crate::parsers::video::webm::parse_webm_metadata;
+use crate::parsers::xmp::generic_xml::parse_xml_file;
 use crate::parsers::xmp::parse_xmp_file;
 
 // Import format-specific parsers from operations module
@@ -243,6 +244,7 @@ pub fn dispatch_format_parser(
         FileFormat::X509 => convert_string_error(parse_x509_metadata(reader), "X.509"),
         FileFormat::ICC => parse_icc_file(reader),
         FileFormat::XMP => parse_xmp_file(reader),
+        FileFormat::XML => parse_xml_file(reader),
         FileFormat::EPS => convert_string_error(parse_eps_metadata(reader), "EPS"),
         FileFormat::VRD => parse_vrd_file(reader),
         FileFormat::DR4 => parse_dr4_file(reader),

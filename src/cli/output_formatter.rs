@@ -643,7 +643,7 @@ pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String
         // prints `RGB`/`XYZ`, no trailing space, but oxidex's `-s` output
         // printed the untrimmed `"RGB "` before this fix. `.trim_end()`
         // only, matching Perl's `\s+$` (trailing only, not leading).
-        TagValue::String(s) => s.trim_end().to_string(),
+        TagValue::String(s) => printable_text_value(s),
         TagValue::Integer(i) => i.to_string(),
         TagValue::Float(f) => format!("{:.2}", f), // Limit decimal places
         TagValue::Rational {
@@ -681,6 +681,47 @@ pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String
     }
 }
 
+/// The `exiftool` script's whole non-JSON, non-XML value sanitiser, in order
+/// (`exiftool`:3006-3009, and the identical block at `exiftool`:4044-4047):
+///
+/// ```perl
+///     # translate unprintable chars in value and remove trailing spaces
+///     $val =~ tr/\x01-\x1f\x7f/./;
+///     $val =~ s/\x00//g;
+///     $val =~ s/\s+$//;
+/// ```
+///
+/// Only the third line was transcribed here before. The first is what turns
+/// the embedded newline in `Geotag.gpx`'s two-line `xsi:schemaLocation` into a
+/// `.`, which is how the pinned oracle prints it -- oxidex emitted a real
+/// newline, splitting one tag across two output lines and breaking any
+/// line-oriented consumer (`duplicate_loss_scan.py` treats an unparseable line
+/// as a continuation, exactly to cope with this).
+///
+/// The order is load-bearing and is Perl's, not a tidier equivalent: the `tr`
+/// runs *first*, so a trailing `\n` has already become `.` by the time
+/// `s/\s+$//` looks for trailing whitespace, and is therefore kept. Doing the
+/// trim first would silently delete it.
+///
+/// This is display only, and deliberately not applied to `-j`: ExifTool's JSON
+/// writer escapes control characters as `\uXXXX` (`exiftool`:3821) rather than
+/// replacing them, and oxidex's JSON path emits the real character, which
+/// decodes to the same string.
+fn printable_text_value(value: &str) -> String {
+    let translated: String = value
+        .chars()
+        .filter(|c| *c != '\0')
+        .map(|c| {
+            if matches!(c, '\x01'..='\x1f' | '\x7f') {
+                '.'
+            } else {
+                c
+            }
+        })
+        .collect();
+    translated.trim_end().to_string()
+}
+
 /// ExifTool's rendering of a list-valued tag: the items, joined, unbracketed.
 ///
 /// `ListSep` defaults to `', '` (ExifTool.pm:1173) and is applied as a plain
@@ -714,7 +755,7 @@ pub(crate) fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
         // own trailing-whitespace strip (`exiftool`:3006-3009,
         // `$val =~ s/\s+$//;`) applies to every non-JSON, non-XML format,
         // not just `-s`.
-        TagValue::String(s) => s.trim_end().to_string(),
+        TagValue::String(s) => printable_text_value(s),
         TagValue::Integer(i) => i.to_string(),
         TagValue::Float(f) => f.to_string(),
         TagValue::Rational {
@@ -1601,9 +1642,39 @@ mod tests {
 
         let output = ShortFormatter.format(&metadata, None);
 
-        // Rendered whole, exactly as `exiftool -s` renders over-long values.
-        assert!(output.contains(&format!("GPSProcessingMethod: {}\n", gps_processing_method)));
+        // The CJK value carries no control characters, so it is rendered
+        // byte-for-byte -- the primary multi-byte case this test exists for.
         assert!(output.contains(&format!("Description: {}\n", cjk)));
+
+        // The GPS payload is checked by property rather than verbatim, because
+        // `printable_text_value` (the `exiftool`:3006-3009 sanitiser) removes
+        // its NULs and maps its control bytes to `.`. Asserting the raw bytes
+        // back would be asserting that the sanitiser does not run, which is not
+        // what ExifTool does -- the pinned oracle prints this very tag on this
+        // very file (`Samsung/SamsungL73.jpg`) as an empty value.
+        let line = output
+            .lines()
+            .find(|l| l.starts_with("GPSProcessingMethod: "))
+            .expect("GPSProcessingMethod line");
+        let rendered = &line["GPSProcessingMethod: ".len()..];
+
+        // No truncation and no split: every character survives except the NULs
+        // the sanitiser deletes, and each is still one whole character.
+        assert_eq!(
+            rendered.chars().count(),
+            gps_processing_method.chars().filter(|c| *c != '\0').count(),
+            "value was truncated or a multi-byte character was split: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains('\0') && !rendered.chars().any(|c| c.is_control()),
+            "sanitiser left a control character behind: {rendered:?}"
+        );
+        // Every U+FFFD from the lossy decode is still present and intact --
+        // these are the 3-byte characters the byte-47 cut used to split.
+        assert_eq!(
+            rendered.matches('\u{fffd}').count(),
+            gps_processing_method.matches('\u{fffd}').count()
+        );
         assert!(
             !output.contains("..."),
             "ExifTool's -s shortens tag names, never values: {output:?}"
