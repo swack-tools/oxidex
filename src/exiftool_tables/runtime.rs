@@ -84,10 +84,26 @@ impl DecodedValue {
         }
     }
 
+    /// The string ExifTool would look a `PrintConv` hash up by.
+    ///
+    /// ExifTool's hash `PrintConv` is a plain `$$printConv{$val}`
+    /// (ExifTool.pm:3711), and `$val` for an `undef[N]` field is the raw byte
+    /// string `ReadValue` returned (ExifTool.pm:6308) -- Perl draws no
+    /// distinction between that and a `string` field's value, so a
+    /// `%palmTypes`-style hash keyed by 8-character type/creator pairs
+    /// (Palm.pm:23-52, reached from Palm.pm:95-99's `Format => 'undef[8]'`)
+    /// resolves normally. Without `Undefined` here, that field fell back to
+    /// its raw bytes and printed `(Binary data 8 bytes, ...)` where ExifTool
+    /// prints `Mobipocket`.
+    ///
+    /// Bytes that are not valid UTF-8 yield `None`, which is not a loss: a
+    /// generated `StrEnum`'s keys are all `&str`, so no non-UTF-8 value could
+    /// have matched one.
     fn enum_key(&self) -> Option<String> {
         match self {
             Self::Integer(value) => Some(value.to_string()),
             Self::String(value) => Some(value.clone()),
+            Self::Undefined(bytes) => String::from_utf8(bytes.clone()).ok(),
             _ => None,
         }
     }

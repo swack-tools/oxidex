@@ -59,8 +59,10 @@ use crate::parsers::image::radiance::parse_radiance_metadata;
 use crate::parsers::image::xcf::parse_xcf_metadata;
 // Note: HEIF uses parse_quicktime_metadata since HEIF is ISOBMFF-based
 use crate::parsers::canon_vrd::{parse_dr4_file, parse_vrd_file};
+use crate::parsers::document::indesign::parse_indesign_metadata;
 use crate::parsers::elf::parse_elf_metadata;
 use crate::parsers::flir_fpf::parse_fpf_metadata;
+use crate::parsers::font::pfb::parse_pfb_metadata;
 use crate::parsers::icc::parse_icc_file;
 use crate::parsers::image::czi::parse_czi_metadata;
 use crate::parsers::image::ico::parse_ico_metadata;
@@ -89,9 +91,11 @@ use crate::parsers::specialized::hdf5::parse_hdf5_metadata;
 use crate::parsers::specialized::itc::parse_itc_metadata;
 use crate::parsers::specialized::lnk::parse_lnk_metadata;
 use crate::parsers::specialized::lytro::parse_lytro_metadata;
+use crate::parsers::specialized::macos::parse_macos_metadata;
 use crate::parsers::specialized::moi::parse_moi_metadata;
 use crate::parsers::specialized::mrc::parse_mrc_metadata;
 use crate::parsers::specialized::obj::parse_obj_metadata;
+use crate::parsers::specialized::palm::parse_palm_metadata;
 use crate::parsers::specialized::pcap::parse_pcap_metadata;
 use crate::parsers::specialized::plist::parse_plist_metadata;
 use crate::parsers::specialized::prefetch::parse_prefetch_metadata;
@@ -99,11 +103,13 @@ use crate::parsers::specialized::red::parse_r3d_metadata;
 use crate::parsers::specialized::registry::parse_registry_metadata;
 use crate::parsers::specialized::sqlite::parse_sqlite_metadata;
 use crate::parsers::specialized::stl::parse_stl_metadata;
+use crate::parsers::specialized::torrent::parse_torrent_metadata;
 use crate::parsers::specialized::x509::parse_x509_metadata;
 use crate::parsers::text::eps::parse_eps_metadata;
 use crate::parsers::text::html::parse_html_metadata;
 use crate::parsers::text::txt::parse_txt_metadata;
 use crate::parsers::text::vcf::parse_vcf_metadata;
+use crate::parsers::tiff::bigtiff::parse_bigtiff_metadata;
 use crate::parsers::video::asf::parse_asf_metadata;
 use crate::parsers::video::avi::parse_avi_metadata;
 use crate::parsers::video::dv::parse_dv_metadata;
@@ -291,6 +297,12 @@ pub fn dispatch_format_parser(
         FileFormat::AA => convert_string_error(parse_aa_metadata(reader), "AA"),
         FileFormat::PICT => convert_string_error(parse_pict_metadata(reader), "PICT"),
         FileFormat::PPM => convert_string_error(parse_ppm_metadata(reader), "PPM"),
+        FileFormat::Torrent => convert_string_error(parse_torrent_metadata(reader), "Torrent"),
+        FileFormat::PalmDB => convert_string_error(parse_palm_metadata(reader), "Palm"),
+        FileFormat::PFB => convert_string_error(parse_pfb_metadata(reader), "PFB"),
+        FileFormat::INDD => convert_string_error(parse_indesign_metadata(reader), "InDesign"),
+        FileFormat::MacOSSidecar => convert_string_error(parse_macos_metadata(reader), "MacOS"),
+        FileFormat::BigTIFF => parse_bigtiff_metadata(reader),
         _ => Err(ExifToolError::unsupported_format(format!(
             "Format {:?} not yet supported in this iteration",
             format

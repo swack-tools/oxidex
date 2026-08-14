@@ -114,6 +114,42 @@ pub fn mac_time_to_exif_datetime(mac_time: u64) -> Option<String> {
     ))
 }
 
+/// Renders a plain Unix timestamp the way `ConvertUnixTime($val, 1)` does
+/// (ExifTool.pm:6784-6810): local time, with a `TimeZoneString` UTC-offset
+/// suffix.
+///
+/// The `$toLocal` argument is what selects `localtime` over `gmtime`
+/// (ExifTool.pm:6798-6807), so the rendering genuinely depends on the
+/// machine's time zone -- the same dependency [`mac_time_to_local_exif_datetime`]
+/// already carries for CR3. Times of exactly zero short-circuit to
+/// `0000:00:00 00:00:00` (ExifTool.pm:6787) before any zone is consulted.
+///
+/// Used by Torrent.pm:40's `CreateDate` and Palm.pm's `Palm::Main` date
+/// fields, both of which pass `1`.
+pub fn unix_time_to_local_exif_datetime(seconds: i64) -> String {
+    // ExifTool.pm:6787, `return '0000:00:00 00:00:00' if $time == 0`.
+    if seconds == 0 {
+        return "0000:00:00 00:00:00".to_string();
+    }
+    use chrono::{Datelike, Offset, Timelike};
+    let Some(utc) = chrono::DateTime::from_timestamp(seconds, 0) else {
+        // Out of chrono's representable range; Perl's localtime would have
+        // produced garbage here too, so emit nothing rather than a guess.
+        return "0000:00:00 00:00:00".to_string();
+    };
+    let local = utc.with_timezone(&chrono::Local);
+    let offset_secs = local.offset().fix().local_minus_utc();
+    format_local_datetime(
+        local.year(),
+        local.month(),
+        local.day(),
+        local.hour(),
+        local.minute(),
+        local.second(),
+        offset_secs,
+    )
+}
+
 /// Converts a Mac/QuickTime timestamp to ExifTool's *local-time* datetime
 /// rendering, used only for Canon CR3 files.
 ///

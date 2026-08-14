@@ -50,6 +50,14 @@ pub fn detect_tiff_variants(data: &[u8]) -> Option<FileFormat> {
         return Some(FileFormat::CameraRaw(raw::RawFormat::CanonCRW));
     }
 
+    // BigTIFF: `MM\0\x2b\0\x08\0\0` or `II\x2b\0\x08\0\0\0`
+    // (BigTIFF.pm:241). ExifTool branches on the `0x2b` version word *before*
+    // the ordinary TIFF path (ExifTool.pm:8661-8665) and never returns to it,
+    // so this is tested ahead of the 0x2a signatures rather than beside them.
+    if crate::parsers::tiff::bigtiff::is_bigtiff(data) {
+        return Some(FileFormat::BigTIFF);
+    }
+
     // All TIFF variants (group by byte order for efficiency)
     let tiff_signatures = [
         ([0x49, 0x49, 0x2A, 0x00], "standard LE"),

@@ -52,13 +52,17 @@ pub(crate) enum PlistValue {
     /// An integer, read unsigned as ExifTool's `%readProc` does.
     Int(u64),
     Real(f64),
-    /// A date. Deliberately carries no rendering: ExifTool converts it with
-    /// `ConvertUnixTime($val + 11323 * 24 * 3600, 1)` (PLIST.pm:279), and that
-    /// second argument is `$toLocal`, so the printed string carries the *local*
-    /// time zone of the machine that ran the extraction. A value that depends
-    /// on the reader's clock settings cannot be reproduced, so a date is
-    /// dropped rather than approximated.
-    Date,
+    /// A date, carrying the raw seconds-since-2001 the plist stores.
+    ///
+    /// ExifTool converts it with `ConvertUnixTime($val + 11323 * 24 * 3600, 1)`
+    /// (PLIST.pm:279), and that second argument is `$toLocal`, so the printed
+    /// string carries the *local* time zone of the machine that ran the
+    /// extraction. [`Self::scalar`] therefore still returns `None` here -- a
+    /// caller that wants the date has to opt into that time-zone dependency
+    /// explicitly, which `parsers::specialized::macos` does because
+    /// MacOS.pm's `._` sidecar tags are exactly the case where ExifTool
+    /// prints one.
+    Date(f64),
     Data(Vec<u8>),
     Str(String),
     /// A UID, rendered as ExifTool's `%readProc` integer or, failing that, its
@@ -83,9 +87,10 @@ impl PlistValue {
             PlistValue::Real(f) => Some(perl_number(*f)),
             PlistValue::Str(s) => Some(s.clone()),
             PlistValue::Uid(s) => Some(s.clone()),
-            PlistValue::Data(_) | PlistValue::Date | PlistValue::Array(_) | PlistValue::Dict(_) => {
-                None
-            }
+            PlistValue::Data(_)
+            | PlistValue::Date(_)
+            | PlistValue::Array(_)
+            | PlistValue::Dict(_) => None,
         }
     }
 }
@@ -186,11 +191,15 @@ fn extract(ctx: &mut Ctx<'_>, depth: usize) -> Option<PlistValue> {
         // date: same readers as a real, then ExifTool's local-time conversion
         3 => {
             let n = 1usize << size;
-            let _ = ctx.reader.take(n)?;
-            if n == 4 || n == 8 {
-                Some(PlistValue::Date)
-            } else {
-                None
+            let b = ctx.reader.take(n)?;
+            match n {
+                4 => Some(PlistValue::Date(f64::from(f32::from_be_bytes([
+                    b[0], b[1], b[2], b[3],
+                ])))),
+                8 => Some(PlistValue::Date(f64::from_be_bytes([
+                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                ]))),
+                _ => None,
             }
         }
         // UID (PLIST.pm:281-292)
@@ -403,7 +412,7 @@ fn serialize_value(v: &PlistValue, ket: Option<char>) -> String {
                 .collect();
             format!("[{}]", body.join(","))
         }
-        PlistValue::Date | PlistValue::Data(_) => String::new(),
+        PlistValue::Date(_) | PlistValue::Data(_) => String::new(),
         other => match other.scalar() {
             Some(s) => escape_scalar(&s, ket),
             // `$rtnVal = ''` for an undefined item (XMPStruct.pl:66)

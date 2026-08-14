@@ -492,7 +492,18 @@ pub fn read_metadata_with_detector_and_options(
     // DR4 is excluded: its magic number *is* `IIII`, a Canon byte-order marker
     // for the recipe directory rather than a TIFF header, and ExifTool reports
     // no ExifByteOrder for it.
-    if !metadata.contains_key("File:ExifByteOrder") && format != FileFormat::DR4 {
+    //
+    // BigTIFF is excluded for a different reason: it *does* have a TIFF byte
+    // order marker, but ExifTool branches to `BigTIFF::ProcessBTF` at
+    // ExifTool.pm:8661-8665 and returns at :8667, never reaching the
+    // `FoundTag('ExifByteOrder', ...)` at :8702 that every other TIFF-based
+    // file goes through. The pinned 13.59 oracle agrees: `-ExifByteOrder` on
+    // `BigTIFF.btf` prints nothing where `ExifTool.tif` prints
+    // `Big-endian (Motorola, MM)`.
+    if !metadata.contains_key("File:ExifByteOrder")
+        && format != FileFormat::DR4
+        && format != FileFormat::BigTIFF
+    {
         if let Ok(head) = reader.read(0, 2) {
             let order = match &head[..] {
                 b"II" => Some(ByteOrder::LittleEndian),
@@ -698,6 +709,8 @@ pub fn read_metadata_report_with_detector_and_options(
 
     if !metadata.contains_key("File:ExifByteOrder")
         && format != FileFormat::DR4
+        // See the citation on the equivalent guard in `read_metadata`.
+        && format != FileFormat::BigTIFF
         && let Ok(head) = reader.read(0, 2)
     {
         let order = match &head[..] {

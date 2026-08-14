@@ -231,3 +231,6 @@ mod recursive_extension_coverage;
 
 #[path = "forensic/mod.rs"]
 mod forensic;
+
+#[path = "integration/detected_not_parsed_routing_tests.rs"]
+mod detected_not_parsed_routing_tests;

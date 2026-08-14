@@ -323,6 +323,51 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         && matches!(magic_bytes[3], 0x3f | 0xbf)
     {
         return Ok(FileFormat::DV);
+    // MacOS `._` sidecar: `\0\x05\x16\x07\0.\0\0Mac OS X        `
+    // (ExifTool.pm:992's `%magicNumber`) -- the AppleDouble magic with a
+    // wildcard version byte at offset 5, which `signature!`'s literal-bytes
+    // table cannot express. MacOS.pm:706 makes the same test.
+    if crate::filetype::matches_magic("MacOS", magic_bytes) {
+        return Ok(FileFormat::MacOSSidecar);
+    }
+
+    // INDD/IND: the 16-byte master-page GUID at offset 0 (InDesign.pm:25,
+    // and ExifTool.pm's `%magicNumber` `IND` entry). `indesign.rs` repeats
+    // the test and goes on to validate the second master page the way
+    // InDesign.pm:55 does.
+    if magic_bytes.starts_with(b"\x06\x06\xed\xf5\xd8\x1d\x46\xe5\xbd\x31\xef\xe7\xfe\x74\xb7\x1d")
+    {
+        return Ok(FileFormat::INDD);
+    }
+
+    // PFB/PFA: `^(.{6})?%!(PS-(AdobeFont-|Bitstream )|FontType1-)`
+    // (Font.pm:840) -- a PostScript Type 1 font program, optionally behind a
+    // six-byte PFB segment header. Tested before the `%!PS` signature that
+    // would otherwise claim it for the EPS/PS parser, which is the order
+    // ExifTool uses: `Font::ProcessFont` reaches this arm and only then hands
+    // off to `PostScript::ProcessPS` with `Font::PSInfo` bound as a second
+    // table (PostScript.pm:452-457).
+    if crate::parsers::font::pfb::is_type1_font_program(magic_bytes) {
+        return Ok(FileFormat::PFB);
+    }
+
+    // PDB/MOBI: `^.{60}(\.pdfADBE|TEXtREAd|...)` (ExifTool.pm's
+    // `%magicNumber`, generated from Palm.pm:23-52's `%palmTypes`) -- a
+    // 28-way alternation on the type/creator pair at offset 60, outside
+    // `signature!`'s literal-bytes grammar. Palm.pm:294-295 makes the same
+    // test the file's accept/reject gate, and `palm.rs` repeats it.
+    if crate::filetype::matches_magic("PDB", magic_bytes) {
+        return Ok(FileFormat::PalmDB);
+    }
+
+    // Torrent: `^d\d+:\w+` (ExifTool.pm's `%magicNumber`) -- a bencoded
+    // dictionary whose first key is a byte string. The `\d+`/`\w+` runs are
+    // outside `signature!`'s literal-bytes grammar, same reason FITS, MIE,
+    // PCX and MRC are checked here. `torrent.rs` re-validates by requiring
+    // the decoded root dictionary to carry `announce`, `created by` or
+    // `info` (Torrent.pm:286) before accepting the file.
+    if crate::filetype::matches_magic("Torrent", magic_bytes) {
+        return Ok(FileFormat::Torrent);
     }
 
     // Phase 2: Check simple signatures from lookup table

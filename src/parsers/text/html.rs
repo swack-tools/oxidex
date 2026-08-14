@@ -429,7 +429,7 @@ const LATIN_HIGH: [u32; 32] = [
     0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
 ];
 
-fn decode_latin(data: &[u8]) -> String {
+pub(crate) fn decode_latin(data: &[u8]) -> String {
     data.iter()
         .map(|&byte| {
             let code = if (0x80..0xA0).contains(&byte) {

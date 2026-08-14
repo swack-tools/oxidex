@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+pub mod bigtiff;
 pub mod file_parser;
 pub mod geotiff_parser;
 pub mod ifd_parser;

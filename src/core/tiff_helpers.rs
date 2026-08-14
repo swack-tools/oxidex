@@ -439,7 +439,7 @@ mod parse_ifd_chain_malformed_entry_tests {
 /// # Returns
 ///
 /// The IFD name (e.g., "IFD0", "IFD1", "IFD2", "IFD3")
-fn get_ifd_name(index: usize) -> &'static str {
+pub(crate) fn get_ifd_name(index: usize) -> &'static str {
     match index {
         0 => "IFD0",
         1 => "IFD1",
@@ -468,7 +468,7 @@ fn get_ifd_name(index: usize) -> &'static str {
 /// # Returns
 ///
 /// A tuple of (exif_offset, gps_offset, makernote_data)
-fn process_tiff_ifd_tags<'a>(
+pub(crate) fn process_tiff_ifd_tags<'a>(
     tags: &'a [(u16, u16, u32, std::borrow::Cow<[u8]>)],
     ifd_name: &str,
     byte_order: ByteOrder,

@@ -409,6 +409,24 @@ pub enum FileFormat {
 
     /// Zeiss Integrated Software RAW microscopy image (.czi)
     CZI,
+    /// BitTorrent metainfo file (.torrent)
+    Torrent,
+
+    /// Palm database, including Mobipocket and Kindle KF7/KF8 e-books
+    /// (.pdb, .prc, .mobi, .azw, .azw3)
+    PalmDB,
+
+    /// PostScript Type 1 font, binary or ASCII (.pfb, .pfa)
+    PFB,
+
+    /// Adobe InDesign document or template (.indd, .ind, .indt)
+    INDD,
+
+    /// MacOS "._" sidecar file (AppleDouble)
+    MacOSSidecar,
+
+    /// BigTIFF image (.btf, .tif with a 0x2b version word)
+    BigTIFF,
 
     /// Unknown or unsupported format
     Unknown,
@@ -545,6 +563,12 @@ impl FileFormat {
             FileFormat::PMP => "PMP",
             FileFormat::DV => "DV",
             FileFormat::CZI => "CZI",
+            FileFormat::Torrent => "Torrent",
+            FileFormat::PalmDB => "Palm Database",
+            FileFormat::PFB => "PFB",
+            FileFormat::INDD => "INDD",
+            FileFormat::MacOSSidecar => "MacOS",
+            FileFormat::BigTIFF => "BTF",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -685,6 +709,12 @@ impl FileFormat {
             FileFormat::PMP => &["pmp"],
             FileFormat::DV => &["dv"],
             FileFormat::CZI => &["czi"],
+            FileFormat::Torrent => &["torrent"],
+            FileFormat::PalmDB => &["pdb", "prc", "mobi", "azw", "azw3"],
+            FileFormat::PFB => &["pfb", "pfa"],
+            FileFormat::INDD => &["indd", "ind", "indt"],
+            FileFormat::MacOSSidecar => &["macos"],
+            FileFormat::BigTIFF => &["btf", "tif", "tiff"],
             FileFormat::Unknown => &[],
         }
     }

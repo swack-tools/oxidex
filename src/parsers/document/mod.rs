@@ -3,6 +3,7 @@
 pub mod eml;
 pub mod epub;
 pub mod ics;
+pub mod indesign;
 pub mod iwork;
 pub mod ooxml;
 pub mod tnef;
