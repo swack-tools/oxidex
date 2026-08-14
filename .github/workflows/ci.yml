@@ -498,6 +498,8 @@ jobs:
               src/parsers/tiff/makernotes/samsung/lookups.rs \
               src/parsers/tiff/makernotes/olympus/lookups.rs \
               src/parsers/tiff/makernotes/lens_data.rs \
+              src/parsers/tiff/makernotes/sony/main_extra_tables.rs \
+              src/parsers/tiff/makernotes/minolta_a100_tables.rs \
               tools/exiftool-tables/af_points.json; then
             echo "::error::a committed tier-2 generated file does not match what its generator produces against ExifTool ${ET_VERSION}. Either the file was hand-edited, or it is stale relative to the pin -- re-run 'tools/exiftool-tables/regen-all.sh --tier2-only' and commit the result." >&2
             exit 1

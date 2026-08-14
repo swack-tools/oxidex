@@ -333,23 +333,27 @@ registry grows. Protect that property.
   corpus), CRW (156) and DICOM (101) need real format implementations. This
   methodology has no shortcut for them, and claiming otherwise would repeat the
   mistake this document is written to avoid.
-- **Six generated files have no committed generator** (found while wiring the
-  second generation tier, tag-machinery overhaul Step 14):
-  `sony/{enciphered,plain,main_extra}_tables.rs`,
-  `nikon/{encrypted,settings}_tables.rs`, `minolta_a100_tables.rs`. Each file's
-  own header already names its source hash (`%Image::ExifTool::Sony::*`,
+- **Four of six generated files still have no committed generator** (found
+  while wiring the second generation tier, tag-machinery overhaul Step 14;
+  two of the original six were reconstructed in a later pass -- see the
+  Step 18 update below): `sony/{enciphered,plain}_tables.rs`,
+  `nikon/{encrypted,settings}_tables.rs`. `sony/main_extra_tables.rs` and
+  `minolta_a100_tables.rs` now have one (`tools/exiftool-tables/
+  gen_sony_main_extra_tables.py`, `gen_minolta_a100_tables.py`). Each
+  remaining file's own header still names its source hash
+  (`%Image::ExifTool::Sony::*`,
   `%Image::ExifTool::Nikon::*`/`NikonCustom::*`, `%NikonSettings::Main`,
   `%Image::ExifTool::Minolta::*`) and states it was "read out of ExifTool's own
-  ... hash in-process (13.59) rather than retyped" — but no script that does
-  that reading is checked in anywhere, so a bump cannot refresh these six
-  without someone re-deriving the translation by hand, and nothing would
-  report it if that never happened. That is the exact mixed-release-skew risk
-  this step exists to close, just one layer further down than the five
-  generators that *did* get wired (`codegen_subdirs.py`'s three outputs, the
-  Nikon AF-point grids, the six `scripts/gen_*.pl` one-offs — see
-  `tools/exiftool-tables/regen-all.sh`).
+  ... hash in-process (13.59) rather than retyped" — but for these four, no
+  script that does that reading is checked in anywhere, so a bump cannot
+  refresh them without someone re-deriving the translation by hand, and
+  nothing would report it if that never happened. That is the exact
+  mixed-release-skew risk this step exists to close, just one layer further
+  down than the five generators that *did* get wired in Step 14
+  (`codegen_subdirs.py`'s three outputs, the Nikon AF-point grids, the six
+  `scripts/gen_*.pl` one-offs — see `tools/exiftool-tables/regen-all.sh`).
 
-  These six were deliberately **not** reconstructed in Step 14, and the
+  All six were deliberately **not** reconstructed in Step 14, and the
   distinction from the five that were matters: `dump_tables.pl` already
   carries every one of these tables' raw fields (they are ordinary
   `ProcessBinaryData`/IFD hashes, no array-lexical problem like the AF-point
@@ -364,14 +368,14 @@ registry grows. Protect that property.
   on anything unregistered), but with a translation vocabulary sized to each
   file instead of one table. Measured directly from the committed files:
 
-  | file                         | lines | distinct DSL variants used |
-  | ----------------------------- | ----: | --------------------------: |
-  | `sony/main_extra_tables.rs`  |    85 |                           22 |
-  | `minolta_a100_tables.rs`     |   333 |                           20 |
-  | `sony/plain_tables.rs`       |   415 |                           30 |
-  | `nikon/settings_tables.rs`   |   475 |                           18 |
-  | `sony/enciphered_tables.rs`  |  1131 |                           50 |
-  | `nikon/encrypted_tables.rs`  |  3539 |                           67 |
+  | file                         | lines | distinct DSL variants used | generator |
+  | ----------------------------- | ----: | --------------------------: | :-------- |
+  | `sony/main_extra_tables.rs`  |    85 |                           22 | `gen_sony_main_extra_tables.py` |
+  | `minolta_a100_tables.rs`     |   333 |                           20 | `gen_minolta_a100_tables.py` |
+  | `sony/plain_tables.rs`       |   415 |                           30 | — |
+  | `nikon/settings_tables.rs`   |   475 |                           18 | — |
+  | `sony/enciphered_tables.rs`  |  1131 |                           50 | — |
+  | `nikon/encrypted_tables.rs`  |  3539 |                           67 | — |
 
   A generator for any one of these is realistically its own
   `codegen_subdirs.py`-sized project (a new hard-erroring parser plus a
@@ -380,8 +384,12 @@ registry grows. Protect that property.
   script. Faking it — emitting *something* that compiles against the same
   struct shapes without that verification — is exactly the "plausible but
   wrong under a real tag name" failure this whole methodology exists to
-  refuse, so the honest state to leave this in is: unreconstructed, the gap
-  measured and named here, rather than a generator nobody can trust.
+  refuse, so the honest state for the remaining four is: unreconstructed, the
+  gap measured and named here, rather than a generator nobody can trust. The
+  two smallest turned out tractable (see the Step 18 update below); the other
+  four were not attempted in that pass and this table's line/variant counts
+  are still the basis for treating each as its own project, not a discovered
+  blocker specific to any one of them.
 
   **Step 16 update:** still no generator, but no longer silently invisible
   either. `tools/exiftool-tables/check_hand_enum_drift.py` extracts every
@@ -406,6 +414,42 @@ registry grows. Protect that property.
   touched Sony/Nikon/Minolta at all — because "nothing changed here" is not
   the same claim as "this is covered". See
   `docs/reference/bump-reports/13.58-to-13.59.md` for a worked example.
+
+  **Step 18 update:** the two smallest of the six -- `sony/main_extra_tables.rs`
+  (85 lines, 22 DSL variants) and `minolta_a100_tables.rs` (333 lines, 20
+  variants) -- now have committed generators,
+  `tools/exiftool-tables/gen_sony_main_extra_tables.py` and
+  `gen_minolta_a100_tables.py`, wired into `regen-all.sh`'s tier 2 and into
+  CI's `verify-tables` rerun-and-diff. Both follow the same discipline as
+  `scripts/gen_canon_custom_functions2.pl`: a hard-coded dictionary keyed on
+  the literal (whitespace-normalized) `Condition`/`RawConv`/`ValueConv`/
+  `PrintConv` text `dump_tables.pl` reports, hard-erroring on anything not
+  registered, with a small number of parameterized regexes for idioms that
+  repeat with different constants (`$val / N`, `2 ** (($val-a)/b)`, ...)
+  rather than a general expression parser. `gen_minolta_a100_tables.py` also
+  demonstrates the omission side of the rule: `WBInfoA100` offset 4172
+  (`TiffMeteringImage`) reassembles a 40x30 pixel array into a synthetic
+  16-bit TIFF via a bespoke Perl subroutine with no DSL equivalent, so the
+  generator skips it explicitly (`ALLOWED_SKIPS`) rather than emitting a
+  guess -- matching the committed file, which has never carried that tag.
+  `main_extra_tables.rs`'s manifest of covered ids, and the *order* rows
+  and shared lookup tables (`M0`, `M1`, ...) are declared in, are likewise
+  recovered from the committed files rather than derived from any Perl
+  source of truth for "which ids does `main_table.rs` not already handle" --
+  the same kind of by-hand manifest `regen-all.sh`'s own `gen_subdir` table
+  lists already use for `codegen_subdirs.py`.
+
+  `sony/plain_tables.rs`, `sony/enciphered_tables.rs`,
+  `nikon/settings_tables.rs` and `nikon/encrypted_tables.rs` remain
+  unreconstructed; they were not attempted in this pass. One known residual
+  gap from reconstructing only two of six: `check_hand_enum_drift.py`'s
+  baseline and `triage_bump.py`'s per-bump HAND classification still list
+  all six files uniformly (including the two that now have generators),
+  because neither script's file list was updated in this pass. That is
+  over-conservative rather than wrong -- a bump still gets flagged for
+  human attention on `main_extra_tables.rs`/`minolta_a100_tables.rs` even
+  though `regen-all.sh` can now refresh them unattended -- but it is next
+  in line to tighten, not a correctness bug.
 
 ## Relationship to the AI harness
 

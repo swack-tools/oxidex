@@ -214,6 +214,24 @@ perl "$ROOT/scripts/gen_leica_lens_types.pl" > "$LEICA_RAW"
 python3 "$HERE/splice_leica.py" "$LEICA_RAW" "$ROOT/src/parsers/tiff/makernotes/lens_data.rs"
 
 echo "=========================================================="
+echo ">> TIER 2d: bespoke sony::binary_data-DSL tables"
+echo "=========================================================="
+# docs/TRANSCRIPTION.md's "Honest limits" section names six generated files
+# that had no committed generator at all -- each targets a bespoke, per-file
+# Rust DSL hand-matched against ExifTool's Condition/RawConv/ValueConv/
+# PrintConv text, closer in spirit to gen_canon_custom_functions2.pl's
+# hard-coded expression dictionary than to codegen_subdirs.py's general
+# ProcessBinaryData walk. Two of the six -- the smallest -- were reconstructed
+# this way; the other four (sony/plain_tables.rs, sony/enciphered_tables.rs,
+# nikon/settings_tables.rs, nikon/encrypted_tables.rs) remain unreconstructed
+# and are still called out in that section, each its own similarly-sized
+# project.
+python3 "$HERE/gen_sony_main_extra_tables.py" "$JSON" \
+    -o "$ROOT/src/parsers/tiff/makernotes/sony/main_extra_tables.rs"
+python3 "$HERE/gen_minolta_a100_tables.py" "$JSON" \
+    -o "$ROOT/src/parsers/tiff/makernotes/minolta_a100_tables.rs"
+
+echo "=========================================================="
 echo ">> formatting tier-2 output"
 echo "=========================================================="
 cd "$ROOT"
@@ -225,6 +243,8 @@ cargo fmt -- \
     src/parsers/tiff/makernotes/canon/custom_functions2_tables.rs \
     src/parsers/jpeg/app_segments/infiray_tables.rs \
     src/parsers/jpeg/app_segments/qualcomm_tables.rs \
+    src/parsers/tiff/makernotes/sony/main_extra_tables.rs \
+    src/parsers/tiff/makernotes/minolta_a100_tables.rs \
     src/parsers/tiff/makernotes/samsung/lookups.rs \
     src/parsers/tiff/makernotes/olympus/lookups.rs \
     src/parsers/tiff/makernotes/lens_data.rs \

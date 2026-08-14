@@ -107,6 +107,7 @@ my @TAG_KEYS = qw(
     Priority ByteOrder DataMember RelatedTag SeparateTable PrintHex
     Base Offset ChangeBase
     Require Desire Inhibit
+    BitsPerWord BitsTotal
 );
 
 sub scrub {
