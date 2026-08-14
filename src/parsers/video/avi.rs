@@ -36,7 +36,7 @@
 #![allow(dead_code)]
 
 use crate::core::formatters::audio_encoding_name;
-use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
+use crate::core::{FileFormat, FileReader, FormatParser, Instance, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::xmp::parse_xmp;
@@ -669,11 +669,25 @@ fn parse_stream_header(
     // dwSampleSize=44).
     let quality = r.u32_at(40).unwrap_or(0);
 
-    // Stream type (for first video stream)
+    // RIFF.pm's StreamHeader table has `PRIORITY => 0` (RIFF.pm:1160-1165),
+    // so the first stream remains the default-view winner while `-a` exposes
+    // every stream occurrence. Its PrintConv maps `vids` and `auds` to these
+    // display values (RIFF.pm:1166-1176).
     if stream_type == *b"vids" && is_first_video {
-        metadata.insert(
-            "RIFF:StreamType".to_string(),
+        metadata.insert_occurrence(
+            "RIFF:StreamType",
             TagValue::new_string("Video".to_string()),
+            0,
+            "RIFF",
+            Instance::default(),
+        );
+    } else if stream_type == *b"auds" && is_first_audio {
+        metadata.insert_occurrence(
+            "RIFF:StreamType",
+            TagValue::new_string("Audio".to_string()),
+            0,
+            "RIFF",
+            Instance::default(),
         );
     }
 
@@ -759,17 +773,24 @@ fn parse_stream_header(
         );
     }
 
-    // SampleSize (variable vs fixed)
+    // RIFF.pm:1243-1245 prints zero as "Variable" and a nonzero value as
+    // its exact byte count (not merely "Fixed"). As above, priority 0 keeps
+    // the first stream's value in the ordinary view and retains both for -a.
     let sample_size = r.u32_at(44).unwrap_or(0);
-    if stream_type == *b"vids" && is_first_video {
+    if (stream_type == *b"vids" && is_first_video) || (stream_type == *b"auds" && is_first_audio) {
         let size_str = if sample_size == 0 {
-            "Variable"
+            "Variable".to_string()
+        } else if sample_size == 1 {
+            "1 byte".to_string()
         } else {
-            "Fixed"
+            format!("{sample_size} bytes")
         };
-        metadata.insert(
-            "RIFF:SampleSize".to_string(),
-            TagValue::new_string(size_str.to_string()),
+        metadata.insert_occurrence(
+            "RIFF:SampleSize",
+            TagValue::new_string(size_str),
+            0,
+            "RIFF",
+            Instance::default(),
         );
     }
 
@@ -1008,12 +1029,12 @@ mod tests {
     /// Builds a minimal `RIFF....AVI ` file containing a `hdrl` LIST with one
     /// `avih` chunk and one `strl` LIST per supplied stream header.
     ///
-    /// `strh_streams` entries are `(stream_type, codec_fourcc)` pairs, e.g.
-    /// `(b"vids", b"MJPG")`.
+    /// `strh_streams` entries are `(stream_type, codec_fourcc, sample_size)`
+    /// triples, e.g. `(b"vids", b"MJPG", 0)`.
     fn synthetic_avi(
         microsec_per_frame: u32,
         total_frames: u32,
-        strh_streams: &[(&[u8; 4], &[u8; 4])],
+        strh_streams: &[(&[u8; 4], &[u8; 4], u32)],
     ) -> Vec<u8> {
         fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
             let mut out = id.to_vec();
@@ -1030,10 +1051,11 @@ mod tests {
 
         let mut hdrl = b"hdrl".to_vec();
         hdrl.extend_from_slice(&chunk(b"avih", &avih));
-        for (stream_type, codec_fourcc) in strh_streams {
+        for (stream_type, codec_fourcc, sample_size) in strh_streams {
             let mut strh = vec![0u8; 56];
             strh[0..4].copy_from_slice(*stream_type); // fccType
             strh[4..8].copy_from_slice(*codec_fourcc); // fccHandler
+            strh[44..48].copy_from_slice(&sample_size.to_le_bytes()); // dwSampleSize
             let mut strl = b"strl".to_vec();
             strl.extend_from_slice(&chunk(b"strh", &strh));
             hdrl.extend_from_slice(&chunk(b"LIST", &strl));
@@ -1146,7 +1168,7 @@ mod tests {
     /// "15.64") in both digits and shape.
     #[test]
     fn avi_aliases_mirror_their_riff_counterparts() {
-        let data = synthetic_avi(40_000, 391, &[(b"vids", b"MJPG"), (b"auds", b"VORB")]);
+        let data = synthetic_avi(40_000, 391, &[(b"vids", b"MJPG", 0), (b"auds", b"VORB", 0)]);
         let reader = TestReader::new(data);
         let metadata = parse_avi_metadata(&reader).unwrap();
 
@@ -1194,6 +1216,56 @@ mod tests {
         );
 
         assert_no_divergent_prefixed_duplicates(&metadata);
+    }
+
+    #[test]
+    fn stream_header_retains_video_and_audio_stream_type_and_sample_size() {
+        // Pinned against ExifTool 13.59's RIFF.pm:1165-1176 and :1243-1245:
+        // `PRIORITY => 0` keeps the video stream in the ordinary projection,
+        // while -a must retain both streams. Zero prints "Variable" and a
+        // nonzero audio dwSampleSize prints its exact byte count.
+        let data = synthetic_avi(
+            40_000,
+            391,
+            &[(b"vids", b"MJPG", 0), (b"auds", b"\0\0\0\0", 2)],
+        );
+        let metadata = parse_avi_metadata(&TestReader::new(data)).unwrap();
+
+        assert_eq!(
+            metadata.get("RIFF:StreamType"),
+            Some(&TagValue::new_string("Video")),
+            "priority 0 preserves the first stream in the normal view",
+        );
+        assert_eq!(
+            metadata.get("RIFF:SampleSize"),
+            Some(&TagValue::new_string("Variable")),
+            "priority 0 preserves the first stream in the normal view",
+        );
+
+        let stream_types: Vec<_> = metadata
+            .occurrences_for("RIFF:StreamType")
+            .into_iter()
+            .map(|occurrence| occurrence.raw.clone())
+            .collect();
+        assert_eq!(
+            stream_types,
+            vec![TagValue::new_string("Video"), TagValue::new_string("Audio"),],
+            "-a must expose both AVISTREAMHEADER stream types in file order",
+        );
+
+        let sample_sizes: Vec<_> = metadata
+            .occurrences_for("RIFF:SampleSize")
+            .into_iter()
+            .map(|occurrence| occurrence.raw.clone())
+            .collect();
+        assert_eq!(
+            sample_sizes,
+            vec![
+                TagValue::new_string("Variable"),
+                TagValue::new_string("2 bytes"),
+            ],
+            "-a must expose both AVISTREAMHEADER sample sizes in file order",
+        );
     }
 
     #[test]
