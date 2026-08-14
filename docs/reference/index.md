@@ -20,7 +20,7 @@ Information about the metadata tag database, including supported tag families an
 Detailed analysis of the gap between defined tags and extracted tags, with recommendations for improving coverage.
 
 ### [ExifTool Compatibility](/reference/comparison/)
-Empirical comparison against ExifTool, including the [JPEG Tag Support mapping](/reference/jpeg-tag-support) (every ExifTool tag OxiDex reads/writes, with working keys and example values) and the [full JPEG Tag Matrix](/reference/jpeg-tag-matrix) (per-tag classification and known-bug inventory, regression-gated in CI).
+Empirical comparison against ExifTool, including the [JPEG Tag Support mapping](/reference/jpeg-tag-support) (every ExifTool tag OxiDex reads/writes, with working keys and example values), the [full JPEG Tag Matrix](/reference/jpeg-tag-matrix) (per-tag classification and known-bug inventory, regression-gated in CI), and [Corpus Synthesis](/reference/corpus-synthesis) (measuring how much of the 613-table binary transcription set can be made testable by writing synthetic samples with ExifTool itself).
 
 ### [Supported Formats](/reference/formats/)
 Complete list of supported file formats with implementation details and coverage information.

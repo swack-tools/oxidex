@@ -1,0 +1,5465 @@
+{
+  "tables": [
+    {
+      "module": "AIFF",
+      "table": "Common",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "AIFF",
+      "table": "FormatVers",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar AIFF.aif"
+    },
+    {
+      "module": "APE",
+      "table": "NewHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar APE.ape"
+    },
+    {
+      "module": "APE",
+      "table": "OldHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar APE.ape"
+    },
+    {
+      "module": "ASF",
+      "table": "FileProperties",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ASF.wmv"
+    },
+    {
+      "module": "ASF",
+      "table": "StreamProperties",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ASF.wmv"
+    },
+    {
+      "module": "BMP",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar BMP.bmp"
+    },
+    {
+      "module": "BMP",
+      "table": "OS2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar BMP.bmp"
+    },
+    {
+      "module": "BPG",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar BPG.bpg"
+    },
+    {
+      "module": "Canon",
+      "table": "AFConfig",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "27/27 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "AFMicroAdj",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "Ambience",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "AspectInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "5/5 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CMP1",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo1000D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "21/21 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo1D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "14/14 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo1DX",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "18/19 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo1DmkII",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "16/16 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo1DmkIII",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "22/22 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo1DmkIIN",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "13/13 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo1DmkIV",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "21/22 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo40D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "20/20 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo450D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "19/19 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo500D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "21/22 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo50D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "22/23 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo550D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "19/20 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo5D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "59/59 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo5DmkII",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "25/26 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo5DmkIII",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "21/22 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo600D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "19/20 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo60D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "17/18 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo650D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "19/21 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo6D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "17/18 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo70D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "15/16 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo750D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "14/16 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo7D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "23/24 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfo80D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "14/15 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfoG5XII",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfoPowerShot",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "6/6 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfoPowerShot2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "9/9 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfoR6",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfoR6m2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfoR6m3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfoUnknown",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraInfoUnknown32",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "6/6 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CameraSettings",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorBalance",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "10/10 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorCoefs",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "46/46 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorCoefs2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "46/46 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData1",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "21/21 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData10",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "86/86 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData11",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "82/82 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData12",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "86/86 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "58/58 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "35/35 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData4",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "18/18 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData5",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "9/9 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData6",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "58/58 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData7",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "75/75 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData8",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "91/91 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorData9",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "84/84 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorDataUnknown",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ColorInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ContrastInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "CropInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ExposureInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "FaceDetect1",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "11/11 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "FaceDetect2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "FaceDetect3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "FileInfo",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Canon",
+      "table": "Flags",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "FocalLength",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "FocusBracketingInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "7/7 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "HDRInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "LensInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "LevelInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "5/5 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "LightingOpt",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "7/7 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "LogInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "7/7 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "MeasuredColor",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ModifiedInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "11/11 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "MovieInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "9/9 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "MultiExp",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "MyColors",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "PSInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "57/57 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "PSInfo2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "63/63 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "Panorama",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "PreviewImageInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "5/5 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "Processing",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "15/15 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "RawBurstInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "SensorInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "SerialInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "ShotInfo",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Canon",
+      "table": "TimeInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "VignettingCorr",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "8/9 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "VignettingCorr2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "VignettingCorrUnknown",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "table WRITABLE set but no individual tag confirmed (writable via default)",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "Canon",
+      "table": "WBInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "10/10 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Canon"
+    },
+    {
+      "module": "CanonCustom",
+      "table": "PersonalFuncValues",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "24/24 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-function tags are model/firmware dependent"
+    },
+    {
+      "module": "CanonCustom",
+      "table": "PersonalFuncs",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "29/29 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-function tags are model/firmware dependent"
+    },
+    {
+      "module": "CanonRaw",
+      "table": "DecoderTable",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "CIFF/CRW-specific module, not any Canon file"
+    },
+    {
+      "module": "CanonRaw",
+      "table": "ExposureInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "CIFF/CRW-specific module, not any Canon file"
+    },
+    {
+      "module": "CanonRaw",
+      "table": "FlashInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "CIFF/CRW-specific module, not any Canon file"
+    },
+    {
+      "module": "CanonRaw",
+      "table": "ImageFormat",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "CIFF/CRW-specific module, not any Canon file"
+    },
+    {
+      "module": "CanonRaw",
+      "table": "ImageInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/7 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "CIFF/CRW-specific module, not any Canon file"
+    },
+    {
+      "module": "CanonRaw",
+      "table": "RawJpgInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "CIFF/CRW-specific module, not any Canon file"
+    },
+    {
+      "module": "CanonRaw",
+      "table": "TimeStamp",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "CIFF/CRW-specific module, not any Canon file"
+    },
+    {
+      "module": "CanonRaw",
+      "table": "WhiteSample",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "CIFF/CRW-specific module, not any Canon file"
+    },
+    {
+      "module": "CanonVRD",
+      "table": "CropInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "11/11 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar CanonVRD.vrd"
+    },
+    {
+      "module": "CanonVRD",
+      "table": "DLOInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar CanonVRD.vrd"
+    },
+    {
+      "module": "CanonVRD",
+      "table": "DR4Header",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar CanonVRD.vrd"
+    },
+    {
+      "module": "CanonVRD",
+      "table": "DustInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar CanonVRD.vrd"
+    },
+    {
+      "module": "CanonVRD",
+      "table": "GammaInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "13/13 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar CanonVRD.vrd"
+    },
+    {
+      "module": "CanonVRD",
+      "table": "StampInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar CanonVRD.vrd"
+    },
+    {
+      "module": "CanonVRD",
+      "table": "StampTool",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar CanonVRD.vrd"
+    },
+    {
+      "module": "CanonVRD",
+      "table": "ToneCurve",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "10/10 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar CanonVRD.vrd"
+    },
+    {
+      "module": "CanonVRD",
+      "table": "Ver1",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "42/43 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar CanonVRD.vrd"
+    },
+    {
+      "module": "CanonVRD",
+      "table": "Ver2",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Casio",
+      "table": "FaceInfo1",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "12/12 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Casio file or dir in corpus"
+    },
+    {
+      "module": "Casio",
+      "table": "FaceInfo2",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "13/13 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Casio file or dir in corpus"
+    },
+    {
+      "module": "Casio",
+      "table": "QVCI",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "DJI",
+      "table": "ThermalParams",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir DJI"
+    },
+    {
+      "module": "DJI",
+      "table": "ThermalParams2",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "DJI",
+      "table": "ThermalParams3",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir DJI"
+    },
+    {
+      "module": "DNG",
+      "table": "ImageSeq",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar DNG.dng"
+    },
+    {
+      "module": "DNG",
+      "table": "ProfileDynamicRange",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar DNG.dng"
+    },
+    {
+      "module": "DPX",
+      "table": "Main",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "DSF",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .dsf DSD-audio file in corpus"
+    },
+    {
+      "module": "DjVu",
+      "table": "Form",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar DjVu.djvu"
+    },
+    {
+      "module": "DjVu",
+      "table": "Info",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar DjVu.djvu"
+    },
+    {
+      "module": "EXE",
+      "table": "AR",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar EXE.exe"
+    },
+    {
+      "module": "EXE",
+      "table": "CHM",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar EXE.exe"
+    },
+    {
+      "module": "EXE",
+      "table": "DebugNB10",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar EXE.exe"
+    },
+    {
+      "module": "EXE",
+      "table": "DebugRSDS",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar EXE.exe"
+    },
+    {
+      "module": "EXE",
+      "table": "ELF",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar EXE.exe"
+    },
+    {
+      "module": "EXE",
+      "table": "Main",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "EXE",
+      "table": "PEF",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar EXE.exe"
+    },
+    {
+      "module": "EXE",
+      "table": "PEVersion",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar EXE.exe"
+    },
+    {
+      "module": "FLAC",
+      "table": "Picture",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLAC.flac"
+    },
+    {
+      "module": "FLIR",
+      "table": "AFF1",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "AFF5",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "CameraInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "CoarseData",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "EmbeddedImage",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "FPF",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "GPSInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "GPS_UUID",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "GainDeadData",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "Header",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "MeterLink",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "MoreInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "PaintData",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "PaletteInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "Params",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "PiP",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "RawData",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FLIR",
+      "table": "SerialNums",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar FLIR.fpf"
+    },
+    {
+      "module": "FlashPix",
+      "table": "CompObj",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "OLE/FlashPix compound doc, module match unverified"
+    },
+    {
+      "module": "FlashPix",
+      "table": "DOP",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "OLE/FlashPix compound doc, module match unverified"
+    },
+    {
+      "module": "FlashPix",
+      "table": "PreviewInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "OLE/FlashPix compound doc, module match unverified"
+    },
+    {
+      "module": "FlashPix",
+      "table": "SubimageHdr",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "OLE/FlashPix compound doc, module match unverified"
+    },
+    {
+      "module": "Font",
+      "table": "PFM",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Font.ttf"
+    },
+    {
+      "module": "FotoStation",
+      "table": "SoftEdit",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "10/10 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no dedicated exemplar in corpus"
+    },
+    {
+      "module": "FujiFilm",
+      "table": "AFCSettings",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir FujiFilm"
+    },
+    {
+      "module": "FujiFilm",
+      "table": "DriveSettings",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir FujiFilm"
+    },
+    {
+      "module": "FujiFilm",
+      "table": "FFMV",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir FujiFilm"
+    },
+    {
+      "module": "FujiFilm",
+      "table": "FocusSettings",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "5/5 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir FujiFilm"
+    },
+    {
+      "module": "FujiFilm",
+      "table": "MOV",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir FujiFilm"
+    },
+    {
+      "module": "FujiFilm",
+      "table": "PrioritySettings",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir FujiFilm"
+    },
+    {
+      "module": "FujiFilm",
+      "table": "RAFData",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir FujiFilm"
+    },
+    {
+      "module": "FujiFilm",
+      "table": "RAFHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir FujiFilm"
+    },
+    {
+      "module": "GIF",
+      "table": "Animation",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar GIF.gif"
+    },
+    {
+      "module": "GIF",
+      "table": "MIDIControl",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar GIF.gif"
+    },
+    {
+      "module": "GIF",
+      "table": "Screen",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar GIF.gif"
+    },
+    {
+      "module": "GIMP",
+      "table": "Header",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar GIMP.xcf"
+    },
+    {
+      "module": "GIMP",
+      "table": "Resolution",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar GIMP.xcf"
+    },
+    {
+      "module": "GM",
+      "table": "mrlh",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no dedicated exemplar in corpus"
+    },
+    {
+      "module": "GoPro",
+      "table": "fdsc",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir GoPro"
+    },
+    {
+      "module": "H264",
+      "table": "Camera1",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no raw H264 elementary stream in corpus"
+    },
+    {
+      "module": "H264",
+      "table": "Camera2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no raw H264 elementary stream in corpus"
+    },
+    {
+      "module": "H264",
+      "table": "FrameInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no raw H264 elementary stream in corpus"
+    },
+    {
+      "module": "H264",
+      "table": "MakeModel",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no raw H264 elementary stream in corpus"
+    },
+    {
+      "module": "H264",
+      "table": "RecInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no raw H264 elementary stream in corpus"
+    },
+    {
+      "module": "H264",
+      "table": "Shutter",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no raw H264 elementary stream in corpus"
+    },
+    {
+      "module": "HP",
+      "table": "Type4",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no dedicated exemplar in corpus"
+    },
+    {
+      "module": "HP",
+      "table": "Type6",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no dedicated exemplar in corpus"
+    },
+    {
+      "module": "ICC_Profile",
+      "table": "Chromaticity",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ICC_Profile.icc"
+    },
+    {
+      "module": "ICC_Profile",
+      "table": "ColorRep",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ICC_Profile.icc"
+    },
+    {
+      "module": "ICC_Profile",
+      "table": "ColorantTable",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ICC_Profile.icc"
+    },
+    {
+      "module": "ICC_Profile",
+      "table": "Header",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ICC_Profile.icc"
+    },
+    {
+      "module": "ICC_Profile",
+      "table": "Measurement",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ICC_Profile.icc"
+    },
+    {
+      "module": "ICC_Profile",
+      "table": "ViewingConditions",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ICC_Profile.icc"
+    },
+    {
+      "module": "ICO",
+      "table": "IconDir",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ICO.ico"
+    },
+    {
+      "module": "ICO",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ICO.ico"
+    },
+    {
+      "module": "ID3",
+      "table": "v1",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "ID3",
+      "table": "v1_Enh",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar MP3.mp3"
+    },
+    {
+      "module": "ISO",
+      "table": "BootRecord",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ISO.iso"
+    },
+    {
+      "module": "ISO",
+      "table": "PrimaryVolume",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ISO.iso"
+    },
+    {
+      "module": "ITC",
+      "table": "Header",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ITC.itc"
+    },
+    {
+      "module": "ITC",
+      "table": "Item",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ITC.itc"
+    },
+    {
+      "module": "InfiRay",
+      "table": "Factory",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no InfiRay thermal file in corpus"
+    },
+    {
+      "module": "InfiRay",
+      "table": "Isothermal",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no InfiRay thermal file in corpus"
+    },
+    {
+      "module": "InfiRay",
+      "table": "MixMode",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no InfiRay thermal file in corpus"
+    },
+    {
+      "module": "InfiRay",
+      "table": "OpMode",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no InfiRay thermal file in corpus"
+    },
+    {
+      "module": "InfiRay",
+      "table": "Picture",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no InfiRay thermal file in corpus"
+    },
+    {
+      "module": "InfiRay",
+      "table": "Sensor",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no InfiRay thermal file in corpus"
+    },
+    {
+      "module": "InfiRay",
+      "table": "Version",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no InfiRay thermal file in corpus"
+    },
+    {
+      "module": "JPEG",
+      "table": "AVI1",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "native JPEG segment tables; corpus is 4085 jpgs"
+    },
+    {
+      "module": "JPEG",
+      "table": "Adobe",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "native JPEG segment tables; corpus is 4085 jpgs"
+    },
+    {
+      "module": "JPEG",
+      "table": "AdobeCM",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "native JPEG segment tables; corpus is 4085 jpgs"
+    },
+    {
+      "module": "JPEG",
+      "table": "HDRGainInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "native JPEG segment tables; corpus is 4085 jpgs"
+    },
+    {
+      "module": "JPEG",
+      "table": "JPS",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "native JPEG segment tables; corpus is 4085 jpgs"
+    },
+    {
+      "module": "JPEG",
+      "table": "NITF",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "native JPEG segment tables; corpus is 4085 jpgs"
+    },
+    {
+      "module": "JPEG",
+      "table": "SPIFF",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "native JPEG segment tables; corpus is 4085 jpgs"
+    },
+    {
+      "module": "Jpeg2000",
+      "table": "CaptureResolution",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Jpeg2000.jp2"
+    },
+    {
+      "module": "Jpeg2000",
+      "table": "ColorSpec",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Jpeg2000.jp2"
+    },
+    {
+      "module": "Jpeg2000",
+      "table": "DisplayResolution",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Jpeg2000.jp2"
+    },
+    {
+      "module": "Jpeg2000",
+      "table": "FileType",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Jpeg2000.jp2"
+    },
+    {
+      "module": "Jpeg2000",
+      "table": "ImageHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Jpeg2000.jp2"
+    },
+    {
+      "module": "Kandao",
+      "table": "GPS",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Kandao VR file in corpus"
+    },
+    {
+      "module": "Kandao",
+      "table": "GPSX",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Kandao VR file in corpus"
+    },
+    {
+      "module": "Kandao",
+      "table": "IMU",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Kandao VR file in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "MOV",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "Main",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "34/34 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "Processing",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "Scrn",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "Type2",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "Type3",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "8/8 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "Type4",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "Type5",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "9/9 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "Type6",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "7/7 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "Type7",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "Kodak",
+      "table": "Type9",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "5/7 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Kodak file or dir in corpus"
+    },
+    {
+      "module": "KyoceraRaw",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar KyoceraRaw.raw"
+    },
+    {
+      "module": "LNK",
+      "table": "Beef0003",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "Beef0004",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "ConsoleData",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "ConsoleFEData",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "ControlPanelCPL",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "ControlPanelInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "EnvVarData",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "GameFolderInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "Item00Info",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "MTPType2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "PropertyStore",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "RootFolder",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "TargetInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "URI",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "LNK",
+      "table": "UsersFilesFolder",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar LNK.lnk"
+    },
+    {
+      "module": "MNG",
+      "table": "Background",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "BasisObject",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "ClipObjects",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "CloneObject",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "DefineObject",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "DeltaPNGHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "ExportImage",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "FramePriority",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "JNGHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "Loop",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "MNGHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "MagnifyObject",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "MoveObjects",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "PasteImage",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "PromoteParent",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "ShowObjects",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MNG",
+      "table": "TerminationAction",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mng file in corpus"
+    },
+    {
+      "module": "MOI",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar MOI.moi"
+    },
+    {
+      "module": "MPEG",
+      "table": "Lame",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .mpg/.mpeg elementary stream in corpus"
+    },
+    {
+      "module": "MPF",
+      "table": "MPImage",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "MRC",
+      "table": "FEI12",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar MRC.mrc"
+    },
+    {
+      "module": "MRC",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar MRC.mrc"
+    },
+    {
+      "module": "MXF",
+      "table": "Header",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar MXF.mxf"
+    },
+    {
+      "module": "Microsoft",
+      "table": "Stitch",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "7/7 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no dedicated exemplar in corpus"
+    },
+    {
+      "module": "Minolta",
+      "table": "CameraInfoA100",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "17/17 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "Minolta",
+      "table": "CameraSettings",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "50/50 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "Minolta",
+      "table": "CameraSettings5D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "26/26 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "Minolta",
+      "table": "CameraSettings7D",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "26/26 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "Minolta",
+      "table": "CameraSettingsA100",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "78/78 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "Minolta",
+      "table": "ISInfoA100",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "Minolta",
+      "table": "MMA",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "Minolta",
+      "table": "MOV1",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "Minolta",
+      "table": "MOV2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "Minolta",
+      "table": "WBInfoA100",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "64/64 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "MinoltaRaw",
+      "table": "PRD",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "9/9 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "MinoltaRaw",
+      "table": "RIF",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "27/28 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "MinoltaRaw",
+      "table": "WBG",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Minolta.mrw"
+    },
+    {
+      "module": "Nikon",
+      "table": "AFInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "AFInfo2V0100",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "12/13 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "AFInfo2V0101",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "14/15 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "AFInfo2V0200",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/5 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "AFInfo2V0300",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "14/15 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "AFInfo2V0400",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "13/14 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "AFTune",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "AutoCaptureInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "11/11 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "BarometerInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "BracketingInfoD500",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "BracketingInfoD810",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "CaptureOutput",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ColorBalance1",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ColorBalance2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ColorBalance3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ColorBalance4",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ColorBalanceA",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "8/8 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ColorBalanceB",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "9/9 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ColorBalanceC",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "13/13 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ColorBalanceUnknown",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ColorBalanceUnknown2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "CustomSettingsD500",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "DistortInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "DistortionInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "5/5 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "FaceDetect",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "14/14 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "FileInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "FlashInfo0100",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "14/15 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "FlashInfo0102",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "16/17 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "FlashInfo0103",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "20/21 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "FlashInfo0106",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "17/18 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "FlashInfo0107",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "16/17 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "FlashInfo0300",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "19/20 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "FlashInfoUnknown",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "table WRITABLE set but no individual tag confirmed (writable via default)",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "GEM",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "HDRInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/5 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "HDRInfo2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ISOAutoInfoD810",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ISOInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "IntervalInfoD6",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "18/18 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "IntervalInfoZ7II",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "JPGInfoD500",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "LensData00",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "7/8 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "LensData01",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "13/14 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "LensData0204",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "13/14 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "LensData0400",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "LensData0402",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "LensData0403",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "LensData0800",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "25/26 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "LensDataUnknown",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "LocationInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "5/5 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MOV",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MakerNotes0x51",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MakerNotes0x56",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "7/8 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MenuInfoZ7II",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MenuSettingsD850",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MenuSettingsZ6III",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "63/63 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MenuSettingsZ7II",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "39/39 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MenuSettingsZ8",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "64/64 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MenuSettingsZ8v1",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "52/52 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MenuSettingsZ8v2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "65/65 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MenuSettingsZ9",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "70/70 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MenuSettingsZ9v3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "74/74 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MenuSettingsZ9v4",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "135/135 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MoreSettingsD850",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MultiExposure",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "MultiExposure2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "Offset13InfoZ9",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "OtherInfoD500",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "PictureControl",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "12/13 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "PictureControl2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "13/14 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "PictureControl3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "14/15 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "PictureControlUnknown",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "table WRITABLE set but no individual tag confirmed (writable via default)",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "PortraitInfoZ7II",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ROC",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "RetouchInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "RotationInfoD500",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "SeqInfoD6",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "SeqInfoZ9",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "SettingsInfoD810",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ShootingMenuD500",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "6/6 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "ShotInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "9/11 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "VRInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "VignetteInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "Nikon",
+      "table": "WorldTime",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Nikon"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "Brightness",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "ColorBoost",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "CropData",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "13/13 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "DLightingHQ",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "DLightingHS",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "Exposure",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "HighlightData",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "NoiseReduction",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "9/9 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "PhotoEffects",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "PictureCtrl",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "8/8 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "RedEyeData",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "UnsharpData",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "17/17 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCapture",
+      "table": "WBAdjData",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "6/6 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "capture-editing tags not guaranteed on any given sample"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "76/76 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD4",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "89/89 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD40",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "22/22 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD5",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "89/89 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD500",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "89/89 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD5000",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "26/26 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD5100",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "23/23 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD5200",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "26/26 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD610",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "25/25 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD700",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "70/70 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD7000",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "64/64 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD80",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "48/48 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD800",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "21/21 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD810",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "86/86 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD850",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "89/89 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsD90",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "54/54 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsZ6III",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "96/96 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsZ8",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "126/126 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsZ9",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "141/141 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "NikonCustom",
+      "table": "SettingsZ9v4",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "142/142 tags writable",
+      "carrier_status": "low-confidence",
+      "carrier_detail": "custom-settings layout is model dependent (D5 vs others)"
+    },
+    {
+      "module": "Nintendo",
+      "table": "CameraInfo",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "5/5 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Nintendo camera file in corpus"
+    },
+    {
+      "module": "Olympus",
+      "table": "AFInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "AFTargetInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "AVI",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "DSS",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Olympus",
+      "table": "MOV1",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "MOV2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "MP4",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "MovableInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "OLYM",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "SubjectDetectInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "Thumbnail",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "WAV",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "prms",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "scrn",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "scrn2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "thmb",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Olympus",
+      "table": "thmb2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Olympus"
+    },
+    {
+      "module": "Opus",
+      "table": "Header",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Opus.opus"
+    },
+    {
+      "module": "PCX",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PCX.pcx"
+    },
+    {
+      "module": "PGF",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PGF.pgf"
+    },
+    {
+      "module": "PNG",
+      "table": "AnimationControl",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PNG.png"
+    },
+    {
+      "module": "PNG",
+      "table": "CICodePoints",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PNG.png"
+    },
+    {
+      "module": "PNG",
+      "table": "ImageHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PNG.png"
+    },
+    {
+      "module": "PNG",
+      "table": "PhysicalPixel",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PNG.png"
+    },
+    {
+      "module": "PNG",
+      "table": "PrimaryChromaticities",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PNG.png"
+    },
+    {
+      "module": "PNG",
+      "table": "StereoImage",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PNG.png"
+    },
+    {
+      "module": "PNG",
+      "table": "SubjectScale",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PNG.png"
+    },
+    {
+      "module": "PNG",
+      "table": "VirtualPage",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PNG.png"
+    },
+    {
+      "module": "PSP",
+      "table": "Image",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar PSP.psp"
+    },
+    {
+      "module": "Palm",
+      "table": "MOBI",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Palm.mobi"
+    },
+    {
+      "module": "Palm",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Palm.mobi"
+    },
+    {
+      "module": "Panasonic",
+      "table": "Data1",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Panasonic"
+    },
+    {
+      "module": "Panasonic",
+      "table": "FaceDetInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "6/6 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Panasonic"
+    },
+    {
+      "module": "Panasonic",
+      "table": "FaceRecInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "10/10 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Panasonic"
+    },
+    {
+      "module": "Panasonic",
+      "table": "FocusInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Panasonic"
+    },
+    {
+      "module": "Panasonic",
+      "table": "PANA",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Panasonic"
+    },
+    {
+      "module": "Panasonic",
+      "table": "SerialInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Panasonic"
+    },
+    {
+      "module": "Panasonic",
+      "table": "ShotInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Panasonic"
+    },
+    {
+      "module": "Panasonic",
+      "table": "TimeInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Panasonic"
+    },
+    {
+      "module": "Panasonic",
+      "table": "Type2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Panasonic"
+    },
+    {
+      "module": "PanasonicRaw",
+      "table": "WBInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "15/15 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Panasonic.rw2"
+    },
+    {
+      "module": "PanasonicRaw",
+      "table": "WBInfo2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "15/15 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Panasonic.rw2"
+    },
+    {
+      "module": "Parrot",
+      "table": "ARCoreAccel",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Parrot drone file in corpus"
+    },
+    {
+      "module": "Parrot",
+      "table": "ARCoreAccel0",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Parrot drone file in corpus"
+    },
+    {
+      "module": "Parrot",
+      "table": "ARCoreGyro",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Parrot drone file in corpus"
+    },
+    {
+      "module": "Parrot",
+      "table": "ARCoreGyro0",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Parrot drone file in corpus"
+    },
+    {
+      "module": "Parrot",
+      "table": "Automation",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Parrot drone file in corpus"
+    },
+    {
+      "module": "Parrot",
+      "table": "FollowMe",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Parrot drone file in corpus"
+    },
+    {
+      "module": "Parrot",
+      "table": "V1",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Parrot drone file in corpus"
+    },
+    {
+      "module": "Parrot",
+      "table": "V2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Parrot drone file in corpus"
+    },
+    {
+      "module": "Parrot",
+      "table": "V3",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Parrot drone file in corpus"
+    },
+    {
+      "module": "Pentax",
+      "table": "AEInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "16/17 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "AEInfo2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "12/12 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "AEInfo3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "7/7 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "AFInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "17/17 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "AFInfoK3III",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "5/8 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "AFPointInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "AWBInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "BatteryInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "13/13 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "CAFPointInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "CameraInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "CameraSettings",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "31/31 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "ColorInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "EVStepInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "FaceInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "FaceInfoK3III",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "65/65 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "FacePos",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "32/32 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "FaceSize",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "32/32 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "FilterInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "22/22 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "FlashInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "11/11 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "Junk",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "Junk2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "KelvinWB",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "17/17 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LensCorr",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LensData",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "22/22 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LensInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LensInfo2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LensInfo3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LensInfo4",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LensInfo5",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LensInfoQ",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LensRec",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LevelInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "7/7 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "LevelInfoK3III",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "MOV",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Pentax",
+      "table": "PENT",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "PXTH",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "PixelShiftInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "SRInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "SRInfo2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "ShotInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "TempInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "6/6 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "TimeInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "5/5 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "Pentax",
+      "table": "WBLevels",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "11/11 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Pentax"
+    },
+    {
+      "module": "PhotoCD",
+      "table": "Main",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Photoshop",
+      "table": "Header",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "also present as APP13 in many corpus jpgs"
+    },
+    {
+      "module": "Photoshop",
+      "table": "ImageData",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "also present as APP13 in many corpus jpgs"
+    },
+    {
+      "module": "Photoshop",
+      "table": "JPEG_Quality",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "also present as APP13 in many corpus jpgs"
+    },
+    {
+      "module": "Photoshop",
+      "table": "PixelInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "also present as APP13 in many corpus jpgs"
+    },
+    {
+      "module": "Photoshop",
+      "table": "PrintScaleInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "also present as APP13 in many corpus jpgs"
+    },
+    {
+      "module": "Photoshop",
+      "table": "Resolution",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "also present as APP13 in many corpus jpgs"
+    },
+    {
+      "module": "Photoshop",
+      "table": "SliceInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "also present as APP13 in many corpus jpgs"
+    },
+    {
+      "module": "Photoshop",
+      "table": "VersionInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "also present as APP13 in many corpus jpgs"
+    },
+    {
+      "module": "QuickTime",
+      "table": "AV1Config",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "AudioProf",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "Bitrate",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "ChannelLayout",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "CleanAperture",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "ColorRep",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "ContentLightLevel",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "DecodeConfig",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "FileProf",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "FileType",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "Flip",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "GenMediaInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "HEVCConfig",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "Handler",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "HintHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "MediaHeader",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/6 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "MovieFragHdr",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "MovieHeader",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/15 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "Preview",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/4 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "SchemeType",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "SpatialAudio",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "TCMediaInfo",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "TrackHeader",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/11 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "Video",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "VideoHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "VideoProf",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "cbmp",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "QuickTime",
+      "table": "equi",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar QuickTime.mov"
+    },
+    {
+      "module": "RIFF",
+      "table": "ALPH",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "ANIM",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "ANMF",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "AVIHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "Acidizer",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "AudioFormat",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "BroadcastExt",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "CSET",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "ExtAVIHdr",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "Instrument",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "Sampler",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "StreamHeader",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "UserText",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "VP8",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "VP8L",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "RIFF",
+      "table": "VP8X",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar RIFF.avi"
+    },
+    {
+      "module": "Reconyx",
+      "table": "HyperFire",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "17/19 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Reconyx trail-camera file in corpus"
+    },
+    {
+      "module": "Reconyx",
+      "table": "HyperFire2",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "26/26 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Reconyx trail-camera file in corpus"
+    },
+    {
+      "module": "Reconyx",
+      "table": "HyperFire4K",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "24/24 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Reconyx trail-camera file in corpus"
+    },
+    {
+      "module": "Reconyx",
+      "table": "MicroFire",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "30/30 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Reconyx trail-camera file in corpus"
+    },
+    {
+      "module": "Reconyx",
+      "table": "UltraFire",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "16/16 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Reconyx trail-camera file in corpus"
+    },
+    {
+      "module": "Red",
+      "table": "RED1",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Red.r3d"
+    },
+    {
+      "module": "Red",
+      "table": "RED2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Red.r3d"
+    },
+    {
+      "module": "Ricoh",
+      "table": "FaceInfo",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "10/10 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Ricoh file or dir in corpus"
+    },
+    {
+      "module": "Ricoh",
+      "table": "FirmwareInfo",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Ricoh file or dir in corpus"
+    },
+    {
+      "module": "Ricoh",
+      "table": "ImageInfo",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "11/11 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Ricoh file or dir in corpus"
+    },
+    {
+      "module": "Ricoh",
+      "table": "SerialInfo",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "4/4 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Ricoh file or dir in corpus"
+    },
+    {
+      "module": "Samsung",
+      "table": "DualShotExtra",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Samsung"
+    },
+    {
+      "module": "Samsung",
+      "table": "MP4",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Samsung"
+    },
+    {
+      "module": "Samsung",
+      "table": "Main",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Samsung",
+      "table": "OrientationInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Samsung"
+    },
+    {
+      "module": "Samsung",
+      "table": "PictureWizard",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "5/5 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Samsung"
+    },
+    {
+      "module": "Samsung",
+      "table": "Thumbnail",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Samsung"
+    },
+    {
+      "module": "Samsung",
+      "table": "Thumbnail2",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Samsung"
+    },
+    {
+      "module": "Samsung",
+      "table": "sec",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Samsung"
+    },
+    {
+      "module": "Sanyo",
+      "table": "FaceInfo",
+      "class": "needs-real-sample",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "none",
+      "carrier_detail": "no Sanyo file in corpus"
+    },
+    {
+      "module": "Sanyo",
+      "table": "MOV",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Sanyo file in corpus"
+    },
+    {
+      "module": "Sanyo",
+      "table": "MP4",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Sanyo file in corpus"
+    },
+    {
+      "module": "Sanyo",
+      "table": "Thumbnail",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no Sanyo file in corpus"
+    },
+    {
+      "module": "Sigma",
+      "table": "WBSettings",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "10/10 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Sigma.x3f"
+    },
+    {
+      "module": "SigmaRaw",
+      "table": "Header4",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Sigma.x3f"
+    },
+    {
+      "module": "Sony",
+      "table": "AFStatus15",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "18/18 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "AFStatus19",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "30/30 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "AFStatus79",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "95/95 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "CameraInfo",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Sony",
+      "table": "CameraInfo2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "16/16 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "CameraInfo3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "21/21 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "CameraSettings",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "55/55 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "CameraSettings2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "45/45 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "CameraSettings3",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "68/68 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "ExtraInfo",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Sony",
+      "table": "ExtraInfo2",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Sony",
+      "table": "ExtraInfo3",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Sony",
+      "table": "FaceInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "9/9 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "FaceInfo1",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "8/8 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "FaceInfo2",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "8/8 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "FaceInfoA",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "15/15 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "FocusInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "18/18 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "HiddenInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "2/2 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "ISOInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "MeterInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "16/16 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "MeterInfo9",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "16/16 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "MoreInfo0201",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "3/3 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "MoreInfo0401",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "1/1 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "MoreSettings",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "47/47 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "PMP",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "Panorama",
+      "class": "reachable",
+      "detail": "already wired to find_table() at runtime"
+    },
+    {
+      "module": "Sony",
+      "table": "ShotInfo",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "7/9 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Sony",
+      "table": "Tag202a",
+      "class": "synthesizable",
+      "writable": true,
+      "write_detail": "17/17 tags writable",
+      "carrier_status": "available",
+      "carrier_detail": "vendor dir Sony"
+    },
+    {
+      "module": "Stim",
+      "table": "CropX",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no dedicated exemplar in corpus"
+    },
+    {
+      "module": "Stim",
+      "table": "CropY",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no dedicated exemplar in corpus"
+    },
+    {
+      "module": "Theora",
+      "table": "Identification",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .ogv Theora stream in corpus"
+    },
+    {
+      "module": "Vorbis",
+      "table": "Identification",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar Vorbis.ogg"
+    },
+    {
+      "module": "WavPack",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "none",
+      "carrier_detail": "no .wv file in corpus"
+    },
+    {
+      "module": "ZIP",
+      "table": "GZIP",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ZIP.zip"
+    },
+    {
+      "module": "ZIP",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ZIP.zip"
+    },
+    {
+      "module": "ZIP",
+      "table": "RAR",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ZIP.zip"
+    },
+    {
+      "module": "ZISRAW",
+      "table": "Main",
+      "class": "unwritable",
+      "writable": false,
+      "write_detail": "no table WRITABLE and no tag-level Writable override",
+      "carrier_status": "available",
+      "carrier_detail": "exemplar ZISRAW.czi"
+    }
+  ],
+  "counts": {
+    "reachable": 21,
+    "synthesizable": 305,
+    "needs-real-sample": 23,
+    "unwritable": 264,
+    "no-perl-data": 0
+  }
+}

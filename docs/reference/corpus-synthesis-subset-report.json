@@ -1,0 +1,3427 @@
+[
+  {
+    "module": "Canon",
+    "table": "AFConfig",
+    "attempted_tags": 22,
+    "total_fields": 26,
+    "carrier": "Canon/CanonEOS_R8.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 18,
+    "oxidex_ok": 18,
+    "tags": [
+      {
+        "tag": "AFTrackingSensitivity",
+        "sample": "127",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "127",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AFTrackingSensitivity"
+      },
+      {
+        "tag": "AFAccelDecelTracking",
+        "sample": "127",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "127",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AFAccelDecelTracking"
+      },
+      {
+        "tag": "AFPointSwitching",
+        "sample": "2147483647",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "2147483647",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AFPointSwitching"
+      },
+      {
+        "tag": "AIServoFirstImage",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AIServoFirstImage"
+      },
+      {
+        "tag": "AIServoSecondImage",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AIServoSecondImage"
+      },
+      {
+        "tag": "AFAssistBeam",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AFAssistBeam"
+      },
+      {
+        "tag": "OneShotAFRelease",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:OneShotAFRelease"
+      },
+      {
+        "tag": "LensDriveWhenAFImpossible",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:LensDriveWhenAFImpossible"
+      },
+      {
+        "tag": "SelectAFAreaSelectionMode",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:SelectAFAreaSelectionMode"
+      },
+      {
+        "tag": "AFAreaSelectionMethod",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AFAreaSelectionMethod"
+      },
+      {
+        "tag": "OrientationLinkedAF",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:OrientationLinkedAF"
+      },
+      {
+        "tag": "ManualAFPointSelPattern",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:ManualAFPointSelPattern"
+      },
+      {
+        "tag": "AFPointDisplayDuringFocus",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AFPointDisplayDuringFocus"
+      },
+      {
+        "tag": "VFDisplayIllumination",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:VFDisplayIllumination"
+      },
+      {
+        "tag": "SubjectToDetect",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:SubjectToDetect"
+      },
+      {
+        "tag": "SubjectSwitching",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:SubjectSwitching"
+      },
+      {
+        "tag": "EyeDetection",
+        "sample": "2",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "2",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:EyeDetection"
+      },
+      {
+        "tag": "WholeAreaTracking",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:WholeAreaTracking"
+      },
+      {
+        "tag": "ServoAFCharacteristics",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "CaseAutoSetting",
+        "sample": "-1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "ActionPriority",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "SportEvents",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      }
+    ]
+  },
+  {
+    "module": "Canon",
+    "table": "AFMicroAdj",
+    "attempted_tags": 2,
+    "total_fields": 2,
+    "carrier": "Canon/CanonEOS_R8.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 2,
+    "oxidex_ok": 2,
+    "tags": [
+      {
+        "tag": "AFMicroAdjMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AFMicroAdjMode"
+      },
+      {
+        "tag": "AFMicroAdjValue",
+        "sample": "1.5",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1.5",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AFMicroAdjValue"
+      }
+    ]
+  },
+  {
+    "module": "Canon",
+    "table": "AspectInfo",
+    "attempted_tags": 5,
+    "total_fields": 5,
+    "carrier": "Canon/CanonEOS_R8.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 5,
+    "oxidex_ok": 5,
+    "tags": [
+      {
+        "tag": "AspectRatio",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:AspectRatio"
+      },
+      {
+        "tag": "CroppedImageWidth",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:CroppedImageWidth"
+      },
+      {
+        "tag": "CroppedImageHeight",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:CroppedImageHeight"
+      },
+      {
+        "tag": "CroppedImageLeft",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:CroppedImageLeft"
+      },
+      {
+        "tag": "CroppedImageTop",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:CroppedImageTop"
+      }
+    ]
+  },
+  {
+    "module": "Canon",
+    "table": "CameraInfo1DX",
+    "attempted_tags": 7,
+    "total_fields": 18,
+    "carrier": "Canon/CanonEOS_R8.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 5,
+    "oxidex_ok": 5,
+    "tags": [
+      {
+        "tag": "CameraOrientation",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "WhiteBalance",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:WhiteBalance"
+      },
+      {
+        "tag": "ColorTemperature",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:ColorTemperature"
+      },
+      {
+        "tag": "PictureStyle",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:PictureStyle"
+      },
+      {
+        "tag": "LensType",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:LensType"
+      },
+      {
+        "tag": "MinFocalLength",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Canon:MinFocalLength"
+      },
+      {
+        "tag": "FirmwareVersion",
+        "sample": "3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      }
+    ]
+  },
+  {
+    "module": "CanonCustom",
+    "table": "PersonalFuncValues",
+    "attempted_tags": 20,
+    "total_fields": 24,
+    "carrier": "Canon/CanonEOS-1D.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 20,
+    "oxidex_ok": 20,
+    "tags": [
+      {
+        "tag": "PF1Value",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF1Value"
+      },
+      {
+        "tag": "PF2Value",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF2Value"
+      },
+      {
+        "tag": "PF3Value",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF3Value"
+      },
+      {
+        "tag": "PF8BracketShots",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF8BracketShots"
+      },
+      {
+        "tag": "PF19ShootingSpeedLow",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF19ShootingSpeedLow"
+      },
+      {
+        "tag": "PF19ShootingSpeedHigh",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF19ShootingSpeedHigh"
+      },
+      {
+        "tag": "PF20MaxContinousShots",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF20MaxContinousShots"
+      },
+      {
+        "tag": "PF23ShutterButtonTime",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF23ShutterButtonTime"
+      },
+      {
+        "tag": "PF23FELockTime",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF23FELockTime"
+      },
+      {
+        "tag": "PF23PostReleaseTime",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF23PostReleaseTime"
+      },
+      {
+        "tag": "PF25AEMode",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF25AEMode"
+      },
+      {
+        "tag": "PF25MeteringMode",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF25MeteringMode"
+      },
+      {
+        "tag": "PF25DriveMode",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF25DriveMode"
+      },
+      {
+        "tag": "PF25AFMode",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF25AFMode"
+      },
+      {
+        "tag": "PF25AFPointSel",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF25AFPointSel"
+      },
+      {
+        "tag": "PF25ImageSize",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF25ImageSize"
+      },
+      {
+        "tag": "PF25WBMode",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF25WBMode"
+      },
+      {
+        "tag": "PF25Parameters",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF25Parameters"
+      },
+      {
+        "tag": "PF25ColorMatrix",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF25ColorMatrix"
+      },
+      {
+        "tag": "PF27Value",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonCustom:PF27Value"
+      }
+    ]
+  },
+  {
+    "module": "CanonRaw",
+    "table": "ImageInfo",
+    "attempted_tags": 7,
+    "total_fields": 7,
+    "carrier": "CanonRaw.crw",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 3,
+    "oxidex_ok": 0,
+    "tags": [
+      {
+        "tag": "ImageWidth",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3072",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "ImageHeight",
+        "sample": "3",
+        "exiftool_roundtrip": "MISMATCH",
+        "exiftool_raw_val": "2048",
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "PixelAspectRatio",
+        "sample": "1.5",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "Rotation",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "ComponentBitDepth",
+        "sample": "3",
+        "exiftool_roundtrip": "MISMATCH",
+        "exiftool_raw_val": "8",
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "ColorBitDepth",
+        "sample": "3",
+        "exiftool_roundtrip": "MISMATCH",
+        "exiftool_raw_val": "24",
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "ColorBW",
+        "sample": "3",
+        "exiftool_roundtrip": "MISMATCH",
+        "exiftool_raw_val": "257",
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      }
+    ]
+  },
+  {
+    "module": "CanonRaw",
+    "table": "FlashInfo",
+    "attempted_tags": 2,
+    "total_fields": 2,
+    "carrier": "CanonRaw.crw",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "0 image files updated\n    1 image files unchanged",
+    "status": "WRITE_NOOP",
+    "write_stderr": ""
+  },
+  {
+    "module": "CanonVRD",
+    "table": "ToneCurve",
+    "attempted_tags": 10,
+    "total_fields": 10,
+    "carrier": "CanonVRD.vrd",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 4,
+    "oxidex_ok": 4,
+    "tags": [
+      {
+        "tag": "ToneCurveColorSpace",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "ToneCurveShape",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "ToneCurveInputRange",
+        "sample": "3 3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "ToneCurveOutputRange",
+        "sample": "3 3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "RGBCurvePoints",
+        "sample": "3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonVRD:RGBCurvePoints"
+      },
+      {
+        "tag": "ToneCurveX",
+        "sample": "3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "ToneCurveY",
+        "sample": "3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "RedCurvePoints",
+        "sample": "3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonVRD:RedCurvePoints"
+      },
+      {
+        "tag": "GreenCurvePoints",
+        "sample": "3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonVRD:GreenCurvePoints"
+      },
+      {
+        "tag": "BlueCurvePoints",
+        "sample": "3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3",
+        "oxidex": "OK",
+        "oxidex_key": "CanonVRD:BlueCurvePoints"
+      }
+    ]
+  },
+  {
+    "module": "FujiFilm",
+    "table": "AFCSettings",
+    "attempted_tags": 4,
+    "total_fields": 4,
+    "carrier": "FujiFilm/FujiFilmX-T5.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 3,
+    "oxidex_ok": 3,
+    "tags": [
+      {
+        "tag": "AF-CSetting",
+        "sample": "16",
+        "exiftool_roundtrip": "MISMATCH",
+        "exiftool_raw_val": "51",
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AF-CTrackingSensitivity",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "FujiFilm:AF-CTrackingSensitivity"
+      },
+      {
+        "tag": "AF-CSpeedTrackingSensitivity",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "FujiFilm:AF-CSpeedTrackingSensitivity"
+      },
+      {
+        "tag": "AF-CZoneAreaSwitching",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "FujiFilm:AF-CZoneAreaSwitching"
+      }
+    ]
+  },
+  {
+    "module": "FujiFilm",
+    "table": "FocusSettings",
+    "attempted_tags": 5,
+    "total_fields": 5,
+    "carrier": "FujiFilm/FujiFilmX-T5.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 5,
+    "oxidex_ok": 5,
+    "tags": [
+      {
+        "tag": "FocusMode2",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "FujiFilm:FocusMode2"
+      },
+      {
+        "tag": "PreAF",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "FujiFilm:PreAF"
+      },
+      {
+        "tag": "AFAreaMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "FujiFilm:AFAreaMode"
+      },
+      {
+        "tag": "AFAreaPointSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "FujiFilm:AFAreaPointSize"
+      },
+      {
+        "tag": "AFAreaZoneSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "FujiFilm:AFAreaZoneSize"
+      }
+    ]
+  },
+  {
+    "module": "Jpeg2000",
+    "table": "ColorSpec",
+    "attempted_tags": 2,
+    "total_fields": 3,
+    "carrier": "Jpeg2000.jp2",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "0 image files updated\n    1 image files unchanged",
+    "status": "WRITE_NOOP",
+    "write_stderr": "Warning: Color space not defined - /tmp/synth28/work/Jpeg2000_ColorSpec.jp2"
+  },
+  {
+    "module": "Minolta",
+    "table": "CameraSettings",
+    "attempted_tags": 31,
+    "total_fields": 50,
+    "carrier": "Minolta.mrw",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 31,
+    "oxidex_ok": 25,
+    "tags": [
+      {
+        "tag": "ExposureMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "MISMATCH",
+        "oxidex_val": "Manual",
+        "oxidex_key": "ExifIFD:ExposureMode",
+        "expected_printconv": "Program"
+      },
+      {
+        "tag": "FlashMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:FlashMode"
+      },
+      {
+        "tag": "WhiteBalance",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "MISMATCH",
+        "oxidex_val": "Auto",
+        "oxidex_key": "ExifIFD:WhiteBalance",
+        "expected_printconv": "Tungsten"
+      },
+      {
+        "tag": "MinoltaImageSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:MinoltaImageSize"
+      },
+      {
+        "tag": "MinoltaQuality",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:MinoltaQuality"
+      },
+      {
+        "tag": "DriveMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:DriveMode"
+      },
+      {
+        "tag": "MeteringMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "MISMATCH",
+        "oxidex_val": "Unknown",
+        "oxidex_key": "ExifIFD:MeteringMode",
+        "expected_printconv": "Multi-segment"
+      },
+      {
+        "tag": "MacroMode",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:MacroMode"
+      },
+      {
+        "tag": "DigitalZoom",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:DigitalZoom"
+      },
+      {
+        "tag": "BracketStep",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:BracketStep"
+      },
+      {
+        "tag": "IntervalLength",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:IntervalLength"
+      },
+      {
+        "tag": "IntervalNumber",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:IntervalNumber"
+      },
+      {
+        "tag": "FlashFired",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:FlashFired"
+      },
+      {
+        "tag": "FileNumberMemory",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:FileNumberMemory"
+      },
+      {
+        "tag": "LastFileNumber",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:LastFileNumber"
+      },
+      {
+        "tag": "Sharpness",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "MISMATCH",
+        "oxidex_val": "Normal",
+        "oxidex_key": "ExifIFD:Sharpness",
+        "expected_printconv": "Hard"
+      },
+      {
+        "tag": "SubjectProgram",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:SubjectProgram"
+      },
+      {
+        "tag": "ISOSetting",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "MISMATCH",
+        "oxidex_val": "65",
+        "oxidex_key": "MakerNotes:ISOSetting",
+        "expected_printconv": "100"
+      },
+      {
+        "tag": "MinoltaModelID",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:MinoltaModelID"
+      },
+      {
+        "tag": "IntervalMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:IntervalMode"
+      },
+      {
+        "tag": "FolderName",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:FolderName"
+      },
+      {
+        "tag": "ColorMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:ColorMode"
+      },
+      {
+        "tag": "BWFilter",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "MISMATCH",
+        "oxidex_val": "0",
+        "oxidex_key": "MakerNotes:BWFilter",
+        "expected_printconv": "3"
+      },
+      {
+        "tag": "InternalFlash",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:InternalFlash"
+      },
+      {
+        "tag": "SpotFocusPointX",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:SpotFocusPointX"
+      },
+      {
+        "tag": "SpotFocusPointY",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:SpotFocusPointY"
+      },
+      {
+        "tag": "WideFocusZone",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:WideFocusZone"
+      },
+      {
+        "tag": "FocusMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:FocusMode"
+      },
+      {
+        "tag": "FocusArea",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:FocusArea"
+      },
+      {
+        "tag": "DECPosition",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:DECPosition"
+      },
+      {
+        "tag": "FlashMetering",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:FlashMetering"
+      }
+    ]
+  },
+  {
+    "module": "MinoltaRaw",
+    "table": "WBG",
+    "attempted_tags": 1,
+    "total_fields": 1,
+    "carrier": "Minolta.mrw",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 1,
+    "oxidex_ok": 1,
+    "tags": [
+      {
+        "tag": "WBScale",
+        "sample": "3 3 3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3 3 3",
+        "oxidex": "OK",
+        "oxidex_key": "MakerNotes:WBScale"
+      }
+    ]
+  },
+  {
+    "module": "Nikon",
+    "table": "AFInfo",
+    "attempted_tags": 3,
+    "total_fields": 3,
+    "carrier": "Nikon/NikonZ8.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 1,
+    "oxidex_ok": 1,
+    "tags": [
+      {
+        "tag": "AFAreaMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AFAreaMode"
+      },
+      {
+        "tag": "AFPoint",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFPointsInFocus",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      }
+    ]
+  },
+  {
+    "module": "Nikon",
+    "table": "ColorBalance1",
+    "attempted_tags": 1,
+    "total_fields": 1,
+    "carrier": "Nikon/NikonD6.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "0 image files updated\n    1 image files unchanged",
+    "status": "WRITE_NOOP",
+    "write_stderr": ""
+  },
+  {
+    "module": "Nikon",
+    "table": "AutoCaptureInfo",
+    "status": "NO_ELIGIBLE_FIELDS",
+    "total_fields": 11
+  },
+  {
+    "module": "NikonCapture",
+    "table": "PictureCtrl",
+    "attempted_tags": 2,
+    "total_fields": 8,
+    "carrier": "Nikon/NikonD6.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "0 image files updated\n    1 image files unchanged",
+    "status": "WRITE_NOOP",
+    "write_stderr": ""
+  },
+  {
+    "module": "NikonCapture",
+    "table": "Exposure",
+    "attempted_tags": 3,
+    "total_fields": 4,
+    "carrier": "Nikon/NikonD6.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "0 image files updated\n    1 image files unchanged",
+    "status": "WRITE_NOOP",
+    "write_stderr": ""
+  },
+  {
+    "module": "NikonCustom",
+    "table": "SettingsD500",
+    "attempted_tags": 85,
+    "total_fields": 89,
+    "carrier": "Nikon/NikonD500.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 85,
+    "oxidex_ok": 85,
+    "tags": [
+      {
+        "tag": "CustomSettingsBank",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CustomSettingsBank"
+      },
+      {
+        "tag": "AF-CPrioritySelection",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AF-CPrioritySelection"
+      },
+      {
+        "tag": "AF-SPrioritySelection",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AF-SPrioritySelection"
+      },
+      {
+        "tag": "NumberOfFocusPoints",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:NumberOfFocusPoints"
+      },
+      {
+        "tag": "Three-DTrackingFaceDetection",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:Three-DTrackingFaceDetection"
+      },
+      {
+        "tag": "BlockShotAFResponse",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:BlockShotAFResponse"
+      },
+      {
+        "tag": "FocusPointWrap",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:FocusPointWrap"
+      },
+      {
+        "tag": "AFPointBrightness",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AFPointBrightness"
+      },
+      {
+        "tag": "ISODisplay",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ISODisplay"
+      },
+      {
+        "tag": "GridDisplay",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:GridDisplay"
+      },
+      {
+        "tag": "LCDIllumination",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:LCDIllumination"
+      },
+      {
+        "tag": "ElectronicFront-CurtainShutter",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ElectronicFront-CurtainShutter"
+      },
+      {
+        "tag": "ReverseIndicators",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ReverseIndicators"
+      },
+      {
+        "tag": "CommandDialsReverseRotation",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CommandDialsReverseRotation"
+      },
+      {
+        "tag": "EasyExposureCompensation",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:EasyExposureCompensation"
+      },
+      {
+        "tag": "ExposureControlStepSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ExposureControlStepSize"
+      },
+      {
+        "tag": "ISOStepSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ISOStepSize"
+      },
+      {
+        "tag": "ExposureCompStepSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ExposureCompStepSize"
+      },
+      {
+        "tag": "CenterWeightedAreaSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CenterWeightedAreaSize"
+      },
+      {
+        "tag": "MultiSelectorShootMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MultiSelectorShootMode"
+      },
+      {
+        "tag": "MultiSelectorPlaybackMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MultiSelectorPlaybackMode"
+      },
+      {
+        "tag": "MultiSelector",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MultiSelector"
+      },
+      {
+        "tag": "ExposureDelayMode",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ExposureDelayMode"
+      },
+      {
+        "tag": "CLModeShootingSpeed",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CLModeShootingSpeed"
+      },
+      {
+        "tag": "MaxContinuousRelease",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MaxContinuousRelease"
+      },
+      {
+        "tag": "AutoBracketOrder",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AutoBracketOrder"
+      },
+      {
+        "tag": "AutoBracketModeM",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AutoBracketModeM"
+      },
+      {
+        "tag": "Func1Button",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:Func1Button"
+      },
+      {
+        "tag": "PreviewButton",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:PreviewButton"
+      },
+      {
+        "tag": "AssignBktButton",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignBktButton"
+      },
+      {
+        "tag": "CommandDialsChangeMainSub",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CommandDialsChangeMainSub"
+      },
+      {
+        "tag": "CommandDialsMenuAndPlayback",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CommandDialsMenuAndPlayback"
+      },
+      {
+        "tag": "CommandDialsApertureSetting",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CommandDialsApertureSetting"
+      },
+      {
+        "tag": "ReleaseButtonToUseDial",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ReleaseButtonToUseDial"
+      },
+      {
+        "tag": "StandbyTimer",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:StandbyTimer"
+      },
+      {
+        "tag": "SelfTimerTime",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SelfTimerTime"
+      },
+      {
+        "tag": "SelfTimerShotInterval",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SelfTimerShotInterval"
+      },
+      {
+        "tag": "SelfTimerShotCount",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SelfTimerShotCount"
+      },
+      {
+        "tag": "ImageReviewMonitorOffTime",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ImageReviewMonitorOffTime"
+      },
+      {
+        "tag": "LiveViewMonitorOffTime",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:LiveViewMonitorOffTime"
+      },
+      {
+        "tag": "MenuMonitorOffTime",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MenuMonitorOffTime"
+      },
+      {
+        "tag": "ShootingInfoMonitorOffTime",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ShootingInfoMonitorOffTime"
+      },
+      {
+        "tag": "FlashSyncSpeed",
+        "sample": "2",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "2",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:FlashSyncSpeed"
+      },
+      {
+        "tag": "FlashShutterSpeed",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:FlashShutterSpeed"
+      },
+      {
+        "tag": "ModelingFlash",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ModelingFlash"
+      },
+      {
+        "tag": "PlaybackMonitorOffTime",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:PlaybackMonitorOffTime"
+      },
+      {
+        "tag": "MultiSelectorLiveView",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MultiSelectorLiveView"
+      },
+      {
+        "tag": "ShutterSpeedLock",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ShutterSpeedLock"
+      },
+      {
+        "tag": "ApertureLock",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ApertureLock"
+      },
+      {
+        "tag": "MovieShutterButton",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MovieShutterButton"
+      },
+      {
+        "tag": "FlashExposureCompArea",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:FlashExposureCompArea"
+      },
+      {
+        "tag": "AutoFlashISOSensitivity",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AutoFlashISOSensitivity"
+      },
+      {
+        "tag": "MovieFunc1Button",
+        "sample": "2",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "2",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MovieFunc1Button"
+      },
+      {
+        "tag": "MoviePreviewButton",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MoviePreviewButton"
+      },
+      {
+        "tag": "Func1ButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:Func1ButtonPlusDials"
+      },
+      {
+        "tag": "PreviewButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:PreviewButtonPlusDials"
+      },
+      {
+        "tag": "AssignMovieRecordButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMovieRecordButtonPlusDials"
+      },
+      {
+        "tag": "DynamicAreaAFDisplay",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:DynamicAreaAFDisplay"
+      },
+      {
+        "tag": "AFPointIllumination",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AFPointIllumination"
+      },
+      {
+        "tag": "StoreByOrientation",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:StoreByOrientation"
+      },
+      {
+        "tag": "GroupAreaAFIllumination",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:GroupAreaAFIllumination"
+      },
+      {
+        "tag": "MatrixMetering",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MatrixMetering"
+      },
+      {
+        "tag": "LiveViewButtonOptions",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:LiveViewButtonOptions"
+      },
+      {
+        "tag": "AFModeRestrictions",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AFModeRestrictions"
+      },
+      {
+        "tag": "LimitAFAreaModeSelection",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:LimitAFAreaModeSelection"
+      },
+      {
+        "tag": "LensFocusFunctionButtons",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:LensFocusFunctionButtons"
+      },
+      {
+        "tag": "VerticalMultiSelector",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:VerticalMultiSelector"
+      },
+      {
+        "tag": "AssignMB-D17FuncButton",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMB-D17FuncButton"
+      },
+      {
+        "tag": "AssignMB-D17FuncButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMB-D17FuncButtonPlusDials"
+      },
+      {
+        "tag": "AF-OnButton",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AF-OnButton"
+      },
+      {
+        "tag": "SubSelector",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SubSelector"
+      },
+      {
+        "tag": "SubSelectorCenter",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SubSelectorCenter"
+      },
+      {
+        "tag": "SubSelectorPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SubSelectorPlusDials"
+      },
+      {
+        "tag": "AssignMovieSubselector",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMovieSubselector"
+      },
+      {
+        "tag": "AssignMovieFunc1ButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMovieFunc1ButtonPlusDials"
+      },
+      {
+        "tag": "AssignMoviePreviewButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMoviePreviewButtonPlusDials"
+      },
+      {
+        "tag": "AssignMovieSubselectorPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMovieSubselectorPlusDials"
+      },
+      {
+        "tag": "SyncReleaseMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SyncReleaseMode"
+      },
+      {
+        "tag": "Three-DTrackingWatchArea",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:Three-DTrackingWatchArea"
+      },
+      {
+        "tag": "SubjectMotion",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SubjectMotion"
+      },
+      {
+        "tag": "AFActivation",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AFActivation"
+      },
+      {
+        "tag": "ShutterReleaseButtonAE-L",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ShutterReleaseButtonAE-L"
+      },
+      {
+        "tag": "AssignMB-D17AF-OnButton",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMB-D17AF-OnButton"
+      },
+      {
+        "tag": "Func2Button",
+        "sample": "15",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "15",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:Func2Button"
+      },
+      {
+        "tag": "AssignMovieFunc2Button",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMovieFunc2Button"
+      }
+    ]
+  },
+  {
+    "module": "NikonCustom",
+    "table": "SettingsD5",
+    "attempted_tags": 85,
+    "total_fields": 89,
+    "carrier": "Nikon/NikonD500.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 80,
+    "oxidex_ok": 80,
+    "tags": [
+      {
+        "tag": "CustomSettingsBank",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CustomSettingsBank"
+      },
+      {
+        "tag": "AF-CPrioritySelection",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AF-CPrioritySelection"
+      },
+      {
+        "tag": "AF-SPrioritySelection",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AF-SPrioritySelection"
+      },
+      {
+        "tag": "NumberOfFocusPoints",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:NumberOfFocusPoints"
+      },
+      {
+        "tag": "Three-DTrackingFaceDetection",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:Three-DTrackingFaceDetection"
+      },
+      {
+        "tag": "BlockShotAFResponse",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:BlockShotAFResponse"
+      },
+      {
+        "tag": "FocusPointWrap",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:FocusPointWrap"
+      },
+      {
+        "tag": "AFPointBrightness",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AFPointBrightness"
+      },
+      {
+        "tag": "ISODisplay",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ISODisplay"
+      },
+      {
+        "tag": "GridDisplay",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:GridDisplay"
+      },
+      {
+        "tag": "LCDIllumination",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:LCDIllumination"
+      },
+      {
+        "tag": "ElectronicFront-CurtainShutter",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ElectronicFront-CurtainShutter"
+      },
+      {
+        "tag": "ReverseIndicators",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ReverseIndicators"
+      },
+      {
+        "tag": "CommandDialsReverseRotation",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CommandDialsReverseRotation"
+      },
+      {
+        "tag": "EasyExposureCompensation",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:EasyExposureCompensation"
+      },
+      {
+        "tag": "ExposureControlStepSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ExposureControlStepSize"
+      },
+      {
+        "tag": "ISOStepSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ISOStepSize"
+      },
+      {
+        "tag": "ExposureCompStepSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ExposureCompStepSize"
+      },
+      {
+        "tag": "CenterWeightedAreaSize",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CenterWeightedAreaSize"
+      },
+      {
+        "tag": "MultiSelectorShootMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MultiSelectorShootMode"
+      },
+      {
+        "tag": "MultiSelector",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MultiSelector"
+      },
+      {
+        "tag": "ExposureDelayMode",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ExposureDelayMode"
+      },
+      {
+        "tag": "CLModeShootingSpeed",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CLModeShootingSpeed"
+      },
+      {
+        "tag": "MaxContinuousRelease",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MaxContinuousRelease"
+      },
+      {
+        "tag": "AutoBracketOrder",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AutoBracketOrder"
+      },
+      {
+        "tag": "AutoBracketModeM",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AutoBracketModeM"
+      },
+      {
+        "tag": "Func1Button",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:Func1Button"
+      },
+      {
+        "tag": "PreviewButton",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:PreviewButton"
+      },
+      {
+        "tag": "AssignBktButton",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignBktButton"
+      },
+      {
+        "tag": "CommandDialsChangeMainSub",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CommandDialsChangeMainSub"
+      },
+      {
+        "tag": "CommandDialsMenuAndPlayback",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CommandDialsMenuAndPlayback"
+      },
+      {
+        "tag": "CommandDialsApertureSetting",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:CommandDialsApertureSetting"
+      },
+      {
+        "tag": "ReleaseButtonToUseDial",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ReleaseButtonToUseDial"
+      },
+      {
+        "tag": "StandbyTimer",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:StandbyTimer"
+      },
+      {
+        "tag": "SelfTimerTime",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SelfTimerTime"
+      },
+      {
+        "tag": "SelfTimerShotInterval",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SelfTimerShotInterval"
+      },
+      {
+        "tag": "SelfTimerShotCount",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SelfTimerShotCount"
+      },
+      {
+        "tag": "ImageReviewMonitorOffTime",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ImageReviewMonitorOffTime"
+      },
+      {
+        "tag": "LiveViewMonitorOffTime",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:LiveViewMonitorOffTime"
+      },
+      {
+        "tag": "MenuMonitorOffTime",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MenuMonitorOffTime"
+      },
+      {
+        "tag": "ShootingInfoMonitorOffTime",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ShootingInfoMonitorOffTime"
+      },
+      {
+        "tag": "FlashSyncSpeed",
+        "sample": "2",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "2",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:FlashSyncSpeed"
+      },
+      {
+        "tag": "FlashShutterSpeed",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:FlashShutterSpeed"
+      },
+      {
+        "tag": "ModelingFlash",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ModelingFlash"
+      },
+      {
+        "tag": "PlaybackMonitorOffTime",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:PlaybackMonitorOffTime"
+      },
+      {
+        "tag": "MultiSelectorLiveView",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MultiSelectorLiveView"
+      },
+      {
+        "tag": "ShutterSpeedLock",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ShutterSpeedLock"
+      },
+      {
+        "tag": "ApertureLock",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ApertureLock"
+      },
+      {
+        "tag": "MovieShutterButton",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MovieShutterButton"
+      },
+      {
+        "tag": "FlashExposureCompArea",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:FlashExposureCompArea"
+      },
+      {
+        "tag": "AutoFlashISOSensitivity",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AutoFlashISOSensitivity"
+      },
+      {
+        "tag": "MovieFunc1Button",
+        "sample": "2",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "2",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MovieFunc1Button"
+      },
+      {
+        "tag": "MoviePreviewButton",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MoviePreviewButton"
+      },
+      {
+        "tag": "Func1ButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:Func1ButtonPlusDials"
+      },
+      {
+        "tag": "PreviewButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:PreviewButtonPlusDials"
+      },
+      {
+        "tag": "AssignMovieRecordButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMovieRecordButtonPlusDials"
+      },
+      {
+        "tag": "DynamicAreaAFDisplay",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:DynamicAreaAFDisplay"
+      },
+      {
+        "tag": "AFPointIllumination",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AFPointIllumination"
+      },
+      {
+        "tag": "StoreByOrientation",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:StoreByOrientation"
+      },
+      {
+        "tag": "MatrixMetering",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:MatrixMetering"
+      },
+      {
+        "tag": "LiveViewButtonOptions",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:LiveViewButtonOptions"
+      },
+      {
+        "tag": "AFModeRestrictions",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AFModeRestrictions"
+      },
+      {
+        "tag": "LimitAFAreaModeSelection",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:LimitAFAreaModeSelection"
+      },
+      {
+        "tag": "LensFocusFunctionButtons",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:LensFocusFunctionButtons"
+      },
+      {
+        "tag": "VerticalMultiSelector",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:VerticalMultiSelector"
+      },
+      {
+        "tag": "VerticalFuncButton",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "VerticalFuncPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AF-OnButton",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AF-OnButton"
+      },
+      {
+        "tag": "SubSelector",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SubSelector"
+      },
+      {
+        "tag": "SubSelectorCenter",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SubSelectorCenter"
+      },
+      {
+        "tag": "SubSelectorPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SubSelectorPlusDials"
+      },
+      {
+        "tag": "AssignMovieSubselector",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMovieSubselector"
+      },
+      {
+        "tag": "AssignMovieFunc1ButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMovieFunc1ButtonPlusDials"
+      },
+      {
+        "tag": "AssignMoviePreviewButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMoviePreviewButtonPlusDials"
+      },
+      {
+        "tag": "AssignMovieSubselectorPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMovieSubselectorPlusDials"
+      },
+      {
+        "tag": "SyncReleaseMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SyncReleaseMode"
+      },
+      {
+        "tag": "Three-DTrackingWatchArea",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:Three-DTrackingWatchArea"
+      },
+      {
+        "tag": "SubjectMotion",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:SubjectMotion"
+      },
+      {
+        "tag": "AFActivation",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AFActivation"
+      },
+      {
+        "tag": "ShutterReleaseButtonAE-L",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:ShutterReleaseButtonAE-L"
+      },
+      {
+        "tag": "VerticalAFOnButton",
+        "sample": "3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "Func2Button",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:Func2Button"
+      },
+      {
+        "tag": "Func2ButtonPlusDials",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AssignMovieFunc2Button",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Nikon:AssignMovieFunc2Button"
+      },
+      {
+        "tag": "Func3Button",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      }
+    ]
+  },
+  {
+    "module": "Olympus",
+    "table": "AFTargetInfo",
+    "attempted_tags": 3,
+    "total_fields": 3,
+    "carrier": "Olympus/OlympusOM-1MarkII.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 3,
+    "oxidex_ok": 0,
+    "tags": [
+      {
+        "tag": "AFFrameSize",
+        "sample": "3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "AFFocusArea",
+        "sample": "3 3 3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3 3 3",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "AFSelectedArea",
+        "sample": "3 3 3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3 3 3",
+        "oxidex": "MISSING"
+      }
+    ]
+  },
+  {
+    "module": "Olympus",
+    "table": "SubjectDetectInfo",
+    "attempted_tags": 4,
+    "total_fields": 4,
+    "carrier": "Olympus/OlympusOM-1MarkII.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 4,
+    "oxidex_ok": 0,
+    "tags": [
+      {
+        "tag": "SubjectDetectFrameSize",
+        "sample": "3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "SubjectDetectArea",
+        "sample": "3 3 3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3 3 3",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "SubjectDetectDetail",
+        "sample": "3 3 3 3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3 3 3 3",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "SubjectDetectStatus",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "MISSING"
+      }
+    ]
+  },
+  {
+    "module": "PNG",
+    "table": "PhysicalPixel",
+    "attempted_tags": 3,
+    "total_fields": 3,
+    "carrier": "PNG.png",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 3,
+    "oxidex_ok": 3,
+    "tags": [
+      {
+        "tag": "PixelsPerUnitX",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "PNG-pHYs:PixelsPerUnitX"
+      },
+      {
+        "tag": "PixelsPerUnitY",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "PNG-pHYs:PixelsPerUnitY"
+      },
+      {
+        "tag": "PixelUnits",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "PNG-pHYs:PixelUnits"
+      }
+    ]
+  },
+  {
+    "module": "Panasonic",
+    "table": "FaceDetInfo",
+    "status": "NO_ELIGIBLE_FIELDS",
+    "total_fields": 6
+  },
+  {
+    "module": "Panasonic",
+    "table": "ShotInfo",
+    "attempted_tags": 1,
+    "total_fields": 1,
+    "carrier": "Panasonic/PanasonicDC-G9.jpg",
+    "carrier_candidates_tried": 1,
+    "write_exit": 1,
+    "write_stdout": "",
+    "status": "WRITE_FAILED",
+    "write_stderr": "Warning: Sorry, Panasonic:FileIndex doesn't exist or isn't writable\nNothing to do."
+  },
+  {
+    "module": "PanasonicRaw",
+    "table": "WBInfo",
+    "attempted_tags": 15,
+    "total_fields": 15,
+    "carrier": "Panasonic.rw2",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 8,
+    "oxidex_ok": 4,
+    "tags": [
+      {
+        "tag": "NumWBEntries",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "PanasonicRaw:NumWBEntries"
+      },
+      {
+        "tag": "WBType1",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "PanasonicRaw:WBType1"
+      },
+      {
+        "tag": "WB_RBLevels1",
+        "sample": "3 3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "WBType2",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "PanasonicRaw:WBType2"
+      },
+      {
+        "tag": "WB_RBLevels2",
+        "sample": "3 3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "WBType3",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "PanasonicRaw:WBType3"
+      },
+      {
+        "tag": "WB_RBLevels3",
+        "sample": "3 3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "WBType4",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "WB_RBLevels4",
+        "sample": "3 3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "WBType5",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "WB_RBLevels5",
+        "sample": "3 3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "WBType6",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "WB_RBLevels6",
+        "sample": "3 3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "WBType7",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "MISSING"
+      },
+      {
+        "tag": "WB_RBLevels7",
+        "sample": "3 3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      }
+    ]
+  },
+  {
+    "module": "Pentax",
+    "table": "AEInfo",
+    "attempted_tags": 4,
+    "total_fields": 17,
+    "carrier": "Pentax/PentaxK-5.jpg",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 4,
+    "oxidex_ok": 4,
+    "tags": [
+      {
+        "tag": "AEProgramMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Pentax:AEProgramMode"
+      },
+      {
+        "tag": "AEApertureSteps",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Pentax:AEApertureSteps"
+      },
+      {
+        "tag": "AEMeteringMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Pentax:AEMeteringMode"
+      },
+      {
+        "tag": "LevelIndicator",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Pentax:LevelIndicator"
+      }
+    ]
+  },
+  {
+    "module": "Pentax",
+    "table": "AFInfo",
+    "attempted_tags": 2,
+    "total_fields": 13,
+    "carrier": "Pentax/PentaxK-5.jpg",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 2,
+    "oxidex_ok": 2,
+    "tags": [
+      {
+        "tag": "AFPredictor",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Pentax:AFPredictor"
+      },
+      {
+        "tag": "AFDefocus",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Pentax:AFDefocus"
+      }
+    ]
+  },
+  {
+    "module": "Pentax",
+    "table": "BatteryInfo",
+    "status": "NO_ELIGIBLE_FIELDS",
+    "total_fields": 7
+  },
+  {
+    "module": "Photoshop",
+    "table": "JPEG_Quality",
+    "attempted_tags": 1,
+    "total_fields": 3,
+    "carrier": "Photoshop.psd",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "0 image files updated\n    1 image files unchanged",
+    "status": "WRITE_NOOP",
+    "write_stderr": ""
+  },
+  {
+    "module": "Photoshop",
+    "table": "Resolution",
+    "attempted_tags": 2,
+    "total_fields": 4,
+    "carrier": "Photoshop.psd",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 2,
+    "oxidex_ok": 2,
+    "tags": [
+      {
+        "tag": "DisplayedUnitsX",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Photoshop:DisplayedUnitsX"
+      },
+      {
+        "tag": "DisplayedUnitsY",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Photoshop:DisplayedUnitsY"
+      }
+    ]
+  },
+  {
+    "module": "QuickTime",
+    "table": "MovieHeader",
+    "attempted_tags": 1,
+    "total_fields": 14,
+    "carrier": "QuickTime.mov",
+    "carrier_candidates_tried": 1,
+    "write_exit": 1,
+    "write_stdout": "",
+    "status": "WRITE_FAILED",
+    "write_stderr": "Warning: Sorry, QuickTime:NextTrackID doesn't exist or isn't writable\nNothing to do."
+  },
+  {
+    "module": "Samsung",
+    "table": "OrientationInfo",
+    "attempted_tags": 2,
+    "total_fields": 2,
+    "carrier": "Samsung/SamsungNX1.jpg",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "0 image files updated\n    1 image files unchanged",
+    "status": "WRITE_NOOP",
+    "write_stderr": ""
+  },
+  {
+    "module": "Samsung",
+    "table": "PictureWizard",
+    "attempted_tags": 2,
+    "total_fields": 5,
+    "carrier": "Samsung/SamsungNX1.jpg",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 2,
+    "oxidex_ok": 2,
+    "tags": [
+      {
+        "tag": "PictureWizardMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Samsung:PictureWizardMode"
+      },
+      {
+        "tag": "PictureWizardColor",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Samsung:PictureWizardColor"
+      }
+    ]
+  },
+  {
+    "module": "Sigma",
+    "table": "WBSettings",
+    "attempted_tags": 10,
+    "total_fields": 10,
+    "carrier": "Sigma.x3f",
+    "carrier_candidates_tried": 1,
+    "write_exit": 0,
+    "write_stdout": "0 image files updated\n    1 image files unchanged",
+    "status": "WRITE_NOOP",
+    "write_stderr": "Warning: Can't yet write SD9 or SD10 X3F images - /tmp/synth28/work/Sigma_WBSettings.x3f"
+  },
+  {
+    "module": "Sony",
+    "table": "CameraSettings",
+    "attempted_tags": 38,
+    "total_fields": 55,
+    "carrier": "Sony/SonyILCE-7RM4.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 12,
+    "oxidex_ok": 12,
+    "tags": [
+      {
+        "tag": "HighSpeedSync",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "DriveMode",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "WhiteBalanceSetting",
+        "sample": "4",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "WhiteBalance",
+        "sample": "4",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "4",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:WhiteBalance"
+      },
+      {
+        "tag": "FocusModeSetting",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFAreaMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:AFAreaMode"
+      },
+      {
+        "tag": "AFPointSetting",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "FlashMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:FlashMode"
+      },
+      {
+        "tag": "MeteringMode",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:MeteringMode"
+      },
+      {
+        "tag": "DynamicRangeOptimizerMode",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "DynamicRangeOptimizerLevel",
+        "sample": "3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "CreativeStyle",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:CreativeStyle"
+      },
+      {
+        "tag": "ColorSpace",
+        "sample": "0",
+        "exiftool_roundtrip": "MISMATCH",
+        "exiftool_raw_val": "1",
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "FlashControl",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "PrioritySetupShutterRelease",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFIlluminator",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFWithShutter",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "LongExposureNoiseReduction",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:LongExposureNoiseReduction"
+      },
+      {
+        "tag": "HighISONoiseReduction",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:HighISONoiseReduction"
+      },
+      {
+        "tag": "ImageStyle",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "FocusModeSwitch",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "ExposureProgram",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:ExposureProgram"
+      },
+      {
+        "tag": "ImageStabilizationSetting",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "FlashAction",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:FlashAction"
+      },
+      {
+        "tag": "Rotation",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AELock",
+        "sample": "2",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "FlashAction2",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "FocusMode",
+        "sample": "0",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "0",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:FocusMode"
+      },
+      {
+        "tag": "BatteryState",
+        "sample": "2",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "BatteryLevel",
+        "sample": "3",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "3",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:BatteryLevel"
+      },
+      {
+        "tag": "FocusStatus",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "SonyImageSize",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AspectRatio",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:AspectRatio"
+      },
+      {
+        "tag": "Quality",
+        "sample": "0",
+        "exiftool_roundtrip": "MISMATCH",
+        "exiftool_raw_val": "1 3",
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "ExposureLevelIncrements",
+        "sample": "33",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "RedEyeReduction",
+        "sample": "1",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "FolderNumber",
+        "sample": "3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "ImageNumber",
+        "sample": "3",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      }
+    ]
+  },
+  {
+    "module": "Sony",
+    "table": "CameraInfo2",
+    "attempted_tags": 15,
+    "total_fields": 16,
+    "carrier": "Sony/SonyILCE-7RM4.jpg",
+    "carrier_candidates_tried": 3,
+    "write_exit": 0,
+    "write_stdout": "1 image files updated",
+    "status": "TESTED",
+    "roundtrip_ok": 1,
+    "oxidex_ok": 1,
+    "tags": [
+      {
+        "tag": "AFPointSelected",
+        "sample": "1",
+        "exiftool_roundtrip": "OK",
+        "exiftool_raw_val": "1",
+        "oxidex": "OK",
+        "oxidex_key": "Sony:AFPointSelected"
+      },
+      {
+        "tag": "FocusModeSetting",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFPoint",
+        "sample": "0",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusActiveSensor",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusTop-right",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusBottom-right",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusBottom",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusMiddleHorizontal",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusCenterVertical",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusTop",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusTop-left",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusBottom-left",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusLeft",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusCenterHorizontal",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      },
+      {
+        "tag": "AFStatusRight",
+        "sample": "-32768",
+        "exiftool_roundtrip": "NOT_WRITTEN",
+        "exiftool_raw_val": null,
+        "oxidex": "SKIPPED_NO_ROUNDTRIP"
+      }
+    ]
+  }
+]
