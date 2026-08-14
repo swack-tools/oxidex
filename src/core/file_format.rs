@@ -211,6 +211,9 @@ pub enum FileFormat {
     /// JPEG XL image format (.jxl)
     JXL,
 
+    /// JPEG 2000 codestream/container (.j2c, .jp2, .jpx)
+    Jpeg2000,
+
     /// Better Portable Graphics (.bpg)
     BPG,
 
@@ -340,6 +343,9 @@ pub enum FileFormat {
     /// Canon DPP recipe, standalone rather than appended to an image (.vrd)
     VRD,
 
+    /// Transport Neutral Encapsulation Format / winmail.dat (.tnef)
+    TNEF,
+
     /// Canon DPP version 4 recipe, standalone rather than appended (.dr4)
     DR4,
 
@@ -423,6 +429,7 @@ impl FileFormat {
             FileFormat::WOFF2 => "WOFF2",
             FileFormat::AVIF => "AVIF",
             FileFormat::JXL => "JXL",
+            FileFormat::Jpeg2000 => "JPEG 2000",
             FileFormat::BPG => "BPG",
             FileFormat::EXR => "EXR",
             FileFormat::PFM => "PFM",
@@ -465,6 +472,7 @@ impl FileFormat {
             FileFormat::XMP => "XMP",
             FileFormat::EPS => "EPS",
             FileFormat::VRD => "VRD",
+            FileFormat::TNEF => "TNEF",
             FileFormat::DR4 => "DR4",
             FileFormat::FPF => "FPF",
             FileFormat::DICOM => "DICOM",
@@ -542,6 +550,7 @@ impl FileFormat {
             FileFormat::WOFF2 => &["woff2"],
             FileFormat::AVIF => &["avif"],
             FileFormat::JXL => &["jxl"],
+            FileFormat::Jpeg2000 => &["j2c", "j2k", "jpc", "jp2", "jpf", "jph", "jpm", "jpx"],
             FileFormat::BPG => &["bpg"],
             FileFormat::EXR => &["exr"],
             FileFormat::PFM => &["pfm"],
@@ -584,6 +593,7 @@ impl FileFormat {
             FileFormat::XMP => &["xmp"],
             FileFormat::EPS => &["eps", "epsf", "ps"],
             FileFormat::VRD => &["vrd"],
+            FileFormat::TNEF => &["tnef", "dat"],
             FileFormat::DR4 => &["dr4"],
             FileFormat::FPF => &["fpf"],
             FileFormat::DICOM => &["dcm", "dicom"],

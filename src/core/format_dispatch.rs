@@ -33,6 +33,7 @@ use crate::parsers::document::iwork::{
 use crate::parsers::document::ooxml::parse_docx_metadata;
 use crate::parsers::document::ooxml::parse_pptx_metadata;
 use crate::parsers::document::ooxml::parse_xlsx_metadata;
+use crate::parsers::document::tnef::parse_tnef_metadata;
 use crate::parsers::font::otf::parse_otf_metadata;
 use crate::parsers::font::ttf::parse_ttf_metadata;
 use crate::parsers::font::woff::parse_woff_metadata;
@@ -56,6 +57,7 @@ use crate::parsers::elf::parse_elf_metadata;
 use crate::parsers::flir_fpf::parse_fpf_metadata;
 use crate::parsers::icc::parse_icc_file;
 use crate::parsers::image::ico::parse_ico_metadata;
+use crate::parsers::image::jpeg2000::parse_jpeg2000_metadata;
 use crate::parsers::image::jxl::parse_jxl_metadata;
 use crate::parsers::image::psd::parse_psd_metadata;
 use crate::parsers::image::svg::parse_svg_metadata;
@@ -185,6 +187,7 @@ pub fn dispatch_format_parser(
         // HEIF uses ISOBMFF container (same as MP4/MOV), use QuickTime parser for full EXIF extraction
         FileFormat::HEIF => convert_string_error(parse_quicktime_metadata(reader), "HEIF"),
         FileFormat::JXL => convert_string_error(parse_jxl_metadata(reader), "JXL"),
+        FileFormat::Jpeg2000 => convert_string_error(parse_jpeg2000_metadata(reader), "JPEG 2000"),
         FileFormat::BPG => convert_string_error(parse_bpg_metadata(reader), "BPG"),
         FileFormat::EXR => convert_string_error(parse_exr_metadata(reader), "EXR"),
         FileFormat::DPX => convert_string_error(parse_dpx_metadata(reader), "DPX"),
@@ -219,6 +222,7 @@ pub fn dispatch_format_parser(
         FileFormat::SQLite => convert_string_error(parse_sqlite_metadata(reader), "SQLite"),
         FileFormat::ICS => convert_string_error(parse_ics_metadata(reader), "ICS"),
         FileFormat::EML => convert_string_error(parse_eml_metadata(reader), "EML"),
+        FileFormat::TNEF => convert_string_error(parse_tnef_metadata(reader), "TNEF"),
         FileFormat::OLE => convert_string_error(parse_ole_metadata(reader), "OLE"),
         FileFormat::Prefetch => convert_string_error(parse_prefetch_metadata(reader), "Prefetch"),
         FileFormat::Registry => convert_string_error(parse_registry_metadata(reader), "Registry"),

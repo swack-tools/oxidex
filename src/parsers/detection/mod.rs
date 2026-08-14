@@ -312,6 +312,26 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::HDR);
     }
 
+    // Transport Neutral Encapsulation Format (TNEF / winmail.dat).  The
+    // signature is the little-endian 0x223e9f78 key, followed by the TNEF
+    // version attribute header at byte 6 (TNEF.pm:406-409).
+    if magic_bytes.len() >= 10
+        && magic_bytes.starts_with(b"\x78\x9f\x3e\x22")
+        && magic_bytes[6..10] == [0x01, 0x06, 0x90, 0x08]
+    {
+        return Ok(FileFormat::TNEF);
+    }
+
+    // JPEG 2000's two wire forms: the JP2 signature box and a bare J2C
+    // codestream beginning with SOC then SIZ.  `Jpeg2000.pm:1538-1557`
+    // makes exactly this distinction before dispatching the box/marker walk.
+    if magic_bytes.starts_with(b"\x00\x00\x00\x0cjP  \r\n\x87\n")
+        || magic_bytes.starts_with(b"\x00\x00\x00\x0cjP\x1a\x1a\r\n\x87\n")
+        || magic_bytes.starts_with(b"\xff\x4f\xff\x51")
+    {
+        return Ok(FileFormat::Jpeg2000);
+    }
+
     // SVG must outrank ICS/EML text heuristics, but only when SVG is the XML
     // root element. Email bodies may legitimately embed SVG markup.
     if looks_like_svg_root(magic_bytes) {

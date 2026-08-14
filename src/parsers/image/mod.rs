@@ -11,6 +11,7 @@ pub mod flif;
 pub mod gif;
 pub mod heif;
 pub mod ico;
+pub mod jpeg2000;
 pub mod jxl;
 pub mod miff;
 pub mod pfm;

@@ -5,6 +5,7 @@ pub mod epub;
 pub mod ics;
 pub mod iwork;
 pub mod ooxml;
+pub mod tnef;
 
 pub use eml::EmlParser;
 pub use epub::EpubParser;
