@@ -511,36 +511,61 @@ mod tests {
     }
 
     /// Step 28's accounting identity, the third in this series: every
-    /// emitted table lands in exactly one of enabled / eligible / refused,
-    /// and the split is pinned so a regeneration that silently moves it
-    /// fails a test rather than only changing a report nobody reads.
+    /// emitted table lands in exactly one of enabled / eligible / refused.
     ///
-    /// The three counts come from the SAME generated data
-    /// `tools/exiftool-tables/reachability.py` reports from, which is the
-    /// point: the reachability census is generated, not hand-audited, and
-    /// this test is what stops the two from drifting apart. At 13.59 the
-    /// split is regenerated from the binary tables -- see
-    /// `enabled.rs` for why `eligible` is not `enabled`.
+    /// This used to also pin the exact split (`613` tables, `403`
+    /// eligible+enabled, `210` refused, `8` enabled) so a regeneration that
+    /// silently moved it would fail a test instead of only changing a report
+    /// nobody reads. That was the right goal and the wrong mechanism: every
+    /// one of those four numbers is a GLOBAL that any table-wiring branch
+    /// (an `enabled.rs` addition) or any table-regenerating branch (a
+    /// `binary_tables.rs` regen) bumps, so *every* such branch is green in
+    /// isolation and *any two* land on the same tree and collide -- a
+    /// per-branch assertion cannot see a sibling branch's edit by
+    /// construction. That happened four times in one session: `enabled`
+    /// 5 -> 7 across two independent table-wiring branches (APE::NewHeader,
+    /// H264::RecInfo), 7 -> 8 for a third (Font::PFM), and
+    /// eligible+enabled 380 -> 403 / refused 233 -> 210 for a rebase-time
+    /// regeneration (Step 24 -- see `enabled.rs`'s and this file's git
+    /// history for the citations). `cargo test --workspace` stayed red for
+    /// hours after the first collision before anyone noticed it wasn't a
+    /// real regression.
     ///
-    /// Step 28's `conv_dropped` class moves tables to eligible when it is
-    /// their only blocker. A
-    /// field in that class carried a `PrintConv` the generator would not
-    /// reproduce and was emitted ANYWAY, reporting a raw number under
-    /// ExifTool's own tag name. Those tables are eligible now not because
-    /// anything was assumed, but because the drop became an explicit
-    /// `Omitted { print_conv: true }` that `DecodedField::emit` withholds
-    /// and `RefusalCounts::print_conv` counts -- a counted absence in place
-    /// of a silent wrong value.
+    /// So this test now asserts INVARIANTS -- properties that hold for every
+    /// branch, not a value that holds for none:
     ///
-    /// `enabled` has since moved 5 -> 8, one measured allowlist line at a
-    /// time and never as a side effect of regeneration: `APE::NewHeader`
-    /// (85598504) and `H264::RecInfo` (aa9b47ad) each added a line without
-    /// updating this count, so it read 5 while the artifacts said 7 -- the
-    /// exact drift this test exists to catch, caught late. `Font::PFM`
-    /// (`enabled.rs`) is the eighth. Enabling a table moves it between
-    /// classes rather than creating one, so it never changes
-    /// `eligible + enabled`; closing `conv_dropped` does, by moving tables
-    /// in from `refused`.
+    /// 1. every table lands in exactly one class (enabled xor eligible xor
+    ///    refused) -- the actual thing the census exists to protect: a table
+    ///    that stops landing anywhere, or lands in two classes at once, is
+    ///    the generator silently losing track of a table, which is a real
+    ///    bug no legitimate branch would ever trigger.
+    /// 2. no table is both enabled and refused -- the gates are supposed to
+    ///    be a strict narrowing (Gate B can only restrict what Gate A
+    ///    already allowed), so if this ever fires, Gate B started overriding
+    ///    Gate A instead of composing with it.
+    /// 3. every enabled table passes gate A -- restated explicitly here
+    ///    (`enabled.rs`'s own `no_allowlist_entry_is_blocked_by_gate_a` test
+    ///    enforces it from the allowlist side) so a refactor of either file
+    ///    can't quietly drop the guarantee from one side.
+    /// 4. `enabled` equals the Gate B allowlist's size (`ENABLED.len()`) --
+    ///    i.e. enabled is exactly the allowlist, neither a subset (a listed
+    ///    table gate A silently started blocking) nor a superset (a table
+    ///    enabled without a corresponding allowlist line). `ENABLED.len()`
+    ///    is itself derived from `enabled.rs`, not a number anyone has to
+    ///    remember to bump here, so growing the allowlist never touches this
+    ///    test.
+    ///
+    /// What this NO LONGER catches, and why that's acceptable: it will not
+    /// notice a regeneration that moves tables between `eligible` and
+    /// `refused` (Gate A's static soundness reclassifying tables without
+    /// changing who's enabled), because that shift is real, expected
+    /// churn -- exactly the thing that kept conflicting. The exact
+    /// point-in-time split belongs to a GENERATED report instead:
+    /// `just reachability` prints it fresh from these same two files (gate A
+    /// out of `binary_tables.rs`, gate B out of `enabled.rs`), and
+    /// `just reachability docs/reference/step28-reachability.json` writes
+    /// the per-table detail -- legitimate to diff against IF the JSON is
+    /// regenerated in the same run, never as a number frozen into a test.
     #[test]
     fn every_table_lands_in_exactly_one_enablement_class() {
         let (mut enabled, mut eligible, mut refused) = (0usize, 0usize, 0usize);
@@ -557,27 +582,57 @@ mod tests {
                 ),
             }
         }
+
+        // INVARIANT 1: every table lands in exactly one class. Holds for
+        // every branch -- wiring a table or regenerating the tables only
+        // moves a table between classes, never drops it or double-counts
+        // it.
         assert_eq!(
             enabled + eligible + refused,
             ALL_BINARY_TABLES.len(),
             "every table must land in exactly one class"
         );
-        assert_eq!(ALL_BINARY_TABLES.len(), 613, "tables emitted");
-        assert_eq!(eligible + enabled, 411, "tables passing gate A");
-        assert_eq!(refused, 202, "tables gate A blocks");
-        // Raised 5 -> 7 when APE::NewHeader and H264::RecInfo were wired to live
-        // call sites. Each of those branches was green in isolation; the assertion
-        // only broke once both were on the same tree, which is precisely the
-        // cross-branch interaction a per-branch gate cannot see.
-        //
-        // 380 -> 403 eligible+enabled (233 -> 210 refused) is Step 24's own
-        // rebase-time regeneration, not a hand edit: carrying oracle-verified
-        // ValueConv ExprIds shares `exprs.py`'s TRANSLATIONS/grammar compiler
-        // with PrintConv, so the same ledger growth that unlocked ValueConv
-        // coverage also translated PrintConv expressions that previously hit
-        // `expr_unsupported`/`conv_dropped` -- both GATE_A_DISQUALIFYING. See
-        // `tools/exiftool-tables/codegen.py`'s `GATE_A_DISQUALIFYING`.
-        assert_eq!(enabled, 8, "tables both gates enable");
+
+        // INVARIANT 2 and 3, restated explicitly per-table (both already
+        // hold structurally from the match above, via the panicking
+        // `(false, true)` arm; asserting them again here, independently of
+        // that match, is what stops a future refactor of the match from
+        // silently dropping either guarantee).
+        for table in ALL_BINARY_TABLES {
+            let passes_a = table.gate_a.passes();
+            let is_on = table.enabled();
+            assert!(
+                !(is_on && !passes_a),
+                "{}::{} is both enabled and refused",
+                table.module,
+                table.table
+            );
+            if is_on {
+                assert!(
+                    passes_a,
+                    "{}::{} is enabled but gate A blocks it: {:?}",
+                    table.module, table.table, table.gate_a.blocked_by
+                );
+            }
+        }
+
+        // INVARIANT 4: `enabled` is exactly the Gate B allowlist's size.
+        // Every allowlisted table must pass gate A
+        // (`enabled.rs::no_allowlist_entry_is_blocked_by_gate_a` enforces
+        // that from the allowlist side), so the count this census finds
+        // enabled must equal `ENABLED.len()` -- derived from the allowlist,
+        // not hand-counted, so this line never needs editing when the
+        // allowlist grows.
+        assert_eq!(
+            enabled,
+            ENABLED.len(),
+            "enabled tables must equal the Gate B allowlist size"
+        );
+
+        // The exact point-in-time split (enabled / eligible / refused of
+        // ALL_BINARY_TABLES.len()) is intentionally NOT asserted here --
+        // see the doc comment above. Run `just reachability` for the live
+        // numbers.
     }
 
     /// A refused table must say WHY, in the generator's own counter names.

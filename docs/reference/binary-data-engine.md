@@ -94,8 +94,12 @@ Run `just reachability` (or `just reachability docs/reference/step28-reachabilit
 for the per-table JSON, committed alongside this page) — the census is **generated** from the committed
 artifacts (gate A out of `binary_tables.rs`, gate B out of `enabled.rs`), so
 it cannot disagree with what it describes. `cargo test
-every_table_lands_in_exactly_one_enablement_class` pins the same split from
-the Rust side.
+every_table_lands_in_exactly_one_enablement_class` checks the structural
+invariants the split must satisfy (every table lands in exactly one class,
+`enabled` matches the Gate B allowlist size, and so on) rather than pinning
+the exact numbers below -- those move on every table-wiring or regeneration
+branch, so pin them by re-running `just reachability`, not by reading this
+table.
 
 | class | count | meaning |
 |---|---:|---|
