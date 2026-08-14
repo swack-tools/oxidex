@@ -671,34 +671,49 @@ fn convert(conv: Conv, raw: &str) -> Converted {
 struct Collector {
     /// `Lytro:Name` keys in first-seen order.
     order: Vec<String>,
-    /// Every value recorded for a key, in order.
-    values: Vec<(String, Vec<TagValue>)>,
+    /// Every value recorded for a key, in order, alongside whether that key
+    /// is `List => 1` (`ExtractTags` sets it per key from whether *that*
+    /// JSON value is itself an array, Lytro.pm:118 -- not from whether the
+    /// flattened name happens to repeat, which it does whenever an array of
+    /// *objects* shares a field name, e.g. `Modes.RegionOfInterestArray[]
+    /// .type` flattening to `ModesRegionOfInterestArrayType` once per
+    /// element).
+    values: Vec<(String, bool, Vec<TagValue>)>,
     /// The ValueConv form of the most recent value, when it differs.
     forms: Vec<(String, String)>,
 }
 
 impl Collector {
     fn slot(&mut self, key: &str) -> usize {
-        if let Some(i) = self.values.iter().position(|(k, _)| k == key) {
+        if let Some(i) = self.values.iter().position(|(k, _, _)| k == key) {
             return i;
         }
         self.order.push(key.to_string());
-        self.values.push((key.to_string(), Vec::new()));
+        self.values.push((key.to_string(), false, Vec::new()));
         self.values.len() - 1
     }
 
     /// Record one value.
     ///
-    /// ExifTool appends to a List tag and replaces a non-List one, so a JSON
-    /// array of scalars accumulates while two objects that define the same
-    /// field leave only the later value (Lytro.pm:111-125).
+    /// A `List => 1` key's repeats really are multiple values of *one*
+    /// occurrence (Lytro.pm:118, `finish` below joins them into a
+    /// `TagValue::Array`); a non-`List` key's repeats -- like the
+    /// `RegionOfInterestArray` example above -- are ordinary duplicate
+    /// *occurrences* of a scalar tag, which ExifTool's `HandleTag` retains
+    /// individually (last one visible by default, every one visible under
+    /// `-a`) rather than collapsing. This used to overwrite the whole vec on
+    /// every non-list push (`self.values[i].1 = vec![value]`), which is the
+    /// right *default-view* answer but discarded every earlier occurrence
+    /// outright -- `duplicate_loss_scan.py` scored
+    /// `Lytro:ModesRegionOfInterestArrayType` PARTIAL because of it (oracle's
+    /// `-a` shows `exposure` then `creative`, oxidex only `creative`).
+    /// Keeping every value here and letting `finish` insert non-list ones
+    /// one at a time lets [`crate::core::tag_sink::TagSink::record`] retain
+    /// every occurrence while still projecting the last as the winner.
     fn push(&mut self, key: &str, value: TagValue, form: Option<String>, list: bool) {
         let i = self.slot(key);
-        if list {
-            self.values[i].1.push(value);
-        } else {
-            self.values[i].1 = vec![value];
-        }
+        self.values[i].1 = list;
+        self.values[i].2.push(value);
         self.forms.retain(|(k, _)| k != key);
         if let Some(form) = form {
             self.forms.push((key.to_string(), form));
@@ -709,9 +724,18 @@ impl Collector {
     ///
     /// A List tag holding a single value is a scalar in ExifTool, not a
     /// one-element array; only a second value promotes it. `JSONMetadata` (3
-    /// blocks here) is an array, `PictureDerivationArray` (1 entry) is not.
+    /// blocks here) is an array, `PictureDerivationArray` (1 entry) is not. A
+    /// non-List key's values are inserted one at a time instead, so every
+    /// occurrence reaches the sink (see `push`'s own doc comment).
     fn finish(self, metadata: &mut MetadataMap) {
-        for (key, mut values) in self.values {
+        for (key, list, values) in self.values {
+            if !list {
+                for value in values {
+                    metadata.insert(key.clone(), value);
+                }
+                continue;
+            }
+            let mut values = values;
             let value = match values.len() {
                 0 => continue,
                 1 => values.remove(0),

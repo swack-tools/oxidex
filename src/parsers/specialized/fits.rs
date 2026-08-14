@@ -187,9 +187,28 @@ impl FITSParser {
                         // signature, so it is not reported as metadata.
                         "SIMPLE" => {}
                         "HISTORY" | "COMMENT" => {
-                            // MetadataMap represents one value per name, which
-                            // matches ExifTool without `-a`: the last wins.
-                            metadata.insert(Self::tag_name(&keyword), TagValue::String(value));
+                            // FITS.pm's Main table has `GROUPS => { 2 => 'Image'
+                            // }` and no family-0/1 override, so every tag here
+                            // -- including repeated COMMENT/HISTORY cards, which
+                            // FITS legitimately allows many of per file -- is
+                            // family-1 `FITS`. The bare (unprefixed) key this
+                            // used to insert under got family-1 `""` from
+                            // `TagOccurrence::from_insert_shim`
+                            // (`src/core/tag_occurrence.rs`), which prints as
+                            // `-G1`'s empty `[]` bracket: invisible to any
+                            // instrument that expects a `[group]name: value`
+                            // shape, including this repo's own
+                            // `duplicate_loss_scan.py` (its `LINE_RE` requires
+                            // one-or-more chars inside the brackets), which is
+                            // why 6 real `-a` occurrences of Comment scored as
+                            // 0 rather than PARTIAL/RETAINED. `insert()` itself
+                            // already retains every occurrence (`TagSink::record`
+                            // pushes each one); only the missing group prefix
+                            // needed fixing here, not the retention mechanism.
+                            metadata.insert(
+                                format!("FITS:{}", Self::tag_name(&keyword)),
+                                TagValue::String(value),
+                            );
                         }
                         k if k.starts_with("NAXIS") && k.len() > 5 => {
                             if let Ok(axis_val) = value.parse::<i64>() {

@@ -595,13 +595,33 @@ fn parse_extended_content(
                 }
             }
             2 => {
-                // Bool
+                // Bool. `ProcessExtendedContentDescription` and
+                // `ProcessMetadata` (this object and `parse_metadata_object`'s)
+                // share the same `ReadASF` value conversion
+                // (`ASF.pm:592-606`):
+                //   @vals = ReadValue($dataPt, $pos, 'int32u', undef, $size);
+                //   foreach (@vals) { $_ = $_ ? 'True' : 'False' }
+                // `ReadValue` (`ExifTool.pm:6286-6301`) needs 4 bytes for
+                // `int32u` and short-circuits to an empty string *before
+                // reading any of the record's actual bytes* whenever its
+                // declared `$size` is under that -- `return '' if ...
+                // $size < $len`. An empty string is falsy, so the ternary
+                // turns it into `'False'` regardless of what bits the short
+                // value actually holds. This object's own `IsVBR` records are
+                // 2 bytes (not 4), so this is not a hypothetical: the corpus
+                // sample's stream-2 `IsVBR` is bit-pattern `1` (true) by any
+                // ordinary reading, and ExifTool still reports `False` for it
+                // because 2 < 4. Reading it as a 16-bit bool instead of
+                // reproducing this short-circuit is what previously
+                // desynced oxidex's third `IsVBR` occurrence from the oracle.
                 if value_data.len() >= 4 {
                     let val = EndianReader::little_endian(&value_data)
                         .u32_at(0)
                         .unwrap_or(0);
-                    let bool_str = if val != 0 { "true" } else { "false" };
+                    let bool_str = if val != 0 { "True" } else { "False" };
                     metadata.insert(tag_name, TagValue::new_string(bool_str));
+                } else {
+                    metadata.insert(tag_name, TagValue::new_string("False"));
                 }
             }
             3 => {
@@ -893,10 +913,6 @@ fn parse_metadata_object(
     let mut pos = offset + 26;
     let end_pos = offset + size;
 
-    // Track if we've already written IsVBR from this Metadata Object.
-    // ExifTool uses the first stream's value and ignores others.
-    let mut isvbr_written_from_metadata = false;
-
     for _ in 0..record_count {
         if pos + 12 > end_pos {
             break;
@@ -931,13 +947,6 @@ fn parse_metadata_object(
             continue;
         }
 
-        // For IsVBR, ExifTool uses the first Metadata Object value (typically stream 1)
-        // and ignores subsequent stream values. Once we've written IsVBR from this
-        // Metadata Object, skip any further IsVBR entries.
-        if tag_name == "ASF:IsVBR" && isvbr_written_from_metadata {
-            continue;
-        }
-
         // Parse value based on type
         let value = match data_type {
             0 => {
@@ -955,16 +964,32 @@ fn parse_metadata_object(
                 }
             }
             2 => {
-                // BOOL - should output "true" or "false"
-                let v = if value_data.len() >= 4 {
-                    u32::from_le_bytes([value_data[0], value_data[1], value_data[2], value_data[3]])
-                        != 0
-                } else if value_data.len() >= 2 {
-                    u16::from_le_bytes([value_data[0], value_data[1]]) != 0
+                // BOOL. `ReadASF`'s format-2 branch (`ASF.pm:598-602`) always
+                // reads via `ReadValue($dataPt, $pos, 'int32u', undef,
+                // $size)`, which needs 4 bytes and short-circuits to an empty
+                // (falsy) string when the record's own declared size is
+                // smaller -- `ExifTool.pm:6295`, `return '' if ... $size <
+                // $len`, checked *before* any byte of the value is read. This
+                // object's records are commonly only 2 bytes for a BOOL
+                // field (this file's `IsVBR` among them), so ExifTool reports
+                // `False` for those regardless of what bits the 2 bytes hold
+                // -- reading them as a 16-bit bool instead (this function's
+                // previous fallback) reports the *opposite* answer whenever
+                // that raw bit pattern is nonzero, which is exactly what
+                // desynced this file's third `IsVBR` occurrence from the
+                // oracle's `False`.
+                let bool_str = if value_data.len() >= 4 {
+                    let v = u32::from_le_bytes([
+                        value_data[0],
+                        value_data[1],
+                        value_data[2],
+                        value_data[3],
+                    ]) != 0;
+                    if v { "True" } else { "False" }
                 } else {
-                    continue;
+                    "False"
                 };
-                TagValue::new_string(if v { "true" } else { "false" })
+                TagValue::new_string(bool_str)
             }
             4 => {
                 // QWORD (8 bytes)
@@ -1025,11 +1050,6 @@ fn parse_metadata_object(
             }
             _ => continue,
         };
-
-        // Track if we're writing IsVBR so we skip subsequent entries
-        if tag_name == "ASF:IsVBR" {
-            isvbr_written_from_metadata = true;
-        }
 
         metadata.insert(tag_name, value);
     }
@@ -1322,6 +1342,59 @@ mod tests {
         ];
         let formatted = format_guid(&guid);
         assert_eq!(formatted, "5F69B0C4-04F7-4B21-9842-46CCA542D8D3");
+    }
+
+    /// Builds a Metadata Object's own body: a 24-byte placeholder for the
+    /// object GUID+size header `parse_metadata_object` skips via its
+    /// `offset + 24` read, then the 16-bit record count, then one record
+    /// per `(stream, dlen, value)` triple -- 12-byte header (index, stream,
+    /// name_len, dtype=2 "BOOL", dlen), the UTF-16 "IsVBR\0" name, then
+    /// `value` verbatim.
+    fn metadata_object_with_isvbr_records(records: &[(u16, u32, &[u8])]) -> Vec<u8> {
+        let mut body = vec![0u8; 24];
+        body.extend_from_slice(&(records.len() as u16).to_le_bytes());
+        let name: Vec<u8> = "IsVBR\0"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        for (stream, dlen, value) in records {
+            body.extend_from_slice(&0u16.to_le_bytes()); // index
+            body.extend_from_slice(&stream.to_le_bytes());
+            body.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            body.extend_from_slice(&2u16.to_le_bytes()); // dtype: BOOL
+            body.extend_from_slice(&dlen.to_le_bytes());
+            body.extend_from_slice(&name);
+            body.extend_from_slice(value);
+        }
+        body
+    }
+
+    /// `ReadASF`'s format-2 branch (`ASF.pm:598-602`) always reads via
+    /// `ReadValue(..., 'int32u', undef, $size)`, which needs 4 bytes and
+    /// (`ExifTool.pm:6295`) returns an empty, falsy string -- becoming
+    /// `'False'` -- whenever the record's own declared size is smaller,
+    /// *without ever looking at those bytes*. `ASF.wmv`'s own stream-2
+    /// `IsVBR` record is exactly this: 2 declared bytes holding bit pattern
+    /// `1` (true under any ordinary reading), and the real oracle still
+    /// reports `False` for it. A 4-byte record is read normally.
+    #[test]
+    fn short_bool_records_report_false_regardless_of_their_bits() {
+        let data = metadata_object_with_isvbr_records(&[
+            (1, 4, &[1, 0, 0, 0]), // 4 declared bytes, bit pattern true -> True
+            (2, 2, &[1, 0]),       // 2 declared bytes, bit pattern true -> False anyway
+            (3, 2, &[0, 0]),       // 2 declared bytes, bit pattern false -> False
+        ]);
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_metadata_object(&reader, 0, reader.size(), &mut metadata)
+            .expect("parse_metadata_object should succeed");
+
+        let values: Vec<String> = metadata
+            .occurrences_for("ASF:IsVBR")
+            .into_iter()
+            .map(|occurrence| occurrence.raw.as_string().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(values, vec!["True", "False", "False"]);
     }
 }
 

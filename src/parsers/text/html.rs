@@ -1081,21 +1081,39 @@ fn xml_tag_name(raw: &str) -> String {
 
 #[derive(Default)]
 struct Collected {
-    values: HashMap<String, Vec<String>>,
+    // Each key remembers whether it is a `List`-type tag alongside its
+    // values, in file order. A `list` key's repeats really are multiple
+    // values of *one* occurrence (joined into a `TagValue::Array` below,
+    // matching ExifTool's List semantics); a non-`list` key's repeats are
+    // ordinary duplicate *occurrences* of a scalar tag -- e.g. `o:Revision`
+    // and `o:Version` both resolve to `RevisionNumber`
+    // (`static OFFICE`, above) -- which need to reach `MetadataMap::insert`
+    // once per repeat so `TagSink::record` can retain every one (visible
+    // under `-a`) while still projecting the last as the winner. This used
+    // to `entry.clear()` before every non-list push, which discarded every
+    // earlier occurrence outright rather than merely not-yet-deciding a
+    // winner -- `duplicate_loss_scan.py` scored HTML.html's
+    // `HTML-office:RevisionNumber` PARTIAL because of it: two real oracle
+    // occurrences, one oxidex occurrence.
+    values: HashMap<String, (bool, Vec<String>)>,
 }
 
 impl Collected {
     fn add(&mut self, key: String, value: String, list: bool) {
-        let entry = self.values.entry(key).or_default();
-        if !list {
-            entry.clear();
-        }
-        entry.push(value);
+        let entry = self.values.entry(key).or_insert_with(|| (list, Vec::new()));
+        entry.0 = list;
+        entry.1.push(value);
     }
 
     fn into_metadata(self) -> MetadataMap {
         let mut metadata = MetadataMap::new();
-        for (key, mut values) in self.values {
+        for (key, (list, mut values)) in self.values {
+            if !list {
+                for value in values {
+                    metadata.insert(key.clone(), TagValue::String(value));
+                }
+                continue;
+            }
             let value = if values.len() == 1 {
                 TagValue::String(values.pop().unwrap_or_default())
             } else {

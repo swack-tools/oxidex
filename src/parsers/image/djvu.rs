@@ -5,7 +5,7 @@
 //! (`DjVu.pm:179-300`).  This module deliberately implements only the
 //! `metadata` path, including `annote` and standard metadata fields.
 
-use crate::core::{FileReader, MetadataMap, TagValue};
+use crate::core::{FileReader, Instance, MetadataMap, TagValue};
 use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
 use djvu_bzz::bzz_decode;
 use djvu_iff::{Chunk, parse};
@@ -314,12 +314,29 @@ fn collect_djvu_chunks(chunk: &Chunk, metadata: &mut MetadataMap) {
                 b"BM44" => Some("Grayscale IW44"),
                 _ => None,
             };
-            if let Some(subfile_type) = subfile_type
-                && metadata.get("DjVu:SubfileType").is_none()
-            {
-                metadata.insert(
-                    "DjVu:SubfileType".to_string(),
+            if let Some(subfile_type) = subfile_type {
+                // `DjVu::Form`'s `0` field (the FORM's own secondary ID) is
+                // `Priority => 0` (`DjVu.pm:104`) -- the same "first
+                // occurrence wins the default view" rule as JPEG COM
+                // segments (`jpeg_helpers::process_com_segments`) and
+                // `jumbf.rs`'s `JUMDType`/`JUMDLabel`. A DjVu multi-page
+                // document nests one outer `DJVM` FORM around several inner
+                // per-page `DJVU`/`DJVI` FORMs, so this recurses into every
+                // nested FORM and used to guard with `metadata.get(..).
+                // is_none()` to keep only the first -- which kept the right
+                // *winner* but recorded the later FORMs' SubfileType nowhere
+                // at all, invisible to `-a` (`duplicate_loss_scan.py` scored
+                // `DjVu:SubfileType` PARTIAL: oracle's `-a` shows both
+                // `Single-page image` and `Shared component`, oxidex only
+                // the first). `insert_occurrence` with `priority: 0`
+                // reproduces the same default-view winner while recording
+                // every FORM's value.
+                metadata.insert_occurrence(
+                    "DjVu:SubfileType",
                     TagValue::new_string(subfile_type),
+                    0,
+                    "DjVu",
+                    Instance::default(),
                 );
             }
             for child in children {
@@ -417,8 +434,56 @@ pub fn parse_djvu_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
 
 #[cfg(test)]
 mod tests {
-    use super::{ExpressionParser, collect_chunk_metadata, collect_info, metadata_from_expression};
+    use super::{
+        ExpressionParser, collect_chunk_metadata, collect_djvu_chunks, collect_info,
+        metadata_from_expression,
+    };
     use crate::core::{MetadataMap, TagValue};
+    use djvu_iff::Chunk;
+
+    /// `DjVu::Form`'s secondary-ID field is `Priority => 0` (`DjVu.pm:104`):
+    /// the first FORM's SubfileType wins the default view, but a multi-page
+    /// `DJVM` nests several inner FORMs (one per page/component) and
+    /// ExifTool's `-a` reports every one of them, not just the first. This
+    /// used to guard the insert with `metadata.get(..).is_none()`, which kept
+    /// the right winner but never recorded the later FORMs' values at all.
+    #[test]
+    fn subfile_type_retains_every_nested_forms_value_first_wins_default() {
+        let outer = Chunk::Form {
+            secondary_id: *b"DJVM",
+            length: 0,
+            children: vec![
+                Chunk::Form {
+                    secondary_id: *b"DJVU",
+                    length: 0,
+                    children: vec![],
+                },
+                Chunk::Form {
+                    secondary_id: *b"DJVI",
+                    length: 0,
+                    children: vec![],
+                },
+            ],
+        };
+        let mut metadata = MetadataMap::new();
+        // Mirrors `parse_djvu_metadata`'s DJVM handling: recurse into the
+        // outer directory's children rather than the outer FORM itself.
+        for child in outer.children() {
+            collect_djvu_chunks(child, &mut metadata);
+        }
+
+        let values: Vec<String> = metadata
+            .occurrences_for("DjVu:SubfileType")
+            .into_iter()
+            .map(|occurrence| occurrence.raw.as_string().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(values, vec!["Single-page image", "Shared component"]);
+        // Priority 0: the first occurrence, not the last, is the winner.
+        assert_eq!(
+            metadata.get_string("DjVu:SubfileType"),
+            Some("Single-page image")
+        );
+    }
 
     #[test]
     fn extracts_standard_annotation_metadata_with_exiftool_names() {

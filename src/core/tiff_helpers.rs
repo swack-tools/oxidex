@@ -2807,8 +2807,26 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     for (tag_name, tag_value_str) in makernote_tags {
         // ExifTool gives the standard IFD0 PrintIM directory higher priority
         // than a MakerNote copy. Minolta.jpg carries 0250 in IFD0 and 0100 in
-        // its MakerNote; the default visible value is 0250.
+        // its MakerNote; the default visible value is 0250. This used to
+        // `continue` past the MakerNote copy outright once IFD0's had already
+        // landed, which kept the right winner but recorded the MakerNote
+        // value nowhere at all -- invisible to `-a`
+        // (`duplicate_loss_scan.py` scored `PrintIM:PrintIMVersion` PARTIAL:
+        // the oracle's `-a` shows both `0250` and `0100`, oxidex only the
+        // first). Recording it via `insert_occurrence` at priority 0 instead
+        // reproduces the exact same "never displaces a value already
+        // present" winner (`TagSink::record`'s priority-0-vs-1 comparison,
+        // same rule `record_makernote_tag`'s `priority_zero_duplicate_group1`
+        // allowlist uses for the analogous Canon/Nikon/etc. cases just below)
+        // while keeping the occurrence reachable.
         if tag_name == PRINT_IM_VERSION_TAG && metadata.contains_key(PRINT_IM_VERSION_TAG) {
+            metadata.insert_occurrence(
+                PRINT_IM_VERSION_TAG,
+                TagValue::String(tag_value_str),
+                0,
+                "PrintIM",
+                crate::core::Instance::default(),
+            );
             continue;
         }
         let tag_value = TagValue::String(tag_value_str);

@@ -196,26 +196,36 @@ fn skip_whitespace(bytes: &[u8]) -> &[u8] {
     &bytes[end..]
 }
 
-/// Appends a value under `tag`, keeping earlier ones
+/// Records a value under `tag`, in the `Radiance` family-1 group, keeping
+/// earlier occurrences of the same tag rather than overwriting them.
 ///
 /// A Radiance header may carry several `Command` lines -- the sample in the
 /// shared corpus has four, one per program in the render pipeline -- and
-/// ExifTool reports every one. Overwriting would report only the last and
-/// look like a correct single answer.
+/// ExifTool reports every one under `-a`. `Radiance.pm`'s `Main` table has no
+/// `List => 1` on `_command` (or `_comment`), so those repeats are ordinary
+/// same-priority duplicate occurrences, not a list-type tag: ExifTool's
+/// default (non-`-a`) view shows only the *last* one, exactly like any other
+/// scalar tag whose key repeats (`ExifTool.pm:9564`, ">= priority displaces").
+///
+/// This used to collapse repeats into a single `TagValue::Array` occurrence,
+/// which is the wrong shape twice over -- the default view showed every
+/// command joined together instead of just the last one, and `-a` printed
+/// that same ever-growing joined string once per line instead of one command
+/// per line (`duplicate_loss_scan.py` scored oracle vs. oxidex `Command` as
+/// MISSING because of it, since no oxidex line under this key held even one
+/// oracle value verbatim). Recording each value as its own `insert()` call
+/// instead lets [`crate::core::tag_sink::TagSink::record`] retain every
+/// occurrence (visible via `-a`) while still projecting the last one as the
+/// winner (the default view) -- no `Array` wrapping needed.
+///
+/// Also supplies the `Radiance:` family-1 prefix every tag in this table
+/// carries (`GROUPS => { 2 => 'Image' }`, no family-0/1 override, so family-1
+/// defaults to the module name): a bare key gets family-1 `""` from
+/// `TagOccurrence::from_insert_shim`, which prints as `-G1`'s empty `[]`
+/// bracket -- invisible to `duplicate_loss_scan.py`'s `-a -G1 -s` parser
+/// (its `LINE_RE` requires one-or-more chars inside the brackets).
 fn push_value(metadata: &mut MetadataMap, tag: &str, value: String) {
-    let value = TagValue::String(value);
-    match metadata.remove(tag) {
-        Some(TagValue::Array(mut values)) => {
-            values.push(value);
-            metadata.insert(tag.to_string(), TagValue::Array(values));
-        }
-        Some(existing) => {
-            metadata.insert(tag.to_string(), TagValue::Array(vec![existing, value]));
-        }
-        None => {
-            metadata.insert(tag.to_string(), value);
-        }
-    }
+    metadata.insert(format!("Radiance:{tag}"), TagValue::String(value));
 }
 
 /// Parser for Radiance RGBE (HDR) images.
@@ -364,15 +374,15 @@ mod tests {
     fn extracts_the_header_assignments() {
         let metadata = parse(corpus_header());
         assert_eq!(
-            string(&metadata, "Software"),
+            string(&metadata, "Radiance:Software"),
             "RADIANCE 3.1.8 lastmod Thu Sep 17 20:49:56 PDT 1998 by droberts on escher"
         );
         assert_eq!(
-            string(&metadata, "View"),
+            string(&metadata, "Radiance:View"),
             "-vtv -vp 0.832108 2.26053 1.8 -vh 100 -vv 100"
         );
-        assert_eq!(string(&metadata, "Format"), "32-bit_rle_rgbe");
-        assert_eq!(string(&metadata, "Exposure"), "3.512179e-001");
+        assert_eq!(string(&metadata, "Radiance:Format"), "32-bit_rle_rgbe");
+        assert_eq!(string(&metadata, "Radiance:Exposure"), "3.512179e-001");
     }
 
     /// The resolution line names rows before columns, so the first number is
@@ -420,21 +430,28 @@ mod tests {
         }
     }
 
-    /// The sample carries four `Command` lines; reporting only the last would
-    /// look like one correct answer.
+    /// The sample carries two `Command` lines in `corpus_header()` (the real
+    /// corpus file has four); reporting only the last would look like one
+    /// correct answer. Every occurrence must be retained (visible via
+    /// `occurrences_for`, the same instrument `duplicate_loss_scan.py` reads
+    /// through `-a`), while the default (non-`-a`) winner is still the last
+    /// one, matching `Radiance.pm`'s undeclared-`List` scalar semantics.
     #[test]
     fn keeps_every_command_line() {
         let metadata = parse(corpus_header());
-        let Some(TagValue::Array(commands)) = metadata.get("Command") else {
-            panic!(
-                "expected an array of commands, got {:?}",
-                metadata.get("Command")
-            );
-        };
+        let commands: Vec<TagValue> = metadata
+            .occurrences_for("Radiance:Command")
+            .into_iter()
+            .map(|occurrence| occurrence.raw.clone())
+            .collect();
         assert_eq!(commands.len(), 2);
         assert_eq!(
             commands[0],
             TagValue::String("oconv mat.rad sky.rad surfaces.rad".to_string())
+        );
+        assert_eq!(
+            string(&metadata, "Radiance:Command"),
+            "oconv -f -i test4.oct ila01728"
         );
     }
 
@@ -442,7 +459,10 @@ mod tests {
     fn reports_comments_without_their_marker() {
         let data =
             b"#?RADIANCE\n#  rendered overnight\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n".to_vec();
-        assert_eq!(string(&parse(data), "Comment"), "rendered overnight");
+        assert_eq!(
+            string(&parse(data), "Radiance:Comment"),
+            "rendered overnight"
+        );
     }
 
     /// A header key the table does not list still becomes a tag, the way
@@ -452,12 +472,12 @@ mod tests {
         let data =
             b"#?RADIANCE\nCAPDATE= 1998:09:17\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n".to_vec();
         let metadata = parse(data);
-        assert_eq!(string(&metadata, "Capdate"), "1998:09:17");
+        assert_eq!(string(&metadata, "Radiance:Capdate"), "1998:09:17");
 
         // `tr/-_a-zA-Z0-9//dc` leaves under two characters here, so ExifTool
         // skips the line rather than reporting a one-letter tag.
         let data = b"#?RADIANCE\n%*= dropped\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n".to_vec();
-        assert!(!parse(data).contains_key("Dropped"));
+        assert!(!parse(data).contains_key("Radiance:Dropped"));
     }
 
     /// `.*` is greedy, so the split lands on the last `=`, not the first.
@@ -484,6 +504,6 @@ mod tests {
     #[test]
     fn accepts_the_rgbe_spelling_of_the_signature() {
         let data = b"#?RGBE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n".to_vec();
-        assert_eq!(string(&parse(data), "Format"), "32-bit_rle_rgbe");
+        assert_eq!(string(&parse(data), "Radiance:Format"), "32-bit_rle_rgbe");
     }
 }

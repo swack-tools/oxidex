@@ -14,7 +14,9 @@
 
 #![allow(dead_code)]
 
-use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
+use crate::core::{
+    FileFormat, FileReader, FormatParser, Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue,
+};
 use crate::error::{ExifToolError, Result};
 
 /// VCF signature: "BEGIN:VCARD"
@@ -82,6 +84,28 @@ fn split_property_line(line: &str) -> Option<(&str, &str)> {
         }
     }
     None
+}
+
+/// Extracts a `LANGUAGE=xx` parameter from a property line's `raw_key`
+/// (everything before the unquoted `:`), if present.
+///
+/// `ProcessVCard` reads `LANGUAGE` as `$param{Language}` and hands it to
+/// `GetLangInfo`, which appends `-<lang>` to the tag *name*
+/// (`GetVCardTag`'s `$langCode` argument, VCard.pm:207-224) -- so
+/// `NOTE;LANGUAGE=fr:Oui!` becomes tag `Note-fr`, a name distinct from plain
+/// `Note`, not a second occurrence of it. Before this existed, the value
+/// bug this same commit fixes (dropped duplicate occurrences) hid the
+/// consequence: `Oui!` silently landed as a third `Note` occurrence instead
+/// of its own `Note-fr` tag, which would have surfaced as an extra,
+/// oracle-mismatched occurrence the moment retention started working.
+fn language_param(raw_key: &str) -> Option<&str> {
+    raw_key.split(';').skip(1).find_map(|segment| {
+        let (name, value) = segment.split_once('=')?;
+        name.trim()
+            .eq_ignore_ascii_case("LANGUAGE")
+            .then(|| value.trim())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 /// Converts a vCard/iCalendar date-time value to ExifTool's EXIF-style
@@ -185,8 +209,33 @@ impl VCFParser {
             }
         }
 
+        // A VCF file can hold multiple `BEGIN:VCARD`...`END:VCARD` blocks
+        // (this corpus sample has 2), and `VCard.pm`'s `ProcessVCard` reads
+        // every one after the first as a new "document"
+        // (`$$et{DOC_NUM} = ++$$et{DOC_COUNT}` right after the first
+        // `END:VCARD`, VCard.pm:334ish). That matters for which value wins
+        // the *default* (non-`-a`) view when two vCards define the same
+        // property: `TagSink::record`'s Instance rule (see its own doc
+        // comment) means an occurrence recorded under a non-default Instance
+        // can never displace a winner recorded under a *different* instance,
+        // so the first vCard's value stays the default winner even though a
+        // later vCard's occurrence of the same tag is recorded after it --
+        // this file's `FormattedName` default view is "Phil Harvey" (vCard
+        // 1), never "VCard Test" (vCard 2), which plain last-write-wins would
+        // get backwards. `doc_instance` mirrors that: `Instance(0)` (the
+        // default) for the first vCard's properties, `Instance(1)` for the
+        // second's, and so on.
+        let mut doc_instance = Instance::default();
+        let mut seen_begin = false;
+
         // Parse vCard line by line
         for line in text.lines() {
+            if line.trim() == "BEGIN:VCARD" {
+                if seen_begin {
+                    doc_instance = Instance(doc_instance.0 + 1);
+                }
+                seen_begin = true;
+            }
             if let Some((raw_key, raw_value)) = split_property_line(line) {
                 // Strip any ";PARAM=..." group parameters from the key so
                 // "TEL;TYPE=CELL" still matches on "TEL". We don't yet fold
@@ -255,7 +304,61 @@ impl VCFParser {
                     }
                     _ => {
                         if let Some(name) = main_table_name(&key) {
-                            metadata.insert(name.to_string(), TagValue::String(value.to_string()));
+                            // `VCard::Main`'s `GROUPS => { 2 => 'Document' }`
+                            // leaves family-0/1 at the table default, `VCard`
+                            // -- a bare (unprefixed) key instead gets family-1
+                            // `""` from `TagOccurrence::from_insert_shim`,
+                            // which prints as `-G1`'s empty `[]` bracket:
+                            // invisible to `duplicate_loss_scan.py`'s `-a -G1
+                            // -s` parser (its `LINE_RE` requires one-or-more
+                            // chars inside the brackets). `insert_occurrence`
+                            // with the file's own `doc_instance` reproduces
+                            // both ExifTool's default-view winner (the first
+                            // vCard, per this function's own `doc_instance`
+                            // doc comment) and full `-a` retention of every
+                            // vCard's occurrence -- unlike the plain
+                            // `insert()` this replaced, which retains
+                            // occurrences within *this* function's own
+                            // `metadata` sink but then lost them anyway the
+                            // moment `FormatParser::parse` merged this
+                            // `MetadataMap` into the file's real one via
+                            // `IntoIterator`, which only carries the winner
+                            // projection across (see that impl's own doc
+                            // comment) -- fixed below by switching that merge
+                            // to `MetadataMap::merge`, which replays every
+                            // occurrence instead.
+                            // `LANGUAGE=xx` names a *different* tag
+                            // (`Note-fr`, not a second `Note`) -- see
+                            // `language_param`'s own doc comment.
+                            let name = match language_param(raw_key) {
+                                Some(lang) => format!("{name}-{lang}"),
+                                None => name.to_string(),
+                            };
+                            // NOTE: the raw value is inserted as-is, not run
+                            // through `DecodeVCardText`'s backslash-unescape
+                            // (`VCard.pm:227-249`) -- ExifTool's own TEXT
+                            // output (unlike `-b`) additionally replaces any
+                            // embedded control character the unescape can
+                            // produce (a decoded `\n`, in particular) with
+                            // `.` before printing (`exiftool`'s own POD,
+                            // "-b" section: "control characters ... are not
+                            // replaced by '.' as they are in the default
+                            // output" -- implying they *are* replaced
+                            // outside `-b`). That substitution lives in the
+                            // shared CLI text-output formatter this parser
+                            // has no access to, and unescaping without it
+                            // would plant a real newline into a `TagValue`
+                            // that JSON/CSV output would then show verbatim
+                            // -- a new, wrong mismatch in those modes to fix
+                            // a `-s`-only one. Left as the pre-existing raw
+                            // value pending that shared formatter change.
+                            metadata.insert_occurrence(
+                                format!("VCard:{name}"),
+                                TagValue::String(value.to_string()),
+                                SHIM_DEFAULT_PRIORITY,
+                                "VCard",
+                                doc_instance,
+                            );
                         }
                     }
                 }
@@ -324,11 +427,18 @@ impl FormatParser for VCFParser {
             TagValue::String("vCard".to_string()),
         );
 
-        // Parse vCard content and merge with basic metadata
+        // Parse vCard content and merge with basic metadata. `merge` (not a
+        // per-key `for (key, value) in vcard_metadata { insert(...) }` loop)
+        // matters here: `MetadataMap`'s `IntoIterator` deliberately only
+        // yields the winner projection (see its own doc comment), so a
+        // flatten-loop merge would discard every occurrence
+        // `parse_vcard_content`'s `insert_occurrence` calls just retained --
+        // e.g. `VCard:FormattedName`'s second-vCard occurrence -- the moment
+        // it crossed into this function's own map. `merge` replays every
+        // occurrence instead, the same fix `MetadataMap::merge`'s own doc
+        // comment describes for the general case.
         let vcard_metadata = Self::parse_vcard_content(reader)?;
-        for (key, value) in vcard_metadata {
-            metadata.insert(key, value);
-        }
+        metadata.merge(vcard_metadata);
 
         Ok(metadata)
     }
@@ -411,5 +521,64 @@ mod tests {
             Some(("TEL;type=CELL", "555-0000"))
         );
         assert_eq!(split_property_line("no-colon-here"), None);
+    }
+
+    #[test]
+    fn language_param_finds_language_and_ignores_other_params() {
+        assert_eq!(language_param("NOTE;LANGUAGE=fr"), Some("fr"));
+        assert_eq!(
+            language_param("TEL;TYPE=CELL;LANGUAGE=en-us"),
+            Some("en-us")
+        );
+        assert_eq!(language_param("NOTE"), None);
+        assert_eq!(language_param("TEL;TYPE=CELL"), None);
+    }
+
+    /// A second `BEGIN:VCARD`...`END:VCARD` block redefining a tag the first
+    /// block already set must not silently disappear (`-a` retention) and
+    /// must not displace the first block's value as the default winner
+    /// (`TagSink`'s Instance rule, matching `ProcessVCard`'s `DOC_NUM`
+    /// increment) -- this pins both halves of the `VCard.pm` citations in
+    /// `parse_vcard_content`'s own doc comment against a minimal fixture
+    /// shaped like the corpus sample (`FormattedName` repeats across two
+    /// vCards; `NOTE;LANGUAGE=fr` is a distinct `Note-fr` tag, not a third
+    /// `Note` occurrence).
+    #[test]
+    fn a_repeated_tag_across_two_vcards_keeps_both_occurrences_first_wins_default() {
+        use crate::test_support::TestReader;
+
+        let text = "BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Phil Harvey\r\n\
+NOTE:Hello\\, world!\r\n\
+NOTE;LANGUAGE=fr:Bonjour\r\n\
+END:VCARD\r\n\
+BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:VCard Test\r\n\
+END:VCARD\r\n";
+        let reader = TestReader::new(text.as_bytes().to_vec());
+        let metadata = VCFParser.parse(&reader).expect("parse should succeed");
+
+        let names: Vec<String> = metadata
+            .occurrences_for("VCard:FormattedName")
+            .into_iter()
+            .map(|o| o.raw.as_string().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(names, vec!["Phil Harvey", "VCard Test"]);
+        // First vCard's value stays the default-view winner.
+        assert_eq!(
+            metadata.get_string("VCard:FormattedName"),
+            Some("Phil Harvey")
+        );
+
+        // `NOTE;LANGUAGE=fr` is `Note-fr`, not a second `Note` occurrence.
+        let notes: Vec<String> = metadata
+            .occurrences_for("VCard:Note")
+            .into_iter()
+            .map(|o| o.raw.as_string().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(notes, vec!["Hello\\, world!"]);
+        assert_eq!(metadata.get_string("VCard:Note-fr"), Some("Bonjour"));
     }
 }
