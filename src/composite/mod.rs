@@ -965,12 +965,30 @@ mod step22_bare_name_arbitration_regression {
 
     use std::path::Path;
 
+    /// Skip the calling test when its pinned fixture is absent.
+    ///
+    /// This used to be a sentinel STRING returned from `composite_string`, which
+    /// every caller had to remember to check -- and all but one did not, so a
+    /// missing corpus turned into `left: Some("<skipped: fixture absent>")` vs
+    /// `right: Some("8x8")`. That is indistinguishable from a real wrong value,
+    /// and it cost four branches a false RED when a container eviction removed
+    /// the corpus symlink: the code was fine, the fixtures were gone.
+    ///
+    /// A macro that `return`s cannot be silently ignored the way a sentinel can.
+    macro_rules! fixture_or_skip {
+        ($path:expr) => {
+            if !Path::new($path).is_file() {
+                eprintln!(
+                    "skip: pinned fixture {} not present -- not a failure",
+                    $path
+                );
+                return;
+            }
+        };
+    }
+
     fn composite_string(path: &str, key: &str) -> Option<String> {
         let path = Path::new(path);
-        if !path.is_file() {
-            eprintln!("skip: pinned fixture {} not present", path.display());
-            return Some("<skipped: fixture absent>".to_string());
-        }
         let report = crate::core::operations::read_metadata_report(path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         report
@@ -995,6 +1013,7 @@ mod step22_bare_name_arbitration_regression {
     /// SPIFF's own (much larger, unrelated) declared dimensions.
     #[test]
     fn exiftool_jpg_image_size_prefers_the_later_scanned_sof_dimensions() {
+        fixture_or_skip!(EXIFTOOL_JPG);
         assert_eq!(
             composite_string(EXIFTOOL_JPG, "Composite:ImageSize"),
             Some("8x8".to_string())
@@ -1003,10 +1022,8 @@ mod step22_bare_name_arbitration_regression {
 
     #[test]
     fn exiftool_jpg_megapixels_matches_the_sof_dimensions_not_spiffs() {
+        fixture_or_skip!(EXIFTOOL_JPG);
         let mp = composite_string(EXIFTOOL_JPG, "Composite:Megapixels");
-        if mp.as_deref() == Some("<skipped: fixture absent>") {
-            return;
-        }
         let mp: f64 = mp.expect("Composite:Megapixels").parse().expect("numeric");
         assert!(
             (mp - 0.000064).abs() < 1e-9,
@@ -1026,6 +1043,7 @@ mod step22_bare_name_arbitration_regression {
     /// `Composite:Aperture` = `"3.5"`, `Composite:LightValue` = `"10.9"`.
     #[test]
     fn exiftool_jpg_aperture_defers_to_exif_over_the_priority_zero_app12_segment() {
+        fixture_or_skip!(EXIFTOOL_JPG);
         assert_eq!(
             composite_string(EXIFTOOL_JPG, "Composite:Aperture"),
             Some("3.5".to_string())
@@ -1049,12 +1067,30 @@ mod step29_generated_expression_regression {
 
     use std::path::Path;
 
+    /// Skip the calling test when its pinned fixture is absent.
+    ///
+    /// This used to be a sentinel STRING returned from `composite_string`, which
+    /// every caller had to remember to check -- and all but one did not, so a
+    /// missing corpus turned into `left: Some("<skipped: fixture absent>")` vs
+    /// `right: Some("8x8")`. That is indistinguishable from a real wrong value,
+    /// and it cost four branches a false RED when a container eviction removed
+    /// the corpus symlink: the code was fine, the fixtures were gone.
+    ///
+    /// A macro that `return`s cannot be silently ignored the way a sentinel can.
+    macro_rules! fixture_or_skip {
+        ($path:expr) => {
+            if !Path::new($path).is_file() {
+                eprintln!(
+                    "skip: pinned fixture {} not present -- not a failure",
+                    $path
+                );
+                return;
+            }
+        };
+    }
+
     fn composite_string(path: &str, key: &str) -> Option<String> {
         let path = Path::new(path);
-        if !path.is_file() {
-            eprintln!("skip: pinned fixture {} not present", path.display());
-            return Some("<skipped: fixture absent>".to_string());
-        }
         let report = crate::core::operations::read_metadata_report(path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         report
@@ -1074,6 +1110,7 @@ mod step29_generated_expression_regression {
     /// Pinned oracle on `FLIR.jpg` (`PlanckB` = 1374.5): `"10.5 um"`.
     #[test]
     fn flir_peak_spectral_sensitivity_matches_the_pinned_oracle() {
+        fixture_or_skip!(FLIR_JPG);
         assert_eq!(
             composite_string(FLIR_JPG, "Composite:PeakSpectralSensitivity"),
             Some("10.5 um".to_string())
@@ -1088,6 +1125,7 @@ mod step29_generated_expression_regression {
     /// (SensorLeftBorder/Right/Top/Bottom = 8/3656/6/2742): `3648`/`2736`.
     #[test]
     fn panasonicraw_image_size_matches_the_pinned_oracle() {
+        fixture_or_skip!(PANASONIC_RW2);
         assert_eq!(
             composite_string(PANASONIC_RW2, "Composite:ImageWidth"),
             Some("3648".to_string())
