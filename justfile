@@ -671,6 +671,26 @@ check-tag-stats:
 docs-coverage-definitions:
     uv run scripts/generate_tag_coverage.py --skip-conformance
 
+# Stage 4 exit criterion: duplicate-loss scan over the pinned t/images corpus.
+# Re-scores "duplicate-loss scan shows zero irrecoverable losses on t/images"
+# on demand instead of by hand -- see tools/exiftool-tables/duplicate_loss_scan.py
+# for the instrument (text-mode `-a -G1 -s`, group1-qualified) and its stated
+# assumptions. Exits non-zero when any irrecoverable (MISSING/PARTIAL) loss
+# remains, so it doubles as a CI-style gate once the criterion is actually MET.
+duplicate-loss-scan *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/tmp/oxidex-exiftool-cache}"
+    CORPUS="$CACHE_DIR/exiftool/t/images"
+    if [ ! -d "$CORPUS" ]; then
+        echo "❌ $CORPUS not found -- populate the pinned ExifTool cache first" >&2
+        exit 1
+    fi
+    echo "Building oxidex..."
+    cargo build --bin oxidex
+    uv run tools/exiftool-tables/duplicate_loss_scan.py "$CORPUS" \
+        --oxidex ./target/debug/oxidex {{args}}
+
 # ExifTool Comparison
 # -------------------
 

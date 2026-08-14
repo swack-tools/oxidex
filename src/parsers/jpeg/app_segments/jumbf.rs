@@ -56,7 +56,7 @@
 //! - <https://c2pa.org/specifications/>
 
 use super::cbor::{self, CborValue};
-use crate::core::{MetadataMap, TagValue};
+use crate::core::{Instance, MetadataMap, TagValue};
 use crate::error::Result;
 
 /// Smallest APP11 payload that can carry a JUMBF chunk header
@@ -264,17 +264,30 @@ struct Collector {
 }
 
 impl Collector {
-    /// Records a tag under group `JUMBF`, keeping the first value seen.
+    /// Records a tag under group `JUMBF`, with the first value seen winning
+    /// the default (non-`-a`) view.
     ///
-    /// ExifTool reports one copy of a duplicated tag name unless `-a` is given,
-    /// and that copy is the first one extracted -- so a later box repeating a
-    /// name (every C2PA assertion carries its own `alg`, for instance) must not
-    /// displace the value already reported.
+    /// ExifTool reports one copy of a duplicated tag name unless `-a` is
+    /// given, and that copy is the first one extracted -- so a later box
+    /// repeating a name (every C2PA assertion carries its own `alg` or
+    /// `JUMDType`/`JUMDLabel`, for instance) must not displace the value
+    /// already reported. Previously this used a `contains_key` guard that
+    /// simply skipped `insert()` for every repeat, which kept the right
+    /// winner but never recorded the later occurrences at all -- a file
+    /// with N boxes sharing a tag name had 1 `JUMDType`/`JUMDLabel`
+    /// occurrence instead of N, invisible to `-a` (Stage 4's duplicate-loss
+    /// scan, `tools/exiftool-tables/duplicate_loss_scan.py`, is what caught
+    /// it: `ExifTool.jpg` and `XMP.svg` each carry six JUMBF boxes but
+    /// oxidex exposed only one `JUMDType`/`JUMDLabel`). `insert_occurrence`
+    /// with `Priority => 0` reproduces the same "first wins" default this
+    /// module has always had (`TagSink::record`'s priority-0 promotion,
+    /// `ExifTool.pm:9541-9551` -- the same rule JPEG COM's `Comment` uses,
+    /// `jpeg_helpers::process_com_segments`) while still recording every
+    /// occurrence, so `-a` can see them all.
     fn emit(&mut self, name: &str, value: TagValue) {
         let key = format!("JUMBF:{}", name);
-        if !self.metadata.contains_key(&key) {
-            self.metadata.insert(key, value);
-        }
+        self.metadata
+            .insert_occurrence(key, value, 0, "JUMBF", Instance::default());
     }
 
     /// Walks a sequence of JUMBF boxes.

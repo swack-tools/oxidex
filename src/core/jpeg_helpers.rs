@@ -1074,9 +1074,13 @@ pub fn process_app11_segments(segments: &[Segment], metadata: &mut MetadataMap) 
 
     match parse_jumbf(&jumbf_payloads) {
         Ok(jumbf_metadata) => {
-            for (key, value) in jumbf_metadata.iter() {
-                metadata.insert(key.clone(), value.clone());
-            }
+            // `merge`, not a manual `.iter()` loop: same flattening class as
+            // the APP12 Picture Info call site below -- `iter()` is the
+            // winner-projection view, and re-inserting through it drops
+            // every JUMBF box but one's `JUMDType`/`JUMDLabel`/etc. back to
+            // a single occurrence even after `Collector::emit` (jumbf.rs)
+            // was fixed to record all of them.
+            metadata.merge(jumbf_metadata);
         }
         Err(e) => {
             // JUMBF data is optional; a malformed box must not fail the file.

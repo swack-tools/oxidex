@@ -198,13 +198,55 @@ pub fn resolve_requested_tags<'a>(
                 occurrence,
             }));
         } else {
-            // `FoundTag`'s own tie rule (`ExifTool.pm:9564`, and
-            // `TagSink::record`'s implementation of it): highest priority
-            // wins, a tie goes to the occurrence recorded later.
-            let winner = matches
-                .into_iter()
-                .max_by_key(|occurrence| (occurrence.priority, occurrence.order))
-                .expect("matches is non-empty");
+            // `FoundTag`'s own tie rule (`ExifTool.pm:9564`), replicated
+            // here exactly as `TagSink::record` applies it incrementally
+            // rather than as a flat `max_by_key((priority, order))`: fold
+            // the matches in file order, and an arrival displaces the
+            // running winner only when `new.priority >= effective_old_
+            // priority`, where a running winner whose own priority is `0`
+            // is promoted to `1` for that comparison
+            // (`ExifTool.pm:9541-9551`, "promote existing 0-priority tag so
+            // it takes precedence over a new 0-tag"). A flat `max_by_key`
+            // gets `Priority => 0` families wrong: among several 0-priority
+            // arrivals it picks the one with the largest `order` (the
+            // LAST), the opposite of the FIRST-wins default JPEG COM's
+            // `Comment` and JUMBF's `JUMDType`/`JUMDLabel` both need and
+            // that `TagSink::record`'s own winner projection already gives
+            // `-j`'s default (non-`-TAG`) output path -- this bug was
+            // invisible for `Comment` (an explicit `-Comment` request
+            // silently returned the wrong one of two occurrences) until the
+            // Stage 4 duplicate-loss scan
+            // (`tools/exiftool-tables/duplicate_loss_scan.py`) started
+            // retaining JUMBF's occurrences too and made the same
+            // mis-resolution visible there.
+            //
+            // This ports rule 1 of `TagSink::record`'s two rules
+            // (priority-0 promotion) only, not rule 2 (the DOC_NUM/
+            // `Instance` guard for sub-document/track occurrences) --
+            // and rule 2's absence is a REAL, separate, still-open bug,
+            // not a case this function never sees: `-TrackID` against
+            // `CanonRaw.cr3` returns Track4's `4` here (largest `order`
+            // among four equal-priority ties) where the correct answer,
+            // matching `TagSink::record`'s own winner projection (what
+            // default non-`-TAG` `-j` output uses) and the pinned oracle's
+            // `-TrackID` default, is Track1's `1`. Porting rule 2 here
+            // needs the fold to also track the running winner's `Instance`
+            // (displacing only same-instance or default-instance
+            // arrivals), which is more than this pass's scope -- flagged
+            // rather than silently left implied-correct.
+            matches.sort_by_key(|occurrence| occurrence.order);
+            let mut remaining = matches.into_iter();
+            let mut winner = remaining.next().expect("matches is non-empty");
+            for candidate in remaining {
+                let effective_old_priority = if winner.priority == 0 {
+                    1
+                } else {
+                    winner.priority
+                };
+                if candidate.priority >= effective_old_priority {
+                    winner = candidate;
+                }
+            }
             out.push(ResolvedOccurrence {
                 lookup_key: winner.lookup_key(),
                 occurrence: winner,
