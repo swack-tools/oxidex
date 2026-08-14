@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# Hub-side `post-receive` hook (T1.3 / M3 / P5).
+#
+# On every update to refs/heads/refactor/tag-machinery, advances
+# refs/fleet/signals/tip to {sha, generation, ts} with a monotonically
+# increasing generation counter, race-safe under concurrent pushes. This
+# is the cheap, poll-friendly signal fleetd (M2) watches every 15s instead
+# of diffing the full branch ref on every host.
+#
+# NOT INSTALLED ON THE PRODUCTION HUB BY THIS CHANGE. Ground rule 1 in
+# FLEET_PLAN.md/FLEET_SPEC.md: wave 3 installs this. See
+# docs/FLEET.md / this file's companion install instructions in the T1.3
+# commit message for the exact command.
+#
+# Requires only `python3` (stdlib) and `bash` on the hub -- no pip
+# packages, matching the "Python 3, standard library only" rule that
+# applies to all of tools/fleet/.
+#
+# Install (run ON THE HUB, as the account that owns the bare repo):
+#   cp tools/fleet/hooks/post-receive  <bare-repo>.git/hooks/post-receive
+#   cp tools/fleet/drift.py            <bare-repo>.git/hooks/drift.py
+#   cp tools/fleet/fleetlib.py         <bare-repo>.git/hooks/fleetlib.py
+#   chmod +x <bare-repo>.git/hooks/post-receive
+#
+# drift.py imports fleetlib.py by path (see drift.py's own
+# `sys.path.insert(0, ...)` at import time), so the two must sit side by
+# side in the hooks/ directory -- that's why both are copied, not just
+# the hook script.
+#
+# `fleetlib.py` is only present here so `drift.py` can `import fleetlib`
+# without error; the hook only ever calls `bump_tip_signal`, which talks
+# to the *local* repo via `git --git-dir`, never fleetlib.Hub / ssh. It
+# does not need network access to itself.
+
+set -euo pipefail
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGET_REF="refs/heads/refactor/tag-machinery"
+
+# git sets GIT_DIR for hooks, but on some git/OS combinations it is
+# relative to the cwd the hook was invoked from (which for a bare repo's
+# post-receive IS the repo). Resolve to an absolute path so drift.py's
+# subprocess calls are cwd-independent.
+resolved_git_dir="${GIT_DIR:-.}"
+resolved_git_dir="$(cd "$resolved_git_dir" && pwd)"
+
+while read -r oldrev newrev refname; do
+    if [[ "$refname" == "$TARGET_REF" ]]; then
+        if [[ "$newrev" == "0000000000000000000000000000000000000000" ]]; then
+            # A deletion of the tip branch is not a tip advance. This
+            # should never happen in practice (nothing but the merge
+            # train writes this ref, and it never deletes it), but a
+            # signal bump pointing at the null sha would be worse than
+            # just skipping it.
+            echo "post-receive: refusing to bump ${TARGET_REF##*/} signal for a ref deletion" >&2
+            continue
+        fi
+        python3 "$HOOK_DIR/drift.py" bump-tip-signal --git-dir "$resolved_git_dir" "$newrev" \
+            || echo "post-receive: WARNING failed to bump refs/fleet/signals/tip for $newrev (push already accepted; not blocking it)" >&2
+    fi
+done
+
+exit 0
