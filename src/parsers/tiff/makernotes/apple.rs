@@ -247,21 +247,14 @@ fn generated_tag_name(key: &str) -> String {
 }
 
 /// `ExifTool::DecodeBits` (ExifTool.pm:6385-6407) over a 32-bit value.
+///
+/// Delegates to the canonical port (Step 25,
+/// `crate::exiftool_tables::decode_bits`) rather than keeping its own copy of
+/// the bit-walking loop -- this was one of several near-identical local
+/// implementations the generated `PrintConv::Bitmask` schema variant
+/// consolidated onto a single, unit-tested definition.
 fn decode_bits(value: u64, lookup: &[(u32, &str)]) -> String {
-    let mut parts = Vec::new();
-    for i in 0..32 {
-        if value & (1u64 << i) == 0 {
-            continue;
-        }
-        match lookup.iter().find(|(bit, _)| *bit == i) {
-            Some((_, name)) => parts.push((*name).to_string()),
-            None => parts.push(format!("[{i}]")),
-        }
-    }
-    if parts.is_empty() {
-        return "(none)".to_string();
-    }
-    parts.join(", ")
+    crate::exiftool_tables::decode_bits(value as i64, lookup)
 }
 
 /// Descend into `0x0003 RunTime`: a `bplist00` dictionary each of whose keys

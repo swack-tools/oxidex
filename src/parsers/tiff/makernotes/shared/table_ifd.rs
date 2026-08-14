@@ -393,22 +393,12 @@ pub fn list_lookup_or_unknown(map: &[(&str, &str)], key: &str) -> String {
 }
 
 /// Port of `Image::ExifTool::DecodeBits` for a single 32-bit value.
+///
+/// Delegates to the canonical port (Step 25,
+/// `crate::exiftool_tables::decode_bits`) -- see `apple.rs`'s copy of this
+/// same note for why several local implementations were consolidated here.
 pub fn decode_bits(v: i64, bits: &[(u32, &str)]) -> String {
-    let mut out: Vec<String> = Vec::new();
-    for i in 0..32u32 {
-        if v & (1i64 << i) == 0 {
-            continue;
-        }
-        match bits.iter().find(|(b, _)| *b == i) {
-            Some((_, name)) => out.push((*name).to_string()),
-            None => out.push(format!("[{}]", i)),
-        }
-    }
-    if out.is_empty() {
-        "(none)".to_string()
-    } else {
-        out.join(", ")
-    }
+    crate::exiftool_tables::decode_bits(v, bits)
 }
 
 /// Render one element of a list PrintConv.

@@ -200,22 +200,19 @@ pub(crate) enum PrintConv {
 /// `BITMASK` sub-hash: each set bit of `val` becomes its label, joined by
 /// `", "`; a set bit `BITMASK` does not name prints as `[n]`; no bits set
 /// prints `(none)`.
+///
+/// Delegates to the canonical port (Step 25,
+/// `crate::exiftool_tables::decode_bits`) -- see `apple.rs`'s copy of this
+/// same note for why several local implementations were consolidated here.
+/// The bit-label table here is keyed `i64` (this module's own convention)
+/// rather than the canonical function's `u32`, so the small conversion below
+/// is the price of keeping this file's static tables' types unchanged.
 fn decode_bits(val: i64, bits: &[(i64, &str)]) -> String {
-    let mut out = Vec::new();
-    for bit in 0..32i64 {
-        if val & (1 << bit) == 0 {
-            continue;
-        }
-        match bits.iter().find(|(b, _)| *b == bit) {
-            Some((_, label)) => out.push((*label).to_string()),
-            None => out.push(format!("[{bit}]")),
-        }
-    }
-    if out.is_empty() {
-        "(none)".to_string()
-    } else {
-        out.join(", ")
-    }
+    let bits32: Vec<(u32, &str)> = bits
+        .iter()
+        .filter_map(|(bit, label)| u32::try_from(*bit).ok().map(|bit| (bit, *label)))
+        .collect();
+    crate::exiftool_tables::decode_bits(val, &bits32)
 }
 
 /// The `ValueConv` ExifTool applies before the `PrintConv`.

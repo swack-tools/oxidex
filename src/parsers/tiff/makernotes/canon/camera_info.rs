@@ -692,18 +692,18 @@ pub(crate) fn print_conv(pc: Pc, val: Conv) -> String {
                 .unwrap_or_else(|| print_parameter(*n)),
             _ => render(&val),
         },
+        // `DecodeBits` (ExifTool.pm:6385-6407): named bits join with `", "`,
+        // and -- unlike this arm's previous inline decode -- a SET bit with
+        // no entry in `bits` still renders as `"[n]"` rather than silently
+        // vanishing from the output. Delegates to the canonical port (Step
+        // 25, `crate::exiftool_tables::decode_bits`).
         Pc::BitMask(map, bits) => match &val {
             Conv::Int(n) => lookup(map, *n).map(str::to_string).unwrap_or_else(|| {
-                let set: Vec<&str> = bits
+                let bits32: Vec<(u32, &str)> = bits
                     .iter()
-                    .filter(|(bit, _)| n & (1 << bit) != 0)
-                    .map(|(_, name)| *name)
+                    .filter_map(|(bit, name)| u32::try_from(*bit).ok().map(|bit| (bit, *name)))
                     .collect();
-                if set.is_empty() {
-                    format!("(none)")
-                } else {
-                    set.join(", ")
-                }
+                crate::exiftool_tables::decode_bits(*n, &bits32)
             }),
             _ => render(&val),
         },
@@ -1090,6 +1090,33 @@ mod tests {
         // ConvertUnixTime, UTC
         assert_eq!(convert_unix_time(0), "1970:01:01 00:00:00");
         assert_eq!(convert_unix_time(1_234_567_890), "2009:02:13 23:31:30");
+    }
+
+    #[test]
+    fn bitmask_names_every_set_bit_including_unlabelled_ones() {
+        // Mirrors Canon::CameraInfo5D's `AFPointsInFocus5D` (idx 56):
+        // exact match 0 -> "(none)", BITMASK bits 0-14 named, bit 15 is not
+        // -- ExifTool.pm:6385-6407's DecodeBits still names it, as `"[15]"`,
+        // rather than silently dropping it the way this arm's inline decode
+        // used to (Step 25 replaced it with the canonical
+        // `crate::exiftool_tables::decode_bits` port).
+        const EXACT: &[(i64, &str)] = &[(0, "(none)")];
+        const BITS: &[(i64, &str)] = &[(0, "Center"), (1, "Top"), (14, "AI Servo6")];
+        assert_eq!(print_conv(Pc::BitMask(EXACT, BITS), Conv::Int(0)), "(none)");
+        assert_eq!(
+            print_conv(Pc::BitMask(EXACT, BITS), Conv::Int(0b11)),
+            "Center, Top"
+        );
+        // Bit 15 has no entry in BITS -- must still appear, as "[15]", not
+        // vanish.
+        assert_eq!(
+            print_conv(Pc::BitMask(EXACT, BITS), Conv::Int(1 << 15)),
+            "[15]"
+        );
+        assert_eq!(
+            print_conv(Pc::BitMask(EXACT, BITS), Conv::Int((1 << 15) | 1)),
+            "Center, [15]"
+        );
     }
 
     #[test]

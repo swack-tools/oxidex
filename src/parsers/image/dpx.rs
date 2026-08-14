@@ -96,7 +96,9 @@ impl FormatParser for DPXParser {
                     _ => continue,
                 },
                 crate::exiftool_tables::PrintConv::StrEnum(_)
-                | crate::exiftool_tables::PrintConv::Expr(_) => {
+                | crate::exiftool_tables::PrintConv::Expr(_)
+                | crate::exiftool_tables::PrintConv::Bitmask { .. }
+                | crate::exiftool_tables::PrintConv::PartialEnumInt { .. } => {
                     continue;
                 }
             };

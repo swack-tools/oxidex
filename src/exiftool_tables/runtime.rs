@@ -651,6 +651,109 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
                 .map(|(_, rendered)| (*rendered).to_string())
         }
         PrintConv::Expr(expression) => expression.apply(value.number()?),
+        PrintConv::Bitmask { exact, bits } => {
+            let value = value.integer()?;
+            Some(
+                exact
+                    .binary_search_by_key(&value, |(key, _)| *key)
+                    .ok()
+                    .map(|index| exact[index].1.to_string())
+                    .unwrap_or_else(|| decode_bits(value, bits)),
+            )
+        }
+        PrintConv::PartialEnumInt {
+            exact,
+            other,
+            print_hex,
+        } => {
+            let value = value.integer()?;
+            Some(
+                exact
+                    .binary_search_by_key(&value, |(key, _)| *key)
+                    .ok()
+                    .map(|index| exact[index].1.to_string())
+                    .or_else(|| other.and_then(|id| id.apply(value)))
+                    .unwrap_or_else(|| unknown_fallback(value, print_hex)),
+            )
+        }
+    }
+}
+
+/// `Image::ExifTool::DecodeBits` (ExifTool.pm:6385-6407), restricted to the
+/// single-word case: `$bits` (`BitsPerWord`) defaults to 32, and every
+/// BITMASK-carrying `PrintConv` in the pinned 13.59 binary-table corpus
+/// leaves it unset (`codegen.py`'s `bitmask_emitted` census: 61 fields, none
+/// declaring `BitsPerWord`, none needing a second space-separated `$vals`
+/// word). ExifTool's loop:
+///
+/// ```perl
+/// foreach $val (split ' ', $vals) {
+///     for ($i=0; $i<$bits; ++$i) {
+///         next unless $val & (1 << $i);
+///         my $n = $i + $num;
+///         if (not $lookup) { push @bitList, $n; }
+///         elsif ($$lookup{$n}) { push @bitList, $$lookup{$n}; }
+///         else { push @bitList, "[$n]"; }
+///     }
+///     $num += $bits;
+/// }
+/// return '(none)' unless @bitList;
+/// return join($lookup ? ', ' : ',', @bitList);
+/// ```
+///
+/// This port always passes a `lookup` (the caller's static `BITMASK`
+/// sub-hash -- possibly `&[]` when ExifTool's own sub-hash is empty, which
+/// is still a truthy hashref in Perl, so every set bit there renders `[n]`
+/// exactly as it would upstream), so the join separator is always `", "`;
+/// the no-lookup `@bitList` (a bare bit-number list joined by a bare `,`)
+/// branch is out of scope for this generated-schema caller. It is also out
+/// of scope for the hand-written parsers this function's other callers
+/// (`apple.rs`, `lnk.rs`, `table_ifd.rs`, `binary_subdir.rs`,
+/// `camera_info.rs`'s `Pc::BitMask`) replaced: every one of them already
+/// passed a lookup table too, just with its own (divergent, in
+/// `camera_info.rs`'s case buggy -- see that file's `Pc::BitMask` doc
+/// comment) copy of this same loop.
+#[must_use]
+pub fn decode_bits(val: i64, lookup: &[(u32, &str)]) -> String {
+    let bits = val as u64;
+    let mut parts = Vec::new();
+    for i in 0..32u32 {
+        if bits & (1u64 << i) == 0 {
+            continue;
+        }
+        match lookup.iter().find(|(bit, _)| *bit == i) {
+            Some((_, name)) => parts.push((*name).to_string()),
+            None => parts.push(format!("[{i}]")),
+        }
+    }
+    if parts.is_empty() {
+        "(none)".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// ExifTool's own fallback for an unmatched hash `PrintConv`
+/// (ExifTool.pm:3624-3631):
+///
+/// ```perl
+/// if ($$tagInfo{PrintHex} and defined $val and IsInt($val) and $convType eq 'PrintConv') {
+///     $value = sprintf('Unknown (0x%x)', $val);
+/// } else {
+///     $value = "Unknown ($val)";
+/// }
+/// ```
+///
+/// `IsInt($val)` is trivially true here -- this schema's raw value is always
+/// an integer -- so the only live condition is `PrintHex`. Perl's `%x` on a
+/// negative value formats its native-width two's-complement bit pattern;
+/// `val as u64` reproduces that for a 64-bit build.
+#[must_use]
+pub fn unknown_fallback(val: i64, print_hex: bool) -> String {
+    if print_hex {
+        format!("Unknown (0x{:x})", val as u64)
+    } else {
+        format!("Unknown ({val})")
     }
 }
 
@@ -700,7 +803,7 @@ fn read_f64(bytes: &[u8], order: ByteOrder) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exiftool_tables::{ALL_BINARY_TABLES, ExprId, Mask, Omitted, find_table};
+    use crate::exiftool_tables::{ALL_BINARY_TABLES, ExprId, Mask, Omitted, OtherId, find_table};
 
     #[test]
     fn generated_pentax_layout_decodes_offsets_types_and_conversions() {
@@ -1520,5 +1623,185 @@ mod tests {
             &mut Ctx::new(&mut slt_members),
         );
         assert!(decoded.is_empty());
+    }
+
+    // --- Step 25: DecodeBits (ExifTool.pm:6385-6407) -----------------------
+
+    #[test]
+    fn decode_bits_matches_exiftool_pm_6385() {
+        // `return '(none)' unless @bitList;` (ExifTool.pm:6403).
+        assert_eq!(decode_bits(0, &[(0, "A"), (1, "B")]), "(none)");
+        // A named bit contributes its label.
+        assert_eq!(decode_bits(0b1, &[(0, "A"), (1, "B")]), "A");
+        // Multiple set bits join with `", "` (`join($lookup ? ', ' : ',', ...)`,
+        // ExifTool.pm:6404, taken here since a lookup is always passed).
+        assert_eq!(decode_bits(0b11, &[(0, "A"), (1, "B")]), "A, B");
+        // A set bit with no entry in `lookup` renders `"[n]"` (`push
+        // @bitList, "[$n]"`, ExifTool.pm:6401).
+        assert_eq!(decode_bits(0b100, &[(0, "A"), (1, "B")]), "[2]");
+        // Named and unnamed bits interleave in bit order.
+        assert_eq!(decode_bits(0b101, &[(0, "A"), (1, "B")]), "A, [2]");
+        // An empty lookup (`BITMASK => {}`) is still a truthy hashref in
+        // Perl, so DecodeBits takes the `elsif ($$lookup{$n})`/`else` path,
+        // never the `not $lookup` one: every set bit renders `[n]`.
+        assert_eq!(decode_bits(0b11, &[]), "[0], [1]");
+        // Bit 31 (top of the default 32-bit word) is in range.
+        assert_eq!(decode_bits(1i64 << 31, &[(31, "Top")]), "Top");
+        // A negative i64 exercises the two's-complement bit pattern via the
+        // `val as u64` cast -- ExifTool's Perl `&` operates on the same
+        // native-width bit pattern, so `-1` (all bits set) still finds bit 0
+        // and bit 31.
+        let all_set = decode_bits(-1, &[(0, "A"), (31, "Top")]);
+        assert!(all_set.starts_with("A, "), "{all_set}");
+        assert!(all_set.ends_with(", Top"), "{all_set}");
+    }
+
+    #[test]
+    fn unknown_fallback_matches_exiftool_pm_3624() {
+        // `$value = "Unknown ($val)";` (ExifTool.pm:3630) -- the plain form.
+        assert_eq!(unknown_fallback(5, false), "Unknown (5)");
+        assert_eq!(unknown_fallback(-1, false), "Unknown (-1)");
+        // `$value = sprintf('Unknown (0x%x)',$val);` (ExifTool.pm:3627) --
+        // taken when the tag declares `PrintHex`.
+        assert_eq!(unknown_fallback(31, true), "Unknown (0x1f)");
+        // Perl's `%x` on a negative value formats its native-width two's
+        // complement bit pattern.
+        assert_eq!(unknown_fallback(-1, true), "Unknown (0xffffffffffffffff)");
+    }
+
+    // --- Step 25: PartialEnumInt (ExifTool.pm:3612-3631) --------------------
+
+    #[test]
+    fn partial_enum_int_checks_exact_match_before_other_before_unknown() {
+        // Exact match wins even when `other` is registered -- ExifTool checks
+        // the whole PrintConv hash (`$$conv{$val}`) before ever falling back
+        // to BITMASK/OTHER (ExifTool.pm:3612).
+        let conv = PrintConv::PartialEnumInt {
+            exact: &[(1, "One")],
+            other: Some(OtherId::Identity),
+            print_hex: false,
+        };
+        assert_eq!(
+            render(conv, &DecodedValue::Integer(1)),
+            Some("One".to_string())
+        );
+        // Falls to the registered OTHER closure for anything `exact` misses.
+        assert_eq!(
+            render(conv, &DecodedValue::Integer(5)),
+            Some("5".to_string())
+        );
+    }
+
+    #[test]
+    fn partial_enum_int_falls_back_to_unknown_when_other_is_absent_or_undefined() {
+        // No OTHER registered at all: an unmapped value renders ExifTool's
+        // own `"Unknown ($val)"` form (ExifTool.pm:3624-3631) rather than the
+        // bare raw value -- this is Step 25's fix for the 362/16 "partial"
+        // enums that used to drop the fallback entirely.
+        let conv = PrintConv::PartialEnumInt {
+            exact: &[(1, "One")],
+            other: None,
+            print_hex: false,
+        };
+        assert_eq!(
+            render(conv, &DecodedValue::Integer(5)),
+            Some("Unknown (5)".to_string())
+        );
+        // `PrintHex => 1`: `sprintf('Unknown (0x%x)', $val)` (ExifTool.pm:3627).
+        let conv_hex = PrintConv::PartialEnumInt {
+            exact: &[(1, "One")],
+            other: None,
+            print_hex: true,
+        };
+        assert_eq!(
+            render(conv_hex, &DecodedValue::Integer(31)),
+            Some("Unknown (0x1f)".to_string())
+        );
+        // An exact match still wins over the hex fallback.
+        assert_eq!(
+            render(conv_hex, &DecodedValue::Integer(1)),
+            Some("One".to_string())
+        );
+    }
+
+    // --- Step 25: Bitmask ----------------------------------------------------
+
+    #[test]
+    fn bitmask_checks_exact_match_before_decode_bits() {
+        let conv = PrintConv::Bitmask {
+            exact: &[(0, "(none)")],
+            bits: &[
+                (0, "Animation"),
+                (1, "Limited Range"),
+                (3, "Extension Present"),
+            ],
+        };
+        // Exact match (BPG::Main-style: value 0 has its own entry alongside
+        // BITMASK) wins over DecodeBits.
+        assert_eq!(
+            render(conv, &DecodedValue::Integer(0)),
+            Some("(none)".to_string())
+        );
+        // No exact match: DecodeBits decodes the set bits.
+        assert_eq!(
+            render(conv, &DecodedValue::Integer(0b11)),
+            Some("Animation, Limited Range".to_string())
+        );
+        // `render`'s `Bitmask` arm never returns `None` -- unlike `IntEnum`,
+        // a value outside `exact` always gets a rendering (DecodeBits itself,
+        // which returns `"(none)"`/`"[n]"` rather than failing).
+        assert_eq!(
+            render(conv, &DecodedValue::Integer(1 << 5)),
+            Some("[5]".to_string())
+        );
+    }
+
+    // --- Step 25: OtherId registry -------------------------------------------
+
+    #[test]
+    fn other_id_identity_passes_the_value_through() {
+        assert_eq!(OtherId::Identity.apply(127), Some("127".to_string()));
+        assert_eq!(OtherId::Identity.apply(-3), Some("-3".to_string()));
+    }
+
+    #[test]
+    fn other_id_exif_print_parameter_matches_exif_pm_5628() {
+        // Exif.pm:5628-5639's `PrintParameter`: `return $val if $inv` is the
+        // PrintConvInv path, not reachable from here.
+        // `$val <= 0` passes through unchanged.
+        assert_eq!(OtherId::ExifPrintParameter.apply(0), Some("0".to_string()));
+        assert_eq!(
+            OtherId::ExifPrintParameter.apply(-4),
+            Some("-4".to_string())
+        );
+        // `0 < $val <= 0xfff0` gets a leading `+`.
+        assert_eq!(OtherId::ExifPrintParameter.apply(7), Some("+7".to_string()));
+        assert_eq!(
+            OtherId::ExifPrintParameter.apply(0xfff0),
+            Some("+65520".to_string())
+        );
+        // `$val > 0xfff0` is really a negative value in disguise:
+        // `$val - 0x10000`.
+        assert_eq!(
+            OtherId::ExifPrintParameter.apply(0xfff1),
+            Some("-15".to_string())
+        );
+    }
+
+    #[test]
+    fn other_id_minolta_af_status_focus_matches_minolta_pm_648() {
+        // Minolta.pm:648-658's `%afStatusInfo` OTHER sub, forward path only.
+        assert_eq!(
+            OtherId::MinoltaAfStatusFocus.apply(-5),
+            Some("Front Focus (-5)".to_string())
+        );
+        assert_eq!(
+            OtherId::MinoltaAfStatusFocus.apply(5),
+            Some("Back Focus (+5)".to_string())
+        );
+        assert_eq!(
+            OtherId::MinoltaAfStatusFocus.apply(0),
+            Some("Back Focus (+0)".to_string())
+        );
     }
 }

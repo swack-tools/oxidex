@@ -27,6 +27,7 @@ from collections import Counter
 
 import conds
 import exprs
+import others
 import subdirs
 
 # ExifTool format names -> (Rust Fmt variant, byte width).  Sized formats
@@ -72,17 +73,45 @@ def parse_index(key):
 
 
 # PrintConv directives that change only how an unmatched value is displayed,
-# never which string a matched key maps to. Dropping these leaves every emitted
-# entry exactly right, so they cost nothing but are still counted.
+# never which string a matched key maps to, AND that ExifTool's own fallback
+# chain (ExifTool.pm:3612-3631) never actually reads. Dropping these leaves
+# every emitted entry exactly right, so they cost nothing but are still
+# counted. `PrintHex` is the one exception worth spelling out: ExifTool reads
+# it from the TAG, `$$tagInfo{PrintHex}` (dump_tables.pl's top-level `tag.get
+# ("PrintHex")`, a `TAG_KEYS` entry, used directly by `conv_for` below for
+# `PartialEnumInt.print_hex`) -- never from a same-named key living INSIDE the
+# PrintConv hash itself, which is the only shape dump_tables.pl's `directives`
+# dict can carry (see its `BITMASK|OTHER|Notes|PrintHex|SeparateTable` regex).
+# That hash-level `PrintHex` is consequently dead for the runtime fallback and
+# stays benign here.
 #
-# BITMASK and OTHER are different in kind: both add a fallback that produces a
-# rendering for values the plain map does not contain (DecodeBits for the
-# former, a Perl sub for the latter), so an enum carrying one is genuinely
-# partial. The exact-match entries stay -- they are verified against ExifTool
-# and are what it would print -- but they are counted apart from complete
-# enums, because reporting a partial transcription as a whole one is how the
-# coverage number stops meaning anything.
+# BITMASK and OTHER are different in kind: both are ExifTool's *fallback*
+# mechanisms for a value the plain map does not contain (DecodeBits for the
+# former, a Perl closure for the latter; ExifTool.pm:3616-3631's `if
+# ($$conv{BITMASK}) {...} else { if ($$conv{OTHER}) {...} ... "Unknown
+# ($val)" }`), so they are handled explicitly below, not folded into this
+# benign set.
 BENIGN_PC_DIRECTIVES = {"Notes", "PrintHex", "PrintSort", "SeparateTable"}
+
+
+def _int_pairs(m):
+    """`m` (a PrintConv hash's plain string-keyed exact-match dict) as a
+    sorted `[(int, str)]` list, or `None` if any key fails to parse as an
+    integer -- the caller falls back to the string-keyed representation (or,
+    for the two int-only schemas below, refuses instead) rather than reporting
+    a partially-converted table."""
+    pairs = []
+    for k in m:
+        try:
+            pairs.append((int(k, 0), m[k]))
+        except ValueError:
+            return None
+    pairs.sort()
+    return pairs
+
+
+def _rust_pairs(pairs):
+    return ", ".join(f'({k}, "{rust_str(v)}")' for k, v in pairs)
 
 
 def conv_for(tag, stats):
@@ -94,35 +123,117 @@ def conv_for(tag, stats):
     kind = pc.get("kind")
     if kind in ("enum", "enum_partial"):
         m = pc.get("map") or {}
+        directives = pc.get("directives") or {}
+
+        # BITMASK takes priority over OTHER and is checked FIRST -- exactly
+        # ExifTool.pm:3616-3618's branch order (`if ($$conv{BITMASK}) {
+        # DecodeBits(...) } else { ...OTHER... }`; OTHER is dead code
+        # whenever BITMASK is present). Checked before the `not m` bailout
+        # below too: an enum whose only content is a BITMASK sub-hash and an
+        # EMPTY exact-match map (e.g. BPG::Main's `Flags`) used to fall
+        # through that bailout uncounted -- neither emitted nor reported as a
+        # refusal, a silent coverage gap `codegen.py`'s own doctrine forbids.
+        # `Bitmask::apply` (runtime.rs) never returns `None`: DecodeBits
+        # always renders something, `"(none)"` when no bits are set, so this
+        # schema carries no separate "fallback dropped" partial state at all.
+        bitmask = directives.get("BITMASK")
+        if isinstance(bitmask, dict):
+            exact_pairs = _int_pairs(m)
+            bits_pairs = []
+            bits_ok = True
+            for k, v in bitmask.items():
+                try:
+                    n = int(k)
+                except ValueError:
+                    bits_ok = False
+                    break
+                # DecodeBits (ExifTool.pm:6385-6407) indexes bit `i` of a
+                # 32-bit word (`BitsPerWord` unset in every BITMASK entry the
+                # pinned 13.59 binary-table corpus carries -- codegen.py's
+                # REPORT's `bitmask_emitted` count is the census); a bit index
+                # outside that word is not a shape this generator verifies.
+                if n < 0 or n > 31:
+                    bits_ok = False
+                    break
+                bits_pairs.append((n, v))
+            if exact_pairs is not None and bits_ok:
+                bits_pairs.sort()
+                stats["bitmask_emitted"] += 1
+                return (
+                    "PrintConv::Bitmask { exact: &["
+                    f"{_rust_pairs(exact_pairs)}], bits: &[{_rust_pairs(bits_pairs)}] }}"
+                )
+            stats["bitmask_unreadable"] += 1
+            return "PrintConv::None"
+
         if not m:
             return "PrintConv::None"
-        # `enum_partial` means dump_tables.pl saw directive keys alongside the
-        # map; `directives` is a dict of them (null when there are none).
-        # Record which, so the accounting says what was lost rather than
-        # scoring the result as a complete enum.
-        directives = sorted(
-            d for d in (pc.get("directives") or {})
-            if d not in BENIGN_PC_DIRECTIVES
-        )
-        partial = bool(directives)
-        for d in directives:
-            stats["pc_directives_dropped"][d] += 1
-        # An enum whose keys are all integers becomes a sorted i64 table so the
-        # runtime can binary-search it; otherwise fall back to string keys.
-        pairs = []
-        all_int = True
-        for k in m:
-            try:
-                pairs.append((int(k, 0), m[k]))
-            except ValueError:
-                all_int = False
-                break
-        if all_int:
-            stats["enum_int_partial" if partial else "enum_int"] += 1
-            pairs.sort()
-            body = ", ".join(f'({k}, "{rust_str(v)}")' for k, v in pairs)
-            return f"PrintConv::IntEnum(&[{body}])"
-        stats["enum_str_partial" if partial else "enum_str"] += 1
+
+        # OTHER: resolved only through Step 25's deparse-keyed registry
+        # (tools/exiftool-tables/others.py) -- an exact match on the
+        # closure's own deparsed text, never a pattern guess. Unregistered
+        # means this generator does not know what the closure returns for a
+        # value outside `m`, and guessing "Unknown ($val)" would very likely
+        # be WRONG (most OTHER closures exist precisely to transform such
+        # values into something else) -- exactly the approximation AGENTS.md
+        # forbids. So an unregistered OTHER refuses the whole conversion,
+        # same as it silently did before Step 25; the only change is that the
+        # refusal is now counted with its own reason instead of folded into
+        # an undifferentiated "partial" bucket.
+        other = directives.get("OTHER")
+        if other is not None:
+            other_id = None
+            deparse = None
+            if isinstance(other, dict) and other.get("__perl") == "CODE":
+                deparse = other.get("__deparse")
+                if deparse:
+                    other_id = others.translate_other(deparse)
+            if other_id is not None:
+                exact_pairs = _int_pairs(m)
+                if exact_pairs is None:
+                    # The registry only carries int-domain closures (see
+                    # others.py); a string-keyed exact map paired with a
+                    # registered OTHER never occurs in the pinned 13.59
+                    # corpus, but refuse rather than guess how the two would
+                    # interact if it ever does.
+                    stats["other_str_domain_unsupported"] += 1
+                    return "PrintConv::None"
+                stats["other_translated"] += 1
+                print_hex = "true" if tag.get("PrintHex") else "false"
+                return (
+                    "PrintConv::PartialEnumInt { exact: &["
+                    f"{_rust_pairs(exact_pairs)}], other: Some({other_id}), "
+                    f"print_hex: {print_hex} }}"
+                )
+            # Two counters, one event: `pc_directives_dropped["OTHER"]` is the
+            # REPORT's human listing, `other_unregistered` is the scalar Gate A
+            # (Step 28) reads. Gate A indexes plain ints -- a nested Counter
+            # would enter `reasons` as a Counter and be emitted into the
+            # generated Rust as one -- and before Step 25 this same event
+            # raised `enum_int_partial`, which Gate A already disqualified on.
+            # Dropping that counter without putting a scalar back would have
+            # quietly ENABLED every table whose only defect is an OTHER this
+            # generator cannot reproduce.
+            stats["pc_directives_dropped"]["OTHER"] += 1
+            stats["other_unregistered"] += 1
+            if deparse:
+                # Truncated, whitespace-flattened: a reporting key, not a
+                # second copy of the registry's exact-match discipline.
+                flat = " ".join(deparse.split())[:72]
+                stats["other_unregistered_bodies"][flat] += 1
+            return "PrintConv::None"
+
+        # No BITMASK, no OTHER: whatever else is in `directives` is benign
+        # (Notes/PrintHex/SeparateTable -- see BENIGN_PC_DIRECTIVES's doc),
+        # so the map is a complete enum, unmatched-value fallback and all
+        # (IntEnum/StrEnum stay silent on a miss; that is unchanged by Step
+        # 25, which scopes the Unknown($val) fallback to the OTHER/BITMASK
+        # population only -- see AGENTS.md's step description).
+        exact_pairs = _int_pairs(m)
+        if exact_pairs is not None:
+            stats["enum_int"] += 1
+            return f"PrintConv::IntEnum(&[{_rust_pairs(exact_pairs)}])"
+        stats["enum_str"] += 1
         body = ", ".join(
             f'("{rust_str(k)}", "{rust_str(v)}")' for k, v in sorted(m.items())
         )
@@ -367,9 +478,10 @@ def compile_subdir(sd, stats):
 
 def _merge_stats(dst, src):
     """`dst.update(src)` done by hand: `Counter.update` adds values via `+=`,
-    which breaks for the two keys (`unsupported_exprs`,
-    `pc_directives_dropped`) whose value is itself a nested `Counter` rather
-    than an int -- `0 + Counter(...)` has no `__radd__`. Nested Counters
+    which breaks for the three keys (`unsupported_exprs`,
+    `pc_directives_dropped`, `other_unregistered_bodies`) whose value is itself
+    a nested `Counter` rather than an int -- `0 + Counter(...)` has no
+    `__radd__`. Nested Counters
     merge key-wise; everything else adds as a plain int count.
     """
     for key, value in src.items():
@@ -508,12 +620,14 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until):
     """
     variants = tag["_variants"]
     trial_stats = Counter()
-    # `conv_for` writes into these two nested Counters (diagnostic listings,
-    # not part of the coverage arithmetic REPORT checks), so the trial copy
-    # needs its own, or the first write inside a refused-and-discarded trial
-    # would crash on a bare `int` where a `Counter` was expected.
+    # `conv_for` writes into these three nested Counters (diagnostic
+    # listings, not part of the coverage arithmetic REPORT checks), so the
+    # trial copy needs its own, or the first write inside a refused-and-
+    # discarded trial would crash on a bare `int` where a `Counter` was
+    # expected.
     trial_stats["unsupported_exprs"] = Counter()
     trial_stats["pc_directives_dropped"] = Counter()
+    trial_stats["other_unregistered_bodies"] = Counter()
     alt_srcs = []
     local_var_sound_until = var_sound_until
     for v in variants:
@@ -604,8 +718,17 @@ GATE_A_DISQUALIFYING = (
     # conversions dropped -- the field is emitted, but renders the wrong thing
     "expr_unsupported",
     "conv_dropped",
-    "enum_int_partial",
-    "enum_str_partial",
+    # Step 25 retired `enum_int_partial`/`enum_str_partial`: an enum carrying a
+    # BITMASK or a registered OTHER is now transcribed in full (PrintConv::
+    # Bitmask / PrintConv::PartialEnumInt), so it is no longer partial and no
+    # longer disqualifying. The three counters below are what is left of that
+    # population -- every one of them still returns `PrintConv::None`, i.e. the
+    # conversion IS dropped -- and they inherit the gate weight the two retired
+    # counters carried. Without them Gate A would read a Step 25 refusal as a
+    # clean table.
+    "other_unregistered",
+    "other_str_domain_unsupported",
+    "bitmask_unreadable",
     # SubDirectory edges refused -- the pointer is emitted with no target, so
     # every tag on the far side is silently absent
     "subdir_refused_processproc",
@@ -674,6 +797,7 @@ def gen_table(mod_name, tbl_name, tbl, stats):
     stats, run_stats = Counter(), stats
     stats["unsupported_exprs"] = Counter()
     stats["pc_directives_dropped"] = Counter()
+    stats["other_unregistered_bodies"] = Counter()
 
     rows = []
     variant_rows = []
@@ -883,6 +1007,35 @@ pub enum PrintConv {
     IntEnum(&'static [(i64, &'static str)]),
     StrEnum(&'static [(&'static str, &'static str)]),
     Expr(ExprId),
+    /// ExifTool's `BITMASK` fallback (ExifTool.pm:3616-3618; `DecodeBits` at
+    /// ExifTool.pm:6385-6407, ported as `exiftool_tables::runtime::
+    /// decode_bits`). `exact` (sorted by key) is checked first -- ExifTool
+    /// checks the whole PrintConv hash, including its non-directive keys,
+    /// before ever falling back to `BITMASK` -- then any value `exact` does
+    /// not cover is decoded bit-by-bit against `bits`. `Bitmask::apply`
+    /// never returns `None`: `DecodeBits` always renders something,
+    /// `"(none)"` when no bits are set, so this variant carries no separate
+    /// "fallback unavailable" state the way `PartialEnumInt` below does.
+    Bitmask {
+        exact: &'static [(i64, &'static str)],
+        bits: &'static [(u32, &'static str)],
+    },
+    /// An enum whose ExifTool `PrintConv` hash also declares `OTHER`
+    /// (ExifTool.pm:3619-3631): `exact` (sorted by key) is checked first,
+    /// then the registered `other` closure (Step 25's OTHER registry,
+    /// `tools/exiftool-tables/others.py` -> `OtherId`), then ExifTool's own
+    /// `"Unknown ($val)"` / `sprintf('Unknown (0x%x)', $val)` fallback
+    /// (`print_hex` mirrors the tag's `PrintHex`) for whatever `other`
+    /// itself leaves undefined. `other` is `None` only for a
+    /// hand-constructed value (never emitted by `codegen.py`, which only
+    /// builds this variant once `other` has resolved) -- kept `Option`
+    /// because the plain exact+Unknown chain is itself a legitimate,
+    /// independently useful shape.
+    PartialEnumInt {
+        exact: &'static [(i64, &'static str)],
+        other: Option<OtherId>,
+        print_hex: bool,
+    },
 }
 
 /// ExifTool's `Mask`/`BitShift` pair: the field is a slice of the word.
@@ -1103,6 +1256,21 @@ impl PrintConv {
                 m.iter().find(|(k, _)| *k == key).map(|(_, v)| (*v).to_string())
             }
             PrintConv::Expr(e) => e.apply(val as f64),
+            PrintConv::Bitmask { exact, bits } => Some(
+                exact
+                    .binary_search_by_key(&val, |(k, _)| *k)
+                    .ok()
+                    .map(|i| exact[i].1.to_string())
+                    .unwrap_or_else(|| super::runtime::decode_bits(val, bits)),
+            ),
+            PrintConv::PartialEnumInt { exact, other, print_hex } => Some(
+                exact
+                    .binary_search_by_key(&val, |(k, _)| *k)
+                    .ok()
+                    .map(|i| exact[i].1.to_string())
+                    .or_else(|| other.and_then(|id| id.apply(val)))
+                    .unwrap_or_else(|| super::runtime::unknown_fallback(val, *print_hex)),
+            ),
         }
     }
 }
@@ -1193,10 +1361,8 @@ REPORT = (
         ("masked fields", "tag_masked"),
         ("bit fields (frac + Mask)", "tag_fractional_masked"),
         ("SubDirectory edges modeled (Step 27)", "subdir_edge_modeled"),
-    )),
-    ("partial -- exact matches kept, fallback dropped", (
-        ("int enums", "enum_int_partial"),
-        ("string enums", "enum_str_partial"),
+        ("BITMASK fields (DecodeBits, Step 25)", "bitmask_emitted"),
+        ("OTHER conversions registered (Step 25 registry)", "other_translated"),
     )),
     ("emitted with semantics recorded but not applied", (
         ("ValueConv", "omitted_value_conv"),
@@ -1220,6 +1386,9 @@ REPORT = (
         ("unnamed tags", "tag_no_name"),
         ("tables not ProcessBinaryData", "table_not_binary"),
         ("tables bad FORMAT", "table_bad_format"),
+        ("BITMASK unreadable (non-integer/out-of-range bit key)", "bitmask_unreadable"),
+        ("OTHER not in the Step 25 registry", "other_unregistered"),
+        ("OTHER registered but exact map is string-keyed", "other_str_domain_unsupported"),
     )),
     ("offsets unsound past a refused var_* field (fields also counted above)", (
         ("tables affected", "table_offsets_unsound"),
@@ -1250,6 +1419,7 @@ def main():
     stats = Counter()
     stats["unsupported_exprs"] = Counter()
     stats["pc_directives_dropped"] = Counter()
+    stats["other_unregistered_bodies"] = Counter()
     chunks = []
     index_rows = []
 
@@ -1315,12 +1485,14 @@ def main():
 
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(PRELUDE.replace("__VERSION_BLOCK__", version_block))
+        fh.write(others.RUST_SUPPORT)
         fh.write(gen_expr_enum(used))
         fh.write(joined)
         fh.write(index)
 
     ue = stats.pop("unsupported_exprs")
     pcd = stats.pop("pc_directives_dropped")
+    oub = stats.pop("other_unregistered_bodies")
     print(f"wrote {args.out}")
     printed = set()
     for heading, rows in REPORT:
@@ -1347,6 +1519,10 @@ def main():
         print("\n  PrintConv directives dropped from partial enums:")
         for d, n in pcd.most_common():
             print(f"    {n:>4}  {d}")
+    if oub:
+        print("\n  top unregistered OTHER closures (add to tools/exiftool-tables/others.py):")
+        for body, n in oub.most_common(10):
+            print(f"    {n:>4}  {body}")
     if ue:
         print("\n  top unsupported expressions (translate these next):")
         for e, n in ue.most_common(10):

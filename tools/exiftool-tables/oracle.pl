@@ -14,13 +14,24 @@
 #   MODULE  TABLE  INDEX  MASK    BITS  SHIFT       -- one per masked field (6)
 #   MODULE  TABLE  INDEX  HOOK    (empty)           -- field carries a Hook (5)
 #   MODULE  TABLE  INDEX  VARFMT  (empty)           -- field's Format is var_* (5)
+#   MODULE  TABLE  INDEX  BITMASK BIT  LABEL        -- one per BITMASK sub-hash entry (6)
+#   MODULE  TABLE  INDEX  OTHER   PRINTHEX          -- field's PrintConv has OTHER (5)
 #   MODULE  TABLE  INDEX  SUBDIR  TAGTABLE  START  BASE  PROCESSPROC  BYTEORDER  VALIDATE
 #                                                    -- field carries a SubDirectory (10)
 #
 # The trailing empty column on HOOK/VARFMT lines is not decorative: it is
 # what keeps them from colliding with a NAME line on column count (both
 # would otherwise be 4 columns, and a tag genuinely named "Hook" is not
-# impossible). SUBDIR carries the raw facts Step 27's `verify.py` needs to
+# impossible). BITMASK/OTHER are Step 25's addition, read straight from the
+# live `PrintConv` hash: BITMASK emits one row per `$pc->{BITMASK}` entry
+# (same shape as ENUM, so `verify.py` can reuse its pair-comparison logic);
+# OTHER is presence-only (a tag's `OTHER` closure is arbitrary Perl this
+# oracle does not evaluate -- see `tools/exiftool-tables/others.py` for how
+# `codegen.py` decides which ones it trusts), with PRINTHEX carrying
+# `$e->{PrintHex}`'s presence so `verify.py` can confirm a generated
+# `PartialEnumInt`'s `print_hex` flag against the SAME tag-level fact
+# `codegen.py`'s `conv_for` reads. SUBDIR carries the raw facts Step 27's
+# `verify.py` needs to
 # independently re-derive whether `codegen.py`'s SubdirEdge compiler
 # (`tools/exiftool-tables/subdirs.py`) should have modeled this field's edge
 # or refused it, and why -- TAGTABLE/START/BASE are the raw (to_text) source
@@ -117,6 +128,26 @@ sub emit_entry {
 
     my $pc = $e->{PrintConv};
     return unless ref $pc eq 'HASH';
+
+    # Step 25: the BITMASK sub-hash and OTHER closure's presence, straight
+    # from the live PrintConv hash -- independent of dump_tables.pl/
+    # codegen.py/others.py the same way every other row here is. `verify.py`
+    # cross-checks these against the generated `PrintConv::Bitmask`/
+    # `PartialEnumInt` fields: a BITMASK bit this generator invented or
+    # dropped is exactly as wrong as an ENUM/MASK mismatch, and a
+    # `PartialEnumInt` field whose tag has no OTHER at all in ExifTool would
+    # mean the registry matched a closure that was never actually there.
+    if (ref $pc->{BITMASK} eq 'HASH') {
+        for my $bk (sort keys %{$pc->{BITMASK}}) {
+            print join("\t", $mod, $sym, $key, 'BITMASK', clean($bk),
+                       clean($pc->{BITMASK}{$bk})), "\n";
+        }
+    }
+    if (exists $pc->{OTHER}) {
+        my $print_hex = (defined $e->{PrintHex} && $e->{PrintHex}) ? '1' : '';
+        print join("\t", $mod, $sym, $key, 'OTHER', $print_hex), "\n";
+    }
+
     for my $ck (sort keys %$pc) {
         next if $ck =~ /^(BITMASK|OTHER|Notes|PrintHex|SeparateTable)$/;
         next if ref $pc->{$ck};

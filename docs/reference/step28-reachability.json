@@ -1,12 +1,11 @@
 {
-  "eligible": 350,
+  "eligible": 375,
   "enabled": 5,
   "gate_a_refusal_reasons": {
     "conv_dropped": 14,
-    "enum_int_partial": 50,
-    "enum_str_partial": 16,
     "expr_unsupported": 141,
     "offsets_sound_until": 4,
+    "other_unregistered": 29,
     "subdir_refused_processproc": 1,
     "tag_bad_index": 4,
     "tag_fmt_unsupported": 86,
@@ -107,12 +106,12 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
-          1
-        ],
-        [
           "expr_unsupported",
           3
+        ],
+        [
+          "other_unregistered",
+          1
         ],
         [
           "tag_fmt_unsupported",
@@ -159,8 +158,8 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
-          4
+          "other_unregistered",
+          1
         ],
         [
           "tag_variant_cond_unsupported",
@@ -274,18 +273,13 @@
       "table": "CameraInfo1DX"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          3
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 16,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Canon",
-      "status": "refused",
+      "status": "eligible",
       "table": "CameraInfo1DmkII"
     },
     {
@@ -309,18 +303,13 @@
       "table": "CameraInfo1DmkIII"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          3
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 13,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Canon",
-      "status": "refused",
+      "status": "eligible",
       "table": "CameraInfo1DmkIIN"
     },
     {
@@ -453,10 +442,6 @@
     },
     {
       "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ],
         [
           "expr_unsupported",
           2
@@ -769,10 +754,6 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
-          5
-        ],
-        [
           "expr_unsupported",
           3
         ]
@@ -969,24 +950,19 @@
       "table": "ColorDataUnknown"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 3,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Canon",
-      "status": "refused",
+      "status": "eligible",
       "table": "ColorInfo"
     },
     {
       "blocked_by": [
         [
-          "enum_int_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -1152,18 +1128,13 @@
       "table": "LightingOpt"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 7,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Canon",
-      "status": "refused",
+      "status": "eligible",
       "table": "LogInfo"
     },
     {
@@ -1226,33 +1197,23 @@
       "table": "MyColors"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          34
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 45,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Canon",
-      "status": "refused",
+      "status": "eligible",
       "table": "PSInfo"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          38
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 51,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Canon",
-      "status": "refused",
+      "status": "eligible",
       "table": "PSInfo2"
     },
     {
@@ -2235,7 +2196,7 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -2250,7 +2211,7 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -2275,8 +2236,8 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
-          2
+          "other_unregistered",
+          1
         ]
       ],
       "edges": [],
@@ -2365,7 +2326,7 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -2415,11 +2376,11 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
+          "expr_unsupported",
           1
         ],
         [
-          "expr_unsupported",
+          "other_unregistered",
           1
         ],
         [
@@ -2438,7 +2399,7 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
+          "other_unregistered",
           1
         ],
         [
@@ -2779,18 +2740,13 @@
       "table": "AVI1"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 4,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "JPEG",
-      "status": "refused",
+      "status": "eligible",
       "table": "Adobe"
     },
     {
@@ -3002,18 +2958,13 @@
       "table": "MOV"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 25,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Kodak",
-      "status": "refused",
+      "status": "eligible",
       "table": "Main"
     },
     {
@@ -3052,18 +3003,13 @@
       "table": "Type2"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 8,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Kodak",
-      "status": "refused",
+      "status": "eligible",
       "table": "Type3"
     },
     {
@@ -3273,7 +3219,7 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "other_unregistered",
           1
         ],
         [
@@ -3685,26 +3631,17 @@
       "table": "Stitch"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          12
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 17,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Minolta",
-      "status": "refused",
+      "status": "eligible",
       "table": "CameraInfoA100"
     },
     {
       "blocked_by": [
-        [
-          "enum_int_partial",
-          2
-        ],
         [
           "expr_unsupported",
           3
@@ -3736,10 +3673,6 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
-          1
-        ],
-        [
           "expr_unsupported",
           1
         ]
@@ -3753,18 +3686,13 @@
       "table": "CameraSettings7D"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          3
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 78,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Minolta",
-      "status": "refused",
+      "status": "eligible",
       "table": "CameraSettingsA100"
     },
     {
@@ -3820,7 +3748,7 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -3845,11 +3773,11 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
+          "expr_unsupported",
           1
         ],
         [
-          "expr_unsupported",
+          "other_unregistered",
           1
         ]
       ],
@@ -3872,18 +3800,13 @@
       "table": "WBG"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 3,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Nikon",
-      "status": "refused",
+      "status": "eligible",
       "table": "AFInfo"
     },
     {
@@ -3891,10 +3814,6 @@
         [
           "conv_dropped",
           3
-        ],
-        [
-          "enum_int_partial",
-          1
         ]
       ],
       "edges": [],
@@ -3910,10 +3829,6 @@
         [
           "conv_dropped",
           4
-        ],
-        [
-          "enum_int_partial",
-          1
         ],
         [
           "tag_variant_cond_unsupported",
@@ -3939,7 +3854,7 @@
           3
         ],
         [
-          "enum_int_partial",
+          "other_unregistered",
           2
         ]
       ],
@@ -4206,15 +4121,11 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
-          1
-        ],
-        [
-          "enum_str_partial",
-          1
-        ],
-        [
           "expr_unsupported",
+          1
+        ],
+        [
+          "other_unregistered",
           1
         ]
       ],
@@ -4229,11 +4140,11 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "expr_unsupported",
           1
         ],
         [
-          "expr_unsupported",
+          "other_unregistered",
           1
         ]
       ],
@@ -4248,12 +4159,12 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
-          1
-        ],
-        [
           "expr_unsupported",
           4
+        ],
+        [
+          "other_unregistered",
+          1
         ]
       ],
       "edges": [],
@@ -4267,11 +4178,11 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "expr_unsupported",
           1
         ],
         [
-          "expr_unsupported",
+          "other_unregistered",
           1
         ]
       ],
@@ -4286,11 +4197,11 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "expr_unsupported",
           1
         ],
         [
-          "expr_unsupported",
+          "other_unregistered",
           1
         ]
       ],
@@ -4305,11 +4216,11 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "expr_unsupported",
           1
         ],
         [
-          "expr_unsupported",
+          "other_unregistered",
           1
         ]
       ],
@@ -5106,18 +5017,13 @@
       "table": "SettingsD3"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 89,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "NikonCustom",
-      "status": "refused",
+      "status": "eligible",
       "table": "SettingsD4"
     },
     {
@@ -5131,33 +5037,23 @@
       "table": "SettingsD40"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 89,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": true,
       "module": "NikonCustom",
-      "status": "refused",
+      "status": "eligible",
       "table": "SettingsD5"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 89,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "NikonCustom",
-      "status": "refused",
+      "status": "eligible",
       "table": "SettingsD500"
     },
     {
@@ -5241,33 +5137,23 @@
       "table": "SettingsD800"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 86,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "NikonCustom",
-      "status": "refused",
+      "status": "eligible",
       "table": "SettingsD810"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 89,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "NikonCustom",
-      "status": "refused",
+      "status": "eligible",
       "table": "SettingsD850"
     },
     {
@@ -5741,7 +5627,7 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -5963,18 +5849,13 @@
       "table": "V3"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 17,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Pentax",
-      "status": "refused",
+      "status": "eligible",
       "table": "AEInfo"
     },
     {
@@ -6101,18 +5982,13 @@
       "table": "CameraInfo"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          5
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 31,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Pentax",
-      "status": "refused",
+      "status": "eligible",
       "table": "CameraSettings"
     },
     {
@@ -6178,7 +6054,7 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
+          "other_unregistered",
           20
         ]
       ],
@@ -6267,7 +6143,7 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -6287,7 +6163,7 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -6307,7 +6183,7 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -6327,7 +6203,7 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -6347,7 +6223,7 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -6377,7 +6253,7 @@
     {
       "blocked_by": [
         [
-          "enum_str_partial",
+          "other_unregistered",
           1
         ]
       ],
@@ -6465,10 +6341,6 @@
     },
     {
       "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ],
         [
           "expr_unsupported",
           1
@@ -6920,10 +6792,6 @@
     },
     {
       "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ],
         [
           "tag_fmt_unsupported",
           1
@@ -7555,48 +7423,33 @@
       "table": "Header4"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          18
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 18,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Sony",
-      "status": "refused",
+      "status": "eligible",
       "table": "AFStatus15"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          30
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 30,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Sony",
-      "status": "refused",
+      "status": "eligible",
       "table": "AFStatus19"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          95
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 95,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Sony",
-      "status": "refused",
+      "status": "eligible",
       "table": "AFStatus79"
     },
     {
@@ -7604,10 +7457,6 @@
         [
           "conv_dropped",
           1
-        ],
-        [
-          "enum_int_partial",
-          24
         ]
       ],
       "edges": [],
@@ -7623,10 +7472,6 @@
         [
           "conv_dropped",
           1
-        ],
-        [
-          "enum_int_partial",
-          12
         ]
       ],
       "edges": [],
@@ -7642,10 +7487,6 @@
         [
           "conv_dropped",
           1
-        ],
-        [
-          "enum_int_partial",
-          13
         ]
       ],
       "edges": [
@@ -7662,40 +7503,30 @@
       "table": "CameraInfo3"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 55,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Sony",
-      "status": "refused",
+      "status": "eligible",
       "table": "CameraSettings"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 45,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Sony",
-      "status": "refused",
+      "status": "eligible",
       "table": "CameraSettings2"
     },
     {
       "blocked_by": [
         [
-          "enum_int_partial",
-          3
+          "other_unregistered",
+          1
         ]
       ],
       "edges": [],
@@ -7742,18 +7573,13 @@
       "table": "ExtraInfo3"
     },
     {
-      "blocked_by": [
-        [
-          "enum_int_partial",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
       "fields": 9,
-      "gate_a": false,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Sony",
-      "status": "refused",
+      "status": "eligible",
       "table": "FaceInfo"
     },
     {
@@ -7958,11 +7784,11 @@
     {
       "blocked_by": [
         [
-          "enum_int_partial",
+          "expr_unsupported",
           1
         ],
         [
-          "expr_unsupported",
+          "other_unregistered",
           1
         ]
       ],
@@ -8068,6 +7894,6 @@
       "table": "Main"
     }
   ],
-  "refused": 258,
+  "refused": 233,
   "tables": 613
 }

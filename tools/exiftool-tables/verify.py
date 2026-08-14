@@ -61,27 +61,23 @@ FIELD_RE = re.compile(
     r'|Some\(\s*Mask\s*\{\s*bits:\s*(?P<mask_bits>0[xX][0-9a-fA-F_]+|\d+),\s*'
     r'shift:\s*(?P<mask_shift>\d+),?\s*\}\s*,?\s*\)),\s*'
     r'omitted:\s*(?P<omitted>Omitted::NONE|Omitted\s*\{[^{}]*\}),\s*'
-    r'print_conv:\s*(?P<pc>PrintConv::(?:None'
-    # Whitespace/trailing-comma tolerant, not just `Expr\(ExprId::\w+\)`:
-    # rustfmt wraps `Expr(ExprId::VeryLongGeneratedIdentifier)` onto its own
-    # line with a trailing comma once the identifier is long enough to blow
-    # the line-width limit -- invisible until Step 23 started compiling
-    # `_variants` alternatives whose `ExprId` names (built from the full
-    # normalized Perl expression, e.g.
-    # `ImageExifToolExifPrintExposureTimeVal6037F3`) are long enough to
-    # trigger it. A tag whose `pc` group fails to match here is silently
-    # invisible to every check below it, not merely misparsed, so this is a
-    # completeness bug, not a cosmetic one.
-    r'|Expr\(\s*ExprId::\w+\s*,?\s*\)'
-    r'|IntEnum\(&\[.*?\]\)'
-    r'|StrEnum\(&\[.*?\]\)))'
-    # Step 27: `subdir:` is the last field. Its value (`None` or
-    # `Some(SubdirEdge { ... })`, arbitrarily nested via `Start::Expr(&...)`)
-    # is NOT captured here -- a fixed-depth regex cannot bound arbitrary
-    # nesting safely, the same reason enum bodies are rescanned by
-    # `_enum_body` instead of captured inline. This only anchors the offset
-    # `_value_span` starts scanning from; see `_parse_one_field`.
-    r',\s*subdir:\s*',
+    # Step 25: neither `print_conv:` nor `subdir:` has its value captured
+    # inline anymore. `subdir:`'s value (`None` or `Some(SubdirEdge { ... })`,
+    # arbitrarily nested via `Start::Expr(&...)`) never could be -- a
+    # fixed-depth regex cannot bound arbitrary nesting safely, the same
+    # reason enum bodies are rescanned by `_enum_body` instead of captured
+    # inline. `print_conv:`'s value joined it once `PrintConv::Bitmask {
+    # exact: &[...], bits: &[...] }` and `PrintConv::PartialEnumInt { exact:
+    # &[...], other: Some(OtherId::...)|None, print_hex: bool }` arrived: two
+    # independently-sized `&[...]` arrays (or one array plus two scalars) is
+    # exactly the shape a fixed-width alternation cannot bound either. Both
+    # are read the same way from here on: `_value_span`, twice in sequence
+    # from this match's end, locates first the `print_conv:` value and then
+    # (immediately after, anchored by the literal `, subdir:` between them)
+    # the `subdir:` value -- see `_parse_one_field` for how each print_conv
+    # shape (`None`, `Expr(...)`, `IntEnum(&[...])`, `StrEnum(&[...])`,
+    # `Bitmask {...}`, `PartialEnumInt {...}`) is dispatched from its text.
+    r'print_conv:\s*',
     re.S,
 )
 FIELD_COUNT_RE = re.compile(r'Field\s*\{\s*index:')
@@ -268,12 +264,64 @@ def _parse_subdir_value(text):
     return m.group("module"), m.group("table"), start_text, base_text
 
 
-def _parse_one_field(src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges):
-    """Populate `fields`/`enums`/`masks`/`hooks`/`subdirs`/`subdir_edges` from
-    one `FIELD_RE` match `f`, under dict key `k`. Shared by the plain-`fields:`
-    scan and the `variants:` scan below -- a `Field {...}` literal means the
-    same thing in both places, only what `k` looks like differs (see
-    `parse_rust`)."""
+# The literal text between a `print_conv:` value and the `subdir:` value
+# that always follows it -- anchors the second `_value_span` call in
+# `_parse_one_field` once the first has located where the print_conv value
+# ends.
+_SUBDIR_LABEL_RE = re.compile(r'\s*,\s*subdir:\s*', re.S)
+
+# `PrintConv::Bitmask { exact: ..., bits: ... }` / `PrintConv::PartialEnumInt
+# { exact: ..., other: ..., print_hex: ... }`: only the struct TAG is
+# anchored here (whitespace/brace-tolerant across rustfmt's wrapping); each
+# named member's `&[...]` array is then located independently by
+# `_named_array_span` and re-walked by `_enum_body`, the same "do not trust a
+# fixed-depth capture with unbounded nesting" discipline `subdir:` already
+# uses. `PrintConv::None`/`Expr(...)`/`IntEnum(&[...])`/`StrEnum(&[...])`
+# stay recognised by a plain prefix check -- see `_parse_one_field`.
+_BITMASK_RE = re.compile(r'^PrintConv::Bitmask\s*\{', re.S)
+_PARTIAL_ENUM_INT_RE = re.compile(r'^PrintConv::PartialEnumInt\s*\{', re.S)
+_OTHER_ID_RE = re.compile(r'other:\s*(?:Some\(\s*OtherId::(?P<variant>\w+)\s*,?\s*\)|(?P<none>None))')
+_PRINT_HEX_RE = re.compile(r'print_hex:\s*(?P<val>true|false)')
+
+
+def _named_array_span(src, pc_start, pc_end, member):
+    """Absolute `(open_bracket_index)` of `member`'s `&[` inside the
+    `print_conv:` value spanning `src[pc_start:pc_end]` (a `Bitmask`/
+    `PartialEnumInt` struct literal), for `_enum_body` to bracket-match from.
+    Raises SystemExit if `member` is not found in range -- an out-of-date
+    pattern must fail loudly, not silently verify zero entries."""
+    m = re.search(rf'{member}:\s*&\[', src[pc_start:pc_end])
+    if not m:
+        raise SystemExit(
+            f"print_conv value {src[pc_start:pc_end]!r} has no `{member}: &[` "
+            "-- the verifier's pattern is out of date; fix it before trusting a PASS"
+        )
+    return pc_start + m.end() - 1
+
+
+def _parse_int_pairs(src, open_bracket, k, label):
+    """`_enum_body` + `INT_PAIR_RE`, with the same exact-accounting discipline
+    `_parse_one_field`'s enum handling already applies: a pair the pattern
+    cannot read fails the run outright."""
+    body, expected_pairs = _enum_body(src, open_bracket)
+    pairs = INT_PAIR_RE.findall(body)
+    if len(pairs) != expected_pairs:
+        raise SystemExit(
+            f"{label} for {k}: parsed {len(pairs)} of {expected_pairs} entries "
+            "-- the verifier's pair pattern is out of date; fix it before trusting a PASS"
+        )
+    return pairs
+
+
+def _parse_one_field(
+    src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges,
+    bitmasks, other_ids, print_hexes,
+):
+    """Populate `fields`/`enums`/`masks`/`hooks`/`subdirs`/`subdir_edges`/
+    `bitmasks`/`other_ids`/`print_hexes` from one `FIELD_RE` match `f`, under
+    dict key `k`. Shared by the plain-`fields:` scan and the `variants:` scan
+    below -- a `Field {...}` literal means the same thing in both places,
+    only what `k` looks like differs (see `parse_rust`)."""
     fields[k] = unescape(f.group("name"))
 
     bits = f.group("mask_bits")
@@ -286,26 +334,32 @@ def _parse_one_field(src, f, k, fields, enums, masks, hooks, subdirs, subdir_edg
     if "subdirectory: true" in omitted:
         subdirs.add(k)
 
-    # `FIELD_RE` consumes `,\s*subdir:\s*` but does not capture the value
-    # itself (unbounded nesting -- see the pattern's own comment), so its
-    # value starts exactly at the whole match's end.
-    subdir_val_end = _value_span(src, f.end())
-    subdir_edges[k] = _parse_subdir_value(src[f.end():subdir_val_end])
+    # `FIELD_RE` now consumes only `print_conv:` (no captured value -- see
+    # the pattern's own comment): `_value_span` from the match's end finds
+    # where that value ends, the literal `, subdir:` must follow immediately,
+    # and a second `_value_span` from there finds the subdir value.
+    pc_start = f.end()
+    pc_end = _value_span(src, pc_start)
+    pc = src[pc_start:pc_end].strip()
 
-    pc = f.group("pc")
-    # Rescan the enum body from the source itself rather than
-    # trusting the regex capture -- see _enum_body for why.
-    for marker, pair_re, int_keys in (
-        ("PrintConv::IntEnum(&[", INT_PAIR_RE, True),
-        ("PrintConv::StrEnum(&[", STR_PAIR_RE, False),
-    ):
-        if not pc.startswith(marker):
-            continue
-        body, expected_pairs = _enum_body(src, f.start("pc") + len(marker) - 1)
+    sm = _SUBDIR_LABEL_RE.match(src, pc_end)
+    if not sm:
+        raise SystemExit(
+            f"{k}: no `, subdir:` immediately after the print_conv value "
+            f"{pc!r} -- the verifier's pattern is out of date; fix it "
+            "before trusting a PASS"
+        )
+    subdir_val_end = _value_span(src, sm.end())
+    subdir_edges[k] = _parse_subdir_value(src[sm.end():subdir_val_end])
+
+    # Rescan enum bodies from the source itself rather than trusting a
+    # regex capture -- see _enum_body for why.
+    if pc.startswith("PrintConv::IntEnum(&[") or pc.startswith("PrintConv::StrEnum(&["):
+        int_keys = pc.startswith("PrintConv::IntEnum(&[")
+        marker = "PrintConv::IntEnum(&[" if int_keys else "PrintConv::StrEnum(&["
+        pair_re = INT_PAIR_RE if int_keys else STR_PAIR_RE
+        body, expected_pairs = _enum_body(src, pc_start + pc.index(marker) + len(marker) - 1)
         pairs = pair_re.findall(body)
-        # Exact per-enum accounting, the same discipline the field
-        # count gets below: a pair the pattern cannot read must fail
-        # the run, not silently shrink the verified surface.
         if len(pairs) != expected_pairs:
             raise SystemExit(
                 f"enum for {k}: parsed {len(pairs)} of "
@@ -317,11 +371,54 @@ def _parse_one_field(src, f, k, fields, enums, masks, hooks, subdirs, subdir_edg
                 enums[k][kk] = unescape(vv)
             else:
                 enums[k][unescape(kk)] = unescape(vv)
-        break
+    elif _BITMASK_RE.match(pc) or _PARTIAL_ENUM_INT_RE.match(pc):
+        # Step 25: both shapes carry an int-domain `exact: &[(i64, "..."),
+        # ...]` array built exactly like `IntEnum`'s -- feeding it into the
+        # SAME `enums[k]` dict means the pre-existing oracle ENUM comparison
+        # below verifies it for free (oracle.pl already skips the
+        # BITMASK/OTHER directive keys themselves, so `or_enums[k]` holds
+        # exactly this "exact match" population for these fields too).
+        exact_open = _named_array_span(src, pc_start, pc_end, "exact")
+        for kk, vv in _parse_int_pairs(src, exact_open, k, "exact"):
+            enums[k][kk] = unescape(vv)
+        if _BITMASK_RE.match(pc):
+            bits_open = _named_array_span(src, pc_start, pc_end, "bits")
+            bitmasks[k] = {
+                kk: unescape(vv) for kk, vv in _parse_int_pairs(src, bits_open, k, "bits")
+            }
+        else:
+            om = _OTHER_ID_RE.search(pc)
+            if not om:
+                raise SystemExit(
+                    f"{k}: PartialEnumInt value {pc!r} has no `other:` -- "
+                    "the verifier's pattern is out of date; fix it before "
+                    "trusting a PASS"
+                )
+            other_ids[k] = om.group("variant")
+            phm = _PRINT_HEX_RE.search(pc)
+            if not phm:
+                raise SystemExit(
+                    f"{k}: PartialEnumInt value {pc!r} has no `print_hex:` "
+                    "-- the verifier's pattern is out of date; fix it "
+                    "before trusting a PASS"
+                )
+            print_hexes[k] = phm.group("val") == "true"
+    elif pc not in ("PrintConv::None",) and not pc.startswith("PrintConv::Expr("):
+        # Every shape `codegen.py`'s PRELUDE can emit is handled above or is
+        # one of these two data-free ones; anything else is a `PrintConv`
+        # variant this verifier does not know about yet -- fail loudly
+        # rather than silently skip it (the same "an unparsed field is a
+        # coverage lie" doctrine `parse_rust`'s own field-count check
+        # enforces).
+        raise SystemExit(
+            f"{k}: unrecognised print_conv value {pc!r} -- the verifier's "
+            "pattern is out of date; fix it before trusting a PASS"
+        )
 
 
 def parse_rust(path):
-    """-> (fields, enums, masks, hooks, subdirs, subdir_edges, sound_until, variant_keys)
+    """-> (fields, enums, masks, hooks, subdirs, subdir_edges, sound_until,
+    variant_keys, bitmasks, other_ids, print_hexes)
 
     fields{k->name}, enums{k->{key:val}}, masks{k->(bits,shift)},
     hooks{k}, subdirs{k} (sets of field keys with that Omitted flag set),
@@ -330,6 +427,13 @@ def parse_rust(path):
     dicts this one always has an entry for every field, `None` included, so
     `main()` can tell "no edge" from "field not parsed"),
     sound_until{(mod,tbl)->int|None} (the table's offsets_sound_until).
+
+    Step 25: bitmasks{k->{bit:label}} (a `PrintConv::Bitmask` field's `bits:`
+    array), other_ids{k->OtherId variant name} (a `PrintConv::PartialEnumInt`
+    field's registered `other:`), print_hexes{k->bool} (that same field's
+    `print_hex:`). All three are present only for the fields carrying the
+    corresponding `PrintConv` variant -- `main()` treats key-absence as "not
+    applicable", the same way `masks` already does for unmasked fields.
 
     `fields`/`enums`/`masks`/`hooks`/`subdirs`/`subdir_edges` hold BOTH plain
     `fields:` entries (keyed `(mod, tbl, "22")`, exactly as before Step 23)
@@ -348,6 +452,7 @@ def parse_rust(path):
     subdir_edges = {}
     sound_until = {}
     variant_keys = set()
+    bitmasks, other_ids, print_hexes = {}, {}, {}
     bounds = [(m.start(), m.group("module"), m.group("table"), m.group("sound_until"))
               for m in TABLE_RE.finditer(src)]
     for start, mod, tbl, su in bounds:
@@ -378,7 +483,8 @@ def parse_rust(path):
                 # form.
                 key = idx if sub == "None" else f"{idx}.{sub[5:-1]}"
                 _parse_one_field(
-                    src, f, (mod, tbl, key), fields, enums, masks, hooks, subdirs, subdir_edges
+                    src, f, (mod, tbl, key), fields, enums, masks, hooks, subdirs, subdir_edges,
+                    bitmasks, other_ids, print_hexes,
                 )
 
         # `variants: &[VariantGroup { index, sub, alternatives: &[(Cond,
@@ -400,7 +506,8 @@ def parse_rust(path):
                     k = (mod, tbl, f"{base_key}#{pos}")
                     variant_keys.add(k)
                     _parse_one_field(
-                        src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges
+                        src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges,
+                        bitmasks, other_ids, print_hexes,
                     )
 
     # Every Field in the file must have been parsed -- separately for each
@@ -420,7 +527,10 @@ def parse_rust(path):
             f"`variants:` arrays contain {expected_variant} -- the "
             "verifier's pattern is out of date; fix it before trusting a PASS"
         )
-    return fields, enums, masks, hooks, subdirs, subdir_edges, sound_until, variant_keys
+    return (
+        fields, enums, masks, hooks, subdirs, subdir_edges, sound_until, variant_keys,
+        bitmasks, other_ids, print_hexes,
+    )
 
 
 def load_oracle(lib, oracle_pl):
@@ -430,6 +540,8 @@ def load_oracle(lib, oracle_pl):
     ).stdout
     names, enums, masks = {}, defaultdict(dict), {}
     hooks, subdirs, varfmts = set(), set(), set()
+    bitmasks = defaultdict(dict)
+    other_present, other_print_hex = set(), {}
     # Step 27: the raw SubDirectory facts behind each `subdirs` membership --
     # {(mod,sym,key) -> {"tagtable":str, "start":str, "base":str,
     # "processproc":bool, "byteorder":bool, "validate":bool}}, independent of
@@ -462,7 +574,16 @@ def load_oracle(lib, oracle_pl):
             }
         elif len(p) == 5 and p[3] == "VARFMT":
             varfmts.add((p[0], p[1], p[2]))
-    return names, enums, masks, hooks, subdirs, subdir_facts, varfmts
+        elif len(p) == 6 and p[3] == "BITMASK":
+            bitmasks[(p[0], p[1], p[2])][p[4]] = p[5]
+        elif len(p) == 5 and p[3] == "OTHER":
+            key = (p[0], p[1], p[2])
+            other_present.add(key)
+            other_print_hex[key] = p[4] == "1"
+    return (
+        names, enums, masks, hooks, subdirs, subdir_facts, varfmts,
+        bitmasks, other_present, other_print_hex,
+    )
 
 
 def oracle_version(lib):
@@ -608,11 +729,12 @@ def main():
     print(f"ExifTool {version}")
     (
         gen_fields, gen_enums, gen_masks, gen_hooks, gen_subdirs, gen_subdir_edges,
-        gen_sound_until, gen_variant_keys,
+        gen_sound_until, gen_variant_keys, gen_bitmasks, gen_other_ids, gen_print_hexes,
     ) = parse_rust(args.generated_rs)
-    or_names, or_enums, or_masks, or_hooks, or_subdirs, or_subdir_facts, or_varfmts = load_oracle(
-        args.exiftool_lib, args.oracle
-    )
+    (
+        or_names, or_enums, or_masks, or_hooks, or_subdirs, or_subdir_facts, or_varfmts,
+        or_bitmasks, or_other_present, or_other_print_hex,
+    ) = load_oracle(args.exiftool_lib, args.oracle)
 
     if not gen_fields:
         sys.exit("parsed 0 fields from generated Rust -- verifier is broken, "
@@ -707,6 +829,52 @@ def main():
                 mask_bad += 1
                 if len(mask_examples) < args.show:
                     mask_examples.append((k, got, want))
+
+    # Step 25: a `PrintConv::Bitmask` field's `bits:` array, checked the same
+    # way `masks` is just above (union of both sides, so a bit label the
+    # generator invented and one it silently dropped are equally a mismatch).
+    bitmask_ok = bitmask_bad = 0
+    bitmask_examples = []
+    for k in set(gen_bitmasks) | {k for k in or_bitmasks if k in gen_fields}:
+        got = {norm_key(kk): vv for kk, vv in gen_bitmasks.get(k, {}).items()}
+        want = {norm_key(kk): vv for kk, vv in or_bitmasks.get(k, {}).items()}
+        if got == want:
+            bitmask_ok += 1
+        else:
+            bitmask_bad += 1
+            if len(bitmask_examples) < args.show:
+                bitmask_examples.append((k, got, want))
+
+    # Step 25: does a `PrintConv::PartialEnumInt` field's registered `other:`
+    # correspond to a tag that ExifTool's own PrintConv hash really has an
+    # `OTHER` closure on? A field where this is false would mean
+    # `others.py`'s deparse-text registry somehow matched a closure that
+    # is not actually present on this tag -- exactly the kind of "the
+    # oracle disagrees with the generator's own bookkeeping" bug this
+    # verifier's whole purpose is to catch. `print_hex` is cross-checked
+    # against the SAME tag-level `PrintHex` fact `codegen.py`'s `conv_for`
+    # reads (see oracle.pl's OTHER row doc). Only fields where `codegen.py`
+    # actually resolved an `other:` are checked -- an unregistered OTHER
+    # never reaches this schema at all (refused, per others.py's doctrine),
+    # so there is nothing here for a field with `other: None` to check
+    # against.
+    other_ok = other_bad = 0
+    other_examples = []
+    for k, variant in gen_other_ids.items():
+        if variant is None:
+            continue
+        if k not in or_other_present:
+            other_bad += 1
+            if len(other_examples) < args.show:
+                other_examples.append((k, f"other: Some(OtherId::{variant})", "no OTHER in ExifTool"))
+            continue
+        got_hex, want_hex = gen_print_hexes.get(k, False), or_other_print_hex.get(k, False)
+        if got_hex == want_hex:
+            other_ok += 1
+        else:
+            other_bad += 1
+            if len(other_examples) < args.show:
+                other_examples.append((k, f"print_hex: {got_hex}", f"PrintHex: {want_hex}"))
 
     # Hook and SubDirectory are presence flags, not values: `codegen.py`'s
     # `omitted_for` sets them exactly when ExifTool's own hash carries the
@@ -812,6 +980,12 @@ def main():
     print(f"masked fields    {mask_ok + mask_bad}")
     print(f"  match          {mask_ok}")
     print(f"  MISMATCH       {mask_bad}")
+    print(f"BITMASK fields (Step 25) {bitmask_ok + bitmask_bad}")
+    print(f"  match          {bitmask_ok}")
+    print(f"  MISMATCH       {bitmask_bad}")
+    print(f"OTHER-backed fields (Step 25) {other_ok + other_bad}")
+    print(f"  match          {other_ok}")
+    print(f"  MISMATCH       {other_bad}")
     # Step 23 variant columns: `_variants` alternatives (`VariantGroup` in
     # the generated Rust), checked the same way as the plain-field columns
     # above but reported separately so a `_variants`-specific regression
@@ -848,6 +1022,10 @@ def main():
         print(f"  enum  {k} key {kk}: generated {got!r} != exiftool {want!r}")
     for k, got, want in mask_examples:
         print(f"  mask  {k}: generated {got!r} != exiftool {want!r}")
+    for k, got, want in bitmask_examples:
+        print(f"  bitmask  {k}: generated {got!r} != exiftool {want!r}")
+    for k, got, want in other_examples:
+        print(f"  other  {k}: generated {got!r} != exiftool {want!r}")
     for k, got, want in variant_bad_examples:
         print(f"  variant name  {k}: generated {got!r} != exiftool {want!r}")
     for k in variant_orphan_examples:
@@ -866,7 +1044,7 @@ def main():
         print(f"  offsets_sound_until  {k}: generated {got!r} != expected {want!r}")
 
     failed = (
-        name_bad + enum_bad + orphan + mask_bad
+        name_bad + enum_bad + orphan + mask_bad + bitmask_bad + other_bad
         + variant_name_bad + variant_enum_bad + variant_orphan + variant_mask_bad
         + hook_bad + subdir_bad + edge_bad + sound_bad
     )

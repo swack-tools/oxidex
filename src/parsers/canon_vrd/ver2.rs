@@ -87,7 +87,13 @@ pub(super) fn parse_ver2(record: &[u8], metadata: &mut MetadataMap) {
             // Unreachable below LAST_LOSSLESS_INDEX, and guessing at a
             // conversion this module has not accounted for is exactly what the
             // index bound exists to prevent.
-            (PrintConv::StrEnum(_) | PrintConv::Expr(_), _) => continue,
+            (
+                PrintConv::StrEnum(_)
+                | PrintConv::Expr(_)
+                | PrintConv::Bitmask { .. }
+                | PrintConv::PartialEnumInt { .. },
+                _,
+            ) => continue,
             (PrintConv::None | PrintConv::IntEnum(_), _) => continue,
         };
         metadata.insert(format!("CanonVRD:{}", field.name), value);

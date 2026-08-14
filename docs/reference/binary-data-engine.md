@@ -100,8 +100,8 @@ the Rust side.
 | class | count | meaning |
 |---|---:|---|
 | enabled | **5** | both gates; the engine walks it |
-| eligible | **350** | gate A passes, no gate B measurement possible yet |
-| refused | **258** | gate A blocks it |
+| eligible | **375** | gate A passes, no gate B measurement possible yet |
+| refused | **233** | gate A blocks it |
 
 Gate A's refusal reasons, by tables affected (a table can trip several):
 
@@ -109,8 +109,7 @@ Gate A's refusal reasons, by tables affected (a table can trip several):
 |---|---:|
 | `expr_unsupported` | 141 |
 | `tag_fmt_unsupported` | 86 |
-| `enum_int_partial` | 50 |
-| `enum_str_partial` | 16 |
+| `other_unregistered` | 29 |
 | `conv_dropped` | 14 |
 | `tag_variant_skipped` | 9 |
 | `tag_variant_cond_unsupported` | 8 |
@@ -121,9 +120,21 @@ Gate A's refusal reasons, by tables affected (a table can trip several):
 | `tag_variant_field_unsupported` | 1 |
 
 This is design D3 read literally: a construct we cannot parse counts against
-us. 258 refusals is the scoreboard, and `expr_unsupported` alone — 141 tables
+us. 233 refusals is the scoreboard, and `expr_unsupported` alone — 141 tables
 blocked because at least one `PrintConv` expression did not translate — says
 where the next unit of work buys the most enablement.
+
+`enum_int_partial` (50) and `enum_str_partial` (16) used to head that list.
+Step 25 retired both: an enum carrying a `BITMASK` or an `OTHER` this
+generator can reproduce is now transcribed in full (`PrintConv::Bitmask` /
+`PrintConv::PartialEnumInt`), so it is no longer partial and no longer
+disqualifying. What is left of that population is `other_unregistered` (29
+tables) — an `OTHER` closure absent from `tools/exiftool-tables/others.py`,
+whose `PrintConv` is dropped outright — and it inherits the gate weight the
+two retired counters carried. 25 tables moved refused → eligible on that
+change alone; none moved the other way, and no *enabled* table's gate A
+status changed, so the engine walks exactly the same five tables it did
+before.
 
 ## Why only 5 are enabled
 
@@ -132,8 +143,10 @@ it. Two routes exist, and both were measured:
 
 1. **Hand-wired `find_table` call sites.** 21 distinct tables, independently
    reproducing the count in
-   [corpus-synthesis](/reference/corpus-synthesis). Of those, 6 pass gate A,
-   and 5 of the 6 have a live call site (the sixth, `Ricoh::ImageInfo`, is
+   [corpus-synthesis](/reference/corpus-synthesis). Of those, 7 pass gate A
+   — up from 6 because Step 25 retired `enum_int_partial`, the only counter
+   blocking `NikonCustom::SettingsD5` — and 6 of the 7 have a live call site
+   (the seventh, `Ricoh::ImageInfo`, is
    named only inside a comment explaining that the module does *not* call it
    — `reachability.py` now strips comments before counting, because the first
    version of that script did not and reported it as reachable).
@@ -145,7 +158,7 @@ it. Two routes exist, and both were measured:
    therefore enables nothing yet.** That is a measurement, not an omission —
    and it is the concrete thing to fix if the next step wants the edges to pay.
 
-The remaining 350 eligible tables have no live call site at all. Enabling one
+The remaining 375 eligible tables have no live call site at all. Enabling one
 would produce no tags and no measurement — enablement on no evidence, which is
 what opt-in exists to prevent.
 
@@ -191,6 +204,35 @@ gating) plus a debug rather than release build. Both numbers are reported
 rather than reconciled, per `AGENTS.md`: the comparison that means anything is
 control-vs-change on one instrument, and that comparison is the zero above.
 
+### Step 25, measured against the Step 28 tip
+
+Step 25 (BITMASK / PartialEnumInt / the OTHER registry) rebased onto `38144a2c`
+and was re-measured the same way — pristine clone of the parent, clean tree,
+oracle re-probed (`-ver` 13.59; `OOXML.docx` → `DOCX`), same corpus, same
+floors, same `fixloop` profile on both sides.
+
+```
+control  (38144a2c, this step's parent)
+TOTAL  4238  437050 match  21 rename  1671 value  11610 missing  10602 extra   97.0% / 97.1% / 97.6%
+
+Step 25
+TOTAL  4238  437050 match  21 rename  1671 value  11610 missing  10602 extra   97.0% / 97.1% / 97.6%
+```
+
+**Every delta is zero, and 0 of 127 per-format rows moved.** Step 25 is
+conformance-neutral on this corpus, and the reason is the census above: it
+moves 25 tables refused → eligible but *enables* none, so the engine still
+walks the same five tables it did before. The four retired local `decode_bits`
+copies were behaviour-preserving; the one real behaviour fix among them
+(`camera_info.rs`'s `Pc::BitMask`, which dropped unlabeled set bits instead of
+rendering `[n]`) changes no file in this corpus, which is why it is pinned by a
+unit test rather than by a conformance delta.
+
+An earlier draft of this step claimed `+105 match / −15 value / −90 missing /
+−6 extra`. That was the 436945 stale baseline diagnosed above, not a Step 25
+effect — the same phantom, re-measured. The number this step is entitled to
+claim is the zero.
+
 ## What was run, and what was not
 
 * **Ran:** full-corpus conformance twice (control and shipped configuration,
@@ -201,7 +243,7 @@ control-vs-change on one instrument, and that comparison is the zero above.
   change); `just reachability`; a byte-identical regeneration check on
   `binary_tables.rs` before touching `codegen.py`.
 * **Not run:** `just ci-standard` and any release build (gated centrally);
-  gate B for the 350 eligible tables (they have no call site, so there is
+  gate B for the 375 eligible tables (they have no call site, so there is
   nothing to measure); the corpus-synthesis harness
   (`tools/exiftool-tables/synth_*.py`) as an enablement gate — it measures
   whether a table's tags can be *written and read back*, which is a different

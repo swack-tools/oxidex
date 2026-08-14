@@ -265,21 +265,12 @@ fn u64le(data: &[u8], pos: usize) -> Option<u64> {
 /// `Image::ExifTool::DecodeBits` (ExifTool.pm:6385) over a 32-bit value: named
 /// bits joined with ", ", unnamed set bits rendered as `[n]`, and `(none)` when
 /// nothing is set.
+///
+/// Delegates to the canonical port (Step 25,
+/// `crate::exiftool_tables::decode_bits`) -- see `apple.rs`'s copy of this
+/// same note for why several local implementations were consolidated here.
 fn decode_bits(val: u32, lookup: &[(u32, &str)]) -> String {
-    let mut bits: Vec<String> = Vec::new();
-    for bit in 0..32u32 {
-        if val & (1u32 << bit) == 0 {
-            continue;
-        }
-        match lookup.iter().find(|(b, _)| *b == bit) {
-            Some((_, name)) => bits.push((*name).to_string()),
-            None => bits.push(format!("[{bit}]")),
-        }
-    }
-    if bits.is_empty() {
-        return "(none)".to_string();
-    }
-    bits.join(", ")
+    crate::exiftool_tables::decode_bits(i64::from(val), lookup)
 }
 
 /// Hash PrintConv lookup with ExifTool's miss text (ExifTool.pm:3628): with

@@ -46,7 +46,7 @@ pub mod subdir;
 
 pub use binary_tables::{
     ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, GateA, Mask, Omitted,
-    PrintConv,
+    OtherId, PrintConv,
 };
 pub use cond::{CmpOp, Cond, Ctx, EffectSource, MemberValue, VariantGroup, first_match};
 pub use enabled::{ENABLED, is_enabled};
@@ -54,7 +54,7 @@ pub use engine::{Cursor, Dir, Emitted, Step, process_binary_data, read_value};
 pub use runtime::{
     Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
     RefusalCounts, TableDecode, all_fractional_census, decode_binary_table,
-    decode_binary_table_variants, fractional_census,
+    decode_binary_table_variants, decode_bits, fractional_census, unknown_fallback,
 };
 pub use subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
 
@@ -294,8 +294,17 @@ mod tests {
     /// `tools/exiftool-tables/reachability.py` reports from, which is the
     /// point: the reachability census is generated, not hand-audited, and
     /// this test is what stops the two from drifting apart. At 13.59 the
-    /// split is 0 enabled / 355 eligible / 258 refused of 613 -- see
+    /// split is 5 enabled / 375 eligible / 233 refused of 613 -- see
     /// `enabled.rs` for why `eligible` is not `enabled`.
+    ///
+    /// Step 25 moved 25 tables refused -> eligible (350 -> 375) and none the
+    /// other way: `enum_int_partial` (50 tables) and `enum_str_partial` (16)
+    /// stopped being gate A blockers once a `BITMASK`/`OTHER`-carrying enum
+    /// became fully transcribable, and what is left of that population is
+    /// the narrower `other_unregistered` (29). The *enabled* set is
+    /// untouched at 5 -- gate B is a measured allowlist and Step 25 measured
+    /// nothing new -- so the engine still walks exactly the same five
+    /// tables.
     #[test]
     fn every_table_lands_in_exactly_one_enablement_class() {
         let (mut enabled, mut eligible, mut refused) = (0usize, 0usize, 0usize);
@@ -318,8 +327,9 @@ mod tests {
             "every table must land in exactly one class"
         );
         assert_eq!(ALL_BINARY_TABLES.len(), 613, "tables emitted");
-        assert_eq!(eligible + enabled, 355, "tables passing gate A");
-        assert_eq!(refused, 258, "tables gate A blocks");
+        assert_eq!(eligible + enabled, 380, "tables passing gate A");
+        assert_eq!(refused, 233, "tables gate A blocks");
+        assert_eq!(enabled, 5, "tables both gates enable");
     }
 
     /// A refused table must say WHY, in the generator's own counter names.
