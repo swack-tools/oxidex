@@ -45,8 +45,8 @@ pub mod runtime;
 pub mod subdir;
 
 pub use binary_tables::{
-    ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, ExprValue, Field, Fmt, GateA, Mask,
-    Omitted, OtherId, PrintConv,
+    ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, ExprValue, Field, Fmt, GateA,
+    HookCond, HookDelta, HookEffect, Mask, Omitted, OtherId, PrintConv, TagGroups, VarFmt, VarKind,
 };
 pub use cond::{CmpOp, Cond, Ctx, EffectSource, MemberValue, VariantGroup, first_match};
 pub use enabled::{ENABLED, is_enabled};
@@ -827,10 +827,25 @@ mod tests {
     }
 
     /// `offsets_sound_until` must be set on exactly the tables where a
-    /// refused `var_*` field actually sits before an emitted one -- not on
-    /// every table that merely contains a `var_*` field ExifTool declares.
-    /// At 13.59 that is 4 tables covering 81 already-emitted fields whose
-    /// static `index * increment` offset is no longer trustworthy.
+    /// `var_*` field actually sits before an emitted one -- not on every
+    /// table that merely contains a `var_*` field ExifTool declares.
+    ///
+    /// At 13.59 that is 7 tables covering 88 emitted fields whose static
+    /// `index * increment` offset is no longer trustworthy. Step 26 raised
+    /// both numbers (from 4/81) for two reasons, and neither is a loosened
+    /// guard:
+    ///
+    /// * the new scalar formats (int64u, fixed32u, extended, ...) mean fields
+    ///   that used to be refused for their format are now emitted, and some
+    ///   of them sit past an existing hazard boundary -- they were always at
+    ///   an unsound offset, they just were not emitted to be counted;
+    /// * `var_*` fields are now modeled as data (`Fmt::Var`), so a table with
+    ///   several of them emits the second and third, which by definition sit
+    ///   past the first one's boundary. BPG::Main, PNG::SubjectScale and
+    ///   Photoshop::VersionInfo are exactly that case.
+    ///
+    /// A `Fmt::Var` field is never decoded (`runtime::decode_field` refuses
+    /// it), so counting it here is the conservative direction.
     #[test]
     fn offsets_sound_until_marks_exactly_the_tables_with_a_live_hazard() {
         let mut affected_tables = 0usize;
@@ -849,14 +864,17 @@ mod tests {
             );
             affected_fields += hit;
         }
-        assert_eq!(affected_tables, 4, "tables with a live var_* offset hazard");
-        assert_eq!(affected_fields, 81, "fields past the hazard boundary");
+        assert_eq!(affected_tables, 7, "tables with a live var_* offset hazard");
+        assert_eq!(affected_fields, 88, "fields past the hazard boundary");
 
         let expect = [
+            ("BPG", "Main", 6),
             ("CanonVRD", "Ver2", 88),
             ("DNG", "ImageSeq", 0),
             ("FLAC", "Picture", 1),
+            ("PNG", "SubjectScale", 1),
             ("Photoshop", "SliceInfo", 20),
+            ("Photoshop", "VersionInfo", 5),
         ];
         for (module, table, bound) in expect {
             let t = find_table(module, table).unwrap_or_else(|| panic!("{module}::{table}"));

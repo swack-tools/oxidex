@@ -16,6 +16,9 @@
 #   MODULE  TABLE  INDEX  VARFMT  (empty)           -- field's Format is var_* (5)
 #   MODULE  TABLE  INDEX  BITMASK BIT  LABEL        -- one per BITMASK sub-hash entry (6)
 #   MODULE  TABLE  INDEX  OTHER   PRINTHEX          -- field's PrintConv has OTHER (5)
+#   MODULE  TABLE  INDEX  FORMAT  SPELLING          -- field's raw Format (5)
+#   MODULE  TABLE  ''     TGROUPS G0  G1  G2        -- table's raw GROUPS (7)
+#   MODULE  TABLE  INDEX  GROUPS  G0  G1  G2        -- tag's own Groups (7)
 #   MODULE  TABLE  INDEX  SUBDIR  TAGTABLE  START  BASE  PROCESSPROC  BYTEORDER  VALIDATE
 #                                                    -- field carries a SubDirectory (10)
 #
@@ -134,6 +137,28 @@ sub emit_entry {
     # ExifTool's own tag name. Presence and the ref TYPE are all `verify.py`
     # needs to re-derive, independently of dump_tables.pl, which fields ought
     # to carry that flag.
+
+    # Step 26: the field's raw Format spelling, so verify.py can check that
+    # the Fmt variant in the generated Rust is the one ExifTool declares --
+    # and, just as importantly, that a field ExifTool gives a Format the
+    # generator does NOT support was refused rather than emitted at the
+    # table's default width. Before this row existed, verify.py checked every
+    # field's name, enum, mask, hook and subdirectory but never its width: a
+    # format transcribed at the wrong size would have decoded neighbouring
+    # bytes under a correct tag name and passed the whole suite.
+    print join("\t", $mod, $sym, $key, 'FORMAT', clean($fmt)), "\n"
+        if defined $fmt && !ref $fmt;
+
+    # Step 26: the tag's OWN Groups overrides, families 0/1/2. Empty column
+    # means the tag does not override that family -- which is not the same as
+    # having no group; the table supplies it (ExifTool.pm:9236-9244).
+    my $tgrp = $e->{Groups};
+    if (ref $tgrp eq 'HASH') {
+        print join("\t", $mod, $sym, $key, 'GROUPS',
+            map { defined $tgrp->{$_} && !ref $tgrp->{$_} ? clean($tgrp->{$_}) : '' } (0, 1, 2)
+        ), "\n";
+    }
+
     my $pc = $e->{PrintConv};
     if (defined $pc && ref $pc && ref $pc ne 'HASH') {
         print join("\t", $mod, $sym, $key, 'PCREF', ref $pc), "\n";
@@ -198,6 +223,16 @@ for my $mod (grep { !$skip{$_} } @mods) {
             }
         }
         next unless $has_format || $is_bin;
+
+        # Step 26: the table's RAW GROUPS, exactly as the module declares it
+        # (this reads the hash BEFORE GetTagTable would default it, so
+        # verify.py can re-derive the defaulting rule rather than be handed
+        # its result).
+        my $g = $t->{GROUPS};
+        my @graw = ref $g eq 'HASH'
+            ? map { defined $g->{$_} && !ref $g->{$_} ? clean($g->{$_}) : '' } (0, 1, 2)
+            : ('', '', '');
+        print join("\t", $mod, $sym, '', 'TGROUPS', @graw), "\n";
 
         for my $k (sort keys %$t) {
             next if $k !~ /^-?[\d.]+$/;

@@ -629,6 +629,32 @@ fn decode_field(
 ) -> Option<DecodedField> {
     let offset = usize::try_from(table.byte_offset(field)).ok()?;
     let format = table.field_format(field);
+    // Step 26: a `var_*` field is modeled in the schema but never decoded.
+    // Its width depends on the bytes, so reading it at the static offset
+    // would report whatever happens to sit there under a real ExifTool tag
+    // name. `Fmt::Var` carries which rule applies (`VarFmt::kind`) precisely
+    // so a future walker can implement it; until one does, this refuses.
+    // This sits ahead of the Step 28 enablement branch because it holds on
+    // both paths: `Fmt::Var(_).size()` is 0, which the shared `read_value`
+    // port refuses too, but refusing it here keeps the reason legible.
+    if matches!(format, Fmt::Var(_)) {
+        return None;
+    }
+    // pstring carries its own length in the byte at `offset`
+    // (ExifTool.pm:9972-9975: `$count = Get8u($dataPt, ($entry++)+$dirStart)`).
+    // The count byte is consumed here so `decode_value_of` sees only the
+    // payload. ExifTool does not touch `$varSize` for a pstring, so no later
+    // field's offset depends on the length we read -- a short or oversized
+    // count can only lose this one field, never shift the rest of the table.
+    // Also ahead of the enablement branch: `Fmt::PString.size()` is 1 (the
+    // count byte), so handing it to the shared port would report that count
+    // byte as the field's value rather than reading the payload it prefixes.
+    if format == Fmt::PString {
+        let length = usize::from(*data.get(offset)?);
+        let bytes = data.get(offset + 1..offset.checked_add(1 + length)?)?;
+        let raw = decode_value_of(bytes, format, byte_order)?;
+        return Some(DecodedField { field, raw });
+    }
     let raw = if table.enabled() {
         // Step 28: an ENABLED table reads through the one shared `ReadValue`
         // port (ExifTool.pm:6286), which is the whole point of the fold. The
@@ -675,7 +701,10 @@ fn decode_field(
 /// ExifTool.pm:6301-6311.
 #[must_use]
 pub fn decode_value_of(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Option<DecodedValue> {
-    let order = if format == Fmt::Int16uRev {
+    // `int16uRev`/`int32uRev` are ExifTool's DoUnpackRev (ExifTool.pm:6087-6088):
+    // the same unpack template read against the *opposite* byte order to the
+    // rest of the record. Canon really does mix endianness inside one table.
+    let order = if matches!(format, Fmt::Int16uRev | Fmt::Int32uRev) {
         opposite(byte_order)
     } else {
         byte_order
@@ -685,10 +714,24 @@ pub fn decode_value_of(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Opti
         Fmt::Int8s => DecodedValue::Integer(i64::from(*bytes.first()? as i8)),
         Fmt::Int16u | Fmt::Int16uRev => DecodedValue::Integer(i64::from(read_u16(bytes, order)?)),
         Fmt::Int16s => DecodedValue::Integer(i64::from(read_i16(bytes, order)?)),
-        Fmt::Int32u => DecodedValue::Integer(i64::from(read_u32(bytes, order)?)),
+        Fmt::Int32u | Fmt::Int32uRev => DecodedValue::Integer(i64::from(read_u32(bytes, order)?)),
         Fmt::Int32s => DecodedValue::Integer(i64::from(read_i32(bytes, order)?)),
+        // Get64u/Get64s (%readValueProc, ExifTool.pm:6252-6253). An int64u
+        // above i64::MAX has no i64 representation; refuse rather than wrap it
+        // into a negative number that would print as a real value.
+        Fmt::Int64u => DecodedValue::Integer(i64::try_from(read_u64(bytes, order)?).ok()?),
+        Fmt::Int64s => DecodedValue::Integer(read_u64(bytes, order)? as i64),
         Fmt::Float => DecodedValue::Float(f64::from(read_f32(bytes, order)?)),
         Fmt::Double => DecodedValue::Float(read_f64(bytes, order)?),
+        // GetRational32u/s (ExifTool.pm:6100-6106): a 16/16 pair in four bytes.
+        Fmt::Rational32u => DecodedValue::UnsignedRational(
+            u32::from(read_u16(bytes.get(..2)?, order)?),
+            u32::from(read_u16(bytes.get(2..4)?, order)?),
+        ),
+        Fmt::Rational32s => DecodedValue::SignedRational(
+            i32::from(read_i16(bytes.get(..2)?, order)?),
+            i32::from(read_i16(bytes.get(2..4)?, order)?),
+        ),
         Fmt::Rational64u => DecodedValue::UnsignedRational(
             read_u32(bytes.get(..4)?, order)?,
             read_u32(bytes.get(4..8)?, order)?,
@@ -697,7 +740,35 @@ pub fn decode_value_of(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Opti
             read_i32(bytes.get(..4)?, order)?,
             read_i32(bytes.get(4..8)?, order)?,
         ),
-        Fmt::Str(_) => {
+        // The four GetFixed* subs (ExifTool.pm:6121-6144). Each divides by a
+        // fixed denominator and then drops the insignificant digits by the
+        // `int($val * 10^k + copysign(0.5))/10^k` idiom -- reproduced exactly,
+        // including the sign of the rounding bias, which differs between the
+        // signed and unsigned forms.
+        Fmt::Fixed16s => {
+            let value = f64::from(read_i16(bytes, order)?) / f64::from(0x100);
+            DecodedValue::Float(round_fixed(value, 1e3, value < 0.0))
+        }
+        Fmt::Fixed16u => {
+            let value = f64::from(read_u16(bytes, order)?) / f64::from(0x100);
+            DecodedValue::Float(round_fixed(value, 1e3, false))
+        }
+        Fmt::Fixed32s => {
+            let value = f64::from(read_i32(bytes, order)?) / f64::from(0x10000);
+            // GetFixed32s biases by -0.5 unless $val > 0 -- note this is the
+            // `>` test ExifTool writes, so exactly 0.0 takes the negative arm.
+            DecodedValue::Float(round_fixed(value, 1e5, value <= 0.0))
+        }
+        Fmt::Fixed32u => {
+            let value = f64::from(read_u32(bytes, order)?) / f64::from(0x10000);
+            DecodedValue::Float(round_fixed(value, 1e5, false))
+        }
+        Fmt::Extended => DecodedValue::Float(read_extended(bytes, order)?),
+        // pstring: leading int8u count, then that many bytes of string
+        // (ExifTool.pm:9972-9975). `decode_field` has already sliced `bytes` to
+        // exactly the payload, so the length byte is gone by the time we get
+        // here -- this arm and Str share the truncate-at-NUL rule.
+        Fmt::PString | Fmt::Str(_) => {
             let end = bytes
                 .iter()
                 .position(|byte| *byte == 0)
@@ -705,6 +776,49 @@ pub fn decode_value_of(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Opti
             DecodedValue::String(std::str::from_utf8(&bytes[..end]).ok()?.to_string())
         }
         Fmt::Undef(_) => DecodedValue::Undefined(bytes.to_vec()),
+        // Unreachable via `decode_field`, which refuses `Fmt::Var` before it
+        // gets here. Spelled out rather than left to a catch-all so that
+        // adding a genuinely decodable format cannot silently land in a
+        // `_ => None` arm and be dropped without anyone noticing.
+        Fmt::Var(_) => return None,
+    })
+}
+
+/// ExifTool's `int($val * $scale + ±0.5) / $scale`, the idiom every `GetFixed*`
+/// sub ends with (ExifTool.pm:6121-6144). `negative_bias` selects which sign
+/// the 0.5 carries; the four subs do not agree on the test that picks it, so
+/// the caller states it rather than re-deriving it here.
+fn round_fixed(value: f64, scale: f64, negative_bias: bool) -> f64 {
+    let bias = if negative_bias { -0.5 } else { 0.5 };
+    // Perl's int() truncates toward zero, which is Rust's `f64::trunc`.
+    (value * scale + bias).trunc() / scale
+}
+
+/// 80-bit IEEE extended precision, per `GetExtended` (Writer.pl:4498-4507).
+///
+/// ExifTool reads the 16-bit exponent and the 64-bit significand from opposite
+/// ends of the ten bytes depending on byte order (`$pt = GetByteOrder() eq 'MM'
+/// ? 0 : 2`), then returns `$sign * $sig * 2 ** $exp` with the exponent
+/// biased by `-16383 - 63` -- the extra 63 fractionalizes the significand,
+/// whose leading integer bit is explicit in this format (unlike IEEE double).
+fn read_extended(bytes: &[u8], order: ByteOrder) -> Option<f64> {
+    let exponent_at = match order {
+        ByteOrder::Big => 0,
+        ByteOrder::Little => 2,
+    };
+    let exponent = read_u16(bytes.get(exponent_at..exponent_at + 2)?, order)?;
+    let significand_at = 2 - exponent_at;
+    let significand = read_u64(bytes.get(significand_at..significand_at + 8)?, order)?;
+    let sign = if exponent & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exponent = i32::from(exponent & 0x7fff) - 16383 - 63;
+    Some(sign * significand as f64 * 2f64.powi(exponent))
+}
+
+fn read_u64(bytes: &[u8], order: ByteOrder) -> Option<u64> {
+    let bytes: [u8; 8] = bytes.get(..8)?.try_into().ok()?;
+    Some(match order {
+        ByteOrder::Big => u64::from_be_bytes(bytes),
+        ByteOrder::Little => u64::from_le_bytes(bytes),
     })
 }
 
@@ -891,6 +1005,7 @@ fn read_f64(bytes: &[u8], order: ByteOrder) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exiftool_tables::TagGroups;
     use crate::exiftool_tables::{ALL_BINARY_TABLES, ExprId, Mask, Omitted, OtherId, find_table};
 
     #[test]
@@ -964,6 +1079,8 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
             Field {
                 index: 2,
@@ -976,6 +1093,8 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::Expr(ExprId::Sprintf0fValB74070),
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
             Field {
                 index: 4,
@@ -988,12 +1107,15 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
         ];
         static TABLE: BinaryTable = BinaryTable {
             module: "Test",
             table: "Endian",
             group0: "",
+            group1: "",
             group2: "",
             first_entry: 0,
             default_format: Fmt::Int8u,
@@ -1051,6 +1173,8 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
             Field {
                 index: 4,
@@ -1066,6 +1190,8 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::IntEnum(&[(0xB, "Eleven")]),
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
             Field {
                 index: 4,
@@ -1081,6 +1207,8 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
             // Same word, no mask: Step 11 reports the whole word, not a slice.
             Field {
@@ -1094,12 +1222,15 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
         ];
         static TABLE: BinaryTable = BinaryTable {
             module: "Test",
             table: "Fractional",
             group0: "",
+            group1: "",
             group2: "",
             first_entry: 0,
             default_format: Fmt::Int8u,
@@ -1329,11 +1460,14 @@ mod tests {
             value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
         }];
         static TABLE: BinaryTable = BinaryTable {
             module: "Test",
             table: "GatedFractional",
             group0: "",
+            group1: "",
             group2: "",
             first_entry: 0,
             default_format: Fmt::Int8u,
@@ -1398,6 +1532,8 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::IntEnum(&[(1, "Upright"), (5, "Rotated")]),
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
             // A high slice: shift is what makes the enum keys mean anything.
             Field {
@@ -1414,6 +1550,8 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
             // A PrintConv keyed on post-ValueConv values must not be applied
             // to the raw one.
@@ -1435,12 +1573,15 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::IntEnum(&[(0, "Wrong")]),
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
         ];
         static TABLE: BinaryTable = BinaryTable {
             module: "Test",
             table: "Masked",
             group0: "",
+            group1: "",
             group2: "",
             first_entry: 0,
             default_format: Fmt::Int8u,
@@ -1499,6 +1640,8 @@ mod tests {
             value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
         };
         let decoded = DecodedField {
             field: &FIELD,
@@ -1589,6 +1732,8 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
             Field {
                 index: 1,
@@ -1608,6 +1753,8 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
             Field {
                 index: 2,
@@ -1620,12 +1767,15 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
         ];
         static TABLE: BinaryTable = BinaryTable {
             module: "Test",
             table: "Refusals",
             group0: "",
+            group1: "",
             group2: "",
             first_entry: 0,
             default_format: Fmt::Int8u,
@@ -1669,6 +1819,8 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
             Field {
                 index: 5,
@@ -1681,12 +1833,15 @@ mod tests {
                 value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
+                hook: &[],
+                groups: TagGroups::NONE,
             },
         ];
         static TABLE: BinaryTable = BinaryTable {
             module: "Test",
             table: "Unsound",
             group0: "",
+            group1: "",
             group2: "",
             first_entry: 0,
             default_format: Fmt::Int8u,
@@ -1724,6 +1879,8 @@ mod tests {
             value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
         };
         static NEX_FIELD: Field = Field {
             name: "CameraOrientation",
@@ -1758,6 +1915,7 @@ mod tests {
             module: "Test",
             table: "Variants",
             group0: "",
+            group1: "",
             group2: "",
             first_entry: 0,
             default_format: Fmt::Int8u,
@@ -1980,6 +2138,198 @@ mod tests {
         assert_eq!(
             OtherId::MinoltaAfStatusFocus.apply(0),
             Some("Back Focus (+0)".to_string())
+        );
+    }
+
+    /// Step 26: effective groups -- `GetTagTable`'s table-level defaulting
+    /// (ExifTool.pm:8980-8991) plus `AddTagToTable`'s per-tag override
+    /// (ExifTool.pm:9236-9244).
+    #[test]
+    fn effective_groups_default_then_override() {
+        // AIFF::Common declares `GROUPS => { 2 => 'Audio' }` and nothing else,
+        // so families 0 and 1 default to the module name and family 2 keeps
+        // the declared value. Confirmed against the pinned oracle, which
+        // reports AIFF tags under group1 `AIFF`:
+        //   $ exiftool-pinned.sh -G1 t/images/AIFF.aif
+        //   [AIFF]  Num Channels : 1
+        let aiff = find_table("AIFF", "Common").expect("AIFF::Common");
+        assert_eq!(aiff.group0, "AIFF");
+        assert_eq!(aiff.group1, "AIFF");
+        assert_eq!(aiff.group2, "Audio");
+
+        let channels = aiff
+            .fields
+            .iter()
+            .find(|f| f.name == "NumChannels")
+            .expect("NumChannels");
+        // No per-tag override: every family comes from the table.
+        assert_eq!(channels.groups, TagGroups::NONE);
+        assert_eq!(aiff.effective_groups(channels), ("AIFF", "AIFF", "Audio"));
+
+        // A per-tag family-2 override. QuickTime::MovieHeader is GROUPS
+        // { 2 => 'Video' }, and CreateDate carries `Groups => { 2 => 'Time' }`
+        // -- so family 2 is the tag's, families 0/1 still the table's.
+        let movie = find_table("QuickTime", "MovieHeader").expect("QuickTime::MovieHeader");
+        let create = movie
+            .fields
+            .iter()
+            .find(|f| f.name == "CreateDate")
+            .expect("CreateDate");
+        assert_eq!(create.groups.g2, Some("Time"));
+        assert_eq!(create.groups.g0, None, "family 0 is not overridden");
+        let (g0, g1, g2) = movie.effective_groups(create);
+        assert_eq!((g0, g1), (movie.group0, movie.group1));
+        assert_eq!(g2, "Time");
+
+        // The defaulting is not cosmetic: no emitted table may have an empty
+        // group, which is what the raw GROUPS hash produced for 512 of them
+        // before this rule was applied.
+        for table in ALL_BINARY_TABLES {
+            assert!(
+                !table.group0.is_empty() && !table.group1.is_empty() && !table.group2.is_empty(),
+                "{}::{} has an empty effective group",
+                table.module,
+                table.table
+            );
+        }
+    }
+
+    /// Step 26: the two `Hook` idioms the census contains, pinned as data.
+    ///
+    /// These are MODELED, not applied -- `Omitted::hook` is still set on both
+    /// fields, so `emit()` still refuses them. The assertion is that the
+    /// compiled rule matches the Perl, not that the walk uses it.
+    #[test]
+    fn hook_effects_compile_to_the_two_census_idioms() {
+        use super::super::{CmpOp, HookCond, HookDelta, HookEffect};
+
+        // Idiom 1, a format switch. QuickTime.pm's MovieHeader CreateDate:
+        // `$$self{MovieHeaderVersion} and $format = "int64u", $varSize += 4`
+        // -- Perl's comma is a low-precedence sequence inside the `and`, so
+        // both halves are gated on the same DataMember.
+        let movie = find_table("QuickTime", "MovieHeader").expect("QuickTime::MovieHeader");
+        let create = movie
+            .fields
+            .iter()
+            .find(|f| f.name == "CreateDate")
+            .expect("CreateDate");
+        assert_eq!(
+            create.hook,
+            &[HookEffect::SwitchFormat {
+                when: HookCond::MemberTruthy("MovieHeaderVersion"),
+                format: Fmt::Int64u,
+                delta: 4,
+            }]
+        );
+        // Modeled is not applied: `Omitted::hook` is still set, which is what
+        // makes `DecodedField::emit` refuse the field.
+        assert!(create.omitted.hook);
+
+        // Idiom 2, a varSize shift chain. Canon.pm CameraInfo5DmkIII
+        // FocusDistanceLower: `$varSize -= 4 if $$self{CanonFirm} < 3;
+        // $varSize += 5 if $$self{CanonFirm} > 4;` -- two gated shifts, applied
+        // in order, which must compile as a pair or not at all.
+        let canon = find_table("Canon", "CameraInfo5DmkIII").expect("Canon::CameraInfo5DmkIII");
+        let focus = canon
+            .fields
+            .iter()
+            .find(|f| f.name == "FocusDistanceLower")
+            .expect("FocusDistanceLower");
+        assert_eq!(
+            focus.hook,
+            &[
+                HookEffect::ShiftVarSize {
+                    delta: HookDelta::Const(4),
+                    negate: true,
+                    when: Some(HookCond::MemberInt {
+                        member: "CanonFirm",
+                        op: CmpOp::Lt,
+                        value: 3,
+                    }),
+                },
+                HookEffect::ShiftVarSize {
+                    delta: HookDelta::Const(5),
+                    negate: false,
+                    when: Some(HookCond::MemberInt {
+                        member: "CanonFirm",
+                        op: CmpOp::Gt,
+                        value: 4,
+                    }),
+                },
+            ]
+        );
+
+        // A Hook outside the closed grammar compiles to nothing rather than
+        // to something approximate. Samsung::DualShotExtra's reads the data
+        // block and runs a regex over it; `Omitted::hook` still marks it.
+        let samsung = find_table("Samsung", "DualShotExtra").expect("Samsung::DualShotExtra");
+        let dummy = samsung
+            .fields
+            .iter()
+            .find(|f| f.name == "DualShotDummy")
+            .expect("DualShotDummy");
+        assert!(dummy.hook.is_empty(), "refused, not approximated");
+        assert!(dummy.omitted.hook);
+    }
+
+    /// Step 26: `AIFF::Common` SampleRate, the 80-bit IEEE `extended` AGENTS.md
+    /// names as the canonical "transcribed table is short because the
+    /// generator will not guess" case.
+    ///
+    /// The bytes are the real COMM chunk body of the pinned ExifTool test
+    /// sample `t/images/AIFF.aif` (byte-identical to the copy in the pinned
+    /// corpus), read straight out of the file:
+    ///
+    /// ```text
+    /// $ /tmp/oxidex-exiftool-cache/exiftool-pinned.sh -G1 -a t/images/AIFF.aif
+    /// [AIFF]  Sample Rate   : 22050
+    /// ```
+    ///
+    /// 0x400d is the biased exponent (16397 - 16383 - 63 = -49) and
+    /// 0xac44000000000000 the explicit-leading-bit significand (44100 << 48),
+    /// so the value is 44100 * 2^48 * 2^-49 = 22050 exactly -- which is the
+    /// whole reason AIFF stores a sample rate in this format.
+    ///
+    /// This drives the generated table, not `parsers::audio::aiff`'s own
+    /// hand decode: the point is that `Fmt::Extended` now reads the same
+    /// number the parser does, so the two paths cannot drift apart silently.
+    #[test]
+    fn aiff_common_sample_rate_decodes_extended() {
+        let comm = [
+            0x00, 0x01, // NumChannels    = 1
+            0x00, 0x00, 0x2d, 0x22, // NumSampleFrames = 11554
+            0x00, 0x08, // SampleSize     = 8
+            0x40, 0x0d, 0xac, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, // SampleRate (extended)
+        ];
+
+        let table = find_table("AIFF", "Common").expect("generated AIFF::Common table");
+        let sample_rate = table
+            .fields
+            .iter()
+            .find(|f| f.name == "SampleRate")
+            .expect("SampleRate is transcribed now that `extended` is supported");
+        assert_eq!(sample_rate.format, Some(Fmt::Extended));
+
+        // AIFF is big-endian by definition (AIFF.pm sets 'MM').
+        let decode = decode_binary_table(table, &comm, ByteOrder::Big);
+        let get = |name: &str| {
+            decode
+                .fields()
+                .iter()
+                .find(|decoded| decoded.field.name == name)
+                .and_then(DecodedField::emit)
+        };
+
+        assert_eq!(get("NumChannels"), Some(TagValue::Integer(1)));
+        assert_eq!(get("NumSampleFrames"), Some(TagValue::Integer(11554)));
+        assert_eq!(get("SampleSize"), Some(TagValue::Integer(8)));
+        // ExifTool prints 22050, not 22050.0 -- Perl renders an integral
+        // float without a decimal point.
+        assert_eq!(
+            get("SampleRate"),
+            Some(TagValue::Float(22050.0)),
+            "SampleRate must decode to exactly 22050, matching the pinned oracle"
         );
     }
 }

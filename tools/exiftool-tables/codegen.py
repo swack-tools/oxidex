@@ -27,11 +27,26 @@ from collections import Counter
 
 import conds
 import exprs
+import hooks
 import others
 import subdirs
 
 # ExifTool format names -> (Rust Fmt variant, byte width).  Sized formats
 # (string[32]) are handled separately since their width is per-field.
+#
+# Every width here is `%formatSize` in ExifTool.pm:6210-6242, and every decode
+# is the matching entry in `%readValueProc` (ExifTool.pm:6243-6268). The pair
+# is the whole contract: a format may only appear here once BOTH its width and
+# its decoder have been transcribed, because a width with a guessed decoder is
+# exactly the "plausible-but-wrong value under a real ExifTool tag name" that
+# AGENTS.md rules out -- the field would be emitted, sized correctly, and
+# report a confident wrong number.
+#
+# Step 26 added int64u/int64s, int32uRev, fixed16s/u, fixed32s/u, extended and
+# rational32u/s. `fixed64s` and `complex` are deliberately still absent: both
+# have a width in %formatSize but neither occurs in any ProcessBinaryData table
+# in the pinned tree, so transcribing a decoder for them would be unverifiable
+# against a real file.
 SCALAR_FORMATS = {
     "int8u": ("Int8u", 1),
     "int8s": ("Int8s", 1),
@@ -40,10 +55,70 @@ SCALAR_FORMATS = {
     "int32u": ("Int32u", 4),
     "int32s": ("Int32s", 4),
     "int16uRev": ("Int16uRev", 2),
+    # ExifTool.pm:6218 int32uRev => 4; decoder Get32uRev (ExifTool.pm:6088),
+    # which is DoUnpackRev -- the record's byte order, reversed.
+    "int32uRev": ("Int32uRev", 4),
+    # ExifTool.pm:6219-6220 int64s/int64u => 8; Get64s/Get64u (%readValueProc,
+    # ExifTool.pm:6252-6253).
+    "int64u": ("Int64u", 8),
+    "int64s": ("Int64s", 8),
     "float": ("Float", 4),
     "double": ("Double", 8),
+    # ExifTool.pm:6221-6222 rational32s/u => 4 (a 16/16 pair, not 32/32);
+    # GetRational32s/u at ExifTool.pm:6092-6106.
+    "rational32u": ("Rational32u", 4),
+    "rational32s": ("Rational32s", 4),
     "rational64u": ("Rational64u", 8),
     "rational64s": ("Rational64s", 8),
+    # ExifTool.pm:6225-6228 fixed16s/u => 2, fixed32s/u => 4; the four
+    # GetFixed* subs at ExifTool.pm:6121-6144 each divide by a fixed
+    # denominator and then round to a set number of digits.
+    "fixed16s": ("Fixed16s", 2),
+    "fixed16u": ("Fixed16u", 2),
+    "fixed32s": ("Fixed32s", 4),
+    "fixed32u": ("Fixed32u", 4),
+    # ExifTool.pm:6232 extended => 10; GetExtended (Writer.pl:4498-4507), the
+    # 80-bit IEEE extended AIFF stores its sample rate in.
+    "extended": ("Extended", 10),
+}
+
+# `pstring` is a scalar in the sense that matters here -- it never shifts a
+# later field's offset -- but it is NOT in %formatSize and so must never reach
+# the table-FORMAT path: ExifTool.pm:9894-9898 warns and falls back to int8u
+# for a table FORMAT it cannot size. It is handled entirely per-field at
+# ExifTool.pm:9972-9975, which reads a leading int8u count, advances `$entry`
+# past it and then reads that many bytes as a string, leaving `$varSize`
+# untouched. That last part is why it is safe: a var_* format shifts every
+# subsequent index, a pstring does not.
+PER_FIELD_FORMATS = {"pstring": "PString"}
+
+# Step 26. The closed `var_*` grammar -- ExifTool spelling -> Rust `VarKind`.
+#
+# Every entry is one arm of ProcessBinaryData's variable-format branch
+# (ExifTool.pm:10000-10032), which is a fixed `if/elsif` chain over exactly
+# these names plus a NUL-scan fallback. Modeling them as data does NOT make
+# them decodable: the width still depends on the bytes, so the field is
+# emitted carrying its spelling and the runtime refuses to read it, and the
+# table's `offsets_sound_until` still marks everything past it unsound. This
+# is the same discipline conds.py and subdirs.py follow -- compile what the
+# grammar covers, refuse and count the rest with a reason -- and it is why
+# these 15 fields move OUT of the "unsupported format" line into their own
+# REPORT counter rather than silently vanishing from the accounting.
+#
+# `var_ustring` is ExifTool's implicit default: the final `elsif ($$dataPt =~
+# /\0/g)` arm (ExifTool.pm:10029) scans to the next NUL for any `var_` name
+# not matched above. `var_string` is spelled out here because that is the
+# name the tables actually use; a `var_` name outside this map is refused
+# (`tag_var_unmodeled`) rather than assumed to take the fallback arm, since
+# assuming it would be inventing a width.
+VAR_KINDS = {
+    "var_string": "String",     # NUL-scan fallback, ExifTool.pm:10029-10031
+    "var_ustring": "UString",   # UTF-16 to \0\0,   ExifTool.pm:10005-10007
+    "var_pstring": "PString",   # int8u count,      ExifTool.pm:10008-10010
+    "var_pstr32": "PStr32",     # int32u count,     ExifTool.pm:10011-10017
+    "var_ustr32": "UStr32",     # int32u count x2,  ExifTool.pm:10011-10017
+    "var_int16u": "Int16u",     # int16u size + 2,  ExifTool.pm:10018-10023
+    "var_ue7": "Ue7",           # BPG unsigned exp-Golomb, ExifTool.pm:10024-10028
 }
 
 SIZED_RE = re.compile(r"^(\w+)\[(\d+)\]$")
@@ -663,15 +738,38 @@ def gen_field_literal(
                 return None, var_sound_until
         elif f in SCALAR_FORMATS:
             fmt_expr = f"Some(Fmt::{SCALAR_FORMATS[f][0]})"
+        elif f in PER_FIELD_FORMATS:
+            fmt_expr = f"Some(Fmt::{PER_FIELD_FORMATS[f]})"
+        elif f.startswith("var_"):
+            # Data-dependent width. Whether or not the spelling is one this
+            # grammar models, the soundness boundary is the same: ExifTool
+            # shifts every later field by however many bytes this one really
+            # consumed, and that shift is not computable from the table alone.
+            stats["tag_var_format"] += 1
+            if var_sound_until is None:
+                # Only the first one anchors the table's soundness boundary; a
+                # second var_* field past it is already inside the region the
+                # first one made unsound.
+                var_sound_until = idx
+            kind = VAR_KINDS.get(f)
+            if kind is None:
+                # Outside the closed grammar -- most often the
+                # `var_<fmt>[<count expr>]` form (ExifTool.pm:9989), whose
+                # width needs a Perl eval of the count expression.
+                stats["tag_var_unmodeled"] += 1
+                stats["tag_fmt_unsupported"] += 1
+                return None, var_sound_until
+            # Modeled as data, NOT decoded: the field is emitted carrying its
+            # own spelling so a caller can see exactly which variable-width
+            # rule applies, and `super::runtime::decode_field` refuses to read
+            # it. Nothing downstream can mistake this for an extractable value.
+            stats["tag_var_modeled"] += 1
+            fmt_expr = (
+                f'Some(Fmt::Var(VarFmt {{ spelling: "{rust_str(f)}", '
+                f"kind: VarKind::{kind} }}))"
+            )
         else:
-            # Variable-length or expression-sized format -- not mechanical.
-            if f.startswith("var_"):
-                stats["tag_var_format"] += 1
-                if var_sound_until is None:
-                    # Only the first one anchors the table's soundness
-                    # boundary; a second var_* field past it is already
-                    # inside the region the first one made unsound.
-                    var_sound_until = idx
+            # Expression-sized or otherwise non-mechanical format.
             stats["tag_fmt_unsupported"] += 1
             return None, var_sound_until
 
@@ -697,14 +795,77 @@ def gen_field_literal(
         stats["tag_offset_unsound"] += 1
     sub_s = "None" if sub is None else f"Some({sub})"
     subdir_src = compile_subdir(tag.get("SubDirectory"), stats)
+    hook_src = compile_hook_field(tag.get("Hook"), stats)
+    groups_src = compile_groups_field(tag.get("Groups"), stats)
     field_src = (
         f'Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
         f"format: {fmt_expr}, count: {count}, mask: {mask}, "
         f"omitted: {omitted_for(tag, stats, condition_resolved, value_conv_modeled, pc_refused)}, "
         f"value_conv: {vc}, print_conv: {pc}, "
-        f"subdir: {subdir_src} }}"
+        f"subdir: {subdir_src}, hook: {hook_src}, groups: {groups_src} }}"
     )
     return field_src, var_sound_until
+
+
+def compile_groups_field(src, stats):
+    """Step 26: this tag's own `Groups` overrides as a Rust `TagGroups`.
+
+    `AddTagToTable` (ExifTool.pm:9236-9244) fills each group family the tag
+    does NOT declare from the table's GROUPS, and keeps the ones it does:
+
+        if ($$tagInfo{Groups}) {
+            foreach (keys %{$$tagTablePtr{GROUPS}}) {
+                next if $$tagInfo{Groups}{$_};
+                $$tagInfo{Groups}{$_} = $$tagTablePtr{GROUPS}{$_};
+            }
+        } else {
+            $$tagInfo{Groups} = { %{$$tagTablePtr{GROUPS}} };
+        }
+
+    So the per-family rule is exactly "tag's own value if it has one, else the
+    table's" -- which is what `BinaryTable::effective_groups` applies. Only the
+    override half is stored per field; the table half is stored once.
+
+    Families 0/1/2 only. ExifTool defines higher families (3=document,
+    4=instance, 5=path...), but those are assigned during extraction rather
+    than declared in a tag table, so a table-derived value for them would be
+    invented rather than transcribed.
+    """
+    if not isinstance(src, dict) or not src:
+        return "TagGroups::NONE"
+    parts = []
+    for family in ("0", "1", "2"):
+        value = src.get(family)
+        if isinstance(value, str) and value:
+            parts.append(f'Some("{rust_str(value)}")')
+            stats["tag_group_override"] += 1
+        else:
+            parts.append("None")
+    if parts == ["None", "None", "None"]:
+        # Present but carrying only families this schema does not model.
+        stats["tag_group_unmodeled_family"] += 1
+        return "TagGroups::NONE"
+    return f"TagGroups {{ g0: {parts[0]}, g1: {parts[1]}, g2: {parts[2]} }}"
+
+
+def compile_hook_field(src, stats):
+    """Step 26: this field's `Hook` as a Rust `&[HookEffect]` literal.
+
+    Always returns a valid literal -- `&[]` when the field has no Hook, and
+    also when it has one `hooks.py` refuses. The two are told apart by
+    `Omitted::hook`, which `omitted_for` sets for ANY Hook, compiled or not:
+    modeling a Hook is not running it, so a field carrying one is still only
+    as trustworthy as an unconditional read at its nominal offset.
+    """
+    if not isinstance(src, str) or not src.strip():
+        return "&[]"
+    literal, reason = hooks.compile_hook(src)
+    if literal is None:
+        stats["hook_refused"] += 1
+        stats["hook_refusal_reasons"][reason] += 1
+        return "&[]"
+    stats["hook_compiled"] += 1
+    return literal
 
 
 def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format, verified_exprs):
@@ -736,16 +897,17 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format,
     """
     variants = tag["_variants"]
     trial_stats = Counter()
-    # `conv_for` writes into these three nested Counters (diagnostic
-    # listings, not part of the coverage arithmetic REPORT checks), so the
-    # trial copy needs its own, or the first write inside a refused-and-
-    # discarded trial would crash on a bare `int` where a `Counter` was
-    # expected.
+    # `conv_for` and `compile_hook_field` write into these nested Counters
+    # (diagnostic listings, not part of the coverage arithmetic REPORT checks),
+    # so the trial copy needs its own, or the first write inside a
+    # refused-and-discarded trial would crash on a bare `int` where a
+    # `Counter` was expected.
     trial_stats["unsupported_exprs"] = Counter()
     trial_stats["pc_directives_dropped"] = Counter()
     trial_stats["other_unregistered_bodies"] = Counter()
     trial_stats["value_conv_refused_expressions"] = Counter()
     trial_stats["dropped_code_refs"] = Counter()
+    trial_stats["hook_refusal_reasons"] = Counter()
     alt_srcs = []
     local_var_sound_until = var_sound_until
     for v in variants:
@@ -905,11 +1067,16 @@ def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs):
 
     # Step 28 Gate A: field-level counters for THIS table only.
     stats, run_stats = Counter(), stats
+    # Every nested Counter the field path writes into has to exist on the
+    # per-table copy too, not just on the run-wide one: `_merge_stats` folds
+    # them key-wise afterwards, but a bare `int` here crashes at the first
+    # write. Step 26's `hook_refusal_reasons` is one of them.
     stats["unsupported_exprs"] = Counter()
     stats["pc_directives_dropped"] = Counter()
     stats["other_unregistered_bodies"] = Counter()
     stats["value_conv_refused_expressions"] = Counter()
     stats["dropped_code_refs"] = Counter()
+    stats["hook_refusal_reasons"] = Counter()
 
     rows = []
     variant_rows = []
@@ -970,9 +1137,31 @@ def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs):
 
     stats["table_emitted"] += 1
     ident = re.sub(r"[^A-Za-z0-9]", "_", f"{mod_name}_{tbl_name}").upper()
-    groups = meta.get("GROUPS") or {}
-    g0 = groups.get("0", "") if isinstance(groups, dict) else ""
-    g2 = groups.get("2", "") if isinstance(groups, dict) else ""
+    # Step 26: the table's EFFECTIVE groups, i.e. after `GetTagTable`'s
+    # defaulting (ExifTool.pm:8980-8991):
+    #
+    #     unless ($$defaultGroups{0} and $$defaultGroups{1}) {
+    #         if ($tableName =~ /Image::.*?::([^:]*)/) {
+    #             $$defaultGroups{0} = $1 unless $$defaultGroups{0};
+    #             $$defaultGroups{1} = $1 unless $$defaultGroups{1};
+    #         ...
+    #     $$defaultGroups{2} = 'Other' unless $$defaultGroups{2};
+    #
+    # `$1` is the module name: TABLE_NAME is `Image::ExifTool::<Module>::<Table>`
+    # and the non-greedy `.*?` makes `([^:]*)` land on <Module>. The outer
+    # `unless (0 and 1)` guard is a no-op when both are already set, so the
+    # whole rule reduces to the three `or`s below.
+    #
+    # This matters because the raw hash is usually incomplete: of the 1512
+    # tables in the pinned tree only 383 declare all three keys, 608 declare
+    # {0,2}, 320 declare {2} alone and 95 declare no GROUPS at all. Emitting
+    # the raw values recorded an empty group0 for 512 tables -- a tag with no
+    # group is not what ExifTool reports, it is what this generator failed to
+    # look up.
+    groups = meta.get("GROUPS") if isinstance(meta.get("GROUPS"), dict) else {}
+    g0 = groups.get("0") or mod_name
+    g1 = groups.get("1") or mod_name
+    g2 = groups.get("2") or "Other"
 
     # Only record the flag when it actually protects a currently-emitted
     # field. A table that refuses a var_* field with nothing emitted after it
@@ -1019,6 +1208,7 @@ pub static {ident}: BinaryTable = BinaryTable {{
     module: "{mod_name}",
     table: "{tbl_name}",
     group0: "{rust_str(g0)}",
+    group1: "{rust_str(g1)}",
     group2: "{rust_str(g2)}",
     first_entry: {first_entry},
     default_format: Fmt::{default_fmt[0]},
@@ -1078,6 +1268,14 @@ use super::cond::{CmpOp, Cond, EffectSource, VariantGroup};
 use super::subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
 
 /// A binary-table field format.
+///
+/// Every variant's width is ExifTool's own `%formatSize` (ExifTool.pm:6210-6242)
+/// and every decode is the matching `%readValueProc` entry
+/// (ExifTool.pm:6243-6268); `decode_value` in `super::runtime` carries the
+/// per-variant citation. A format appears here only once BOTH halves are
+/// transcribed -- a correct width with a guessed decoder emits a confidently
+/// wrong number under a real ExifTool tag name, which is worse than the
+/// omission it replaces.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Fmt {
     Int8u,
@@ -1088,25 +1286,210 @@ pub enum Fmt {
     Int16uRev,
     Int32u,
     Int32s,
+    /// 32-bit integer read with the opposite endianness to the record
+    /// (`Get32uRev`, ExifTool.pm:6088).
+    Int32uRev,
+    Int64u,
+    Int64s,
     Float,
     Double,
+    /// A 16/16 numerator/denominator pair -- four bytes total, not eight
+    /// (`GetRational32u`, ExifTool.pm:6100-6106).
+    Rational32u,
+    Rational32s,
     Rational64u,
     Rational64s,
+    /// 16-bit fixed point, `/ 0x100` (`GetFixed16s`, ExifTool.pm:6121-6131).
+    Fixed16s,
+    Fixed16u,
+    /// 32-bit fixed point, `/ 0x10000` (`GetFixed32s`, ExifTool.pm:6132-6144).
+    Fixed32s,
+    Fixed32u,
+    /// 80-bit IEEE extended precision (`GetExtended`, Writer.pl:4498-4507).
+    /// AIFF stores its sample rate in one of these.
+    Extended,
+    /// `pstring`: a leading `int8u` length followed by that many bytes of
+    /// string (ExifTool.pm:9972-9975). Its total width is data-dependent, but
+    /// unlike a `var_*` format it does NOT shift any later field's offset --
+    /// ExifTool leaves `$varSize` untouched here -- so it is sound to decode
+    /// in place. [`Fmt::size`] reports the length byte only; the real span is
+    /// computed at decode time.
+    PString,
     /// `string[N]`: N bytes, truncated at the first NUL.
     Str(u32),
     /// `undef[N]`: N raw bytes.
     Undef(u32),
+    /// Step 26: a `var_*` format -- a field whose width depends on the bytes
+    /// themselves, carrying the rule that governs it.
+    ///
+    /// This is modeled, NOT decoded. [`super::runtime`] refuses every
+    /// `Fmt::Var` field, and [`BinaryTable::offsets_sound_until`] still marks
+    /// every later field's offset unsound, exactly as when these fields were
+    /// dropped entirely. What changed is only that the schema now says which
+    /// variable-width rule applies instead of saying nothing at all.
+    Var(VarFmt),
+}
+
+/// A `var_*` format, with the spelling ExifTool's own table writes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct VarFmt {
+    /// The Format string verbatim, e.g. `"var_string"`.
+    pub spelling: &'static str,
+    pub kind: VarKind,
+}
+
+/// The arms of `ProcessBinaryData`'s variable-format branch
+/// (ExifTool.pm:10000-10032). A closed set: a `var_` spelling outside it is
+/// refused by the generator and counted, never assumed to take the fallback
+/// arm -- assuming that would be inventing a width.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VarKind {
+    /// Scan to the next NUL (ExifTool.pm:10029-10031).
+    String,
+    /// UTF-16, scan to the next `\0\0` (ExifTool.pm:10005-10007).
+    UString,
+    /// Leading `int8u` count (ExifTool.pm:10008-10010).
+    PString,
+    /// Leading `int32u` count (ExifTool.pm:10011-10017).
+    PStr32,
+    /// Leading `int32u` count, doubled for UTF-16 (ExifTool.pm:10011-10017).
+    UStr32,
+    /// Leading `int16u` size, plus the two bytes of the size word itself;
+    /// the payload is read as `undef` (ExifTool.pm:10018-10023).
+    Int16u,
+    /// BPG unsigned exponential-Golomb (ExifTool.pm:10024-10028).
+    Ue7,
+}
+
+/// A tag's own group overrides, per family (0, 1, 2).
+///
+/// `None` in a family means "this tag does not override it", NOT "this tag
+/// has no group" -- the value then comes from the table
+/// ([`BinaryTable::effective_groups`], ExifTool.pm:9236-9244).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TagGroups {
+    pub g0: Option<&'static str>,
+    pub g1: Option<&'static str>,
+    pub g2: Option<&'static str>,
+}
+
+impl TagGroups {
+    /// A tag that overrides nothing.
+    pub const NONE: Self = Self { g0: None, g1: None, g2: None };
+}
+
+/// Step 26: one effect of a `Hook`, compiled to data.
+///
+/// A `Hook` is Perl that `ProcessBinaryData` evals mid-walk with `$format`,
+/// `$varSize`, `$size`, `$dataPt` and `$pos` in scope
+/// (ExifTool.pm:10048-10063). It runs AFTER the decorated field's own offset
+/// is fixed, so what it changes is this field's format and every LATER
+/// field's offset -- which is exactly why a partially-translated Hook is
+/// worse than an untranslated one: it silently relocates the rest of the
+/// table. `tools/exiftool-tables/hooks.py` therefore compiles a Hook
+/// atomically or not at all, and the ones it refuses keep `Omitted::hook`
+/// set with nothing here.
+///
+/// A field carrying compiled effects ALSO still has `Omitted::hook` set:
+/// modeling is not applying, and `super::runtime` does not run these. They
+/// are recorded so a walker that wants to reproduce ExifTool's offsets has
+/// the rule in data form rather than in Perl.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookEffect {
+    /// `$varSize += EXPR [if COND]` -- shift every later field's offset.
+    ShiftVarSize {
+        delta: HookDelta,
+        /// True for `-=`. Kept separate from the delta's own sign so that a
+        /// `MemberTernary` (whose arms carry their own signs) negates as a
+        /// whole, the way Perl's `-=` does.
+        negate: bool,
+        when: Option<HookCond>,
+    },
+    /// `$$self{M} and $format = "int64u", $varSize += 4` -- Perl's comma is a
+    /// low-precedence sequence inside the `and`, so BOTH the format change
+    /// and the shift are gated on the same condition.
+    SwitchFormat {
+        when: HookCond,
+        format: Fmt,
+        delta: i64,
+    },
+}
+
+/// The value a [`HookEffect::ShiftVarSize`] shifts by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookDelta {
+    Const(i64),
+    /// `$size` -- the length of the directory being walked.
+    DirSize,
+    /// `($$self{M} ? A : B)`. The false arm is normally 0x10000, a deliberate
+    /// overshoot that pushes the next field past the end of the record and
+    /// ends the walk, rather than reading it at an offset known to be wrong.
+    MemberTernary {
+        member: &'static str,
+        truthy: i64,
+        falsy: i64,
+    },
+    /// `$$self{M} + N` (N may be negative, or 0 for a bare `$$self{M}`).
+    MemberPlus { member: &'static str, addend: i64 },
+    /// `$$self{M} * N`.
+    MemberScaled { member: &'static str, factor: i64 },
+}
+
+/// A `Hook`'s gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookCond {
+    /// `$$self{M}` -- Perl truthiness (0 and "" and undef are false).
+    MemberTruthy(&'static str),
+    /// `$$self{M} <op> N`, numeric comparison.
+    MemberInt {
+        member: &'static str,
+        op: CmpOp,
+        value: i64,
+    },
+    /// `$$self{M} and $$self{M} ge "S"` -- Perl's guard-then-compare idiom.
+    ///
+    /// `op` is a STRING comparison, which is not the numeric one: `"10.0" ge
+    /// "9.0"` is false in Perl. ExifTool uses this on firmware version
+    /// strings, where getting it wrong would shift offsets on exactly the
+    /// bodies the Hook exists to handle.
+    MemberStr {
+        member: &'static str,
+        op: CmpOp,
+        value: &'static str,
+    },
+    /// `$size <op> N`.
+    Size { op: CmpOp, value: i64 },
 }
 
 impl Fmt {
+    /// Byte width of one element, per ExifTool's `%formatSize`
+    /// (ExifTool.pm:6210-6242).
+    ///
+    /// [`Fmt::PString`] is the one variant whose real span is not this number:
+    /// it reports 1, the width of its leading length byte, because that is the
+    /// only part whose size is known before the bytes are read. `decode_field`
+    /// in `super::runtime` special-cases it.
     #[must_use]
     pub const fn size(self) -> u32 {
         match self {
-            Fmt::Int8u | Fmt::Int8s => 1,
-            Fmt::Int16u | Fmt::Int16s | Fmt::Int16uRev => 2,
-            Fmt::Int32u | Fmt::Int32s | Fmt::Float => 4,
-            Fmt::Double | Fmt::Rational64u | Fmt::Rational64s => 8,
+            Fmt::Int8u | Fmt::Int8s | Fmt::PString => 1,
+            Fmt::Int16u | Fmt::Int16s | Fmt::Int16uRev | Fmt::Fixed16s | Fmt::Fixed16u => 2,
+            Fmt::Int32u
+            | Fmt::Int32s
+            | Fmt::Int32uRev
+            | Fmt::Float
+            | Fmt::Rational32u
+            | Fmt::Rational32s
+            | Fmt::Fixed32s
+            | Fmt::Fixed32u => 4,
+            Fmt::Double | Fmt::Int64u | Fmt::Int64s | Fmt::Rational64u | Fmt::Rational64s => 8,
+            Fmt::Extended => 10,
             Fmt::Str(n) | Fmt::Undef(n) => n,
+            // A `var_*` field HAS no static width -- that is the entire
+            // property that makes it one. 0 is not a width here, it is the
+            // absence of one, and every caller that could act on it refuses
+            // the field first (see `super::runtime::decode_field`).
+            Fmt::Var(_) => 0,
         }
     }
 }
@@ -1261,6 +1644,20 @@ pub struct Field {
     /// (`subdir_edge_modeled` vs `subdir_refused_*`) says which, per field,
     /// and never approximates one it cannot compile.
     pub subdir: Option<SubdirEdge>,
+    /// Step 26: this field's `Hook`, compiled to data when it falls inside
+    /// the closed grammar `tools/exiftool-tables/hooks.py` accepts, else
+    /// empty. Empty therefore means either "no Hook" or "a Hook that was
+    /// refused" -- `Omitted::hook` is the flag that distinguishes them, and
+    /// codegen.py's REPORT breaks the refusals down by reason.
+    ///
+    /// Non-empty does NOT mean the effects have been applied: nothing in
+    /// `super::runtime` runs them, and `Omitted::hook` stays set either way.
+    pub hook: &'static [HookEffect],
+    /// Step 26: this tag's own `Groups` overrides, empty when it declares
+    /// none. Resolve against the table with
+    /// [`BinaryTable::effective_groups`] -- this alone is not the tag's
+    /// group, it is only the half ExifTool stores per tag.
+    pub groups: TagGroups,
 }
 
 /// Step 28 Gate A -- whether this table is *statically* sound enough to hand
@@ -1302,7 +1699,13 @@ impl GateA {
 pub struct BinaryTable {
     pub module: &'static str,
     pub table: &'static str,
+    /// The table's EFFECTIVE group 0, after `GetTagTable`'s defaulting
+    /// (ExifTool.pm:8980-8991): the declared value if it has one, else the
+    /// module name. Never empty.
     pub group0: &'static str,
+    /// Effective group 1, same rule and same default as `group0`.
+    pub group1: &'static str,
+    /// Effective group 2, defaulting to `"Other"` (ExifTool.pm:8991).
     pub group2: &'static str,
     pub first_entry: i64,
     pub default_format: Fmt,
@@ -1350,6 +1753,21 @@ impl BinaryTable {
     #[must_use]
     pub fn byte_offset(&self, field: &Field) -> i64 {
         field.index * i64::from(self.default_format.size())
+    }
+
+    /// The groups ExifTool would report for `field`, families (0, 1, 2).
+    ///
+    /// `AddTagToTable` (ExifTool.pm:9236-9244) gives a tag its own value for
+    /// every family it declares and the table's for every family it does
+    /// not, which is exactly this. The table side is already defaulted (see
+    /// [`BinaryTable::group0`]), so the result is never empty.
+    #[must_use]
+    pub fn effective_groups(&self, field: &Field) -> (&'static str, &'static str, &'static str) {
+        (
+            field.groups.g0.unwrap_or(self.group0),
+            field.groups.g1.unwrap_or(self.group1),
+            field.groups.g2.unwrap_or(self.group2),
+        )
     }
 
     #[must_use]
@@ -1567,12 +1985,26 @@ REPORT = (
         ("SubDirectory edges modeled (Step 27)", "subdir_edge_modeled"),
         ("BITMASK fields (DecodeBits, Step 25)", "bitmask_emitted"),
         ("OTHER conversions registered (Step 25 registry)", "other_translated"),
+        ("per-tag group overrides (Step 26)", "tag_group_override"),
+    )),
+    ("Hook compiled to data, NOT applied (Step 26; Omitted::hook stays set)", (
+        ("Hook effects compiled", "hook_compiled"),
+    )),
+    ("var_* modeled as data, NOT decoded (Step 26; offsets past these stay "
+     "unsound and the runtime refuses to read them)", (
+        ("var_* fields seen (modeled + refused)", "tag_var_format"),
+        ("  of which modeled, carrying their rule", "tag_var_modeled"),
+    )),
+    ("partial -- exact matches kept, fallback dropped", (
+        ("int enums", "enum_int_partial"),
+        ("string enums", "enum_str_partial"),
     )),
     ("emitted with semantics recorded but not applied", (
         ("ValueConv", "omitted_value_conv"),
         ("RawConv", "omitted_raw_conv"),
         ("Condition", "omitted_condition"),
         ("Hook", "omitted_hook"),
+        ("  of which refused by the closed grammar (Step 26)", "hook_refused"),
         ("SubDirectory", "omitted_subdirectory"),
         ("bit fields, no Mask", "tag_fractional_bare"),
     )),
@@ -1590,9 +2022,10 @@ REPORT = (
         ("  of which a per-field reason (Unknown/format/mask/...)", "tag_variant_field_unsupported"),
         ("Unknown tags", "tag_unknown_skipped"),
         ("unsupported format", "tag_fmt_unsupported"),
-        ("  of which var_* (data-dep. width)", "tag_var_format"),
+        ("  of which var_* outside the closed grammar", "tag_var_unmodeled"),
         ("unreadable Mask", "tag_mask_unreadable"),
         ("unreadable index", "tag_bad_index"),
+        ("tag Groups naming only families 3+ (not table-derived)", "tag_group_unmodeled_family"),
         ("unnamed tags", "tag_no_name"),
         ("tables not ProcessBinaryData", "table_not_binary"),
         ("tables bad FORMAT", "table_bad_format"),
@@ -1641,6 +2074,7 @@ def main():
     stats["other_unregistered_bodies"] = Counter()
     stats["value_conv_refused_expressions"] = Counter()
     stats["dropped_code_refs"] = Counter()
+    stats["hook_refusal_reasons"] = Counter()
     chunks = []
     index_rows = []
 
@@ -1711,6 +2145,7 @@ def main():
     oub = stats.pop("other_unregistered_bodies")
     vc_refused = stats.pop("value_conv_refused_expressions")
     dcr = stats.pop("dropped_code_refs")
+    hrr = stats.pop("hook_refusal_reasons")
     if args.value_conv_ledger_out:
         refused_reasons = {
             key.removeprefix("value_conv_refused_"): value
@@ -1758,6 +2193,13 @@ def main():
             + " -- add them to REPORT; an unreported refusal is a coverage lie"
         )
 
+    if hrr:
+        # Every Hook refusal, by reason. A bare total would not say whether
+        # the grammar is missing an idiom worth adding or is correctly
+        # declining Perl that reads the data block.
+        print("\n  Hooks refused, by reason (Step 26):")
+        for r, n in hrr.most_common():
+            print(f"    {n:>4}  {r}")
     if pcd:
         print("\n  PrintConv directives dropped from partial enums:")
         for d, n in pcd.most_common():

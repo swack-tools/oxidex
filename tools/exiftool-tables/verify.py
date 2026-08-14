@@ -59,8 +59,11 @@ TABLE_RE = re.compile(
     r'pub static \w+: BinaryTable = BinaryTable \{\s*'
     r'module:\s*"(?P<module>[^"]*)",\s*'
     r'table:\s*"(?P<table>[^"]*)",\s*'
-    r'group0:\s*"[^"]*",\s*'
-    r'group2:\s*"[^"]*",\s*'
+    # Step 26: the three EFFECTIVE groups. Captured (not skipped) so the
+    # defaulting rule itself is checked against the oracle below.
+    r'group0:\s*"(?P<group0>[^"]*)",\s*'
+    r'group1:\s*"(?P<group1>[^"]*)",\s*'
+    r'group2:\s*"(?P<group2>[^"]*)",\s*'
     r'first_entry:\s*-?\d+,\s*'
     r'default_format:\s*Fmt::\w+,\s*'
     r'offsets_sound_until:\s*(?P<sound_until>None|Some\(-?\d+\)),',
@@ -70,7 +73,15 @@ FIELD_RE = re.compile(
     r'index:\s*(?P<index>-?\d+),\s*'
     r'sub:\s*(?P<sub>None|Some\(\d+\)),\s*'
     r'name:\s*"(?P<name>(?:[^"\\]|\\.)*)",\s*'
-    r'format:\s*(?P<fmt>None|Some\(Fmt::\w+(?:\(\d+\))?\)),\s*'
+    # Step 26: `Some(Fmt::Var(VarFmt { spelling: "var_string", kind:
+    # VarKind::String }))` is a third shape alongside `Some(Fmt::Int8u)` and
+    # `Some(Fmt::Str(4))`. Spelled out rather than widened to `.*?`: a
+    # pattern loose enough to swallow anything would also swallow a
+    # malformed literal and report it as a match.
+    r'format:\s*(?P<fmt>None'
+    r'|Some\(Fmt::\w+(?:\(\d+\))?\)'
+    r'|Some\(\s*Fmt::Var\(\s*VarFmt\s*\{\s*spelling:\s*"(?P<var_spelling>[^"]*)",\s*'
+    r'kind:\s*VarKind::(?P<var_kind>\w+),?\s*\}\s*,?\s*\)\s*,?\s*\)),\s*'
     r'count:\s*(?P<count>\d+),\s*'
     r'mask:\s*(?:None'
     r'|Some\(\s*Mask\s*\{\s*bits:\s*(?P<mask_bits>0[xX][0-9a-fA-F_]+|\d+),\s*'
@@ -128,6 +139,80 @@ VERSION_RE = re.compile(r'pub const EXIFTOOL_VERSION: &str = "([^"]+)";')
 # refuses that comma silently skips every wrapped entry.
 INT_PAIR_RE = re.compile(r'\(\s*(-?\d+),\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
 STR_PAIR_RE = re.compile(r'\(\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
+
+
+# Step 26. ExifTool format name -> the Rust `Fmt` variant a correct
+# transcription must use. Written out here on purpose rather than imported
+# from codegen.py: this file's whole reason for existing is that a verifier
+# sharing the generator's tables can only prove the generator agrees with
+# itself (see oracle.pl's header). Every width below is %formatSize in
+# ExifTool.pm:6210-6242.
+#
+# A spelling absent from this map is one the schema cannot express, and the
+# ONLY correct thing for the generator to do with such a field is refuse it --
+# `expected_fmt_literal` returns None to say so, and `main()` checks that no
+# such field was emitted.
+_FMT_VARIANT = {
+    "int8u": "Int8u", "int8s": "Int8s",
+    "int16u": "Int16u", "int16s": "Int16s", "int16uRev": "Int16uRev",
+    "int32u": "Int32u", "int32s": "Int32s", "int32uRev": "Int32uRev",
+    "int64u": "Int64u", "int64s": "Int64s",
+    "float": "Float", "double": "Double",
+    "rational32u": "Rational32u", "rational32s": "Rational32s",
+    "rational64u": "Rational64u", "rational64s": "Rational64s",
+    "fixed16s": "Fixed16s", "fixed16u": "Fixed16u",
+    "fixed32s": "Fixed32s", "fixed32u": "Fixed32u",
+    "extended": "Extended",
+}
+_SIZED_FMT_RE = re.compile(r"^(\w+)\[(\d+)\]$")
+# The arms of ProcessBinaryData's variable-format branch, ExifTool.pm:10000-10032.
+_VAR_KINDS = {
+    "var_string": "String",
+    "var_ustring": "UString",
+    "var_pstring": "PString",
+    "var_pstr32": "PStr32",
+    "var_ustr32": "UStr32",
+    "var_int16u": "Int16u",
+    "var_ue7": "Ue7",
+}
+
+
+def expected_fmt_literal(spelling):
+    """-> ("Some(Fmt::X)" | "None", count) the generated Rust must carry for a
+    field whose ExifTool `Format` is `spelling`, or None if this schema cannot
+    express that format (in which case the field must not be emitted at all).
+
+    `spelling is None` means the field declares no Format and inherits the
+    table's FORMAT, which the Rust records as `format: None, count: 1`.
+    """
+    if spelling is None:
+        return ("None", 1)
+    m = _SIZED_FMT_RE.match(spelling)
+    if m:
+        base, n = m.group(1), int(m.group(2))
+        # `string[N]`/`undef[N]` carry their byte count in the variant itself;
+        # every other sized form is N repetitions of a scalar element.
+        if base == "string":
+            return (f"Some(Fmt::Str({n}))", 1)
+        if base == "undef":
+            return (f"Some(Fmt::Undef({n}))", 1)
+        if base in _FMT_VARIANT:
+            return (f"Some(Fmt::{_FMT_VARIANT[base]})", n)
+        return None
+    if spelling in _FMT_VARIANT:
+        return (f"Some(Fmt::{_FMT_VARIANT[spelling]})", 1)
+    # pstring is not in %formatSize at all -- ExifTool handles it inline at
+    # ExifTool.pm:9972-9975, reading a leading int8u count. It shifts no later
+    # field's offset, so it is expressible; nothing else outside the map is.
+    if spelling == "pstring":
+        return ("Some(Fmt::PString)", 1)
+    # Step 26: a `var_*` name inside the closed grammar is MODELED (emitted
+    # carrying its rule, never decoded); one outside it is refused. Same
+    # split codegen.py makes, re-derived here from ExifTool's own
+    # if/elsif chain at ExifTool.pm:10000-10032 rather than imported.
+    if spelling in _VAR_KINDS:
+        return ("VAR", spelling, _VAR_KINDS[spelling], 1)
+    return None
 
 
 def _bracket_span(src, open_bracket):
@@ -334,16 +419,48 @@ def _parse_int_pairs(src, open_bracket, k, label):
     return pairs
 
 
+# Step 26: `groups: TagGroups::NONE` or
+# `groups: TagGroups { g0: None, g1: Some("GPS"), g2: Some("Location") }`.
+# Scanned from the field's tail rather than captured by FIELD_RE, which stops
+# at `subdir:` (whose value nests arbitrarily -- see that pattern's comment).
+TAG_GROUPS_RE = re.compile(
+    r'groups:\s*(?:TagGroups::NONE'
+    r'|TagGroups\s*\{\s*g0:\s*(?P<g0>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+    r'g1:\s*(?P<g1>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+    r'g2:\s*(?P<g2>None|Some\("(?:[^"\\]|\\.)*"\)),?\s*\})'
+)
+
+
+def _some_str(text):
+    """`Some("X")` -> "X"; `None` (or absent) -> "", matching the oracle's
+    empty-column convention for a family the tag does not override."""
+    if not text or text == "None":
+        return ""
+    return unescape(text[len('Some("'):-len('")')])
+
+
 def _parse_one_field(
     src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges,
-    bitmasks, other_ids, print_hexes, pc_refused, pc_kinds,
+    bitmasks, other_ids, print_hexes, pc_refused, pc_kinds, formats, tag_groups,
 ):
     """Populate `fields`/`enums`/`masks`/`hooks`/`subdirs`/`subdir_edges`/
-    `bitmasks`/`other_ids`/`print_hexes` from one `FIELD_RE` match `f`, under
-    dict key `k`. Shared by the plain-`fields:` scan and the `variants:` scan
-    below -- a `Field {...}` literal means the same thing in both places,
-    only what `k` looks like differs (see `parse_rust`)."""
+    `bitmasks`/`other_ids`/`print_hexes`/`formats`/`tag_groups` from one
+    `FIELD_RE` match `f`, under dict key `k`. Shared by the plain-`fields:`
+    scan and the `variants:` scan below -- a `Field {...}` literal means the
+    same thing in both places, only what `k` looks like differs (see
+    `parse_rust`)."""
     fields[k] = unescape(f.group("name"))
+    # Step 26: (format, count) as written in the Rust, e.g.
+    # ("Some(Fmt::Int64u)", 1). Checked against the oracle's raw Format
+    # spelling in `main()`.
+    # Normalized so rustfmt's line wrapping inside a `Fmt::Var(VarFmt {...})`
+    # literal cannot masquerade as a mismatch: a Var is compared by its two
+    # semantic parts, everything else by its (whitespace-free) literal text.
+    if f.group("var_spelling") is not None:
+        formats[k] = ("VAR", f.group("var_spelling"), f.group("var_kind"),
+                      int(f.group("count")))
+    else:
+        formats[k] = (re.sub(r"\s+", "", f.group("fmt")), int(f.group("count")))
 
     bits = f.group("mask_bits")
     if bits is not None:
@@ -374,6 +491,19 @@ def _parse_one_field(
         )
     subdir_val_end = _value_span(src, sm.end())
     subdir_edges[k] = _parse_subdir_value(src[sm.end():subdir_val_end])
+
+    # The window must clear the `hook:` member that sits between `subdir:`
+    # and `groups:`; a two-effect Canon hook chain alone runs past 400 chars.
+    # Bounded rather than open-ended so a field missing its `groups:` member
+    # cannot silently match the NEXT field's.
+    gm = TAG_GROUPS_RE.search(src, subdir_val_end, subdir_val_end + 4000)
+    if gm is None:
+        raise SystemExit(
+            f"no `groups:` member parsed for {k} -- the verifier's pattern is "
+            "out of date; fix it before trusting a PASS"
+        )
+    tag_groups[k] = (_some_str(gm.group("g0")), _some_str(gm.group("g1")),
+                     _some_str(gm.group("g2")))
 
     pc_kinds[k] = pc.split("(", 1)[0]
     # Rescan enum bodies from the source itself rather than trusting a
@@ -463,11 +593,15 @@ class ParsedRust(NamedTuple):
     print_hexes: dict
     pc_refused: dict
     pc_kinds: dict
+    formats: dict
+    table_groups: dict
+    tag_groups: dict
 
 
 def parse_rust(path):
     """-> (fields, enums, masks, hooks, subdirs, subdir_edges, sound_until,
-    variant_keys, bitmasks, other_ids, print_hexes, pc_refused, pc_kinds)
+    variant_keys, bitmasks, other_ids, print_hexes, pc_refused, pc_kinds,
+    formats, table_groups, tag_groups)
 
     fields{k->name}, enums{k->{key:val}}, masks{k->(bits,shift)},
     hooks{k}, subdirs{k} (sets of field keys with that Omitted flag set),
@@ -504,14 +638,19 @@ def parse_rust(path):
     # independently-read PCREF rows.
     pc_refused, pc_kinds = set(), {}
     subdir_edges = {}
+    formats = {}
     sound_until = {}
+    table_groups = {}
+    tag_groups = {}
     variant_keys = set()
     bitmasks, other_ids, print_hexes = {}, {}, {}
-    bounds = [(m.start(), m.group("module"), m.group("table"), m.group("sound_until"))
+    bounds = [(m.start(), m.group("module"), m.group("table"), m.group("sound_until"),
+               (m.group("group0"), m.group("group1"), m.group("group2")))
               for m in TABLE_RE.finditer(src)]
-    for start, mod, tbl, su in bounds:
+    for start, mod, tbl, su, grp in bounds:
         sound_until[(mod, tbl)] = None if su == "None" else int(su[len("Some("):-1])
-    bounds = [(start, mod, tbl) for start, mod, tbl, _su in bounds]
+        table_groups[(mod, tbl)] = grp
+    bounds = [(start, mod, tbl) for start, mod, tbl, _su, _g in bounds]
     bounds.append((len(src), None, None))
 
     expected_plain = 0
@@ -538,7 +677,7 @@ def parse_rust(path):
                 key = idx if sub == "None" else f"{idx}.{sub[5:-1]}"
                 _parse_one_field(
                     src, f, (mod, tbl, key), fields, enums, masks, hooks, subdirs, subdir_edges,
-                    bitmasks, other_ids, print_hexes, pc_refused, pc_kinds,
+                    bitmasks, other_ids, print_hexes, pc_refused, pc_kinds, formats, tag_groups,
                 )
 
         # `variants: &[VariantGroup { index, sub, alternatives: &[(Cond,
@@ -561,7 +700,7 @@ def parse_rust(path):
                     variant_keys.add(k)
                     _parse_one_field(
                         src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges,
-                        bitmasks, other_ids, print_hexes, pc_refused, pc_kinds,
+                        bitmasks, other_ids, print_hexes, pc_refused, pc_kinds, formats, tag_groups,
                     )
 
     # Every Field in the file must have been parsed -- separately for each
@@ -583,7 +722,7 @@ def parse_rust(path):
         )
     return ParsedRust(
         fields, enums, masks, hooks, subdirs, subdir_edges, sound_until, variant_keys,
-        bitmasks, other_ids, print_hexes, pc_refused, pc_kinds,
+        bitmasks, other_ids, print_hexes, pc_refused, pc_kinds, formats, table_groups, tag_groups,
     )
 
 
@@ -601,6 +740,11 @@ def load_oracle(lib, oracle_pl):
     # CODE refs `exprs.py`'s CODE_REFS names and refuses the rest; `main()`
     # uses this to check that decision from the ExifTool side.
     pcrefs = {}
+    # Step 26: {(mod,sym,key) -> raw Format spelling}, for the format column.
+    rawfmts = {}
+    # Step 26: {(mod,sym) -> (g0,g1,g2)} raw table GROUPS (before defaulting),
+    # and {(mod,sym,key) -> (g0,g1,g2)} per-tag overrides. '' means absent.
+    tblgroups, taggroups = {}, {}
     # Step 27: the raw SubDirectory facts behind each `subdirs` membership --
     # {(mod,sym,key) -> {"tagtable":str, "start":str, "base":str,
     # "processproc":bool, "byteorder":bool, "validate":bool}}, independent of
@@ -641,9 +785,16 @@ def load_oracle(lib, oracle_pl):
             other_print_hex[key] = p[4] == "1"
         elif len(p) == 5 and p[3] == "PCREF":
             pcrefs[(p[0], p[1], p[2])] = p[4]
+        elif len(p) == 5 and p[3] == "FORMAT":
+            rawfmts[(p[0], p[1], p[2])] = p[4]
+        elif len(p) == 7 and p[3] == "TGROUPS":
+            tblgroups[(p[0], p[1])] = (p[4], p[5], p[6])
+        elif len(p) == 7 and p[3] == "GROUPS":
+            taggroups[(p[0], p[1], p[2])] = (p[4], p[5], p[6])
     return (
         names, enums, masks, hooks, subdirs, subdir_facts, varfmts,
         bitmasks, other_present, other_print_hex, pcrefs,
+        rawfmts, tblgroups, taggroups,
     )
 
 
@@ -810,11 +961,12 @@ def main():
     (
         gen_fields, gen_enums, gen_masks, gen_hooks, gen_subdirs, gen_subdir_edges,
         gen_sound_until, gen_variant_keys, gen_bitmasks, gen_other_ids, gen_print_hexes,
-        gen_pc_refused, gen_pc_kinds,
+        gen_pc_refused, gen_pc_kinds, gen_formats, gen_table_groups, gen_tag_groups,
     ) = parse_rust(args.generated_rs)
     (
         or_names, or_enums, or_masks, or_hooks, or_subdirs, or_subdir_facts, or_varfmts,
         or_bitmasks, or_other_present, or_other_print_hex, or_pcrefs,
+        or_rawfmts, or_tblgroups, or_taggroups,
     ) = load_oracle(args.exiftool_lib, args.oracle)
 
     if not gen_fields:
@@ -1023,6 +1175,75 @@ def main():
         else:
             pcref_ok += 1
 
+    # Step 26: every emitted field's width. Before this column existed the
+    # verifier checked each field's name, enum, mask, hook and subdirectory
+    # but never how many bytes it reads, so a format transcribed at the wrong
+    # size would have decoded its neighbour's bytes under a correct ExifTool
+    # tag name and passed the entire suite. `expected_fmt_literal` re-derives
+    # the answer from the oracle's raw Format spelling and ExifTool's own
+    # %formatSize semantics, NOT by importing codegen.py's SCALAR_FORMATS --
+    # a shared table would confirm its own typo.
+    fmt_ok = fmt_bad = 0
+    fmt_examples = []
+    for k, got in gen_formats.items():
+        want = expected_fmt_literal(or_rawfmts.get(k))
+        if want == got:
+            fmt_ok += 1
+        else:
+            fmt_bad += 1
+            if len(fmt_examples) < args.show:
+                fmt_examples.append((k, got, want, or_rawfmts.get(k)))
+
+    # Step 26, effective groups. Two independent properties:
+    #
+    #   1. the TABLE's groups equal GetTagTable's defaulting
+    #      (ExifTool.pm:8980-8991) applied to the module's RAW GROUPS hash --
+    #      re-derived here from the oracle's TGROUPS row, not read back from
+    #      codegen.py's arithmetic;
+    #   2. each FIELD's stored overrides are exactly the tag's own `Groups`
+    #      keys (ExifTool.pm:9236-9244) -- no more (inventing a group) and no
+    #      fewer (silently inheriting where ExifTool overrides).
+    #
+    # The table half matters most: the raw hash is usually partial, so a
+    # generator that copied it verbatim recorded an empty group 0 for a third
+    # of all tables and nothing would have noticed.
+    group_ok = group_bad = 0
+    group_examples = []
+    for (mod, tbl), got in gen_table_groups.items():
+        raw = or_tblgroups.get((mod, tbl))
+        if raw is None:
+            continue
+        # `$$defaultGroups{0} = $1 unless $$defaultGroups{0}` where $1 is the
+        # module name, then `{2} = 'Other' unless {2}`.
+        want = (raw[0] or mod, raw[1] or mod, raw[2] or "Other")
+        if got == want:
+            group_ok += 1
+        else:
+            group_bad += 1
+            if len(group_examples) < args.show:
+                group_examples.append(((mod, tbl), got, want, raw))
+
+    tag_group_ok = tag_group_bad = 0
+    tag_group_examples = []
+    for k, got in gen_tag_groups.items():
+        want = or_taggroups.get(k, ("", "", ""))
+        if got == want:
+            tag_group_ok += 1
+        else:
+            tag_group_bad += 1
+            if len(tag_group_examples) < args.show:
+                tag_group_examples.append((k, got, want))
+
+    # The other half of the same property: a field whose Format this schema
+    # cannot express must have been REFUSED, not emitted at the table's
+    # default width. Without this, dropping a format from SCALAR_FORMATS
+    # would silently start reporting those fields at the wrong size.
+    unsupported_emitted = [
+        (k, or_rawfmts[k], gen_formats[k])
+        for k in gen_formats
+        if k in or_rawfmts and expected_fmt_literal(or_rawfmts[k]) is None
+    ]
+
     # Step 27: does `codegen.py`'s SubdirEdge compiler (`subdirs.py`) agree
     # with an INDEPENDENT re-derivation (`expected_subdir_edge`, built from
     # the oracle's raw TAGTABLE/START/BASE/PROCESSPROC/BYTEORDER/VALIDATE
@@ -1138,6 +1359,16 @@ def main():
     print(f"  accounted for  {pcref_ok}  (ExifTool PrintConv refs: {pcref_translated} translated, {len(gen_pc_refused)} refused)")
     print(f"  MISMATCH: refused with no ExifTool PrintConv ref {pcref_false_refusal}")
     print(f"  MISMATCH: ExifTool PrintConv ref dropped silently {pcref_silent_drop}")
+    print(f"table effective groups (Step 26) {group_ok + group_bad}")
+    print(f"  match          {group_ok}")
+    print(f"  MISMATCH       {group_bad}")
+    print(f"per-tag group overrides (Step 26) {tag_group_ok + tag_group_bad}")
+    print(f"  match          {tag_group_ok}")
+    print(f"  MISMATCH       {tag_group_bad}")
+    print(f"field formats (Step 26) {fmt_ok + fmt_bad}")
+    print(f"  match          {fmt_ok}")
+    print(f"  MISMATCH       {fmt_bad}")
+    print(f"  unsupported format emitted anyway {len(unsupported_emitted)}")
 
     for k, got, want in bad_examples:
         print(f"  name  {k}: generated {got!r} != exiftool {want!r}")
@@ -1169,12 +1400,22 @@ def main():
         print(f"  offsets_sound_until  {k}: generated {got!r} != expected {want!r}")
     for k, why in pcref_examples:
         print(f"  print_conv flag  {k}: {why}")
+    for k, got, want, raw in group_examples:
+        print(f"  table groups  {k}: generated {got!r} != expected {want!r} (raw GROUPS {raw!r})")
+    for k, got, want in tag_group_examples:
+        print(f"  tag groups  {k}: generated {got!r} != exiftool {want!r}")
+    for k, got, want, raw in fmt_examples:
+        print(f"  format  {k}: generated {got!r} != expected {want!r} (Format {raw!r})")
+    for k, raw, got in unsupported_emitted[:args.show]:
+        print(f"  format  {k}: Format {raw!r} is outside the schema but was "
+              f"emitted as {got!r} -- it must be refused, not approximated")
 
     failed = (
         name_bad + enum_bad + orphan + mask_bad + bitmask_bad + other_bad
         + variant_name_bad + variant_enum_bad + variant_orphan + variant_mask_bad
         + hook_bad + subdir_bad + edge_bad + sound_bad
         + pcref_false_refusal + pcref_silent_drop
+        + fmt_bad + len(unsupported_emitted) + group_bad + tag_group_bad
     )
     print("\nRESULT:", "PASS" if failed == 0 else f"FAIL ({failed} discrepancies)")
     sys.exit(1 if failed else 0)

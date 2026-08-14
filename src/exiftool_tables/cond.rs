@@ -400,6 +400,7 @@ pub fn first_match<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exiftool_tables::TagGroups;
 
     fn ctx_with(pairs: &[(&'static str, MemberValue)]) -> HashMap<&'static str, MemberValue> {
         pairs.iter().cloned().collect()
@@ -513,6 +514,8 @@ mod tests {
             value_conv: None,
             print_conv: super::super::PrintConv::None,
             subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
         };
         let nex_field = super::super::Field {
             name: "CameraOrientation",

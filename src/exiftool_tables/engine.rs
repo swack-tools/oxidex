@@ -639,7 +639,7 @@ fn descend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exiftool_tables::{Omitted, PrintConv};
+    use crate::exiftool_tables::{Omitted, PrintConv, TagGroups};
 
     // -- Cursor: ExifTool.pm:9957-9964 --------------------------------------
 
@@ -813,6 +813,8 @@ mod tests {
             value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
         },
         Field {
             index: 1,
@@ -828,6 +830,8 @@ mod tests {
             value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
         },
     ];
 
@@ -835,6 +839,10 @@ mod tests {
         module: "Test",
         table: "Plain",
         group0: "MakerNotes",
+        // Step 26: `group1` is the table's EFFECTIVE family-1 group. This
+        // fixture declares no GROUPS{1}, so GetTagTable's defaulting
+        // (ExifTool.pm:8980-8991) falls back to the module name.
+        group1: "Test",
         group2: "Camera",
         first_entry: 0,
         default_format: Fmt::Int16u,

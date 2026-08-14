@@ -1127,4 +1127,139 @@ mod tests {
         assert_eq!(sprintf_g(1.4142, 2), "1.4");
         assert_eq!(sprintf_g(0.0, 2), "0");
     }
+
+    /// Step 26: the hand-transcribed Canon `HookRule`s and the generated
+    /// `HookEffect`s must describe the SAME offset shift.
+    ///
+    /// Canon's CameraInfo walker predates the shared Hook compiler and keeps
+    /// its own `HookRule` shape (see [`super::camera_info_tables::HookRule`]),
+    /// which models exactly one idiom: `$varSize <op>= N if $$self{CanonFirm}
+    /// <cmp> M`, with `zero_delta` for the `($$self{CanonFirm} ? A : B)`
+    /// form. `tools/exiftool-tables/hooks.py` now compiles the same Perl into
+    /// `HookEffect`, from ExifTool's tables, through a completely separate
+    /// path.
+    ///
+    /// Two transcriptions of one fact drift silently unless something
+    /// compares them, and a drift here moves every later field in the table.
+    /// This is that comparison. It does not replace either representation --
+    /// the walker still runs `HookRule` -- but neither can change alone.
+    #[test]
+    fn hand_hook_rules_agree_with_the_generated_hook_effects() {
+        use crate::exiftool_tables::{CmpOp, HookCond, HookDelta, HookEffect, find_table};
+
+        let mut compared = 0usize;
+        for table in ALL_TABLES {
+            let Some(generated) = find_table("Canon", table.name) else {
+                continue;
+            };
+            for field in table.fields {
+                if field.hook.is_empty() {
+                    continue;
+                }
+                let gen_field = generated
+                    .fields
+                    .iter()
+                    .find(|f| f.name == field.name)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{} field {} is not in the generated table",
+                            table.name, field.name
+                        )
+                    });
+                assert_eq!(
+                    field.hook.len(),
+                    gen_field.hook.len(),
+                    "{}::{} hook statement count",
+                    table.name,
+                    field.name
+                );
+
+                for (hand, compiled) in field.hook.iter().zip(gen_field.hook) {
+                    // Reduce the generated form to the hand form's four
+                    // numbers: (cmp, firm, delta-when-CanonFirm-nonzero,
+                    // delta-when-CanonFirm-zero).
+                    let HookEffect::ShiftVarSize {
+                        delta,
+                        negate,
+                        when,
+                    } = compiled
+                    else {
+                        panic!(
+                            "{}::{} compiled to a non-shift effect",
+                            table.name, field.name
+                        )
+                    };
+                    let Some(HookCond::MemberInt { member, op, value }) = when else {
+                        panic!(
+                            "{}::{} compiled without a CanonFirm gate",
+                            table.name, field.name
+                        )
+                    };
+                    assert_eq!(*member, "CanonFirm");
+
+                    let sign = if *negate { -1 } else { 1 };
+                    let (gen_delta, gen_zero) = match delta {
+                        HookDelta::Const(n) => (sign * n, sign * n),
+                        HookDelta::MemberTernary {
+                            member,
+                            truthy,
+                            falsy,
+                        } => {
+                            assert_eq!(*member, "CanonFirm");
+                            (sign * truthy, sign * falsy)
+                        }
+                        other => {
+                            panic!("{}::{} unexpected delta {other:?}", table.name, field.name)
+                        }
+                    };
+                    let compiled_cmp = match op {
+                        CmpOp::Lt => Cmp::Lt,
+                        CmpOp::Gt => Cmp::Gt,
+                        CmpOp::Eq => Cmp::Eq,
+                        CmpOp::Ge => Cmp::Ge,
+                        CmpOp::Le => Cmp::Le,
+                        CmpOp::Ne => panic!("{}::{} `!=` gate", table.name, field.name),
+                    };
+
+                    assert_eq!(
+                        hand.delta, gen_delta,
+                        "{}::{} delta",
+                        table.name, field.name
+                    );
+                    assert_eq!(
+                        hand.zero_delta, gen_zero,
+                        "{}::{} zero_delta",
+                        table.name, field.name
+                    );
+                    assert_eq!(
+                        hand.firm, *value as u8,
+                        "{}::{} firm",
+                        table.name, field.name
+                    );
+                    assert!(
+                        matches!(
+                            (hand.cmp, compiled_cmp),
+                            (Cmp::Lt, Cmp::Lt)
+                                | (Cmp::Gt, Cmp::Gt)
+                                | (Cmp::Eq, Cmp::Eq)
+                                | (Cmp::Ge, Cmp::Ge)
+                                | (Cmp::Le, Cmp::Le)
+                        ),
+                        "{}::{} comparison operator",
+                        table.name,
+                        field.name
+                    );
+                    compared += 1;
+                }
+            }
+        }
+
+        // Guard against the comparison silently covering nothing -- the
+        // failure mode where a renamed table makes every `find_table` miss
+        // and the loop passes by doing no work at all.
+        assert!(
+            compared >= 10,
+            "expected the Canon CameraInfo hooks to be cross-checked, compared {compared}"
+        );
+    }
 }
