@@ -1,6 +1,6 @@
 {
-  "eligible": 375,
-  "enabled": 5,
+  "eligible": 372,
+  "enabled": 8,
   "gate_a_refusal_reasons": {
     "conv_dropped": 14,
     "expr_unsupported": 141,
@@ -50,9 +50,9 @@
       "edges": [],
       "fields": 7,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "APE",
-      "status": "eligible",
+      "status": "enabled",
       "table": "NewHeader"
     },
     {
@@ -60,7 +60,7 @@
       "edges": [],
       "fields": 6,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "APE",
       "status": "eligible",
       "table": "OldHeader"
@@ -2178,9 +2178,9 @@
       "edges": [],
       "fields": 24,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "Font",
-      "status": "eligible",
+      "status": "enabled",
       "table": "PFM"
     },
     {
@@ -2440,9 +2440,9 @@
       "edges": [],
       "fields": 1,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "H264",
-      "status": "eligible",
+      "status": "enabled",
       "table": "RecInfo"
     },
     {
@@ -2639,7 +2639,7 @@
       "edges": [],
       "fields": 1,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "ITC",
       "status": "eligible",
       "table": "Header"
@@ -2649,7 +2649,7 @@
       "edges": [],
       "fields": 6,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "ITC",
       "status": "eligible",
       "table": "Item"
@@ -3541,7 +3541,7 @@
       "edges": [],
       "fields": 7,
       "gate_a": false,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "MOI",
       "status": "refused",
       "table": "Main"
@@ -3600,7 +3600,7 @@
       "edges": [],
       "fields": 36,
       "gate_a": false,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "MRC",
       "status": "refused",
       "table": "Main"
@@ -5475,7 +5475,7 @@
       "edges": [],
       "fields": 15,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "PCX",
       "status": "eligible",
       "table": "Main"
@@ -5485,7 +5485,7 @@
       "edges": [],
       "fields": 9,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "PGF",
       "status": "eligible",
       "table": "Main"

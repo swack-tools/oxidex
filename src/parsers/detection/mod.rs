@@ -344,6 +344,24 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::PFM);
     }
 
+    // Windows Printer Font Metrics, the *other* format behind `FileType: PFM`
+    // (Font.pm:844-853). Disjoint from the FloatMap magic above -- a FloatMap
+    // file opens with `P`, this one with `\0\x01`/`\0\x02` -- so the order of
+    // the two is ExifTool's (`%fileTypeLookup{pfm} => [['Font','PFM2'], ...]`
+    // tries Font first) rather than a tie-break.
+    //
+    // Content detection is required, not merely preferred: `detect_format`
+    // never sees a filename, so before this a Printer Font Metrics file
+    // resolved to `FileFormat::Unknown` and bottomed out in
+    // `add_identity_tags` -- a correct `File:FileType: PFM` over zero real
+    // tags. ExifTool's own acceptance test is content-based too, and every
+    // clause of it is reproduced in `verify_signature`: the self-describing
+    // size at offset 2 and the `"PostScript\0"` string at the offset named by
+    // offset 101 are what make this specific enough to run this early.
+    if crate::parsers::font::pfm::PrinterFontMetricsParser::verify_signature(reader) {
+        return Ok(FileFormat::PFM);
+    }
+
     // Radiance RGBE (HDR): `#?RADIANCE` or `#?RGBE` on the first line. It has
     // to outrank the text rules below and the plain-text fallback -- the
     // header is ASCII, so `is_likely_text` accepts it, and the file reported

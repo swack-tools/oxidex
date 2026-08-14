@@ -35,6 +35,7 @@ use crate::parsers::document::ooxml::parse_pptx_metadata;
 use crate::parsers::document::ooxml::parse_xlsx_metadata;
 use crate::parsers::document::tnef::parse_tnef_metadata;
 use crate::parsers::font::otf::parse_otf_metadata;
+use crate::parsers::font::pfm::{PrinterFontMetricsParser, parse_printer_font_metrics};
 use crate::parsers::font::ttf::parse_ttf_metadata;
 use crate::parsers::font::woff::parse_woff_metadata;
 use crate::parsers::font::woff2::parse_woff2_metadata;
@@ -199,7 +200,23 @@ pub fn dispatch_format_parser(
         FileFormat::EXR => convert_string_error(parse_exr_metadata(reader), "EXR"),
         FileFormat::DPX => convert_string_error(parse_dpx_metadata(reader), "DPX"),
         FileFormat::PCD => convert_string_error(parse_pcd_metadata(reader), "PCD"),
-        FileFormat::PFM => convert_string_error(parse_pfm_metadata(reader), "PFM"),
+        // `.pfm` is two unrelated formats behind one `FileType: PFM`, told
+        // apart by the header exactly as `crate::filetype::refine` tells the
+        // MIME types apart. ExifTool tries the Font module first
+        // (`%fileTypeLookup{pfm} => [['Font','PFM2'], ...]`, ExifTool.pm), and
+        // its test is disjoint from the Portable FloatMap magic -- a FloatMap
+        // file starts `P`, a Printer Font Metrics file `\0\x01`/`\0\x02` --
+        // so the order is ExifTool's rather than a tie-break. Before this arm
+        // existed, every Printer Font Metrics file fell into the FloatMap
+        // parser, failed, and was reported `Status: IdentifiedOnly` with all
+        // 26 of its Font tags missing and no error raised.
+        FileFormat::PFM => {
+            if PrinterFontMetricsParser::verify_signature(reader) {
+                convert_string_error(parse_printer_font_metrics(reader), "PFM")
+            } else {
+                convert_string_error(parse_pfm_metadata(reader), "PFM")
+            }
+        }
         FileFormat::HDR => convert_string_error(parse_radiance_metadata(reader), "HDR"),
         FileFormat::FLIF => convert_string_error(parse_flif_metadata(reader), "FLIF"),
         FileFormat::XCF => convert_string_error(parse_xcf_metadata(reader), "XCF"),

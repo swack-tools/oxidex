@@ -75,6 +75,31 @@ pub static ENABLED: &[(&str, &str)] = &[
     // Canon::CMP1 -- `src/parsers/raw/metadata.rs:4788`, the CR3 `CMP1` box.
     // Corpus carriers: `CanonRaw.cr3` plus the Canon vendor directory.
     ("Canon", "CMP1"),
+    // Font::PFM -- `src/parsers/font/pfm.rs`, the 117-byte Windows Printer
+    // Font Metrics header ExifTool hands to `ProcessBinaryData` at
+    // Font.pm:860 (`$et->HandleTag($tagTablePtr, 'PFM', $buff)`; the table
+    // itself is Font.pm:278-315). Corpus carrier: `Font.pfm`, the only
+    // Printer Font Metrics file in combined-samples.
+    //
+    // This is the first line here whose call site did not exist before: the
+    // format was DETECTED and not parsed (`AGENTS.md`), reporting a correct
+    // `File:FileType: PFM` over `Status: IdentifiedOnly`. So the call site
+    // asks `table.enabled()` itself rather than relying on `decode_field`'s
+    // read-port switch, which makes this line's own A/B exact -- with the
+    // line the 24 table fields are emitted, without it none are, and nothing
+    // else in the parser moves.
+    //
+    // Gate B, `tools/exiftool-tables/conformance.py --only Font.pfm` against
+    // pinned 13.59, same binary except this line:
+    //
+    //     off  PFM  1 file   5 match  0 value  24 missing  0 extra
+    //     on   PFM  1 file  29 match  0 value   0 missing  0 extra
+    //
+    // 24 MISSING moved to matched; zero new VALUE, zero new EXTRA. Spot
+    // check on the carrier: PFMVersion `1.00` from raw 0x0100 through
+    // `sprintf("%x.%.2x",$val>>8,$val&0xff)`, which the generator compiled --
+    // pinned oracle and oxidex both print `1.00`.
+    ("Font", "PFM"),
     // H264::RecInfo -- Gate B: `conformance.py` on the real `M2TS.mts`
     // carrier versus the 38144a2c control: 22 match / 0 VALUE / 1 MISSING /
     // 0 EXTRA on both sides (the carrier already exercised the hand-written
@@ -123,6 +148,27 @@ pub static ENABLED: &[(&str, &str)] = &[
     //   (see `just reachability`). Enabling one would produce no tags and no
     //   measurement -- enablement on no evidence, which is the thing design
     //   D1 exists to prevent.
+    // * DjVu::Info has a live decode (`parsers/image/djvu.rs`'s
+    //   `collect_info`) that the generated table CANNOT replace: the
+    //   generator set `Omitted::value_conv` on DjVuVersion, SpatialResolution
+    //   and Gamma, whose ValueConvs it declined to model, so `emit` refuses
+    //   all three. Routing through the engine would trade three correct
+    //   values (`0.24`, `100`, `2.2` on `DjVu.djvu`, all matching pinned
+    //   13.59) for silence. `AGENTS.md`: a gap in a transcribed table is not
+    //   evidence the tag does not exist. The hand decode stays.
+    // * DjVu::Form, ICC_Profile::ColorRep and ICC_Profile::ColorantTable pass
+    //   gate A but a gate B run cannot separate them from what is already
+    //   there. `DjVu::Form`'s one `SubfileType` StrEnum is already emitted
+    //   correctly by `collect_djvu_chunks`, so enabling it moves nothing
+    //   measurable; `cicp` and `clrt` have NO carrier in combined-samples at
+    //   all -- `exiftool-pinned.sh -r -ColorPrimaries -ColorantCount` over all
+    //   4,238 files returns zero rows, while the same command for
+    //   `-ProfileDescription` returns many. Corpus acquisition, not wiring.
+    // * The 16 LNK and 3 ZIP tables in that group are either gate-A refused
+    //   (LNK::Main, ZIP::Main, ZIP::GZIP, ZIP::RAR and 9 more) or are
+    //   `ItemID` shells with no carrier: `LNK.lnk` already scores 46/46 with
+    //   zero MISSING and zero EXTRA against pinned 13.59, so there is nothing
+    //   for the eligible LNK tables to move.
     // * Every table reachable through a compiled `SubdirEdge` from a live
     //   root is blocked by gate A. In the pinned 13.59 tree exactly one edge
     //   hangs off a hand-wired table -- `CanonVRD::Ver2 -> CanonVRD::DLOInfo`
