@@ -1,32 +1,27 @@
 {
-  "eligible": 403,
+  "eligible": 426,
   "enabled": 8,
   "gate_a_refusal_reasons": {
-    "expr_unsupported": 108,
-    "offsets_sound_until": 4,
+    "expr_unsupported": 109,
+    "offsets_sound_until": 7,
     "other_unregistered": 29,
     "subdir_refused_processproc": 1,
     "tag_bad_index": 4,
-    "tag_fmt_unsupported": 86,
-    "tag_var_format": 7,
+    "tag_fmt_unsupported": 56,
+    "tag_var_format": 8,
     "tag_variant_cond_unsupported": 8,
     "tag_variant_field_unsupported": 1,
     "tag_variant_skipped": 9
   },
   "per_table": [
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 4,
-      "gate_a": false,
+      "fields": 6,
+      "gate_a": true,
       "hand_wired": true,
       "module": "AIFF",
-      "status": "refused",
+      "status": "eligible",
       "table": "Common"
     },
     {
@@ -63,15 +58,15 @@
       "blocked_by": [
         [
           "expr_unsupported",
-          1
+          3
         ],
         [
           "tag_fmt_unsupported",
-          7
+          1
         ]
       ],
       "edges": [],
-      "fields": 4,
+      "fields": 10,
       "gate_a": false,
       "hand_wired": false,
       "module": "ASF",
@@ -86,11 +81,11 @@
         ],
         [
           "tag_fmt_unsupported",
-          3
+          2
         ]
       ],
       "edges": [],
-      "fields": 6,
+      "fields": 7,
       "gate_a": false,
       "hand_wired": false,
       "module": "ASF",
@@ -106,14 +101,10 @@
         [
           "other_unregistered",
           1
-        ],
-        [
-          "tag_fmt_unsupported",
-          3
         ]
       ],
       "edges": [],
-      "fields": 22,
+      "fields": 25,
       "gate_a": false,
       "hand_wired": false,
       "module": "BMP",
@@ -133,16 +124,16 @@
     {
       "blocked_by": [
         [
-          "tag_fmt_unsupported",
+          "tag_var_format",
           3
         ],
         [
-          "tag_var_format",
-          3
+          "offsets_sound_until",
+          1
         ]
       ],
       "edges": [],
-      "fields": 5,
+      "fields": 8,
       "gate_a": false,
       "hand_wired": false,
       "module": "BPG",
@@ -492,7 +483,7 @@
       ],
       "fields": 21,
       "gate_a": false,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "Canon",
       "status": "refused",
       "table": "CameraInfo5DmkIII"
@@ -979,18 +970,13 @@
       "table": "CropInfo"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 1,
-      "gate_a": false,
+      "fields": 3,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Canon",
-      "status": "refused",
+      "status": "eligible",
       "table": "ExposureInfo"
     },
     {
@@ -1051,6 +1037,16 @@
       "module": "Canon",
       "status": "eligible",
       "table": "Flags"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "FocalInfo"
     },
     {
       "blocked_by": [
@@ -1156,14 +1152,10 @@
         [
           "expr_unsupported",
           2
-        ],
-        [
-          "tag_fmt_unsupported",
-          1
         ]
       ],
       "edges": [],
-      "fields": 8,
+      "fields": 9,
       "gate_a": false,
       "hand_wired": false,
       "module": "Canon",
@@ -1285,7 +1277,7 @@
       "edges": [],
       "fields": 29,
       "gate_a": false,
-      "hand_wired": true,
+      "hand_wired": false,
       "module": "Canon",
       "status": "refused",
       "table": "ShotInfo"
@@ -1563,10 +1555,6 @@
     {
       "blocked_by": [
         [
-          "tag_fmt_unsupported",
-          1
-        ],
-        [
           "tag_var_format",
           1
         ],
@@ -1581,7 +1569,7 @@
           "DLOInfo"
         ]
       ],
-      "fields": 143,
+      "fields": 144,
       "gate_a": false,
       "hand_wired": true,
       "module": "CanonVRD",
@@ -1656,10 +1644,6 @@
     {
       "blocked_by": [
         [
-          "tag_fmt_unsupported",
-          3
-        ],
-        [
           "tag_var_format",
           3
         ],
@@ -1669,7 +1653,7 @@
         ]
       ],
       "edges": [],
-      "fields": 3,
+      "fields": 6,
       "gate_a": false,
       "hand_wired": false,
       "module": "DNG",
@@ -1702,18 +1686,13 @@
       "table": "Main"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 7,
-      "gate_a": false,
+      "fields": 8,
+      "gate_a": true,
       "hand_wired": false,
       "module": "DSF",
-      "status": "refused",
+      "status": "eligible",
       "table": "Main"
     },
     {
@@ -1830,7 +1809,7 @@
       "blocked_by": [
         [
           "tag_fmt_unsupported",
-          3
+          1
         ],
         [
           "tag_var_format",
@@ -1842,7 +1821,7 @@
         ]
       ],
       "edges": [],
-      "fields": 6,
+      "fields": 8,
       "gate_a": false,
       "hand_wired": false,
       "module": "FLAC",
@@ -2427,18 +2406,13 @@
       "table": "Type6"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          4
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 2,
-      "gate_a": false,
+      "fields": 6,
+      "gate_a": true,
       "hand_wired": false,
       "module": "ICC_Profile",
-      "status": "refused",
+      "status": "eligible",
       "table": "Chromaticity"
     },
     {
@@ -2466,14 +2440,10 @@
         [
           "expr_unsupported",
           4
-        ],
-        [
-          "tag_fmt_unsupported",
-          1
         ]
       ],
       "edges": [],
-      "fields": 15,
+      "fields": 16,
       "gate_a": false,
       "hand_wired": false,
       "module": "ICC_Profile",
@@ -2483,12 +2453,12 @@
     {
       "blocked_by": [
         [
-          "tag_fmt_unsupported",
-          2
+          "expr_unsupported",
+          1
         ]
       ],
       "edges": [],
-      "fields": 3,
+      "fields": 5,
       "gate_a": false,
       "hand_wired": false,
       "module": "ICC_Profile",
@@ -2496,18 +2466,13 @@
       "table": "Measurement"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 1,
-      "gate_a": false,
+      "fields": 3,
+      "gate_a": true,
       "hand_wired": false,
       "module": "ICC_Profile",
-      "status": "refused",
+      "status": "eligible",
       "table": "ViewingConditions"
     },
     {
@@ -2656,18 +2621,13 @@
       "table": "Sensor"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          3
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 19,
-      "gate_a": false,
+      "fields": 22,
+      "gate_a": true,
       "hand_wired": false,
       "module": "InfiRay",
-      "status": "refused",
+      "status": "eligible",
       "table": "Version"
     },
     {
@@ -2751,18 +2711,13 @@
       "table": "SPIFF"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 2,
-      "gate_a": false,
+      "fields": 4,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Jpeg2000",
-      "status": "refused",
+      "status": "eligible",
       "table": "CaptureResolution"
     },
     {
@@ -2785,18 +2740,13 @@
       "table": "ColorSpec"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 2,
-      "gate_a": false,
+      "fields": 4,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Jpeg2000",
-      "status": "refused",
+      "status": "eligible",
       "table": "DisplayResolution"
     },
     {
@@ -2849,14 +2799,10 @@
         [
           "expr_unsupported",
           1
-        ],
-        [
-          "tag_fmt_unsupported",
-          1
         ]
       ],
       "edges": [],
-      "fields": 4,
+      "fields": 5,
       "gate_a": false,
       "hand_wired": false,
       "module": "Kandao",
@@ -2864,18 +2810,13 @@
       "table": "GPSX"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 2,
-      "gate_a": false,
+      "fields": 3,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Kandao",
-      "status": "refused",
+      "status": "eligible",
       "table": "IMU"
     },
     {
@@ -3008,7 +2949,7 @@
       "edges": [],
       "fields": 11,
       "gate_a": false,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "KyoceraRaw",
       "status": "refused",
       "table": "Main"
@@ -3037,6 +2978,26 @@
       "module": "LNK",
       "status": "refused",
       "table": "Beef0004"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "eligible",
+      "table": "Beef0025"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "eligible",
+      "table": "Beef0026a"
     },
     {
       "blocked_by": [
@@ -3148,10 +3109,6 @@
         [
           "other_unregistered",
           1
-        ],
-        [
-          "tag_fmt_unsupported",
-          3
         ]
       ],
       "edges": [
@@ -3212,7 +3169,7 @@
           "UnknownData"
         ]
       ],
-      "fields": 25,
+      "fields": 28,
       "gate_a": false,
       "hand_wired": false,
       "module": "LNK",
@@ -3257,12 +3214,27 @@
     {
       "blocked_by": [
         [
-          "tag_fmt_unsupported",
-          6
+          "tag_var_format",
+          1
         ]
       ],
       "edges": [],
-      "fields": 5,
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "refused",
+      "table": "TrackerData"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          5
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
       "gate_a": false,
       "hand_wired": false,
       "module": "LNK",
@@ -3495,18 +3467,13 @@
       "table": "MPImage"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 96,
-      "gate_a": false,
+      "fields": 98,
+      "gate_a": true,
       "hand_wired": false,
       "module": "MRC",
-      "status": "refused",
+      "status": "eligible",
       "table": "FEI12"
     },
     {
@@ -3525,18 +3492,13 @@
       "table": "Main"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          2
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 1,
-      "gate_a": false,
+      "fields": 3,
+      "gate_a": true,
       "hand_wired": false,
       "module": "MXF",
-      "status": "refused",
+      "status": "eligible",
       "table": "Header"
     },
     {
@@ -4483,23 +4445,18 @@
       "table": "MenuSettingsZ9v3"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [
         [
           "NikonCustom",
           "SettingsZ9v4"
         ]
       ],
-      "fields": 48,
-      "gate_a": false,
+      "fields": 49,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Nikon",
-      "status": "refused",
+      "status": "eligible",
       "table": "MenuSettingsZ9v4"
     },
     {
@@ -4546,6 +4503,16 @@
       "module": "Nikon",
       "status": "refused",
       "table": "Offset13InfoZ9"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "OrientationInfo"
     },
     {
       "blocked_by": [],
@@ -5433,16 +5400,16 @@
     {
       "blocked_by": [
         [
-          "tag_fmt_unsupported",
+          "tag_var_format",
           2
         ],
         [
-          "tag_var_format",
-          2
+          "offsets_sound_until",
+          1
         ]
       ],
       "edges": [],
-      "fields": 1,
+      "fields": 3,
       "gate_a": false,
       "hand_wired": false,
       "module": "PNG",
@@ -5542,11 +5509,11 @@
         ],
         [
           "tag_fmt_unsupported",
-          10
+          4
         ]
       ],
       "edges": [],
-      "fields": 13,
+      "fields": 19,
       "gate_a": false,
       "hand_wired": false,
       "module": "Panasonic",
@@ -5672,6 +5639,16 @@
       "module": "Parrot",
       "status": "eligible",
       "table": "FollowMe"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Parrot",
+      "status": "eligible",
+      "table": "TimeStamp"
     },
     {
       "blocked_by": [],
@@ -6328,10 +6305,6 @@
     {
       "blocked_by": [
         [
-          "tag_fmt_unsupported",
-          1
-        ],
-        [
           "tag_var_format",
           1
         ],
@@ -6341,7 +6314,7 @@
         ]
       ],
       "edges": [],
-      "fields": 1,
+      "fields": 2,
       "gate_a": false,
       "hand_wired": false,
       "module": "Photoshop",
@@ -6351,16 +6324,16 @@
     {
       "blocked_by": [
         [
-          "tag_fmt_unsupported",
+          "tag_var_format",
           2
         ],
         [
-          "tag_var_format",
-          2
+          "offsets_sound_until",
+          1
         ]
       ],
       "edges": [],
-      "fields": 1,
+      "fields": 3,
       "gate_a": false,
       "hand_wired": false,
       "module": "Photoshop",
@@ -6376,6 +6349,16 @@
       "module": "QuickTime",
       "status": "eligible",
       "table": "AV1Config"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "AudioHeader"
     },
     {
       "blocked_by": [
@@ -6493,18 +6476,13 @@
       "table": "Flip"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 4,
-      "gate_a": false,
+      "fields": 5,
+      "gate_a": true,
       "hand_wired": false,
       "module": "QuickTime",
-      "status": "refused",
+      "status": "eligible",
       "table": "GenMediaInfo"
     },
     {
@@ -6577,16 +6555,12 @@
         [
           "expr_unsupported",
           7
-        ],
-        [
-          "tag_fmt_unsupported",
-          1
         ]
       ],
       "edges": [],
-      "fields": 14,
+      "fields": 15,
       "gate_a": false,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "QuickTime",
       "status": "refused",
       "table": "MovieHeader"
@@ -6632,18 +6606,13 @@
       "table": "SpatialAudio"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 5,
-      "gate_a": false,
+      "fields": 6,
+      "gate_a": true,
       "hand_wired": false,
       "module": "QuickTime",
-      "status": "refused",
+      "status": "eligible",
       "table": "TCMediaInfo"
     },
     {
@@ -6651,14 +6620,10 @@
         [
           "expr_unsupported",
           1
-        ],
-        [
-          "tag_fmt_unsupported",
-          1
         ]
       ],
       "edges": [],
-      "fields": 10,
+      "fields": 11,
       "gate_a": false,
       "hand_wired": false,
       "module": "QuickTime",
@@ -6690,14 +6655,10 @@
         [
           "expr_unsupported",
           2
-        ],
-        [
-          "tag_fmt_unsupported",
-          2
         ]
       ],
       "edges": [],
-      "fields": 7,
+      "fields": 9,
       "gate_a": false,
       "hand_wired": false,
       "module": "QuickTime",
@@ -6723,6 +6684,16 @@
       "module": "QuickTime",
       "status": "eligible",
       "table": "equi"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "prhd"
     },
     {
       "blocked_by": [],
@@ -6828,6 +6799,16 @@
       "module": "RIFF",
       "status": "eligible",
       "table": "CSET"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "eligible",
+      "table": "DS64"
     },
     {
       "blocked_by": [],
@@ -7007,18 +6988,13 @@
       "table": "UltraFire"
     },
     {
-      "blocked_by": [
-        [
-          "tag_fmt_unsupported",
-          1
-        ]
-      ],
+      "blocked_by": [],
       "edges": [],
-      "fields": 4,
-      "gate_a": false,
+      "fields": 5,
+      "gate_a": true,
       "hand_wired": false,
       "module": "Red",
-      "status": "refused",
+      "status": "eligible",
       "table": "RED1"
     },
     {
@@ -7076,7 +7052,7 @@
       "edges": [],
       "fields": 3,
       "gate_a": true,
-      "hand_wired": false,
+      "hand_wired": true,
       "module": "Samsung",
       "status": "eligible",
       "table": "DualShotExtra"
@@ -7674,6 +7650,6 @@
       "table": "Main"
     }
   ],
-  "refused": 202,
-  "tables": 613
+  "refused": 188,
+  "tables": 622
 }
