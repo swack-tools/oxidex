@@ -4763,6 +4763,24 @@ fn find_cr3_ctmd_sample(data: &[u8]) -> Option<&[u8]> {
 /// `ProcessBinaryData` record.  Its generated table has only two lossless
 /// fields: `ImageWidth` at int16 index 8 and `ImageHeight` at index 10.  These
 /// are Canon/MakerNotes tags, not the QuickTime source-image dimensions.
+///
+/// `Canon.pm:9766-9775` declares `PRIORITY => 0` on the whole `%CMP1` table
+/// ("let EXIF:ImageWidth take priority", the same demotion Canon's own `ISO`
+/// gets at `Canon.pm:9781-9782` and that `resolve_dependency`'s doc comment
+/// in `src/composite/mod.rs` cites as the worked example this arbitration
+/// exists for). A CR3 carries one CMP1 box per non-metadata track --
+/// `CanonRaw.cr3` has two, at 1624x1080 (Track2's proxy) and 3144x4056
+/// (Track3's preview) -- neither of which is the still image's real
+/// 6000x4000. Storing them with `insert()`'s ordinary
+/// `SHIM_DEFAULT_PRIORITY` let whichever one this function reads *last* win
+/// the bare `ImageWidth`/`ImageHeight` keys on the newest-arrival tiebreak
+/// (`TagSink::record`, `ExifTool.pm:9564`), silently displacing the correct
+/// `EXIF:ImageWidth`/`IFD0:ImageWidth` pair from CMT1 and feeding
+/// `Composite:ImageSize`/`Megapixels` a proxy track's resolution instead of
+/// the full image's. `insert_occurrence` at priority 0 reproduces the Perl
+/// table's own declared priority instead, so these compete for the bare key
+/// exactly the way `FoundTag` would -- and lose to any ordinary-priority
+/// `ImageWidth`/`ImageHeight`, on this file or any other CR3.
 fn parse_cr3_cmp1(data: &[u8], metadata: &mut MetadataMap) {
     let Some(record) = find_cr3_box(data, b"CMP1") else {
         return;
@@ -4777,9 +4795,16 @@ fn parse_cr3_cmp1(data: &[u8], metadata: &mut MetadataMap) {
         let Some(TagValue::Integer(value)) = decoded.emit() else {
             continue;
         };
-        metadata.insert(
+        // `Canon::CMP1`'s `GROUPS => { 0 => 'MakerNotes', 1 => 'Canon' }`;
+        // this crate's flat key already carries family 1 as its `Canon:`
+        // prefix (matching every other Canon MakerNote tag in this file), so
+        // `group1` just repeats it -- `priority: 0` is the actual fix.
+        metadata.insert_occurrence(
             format!("Canon:{}", decoded.field.name),
             TagValue::Integer(value),
+            0,
+            "Canon",
+            crate::core::Instance::default(),
         );
     }
 }

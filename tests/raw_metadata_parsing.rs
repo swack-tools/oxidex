@@ -342,6 +342,40 @@ fn canon_cr3_dust_removal_data_preserves_binary_cmt3_payload() {
     ));
 }
 
+/// Pins the fix for `parse_cr3_cmp1`'s missing `PRIORITY => 0`
+/// (`Canon.pm:9766-9775`, `src/parsers/raw/metadata.rs`): before this fix,
+/// `Composite:ImageSize` read `1624x1080` (Track2's proxy-image `CMP1` box)
+/// instead of the pinned oracle's `6000x4000`, because `parse_cr3_cmp1`
+/// stored `Canon:ImageWidth`/`Canon:ImageHeight` at the ordinary
+/// `SHIM_DEFAULT_PRIORITY` and the newest-arrival tiebreak
+/// (`ExifTool.pm:9564`) let it displace the correct `EXIF:ImageWidth`/
+/// `IFD0:ImageWidth` pair extracted earlier from CMT1.
+#[test]
+fn canon_cr3_composite_image_size_prefers_exif_over_cmp1_proxy_track() {
+    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3").is_file() {
+        eprintln!(
+            "skipping: corpus fixture not present at {}",
+            "/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3"
+        );
+        return;
+    }
+    let data = fs::read("/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3")
+        .expect("pinned Canon CR3 fixture must be available");
+    let mut metadata = parse_raw_metadata(&data, RawFormat::CanonCR3)
+        .expect("pinned Canon CR3 fixture should parse");
+
+    assert_eq!(metadata.get_integer("IFD0:ImageWidth"), Some(6000));
+    assert_eq!(metadata.get_integer("IFD0:ImageHeight"), Some(4000));
+
+    oxidex::composite::apply(&mut metadata);
+
+    assert_eq!(
+        metadata.get_string("Composite:ImageSize"),
+        Some("6000x4000")
+    );
+    assert_eq!(metadata.get_string("Composite:Megapixels"), Some("24.0"));
+}
+
 #[test]
 fn test_parse_minimal_tiff_based_raw() {
     // Create a minimal valid TIFF header
