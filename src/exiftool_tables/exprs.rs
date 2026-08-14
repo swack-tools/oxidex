@@ -308,9 +308,229 @@ pub fn tr_translate(val: &str, from: &str, to: &str, delete: bool) -> String {
     out
 }
 
+/// `Image::ExifTool::CanonCustom::ConvertPfn($val)`.
+///
+/// ExifTool (`CanonCustom.pm:2624-2628`, pinned 13.59):
+/// ```perl
+/// sub ConvertPfn($)
+/// {
+///     my $val = shift;
+///     return $val ? ($val==1 ? 'On' : "On ($val)") : "Off";
+/// }
+/// ```
+/// The `PrintConv` half of the `%convPFn` pair (`CanonCustom.pm:36`) that
+/// every one of `CanonCustom::PersonalFuncs`' 29 fields carries. A pure
+/// function of `$val`: no ExifTool object, no option, no other tag. Perl's
+/// truthiness test on a number is `!= 0`, which is what the first branch is.
+#[must_use]
+pub fn convert_pfn(val: f64) -> String {
+    if val == 0.0 {
+        "Off".to_string()
+    } else if val == 1.0 {
+        "On".to_string()
+    } else {
+        format!("On ({})", perl_num(val))
+    }
+}
+
+/// `Image::ExifTool::ConvertFileSize($val)`, the default `ByteUnit` branch.
+///
+/// ExifTool (`ExifTool.pm:6851-6871`, pinned 13.59) selects between a binary
+/// and an SI branch on `$$et{OPTIONS}{ByteUnit}`; `ByteUnit` defaults to
+/// `'SI'` (`ExifTool.pm:1115`) and nothing in this pipeline ever sets it, so
+/// the SI branch is the whole function here:
+/// ```perl
+/// $val < 2000 and return "$val bytes";
+/// $val < 10000 and return sprintf('%.1f kB', $val / 1000);
+/// $val < 2000000 and return sprintf('%.0f kB', $val / 1000);
+/// $val < 10000000 and return sprintf('%.1f MB', $val / 1000000);
+/// $val < 2000000000 and return sprintf('%.0f MB', $val / 1000000);
+/// $val < 10000000000 and return sprintf('%.1f GB', $val / 1000000000);
+/// return sprintf('%.0f GB', $val / 1000000000);
+/// ```
+/// The `Binary` branch is deliberately absent rather than approximated: it is
+/// reachable only through an API option this crate never passes, and a
+/// half-implemented option is worse than an unimplemented one.
+///
+/// [`crate::core::value_formatter::format_file_size`] is the same conversion
+/// over a `u64` (the `File:FileSize` call site) and delegates here, so the
+/// two cannot drift.
+#[must_use]
+pub fn convert_file_size(val: f64) -> String {
+    if val < 2000.0 {
+        // `"$val bytes"` is Perl string interpolation, not a `sprintf` --
+        // it goes through `%.15g`, which is what `perl_num` reproduces.
+        format!("{} bytes", perl_num(val))
+    } else if val < 10_000.0 {
+        format!("{:.1} kB", val / 1_000.0)
+    } else if val < 2_000_000.0 {
+        format!("{:.0} kB", val / 1_000.0)
+    } else if val < 10_000_000.0 {
+        format!("{:.1} MB", val / 1_000_000.0)
+    } else if val < 2_000_000_000.0 {
+        format!("{:.0} MB", val / 1_000_000.0)
+    } else if val < 10_000_000_000.0 {
+        format!("{:.1} GB", val / 1_000_000_000.0)
+    } else {
+        format!("{:.0} GB", val / 1_000_000_000.0)
+    }
+}
+
+/// `Image::ExifTool::Nikon::PrintAFPointsLeftRight($col, $ncol)`.
+///
+/// ExifTool (`Nikon.pm:13420-13428`, pinned 13.59):
+/// ```perl
+/// sub PrintAFPointsLeftRight($$)
+/// {
+///     my ($col, $ncol) = @_;
+///     my $center = ($ncol + 1) / 2;
+///     return 'n/a' if $col == 0;   #out of focus
+///     return 'C' if $col == $center;
+///     return sprintf('%d', $center - $col) . 'L of Center' if $col < $center;
+///     return sprintf('%d', $col - $center) . 'R of Center' if $col > $center;
+/// }
+/// ```
+/// `ncol` is a literal at every call site (19, 21 or 29 in the pinned tree),
+/// so with it fixed this is a pure function of the value.
+///
+/// The Perl falls off the end -- returning `undef` -- when none of the four
+/// guards fire, which for a numeric `col` is only possible at NaN.
+/// `ProcessBinaryData` reads this field as an integer, so NaN cannot reach
+/// here and the final branch is `$col > $center`, not a catch-all standing in
+/// for one.
+#[must_use]
+pub fn print_af_points_left_right(col: f64, ncol: f64) -> String {
+    let center = (ncol + 1.0) / 2.0;
+    if col == 0.0 {
+        "n/a".to_string()
+    } else if col == center {
+        "C".to_string()
+    } else if col < center {
+        format!("{}L of Center", perl_int(center - col))
+    } else {
+        format!("{}R of Center", perl_int(col - center))
+    }
+}
+
+/// `Image::ExifTool::Nikon::PrintAFPointsUpDown($row, $nrow)`.
+///
+/// ExifTool (`Nikon.pm:13434-13442`, pinned 13.59):
+/// ```perl
+/// sub PrintAFPointsUpDown($$)
+/// {
+///     my ($row, $nrow) = @_;
+///     my $center = ($nrow + 1) / 2;
+///     return 'n/a' if $row == 0;     #out of focus
+///     return 'C' if $row == $center;
+///     return sprintf('%d', $center - $row) . 'U from Center' if $row < $center;
+///     return sprintf('%d', $row - $center) . 'D from Center' if $row > $center;
+/// }
+/// ```
+/// Same shape, and the same NaN note, as
+/// [`print_af_points_left_right`]; `nrow` is 11, 13 or 17 at the pinned
+/// tree's call sites.
+#[must_use]
+pub fn print_af_points_up_down(row: f64, nrow: f64) -> String {
+    let center = (nrow + 1.0) / 2.0;
+    if row == 0.0 {
+        "n/a".to_string()
+    } else if row == center {
+        "C".to_string()
+    } else if row < center {
+        format!("{}U from Center", perl_int(center - row))
+    } else {
+        format!("{}D from Center", perl_int(row - center))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ConvertPfn` (CanonCustom.pm:2624-2628). Every value that is neither
+    /// 0 nor 1 goes through Perl string interpolation, so the digits are
+    /// `perl_num`'s, not Rust `Display`'s -- the `1e18` row is that
+    /// distinction, and it is the one a hand-written `format!("{}", v)` gets
+    /// wrong.
+    #[test]
+    fn convert_pfn_matches_exiftool() {
+        assert_eq!(convert_pfn(0.0), "Off");
+        assert_eq!(convert_pfn(1.0), "On");
+        assert_eq!(convert_pfn(2.0), "On (2)");
+        assert_eq!(convert_pfn(255.0), "On (255)");
+        assert_eq!(convert_pfn(-1.0), "On (-1)");
+        assert_eq!(convert_pfn(1e18), "On (1e+18)");
+    }
+
+    /// `ConvertFileSize` (ExifTool.pm:6851-6871, SI branch). The boundaries
+    /// are the ones the Perl states, and the point of the 1500/1_000_000 rows
+    /// is that the unit does NOT change at each power of 1000.
+    #[test]
+    fn convert_file_size_matches_exiftool() {
+        assert_eq!(convert_file_size(500.0), "500 bytes");
+        assert_eq!(convert_file_size(1999.0), "1999 bytes");
+        assert_eq!(convert_file_size(2000.0), "2.0 kB");
+        assert_eq!(convert_file_size(9999.0), "10.0 kB");
+        assert_eq!(convert_file_size(10_000.0), "10 kB");
+        assert_eq!(convert_file_size(1_000_000.0), "1000 kB");
+        // Palm.mobi's real UncompressedTextLength -- see
+        // `exiftool_tables::tests::recovered_conversions_match_the_pinned_
+        // oracle_on_real_carriers` for the oracle run this came from.
+        assert_eq!(convert_file_size(171_966.0), "172 kB");
+        assert_eq!(convert_file_size(2_500_000_000.0), "2.5 GB");
+    }
+
+    /// The `u64` file-size formatter and the `f64` `PrintConv` one must be
+    /// the same function, because they are: `format_file_size` delegates
+    /// here. Asserted rather than assumed, so a future edit that re-inlines
+    /// the branch chain into `value_formatter` fails a test instead of
+    /// quietly forking the port in two.
+    #[test]
+    fn format_file_size_is_this_same_conversion() {
+        for bytes in [
+            0u64,
+            1,
+            500,
+            1999,
+            2000,
+            9999,
+            10_000,
+            999_999,
+            1_000_000,
+            171_966,
+            2_000_000,
+            9_999_999,
+            10_000_000,
+            2_000_000_000,
+            10_000_000_000,
+        ] {
+            assert_eq!(
+                crate::core::value_formatter::format_file_size(bytes),
+                convert_file_size(bytes as f64),
+                "file size {bytes}",
+            );
+        }
+    }
+
+    /// `PrintAFPointsLeftRight`/`PrintAFPointsUpDown` (Nikon.pm:13420-13428,
+    /// :13434-13442). The values are the ones the pinned oracle reports for
+    /// real Z-series carriers; `ncol`/`nrow` is the literal the matching
+    /// `_variants` alternative passes.
+    #[test]
+    fn print_af_points_relative_matches_exiftool() {
+        // NikonZ7_2.jpg: Z 7_2 -> 29 columns, 17 rows.
+        assert_eq!(print_af_points_left_right(16.0, 29.0), "1R of Center");
+        assert_eq!(print_af_points_up_down(12.0, 17.0), "3D from Center");
+        // NikonZ6_2.jpg: Z 6_2 -> 21 columns, 13 rows.
+        assert_eq!(print_af_points_left_right(5.0, 21.0), "6L of Center");
+        assert_eq!(print_af_points_up_down(10.0, 13.0), "3D from Center");
+        // NikonZ30.jpg: Z 30 -> 19 columns, 11 rows; both dead centre.
+        assert_eq!(print_af_points_left_right(10.0, 19.0), "C");
+        assert_eq!(print_af_points_up_down(6.0, 11.0), "C");
+        // `$col == 0` is ExifTool's out-of-focus marker, not a column.
+        assert_eq!(print_af_points_left_right(0.0, 19.0), "n/a");
+        assert_eq!(print_af_points_up_down(0.0, 11.0), "n/a");
+    }
 
     #[test]
     fn perl_num_plain_integers_and_fractions() {

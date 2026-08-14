@@ -50,6 +50,9 @@ HARNESS_PATH = REPO_ROOT / "src" / "bin" / "expr_oracle_harness.rs"
 
 SLOTS = ("ValueConv", "PrintConv", "RawConv")
 
+# `exprs.compile_composite`'s `@val` placeholders -- see `main()`.
+_COMPOSITE_PLACEHOLDER_RE = re.compile(r"\{v\d+\}")
+
 
 # --- census (same walk as expr_coverage.py / expr_census.py) --------------
 
@@ -61,7 +64,49 @@ def walk_tags(node, out):
             walk_tags(v, out)
 
 
+def walk_code_refs(node, out):
+    """Every tag hash reachable from `node`, INCLUDING `_variants`
+    alternatives -- but used only to collect CODE refs.
+
+    Deliberately not folded into `walk_tags`. Widening that walk widens the
+    *expression* census too, and `_variants` alternatives inside ExifTool's
+    Composite tables carry `$val[N]`-indexed conversions -- a different value
+    domain (`exprs.compile_composite`, `@val` rather than a lone scalar) that
+    this harness has no probe shape for and cannot build Rust for: the
+    generated `expr_oracle_harness.rs` fails to compile on the `{v0}`
+    placeholders. Six of the eight `CODE_REFS` entries live only in
+    `_variants` (Nikon's `AFInfo2V0300`/`V0400` FocusPosition fields), so the
+    walk has to reach them; keeping it separate is what stops that reach from
+    changing the population the rest of this script has always verified.
+    """
+    if isinstance(node, dict):
+        out.append(node)
+        if "_variants" in node:
+            walk_code_refs(node["_variants"], out)
+    elif isinstance(node, list):
+        for v in node:
+            walk_code_refs(v, out)
+
+
 def census(tables_json_path):
+    """Every conversion the shipped translator claims to handle, by text.
+
+    Two populations, deliberately merged into one counter because the oracle
+    treats them identically -- it evaluates the key as Perl and diffs against
+    the Rust:
+
+      kind == "expr"  the conversion IS Perl text (`'$val / 10'`), and the
+                      key is that text verbatim.
+      kind == "code"  the conversion is a CODE ref (`PrintConv => \\&Sub`),
+                      which has no text at all; `exprs.CODE_REFS` maps the
+                      deparsed body onto a key that NAMES the sub as a real
+                      Perl call (`Image::ExifTool::CanonCustom::ConvertPfn
+                      ($val)`). Evaluating that key runs ExifTool's actual
+                      subroutine, which is what makes the registry entry
+                      checkable at all -- without this the code-ref
+                      translations would be the only ones in the file taken
+                      on faith.
+    """
     d = json.load(open(tables_json_path, encoding="utf-8"))
     counter = {}
     for _modname, mod in d["modules"].items():
@@ -76,6 +121,15 @@ def census(tables_json_path):
                             e = v.get("expr")
                             if isinstance(e, str) and e.strip():
                                 counter[e] = counter.get(e, 0) + 1
+                code_nodes = []
+                walk_code_refs(tagnode, code_nodes)
+                for tag in code_nodes:
+                    for slot in SLOTS:
+                        v = tag.get(slot)
+                        if isinstance(v, dict) and v.get("kind") == "code":
+                            named = exprs.code_ref_expr(v.get("deparse"))
+                            if named:
+                                counter[named] = counter.get(named, 0) + 1
     return d.get("exiftool_version"), counter
 
 
@@ -180,6 +234,13 @@ def build_perl_script(jobs, et_lib):
         "use Image::ExifTool;",
         "use Image::ExifTool::Exif;",
         "use Image::ExifTool::GPS;",
+        # The modules whose named subs `exprs.CODE_REFS` keys call. Without
+        # these the key text still parses and still evaluates -- to an
+        # "Undefined subroutine" die, which this harness scores as ERROR and
+        # SKIPS, so the entry would read as verified while never having been
+        # run once.
+        "use Image::ExifTool::CanonCustom;",
+        "use Image::ExifTool::Nikon;",
         "my $self = new Image::ExifTool;",
         "binmode STDOUT, ':utf8';",
         # ExifTool itself runs every ValueConv/PrintConv/RawConv string
@@ -376,10 +437,24 @@ def main():
     # table's ExprId.
     by_expr = {}       # raw_expr -> (rust_type, rust_code)
     domain_of = {}      # raw_expr -> domain
+    # A Composite conversion (`$val[0]`, `$val[1] ? ... : undef`) compiles
+    # through `exprs.compile_composite`, whose output carries `{v0}`/`{v1}`/…
+    # placeholders for ExifTool's `@val` array rather than this harness's lone
+    # `{v}` scalar. It is a different value domain with a different probe
+    # shape, it never reaches `binary_tables.rs` (codegen_composite.py owns
+    # it), and feeding it to `build_rust_harness` produces a source file that
+    # does not compile -- `{v0}` survives into the Rust as an undefined
+    # variable and `cargo run` exits 101 before a single probe is compared.
+    # Skipped by NAME and COUNTED, not silently: an unverified expression
+    # this script does not mention is one a reader would assume it checked.
+    composite_domain = []
     for e in counter:
         r = exprs.translate_or_compile_any(e)
         if r:
             domain, rty, code = r
+            if _COMPOSITE_PLACEHOLDER_RE.search(code):
+                composite_domain.append(e)
+                continue
             by_expr[e] = (rty, code)
             domain_of[e] = domain
 
@@ -390,6 +465,13 @@ def main():
 
     print(f"pinned release        {version}")
     print(f"translated expressions {len(by_expr)}   probe jobs {len(jobs)}")
+    if composite_domain:
+        print(f"NOT verified here: {len(composite_domain)} Composite-domain "
+              "expression(s) -- `@val`-indexed, a different probe shape "
+              "(see the comment in main()); this script covers the scalar "
+              "`$val` surface only:")
+        for e in sorted(composite_domain):
+            print(f"    {re.sub(r'[$]s+', ' ', e.strip())[:88]}")
 
     perl_script = build_perl_script(jobs, args.et_lib)
     print("running Perl oracle ...")

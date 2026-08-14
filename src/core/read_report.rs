@@ -138,7 +138,8 @@ impl Diagnostic {
         Some(Self::refusal(format!(
             "{module}::{table}: {total} field{plural} withheld \
              (value_conv={value_conv} raw_conv={raw_conv} condition={condition} \
-             hook={hook} subdirectory={subdirectory} offset_unsound={offset_unsound})",
+             hook={hook} subdirectory={subdirectory} print_conv={print_conv} \
+             offset_unsound={offset_unsound})",
             total = counts.total(),
             plural = if counts.total() == 1 { "" } else { "s" },
             value_conv = counts.value_conv,
@@ -146,6 +147,7 @@ impl Diagnostic {
             condition = counts.condition,
             hook = counts.hook,
             subdirectory = counts.subdirectory,
+            print_conv = counts.print_conv,
             offset_unsound = counts.offset_unsound,
         )))
     }
@@ -222,16 +224,20 @@ mod tests {
             condition: 6,
             hook: 0,
             subdirectory: 0,
+            print_conv: 2,
             offset_unsound: 0,
         };
         let diagnostic =
             Diagnostic::refusals("PhotoCD", "Main", counts).expect("nonzero counts produce Some");
         assert_eq!(diagnostic.kind, DiagnosticKind::Refusal);
         assert!(diagnostic.message.contains("PhotoCD::Main"));
-        assert!(diagnostic.message.contains("18 fields withheld"));
+        assert!(diagnostic.message.contains("20 fields withheld"));
         assert!(diagnostic.message.contains("value_conv=9"));
         assert!(diagnostic.message.contains("raw_conv=3"));
         assert!(diagnostic.message.contains("condition=6"));
+        // The newest reason has to appear by name too: a refusal reported
+        // only in the total is a refusal a reader cannot act on.
+        assert!(diagnostic.message.contains("print_conv=2"));
     }
 
     #[test]

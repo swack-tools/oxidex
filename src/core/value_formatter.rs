@@ -46,22 +46,13 @@
 /// assert_eq!(format_file_size(2_500_000_000), "2.5 GB");
 /// ```
 pub fn format_file_size(bytes: u64) -> String {
-    let v = bytes as f64;
-    if bytes < 2_000 {
-        format!("{} bytes", bytes)
-    } else if bytes < 10_000 {
-        format!("{:.1} kB", v / 1_000.0)
-    } else if bytes < 2_000_000 {
-        format!("{:.0} kB", v / 1_000.0)
-    } else if bytes < 10_000_000 {
-        format!("{:.1} MB", v / 1_000_000.0)
-    } else if bytes < 2_000_000_000 {
-        format!("{:.0} MB", v / 1_000_000.0)
-    } else if bytes < 10_000_000_000 {
-        format!("{:.1} GB", v / 1_000_000_000.0)
-    } else {
-        format!("{:.0} GB", v / 1_000_000_000.0)
-    }
+    // One implementation of the branch chain above, shared with the
+    // generated tables' `PrintConv` for `Palm::MOBI` UncompressedTextLength
+    // (`Palm.pm:121-124`, `PrintConv => \&Image::ExifTool::ConvertFileSize`).
+    // Two copies of a conversion drift silently; this one is the port that
+    // `tools/exiftool-tables/verify_exprs.py` checks against the pinned
+    // Perl, so it is the one that stays.
+    crate::exiftool_tables::exprs::convert_file_size(bytes as f64)
 }
 
 /// Format EXIF date/time to ExifTool format (YYYY:MM:DD HH:MM:SS)

@@ -27,6 +27,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import NamedTuple
 
 # The repo root, derived from this file's location rather than the working
 # directory: CI, the justfile and regen.sh all invoke this script from
@@ -321,7 +322,7 @@ def _parse_int_pairs(src, open_bracket, k, label):
 
 def _parse_one_field(
     src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges,
-    bitmasks, other_ids, print_hexes,
+    bitmasks, other_ids, print_hexes, pc_refused, pc_kinds,
 ):
     """Populate `fields`/`enums`/`masks`/`hooks`/`subdirs`/`subdir_edges`/
     `bitmasks`/`other_ids`/`print_hexes` from one `FIELD_RE` match `f`, under
@@ -339,6 +340,8 @@ def _parse_one_field(
         hooks.add(k)
     if "subdirectory: true" in omitted:
         subdirs.add(k)
+    if "print_conv: true" in omitted:
+        pc_refused.add(k)
 
     # `FIELD_RE` now consumes only `print_conv:` (no captured value -- see
     # the pattern's own comment): `_value_span` from the match's end finds
@@ -358,6 +361,7 @@ def _parse_one_field(
     subdir_val_end = _value_span(src, sm.end())
     subdir_edges[k] = _parse_subdir_value(src[sm.end():subdir_val_end])
 
+    pc_kinds[k] = pc.split("(", 1)[0]
     # Rescan enum bodies from the source itself rather than trusting a
     # regex capture -- see _enum_body for why.
     if pc.startswith("PrintConv::IntEnum(&[") or pc.startswith("PrintConv::StrEnum(&["):
@@ -422,9 +426,34 @@ def _parse_one_field(
         )
 
 
+# `parse_rust`'s result, by NAME as well as by position. It is still a tuple,
+# so this file's own positional unpack keeps working -- but a caller in ANOTHER
+# file should reach for the attribute, because the positional contract has now
+# been broken twice by the same mechanism: Step 25 (b025fcb1) appended
+# bitmasks/other_ids/print_hexes and `verify_subdirs.py` died unpacking 8 of 11
+# (fixed in da1fec86 by hardcoding 11); Step 28's print_conv accounting then
+# appended pc_refused/pc_kinds and it died again, 11 of 13. Both times each
+# branch passed its own gate and only the merged tree broke. Appending a field
+# below can no longer break an attribute-using caller at all.
+class ParsedRust(NamedTuple):
+    fields: dict
+    enums: dict
+    masks: dict
+    hooks: set
+    subdirs: set
+    subdir_edges: dict
+    sound_until: dict
+    variant_keys: dict
+    bitmasks: dict
+    other_ids: dict
+    print_hexes: dict
+    pc_refused: dict
+    pc_kinds: dict
+
+
 def parse_rust(path):
     """-> (fields, enums, masks, hooks, subdirs, subdir_edges, sound_until,
-    variant_keys, bitmasks, other_ids, print_hexes)
+    variant_keys, bitmasks, other_ids, print_hexes, pc_refused, pc_kinds)
 
     fields{k->name}, enums{k->{key:val}}, masks{k->(bits,shift)},
     hooks{k}, subdirs{k} (sets of field keys with that Omitted flag set),
@@ -455,6 +484,11 @@ def parse_rust(path):
 
     fields, enums, masks = {}, defaultdict(dict), {}
     hooks, subdirs = set(), set()
+    # Step 28's `Omitted.print_conv`: the fields the generator refused a
+    # `PrintConv` for, plus every field's `PrintConv::` variant name, so
+    # `main()` can check the refusal both ways round against `oracle.pl`'s
+    # independently-read PCREF rows.
+    pc_refused, pc_kinds = set(), {}
     subdir_edges = {}
     sound_until = {}
     variant_keys = set()
@@ -490,7 +524,7 @@ def parse_rust(path):
                 key = idx if sub == "None" else f"{idx}.{sub[5:-1]}"
                 _parse_one_field(
                     src, f, (mod, tbl, key), fields, enums, masks, hooks, subdirs, subdir_edges,
-                    bitmasks, other_ids, print_hexes,
+                    bitmasks, other_ids, print_hexes, pc_refused, pc_kinds,
                 )
 
         # `variants: &[VariantGroup { index, sub, alternatives: &[(Cond,
@@ -513,7 +547,7 @@ def parse_rust(path):
                     variant_keys.add(k)
                     _parse_one_field(
                         src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges,
-                        bitmasks, other_ids, print_hexes,
+                        bitmasks, other_ids, print_hexes, pc_refused, pc_kinds,
                     )
 
     # Every Field in the file must have been parsed -- separately for each
@@ -533,9 +567,9 @@ def parse_rust(path):
             f"`variants:` arrays contain {expected_variant} -- the "
             "verifier's pattern is out of date; fix it before trusting a PASS"
         )
-    return (
+    return ParsedRust(
         fields, enums, masks, hooks, subdirs, subdir_edges, sound_until, variant_keys,
-        bitmasks, other_ids, print_hexes,
+        bitmasks, other_ids, print_hexes, pc_refused, pc_kinds,
     )
 
 
@@ -548,6 +582,11 @@ def load_oracle(lib, oracle_pl):
     hooks, subdirs, varfmts = set(), set(), set()
     bitmasks = defaultdict(dict)
     other_present, other_print_hex = set(), {}
+    # {(mod,sym,key) -> 'CODE'|'ARRAY'|...}: the field's PrintConv is a REF
+    # that is not a HASH, i.e. not an enum. `codegen.py` translates only the
+    # CODE refs `exprs.py`'s CODE_REFS names and refuses the rest; `main()`
+    # uses this to check that decision from the ExifTool side.
+    pcrefs = {}
     # Step 27: the raw SubDirectory facts behind each `subdirs` membership --
     # {(mod,sym,key) -> {"tagtable":str, "start":str, "base":str,
     # "processproc":bool, "byteorder":bool, "validate":bool}}, independent of
@@ -586,9 +625,11 @@ def load_oracle(lib, oracle_pl):
             key = (p[0], p[1], p[2])
             other_present.add(key)
             other_print_hex[key] = p[4] == "1"
+        elif len(p) == 5 and p[3] == "PCREF":
+            pcrefs[(p[0], p[1], p[2])] = p[4]
     return (
         names, enums, masks, hooks, subdirs, subdir_facts, varfmts,
-        bitmasks, other_present, other_print_hex,
+        bitmasks, other_present, other_print_hex, pcrefs,
     )
 
 
@@ -736,10 +777,11 @@ def main():
     (
         gen_fields, gen_enums, gen_masks, gen_hooks, gen_subdirs, gen_subdir_edges,
         gen_sound_until, gen_variant_keys, gen_bitmasks, gen_other_ids, gen_print_hexes,
+        gen_pc_refused, gen_pc_kinds,
     ) = parse_rust(args.generated_rs)
     (
         or_names, or_enums, or_masks, or_hooks, or_subdirs, or_subdir_facts, or_varfmts,
-        or_bitmasks, or_other_present, or_other_print_hex,
+        or_bitmasks, or_other_present, or_other_print_hex, or_pcrefs,
     ) = load_oracle(args.exiftool_lib, args.oracle)
 
     if not gen_fields:
@@ -908,6 +950,46 @@ def main():
             if len(subdir_examples) < args.show:
                 subdir_examples.append((k, got, want))
 
+    # Step 28's `Omitted.print_conv`, checked BOTH ways round against
+    # `oracle.pl`'s PCREF rows (read straight out of the live Perl hash, not
+    # from dump_tables.pl's JSON):
+    #
+    #   flagged but no PCREF  -- the generator refused a conversion ExifTool
+    #                            does not have, so a field is withheld for no
+    #                            reason. A false refusal, i.e. a lost tag.
+    #   PCREF, not flagged,   -- the DANGEROUS direction, and the one this
+    #   PrintConv::None          whole flag exists for: ExifTool renders this
+    #                            field through a Perl sub, the generator
+    #                            reproduced nothing, and the field is emitted
+    #                            anyway carrying its raw value under
+    #                            ExifTool's own tag name.
+    #
+    # A PCREF field that is NOT flagged and DOES carry a `PrintConv::Expr` is
+    # correct: `exprs.py`'s CODE_REFS recognised the sub and the translation
+    # shipped. `verify_exprs.py` is what checks that translation against the
+    # sub itself; this check only establishes that no third state exists.
+    pcref_ok = pcref_false_refusal = pcref_silent_drop = 0
+    pcref_translated = 0
+    pcref_examples = []
+    for k in gen_fields:
+        flagged, is_ref = k in gen_pc_refused, k in or_pcrefs
+        if flagged and not is_ref:
+            pcref_false_refusal += 1
+            if len(pcref_examples) < args.show:
+                pcref_examples.append((k, "flagged but ExifTool has no PrintConv ref"))
+        elif is_ref and not flagged:
+            if gen_pc_kinds.get(k) == "PrintConv::None":
+                pcref_silent_drop += 1
+                if len(pcref_examples) < args.show:
+                    pcref_examples.append(
+                        (k, f"ExifTool PrintConv is a {or_pcrefs[k]} ref, dropped silently")
+                    )
+            else:
+                pcref_translated += 1
+                pcref_ok += 1
+        else:
+            pcref_ok += 1
+
     # Step 27: does `codegen.py`'s SubdirEdge compiler (`subdirs.py`) agree
     # with an INDEPENDENT re-derivation (`expected_subdir_edge`, built from
     # the oracle's raw TAGTABLE/START/BASE/PROCESSPROC/BYTEORDER/VALIDATE
@@ -1019,6 +1101,10 @@ def main():
     print(f"offsets_sound_until tables {sound_ok + sound_bad}")
     print(f"  match          {sound_ok}")
     print(f"  MISMATCH       {sound_bad}")
+    print(f"print_conv flags checked (Step 28) {pcref_ok + pcref_false_refusal + pcref_silent_drop}")
+    print(f"  accounted for  {pcref_ok}  (ExifTool PrintConv refs: {pcref_translated} translated, {len(gen_pc_refused)} refused)")
+    print(f"  MISMATCH: refused with no ExifTool PrintConv ref {pcref_false_refusal}")
+    print(f"  MISMATCH: ExifTool PrintConv ref dropped silently {pcref_silent_drop}")
 
     for k, got, want in bad_examples:
         print(f"  name  {k}: generated {got!r} != exiftool {want!r}")
@@ -1048,11 +1134,14 @@ def main():
         print(f"  subdir edge  {k}: generated {got!r} != expected {want!r}")
     for k, got, want in sound_examples:
         print(f"  offsets_sound_until  {k}: generated {got!r} != expected {want!r}")
+    for k, why in pcref_examples:
+        print(f"  print_conv flag  {k}: {why}")
 
     failed = (
         name_bad + enum_bad + orphan + mask_bad + bitmask_bad + other_bad
         + variant_name_bad + variant_enum_bad + variant_orphan + variant_mask_bad
         + hook_bad + subdir_bad + edge_bad + sound_bad
+        + pcref_false_refusal + pcref_silent_drop
     )
     print("\nRESULT:", "PASS" if failed == 0 else f"FAIL ({failed} discrepancies)")
     sys.exit(1 if failed else 0)

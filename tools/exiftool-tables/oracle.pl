@@ -126,7 +126,18 @@ sub emit_entry {
     print join("\t", $mod, $sym, $key, 'VARFMT', ''), "\n"
         if defined $fmt && !ref $fmt && $fmt =~ /^var_/;
 
+    # A PrintConv that is a REF but not a HASH is not an enum: it is a Perl
+    # CODE ref (`PrintConv => \&SomeSub`) or, rarely, an ARRAY. `codegen.py`
+    # translates only the CODE refs `exprs.py`'s CODE_REFS registry names and
+    # REFUSES the rest, recording the refusal as `Omitted { print_conv: true }`
+    # so the field is withheld rather than emitted carrying a raw number under
+    # ExifTool's own tag name. Presence and the ref TYPE are all `verify.py`
+    # needs to re-derive, independently of dump_tables.pl, which fields ought
+    # to carry that flag.
     my $pc = $e->{PrintConv};
+    if (defined $pc && ref $pc && ref $pc ne 'HASH') {
+        print join("\t", $mod, $sym, $key, 'PCREF', ref $pc), "\n";
+    }
     return unless ref $pc eq 'HASH';
 
     # Step 25: the BITMASK sub-hash and OTHER closure's presence, straight

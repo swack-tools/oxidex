@@ -205,23 +205,12 @@ def load_perl_subdirs(perl, et_lib):
 
 def census(generated_rs, perl_facts):
     """Join every generated edge to its raw live-Perl Start/Base strings."""
-    # parse_rust returns an 11-tuple (verify.py:419-421). Step 25 appended
-    # bitmasks/other_ids/print_hexes; this caller was cut before that landed and
-    # still unpacked 8, so `just verify-tables` died here on the merged tree while
-    # both branches passed in isolation.
-    (
-        _fields,
-        _enums,
-        _masks,
-        _hooks,
-        _subdirs,
-        generated_edges,
-        _sound,
-        _variants,
-        _bitmasks,
-        _other_ids,
-        _print_hexes,
-    ) = verify.parse_rust(generated_rs)
+    # By ATTRIBUTE, not by position: this caller has been broken twice by
+    # `parse_rust` growing a return value (8-of-11 in Step 25, fixed in
+    # da1fec86 by hardcoding 11; then 11-of-13 when Step 28's print_conv
+    # accounting appended pc_refused/pc_kinds). Naming the one field this
+    # verifier actually consumes ends that class -- see `verify.ParsedRust`.
+    generated_edges = verify.parse_rust(generated_rs).subdir_edges
     edges = []
     missing = []
     for key, edge in sorted(generated_edges.items()):

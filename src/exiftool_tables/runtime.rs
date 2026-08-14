@@ -108,7 +108,7 @@ pub struct DecodedField {
 
 impl DecodedField {
     /// The value ExifTool would report for this field, or `None` when any of
-    /// `Field::omitted`'s five flags is set.
+    /// `Field::omitted`'s six flags is set.
     ///
     /// A clean field (no flag set) renders its generated `PrintConv`; when
     /// that yields nothing -- `PrintConv::None`, or a hash/expression that
@@ -216,6 +216,13 @@ impl Acknowledged {
     pub const CONDITION: Self = Self(1 << 2);
     pub const HOOK: Self = Self(1 << 3);
     pub const SUBDIRECTORY: Self = Self(1 << 4);
+    /// The caller has supplied the `PrintConv` this schema refused -- i.e. it
+    /// renders the field itself from [`RawAccess::raw`] rather than through
+    /// [`RawAccess::emit_raw`], which would fall back to the raw value
+    /// precisely because the generated `print_conv` is `PrintConv::None`
+    /// here. Acknowledging this flag and then calling `emit_raw` reproduces
+    /// exactly the wrong output the flag exists to prevent.
+    pub const PRINT_CONV: Self = Self(1 << 5);
 
     #[must_use]
     const fn contains(self, flag: Self) -> bool {
@@ -232,6 +239,7 @@ impl Acknowledged {
             && (!omitted.condition || self.contains(Self::CONDITION))
             && (!omitted.hook || self.contains(Self::HOOK))
             && (!omitted.subdirectory || self.contains(Self::SUBDIRECTORY))
+            && (!omitted.print_conv || self.contains(Self::PRINT_CONV))
     }
 }
 
@@ -393,7 +401,7 @@ pub fn all_fractional_census() -> FractionalCensus {
 /// [`DecodedField::emit`], broken out by reason.
 ///
 /// Step 10 (`OVERHAUL_OXIDEX_PLAN.md`, D1): a field is withheld when any of
-/// `Field::omitted`'s five flags is set, or when its offset falls past the
+/// `Field::omitted`'s six flags is set, or when its offset falls past the
 /// table's [`BinaryTable::offsets_sound_until`] boundary. A field can trip
 /// more than one flag at once (e.g. both `condition` and `value_conv`), and
 /// each is counted independently -- this is a census of *reasons*, not of
@@ -408,7 +416,14 @@ pub struct RefusalCounts {
     pub condition: usize,
     pub hook: usize,
     pub subdirectory: usize,
-    /// Fields whose offset sits past `offsets_sound_until` -- unlike the five
+    /// Fields carrying a `PrintConv` the generator refused to reproduce
+    /// (`Omitted::print_conv`). Counted apart from the four above because
+    /// what it withholds is different in kind: those fields have a raw value
+    /// that is not the reported value, whereas these have a raw value
+    /// ExifTool would have rendered as a *string*. Before the flag existed
+    /// they were not withheld at all -- they were emitted raw, silently.
+    pub print_conv: usize,
+    /// Fields whose offset sits past `offsets_sound_until` -- unlike the six
     /// flags above, there is no [`RawAccess`] escape for this one: the static
     /// `index * increment` formula is not just unmodeled here, it is not
     /// reliably the field's real byte offset at all, so there is no `raw` to
@@ -417,7 +432,7 @@ pub struct RefusalCounts {
 }
 
 impl RefusalCounts {
-    /// Sum across all six reasons.
+    /// Sum across all seven reasons.
     #[must_use]
     pub const fn total(self) -> usize {
         self.value_conv
@@ -425,6 +440,7 @@ impl RefusalCounts {
             + self.condition
             + self.hook
             + self.subdirectory
+            + self.print_conv
             + self.offset_unsound
     }
 
@@ -437,6 +453,7 @@ impl RefusalCounts {
             condition: self.condition + other.condition,
             hook: self.hook + other.hook,
             subdirectory: self.subdirectory + other.subdirectory,
+            print_conv: self.print_conv + other.print_conv,
             offset_unsound: self.offset_unsound + other.offset_unsound,
         }
     }
@@ -547,6 +564,9 @@ pub fn decode_binary_table(
         }
         if omitted.subdirectory {
             refusals.subdirectory += 1;
+        }
+        if omitted.print_conv {
+            refusals.print_conv += 1;
         }
         fields.push(decoded);
     }
@@ -1221,8 +1241,69 @@ mod tests {
         assert_eq!(max_release.emit(), Some(TagValue::Integer(42)));
     }
 
+    /// The behaviour change `Omitted::print_conv` exists to produce, shown
+    /// on a real generated table rather than a fixture.
+    ///
+    /// `Nikon::PictureControl` PictureControlName is the pure case: ExifTool
+    /// renders it through `Image::ExifTool::Nikon::FormatString`
+    /// (`Nikon.pm:3504`, `:13526-13551`), and this schema reproduces no part
+    /// of that -- `FormatString`'s first branch is a function of
+    /// `$et->Options('LimitLongValues')` (`Nikon.pm:13530`), not of `$val`,
+    /// which is outside the "pure function of the value" boundary
+    /// `exprs.py`'s registries draw. The field carries no `ValueConv`,
+    /// `RawConv`, `Condition`, `Hook` or `SubDirectory`, so before this flag
+    /// existed NOTHING withheld it: `emit()` returned the raw 20-byte string
+    /// `"AUTO                "` under ExifTool's own `PictureControlName`,
+    /// where ExifTool prints `"Auto"`.
+    ///
+    /// Two assertions, and the second is the point: it is not enough that
+    /// `emit` refuses, the refusal has to be COUNTED, or a caller reading
+    /// `RefusalCounts` cannot tell a withheld field from one ExifTool has no
+    /// tag for.
+    #[test]
+    fn a_refused_print_conv_is_withheld_and_counted() {
+        let table = crate::exiftool_tables::find_table("Nikon", "PictureControl")
+            .expect("Nikon::PictureControl is in the generated set");
+        let field = table
+            .fields
+            .iter()
+            .find(|f| f.name == "PictureControlName")
+            .expect("PictureControlName is transcribed");
+        assert!(
+            field.omitted.print_conv,
+            "the whole test rests on this field being the refused-PrintConv case",
+        );
+
+        // 4 bytes of PictureControlVersion, then the 20-byte name Nikon
+        // actually writes (all caps, space padded), then the 20-byte
+        // PictureControlBase at offset 24 -- the table's other refused
+        // field, included so the count below is over both rather than over
+        // a buffer that happens to stop before the second one.
+        let mut data = b"0300".to_vec();
+        data.extend_from_slice(b"AUTO                ");
+        data.extend_from_slice(b"AUTO                ");
+        let decode = decode_binary_table(table, &data, ByteOrder::Big);
+
+        let decoded = decode
+            .fields()
+            .iter()
+            .find(|d| d.field.name == "PictureControlName")
+            .expect("the bytes are there, only the meaning is refused");
+        assert_eq!(
+            decoded.emit(),
+            None,
+            "a refused PrintConv must withhold the field, not report `AUTO` \
+             where ExifTool prints `Auto`",
+        );
+        assert_eq!(
+            decode.refusals().print_conv,
+            2,
+            "PictureControlName + PictureControlBase"
+        );
+    }
+
     /// Step 11 makes a maskless fractional field's bytes readable, but
-    /// readable is not reportable: Step 10's five `Omitted` flags apply
+    /// readable is not reportable: Step 10's `Omitted` flags apply
     /// independently of *why* a field was previously withheld. A fractional
     /// field gated on a `Condition` (or any other flag) must stay refused by
     /// `emit`, exactly as a masked field with the same flag would, and must
@@ -1243,6 +1324,7 @@ mod tests {
                 condition: true,
                 hook: false,
                 subdirectory: false,
+                print_conv: false,
             },
             value_conv: None,
             print_conv: PrintConv::None,
@@ -1348,6 +1430,7 @@ mod tests {
                     condition: false,
                     hook: false,
                     subdirectory: false,
+                    print_conv: false,
                 },
                 value_conv: None,
                 print_conv: PrintConv::IntEnum(&[(0, "Wrong")]),
@@ -1411,6 +1494,7 @@ mod tests {
                 condition: true,
                 hook: false,
                 subdirectory: false,
+                print_conv: false,
             },
             value_conv: None,
             print_conv: PrintConv::None,
@@ -1500,6 +1584,7 @@ mod tests {
                     condition: true,
                     hook: false,
                     subdirectory: false,
+                    print_conv: false,
                 },
                 value_conv: None,
                 print_conv: PrintConv::None,
@@ -1518,6 +1603,7 @@ mod tests {
                     condition: true,
                     hook: false,
                     subdirectory: false,
+                    print_conv: false,
                 },
                 value_conv: None,
                 print_conv: PrintConv::None,
@@ -1562,6 +1648,7 @@ mod tests {
                 condition: 2,
                 hook: 0,
                 subdirectory: 0,
+                print_conv: 0,
                 offset_unsound: 0,
             }
         );

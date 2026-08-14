@@ -99,9 +99,9 @@ the Rust side.
 
 | class | count | meaning |
 |---|---:|---|
-| enabled | **5** | both gates; the engine walks it |
-| eligible | **375** | gate A passes, no gate B measurement possible yet |
-| refused | **233** | gate A blocks it |
+| enabled | **7** | both gates; the engine walks it |
+| eligible | **381** | gate A passes, no gate B measurement possible yet |
+| refused | **225** | gate A blocks it |
 
 Gate A's refusal reasons, by tables affected (a table can trip several):
 
@@ -110,7 +110,6 @@ Gate A's refusal reasons, by tables affected (a table can trip several):
 | `expr_unsupported` | 141 |
 | `tag_fmt_unsupported` | 86 |
 | `other_unregistered` | 29 |
-| `conv_dropped` | 14 |
 | `tag_variant_skipped` | 9 |
 | `tag_variant_cond_unsupported` | 8 |
 | `tag_var_format` | 7 |
@@ -120,7 +119,7 @@ Gate A's refusal reasons, by tables affected (a table can trip several):
 | `tag_variant_field_unsupported` | 1 |
 
 This is design D3 read literally: a construct we cannot parse counts against
-us. 233 refusals is the scoreboard, and `expr_unsupported` alone — 141 tables
+us. 225 refusals is the scoreboard, and `expr_unsupported` alone — 141 tables
 blocked because at least one `PrintConv` expression did not translate — says
 where the next unit of work buys the most enablement.
 
@@ -132,11 +131,12 @@ disqualifying. What is left of that population is `other_unregistered` (29
 tables) — an `OTHER` closure absent from `tools/exiftool-tables/others.py`,
 whose `PrintConv` is dropped outright — and it inherits the gate weight the
 two retired counters carried. 25 tables moved refused → eligible on that
-change alone; none moved the other way, and no *enabled* table's gate A
-status changed, so the engine walks exactly the same five tables it did
-before.
+change alone. This rebase also converts unsupported Perl CODE refs into
+explicit `Omitted::print_conv` refusals, so they no longer report raw values
+under real tag names; 42 exact, verified CODE-ref translations are emitted and
+23 fields are withheld loudly instead. The current engine walks seven tables.
 
-## Why only 5 are enabled
+## Why only 7 are enabled
 
 Enablement needs a table to be *reached* — something has to route bytes into
 it. Two routes exist, and both were measured:
@@ -158,7 +158,7 @@ it. Two routes exist, and both were measured:
    therefore enables nothing yet.** That is a measurement, not an omission —
    and it is the concrete thing to fix if the next step wants the edges to pay.
 
-The remaining 375 eligible tables have no live call site at all. Enabling one
+The remaining 381 eligible tables have no live call site at all. Enabling one
 would produce no tags and no measurement — enablement on no evidence, which is
 what opt-in exists to prevent.
 

@@ -204,6 +204,231 @@ mod tests {
         assert!(!Omitted::NONE.any());
     }
 
+    /// `Omitted::print_conv` is the sixth flag, and the one whose absence
+    /// was a *wrong value* rather than a missing one: a field whose ExifTool
+    /// `PrintConv` the generator would not reproduce used to be emitted
+    /// anyway, carrying `PrintConv::None`, so it reported a raw number where
+    /// ExifTool prints a string. `any()` must see it, or that is exactly
+    /// what happens again.
+    #[test]
+    fn omitted_any_covers_print_conv() {
+        assert!(
+            Omitted {
+                print_conv: true,
+                ..Omitted::NONE
+            }
+            .any()
+        );
+    }
+
+    /// The census sibling of `hook_and_subdirectory_census_matches_the_13_59_
+    /// dump`, for the flag that closed Step 28's `conv_dropped` refusal
+    /// class. 23 fields across 11 tables carry an ExifTool `PrintConv` --
+    /// always a Perl CODE or ARRAY ref -- that
+    /// `tools/exiftool-tables/exprs.py`'s `CODE_REFS` registry does not
+    /// recognise, and every one of them is now WITHHELD rather than reported
+    /// raw. The number is `codegen.py`'s own `conv_dropped` REPORT line.
+    ///
+    /// The second assertion is the one that matters most: a flagged field
+    /// must never also carry a `PrintConv`. The flag says "we refused to
+    /// reproduce the conversion"; a conversion sitting next to it would mean
+    /// the generator both refused and guessed.
+    #[test]
+    fn print_conv_refusal_census_matches_the_13_59_dump() {
+        let mut refused = 0usize;
+        let mut tables = 0usize;
+        for t in ALL_BINARY_TABLES {
+            let mut here = 0usize;
+            for f in t.fields.iter().chain(
+                t.variants
+                    .iter()
+                    .flat_map(|g| g.alternatives.iter().map(|(_, f)| f)),
+            ) {
+                if !f.omitted.print_conv {
+                    continue;
+                }
+                here += 1;
+                assert!(
+                    matches!(f.print_conv, PrintConv::None),
+                    "{}::{} {} is flagged print_conv-refused but carries a conversion",
+                    t.module,
+                    t.table,
+                    f.name
+                );
+            }
+            refused += here;
+            tables += usize::from(here > 0);
+        }
+        assert_eq!(refused, 23, "fields whose PrintConv the generator refused");
+        assert_eq!(tables, 11, "tables carrying at least one such field");
+    }
+
+    /// The other half of the `conv_dropped` story: the conversions that were
+    /// dropped and are now REPRODUCED, pinned against real carrier files.
+    ///
+    /// Instruments, per `AGENTS.md`:
+    ///
+    ///   oracle   `/tmp/oxidex-exiftool-cache/exiftool-pinned.sh` -- ExifTool
+    ///            13.59, `-ver` and OOXML.docx-to-DOCX probed. `-n` gives the
+    ///            value a `PrintConv` receives, the same run without `-n`
+    ///            gives what it must produce; both columns below are that
+    ///            pair, quoted, per file.
+    ///   carriers `/tmp/oxidex-exiftool-cache/combined-samples/...` -- real
+    ///            camera and e-book files, not synthesised bytes.
+    ///   subject  the shipped `PrintConv` in `binary_tables.rs`, reached
+    ///            through `runtime::render` -- the same call
+    ///            `DecodedField::emit` makes, not a re-derivation of it.
+    ///
+    /// This is deliberately NOT the same evidence as
+    /// `tools/exiftool-tables/verify_exprs.py`'s probe battery, which runs
+    /// ExifTool's own subroutine over synthetic inputs. That answers "is the
+    /// translation right?"; this answers "is it right on the numbers real
+    /// files actually contain?", which is the question a corpus run would ask
+    /// if any of these tables had a live call site. None of them does today
+    /// (`reachability.py`: only `Sony::CameraInfo` among the affected tables
+    /// is hand-wired at all), so this test is the corpus check standing in
+    /// for a corpus that cannot reach them yet.
+    ///
+    /// The Canon rows are all `0 -> "Off"`: every 1D-series carrier in the
+    /// corpus has every personal function disabled, so the `'On'` and
+    /// `"On ($val)"` branches are exercised by the Perl oracle's probes and
+    /// by `exprs.rs`'s unit tests, not by a carrier. Said rather than papered
+    /// over -- a branch no file reaches is not a branch this test covers.
+    #[test]
+    fn recovered_conversions_match_the_pinned_oracle_on_real_carriers() {
+        // (module, table, field, ExifTool `-n` value, ExifTool printed value,
+        //  carrier)
+        const CASES: &[(&str, &str, &str, i64, &str, &str)] = &[
+            // exiftool-pinned.sh -s -G1 [-n] -UncompressedTextLength Palm.mobi
+            //   [MOBI] UncompressedTextLength : 171966   (-n)
+            //   [MOBI] UncompressedTextLength : 172 kB
+            // Palm.pm:121-124 -> ExifTool.pm:6851-6871.
+            (
+                "Palm",
+                "MOBI",
+                "UncompressedTextLength",
+                171_966,
+                "172 kB",
+                "Palm.mobi",
+            ),
+            // exiftool-pinned.sh -s -G1 [-n] -PF* Canon/CanonEOS-1DmkII.jpg
+            //   [CanonCustom] PF0CustomFuncRegistration : 0   (-n)
+            //   [CanonCustom] PF0CustomFuncRegistration : Off
+            // CanonCustom.pm:1100/1119/1131 -> :36 -> :2624-2628.
+            (
+                "CanonCustom",
+                "PersonalFuncs",
+                "PF0CustomFuncRegistration",
+                0,
+                "Off",
+                "Canon/CanonEOS-1DmkII.jpg",
+            ),
+            (
+                "CanonCustom",
+                "PersonalFuncs",
+                "PF19ContinuousShootSpeed",
+                0,
+                "Off",
+                "Canon/CanonEOS-1DS.jpg",
+            ),
+            (
+                "CanonCustom",
+                "PersonalFuncs",
+                "PF31OriginalDecisionData",
+                0,
+                "Off",
+                "Canon/CanonEOS-1DSmkII.jpg",
+            ),
+        ];
+        for (module, table, name, raw, want, carrier) in CASES {
+            let t = find_table(module, table)
+                .unwrap_or_else(|| panic!("{module}::{table} is not in the generated set"));
+            let f = t
+                .fields
+                .iter()
+                .find(|f| f.name == *name)
+                .unwrap_or_else(|| panic!("{module}::{table} has no field {name}"));
+            assert_eq!(
+                runtime::render(f.print_conv, &DecodedValue::Integer(*raw)).as_deref(),
+                Some(*want),
+                "{module}::{table} {name} on {carrier}: ExifTool 13.59 prints {want:?} \
+                 for the raw value {raw}",
+            );
+        }
+
+        // Nikon's FocusPosition fields are `_variants` alternatives -- one per
+        // sensor geometry, picked by a `Condition` on `$$self{Model}`. Each
+        // alternative's own `PrintConv` is checked here against the carrier
+        // whose model selects it; which alternative wins is `cond.rs`'s
+        // question, not this test's.
+        //
+        // exiftool-pinned.sh -s -G1 [-n] -FocusPosition{Horizontal,Vertical}
+        //   NikonZ7_2.jpg  H: 16 -> "1R of Center"   V: 12 -> "3D from Center"
+        //   NikonZ6_2.jpg  H:  5 -> "6L of Center"   V: 10 -> "3D from Center"
+        //   NikonZ30.jpg   H: 10 -> "C"              V:  6 -> "C"
+        // Nikon.pm:13420-13428 (LeftRight) and :13434-13442 (UpDown).
+        const NIKON: &[(&str, &str, i64, &str, &str)] = &[
+            (
+                "AFInfo2V0300",
+                "FocusPositionHorizontal",
+                16,
+                "1R of Center",
+                "NikonZ7_2.jpg",
+            ),
+            (
+                "AFInfo2V0300",
+                "FocusPositionVertical",
+                12,
+                "3D from Center",
+                "NikonZ7_2.jpg",
+            ),
+            (
+                "AFInfo2V0300",
+                "FocusPositionHorizontal",
+                5,
+                "6L of Center",
+                "NikonZ6_2.jpg",
+            ),
+            (
+                "AFInfo2V0300",
+                "FocusPositionVertical",
+                10,
+                "3D from Center",
+                "NikonZ6_2.jpg",
+            ),
+            (
+                "AFInfo2V0300",
+                "FocusPositionHorizontal",
+                10,
+                "C",
+                "NikonZ30.jpg",
+            ),
+            (
+                "AFInfo2V0300",
+                "FocusPositionVertical",
+                6,
+                "C",
+                "NikonZ30.jpg",
+            ),
+        ];
+        for (table, name, raw, want, carrier) in NIKON {
+            let t = find_table("Nikon", table).expect("Nikon table is in the generated set");
+            let rendered: Vec<String> = t
+                .variants
+                .iter()
+                .flat_map(|g| g.alternatives.iter().map(|(_, f)| f))
+                .filter(|f| f.name == *name)
+                .filter_map(|f| runtime::render(f.print_conv, &DecodedValue::Integer(*raw)))
+                .collect();
+            assert!(
+                rendered.iter().any(|r| r == want),
+                "Nikon::{table} {name} on {carrier}: ExifTool 13.59 prints {want:?} for \
+                 the raw value {raw}, but no alternative's PrintConv rendered it \
+                 (got {rendered:?})",
+            );
+        }
+    }
+
     /// Step 9's accounting identity: the count of fields the generator flags
     /// `hook`/`subdirectory` must equal what a census of the ExifTool 13.59
     /// dump found (measured independently with `tools/exiftool-tables/
@@ -294,22 +519,28 @@ mod tests {
     /// `tools/exiftool-tables/reachability.py` reports from, which is the
     /// point: the reachability census is generated, not hand-audited, and
     /// this test is what stops the two from drifting apart. At 13.59 the
-    /// split is 7 enabled / 396 eligible / 210 refused of 613 -- see
+    /// split is regenerated from the binary tables -- see
     /// `enabled.rs` for why `eligible` is not `enabled`.
     ///
-    /// Step 25 moved tables refused -> eligible by fully transcribing enums
-    /// carrying a `BITMASK` or a registered `OTHER` (`PrintConv::Bitmask` /
-    /// `PrintConv::PartialEnumInt`) instead of dropping them as partial.
-    /// Step 24's rebase-time regeneration (carrying oracle-verified
-    /// ValueConv ExprIds) moved a further batch refused -> eligible for a
-    /// different reason: it shares `exprs.py`'s TRANSLATIONS/grammar
-    /// compiler with PrintConv, so the same ledger growth that unlocked
-    /// ValueConv coverage also translated PrintConv expressions that used to
-    /// hit `expr_unsupported`/`conv_dropped` -- both
-    /// `GATE_A_DISQUALIFYING`. The *enabled* set moved separately (5 -> 7)
-    /// when APE::NewHeader and H264::RecInfo were wired to live call sites
-    /// -- gate B is a measured allowlist, orthogonal to gate A's static
-    /// count -- so the engine walks seven tables.
+    /// Step 28's `conv_dropped` class moves tables to eligible when it is
+    /// their only blocker. A
+    /// field in that class carried a `PrintConv` the generator would not
+    /// reproduce and was emitted ANYWAY, reporting a raw number under
+    /// ExifTool's own tag name. Those tables are eligible now not because
+    /// anything was assumed, but because the drop became an explicit
+    /// `Omitted { print_conv: true }` that `DecodedField::emit` withholds
+    /// and `RefusalCounts::print_conv` counts -- a counted absence in place
+    /// of a silent wrong value.
+    ///
+    /// `enabled` has since moved 5 -> 8, one measured allowlist line at a
+    /// time and never as a side effect of regeneration: `APE::NewHeader`
+    /// (85598504) and `H264::RecInfo` (aa9b47ad) each added a line without
+    /// updating this count, so it read 5 while the artifacts said 7 -- the
+    /// exact drift this test exists to catch, caught late. `Font::PFM`
+    /// (`enabled.rs`) is the eighth. Enabling a table moves it between
+    /// classes rather than creating one, so it never changes
+    /// `eligible + enabled`; closing `conv_dropped` does, by moving tables
+    /// in from `refused`.
     #[test]
     fn every_table_lands_in_exactly_one_enablement_class() {
         let (mut enabled, mut eligible, mut refused) = (0usize, 0usize, 0usize);
@@ -332,8 +563,8 @@ mod tests {
             "every table must land in exactly one class"
         );
         assert_eq!(ALL_BINARY_TABLES.len(), 613, "tables emitted");
-        assert_eq!(eligible + enabled, 403, "tables passing gate A");
-        assert_eq!(refused, 210, "tables gate A blocks");
+        assert_eq!(eligible + enabled, 411, "tables passing gate A");
+        assert_eq!(refused, 202, "tables gate A blocks");
         // Raised 5 -> 7 when APE::NewHeader and H264::RecInfo were wired to live
         // call sites. Each of those branches was green in isolation; the assertion
         // only broke once both were on the same tree, which is precisely the

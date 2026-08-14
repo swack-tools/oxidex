@@ -85,6 +85,42 @@ TRANSLATIONS = {
          'if {v} > 655.345 { "inf".to_string() } else '
          '{ format!("{} m", crate::exiftool_tables::exprs::perl_num({v})) }'),
 
+    # --- named ExifTool helper subs reached through a Perl CODE ref ---------
+    # These keys are not text lifted out of a tag table: a `PrintConv =>
+    # \&SomeSub` is a code REF, so `dump_tables.pl` records its deparsed body
+    # and there is no expression string to match on. CODE_REFS below maps each
+    # such deparsed body -- by exact match, same doctrine as this table --
+    # onto the key here that NAMES the sub it is. Writing the key as a real
+    # Perl call is what makes it verifiable: `verify_exprs.py` evaluates the
+    # key text against the pinned tree's own subroutine, so the entry is
+    # checked against the actual ExifTool implementation rather than against
+    # a transcription of it.
+    "Image::ExifTool::CanonCustom::ConvertPfn($val)":
+        ("String", "crate::exiftool_tables::exprs::convert_pfn({v})"),
+    "Image::ExifTool::ConvertFileSize($val)":
+        ("String", "crate::exiftool_tables::exprs::convert_file_size({v})"),
+    # `$ncol`/`$nrow` is a literal at every pinned call site, so each distinct
+    # literal is its own entry rather than a parameter: a template with a hole
+    # in it could be filled with a number no ExifTool table actually passes.
+    "Image::ExifTool::Nikon::PrintAFPointsLeftRight($val, 19)":
+        ("String",
+         "crate::exiftool_tables::exprs::print_af_points_left_right({v}, 19.0)"),
+    "Image::ExifTool::Nikon::PrintAFPointsLeftRight($val, 21)":
+        ("String",
+         "crate::exiftool_tables::exprs::print_af_points_left_right({v}, 21.0)"),
+    "Image::ExifTool::Nikon::PrintAFPointsLeftRight($val, 29)":
+        ("String",
+         "crate::exiftool_tables::exprs::print_af_points_left_right({v}, 29.0)"),
+    "Image::ExifTool::Nikon::PrintAFPointsUpDown($val, 11)":
+        ("String",
+         "crate::exiftool_tables::exprs::print_af_points_up_down({v}, 11.0)"),
+    "Image::ExifTool::Nikon::PrintAFPointsUpDown($val, 13)":
+        ("String",
+         "crate::exiftool_tables::exprs::print_af_points_up_down({v}, 13.0)"),
+    "Image::ExifTool::Nikon::PrintAFPointsUpDown($val, 17)":
+        ("String",
+         "crate::exiftool_tables::exprs::print_af_points_up_down({v}, 17.0)"),
+
     # --- multi-statement idiom, hand-verified rather than grammar-parsed:
     # a Perl statement-modifier guard followed by a helper call is a
     # different syntactic shape than a plain expression, and generalising a
@@ -94,6 +130,116 @@ TRANSLATIONS = {
          'if {v} > 0.99 { "Full".to_string() } '
          'else { crate::exiftool_tables::exprs::print_exposure_time({v}) }'),
 }
+
+
+# =============================================================================
+# CODE_REFS -- the sibling of TRANSLATIONS for a `PrintConv => \&NamedSub`.
+#
+# ExifTool writes a conversion two ways: as a string of Perl (`'$val / 10'`),
+# which `dump_tables.pl` records verbatim and TRANSLATIONS/compile() handle,
+# and as a reference to a named subroutine (`\&ConvertPfn`), which has no
+# expression text at all. `dump_tables.pl` records the latter as
+# `{"kind": "code", "deparse": "<B::Deparse output>"}`, and codegen.py used to
+# drop every one of them -- counted as `conv_dropped`, but with the field still
+# EMITTED carrying `PrintConv::None`, i.e. a raw number where ExifTool prints a
+# string. That is the one failure mode `AGENTS.md` rates worse than a missing
+# tag, so the two halves of this file's answer to it are: recognise the code
+# refs that are pure functions of `$val` (here), and make codegen.py flag the
+# rest as an explicit `Omitted { print_conv: true }` refusal so the field is
+# WITHHELD instead of reported wrong.
+#
+# The doctrine is TRANSLATIONS' doctrine, unchanged. A deparsed body is
+# recognised only by exact (whitespace-normalised) match, and the value it maps
+# to is a key in TRANSLATIONS -- so a code ref cannot reach any Rust that has
+# not already been written down, reviewed and oracle-checked as an ordinary
+# translation. Matching on the deparse rather than on the sub's name is what
+# makes this safe across releases: if ExifTool rewrites `ConvertPfn`'s body,
+# the key stops matching and the conversion goes back to being refused, rather
+# than silently continuing to run the old translation under the new sub.
+#
+# Deliberately NOT here, and why (each is a real entry in the pinned tree that
+# this file refuses):
+#
+#   Nikon::FormatString          not a pure function of $val -- its first
+#                                branch is keyed on $et->Options
+#                                ('LimitLongValues') (Nikon.pm:13530).
+#   Nikon::PrintAFPoints         string-domain: they consume the SPACE-
+#     (Nikon.pm:13307-13329),    SEPARATED HEX TEXT a ValueConv already
+#   Nikon::PrintAFPointsGrid     produced, and PrintConv::Expr's shipped
+#     (Nikon.pm:13378-13395),    surface is `apply(f64) -> Option<String>`.
+#   Sony::PrintLensSpec          PrintLensSpec additionally reads the
+#     (Sony.pm:11179-11213),     module-level @lensFeatures table, and
+#   Pentax::AFPointNamesK3III    AFPointNamesK3III takes a third argument
+#     (Pentax.pm:6758-6769)      ExifTool's caller supplies, not $val.
+#
+# See codegen.py's `conv_for` for the counters, and
+# `docs/reference/binary-data-engine.md` for the per-field census.
+CODE_REFS = {
+    # Image::ExifTool::CanonCustom::ConvertPfn -- CanonCustom.pm:2624-2628,
+    # reached from `%convPFn` (CanonCustom.pm:36) by all 29 fields of
+    # CanonCustom::PersonalFuncs.
+    "($) { package Image::ExifTool::CanonCustom; use strict; "
+    "(my($val) = (shift())); "
+    "(return ($val ? (($val == 1) ? 'On' : (\"On ($val)\")) : 'Off')); }":
+        "Image::ExifTool::CanonCustom::ConvertPfn($val)",
+
+    # Image::ExifTool::ConvertFileSize -- ExifTool.pm:6851-6871, reached from
+    # Palm.pm:121-124 (MOBI UncompressedTextLength). The deparse carries BOTH
+    # of the sub's branches; the translation reproduces the SI one, which is
+    # the only one reachable without an API option this crate never sets
+    # (`ByteUnit` defaults to 'SI', ExifTool.pm:1115).
+    "($;$) { package Image::ExifTool; use strict; (my($val, $et) = @_); "
+    "if (($et and ($et->{'OPTIONS'}{'ByteUnit'} eq 'Binary'))) { "
+    "(($val < 2048) and (return (\"$val bytes\"))); "
+    "(($val < 10240) and (return sprintf('%.1f KiB', ($val / 1024)))); "
+    "(($val < 2097152) and (return sprintf('%.0f KiB', ($val / 1024)))); "
+    "(($val < 10485760) and (return sprintf('%.1f MiB', ($val / 1048576)))); "
+    "(($val < 2147483648) and (return sprintf('%.0f MiB', ($val / 1048576)))); "
+    "(($val < 10737418240) and (return sprintf('%.1f GiB', ($val / 1073741824)))); "
+    "(return sprintf('%.0f GiB', ($val / 1073741824))); } "
+    "else { (($val < 2000) and (return (\"$val bytes\"))); "
+    "(($val < 10000) and (return sprintf('%.1f kB', ($val / 1000)))); "
+    "(($val < 2000000) and (return sprintf('%.0f kB', ($val / 1000)))); "
+    "(($val < 10000000) and (return sprintf('%.1f MB', ($val / 1000000)))); "
+    "(($val < 2000000000) and (return sprintf('%.0f MB', ($val / 1000000)))); "
+    "(($val < 10000000000) and (return sprintf('%.1f GB', ($val / 1000000000)))); "
+    "(return sprintf('%.0f GB', ($val / 1000000000))); } }":
+        "Image::ExifTool::ConvertFileSize($val)",
+}
+
+# The `PrintAFPointsLeftRight`/`PrintAFPointsUpDown` bodies differ from each
+# other only in the literal column/row count, so they are built rather than
+# spelled out -- the deparse text is still matched in full and exactly, and the
+# TRANSLATIONS key each maps to still has to exist by name below.
+for _sub, _ns in (("PrintAFPointsLeftRight", (19, 21, 29)),
+                  ("PrintAFPointsUpDown", (11, 13, 17))):
+    for _n in _ns:
+        CODE_REFS[
+            "{ package Image::ExifTool::Nikon; use strict; "
+            "(my($val) = @_); "
+            f"{_sub}($val, {_n}); }}"
+        ] = f"Image::ExifTool::Nikon::{_sub}($val, {_n})"
+
+for _deparse, _key in CODE_REFS.items():
+    if _key not in TRANSLATIONS:
+        raise AssertionError(
+            f"CODE_REFS maps a deparsed body onto {_key!r}, which is not in "
+            "TRANSLATIONS -- a code ref must never reach Rust that has not "
+            "been written down as an ordinary, oracle-checked translation"
+        )
+
+
+def code_ref_expr(deparse):
+    """The TRANSLATIONS key naming the ExifTool sub `deparse` is, or None.
+
+    None is the normal outcome for the overwhelming majority of code refs and
+    the caller must handle it by REFUSING the conversion -- explicitly, with a
+    counter and an `Omitted` flag -- never by falling back to the raw value
+    silently.
+    """
+    if not isinstance(deparse, str):
+        return None
+    return CODE_REFS.get(normalize(deparse))
 
 
 def normalize(expr):

@@ -161,10 +161,15 @@ def _rust_pairs(pairs):
 
 
 def conv_for(tag, stats, input_domain, verified_exprs):
-    """Return Rust PrintConv construction, or None if this tag must lose it."""
+    """Return `(rust_printconv_src, refused)` for one tag.
+
+    `refused` is true only when ExifTool declares a PrintConv that this
+    generator cannot reproduce.  The caller then records `Omitted.print_conv`,
+    so the field is withheld instead of being emitted with a raw value.
+    """
     pc = tag.get("PrintConv")
     if not isinstance(pc, dict):
-        return "PrintConv::None"
+        return "PrintConv::None", False
 
     kind = pc.get("kind")
     if kind in ("enum", "enum_partial"):
@@ -208,12 +213,12 @@ def conv_for(tag, stats, input_domain, verified_exprs):
                 return (
                     "PrintConv::Bitmask { exact: &["
                     f"{_rust_pairs(exact_pairs)}], bits: &[{_rust_pairs(bits_pairs)}] }}"
-                )
+                ), False
             stats["bitmask_unreadable"] += 1
-            return "PrintConv::None"
+            return "PrintConv::None", False
 
         if not m:
-            return "PrintConv::None"
+            return "PrintConv::None", False
 
         # OTHER: resolved only through Step 25's deparse-keyed registry
         # (tools/exiftool-tables/others.py) -- an exact match on the
@@ -243,14 +248,14 @@ def conv_for(tag, stats, input_domain, verified_exprs):
                     # corpus, but refuse rather than guess how the two would
                     # interact if it ever does.
                     stats["other_str_domain_unsupported"] += 1
-                    return "PrintConv::None"
+                    return "PrintConv::None", False
                 stats["other_translated"] += 1
                 print_hex = "true" if tag.get("PrintHex") else "false"
                 return (
                     "PrintConv::PartialEnumInt { exact: &["
                     f"{_rust_pairs(exact_pairs)}], other: Some({other_id}), "
                     f"print_hex: {print_hex} }}"
-                )
+                ), False
             # Two counters, one event: `pc_directives_dropped["OTHER"]` is the
             # REPORT's human listing, `other_unregistered` is the scalar Gate A
             # (Step 28) reads. Gate A indexes plain ints -- a nested Counter
@@ -267,7 +272,7 @@ def conv_for(tag, stats, input_domain, verified_exprs):
                 # second copy of the registry's exact-match discipline.
                 flat = " ".join(deparse.split())[:72]
                 stats["other_unregistered_bodies"][flat] += 1
-            return "PrintConv::None"
+            return "PrintConv::None", False
 
         # No BITMASK, no OTHER: whatever else is in `directives` is benign
         # (Notes/PrintHex/SeparateTable -- see BENIGN_PC_DIRECTIVES's doc),
@@ -278,12 +283,12 @@ def conv_for(tag, stats, input_domain, verified_exprs):
         exact_pairs = _int_pairs(m)
         if exact_pairs is not None:
             stats["enum_int"] += 1
-            return f"PrintConv::IntEnum(&[{_rust_pairs(exact_pairs)}])"
+            return f"PrintConv::IntEnum(&[{_rust_pairs(exact_pairs)}])", False
         stats["enum_str"] += 1
         body = ", ".join(
             f'("{rust_str(k)}", "{rust_str(v)}")' for k, v in sorted(m.items())
         )
-        return f"PrintConv::StrEnum(&[{body}])"
+        return f"PrintConv::StrEnum(&[{body}])", False
 
     if kind == "expr":
         raw = pc.get("expr")
@@ -292,17 +297,17 @@ def conv_for(tag, stats, input_domain, verified_exprs):
         if not t:
             stats["expr_unsupported"] += 1
             stats["unsupported_exprs"][normalized] += 1
-            return "PrintConv::None"
+            return "PrintConv::None", False
         domain, _rty, _code = t
         if domain != input_domain:
             # Do not let render() fall through to raw bytes after accepting
             # an expression whose `$val` domain is wrong.  That would look
             # like a successful tag with a silently skipped PrintConv.
             stats["expr_refused_input_domain"] += 1
-            return "PrintConv::None"
+            return "PrintConv::None", False
         if verified_exprs is None or normalized not in verified_exprs:
             stats["expr_refused_oracle"] += 1
-            return "PrintConv::None"
+            return "PrintConv::None", False
         # translate_or_compile_any() tries the hand-verified TRANSLATIONS
         # exact-match table first, then Step 15's grammar compiler -- counted
         # separately so a coverage report can tell curated translations from
@@ -313,9 +318,19 @@ def conv_for(tag, stats, input_domain, verified_exprs):
             stats["expr_compiled"] += 1
         # Translated expressions are emitted by name so the generated code
         # stays readable and the mapping stays auditable.
-        return f"PrintConv::Expr(ExprId::{expr_ident(raw)})"
+        return f"PrintConv::Expr(ExprId::{expr_ident(raw)})", False
+    if kind == "code":
+        # A `PrintConv => \\&SomeSub` is accepted only if its deparsed body
+        # maps exactly to a named, oracle-verified expression translation.
+        named = exprs.code_ref_expr(pc.get("deparse"))
+        if named:
+            stats["expr_translated_code_ref"] += 1
+            return f"PrintConv::Expr(ExprId::{expr_ident(named)})", False
+        stats["conv_dropped"] += 1
+        stats["dropped_code_refs"][exprs.normalize(pc.get("deparse") or "")] += 1
+        return "PrintConv::None", True
     stats["conv_dropped"] += 1
-    return "PrintConv::None"
+    return "PrintConv::None", True
 
 
 def expr_ident(expr):
@@ -436,7 +451,8 @@ def value_conv_for(tag, stats, input_domain, verified_exprs):
     return f"Some(ExprId::{expr_ident(raw)})", True
 
 
-def omitted_for(tag, stats, condition_resolved=False, value_conv_modeled=False):
+def omitted_for(tag, stats, condition_resolved=False, value_conv_modeled=False,
+                print_conv_refused=False):
     """Flag the semantics ExifTool applies that this schema does not reproduce.
 
     `condition_resolved` is set by `compile_variant_group`'s call through
@@ -487,11 +503,15 @@ def omitted_for(tag, stats, condition_resolved=False, value_conv_modeled=False):
         if tag.get(key) is not None:
             flags.append(member)
             stats[f"omitted_{member}"] += 1
+    if print_conv_refused:
+        # `conv_for` already counts this exact event as `conv_dropped`; adding
+        # another scalar would let the coverage report give one fact two names.
+        flags.append("print_conv")
     if not flags:
         return "Omitted::NONE"
     return "Omitted { " + ", ".join(
         f"{m}: {'true' if m in flags else 'false'}"
-        for m in ("value_conv", "raw_conv", "condition", "hook", "subdirectory")
+        for m in ("value_conv", "raw_conv", "condition", "hook", "subdirectory", "print_conv")
     ) + " }"
 
 
@@ -664,7 +684,7 @@ def gen_field_literal(
     format_name = f if isinstance(f, str) else default_format
     input_domain = value_domain(format_name, count)
     vc, value_conv_modeled = value_conv_for(tag, stats, input_domain, verified_exprs)
-    pc = conv_for(tag, stats, input_domain, verified_exprs)
+    pc, pc_refused = conv_for(tag, stats, input_domain, verified_exprs)
     if sub is not None:
         # A fractional key names a slice of the word at int(key); `Mask` is
         # what says which bits. The runtime decodes the ones that declare
@@ -680,7 +700,7 @@ def gen_field_literal(
     field_src = (
         f'Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
         f"format: {fmt_expr}, count: {count}, mask: {mask}, "
-        f"omitted: {omitted_for(tag, stats, condition_resolved, value_conv_modeled)}, "
+        f"omitted: {omitted_for(tag, stats, condition_resolved, value_conv_modeled, pc_refused)}, "
         f"value_conv: {vc}, print_conv: {pc}, "
         f"subdir: {subdir_src} }}"
     )
@@ -725,6 +745,7 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format,
     trial_stats["pc_directives_dropped"] = Counter()
     trial_stats["other_unregistered_bodies"] = Counter()
     trial_stats["value_conv_refused_expressions"] = Counter()
+    trial_stats["dropped_code_refs"] = Counter()
     alt_srcs = []
     local_var_sound_until = var_sound_until
     for v in variants:
@@ -778,7 +799,7 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format,
 # The two halves of that sentence are different failure modes, and only the
 # second one is visible in the emitted Rust:
 #
-# * A field carrying an explicit refusal flag is FINE. `Omitted`'s five flags
+# * A field carrying an explicit refusal flag is FINE. `Omitted`'s flags
 #   are the refusal; `DecodedField::emit` and the engine both withhold the
 #   field, loudly and countably. A table full of them passes Gate A -- it just
 #   reports less.
@@ -789,13 +810,9 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format,
 #   reads -- the `AGENTS.md` "a gap in a transcribed table is not evidence the
 #   tag does not exist" trap, promoted from a documentation hazard to a
 #   runtime one.
-# * A CONVERSION the generator dropped is worse than either, and is why this
-#   gate counts `expr_unsupported`/`conv_dropped`/`enum_*_partial` too. Those
-#   fields ARE emitted, with `PrintConv::None`, so the engine reports the raw
-#   number where ExifTool prints a string. That is not a missing tag, it is a
-#   plausible wrong VALUE under a real ExifTool tag name -- precisely what
-#   Gate B would catch on the corpus, and what Gate A can refuse for free on
-#   the tables the corpus never covers.
+# * An unsupported CODE-ref PrintConv is also explicit now: it carries
+#   `Omitted.print_conv`, so it is withheld and countable rather than emitted
+#   as a raw value under ExifTool's tag name.
 #
 # Counters that are NOT disqualifying, and why:
 #   tag_unknown_skipped   ExifTool itself hides these behind -u; not reporting
@@ -814,17 +831,11 @@ GATE_A_DISQUALIFYING = (
     "tag_variant_skipped",
     "tag_variant_cond_unsupported",
     "tag_variant_field_unsupported",
-    # conversions dropped -- the field is emitted, but renders the wrong thing
+    # expressions currently emitted without a safe conversion
     "expr_unsupported",
-    "conv_dropped",
-    # Step 25 retired `enum_int_partial`/`enum_str_partial`: an enum carrying a
-    # BITMASK or a registered OTHER is now transcribed in full (PrintConv::
-    # Bitmask / PrintConv::PartialEnumInt), so it is no longer partial and no
-    # longer disqualifying. The three counters below are what is left of that
-    # population -- every one of them still returns `PrintConv::None`, i.e. the
-    # conversion IS dropped -- and they inherit the gate weight the two retired
-    # counters carried. Without them Gate A would read a Step 25 refusal as a
-    # clean table.
+    # Step 25's unsupported BITMASK/OTHER conversions are still emitted with
+    # `PrintConv::None`; unlike CODE refs, they have no Omitted.print_conv
+    # refusal flag, so they remain Gate A hazards.
     "other_unregistered",
     "other_str_domain_unsupported",
     "bitmask_unreadable",
@@ -898,6 +909,7 @@ def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs):
     stats["pc_directives_dropped"] = Counter()
     stats["other_unregistered_bodies"] = Counter()
     stats["value_conv_refused_expressions"] = Counter()
+    stats["dropped_code_refs"] = Counter()
 
     rows = []
     variant_rows = []
@@ -1192,6 +1204,9 @@ pub struct Omitted {
     /// scalar yields a plausible integer that is not what ExifTool reports
     /// for this tag.
     pub subdirectory: bool,
+    /// ExifTool declares a `PrintConv` that the generator cannot reproduce.
+    /// The field is withheld rather than emitted with a raw value.
+    pub print_conv: bool,
 }
 
 impl Omitted {
@@ -1201,12 +1216,18 @@ impl Omitted {
         condition: false,
         hook: false,
         subdirectory: false,
+        print_conv: false,
     };
 
     /// True when anything was dropped, i.e. the raw value stands alone.
     #[must_use]
     pub const fn any(self) -> bool {
-        self.value_conv || self.raw_conv || self.condition || self.hook || self.subdirectory
+        self.value_conv
+            || self.raw_conv
+            || self.condition
+            || self.hook
+            || self.subdirectory
+            || self.print_conv
     }
 }
 
@@ -1539,6 +1560,7 @@ REPORT = (
         ("string enums", "enum_str"),
         ("exprs translated (exact match)", "expr_translated"),
         ("exprs translated (grammar-compiled, Step 15)", "expr_compiled"),
+        ("named subs reached via a CODE ref", "expr_translated_code_ref"),
         ("ValueConv ExprIds (R2, oracle-approved)", "value_conv_compiled"),
         ("masked fields", "tag_masked"),
         ("bit fields (frac + Mask)", "tag_fractional_masked"),
@@ -1562,7 +1584,7 @@ REPORT = (
         ("ValueConv outside closed grammar", "value_conv_refused_shape"),
         ("ValueConv input domain/array", "value_conv_refused_input_domain"),
         ("ValueConv without matching oracle PASS", "value_conv_refused_oracle"),
-        ("other PrintConv", "conv_dropped"),
+        ("other PrintConv (field withheld: Omitted.print_conv)", "conv_dropped"),
         ("variant tags", "tag_variant_skipped"),
         ("  of which Condition outside the closed grammar", "tag_variant_cond_unsupported"),
         ("  of which a per-field reason (Unknown/format/mask/...)", "tag_variant_field_unsupported"),
@@ -1618,6 +1640,7 @@ def main():
     stats["pc_directives_dropped"] = Counter()
     stats["other_unregistered_bodies"] = Counter()
     stats["value_conv_refused_expressions"] = Counter()
+    stats["dropped_code_refs"] = Counter()
     chunks = []
     index_rows = []
 
@@ -1687,6 +1710,7 @@ def main():
     pcd = stats.pop("pc_directives_dropped")
     oub = stats.pop("other_unregistered_bodies")
     vc_refused = stats.pop("value_conv_refused_expressions")
+    dcr = stats.pop("dropped_code_refs")
     if args.value_conv_ledger_out:
         refused_reasons = {
             key.removeprefix("value_conv_refused_"): value
@@ -1742,6 +1766,11 @@ def main():
         print("\n  top unregistered OTHER closures (add to tools/exiftool-tables/others.py):")
         for body, n in oub.most_common(10):
             print(f"    {n:>4}  {body}")
+    if dcr:
+        print("\n  PrintConv CODE refs refused (field withheld, not emitted raw):")
+        for d, n in dcr.most_common():
+            flat = re.sub(r"\s+", " ", d)
+            print(f"    {n:>4}  {flat if len(flat) <= 96 else flat[:93] + '...'}")
     if ue:
         print("\n  top unsupported expressions (translate these next):")
         for e, n in ue.most_common(10):
