@@ -62,12 +62,42 @@ FIELD_RE = re.compile(
     r'shift:\s*(?P<mask_shift>\d+),?\s*\}\s*,?\s*\)),\s*'
     r'omitted:\s*(?P<omitted>Omitted::NONE|Omitted\s*\{[^{}]*\}),\s*'
     r'print_conv:\s*(?P<pc>PrintConv::(?:None'
-    r'|Expr\(ExprId::\w+\)'
+    # Whitespace/trailing-comma tolerant, not just `Expr\(ExprId::\w+\)`:
+    # rustfmt wraps `Expr(ExprId::VeryLongGeneratedIdentifier)` onto its own
+    # line with a trailing comma once the identifier is long enough to blow
+    # the line-width limit -- invisible until Step 23 started compiling
+    # `_variants` alternatives whose `ExprId` names (built from the full
+    # normalized Perl expression, e.g.
+    # `ImageExifToolExifPrintExposureTimeVal6037F3`) are long enough to
+    # trigger it. A tag whose `pc` group fails to match here is silently
+    # invisible to every check below it, not merely misparsed, so this is a
+    # completeness bug, not a cosmetic one.
+    r'|Expr\(\s*ExprId::\w+\s*,?\s*\)'
     r'|IntEnum\(&\[.*?\]\)'
     r'|StrEnum\(&\[.*?\]\)))',
     re.S,
 )
 FIELD_COUNT_RE = re.compile(r'Field\s*\{\s*index:')
+# Step 23: a table's `variants: &[VariantGroup { index: N, sub: S,
+# alternatives: &[(Cond, Field), ...] }, ...]` holds `Field` literals too --
+# ExifTool's `_variants` alternatives, several of which share one `index`/
+# `sub` with each other. Scanning `Field {` blindly across a whole table's
+# byte range (as this file did before Step 23) pulls those in as if they
+# were `fields:` entries and collides them under one `(module, table, key)`
+# dict key, silently discarding all but the last alternative -- caught by
+# `parse_rust`'s own "every Field in the file must have been parsed" check
+# (a real regression during Step 23's development: 6895 `Field {` in the
+# file, only 6769 survived the dict merge). `FIELDS_MARKER_RE`/
+# `VARIANTS_MARKER_RE` locate each array's own `&[...]` span so the two
+# populations are scanned, and keyed, separately.
+FIELDS_MARKER_RE = re.compile(r"fields:\s*&\[")
+VARIANTS_MARKER_RE = re.compile(r"variants:\s*&\[")
+VARIANT_GROUP_RE = re.compile(
+    r"VariantGroup\s*\{\s*"
+    r"index:\s*(?P<index>-?\d+),\s*"
+    r"sub:\s*(?P<sub>None|Some\(\d+\)),\s*"
+    r"alternatives:\s*&\["
+)
 VERSION_RE = re.compile(r'pub const EXIFTOOL_VERSION: &str = "([^"]+)";')
 # The `,?` before the closing paren matters: rustfmt wraps long tuples onto
 # multiple lines and leaves a trailing comma before `)`, and a pattern that
@@ -76,18 +106,50 @@ INT_PAIR_RE = re.compile(r'\(\s*(-?\d+),\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
 STR_PAIR_RE = re.compile(r'\(\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
 
 
+def _bracket_span(src, open_bracket):
+    """(start, end) of the text strictly between the `[` at `open_bracket`
+    and its true matching `]`, honoring string literals and escapes so a `]`
+    inside a Rust string literal (an enum description, a tag name) does not
+    terminate the span early. Shared by `_enum_body` (which additionally
+    counts top-level tuples) and `parse_rust`'s `fields: &[...]` /
+    `variants: &[...]` / `alternatives: &[...]` span-finding.
+    """
+    i = open_bracket + 1
+    depth, in_str = 1, False
+    while i < len(src):
+        c = src[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                return open_bracket + 1, i
+        i += 1
+    raise SystemExit("unterminated `[...]` in generated file")
+
+
 def _enum_body(src, open_bracket):
     """The text between `[` at open_bracket and its true matching `]`.
 
     Also returns the number of top-level `(..)` tuples inside it. A regex
     cannot do this job: enum descriptions may contain `])`, which truncated
     the lazy `.*?\\]\\)` capture and silently dropped the rest of that enum
-    from verification. This scan honors string literals and escapes.
+    from verification. This scan honors string literals and escapes, via
+    `_bracket_span` for the bracket-matching part.
     """
-    i = open_bracket + 1
-    depth, paren_depth, tuples, in_str = 1, 0, 0, False
-    while i < len(src):
-        c = src[i]
+    start, end = _bracket_span(src, open_bracket)
+    body = src[start:end]
+    paren_depth, tuples, in_str, i = 0, 0, False, 0
+    while i < len(body):
+        c = body[i]
         if in_str:
             if c == "\\":
                 i += 2
@@ -102,14 +164,8 @@ def _enum_body(src, open_bracket):
             paren_depth += 1
         elif c == ")":
             paren_depth -= 1
-        elif c == "[":
-            depth += 1
-        elif c == "]":
-            depth -= 1
-            if depth == 0:
-                return src[open_bracket + 1:i], tuples
         i += 1
-    raise SystemExit("unterminated enum body in generated file")
+    return body, tuples
 
 
 def unescape(s):
@@ -119,12 +175,66 @@ def unescape(s):
              .replace('\x00', '\\'))
 
 
+def _parse_one_field(src, f, k, fields, enums, masks, hooks, subdirs):
+    """Populate `fields`/`enums`/`masks`/`hooks`/`subdirs` from one `FIELD_RE`
+    match `f`, under dict key `k`. Shared by the plain-`fields:` scan and the
+    `variants:` scan below -- a `Field {...}` literal means the same thing in
+    both places, only what `k` looks like differs (see `parse_rust`)."""
+    fields[k] = unescape(f.group("name"))
+
+    bits = f.group("mask_bits")
+    if bits is not None:
+        masks[k] = (int(bits, 0), int(f.group("mask_shift")))
+
+    omitted = f.group("omitted")
+    if "hook: true" in omitted:
+        hooks.add(k)
+    if "subdirectory: true" in omitted:
+        subdirs.add(k)
+
+    pc = f.group("pc")
+    # Rescan the enum body from the source itself rather than
+    # trusting the regex capture -- see _enum_body for why.
+    for marker, pair_re, int_keys in (
+        ("PrintConv::IntEnum(&[", INT_PAIR_RE, True),
+        ("PrintConv::StrEnum(&[", STR_PAIR_RE, False),
+    ):
+        if not pc.startswith(marker):
+            continue
+        body, expected_pairs = _enum_body(src, f.start("pc") + len(marker) - 1)
+        pairs = pair_re.findall(body)
+        # Exact per-enum accounting, the same discipline the field
+        # count gets below: a pair the pattern cannot read must fail
+        # the run, not silently shrink the verified surface.
+        if len(pairs) != expected_pairs:
+            raise SystemExit(
+                f"enum for {k}: parsed {len(pairs)} of "
+                f"{expected_pairs} entries -- the verifier's pair "
+                "pattern is out of date; fix it before trusting a PASS"
+            )
+        for kk, vv in pairs:
+            if int_keys:
+                enums[k][kk] = unescape(vv)
+            else:
+                enums[k][unescape(kk)] = unescape(vv)
+        break
+
+
 def parse_rust(path):
-    """-> (fields, enums, masks, hooks, subdirs, sound_until)
+    """-> (fields, enums, masks, hooks, subdirs, sound_until, variant_keys)
 
     fields{k->name}, enums{k->{key:val}}, masks{k->(bits,shift)},
     hooks{k}, subdirs{k} (sets of field keys with that Omitted flag set),
     sound_until{(mod,tbl)->int|None} (the table's offsets_sound_until).
+
+    `fields`/`enums`/`masks`/`hooks`/`subdirs` hold BOTH plain `fields:`
+    entries (keyed `(mod, tbl, "22")`, exactly as before Step 23) and
+    `variants:` alternatives (keyed `(mod, tbl, "22#0")`, `(mod, tbl,
+    "22#1")`, ... -- 0-based array position, matching `oracle.pl`'s own
+    `"$k#$i"` key for a `_variants` alternative). The two key spaces cannot
+    collide: a plain key is never built with `#` in it. `variant_keys` is the
+    set of the latter, so `main()` can report them as their own column
+    without a second, parallel set of dicts to keep in sync.
     """
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
@@ -132,7 +242,7 @@ def parse_rust(path):
     fields, enums, masks = {}, defaultdict(dict), {}
     hooks, subdirs = set(), set()
     sound_until = {}
-    expected = len(FIELD_COUNT_RE.findall(src))
+    variant_keys = set()
     bounds = [(m.start(), m.group("module"), m.group("table"), m.group("sound_until"))
               for m in TABLE_RE.finditer(src)]
     for start, mod, tbl, su in bounds:
@@ -140,65 +250,68 @@ def parse_rust(path):
     bounds = [(start, mod, tbl) for start, mod, tbl, _su in bounds]
     bounds.append((len(src), None, None))
 
+    expected_plain = 0
+    expected_variant = 0
     for i in range(len(bounds) - 1):
         start, mod, tbl = bounds[i]
         end = bounds[i + 1][0]
-        for f in FIELD_RE.finditer(src, start, end):
-            # Sub-indexed bit-fields share a byte offset; the oracle keys them
-            # by ExifTool's original "12.1" string, so rebuild that form.
-            sub = f.group("sub")
-            idx = f.group("index")
-            key = idx if sub == "None" else f"{idx}.{sub[5:-1]}"
-            k = (mod, tbl, key)
-            fields[k] = unescape(f.group("name"))
 
-            bits = f.group("mask_bits")
-            if bits is not None:
-                masks[k] = (int(bits, 0), int(f.group("mask_shift")))
+        # `fields: &[...]` -- exactly the pre-Step-23 population, now scoped
+        # to its own array span so a `variants:` array later in the same
+        # table's static literal can never contribute a `Field {...}` to
+        # this scan (see FIELDS_MARKER_RE's module-level doc comment for the
+        # collision this fixes).
+        fm = FIELDS_MARKER_RE.search(src, start, end)
+        if fm:
+            f_start, f_end = _bracket_span(src, fm.end() - 1)
+            expected_plain += len(FIELD_COUNT_RE.findall(src, f_start, f_end))
+            for f in FIELD_RE.finditer(src, f_start, f_end):
+                sub = f.group("sub")
+                idx = f.group("index")
+                # Sub-indexed bit-fields share a byte offset; the oracle keys
+                # them by ExifTool's original "12.1" string, so rebuild that
+                # form.
+                key = idx if sub == "None" else f"{idx}.{sub[5:-1]}"
+                _parse_one_field(src, f, (mod, tbl, key), fields, enums, masks, hooks, subdirs)
 
-            omitted = f.group("omitted")
-            if "hook: true" in omitted:
-                hooks.add(k)
-            if "subdirectory: true" in omitted:
-                subdirs.add(k)
+        # `variants: &[VariantGroup { index, sub, alternatives: &[(Cond,
+        # Field), ...] }, ...]` -- each `VariantGroup`'s own `alternatives`
+        # span is scanned independently so the 0-based position within IT
+        # (not within the table as a whole) becomes the `#i` suffix, exactly
+        # matching the array position `oracle.pl` numbers its `_variants`
+        # alternatives by.
+        vm = VARIANTS_MARKER_RE.search(src, start, end)
+        if vm:
+            v_start, v_end = _bracket_span(src, vm.end() - 1)
+            for gm in VARIANT_GROUP_RE.finditer(src, v_start, v_end):
+                sub = gm.group("sub")
+                idx = gm.group("index")
+                base_key = idx if sub == "None" else f"{idx}.{sub[5:-1]}"
+                a_start, a_end = _bracket_span(src, gm.end() - 1)
+                expected_variant += len(FIELD_COUNT_RE.findall(src, a_start, a_end))
+                for pos, f in enumerate(FIELD_RE.finditer(src, a_start, a_end)):
+                    k = (mod, tbl, f"{base_key}#{pos}")
+                    variant_keys.add(k)
+                    _parse_one_field(src, f, k, fields, enums, masks, hooks, subdirs)
 
-            pc = f.group("pc")
-            # Rescan the enum body from the source itself rather than
-            # trusting the regex capture -- see _enum_body for why.
-            for marker, pair_re, int_keys in (
-                ("PrintConv::IntEnum(&[", INT_PAIR_RE, True),
-                ("PrintConv::StrEnum(&[", STR_PAIR_RE, False),
-            ):
-                if not pc.startswith(marker):
-                    continue
-                body, expected_pairs = _enum_body(
-                    src, f.start("pc") + len(marker) - 1
-                )
-                pairs = pair_re.findall(body)
-                # Exact per-enum accounting, the same discipline the field
-                # count gets below: a pair the pattern cannot read must fail
-                # the run, not silently shrink the verified surface.
-                if len(pairs) != expected_pairs:
-                    raise SystemExit(
-                        f"enum for {k}: parsed {len(pairs)} of "
-                        f"{expected_pairs} entries -- the verifier's pair "
-                        "pattern is out of date; fix it before trusting a PASS"
-                    )
-                for kk, vv in pairs:
-                    if int_keys:
-                        enums[k][kk] = unescape(vv)
-                    else:
-                        enums[k][unescape(kk)] = unescape(vv)
-                break
-
-    # Every Field in the file must have been parsed. Without this, a formatting
-    # change that defeats the pattern degrades into a silent partial check.
-    if len(fields) != expected:
+    # Every Field in the file must have been parsed -- separately for each
+    # population, so a formatting change that defeats one pattern (say,
+    # `variants:`'s nested tuples) cannot hide behind the other population's
+    # correct count and still read as a clean PASS.
+    got_plain = len(fields) - len(variant_keys)
+    if got_plain != expected_plain:
         raise SystemExit(
-            f"parsed {len(fields)} fields but the file contains {expected} "
-            "-- the verifier's pattern is out of date; fix it before trusting a PASS"
+            f"parsed {got_plain} plain fields but `fields:` arrays contain "
+            f"{expected_plain} -- the verifier's pattern is out of date; fix "
+            "it before trusting a PASS"
         )
-    return fields, enums, masks, hooks, subdirs, sound_until
+    if len(variant_keys) != expected_variant:
+        raise SystemExit(
+            f"parsed {len(variant_keys)} variant alternatives but "
+            f"`variants:` arrays contain {expected_variant} -- the "
+            "verifier's pattern is out of date; fix it before trusting a PASS"
+        )
+    return fields, enums, masks, hooks, subdirs, sound_until, variant_keys
 
 
 def load_oracle(lib, oracle_pl):
@@ -314,9 +427,9 @@ def main():
 
     version = check_version(args.generated_rs, args.exiftool_lib)
     print(f"ExifTool {version}")
-    gen_fields, gen_enums, gen_masks, gen_hooks, gen_subdirs, gen_sound_until = parse_rust(
-        args.generated_rs
-    )
+    (
+        gen_fields, gen_enums, gen_masks, gen_hooks, gen_subdirs, gen_sound_until, gen_variant_keys,
+    ) = parse_rust(args.generated_rs)
     or_names, or_enums, or_masks, or_hooks, or_subdirs, or_varfmts = load_oracle(
         args.exiftool_lib, args.oracle
     )
@@ -325,49 +438,95 @@ def main():
         sys.exit("parsed 0 fields from generated Rust -- verifier is broken, "
                  "not the generator; fix the parser before trusting a PASS")
 
+    # Step 23: every check below runs once over the WHOLE `gen_fields`/
+    # `gen_enums`/`gen_masks` population (plain `fields:` entries and
+    # `variants:` alternatives together -- `gen_variant_keys` says which is
+    # which), but tallies two sets of counters so the report gains a
+    # separate "variant" column instead of quietly folding `_variants`
+    # alternatives into the pre-Step-23 numbers. A `_variants` alternative
+    # is checked exactly like a plain field: same name/enum/mask truth
+    # source (`oracle.pl`, keyed `"idx#i"` for these -- see this file's
+    # `VARIANT_GROUP_RE` doc comment), same match/mismatch/orphan meaning.
     name_ok = name_bad = orphan = 0
     enum_ok = enum_bad = 0
     mask_ok = mask_bad = 0
+    variant_name_ok = variant_name_bad = variant_orphan = 0
+    variant_enum_ok = variant_enum_bad = 0
+    variant_mask_ok = variant_mask_bad = 0
     bad_examples, orphan_examples, enum_examples = [], [], []
     mask_examples = []
+    variant_bad_examples, variant_orphan_examples, variant_enum_examples = [], [], []
+    variant_mask_examples = []
 
     for k, name in gen_fields.items():
+        is_variant = k in gen_variant_keys
         truth = or_names.get(k)
         if truth is None:
-            orphan += 1
-            if len(orphan_examples) < args.show:
-                orphan_examples.append(k)
+            if is_variant:
+                variant_orphan += 1
+                if len(variant_orphan_examples) < args.show:
+                    variant_orphan_examples.append(k)
+            else:
+                orphan += 1
+                if len(orphan_examples) < args.show:
+                    orphan_examples.append(k)
             continue
         if truth == name:
-            name_ok += 1
+            if is_variant:
+                variant_name_ok += 1
+            else:
+                name_ok += 1
         else:
-            name_bad += 1
-            if len(bad_examples) < args.show:
-                bad_examples.append((k, name, truth))
+            if is_variant:
+                variant_name_bad += 1
+                if len(variant_bad_examples) < args.show:
+                    variant_bad_examples.append((k, name, truth))
+            else:
+                name_bad += 1
+                if len(bad_examples) < args.show:
+                    bad_examples.append((k, name, truth))
 
     for k, m in gen_enums.items():
+        is_variant = k in gen_variant_keys
         truth = {norm_key(a): b for a, b in or_enums.get(k, {}).items()}
         for kk, vv in m.items():
             t = truth.get(norm_key(kk))
             if t == vv:
-                enum_ok += 1
+                if is_variant:
+                    variant_enum_ok += 1
+                else:
+                    enum_ok += 1
             else:
-                enum_bad += 1
-                if len(enum_examples) < args.show:
-                    enum_examples.append((k, kk, vv, t))
+                if is_variant:
+                    variant_enum_bad += 1
+                    if len(variant_enum_examples) < args.show:
+                        variant_enum_examples.append((k, kk, vv, t))
+                else:
+                    enum_bad += 1
+                    if len(enum_examples) < args.show:
+                        enum_examples.append((k, kk, vv, t))
 
     # Masks decide what a field's value IS, not merely how it prints, so a
     # wrong one is a wrong number under a real tag name. Checked in both
     # directions: a mask the generator invented and a mask it silently dropped
     # are equally wrong, and only comparing the union catches the second.
     for k in set(gen_masks) | {k for k in or_masks if k in gen_fields}:
+        is_variant = k in gen_variant_keys
         got, want = gen_masks.get(k), or_masks.get(k)
         if got == want:
-            mask_ok += 1
+            if is_variant:
+                variant_mask_ok += 1
+            else:
+                mask_ok += 1
         else:
-            mask_bad += 1
-            if len(mask_examples) < args.show:
-                mask_examples.append((k, got, want))
+            if is_variant:
+                variant_mask_bad += 1
+                if len(variant_mask_examples) < args.show:
+                    variant_mask_examples.append((k, got, want))
+            else:
+                mask_bad += 1
+                if len(mask_examples) < args.show:
+                    mask_examples.append((k, got, want))
 
     # Hook and SubDirectory are presence flags, not values: `codegen.py`'s
     # `omitted_for` sets them exactly when ExifTool's own hash carries the
@@ -446,6 +605,21 @@ def main():
     print(f"masked fields    {mask_ok + mask_bad}")
     print(f"  match          {mask_ok}")
     print(f"  MISMATCH       {mask_bad}")
+    # Step 23 variant columns: `_variants` alternatives (`VariantGroup` in
+    # the generated Rust), checked the same way as the plain-field columns
+    # above but reported separately so a `_variants`-specific regression
+    # cannot hide inside the (much larger) plain-field totals.
+    print(f"variant tags in schema     {len(gen_variant_keys)}")
+    print(f"variant names checked      {variant_name_ok + variant_name_bad}")
+    print(f"  match                    {variant_name_ok}")
+    print(f"  MISMATCH                 {variant_name_bad}")
+    print(f"  not in oracle            {variant_orphan}")
+    print(f"variant enum entries       {variant_enum_ok + variant_enum_bad}")
+    print(f"  match                    {variant_enum_ok}")
+    print(f"  MISMATCH                 {variant_enum_bad}")
+    print(f"variant masked fields      {variant_mask_ok + variant_mask_bad}")
+    print(f"  match                    {variant_mask_ok}")
+    print(f"  MISMATCH                 {variant_mask_bad}")
     print(f"hook flags       {hook_ok + hook_bad}")
     print(f"  match          {hook_ok}")
     print(f"  MISMATCH       {hook_bad}")
@@ -464,6 +638,14 @@ def main():
         print(f"  enum  {k} key {kk}: generated {got!r} != exiftool {want!r}")
     for k, got, want in mask_examples:
         print(f"  mask  {k}: generated {got!r} != exiftool {want!r}")
+    for k, got, want in variant_bad_examples:
+        print(f"  variant name  {k}: generated {got!r} != exiftool {want!r}")
+    for k in variant_orphan_examples:
+        print(f"  variant orphan {k}")
+    for k, kk, got, want in variant_enum_examples:
+        print(f"  variant enum  {k} key {kk}: generated {got!r} != exiftool {want!r}")
+    for k, got, want in variant_mask_examples:
+        print(f"  variant mask  {k}: generated {got!r} != exiftool {want!r}")
     for k, got, want in hook_examples:
         print(f"  hook  {k}: generated {got!r} != exiftool {want!r}")
     for k, got, want in subdir_examples:
@@ -473,6 +655,7 @@ def main():
 
     failed = (
         name_bad + enum_bad + orphan + mask_bad
+        + variant_name_bad + variant_enum_bad + variant_orphan + variant_mask_bad
         + hook_bad + subdir_bad + sound_bad
     )
     print("\nRESULT:", "PASS" if failed == 0 else f"FAIL ({failed} discrepancies)")

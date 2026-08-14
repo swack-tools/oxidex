@@ -25,6 +25,7 @@ import json
 import re
 from collections import Counter
 
+import conds
 import exprs
 
 # ExifTool format names -> (Rust Fmt variant, byte width).  Sized formats
@@ -234,8 +235,19 @@ def mask_for(tag, stats):
     return f"Some(Mask {{ bits: {mask:#x}, shift: {shift} }})"
 
 
-def omitted_for(tag, stats):
+def omitted_for(tag, stats, condition_resolved=False):
     """Flag the semantics ExifTool applies that this schema does not reproduce.
+
+    `condition_resolved` is set by `compile_variant_group`'s call through
+    `gen_field_literal`: a `_variants` alternative's `Condition` is exactly
+    what picked this `Field` in the first place (`conds.py` compiled it, and
+    `Cond::eval`/`first_match` at runtime apply it before this `Field` is ever
+    reached) -- by the time a caller holds the winning alternative, there is
+    no unresolved `Condition` left to flag `omitted.condition` over. Setting
+    it anyway (as the single-entry path correctly still does for its own,
+    uncompiled, `Condition`) would make `DecodedField::emit` refuse a field
+    Step 23 just finished proving it can resolve, silently erasing the whole
+    point of compiling it.
 
     `ValueConv`, `RawConv` and `Condition` are Perl, so the mechanical pass
     cannot run them. It used to drop them without a counter and without a slot
@@ -267,6 +279,8 @@ def omitted_for(tag, stats):
         ("Hook", "hook"),
         ("SubDirectory", "subdirectory"),
     ):
+        if member == "condition" and condition_resolved:
+            continue
         if tag.get(key) is not None:
             flags.append(member)
             stats[f"omitted_{member}"] += 1
@@ -276,6 +290,194 @@ def omitted_for(tag, stats):
         f"{m}: {'true' if m in flags else 'false'}"
         for m in ("value_conv", "raw_conv", "condition", "hook", "subdirectory")
     ) + " }"
+
+
+def _merge_stats(dst, src):
+    """`dst.update(src)` done by hand: `Counter.update` adds values via `+=`,
+    which breaks for the two keys (`unsupported_exprs`,
+    `pc_directives_dropped`) whose value is itself a nested `Counter` rather
+    than an int -- `0 + Counter(...)` has no `__radd__`. Nested Counters
+    merge key-wise; everything else adds as a plain int count.
+    """
+    for key, value in src.items():
+        if isinstance(value, Counter):
+            dst.setdefault(key, Counter())
+            dst[key].update(value)
+        else:
+            dst[key] += value
+
+
+def gen_field_literal(
+    tag, idx, sub, stats, var_sound_until, record_offset_hazard=True, condition_resolved=False
+):
+    """Build one `Field {...}` Rust literal for `tag` at offset `idx`/`sub`.
+
+    Shared by the plain (one-entry) field path and `compile_variant_group`'s
+    per-alternative path below -- the two must apply identical Format/Mask/
+    PrintConv/Omitted rules, or a variant alternative's semantics would
+    silently diverge from a non-variant tag's at the same offset for no
+    ExifTool-side reason.
+
+    Always returns a `(field_src, updated_var_sound_until)` pair -- `field_src`
+    is `None` on refusal (the various `stats` counters record why, same keys
+    the single-field path has always used), but `updated_var_sound_until`
+    must still propagate even then: a refused `var_*` field is exactly what
+    *establishes* the hazard boundary in the first place (see the `var_`
+    branch below), so a caller that discarded the pair on refusal would lose
+    the one piece of state a var_* refusal exists to produce -- silently
+    reverting every later field in the table to the unsound static-offset
+    formula with no `offsets_sound_until` guard at all. `record_offset_hazard`
+    is false for a variant alternative: the group compiler checks the
+    *group's* offset against the hazard boundary once, after every
+    alternative has run (see `compile_variant_group`), rather than once per
+    alternative competing for the same offset -- `tag_offset_unsound` counts
+    affected offsets, and a variant group is one offset no matter how many
+    alternatives it lists.
+    """
+    name = tag.get("Name")
+    if not isinstance(name, str) or not name:
+        stats["tag_no_name"] += 1
+        return None, var_sound_until
+    if tag.get("Unknown"):
+        stats["tag_unknown_skipped"] += 1
+        return None, var_sound_until
+
+    # A per-field Format overrides the table FORMAT. `count` is the number
+    # of repetitions of that format (ExifTool's `format[N]` array syntax);
+    # 1 for every scalar field.
+    f = tag.get("Format")
+    fmt_expr = "None"
+    count = 1
+    if isinstance(f, str):
+        m = SIZED_RE.match(f)
+        if m:
+            base, n = m.group(1), int(m.group(2))
+            if base == "string":
+                fmt_expr = f"Some(Fmt::Str({n}))"
+            elif base == "undef":
+                fmt_expr = f"Some(Fmt::Undef({n}))"
+            elif base in SCALAR_FORMATS:
+                # An array of a scalar format, e.g. `int16u[4]`: n repeats
+                # of the element format, not n bytes.
+                fmt_expr = f"Some(Fmt::{SCALAR_FORMATS[base][0]})"
+                count = n
+            else:
+                stats["tag_fmt_unsupported"] += 1
+                return None, var_sound_until
+        elif f in SCALAR_FORMATS:
+            fmt_expr = f"Some(Fmt::{SCALAR_FORMATS[f][0]})"
+        else:
+            # Variable-length or expression-sized format -- not mechanical.
+            if f.startswith("var_"):
+                stats["tag_var_format"] += 1
+                if var_sound_until is None:
+                    # Only the first one anchors the table's soundness
+                    # boundary; a second var_* field past it is already
+                    # inside the region the first one made unsound.
+                    var_sound_until = idx
+            stats["tag_fmt_unsupported"] += 1
+            return None, var_sound_until
+
+    mask = mask_for(tag, stats)
+    if mask is None:
+        # A Mask this schema cannot express means the field's value is not
+        # the word at that offset. Omit it rather than report the word.
+        return None, var_sound_until
+
+    pc = conv_for(tag, stats)
+    if sub is not None:
+        # A fractional key names a slice of the word at int(key); `Mask` is
+        # what says which bits. The runtime decodes the ones that declare
+        # one and refuses the rest, so the split is the honest measure of
+        # how much of ExifTool's bit-field notation this schema reaches.
+        # Both halves are emitted either way -- this counts, it does not
+        # gate.
+        stats["tag_fractional_masked" if mask != "None" else "tag_fractional_bare"] += 1
+    if record_offset_hazard and var_sound_until is not None and idx > var_sound_until:
+        stats["tag_offset_unsound"] += 1
+    sub_s = "None" if sub is None else f"Some({sub})"
+    field_src = (
+        f'Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
+        f"format: {fmt_expr}, count: {count}, mask: {mask}, "
+        f"omitted: {omitted_for(tag, stats, condition_resolved)}, print_conv: {pc} }}"
+    )
+    return field_src, var_sound_until
+
+
+def compile_variant_group(tag, idx, sub, stats, var_sound_until):
+    """Compile a `_variants` array (`dump_tables.pl`'s arrayref-of-alternatives
+    shape) into a `VariantGroup`, per Step 23.
+
+    All-or-nothing, same doctrine as `exprs.py`'s TRANSLATIONS lookup: this
+    refuses the WHOLE group -- not just the alternative that failed -- the
+    moment any alternative's `Condition` falls outside `conds.py`'s closed
+    grammar, or any alternative itself hits one of the ordinary per-field
+    refusal reasons (`Unknown`, no `Name`, an unsupported `Format`/`Mask`).
+    Partially compiling an array (keeping the alternatives that work, silently
+    dropping the rest) would change *first-match-wins* order: dropping the
+    alternative that would have won for some models lets a later, wrong,
+    alternative win instead under that model, which is a wrong value under a
+    real tag name -- exactly what `AGENTS.md` forbids. See `conds.py`'s
+    module docstring for the same argument in more detail.
+
+    Trial-compiles into a throwaway `Counter` (`mask_for`/`conv_for`/
+    `omitted_for` all write into whatever `stats` they are given) and only
+    merges it into the real `stats` -- plus increments `tag_variant_emitted`
+    -- once every alternative has compiled; a refused group instead
+    increments exactly one of the `tag_variant_*_unsupported` counters once
+    for the whole array, leaving no partial-credit residue (an `enum_int` or
+    `expr_compiled` bump for an alternative that never actually shipped)
+    in the coverage report.
+
+    Returns `(group_src, updated_var_sound_until)` or `None`.
+    """
+    variants = tag["_variants"]
+    trial_stats = Counter()
+    # `conv_for` writes into these two nested Counters (diagnostic listings,
+    # not part of the coverage arithmetic REPORT checks), so the trial copy
+    # needs its own, or the first write inside a refused-and-discarded trial
+    # would crash on a bare `int` where a `Counter` was expected.
+    trial_stats["unsupported_exprs"] = Counter()
+    trial_stats["pc_directives_dropped"] = Counter()
+    alt_srcs = []
+    local_var_sound_until = var_sound_until
+    for v in variants:
+        if not isinstance(v, dict) or "_variants" in v:
+            # Nested variants: never observed in the pinned corpus's
+            # binary-table population -- refuse rather than guess at a shape
+            # nothing exercises or verifies.
+            stats["tag_variant_cond_unsupported"] += 1
+            return None
+        cond_src = conds.compile_cond(v.get("Condition"))
+        if cond_src is None:
+            stats["tag_variant_cond_unsupported"] += 1
+            return None
+        field_src, local_var_sound_until = gen_field_literal(
+            v,
+            idx,
+            sub,
+            trial_stats,
+            local_var_sound_until,
+            record_offset_hazard=False,
+            condition_resolved=True,
+        )
+        if field_src is None:
+            stats["tag_variant_field_unsupported"] += 1
+            return None
+        alt_srcs.append(f"({cond_src}, {field_src})")
+
+    _merge_stats(stats, trial_stats)
+    stats["tag_variant_emitted"] += 1
+    if local_var_sound_until is not None and idx > local_var_sound_until:
+        # One offset, counted once, regardless of how many alternatives
+        # compete for it -- see gen_field_literal's `record_offset_hazard`
+        # doc.
+        stats["tag_offset_unsound"] += 1
+
+    sub_s = "None" if sub is None else f"Some({sub})"
+    alts_body = ", ".join(alt_srcs)
+    group_src = f"VariantGroup {{ index: {idx}, sub: {sub_s}, alternatives: &[{alts_body}] }}"
+    return group_src, local_var_sound_until
 
 
 def gen_table(mod_name, tbl_name, tbl, stats):
@@ -306,6 +508,7 @@ def gen_table(mod_name, tbl_name, tbl, stats):
         first_entry = 0
 
     rows = []
+    variant_rows = []
     # ProcessBinaryData computes every field's byte offset as `int(index) *
     # increment` -- a static formula that assumes every preceding field is a
     # fixed width. A `var_*` Format (`var_string`, `var_int16u`, ...) breaks
@@ -325,81 +528,33 @@ def gen_table(mod_name, tbl_name, tbl, stats):
             stats["tag_bad_index"] += 1
             continue
         if "_variants" in tag:
-            # Model-dependent layout: needs Condition evaluation, which is a
-            # Perl expression. Out of scope for the mechanical pass by design.
-            stats["tag_variant_skipped"] += 1
-            continue
-        name = tag.get("Name")
-        if not isinstance(name, str) or not name:
-            stats["tag_no_name"] += 1
-            continue
-        if tag.get("Unknown"):
-            stats["tag_unknown_skipped"] += 1
-            continue
-
-        # A per-field Format overrides the table FORMAT. `count` is the number
-        # of repetitions of that format (ExifTool's `format[N]` array syntax);
-        # 1 for every scalar field.
-        f = tag.get("Format")
-        fmt_expr = "None"
-        count = 1
-        if isinstance(f, str):
-            m = SIZED_RE.match(f)
-            if m:
-                base, n = m.group(1), int(m.group(2))
-                if base == "string":
-                    fmt_expr = f"Some(Fmt::Str({n}))"
-                elif base == "undef":
-                    fmt_expr = f"Some(Fmt::Undef({n}))"
-                elif base in SCALAR_FORMATS:
-                    # An array of a scalar format, e.g. `int16u[4]`: n repeats
-                    # of the element format, not n bytes.
-                    fmt_expr = f"Some(Fmt::{SCALAR_FORMATS[base][0]})"
-                    count = n
-                else:
-                    stats["tag_fmt_unsupported"] += 1
-                    continue
-            elif f in SCALAR_FORMATS:
-                fmt_expr = f"Some(Fmt::{SCALAR_FORMATS[f][0]})"
-            else:
-                # Variable-length or expression-sized format -- not mechanical.
-                if f.startswith("var_"):
-                    stats["tag_var_format"] += 1
-                    if var_sound_until is None:
-                        # Only the first one anchors the table's soundness
-                        # boundary; a second var_* field past it is already
-                        # inside the region the first one made unsound.
-                        var_sound_until = idx
-                stats["tag_fmt_unsupported"] += 1
+            # Step 23: `dump_tables.pl`'s arrayref-of-alternatives shape,
+            # ExifTool's own representation of a model-dependent layout
+            # (Canon CameraInfo's 33 alternatives, Sony ExtraInfo3's
+            # NEX-vs-everything-else CameraOrientation). Compiled via the
+            # closed `Cond` grammar (`conds.py`) when every alternative's
+            # `Condition` and per-field shape allow it; refused (and counted
+            # by exactly one of the `tag_variant_*_unsupported` reasons)
+            # atomically otherwise -- see `compile_variant_group`.
+            built = compile_variant_group(tag, idx, sub, stats, var_sound_until)
+            if built is None:
+                stats["tag_variant_skipped"] += 1
                 continue
-
-        mask = mask_for(tag, stats)
-        if mask is None:
-            # A Mask this schema cannot express means the field's value is not
-            # the word at that offset. Omit it rather than report the word.
+            group_src, var_sound_until = built
+            if var_sound_until is not None and idx > var_sound_until:
+                var_sound_hit = True
+            variant_rows.append(f"    {group_src},")
             continue
 
-        pc = conv_for(tag, stats)
-        if sub is not None:
-            # A fractional key names a slice of the word at int(key); `Mask` is
-            # what says which bits. The runtime decodes the ones that declare
-            # one and refuses the rest, so the split is the honest measure of
-            # how much of ExifTool's bit-field notation this schema reaches.
-            # Both halves are emitted either way -- this counts, it does not
-            # gate.
-            stats["tag_fractional_masked" if mask != "None" else "tag_fractional_bare"] += 1
+        field_src, var_sound_until = gen_field_literal(tag, idx, sub, stats, var_sound_until)
+        if field_src is None:
+            continue
         if var_sound_until is not None and idx > var_sound_until:
             var_sound_hit = True
-            stats["tag_offset_unsound"] += 1
-        sub_s = "None" if sub is None else f"Some({sub})"
-        rows.append(
-            f'    Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
-            f"format: {fmt_expr}, count: {count}, mask: {mask}, "
-            f"omitted: {omitted_for(tag, stats)}, print_conv: {pc} }},"
-        )
+        rows.append(f"    {field_src},")
         stats["tag_emitted"] += 1
 
-    if not rows:
+    if not rows and not variant_rows:
         return None
 
     stats["table_emitted"] += 1
@@ -419,8 +574,13 @@ def gen_table(mod_name, tbl_name, tbl, stats):
         sound_until_expr = "None"
 
     body = "\n".join(rows)
+    variants_body = "\n".join(variant_rows)
+    variants_expr = (
+        "&[]" if not variant_rows else f"&[\n{variants_body}\n    ]"
+    )
     return f"""
-/// `Image::ExifTool::{mod_name}::{tbl_name}` -- {len(rows)} fields.
+/// `Image::ExifTool::{mod_name}::{tbl_name}` -- {len(rows)} fields,
+/// {len(variant_rows)} `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static {ident}: BinaryTable = BinaryTable {{
     module: "{mod_name}",
@@ -433,6 +593,7 @@ pub static {ident}: BinaryTable = BinaryTable {{
     fields: &[
 {body}
     ],
+    variants: {variants_expr},
 }};
 """
 
@@ -461,6 +622,16 @@ PRELUDE = '''//! ExifTool binary tag tables, generated from ExifTool's own Perl 
 // syntactically redundant once the surrounding expression is fixed.
 
 __VERSION_BLOCK__
+
+// `EffectSource` (`Cond::SetMember`) is imported unconditionally like its
+// sibling `Cond`/`CmpOp`/`VariantGroup` types even though this particular
+// generation run may not have compiled any `Condition` using the
+// assignment-as-condition idiom (see `src/exiftool_tables/cond.rs`) -- a
+// conditional `use` would depend on which conditions the pinned tree happens
+// to carry this release, which is exactly the kind of generator-output
+// nondeterminism `codegen.py`'s own module doc warns against elsewhere.
+#[allow(unused_imports)]
+use super::cond::{CmpOp, Cond, EffectSource, VariantGroup};
 
 /// A binary-table field format.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -619,6 +790,15 @@ pub struct BinaryTable {
     /// after it.
     pub offsets_sound_until: Option<i64>,
     pub fields: &'static [Field],
+    /// Step 23's `_variants` schema: offsets ExifTool's own table declares
+    /// as a Perl arrayref of model-dependent alternatives (`dump_tables.pl`'s
+    /// `_variants`), compiled to a [`crate::exiftool_tables::cond::Cond`]
+    /// per alternative. Disjoint from `fields` by construction -- an offset
+    /// with a compiled `_variants` group never also appears in `fields` --
+    /// so existing code walking `fields` alone sees exactly what it always
+    /// has. Resolve with
+    /// [`crate::exiftool_tables::decode_binary_table_variants`].
+    pub variants: &'static [VariantGroup],
 }
 
 impl BinaryTable {
@@ -737,6 +917,7 @@ REPORT = (
     ("transcribed", (
         ("tables emitted", "table_emitted"),
         ("tags emitted", "tag_emitted"),
+        ("variant tags compiled (Step 23)", "tag_variant_emitted"),
         ("int enums", "enum_int"),
         ("string enums", "enum_str"),
         ("exprs translated (exact match)", "expr_translated"),
@@ -760,6 +941,8 @@ REPORT = (
         ("exprs unsupported", "expr_unsupported"),
         ("other PrintConv", "conv_dropped"),
         ("variant tags", "tag_variant_skipped"),
+        ("  of which Condition outside the closed grammar", "tag_variant_cond_unsupported"),
+        ("  of which a per-field reason (Unknown/format/mask/...)", "tag_variant_field_unsupported"),
         ("Unknown tags", "tag_unknown_skipped"),
         ("unsupported format", "tag_fmt_unsupported"),
         ("  of which var_* (data-dep. width)", "tag_var_format"),

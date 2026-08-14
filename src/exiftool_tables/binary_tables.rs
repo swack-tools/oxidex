@@ -29,6 +29,16 @@
 /// transcription errors. Regenerate with `just regen-tables <version>`.
 pub const EXIFTOOL_VERSION: &str = "13.59";
 
+// `EffectSource` (`Cond::SetMember`) is imported unconditionally like its
+// sibling `Cond`/`CmpOp`/`VariantGroup` types even though this particular
+// generation run may not have compiled any `Condition` using the
+// assignment-as-condition idiom (see `src/exiftool_tables/cond.rs`) -- a
+// conditional `use` would depend on which conditions the pinned tree happens
+// to carry this release, which is exactly the kind of generator-output
+// nondeterminism `codegen.py`'s own module doc warns against elsewhere.
+#[allow(unused_imports)]
+use super::cond::{CmpOp, Cond, EffectSource, VariantGroup};
+
 /// A binary-table field format.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Fmt {
@@ -186,6 +196,15 @@ pub struct BinaryTable {
     /// after it.
     pub offsets_sound_until: Option<i64>,
     pub fields: &'static [Field],
+    /// Step 23's `_variants` schema: offsets ExifTool's own table declares
+    /// as a Perl arrayref of model-dependent alternatives (`dump_tables.pl`'s
+    /// `_variants`), compiled to a [`crate::exiftool_tables::cond::Cond`]
+    /// per alternative. Disjoint from `fields` by construction -- an offset
+    /// with a compiled `_variants` group never also appears in `fields` --
+    /// so existing code walking `fields` alone sees exactly what it always
+    /// has. Resolve with
+    /// [`crate::exiftool_tables::decode_binary_table_variants`].
+    pub variants: &'static [VariantGroup],
 }
 
 impl BinaryTable {
@@ -342,6 +361,10 @@ pub enum ExprId {
     Sprintf6fVal812570,
     /// `sprintf(\"%.8x\",$val)`
     Sprintf8xVal307B5B,
+    /// `sprintf(\"%d (%.1fV, %d%%)\",$val,$val*8.18/186,($val-152)*100/34)`
+    SprintfD1fVDValVal818186Val15210034BEDD54,
+    /// `sprintf(\"%d (%.1fV, %d%%)\",$val,$val*8.18/186,($val-155)*100/35)`
+    SprintfD1fVDValVal818186Val15510035C1F87F,
     /// `sprintf(\"%d (level %.1f)\", $val, $val/30)`
     SprintfDLevel1fValVal305690B0,
     /// `sprintf(\"%+d\",$val)`
@@ -560,6 +583,18 @@ impl ExprId {
             ExprId::Sprintf5fValCD9331 => Some(format!("{:.5}", val)),
             ExprId::Sprintf6fVal812570 => Some(format!("{:.6}", val)),
             ExprId::Sprintf8xVal307B5B => Some(format!("{:08x}", ((val) as i64 as u64))),
+            ExprId::SprintfD1fVDValVal818186Val15210034BEDD54 => Some(format!(
+                "{:} ({:.1}V, {:}%)",
+                ((val) as i64),
+                (((val) * (8.18_f64)) / (186.0_f64)),
+                (((((val) - (152.0_f64)) * (100.0_f64)) / (34.0_f64)) as i64)
+            )),
+            ExprId::SprintfD1fVDValVal818186Val15510035C1F87F => Some(format!(
+                "{:} ({:.1}V, {:}%)",
+                ((val) as i64),
+                (((val) * (8.18_f64)) / (186.0_f64)),
+                (((((val) - (155.0_f64)) * (100.0_f64)) / (35.0_f64)) as i64)
+            )),
             ExprId::SprintfDLevel1fValVal305690B0 => Some(format!(
                 "{:} (level {:.1})",
                 ((val) as i64),
@@ -870,7 +905,8 @@ impl ExprId {
     }
 }
 
-/// `Image::ExifTool::AIFF::Common` -- 4 fields.
+/// `Image::ExifTool::AIFF::Common` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static AIFF_COMMON: BinaryTable = BinaryTable {
     module: "AIFF",
@@ -937,9 +973,11 @@ pub static AIFF_COMMON: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::AIFF::FormatVers` -- 1 fields.
+/// `Image::ExifTool::AIFF::FormatVers` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static AIFF_FORMATVERS: BinaryTable = BinaryTable {
     module: "AIFF",
@@ -965,9 +1003,11 @@ pub static AIFF_FORMATVERS: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::APE::NewHeader` -- 7 fields.
+/// `Image::ExifTool::APE::NewHeader` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static APE_NEWHEADER: BinaryTable = BinaryTable {
     module: "APE",
@@ -1049,9 +1089,11 @@ pub static APE_NEWHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::APE::OldHeader` -- 6 fields.
+/// `Image::ExifTool::APE::OldHeader` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static APE_OLDHEADER: BinaryTable = BinaryTable {
     module: "APE",
@@ -1129,9 +1171,11 @@ pub static APE_OLDHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ASF::FileProperties` -- 4 fields.
+/// `Image::ExifTool::ASF::FileProperties` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ASF_FILEPROPERTIES: BinaryTable = BinaryTable {
     module: "ASF",
@@ -1183,9 +1227,11 @@ pub static ASF_FILEPROPERTIES: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ASF::StreamProperties` -- 2 fields.
+/// `Image::ExifTool::ASF::StreamProperties` -- 2 fields,
+/// 2 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ASF_STREAMPROPERTIES: BinaryTable = BinaryTable {
     module: "ASF",
@@ -1223,9 +1269,344 @@ pub static ASF_STREAMPROPERTIES: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 54,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberStrEq {
+                        member: "ASF_STREAM_TYPE",
+                        value: "Audio",
+                        negate: false,
+                    },
+                    Field {
+                        index: 54,
+                        sub: None,
+                        name: "AudioCodecID",
+                        format: Some(Fmt::Int16u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (1, "Microsoft PCM"),
+                            (2, "Microsoft ADPCM"),
+                            (3, "Microsoft IEEE float"),
+                            (4, "Compaq VSELP"),
+                            (5, "IBM CVSD"),
+                            (6, "Microsoft a-Law"),
+                            (7, "Microsoft u-Law"),
+                            (8, "Microsoft DTS"),
+                            (9, "DRM"),
+                            (10, "WMA 9 Speech"),
+                            (11, "Microsoft Windows Media RT Voice"),
+                            (16, "OKI-ADPCM"),
+                            (17, "Intel IMA/DVI-ADPCM"),
+                            (18, "Videologic Mediaspace ADPCM"),
+                            (19, "Sierra ADPCM"),
+                            (20, "Antex G.723 ADPCM"),
+                            (21, "DSP Solutions DIGISTD"),
+                            (22, "DSP Solutions DIGIFIX"),
+                            (23, "Dialoic OKI ADPCM"),
+                            (24, "Media Vision ADPCM"),
+                            (25, "HP CU"),
+                            (26, "HP Dynamic Voice"),
+                            (32, "Yamaha ADPCM"),
+                            (33, "SONARC Speech Compression"),
+                            (34, "DSP Group True Speech"),
+                            (35, "Echo Speech Corp."),
+                            (36, "Virtual Music Audiofile AF36"),
+                            (37, "Audio Processing Tech."),
+                            (38, "Virtual Music Audiofile AF10"),
+                            (39, "Aculab Prosody 1612"),
+                            (40, "Merging Tech. LRC"),
+                            (48, "Dolby AC2"),
+                            (49, "Microsoft GSM610"),
+                            (50, "MSN Audio"),
+                            (51, "Antex ADPCME"),
+                            (52, "Control Resources VQLPC"),
+                            (53, "DSP Solutions DIGIREAL"),
+                            (54, "DSP Solutions DIGIADPCM"),
+                            (55, "Control Resources CR10"),
+                            (56, "Natural MicroSystems VBX ADPCM"),
+                            (57, "Crystal Semiconductor IMA ADPCM"),
+                            (58, "Echo Speech ECHOSC3"),
+                            (59, "Rockwell ADPCM"),
+                            (60, "Rockwell DIGITALK"),
+                            (61, "Xebec Multimedia"),
+                            (64, "Antex G.721 ADPCM"),
+                            (65, "Antex G.728 CELP"),
+                            (66, "Microsoft MSG723"),
+                            (67, "IBM AVC ADPCM"),
+                            (69, "ITU-T G.726"),
+                            (80, "Microsoft MPEG"),
+                            (81, "RT23 or PAC"),
+                            (82, "InSoft RT24"),
+                            (83, "InSoft PAC"),
+                            (85, "MP3"),
+                            (89, "Cirrus"),
+                            (96, "Cirrus Logic"),
+                            (97, "ESS Tech. PCM"),
+                            (98, "Voxware Inc."),
+                            (99, "Canopus ATRAC"),
+                            (100, "APICOM G.726 ADPCM"),
+                            (101, "APICOM G.722 ADPCM"),
+                            (102, "Microsoft DSAT"),
+                            (103, "Microsoft DSAT DISPLAY"),
+                            (105, "Voxware Byte Aligned"),
+                            (112, "Voxware AC8"),
+                            (113, "Voxware AC10"),
+                            (114, "Voxware AC16"),
+                            (115, "Voxware AC20"),
+                            (116, "Voxware MetaVoice"),
+                            (117, "Voxware MetaSound"),
+                            (118, "Voxware RT29HW"),
+                            (119, "Voxware VR12"),
+                            (120, "Voxware VR18"),
+                            (121, "Voxware TQ40"),
+                            (122, "Voxware SC3"),
+                            (123, "Voxware SC3"),
+                            (128, "Soundsoft"),
+                            (129, "Voxware TQ60"),
+                            (130, "Microsoft MSRT24"),
+                            (131, "AT&T G.729A"),
+                            (132, "Motion Pixels MVI MV12"),
+                            (133, "DataFusion G.726"),
+                            (134, "DataFusion GSM610"),
+                            (136, "Iterated Systems Audio"),
+                            (137, "Onlive"),
+                            (138, "Multitude, Inc. FT SX20"),
+                            (139, "Infocom ITS A/S G.721 ADPCM"),
+                            (140, "Convedia G729"),
+                            (141, "Not specified congruency, Inc."),
+                            (145, "Siemens SBC24"),
+                            (146, "Sonic Foundry Dolby AC3 APDIF"),
+                            (147, "MediaSonic G.723"),
+                            (148, "Aculab Prosody 8kbps"),
+                            (151, "ZyXEL ADPCM"),
+                            (152, "Philips LPCBB"),
+                            (153, "Studer Professional Audio Packed"),
+                            (160, "Malden PhonyTalk"),
+                            (161, "Racal Recorder GSM"),
+                            (162, "Racal Recorder G720.a"),
+                            (163, "Racal G723.1"),
+                            (164, "Racal Tetra ACELP"),
+                            (176, "NEC AAC NEC Corporation"),
+                            (255, "AAC"),
+                            (256, "Rhetorex ADPCM"),
+                            (257, "IBM u-Law"),
+                            (258, "IBM a-Law"),
+                            (259, "IBM ADPCM"),
+                            (273, "Vivo G.723"),
+                            (274, "Vivo Siren"),
+                            (288, "Philips Speech Processing CELP"),
+                            (289, "Philips Speech Processing GRUNDIG"),
+                            (291, "Digital G.723"),
+                            (293, "Sanyo LD ADPCM"),
+                            (304, "Sipro Lab ACEPLNET"),
+                            (305, "Sipro Lab ACELP4800"),
+                            (306, "Sipro Lab ACELP8V3"),
+                            (307, "Sipro Lab G.729"),
+                            (308, "Sipro Lab G.729A"),
+                            (309, "Sipro Lab Kelvin"),
+                            (310, "VoiceAge AMR"),
+                            (320, "Dictaphone G.726 ADPCM"),
+                            (336, "Qualcomm PureVoice"),
+                            (337, "Qualcomm HalfRate"),
+                            (341, "Ring Zero Systems TUBGSM"),
+                            (352, "Microsoft Audio1"),
+                            (
+                                353,
+                                "Windows Media Audio V2 V7 V8 V9 / DivX audio (WMA) / Alex AC3 Audio",
+                            ),
+                            (354, "Windows Media Audio Professional V9"),
+                            (355, "Windows Media Audio Lossless V9"),
+                            (356, "WMA Pro over S/PDIF"),
+                            (368, "UNISYS NAP ADPCM"),
+                            (369, "UNISYS NAP ULAW"),
+                            (370, "UNISYS NAP ALAW"),
+                            (371, "UNISYS NAP 16K"),
+                            (372, "MM SYCOM ACM SYC008 SyCom Technologies"),
+                            (373, "MM SYCOM ACM SYC701 G726L SyCom Technologies"),
+                            (374, "MM SYCOM ACM SYC701 CELP54 SyCom Technologies"),
+                            (375, "MM SYCOM ACM SYC701 CELP68 SyCom Technologies"),
+                            (376, "Knowledge Adventure ADPCM"),
+                            (384, "Fraunhofer IIS MPEG2AAC"),
+                            (400, "Digital Theater Systems DTS DS"),
+                            (512, "Creative Labs ADPCM"),
+                            (514, "Creative Labs FASTSPEECH8"),
+                            (515, "Creative Labs FASTSPEECH10"),
+                            (528, "UHER ADPCM"),
+                            (533, "Ulead DV ACM"),
+                            (534, "Ulead DV ACM"),
+                            (544, "Quarterdeck Corp."),
+                            (560, "I-Link VC"),
+                            (576, "Aureal Semiconductor Raw Sport"),
+                            (577, "ESST AC3"),
+                            (592, "Interactive Products HSX"),
+                            (593, "Interactive Products RPELP"),
+                            (608, "Consistent CS2"),
+                            (624, "Sony SCX"),
+                            (625, "Sony SCY"),
+                            (626, "Sony ATRAC3"),
+                            (627, "Sony SPC"),
+                            (640, "TELUM Telum Inc."),
+                            (641, "TELUMIA Telum Inc."),
+                            (645, "Norcom Voice Systems ADPCM"),
+                            (768, "Fujitsu FM TOWNS SND"),
+                            (769, "Fujitsu (not specified)"),
+                            (770, "Fujitsu (not specified)"),
+                            (771, "Fujitsu (not specified)"),
+                            (772, "Fujitsu (not specified)"),
+                            (773, "Fujitsu (not specified)"),
+                            (774, "Fujitsu (not specified)"),
+                            (775, "Fujitsu (not specified)"),
+                            (776, "Fujitsu (not specified)"),
+                            (848, "Micronas Semiconductors, Inc. Development"),
+                            (849, "Micronas Semiconductors, Inc. CELP833"),
+                            (1024, "Brooktree Digital"),
+                            (1025, "Intel Music Coder (IMC)"),
+                            (1026, "Ligos Indeo Audio"),
+                            (1104, "QDesign Music"),
+                            (1280, "On2 VP7 On2 Technologies"),
+                            (1281, "On2 VP6 On2 Technologies"),
+                            (1664, "AT&T VME VMPCM"),
+                            (1665, "AT&T TCP"),
+                            (1792, "YMPEG Alpha (dummy for MPEG-2 compressor)"),
+                            (2222, "ClearJump LiteWave (lossless)"),
+                            (4096, "Olivetti GSM"),
+                            (4097, "Olivetti ADPCM"),
+                            (4098, "Olivetti CELP"),
+                            (4099, "Olivetti SBC"),
+                            (4100, "Olivetti OPR"),
+                            (4352, "Lernout & Hauspie"),
+                            (4353, "Lernout & Hauspie CELP codec"),
+                            (4354, "Lernout & Hauspie SBC codec"),
+                            (4355, "Lernout & Hauspie SBC codec"),
+                            (4356, "Lernout & Hauspie SBC codec"),
+                            (5120, "Norris Comm. Inc."),
+                            (5121, "ISIAudio"),
+                            (5376, "AT&T Soundspace Music Compression"),
+                            (6172, "VoxWare RT24 speech codec"),
+                            (6174, "Lucent elemedia AX24000P Music codec"),
+                            (6513, "Sonic Foundry LOSSLESS"),
+                            (6521, "Innings Telecom Inc. ADPCM"),
+                            (7175, "Lucent SX8300P speech codec"),
+                            (7180, "Lucent SX5363S G.723 compliant codec"),
+                            (7939, "CUseeMe DigiTalk (ex-Rocwell)"),
+                            (8132, "NCT Soft ALF2CD ACM"),
+                            (8192, "FAST Multimedia DVM"),
+                            (8193, "Dolby DTS (Digital Theater System)"),
+                            (8194, "RealAudio 1 / 2 14.4"),
+                            (8195, "RealAudio 1 / 2 28.8"),
+                            (8196, "RealAudio G2 / 8 Cook (low bitrate)"),
+                            (8197, "RealAudio 3 / 4 / 5 Music (DNET)"),
+                            (8198, "RealAudio 10 AAC (RAAC)"),
+                            (8199, "RealAudio 10 AAC+ (RACP)"),
+                            (9472, "Reserved range to 0x2600 Microsoft"),
+                            (
+                                13075,
+                                "makeAVIS (ffvfw fake AVI sound from AviSynth scripts)",
+                            ),
+                            (16707, "Divio MPEG-4 AAC audio"),
+                            (16897, "Nokia adaptive multirate"),
+                            (16963, "Divio G726 Divio, Inc."),
+                            (17228, "LEAD Speech"),
+                            (22092, "LEAD Vorbis"),
+                            (22358, "WavPack Audio"),
+                            (26447, "Ogg Vorbis (mode 1)"),
+                            (26448, "Ogg Vorbis (mode 2)"),
+                            (26449, "Ogg Vorbis (mode 3)"),
+                            (26479, "Ogg Vorbis (mode 1+)"),
+                            (26480, "Ogg Vorbis (mode 2+)"),
+                            (26481, "Ogg Vorbis (mode 3+)"),
+                            (28672, "3COM NBX 3Com Corporation"),
+                            (28781, "FAAD AAC"),
+                            (31265, "GSM-AMR (CBR, no SID)"),
+                            (31266, "GSM-AMR (VBR, including SID)"),
+                            (41216, "Comverse Infosys Ltd. G723 1"),
+                            (41217, "Comverse Infosys Ltd. AVQSBC"),
+                            (41218, "Comverse Infosys Ltd. OLDSBC"),
+                            (41219, "Symbol Technologies G729A"),
+                            (41220, "VoiceAge AMR WB VoiceAge Corporation"),
+                            (41221, "Ingenient Technologies Inc. G726"),
+                            (41222, "ISO/MPEG-4 advanced audio Coding"),
+                            (41223, "Encore Software Ltd G726"),
+                            (41225, "Speex ACM Codec xiph.org"),
+                            (57260, "DebugMode SonicFoundry Vegas FrameServer ACM Codec"),
+                            (59144, "Unknown -"),
+                            (61868, "Free Lossless Audio Codec FLAC"),
+                            (65534, "Extensible"),
+                            (65535, "Development"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "ASF_STREAM_TYPE",
+                        pattern: "^(Video|JFIF|Degradable JPEG)$",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 54,
+                        sub: None,
+                        name: "ImageWidth",
+                        format: Some(Fmt::Int32u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 58,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberStrEq {
+                        member: "ASF_STREAM_TYPE",
+                        value: "Audio",
+                        negate: false,
+                    },
+                    Field {
+                        index: 58,
+                        sub: None,
+                        name: "AudioSampleRate",
+                        format: Some(Fmt::Int32u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "ASF_STREAM_TYPE",
+                        pattern: "^(Video|JFIF|Degradable JPEG)$",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 58,
+                        sub: None,
+                        name: "ImageHeight",
+                        format: Some(Fmt::Int32u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::BMP::Main` -- 22 fields.
+/// `Image::ExifTool::BMP::Main` -- 22 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static BMP_MAIN: BinaryTable = BinaryTable {
     module: "BMP",
@@ -1548,9 +1929,11 @@ pub static BMP_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::BMP::OS2` -- 5 fields.
+/// `Image::ExifTool::BMP::OS2` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static BMP_OS2: BinaryTable = BinaryTable {
     module: "BMP",
@@ -1612,9 +1995,11 @@ pub static BMP_OS2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::BPG::Main` -- 5 fields.
+/// `Image::ExifTool::BPG::Main` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static BPG_MAIN: BinaryTable = BinaryTable {
     module: "BPG",
@@ -1716,9 +2101,11 @@ pub static BPG_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::AFConfig` -- 26 fields.
+/// `Image::ExifTool::Canon::AFConfig` -- 26 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_AFCONFIG: BinaryTable = BinaryTable {
     module: "Canon",
@@ -2070,9 +2457,11 @@ pub static CANON_AFCONFIG: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Soccer"), (1, "Basketball"), (2, "Volleyball")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::AFMicroAdj` -- 2 fields.
+/// `Image::ExifTool::Canon::AFMicroAdj` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_AFMICROADJ: BinaryTable = BinaryTable {
     module: "Canon",
@@ -2108,9 +2497,11 @@ pub static CANON_AFMICROADJ: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::Ambience` -- 1 fields.
+/// `Image::ExifTool::Canon::Ambience` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_AMBIENCE: BinaryTable = BinaryTable {
     module: "Canon",
@@ -2140,9 +2531,11 @@ pub static CANON_AMBIENCE: BinaryTable = BinaryTable {
             (8, "Monochrome"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::AspectInfo` -- 5 fields.
+/// `Image::ExifTool::Canon::AspectInfo` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_ASPECTINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -2213,9 +2606,11 @@ pub static CANON_ASPECTINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CMP1` -- 2 fields.
+/// `Image::ExifTool::Canon::CMP1` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CMP1: BinaryTable = BinaryTable {
     module: "Canon",
@@ -2247,9 +2642,11 @@ pub static CANON_CMP1: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo1000D` -- 21 fields.
+/// `Image::ExifTool::Canon::CameraInfo1000D` -- 21 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO1000D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -3199,9 +3596,11 @@ pub static CANON_CAMERAINFO1000D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo1D` -- 13 fields.
+/// `Image::ExifTool::Canon::CameraInfo1D` -- 13 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO1D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -4133,9 +4532,52 @@ pub static CANON_CAMERAINFO1D: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[VariantGroup {
+        index: 72,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "\\b1D$",
+                    ignore_case: false,
+                    negate: false,
+                },
+                Field {
+                    index: 72,
+                    sub: None,
+                    name: "ColorTemperature",
+                    format: Some(Fmt::Int16u),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::None,
+                },
+            ),
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "\\b1DS$",
+                    ignore_case: false,
+                    negate: false,
+                },
+                Field {
+                    index: 72,
+                    sub: None,
+                    name: "Sharpness",
+                    format: Some(Fmt::Int8s),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::None,
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo1DX` -- 18 fields.
+/// `Image::ExifTool::Canon::CameraInfo1DX` -- 18 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO1DX: BinaryTable = BinaryTable {
     module: "Canon",
@@ -5059,9 +5501,11 @@ pub static CANON_CAMERAINFO1DX: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo1DmkII` -- 16 fields.
+/// `Image::ExifTool::Canon::CameraInfo1DmkII` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO1DMKII: BinaryTable = BinaryTable {
     module: "Canon",
@@ -5933,9 +6377,11 @@ pub static CANON_CAMERAINFO1DMKII: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo1DmkIII` -- 22 fields.
+/// `Image::ExifTool::Canon::CameraInfo1DmkIII` -- 22 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO1DMKIII: BinaryTable = BinaryTable {
     module: "Canon",
@@ -6917,9 +7363,11 @@ pub static CANON_CAMERAINFO1DMKIII: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo1DmkIIN` -- 13 fields.
+/// `Image::ExifTool::Canon::CameraInfo1DmkIIN` -- 13 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO1DMKIIN: BinaryTable = BinaryTable {
     module: "Canon",
@@ -7741,9 +8189,11 @@ pub static CANON_CAMERAINFO1DMKIIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo1DmkIV` -- 21 fields.
+/// `Image::ExifTool::Canon::CameraInfo1DmkIV` -- 21 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO1DMKIV: BinaryTable = BinaryTable {
     module: "Canon",
@@ -8690,9 +9140,11 @@ pub static CANON_CAMERAINFO1DMKIV: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo40D` -- 20 fields.
+/// `Image::ExifTool::Canon::CameraInfo40D` -- 20 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO40D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -9617,9 +10069,11 @@ pub static CANON_CAMERAINFO40D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo450D` -- 19 fields.
+/// `Image::ExifTool::Canon::CameraInfo450D` -- 19 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO450D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -10528,9 +10982,11 @@ pub static CANON_CAMERAINFO450D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo500D` -- 22 fields.
+/// `Image::ExifTool::Canon::CameraInfo500D` -- 22 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO500D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -11510,9 +11966,11 @@ pub static CANON_CAMERAINFO500D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo50D` -- 22 fields.
+/// `Image::ExifTool::Canon::CameraInfo50D` -- 22 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO50D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -12492,9 +12950,11 @@ pub static CANON_CAMERAINFO50D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo550D` -- 20 fields.
+/// `Image::ExifTool::Canon::CameraInfo550D` -- 20 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO550D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -13444,9 +13904,11 @@ pub static CANON_CAMERAINFO550D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo5D` -- 59 fields.
+/// `Image::ExifTool::Canon::CameraInfo5D` -- 59 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO5D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -15429,9 +15891,11 @@ pub static CANON_CAMERAINFO5D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo5DmkII` -- 25 fields.
+/// `Image::ExifTool::Canon::CameraInfo5DmkII` -- 25 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO5DMKII: BinaryTable = BinaryTable {
     module: "Canon",
@@ -16474,9 +16938,11 @@ pub static CANON_CAMERAINFO5DMKII: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo5DmkIII` -- 21 fields.
+/// `Image::ExifTool::Canon::CameraInfo5DmkIII` -- 21 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO5DMKIII: BinaryTable = BinaryTable {
     module: "Canon",
@@ -17448,9 +17914,11 @@ pub static CANON_CAMERAINFO5DMKIII: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo600D` -- 20 fields.
+/// `Image::ExifTool::Canon::CameraInfo600D` -- 20 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO600D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -18400,9 +18868,11 @@ pub static CANON_CAMERAINFO600D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo60D` -- 18 fields.
+/// `Image::ExifTool::Canon::CameraInfo60D` -- 18 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO60D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -19300,9 +19770,11 @@ pub static CANON_CAMERAINFO60D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo650D` -- 21 fields.
+/// `Image::ExifTool::Canon::CameraInfo650D` -- 21 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO650D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -20274,9 +20746,11 @@ pub static CANON_CAMERAINFO650D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo6D` -- 18 fields.
+/// `Image::ExifTool::Canon::CameraInfo6D` -- 18 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO6D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -21194,9 +21668,11 @@ pub static CANON_CAMERAINFO6D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo70D` -- 16 fields.
+/// `Image::ExifTool::Canon::CameraInfo70D` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO70D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -22046,9 +22522,11 @@ pub static CANON_CAMERAINFO70D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo750D` -- 16 fields.
+/// `Image::ExifTool::Canon::CameraInfo750D` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO750D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -22940,9 +23418,11 @@ pub static CANON_CAMERAINFO750D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo7D` -- 23 fields.
+/// `Image::ExifTool::Canon::CameraInfo7D` -- 23 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO7D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -23924,9 +24404,11 @@ pub static CANON_CAMERAINFO7D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfo80D` -- 15 fields.
+/// `Image::ExifTool::Canon::CameraInfo80D` -- 15 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFO80D: BinaryTable = BinaryTable {
     module: "Canon",
@@ -24760,9 +25242,11 @@ pub static CANON_CAMERAINFO80D: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfoG5XII` -- 4 fields.
+/// `Image::ExifTool::Canon::CameraInfoG5XII` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFOG5XII: BinaryTable = BinaryTable {
     module: "Canon",
@@ -24838,9 +25322,11 @@ pub static CANON_CAMERAINFOG5XII: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfoPowerShot` -- 6 fields.
+/// `Image::ExifTool::Canon::CameraInfoPowerShot` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFOPOWERSHOT: BinaryTable = BinaryTable {
     module: "Canon",
@@ -24942,9 +25428,11 @@ pub static CANON_CAMERAINFOPOWERSHOT: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValC6E725F),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfoPowerShot2` -- 9 fields.
+/// `Image::ExifTool::Canon::CameraInfoPowerShot2` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFOPOWERSHOT2: BinaryTable = BinaryTable {
     module: "Canon",
@@ -25094,9 +25582,11 @@ pub static CANON_CAMERAINFOPOWERSHOT2: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValC6E725F),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfoR6` -- 2 fields.
+/// `Image::ExifTool::Canon::CameraInfoR6` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFOR6: BinaryTable = BinaryTable {
     module: "Canon",
@@ -25134,9 +25624,11 @@ pub static CANON_CAMERAINFOR6: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfoR6m2` -- 1 fields.
+/// `Image::ExifTool::Canon::CameraInfoR6m2` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFOR6M2: BinaryTable = BinaryTable {
     module: "Canon",
@@ -25156,9 +25648,11 @@ pub static CANON_CAMERAINFOR6M2: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfoR6m3` -- 1 fields.
+/// `Image::ExifTool::Canon::CameraInfoR6m3` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFOR6M3: BinaryTable = BinaryTable {
     module: "Canon",
@@ -25178,9 +25672,11 @@ pub static CANON_CAMERAINFOR6M3: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfoUnknown` -- 2 fields.
+/// `Image::ExifTool::Canon::CameraInfoUnknown` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFOUNKNOWN: BinaryTable = BinaryTable {
     module: "Canon",
@@ -25224,9 +25720,11 @@ pub static CANON_CAMERAINFOUNKNOWN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraInfoUnknown32` -- 6 fields.
+/// `Image::ExifTool::Canon::CameraInfoUnknown32` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERAINFOUNKNOWN32: BinaryTable = BinaryTable {
     module: "Canon",
@@ -25334,9 +25832,11 @@ pub static CANON_CAMERAINFOUNKNOWN32: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValC6E725F),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CameraSettings` -- 40 fields.
+/// `Image::ExifTool::Canon::CameraSettings` -- 40 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CAMERASETTINGS: BinaryTable = BinaryTable {
     module: "Canon",
@@ -26735,9 +27235,11 @@ pub static CANON_CAMERASETTINGS: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(-1, "n/a"), (0, "Off"), (1, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorBalance` -- 9 fields.
+/// `Image::ExifTool::Canon::ColorBalance` -- 9 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORBALANCE: BinaryTable = BinaryTable {
     module: "Canon",
@@ -26839,9 +27341,47 @@ pub static CANON_COLORBALANCE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[VariantGroup {
+        index: 29,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "EOS D60\\b",
+                    ignore_case: false,
+                    negate: true,
+                },
+                Field {
+                    index: 29,
+                    sub: None,
+                    name: "WB_RGGBLevelsCustom",
+                    format: Some(Fmt::Int16s),
+                    count: 4,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::None,
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 29,
+                    sub: None,
+                    name: "BlackLevels",
+                    format: Some(Fmt::Int16s),
+                    count: 4,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::None,
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::Canon::ColorCoefs` -- 20 fields.
+/// `Image::ExifTool::Canon::ColorCoefs` -- 20 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORCOEFS: BinaryTable = BinaryTable {
     module: "Canon",
@@ -27053,9 +27593,11 @@ pub static CANON_COLORCOEFS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorCoefs2` -- 20 fields.
+/// `Image::ExifTool::Canon::ColorCoefs2` -- 20 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORCOEFS2: BinaryTable = BinaryTable {
     module: "Canon",
@@ -27267,9 +27809,11 @@ pub static CANON_COLORCOEFS2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData1` -- 20 fields.
+/// `Image::ExifTool::Canon::ColorData1` -- 20 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA1: BinaryTable = BinaryTable {
     module: "Canon",
@@ -27481,9 +28025,11 @@ pub static CANON_COLORDATA1: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData10` -- 27 fields.
+/// `Image::ExifTool::Canon::ColorData10` -- 27 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA10: BinaryTable = BinaryTable {
     module: "Canon",
@@ -27783,9 +28329,11 @@ pub static CANON_COLORDATA10: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData11` -- 25 fields.
+/// `Image::ExifTool::Canon::ColorData11` -- 25 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA11: BinaryTable = BinaryTable {
     module: "Canon",
@@ -28059,9 +28607,11 @@ pub static CANON_COLORDATA11: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData12` -- 21 fields.
+/// `Image::ExifTool::Canon::ColorData12` -- 21 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA12: BinaryTable = BinaryTable {
     module: "Canon",
@@ -28301,9 +28851,11 @@ pub static CANON_COLORDATA12: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData2` -- 25 fields.
+/// `Image::ExifTool::Canon::ColorData2` -- 25 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA2: BinaryTable = BinaryTable {
     module: "Canon",
@@ -28571,9 +29123,11 @@ pub static CANON_COLORDATA2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData3` -- 34 fields.
+/// `Image::ExifTool::Canon::ColorData3` -- 34 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA3: BinaryTable = BinaryTable {
     module: "Canon",
@@ -28943,9 +29497,11 @@ pub static CANON_COLORDATA3: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData4` -- 16 fields.
+/// `Image::ExifTool::Canon::ColorData4` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA4: BinaryTable = BinaryTable {
     module: "Canon",
@@ -29209,9 +29765,11 @@ pub static CANON_COLORDATA4: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData5` -- 6 fields.
+/// `Image::ExifTool::Canon::ColorData5` -- 6 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA5: BinaryTable = BinaryTable {
     module: "Canon",
@@ -29319,9 +29877,62 @@ pub static CANON_COLORDATA5: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[VariantGroup {
+        index: 71,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberCmp {
+                    member: "ColorDataVersion",
+                    op: CmpOp::Eq,
+                    value: -3,
+                },
+                Field {
+                    index: 71,
+                    sub: None,
+                    name: "ColorCoefs",
+                    format: Some(Fmt::Undef(230)),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                    },
+                    print_conv: PrintConv::None,
+                },
+            ),
+            (
+                Cond::MemberCmp {
+                    member: "ColorDataVersion",
+                    op: CmpOp::Eq,
+                    value: -4,
+                },
+                Field {
+                    index: 71,
+                    sub: None,
+                    name: "ColorCoefs2",
+                    format: Some(Fmt::Undef(368)),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                    },
+                    print_conv: PrintConv::None,
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::Canon::ColorData6` -- 27 fields.
+/// `Image::ExifTool::Canon::ColorData6` -- 27 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA6: BinaryTable = BinaryTable {
     module: "Canon",
@@ -29615,9 +30226,11 @@ pub static CANON_COLORDATA6: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData7` -- 34 fields.
+/// `Image::ExifTool::Canon::ColorData7` -- 34 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA7: BinaryTable = BinaryTable {
     module: "Canon",
@@ -30044,9 +30657,11 @@ pub static CANON_COLORDATA7: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData8` -- 30 fields.
+/// `Image::ExifTool::Canon::ColorData8` -- 30 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA8: BinaryTable = BinaryTable {
     module: "Canon",
@@ -30417,9 +31032,11 @@ pub static CANON_COLORDATA8: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorData9` -- 25 fields.
+/// `Image::ExifTool::Canon::ColorData9` -- 25 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA9: BinaryTable = BinaryTable {
     module: "Canon",
@@ -30698,9 +31315,11 @@ pub static CANON_COLORDATA9: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorDataUnknown` -- 1 fields.
+/// `Image::ExifTool::Canon::ColorDataUnknown` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATAUNKNOWN: BinaryTable = BinaryTable {
     module: "Canon",
@@ -30720,9 +31339,11 @@ pub static CANON_COLORDATAUNKNOWN: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ColorInfo` -- 3 fields.
+/// `Image::ExifTool::Canon::ColorInfo` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -30776,9 +31397,11 @@ pub static CANON_COLORINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(1, "sRGB"), (2, "Adobe RGB")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ContrastInfo` -- 1 fields.
+/// `Image::ExifTool::Canon::ContrastInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CONTRASTINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -30798,9 +31421,11 @@ pub static CANON_CONTRASTINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(0, "Off"), (8, "On"), (65535, "n/a")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::CropInfo` -- 4 fields.
+/// `Image::ExifTool::Canon::CropInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_CROPINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -30852,9 +31477,11 @@ pub static CANON_CROPINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ExposureInfo` -- 1 fields.
+/// `Image::ExifTool::Canon::ExposureInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_EXPOSUREINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -30880,9 +31507,11 @@ pub static CANON_EXPOSUREINFO: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::FaceDetect1` -- 11 fields.
+/// `Image::ExifTool::Canon::FaceDetect1` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_FACEDETECT1: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31064,9 +31693,11 @@ pub static CANON_FACEDETECT1: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::FaceDetect2` -- 2 fields.
+/// `Image::ExifTool::Canon::FaceDetect2` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_FACEDETECT2: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31098,9 +31729,11 @@ pub static CANON_FACEDETECT2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::FaceDetect3` -- 1 fields.
+/// `Image::ExifTool::Canon::FaceDetect3` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_FACEDETECT3: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31120,9 +31753,11 @@ pub static CANON_FACEDETECT3: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::FileInfo` -- 19 fields.
+/// `Image::ExifTool::Canon::FileInfo` -- 19 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_FILEINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31505,9 +32140,11 @@ pub static CANON_FILEINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::Flags` -- 1 fields.
+/// `Image::ExifTool::Canon::Flags` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_FLAGS: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31527,9 +32164,11 @@ pub static CANON_FLAGS: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::FocalLength` -- 2 fields.
+/// `Image::ExifTool::Canon::FocalLength` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_FOCALLENGTH: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31573,9 +32212,11 @@ pub static CANON_FOCALLENGTH: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValMm18ABDF),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::FocusBracketingInfo` -- 7 fields.
+/// `Image::ExifTool::Canon::FocusBracketingInfo` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_FOCUSBRACKETINGINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31657,9 +32298,11 @@ pub static CANON_FOCUSBRACKETINGINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::HDRInfo` -- 2 fields.
+/// `Image::ExifTool::Canon::HDRInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_HDRINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31697,9 +32340,11 @@ pub static CANON_HDRINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::LensInfo` -- 1 fields.
+/// `Image::ExifTool::Canon::LensInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_LENSINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31725,9 +32370,11 @@ pub static CANON_LENSINFO: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::LevelInfo` -- 5 fields.
+/// `Image::ExifTool::Canon::LevelInfo` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_LEVELINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31819,9 +32466,11 @@ pub static CANON_LEVELINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValMm18ABDF),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::LightingOpt` -- 7 fields.
+/// `Image::ExifTool::Canon::LightingOpt` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_LIGHTINGOPT: BinaryTable = BinaryTable {
     module: "Canon",
@@ -31913,9 +32562,11 @@ pub static CANON_LIGHTINGOPT: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::LogInfo` -- 7 fields.
+/// `Image::ExifTool::Canon::LogInfo` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_LOGINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -32044,9 +32695,11 @@ pub static CANON_LOGINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::MeasuredColor` -- 1 fields.
+/// `Image::ExifTool::Canon::MeasuredColor` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_MEASUREDCOLOR: BinaryTable = BinaryTable {
     module: "Canon",
@@ -32066,9 +32719,11 @@ pub static CANON_MEASUREDCOLOR: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ModifiedInfo` -- 11 fields.
+/// `Image::ExifTool::Canon::ModifiedInfo` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_MODIFIEDINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -32257,9 +32912,11 @@ pub static CANON_MODIFIEDINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::MovieInfo` -- 8 fields.
+/// `Image::ExifTool::Canon::MovieInfo` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_MOVIEINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -32375,9 +33032,11 @@ pub static CANON_MOVIEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::MultiExp` -- 3 fields.
+/// `Image::ExifTool::Canon::MultiExp` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_MULTIEXP: BinaryTable = BinaryTable {
     module: "Canon",
@@ -32424,9 +33083,11 @@ pub static CANON_MULTIEXP: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::MyColors` -- 1 fields.
+/// `Image::ExifTool::Canon::MyColors` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_MYCOLORS: BinaryTable = BinaryTable {
     module: "Canon",
@@ -32461,9 +33122,11 @@ pub static CANON_MYCOLORS: BinaryTable = BinaryTable {
             (15, "B&W"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::PSInfo` -- 45 fields.
+/// `Image::ExifTool::Canon::PSInfo` -- 45 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_PSINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -33014,9 +33677,11 @@ pub static CANON_PSINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::PSInfo2` -- 51 fields.
+/// `Image::ExifTool::Canon::PSInfo2` -- 51 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_PSINFO2: BinaryTable = BinaryTable {
     module: "Canon",
@@ -33641,9 +34306,11 @@ pub static CANON_PSINFO2: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::Panorama` -- 2 fields.
+/// `Image::ExifTool::Canon::Panorama` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_PANORAMA: BinaryTable = BinaryTable {
     module: "Canon",
@@ -33681,9 +34348,11 @@ pub static CANON_PANORAMA: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::PreviewImageInfo` -- 5 fields.
+/// `Image::ExifTool::Canon::PreviewImageInfo` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_PREVIEWIMAGEINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -33755,9 +34424,11 @@ pub static CANON_PREVIEWIMAGEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::Processing` -- 15 fields.
+/// `Image::ExifTool::Canon::Processing` -- 15 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_PROCESSING: BinaryTable = BinaryTable {
     module: "Canon",
@@ -33992,9 +34663,11 @@ pub static CANON_PROCESSING: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::RawBurstInfo` -- 2 fields.
+/// `Image::ExifTool::Canon::RawBurstInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_RAWBURSTINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -34026,9 +34699,11 @@ pub static CANON_RAWBURSTINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::SensorInfo` -- 10 fields.
+/// `Image::ExifTool::Canon::SensorInfo` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_SENSORINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -34140,9 +34815,11 @@ pub static CANON_SENSORINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::SerialInfo` -- 1 fields.
+/// `Image::ExifTool::Canon::SerialInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_SERIALINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -34168,9 +34845,11 @@ pub static CANON_SERIALINFO: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::ShotInfo` -- 27 fields.
+/// `Image::ExifTool::Canon::ShotInfo` -- 27 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_SHOTINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -34626,9 +35305,63 @@ pub static CANON_SHOTINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[VariantGroup {
+        index: 22,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "\\b(20D|350D|REBEL XT|Kiss Digital N)\\b",
+                    ignore_case: false,
+                    negate: false,
+                },
+                Field {
+                    index: 22,
+                    sub: None,
+                    name: "ExposureTime",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: true,
+                        raw_conv: true,
+                        condition: false,
+                        hook: false,
+                        subdirectory: false,
+                    },
+                    print_conv: PrintConv::Expr(
+                        ExprId::ImageExifToolExifPrintExposureTimeVal6037F3,
+                    ),
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 22,
+                    sub: None,
+                    name: "ExposureTime",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: true,
+                        raw_conv: true,
+                        condition: false,
+                        hook: false,
+                        subdirectory: false,
+                    },
+                    print_conv: PrintConv::Expr(
+                        ExprId::ImageExifToolExifPrintExposureTimeVal6037F3,
+                    ),
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::Canon::TimeInfo` -- 3 fields.
+/// `Image::ExifTool::Canon::TimeInfo` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_TIMEINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -34706,9 +35439,11 @@ pub static CANON_TIMEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (60, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::VignettingCorr` -- 9 fields.
+/// `Image::ExifTool::Canon::VignettingCorr` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_VIGNETTINGCORR: BinaryTable = BinaryTable {
     module: "Canon",
@@ -34810,9 +35545,11 @@ pub static CANON_VIGNETTINGCORR: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::VignettingCorr2` -- 4 fields.
+/// `Image::ExifTool::Canon::VignettingCorr2` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_VIGNETTINGCORR2: BinaryTable = BinaryTable {
     module: "Canon",
@@ -34864,9 +35601,11 @@ pub static CANON_VIGNETTINGCORR2: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::VignettingCorrUnknown` -- 1 fields.
+/// `Image::ExifTool::Canon::VignettingCorrUnknown` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_VIGNETTINGCORRUNKNOWN: BinaryTable = BinaryTable {
     module: "Canon",
@@ -34886,9 +35625,11 @@ pub static CANON_VIGNETTINGCORRUNKNOWN: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Canon::WBInfo` -- 10 fields.
+/// `Image::ExifTool::Canon::WBInfo` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_WBINFO: BinaryTable = BinaryTable {
     module: "Canon",
@@ -35000,9 +35741,11 @@ pub static CANON_WBINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonCustom::PersonalFuncValues` -- 24 fields.
+/// `Image::ExifTool::CanonCustom::PersonalFuncValues` -- 24 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONCUSTOM_PERSONALFUNCVALUES: BinaryTable = BinaryTable {
     module: "CanonCustom",
@@ -35278,9 +36021,11 @@ pub static CANONCUSTOM_PERSONALFUNCVALUES: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonCustom::PersonalFuncs` -- 29 fields.
+/// `Image::ExifTool::CanonCustom::PersonalFuncs` -- 29 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONCUSTOM_PERSONALFUNCS: BinaryTable = BinaryTable {
     module: "CanonCustom",
@@ -35582,9 +36327,11 @@ pub static CANONCUSTOM_PERSONALFUNCS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonRaw::DecoderTable` -- 3 fields.
+/// `Image::ExifTool::CanonRaw::DecoderTable` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONRAW_DECODERTABLE: BinaryTable = BinaryTable {
     module: "CanonRaw",
@@ -35626,9 +36373,11 @@ pub static CANONRAW_DECODERTABLE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonRaw::ExposureInfo` -- 3 fields.
+/// `Image::ExifTool::CanonRaw::ExposureInfo` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONRAW_EXPOSUREINFO: BinaryTable = BinaryTable {
     module: "CanonRaw",
@@ -35682,9 +36431,11 @@ pub static CANONRAW_EXPOSUREINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fVal2C65CD),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonRaw::FlashInfo` -- 2 fields.
+/// `Image::ExifTool::CanonRaw::FlashInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONRAW_FLASHINFO: BinaryTable = BinaryTable {
     module: "CanonRaw",
@@ -35716,9 +36467,11 @@ pub static CANONRAW_FLASHINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonRaw::ImageFormat` -- 2 fields.
+/// `Image::ExifTool::CanonRaw::ImageFormat` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONRAW_IMAGEFORMAT: BinaryTable = BinaryTable {
     module: "CanonRaw",
@@ -35755,9 +36508,11 @@ pub static CANONRAW_IMAGEFORMAT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonRaw::ImageInfo` -- 7 fields.
+/// `Image::ExifTool::CanonRaw::ImageInfo` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONRAW_IMAGEINFO: BinaryTable = BinaryTable {
     module: "CanonRaw",
@@ -35839,9 +36594,11 @@ pub static CANONRAW_IMAGEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonRaw::RawJpgInfo` -- 4 fields.
+/// `Image::ExifTool::CanonRaw::RawJpgInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONRAW_RAWJPGINFO: BinaryTable = BinaryTable {
     module: "CanonRaw",
@@ -35898,9 +36655,11 @@ pub static CANONRAW_RAWJPGINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonRaw::TimeStamp` -- 3 fields.
+/// `Image::ExifTool::CanonRaw::TimeStamp` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONRAW_TIMESTAMP: BinaryTable = BinaryTable {
     module: "CanonRaw",
@@ -35954,9 +36713,11 @@ pub static CANONRAW_TIMESTAMP: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonRaw::WhiteSample` -- 6 fields.
+/// `Image::ExifTool::CanonRaw::WhiteSample` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONRAW_WHITESAMPLE: BinaryTable = BinaryTable {
     module: "CanonRaw",
@@ -36028,9 +36789,11 @@ pub static CANONRAW_WHITESAMPLE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonVRD::CropInfo` -- 11 fields.
+/// `Image::ExifTool::CanonVRD::CropInfo` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONVRD_CROPINFO: BinaryTable = BinaryTable {
     module: "CanonVRD",
@@ -36152,9 +36915,11 @@ pub static CANONVRD_CROPINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonVRD::DLOInfo` -- 2 fields.
+/// `Image::ExifTool::CanonVRD::DLOInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONVRD_DLOINFO: BinaryTable = BinaryTable {
     module: "CanonVRD",
@@ -36186,9 +36951,11 @@ pub static CANONVRD_DLOINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonVRD::DR4Header` -- 1 fields.
+/// `Image::ExifTool::CanonVRD::DR4Header` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONVRD_DR4HEADER: BinaryTable = BinaryTable {
     module: "CanonVRD",
@@ -36695,9 +37462,11 @@ pub static CANONVRD_DR4HEADER: BinaryTable = BinaryTable {
             (2147485024, "EOS D6000C"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonVRD::DustInfo` -- 1 fields.
+/// `Image::ExifTool::CanonVRD::DustInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONVRD_DUSTINFO: BinaryTable = BinaryTable {
     module: "CanonVRD",
@@ -36717,9 +37486,11 @@ pub static CANONVRD_DUSTINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonVRD::GammaInfo` -- 13 fields.
+/// `Image::ExifTool::CanonVRD::GammaInfo` -- 13 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONVRD_GAMMAINFO: BinaryTable = BinaryTable {
     module: "CanonVRD",
@@ -36879,9 +37650,11 @@ pub static CANONVRD_GAMMAINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonVRD::StampInfo` -- 1 fields.
+/// `Image::ExifTool::CanonVRD::StampInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONVRD_STAMPINFO: BinaryTable = BinaryTable {
     module: "CanonVRD",
@@ -36901,9 +37674,11 @@ pub static CANONVRD_STAMPINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonVRD::StampTool` -- 1 fields.
+/// `Image::ExifTool::CanonVRD::StampTool` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONVRD_STAMPTOOL: BinaryTable = BinaryTable {
     module: "CanonVRD",
@@ -36923,9 +37698,11 @@ pub static CANONVRD_STAMPTOOL: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonVRD::ToneCurve` -- 10 fields.
+/// `Image::ExifTool::CanonVRD::ToneCurve` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONVRD_TONECURVE: BinaryTable = BinaryTable {
     module: "CanonVRD",
@@ -37037,9 +37814,11 @@ pub static CANONVRD_TONECURVE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonVRD::Ver1` -- 43 fields.
+/// `Image::ExifTool::CanonVRD::Ver1` -- 43 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONVRD_VER1: BinaryTable = BinaryTable {
     module: "CanonVRD",
@@ -37533,9 +38312,11 @@ pub static CANONVRD_VER1: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::CanonVRD::Ver2` -- 137 fields.
+/// `Image::ExifTool::CanonVRD::Ver2` -- 137 fields,
+/// 3 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANONVRD_VER2: BinaryTable = BinaryTable {
     module: "CanonVRD",
@@ -39094,9 +39875,186 @@ pub static CANONVRD_VER2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 94,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "VRDVersion",
+                        op: CmpOp::Lt,
+                        value: 330,
+                    },
+                    Field {
+                        index: 94,
+                        sub: None,
+                        name: "ChrominanceNoiseReduction",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "Off"), (58, "Low"), (100, "High")]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 94,
+                        sub: None,
+                        name: "ChrominanceNoiseReduction",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "0"),
+                            (16, "1"),
+                            (33, "2"),
+                            (50, "3"),
+                            (66, "4"),
+                            (83, "5"),
+                            (100, "6"),
+                            (116, "7"),
+                            (133, "8"),
+                            (150, "9"),
+                            (166, "10"),
+                            (167, "11"),
+                            (168, "12"),
+                            (169, "13"),
+                            (170, "14"),
+                            (171, "15"),
+                            (172, "16"),
+                            (173, "17"),
+                            (174, "18"),
+                            (175, "19"),
+                            (176, "20"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 95,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "VRDVersion",
+                        op: CmpOp::Lt,
+                        value: 330,
+                    },
+                    Field {
+                        index: 95,
+                        sub: None,
+                        name: "LuminanceNoiseReduction",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "Off"), (65, "Low"), (100, "High")]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 95,
+                        sub: None,
+                        name: "LuminanceNoiseReduction",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "0"),
+                            (65, "1"),
+                            (100, "2"),
+                            (110, "3"),
+                            (120, "4"),
+                            (130, "5"),
+                            (140, "6"),
+                            (150, "7"),
+                            (160, "8"),
+                            (170, "9"),
+                            (180, "10"),
+                            (181, "11"),
+                            (182, "12"),
+                            (183, "13"),
+                            (184, "14"),
+                            (185, "15"),
+                            (186, "16"),
+                            (187, "17"),
+                            (188, "18"),
+                            (189, "19"),
+                            (190, "20"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 96,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "VRDVersion",
+                        op: CmpOp::Lt,
+                        value: 330,
+                    },
+                    Field {
+                        index: 96,
+                        sub: None,
+                        name: "ChrominanceNR_TIFF_JPEG",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "Off"), (33, "Low"), (100, "High")]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 96,
+                        sub: None,
+                        name: "ChrominanceNR_TIFF_JPEG",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "0"),
+                            (16, "1"),
+                            (33, "2"),
+                            (50, "3"),
+                            (66, "4"),
+                            (83, "5"),
+                            (100, "6"),
+                            (116, "7"),
+                            (133, "8"),
+                            (150, "9"),
+                            (166, "10"),
+                            (167, "11"),
+                            (168, "12"),
+                            (169, "13"),
+                            (170, "14"),
+                            (171, "15"),
+                            (172, "16"),
+                            (173, "17"),
+                            (174, "18"),
+                            (175, "19"),
+                            (176, "20"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Casio::FaceInfo1` -- 12 fields.
+/// `Image::ExifTool::Casio::FaceInfo1` -- 12 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CASIO_FACEINFO1: BinaryTable = BinaryTable {
     module: "Casio",
@@ -39300,9 +40258,11 @@ pub static CASIO_FACEINFO1: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Casio::FaceInfo2` -- 13 fields.
+/// `Image::ExifTool::Casio::FaceInfo2` -- 13 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CASIO_FACEINFO2: BinaryTable = BinaryTable {
     module: "Casio",
@@ -39527,9 +40487,11 @@ pub static CASIO_FACEINFO2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Casio::QVCI` -- 5 fields.
+/// `Image::ExifTool::Casio::QVCI` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CASIO_QVCI: BinaryTable = BinaryTable {
     module: "Casio",
@@ -39602,9 +40564,11 @@ pub static CASIO_QVCI: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::DJI::ThermalParams` -- 16 fields.
+/// `Image::ExifTool::DJI::ThermalParams` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static DJI_THERMALPARAMS: BinaryTable = BinaryTable {
     module: "DJI",
@@ -39776,9 +40740,11 @@ pub static DJI_THERMALPARAMS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::DJI::ThermalParams2` -- 6 fields.
+/// `Image::ExifTool::DJI::ThermalParams2` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static DJI_THERMALPARAMS2: BinaryTable = BinaryTable {
     module: "DJI",
@@ -39850,9 +40816,11 @@ pub static DJI_THERMALPARAMS2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::DJI::ThermalParams3` -- 4 fields.
+/// `Image::ExifTool::DJI::ThermalParams3` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static DJI_THERMALPARAMS3: BinaryTable = BinaryTable {
     module: "DJI",
@@ -39922,9 +40890,11 @@ pub static DJI_THERMALPARAMS3: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::DNG::ImageSeq` -- 3 fields.
+/// `Image::ExifTool::DNG::ImageSeq` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static DNG_IMAGESEQ: BinaryTable = BinaryTable {
     module: "DNG",
@@ -39966,9 +40936,11 @@ pub static DNG_IMAGESEQ: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::DNG::ProfileDynamicRange` -- 3 fields.
+/// `Image::ExifTool::DNG::ProfileDynamicRange` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static DNG_PROFILEDYNAMICRANGE: BinaryTable = BinaryTable {
     module: "DNG",
@@ -40010,9 +40982,11 @@ pub static DNG_PROFILEDYNAMICRANGE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::DPX::Main` -- 39 fields.
+/// `Image::ExifTool::DPX::Main` -- 39 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static DPX_MAIN: BinaryTable = BinaryTable {
     module: "DPX",
@@ -40553,9 +41527,11 @@ pub static DPX_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::DSF::Main` -- 7 fields.
+/// `Image::ExifTool::DSF::Main` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static DSF_MAIN: BinaryTable = BinaryTable {
     module: "DSF",
@@ -40648,9 +41624,11 @@ pub static DSF_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::DjVu::Form` -- 1 fields.
+/// `Image::ExifTool::DjVu::Form` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static DJVU_FORM: BinaryTable = BinaryTable {
     module: "DjVu",
@@ -40677,9 +41655,11 @@ pub static DJVU_FORM: BinaryTable = BinaryTable {
             ("THUM", "Thumbnail image"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::DjVu::Info` -- 6 fields.
+/// `Image::ExifTool::DjVu::Info` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static DJVU_INFO: BinaryTable = BinaryTable {
     module: "DjVu",
@@ -40777,9 +41757,11 @@ pub static DJVU_INFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::EXE::AR` -- 1 fields.
+/// `Image::ExifTool::EXE::AR` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static EXE_AR: BinaryTable = BinaryTable {
     module: "EXE",
@@ -40805,9 +41787,11 @@ pub static EXE_AR: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::EXE::CHM` -- 2 fields.
+/// `Image::ExifTool::EXE::CHM` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static EXE_CHM: BinaryTable = BinaryTable {
     module: "EXE",
@@ -40958,9 +41942,11 @@ pub static EXE_CHM: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::EXE::DebugNB10` -- 3 fields.
+/// `Image::ExifTool::EXE::DebugNB10` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static EXE_DEBUGNB10: BinaryTable = BinaryTable {
     module: "EXE",
@@ -41014,9 +42000,11 @@ pub static EXE_DEBUGNB10: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::EXE::DebugRSDS` -- 2 fields.
+/// `Image::ExifTool::EXE::DebugRSDS` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static EXE_DEBUGRSDS: BinaryTable = BinaryTable {
     module: "EXE",
@@ -41054,9 +42042,11 @@ pub static EXE_DEBUGRSDS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::EXE::ELF` -- 4 fields.
+/// `Image::ExifTool::EXE::ELF` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static EXE_ELF: BinaryTable = BinaryTable {
     module: "EXE",
@@ -41191,9 +42181,11 @@ pub static EXE_ELF: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::EXE::Main` -- 13 fields.
+/// `Image::ExifTool::EXE::Main` -- 13 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static EXE_MAIN: BinaryTable = BinaryTable {
     module: "EXE",
@@ -41420,9 +42412,11 @@ pub static EXE_MAIN: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::EXE::PEF` -- 3 fields.
+/// `Image::ExifTool::EXE::PEF` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static EXE_PEF: BinaryTable = BinaryTable {
     module: "EXE",
@@ -41470,9 +42464,11 @@ pub static EXE_PEF: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::EXE::PEVersion` -- 7 fields.
+/// `Image::ExifTool::EXE::PEVersion` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static EXE_PEVERSION: BinaryTable = BinaryTable {
     module: "EXE",
@@ -41588,9 +42584,11 @@ pub static EXE_PEVERSION: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLAC::Picture` -- 6 fields.
+/// `Image::ExifTool::FLAC::Picture` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLAC_PICTURE: BinaryTable = BinaryTable {
     module: "FLAC",
@@ -41684,9 +42682,11 @@ pub static FLAC_PICTURE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::AFF1` -- 3 fields.
+/// `Image::ExifTool::FLIR::AFF1` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_AFF1: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -41734,9 +42734,11 @@ pub static FLIR_AFF1: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::AFF5` -- 3 fields.
+/// `Image::ExifTool::FLIR::AFF5` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_AFF5: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -41784,9 +42786,11 @@ pub static FLIR_AFF5: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::CameraInfo` -- 45 fields.
+/// `Image::ExifTool::FLIR::CameraInfo` -- 45 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -42332,9 +43336,11 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::CoarseData` -- 4 fields.
+/// `Image::ExifTool::FLIR::CoarseData` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_COARSEDATA: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -42410,9 +43416,11 @@ pub static FLIR_COARSEDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::EmbeddedImage` -- 4 fields.
+/// `Image::ExifTool::FLIR::EmbeddedImage` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_EMBEDDEDIMAGE: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -42476,9 +43484,11 @@ pub static FLIR_EMBEDDEDIMAGE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::FPF` -- 36 fields.
+/// `Image::ExifTool::FLIR::FPF` -- 36 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_FPF: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -42902,9 +43912,11 @@ pub static FLIR_FPF: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fVal2C65CD),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::GPSInfo` -- 15 fields.
+/// `Image::ExifTool::FLIR::GPSInfo` -- 15 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_GPSINFO: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -43156,9 +44168,11 @@ pub static FLIR_GPSINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::GPS_UUID` -- 3 fields.
+/// `Image::ExifTool::FLIR::GPS_UUID` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_GPS_UUID: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -43200,9 +44214,11 @@ pub static FLIR_GPS_UUID: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::GainDeadData` -- 4 fields.
+/// `Image::ExifTool::FLIR::GainDeadData` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_GAINDEADDATA: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -43278,9 +44294,11 @@ pub static FLIR_GAINDEADDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::Header` -- 1 fields.
+/// `Image::ExifTool::FLIR::Header` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_HEADER: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -43300,9 +44318,11 @@ pub static FLIR_HEADER: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::MeterLink` -- 16 fields.
+/// `Image::ExifTool::FLIR::MeterLink` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_METERLINK: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -43574,9 +44594,11 @@ pub static FLIR_METERLINK: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::MoreInfo` -- 1 fields.
+/// `Image::ExifTool::FLIR::MoreInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_MOREINFO: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -43596,9 +44618,11 @@ pub static FLIR_MOREINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::PaintData` -- 4 fields.
+/// `Image::ExifTool::FLIR::PaintData` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_PAINTDATA: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -43674,9 +44698,11 @@ pub static FLIR_PAINTDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::PaletteInfo` -- 11 fields.
+/// `Image::ExifTool::FLIR::PaletteInfo` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_PALETTEINFO: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -43816,9 +44842,11 @@ pub static FLIR_PALETTEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::Params` -- 8 fields.
+/// `Image::ExifTool::FLIR::Params` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_PARAMS: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -43928,9 +44956,11 @@ pub static FLIR_PARAMS: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf2fVal67A3D4),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::PiP` -- 7 fields.
+/// `Image::ExifTool::FLIR::PiP` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_PIP: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -44012,9 +45042,11 @@ pub static FLIR_PIP: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::RawData` -- 4 fields.
+/// `Image::ExifTool::FLIR::RawData` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_RAWDATA: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -44090,9 +45122,11 @@ pub static FLIR_RAWDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FLIR::SerialNums` -- 1 fields.
+/// `Image::ExifTool::FLIR::SerialNums` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLIR_SERIALNUMS: BinaryTable = BinaryTable {
     module: "FLIR",
@@ -44112,9 +45146,11 @@ pub static FLIR_SERIALNUMS: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FlashPix::CompObj` -- 1 fields.
+/// `Image::ExifTool::FlashPix::CompObj` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLASHPIX_COMPOBJ: BinaryTable = BinaryTable {
     module: "FlashPix",
@@ -44134,9 +45170,11 @@ pub static FLASHPIX_COMPOBJ: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FlashPix::DOP` -- 10 fields.
+/// `Image::ExifTool::FlashPix::DOP` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLASHPIX_DOP: BinaryTable = BinaryTable {
     module: "FlashPix",
@@ -44266,9 +45304,11 @@ pub static FLASHPIX_DOP: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FlashPix::PreviewInfo` -- 2 fields.
+/// `Image::ExifTool::FlashPix::PreviewInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLASHPIX_PREVIEWINFO: BinaryTable = BinaryTable {
     module: "FlashPix",
@@ -44300,9 +45340,11 @@ pub static FLASHPIX_PREVIEWINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FlashPix::SubimageHdr` -- 6 fields.
+/// `Image::ExifTool::FlashPix::SubimageHdr` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FLASHPIX_SUBIMAGEHDR: BinaryTable = BinaryTable {
     module: "FlashPix",
@@ -44374,9 +45416,11 @@ pub static FLASHPIX_SUBIMAGEHDR: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Font::PFM` -- 24 fields.
+/// `Image::ExifTool::Font::PFM` -- 24 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FONT_PFM: BinaryTable = BinaryTable {
     module: "Font",
@@ -44628,9 +45672,11 @@ pub static FONT_PFM: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FotoStation::SoftEdit` -- 10 fields.
+/// `Image::ExifTool::FotoStation::SoftEdit` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FOTOSTATION_SOFTEDIT: BinaryTable = BinaryTable {
     module: "FotoStation",
@@ -44784,9 +45830,11 @@ pub static FOTOSTATION_SOFTEDIT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FujiFilm::AFCSettings` -- 4 fields.
+/// `Image::ExifTool::FujiFilm::AFCSettings` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
     module: "FujiFilm",
@@ -44853,9 +45901,11 @@ pub static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Front"), (1, "Auto"), (2, "Center")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FujiFilm::DriveSettings` -- 2 fields.
+/// `Image::ExifTool::FujiFilm::DriveSettings` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FUJIFILM_DRIVESETTINGS: BinaryTable = BinaryTable {
     module: "FujiFilm",
@@ -44897,9 +45947,11 @@ pub static FUJIFILM_DRIVESETTINGS: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "n/a")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FujiFilm::FFMV` -- 1 fields.
+/// `Image::ExifTool::FujiFilm::FFMV` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FUJIFILM_FFMV: BinaryTable = BinaryTable {
     module: "FujiFilm",
@@ -44919,9 +45971,11 @@ pub static FUJIFILM_FFMV: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FujiFilm::FocusSettings` -- 5 fields.
+/// `Image::ExifTool::FujiFilm::FocusSettings` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
     module: "FujiFilm",
@@ -45002,9 +46056,11 @@ pub static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "n/a")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FujiFilm::MOV` -- 5 fields.
+/// `Image::ExifTool::FujiFilm::MOV` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FUJIFILM_MOV: BinaryTable = BinaryTable {
     module: "FujiFilm",
@@ -45072,9 +46128,11 @@ pub static FUJIFILM_MOV: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal0892CDF),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FujiFilm::PrioritySettings` -- 2 fields.
+/// `Image::ExifTool::FujiFilm::PrioritySettings` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FUJIFILM_PRIORITYSETTINGS: BinaryTable = BinaryTable {
     module: "FujiFilm",
@@ -45112,9 +46170,11 @@ pub static FUJIFILM_PRIORITYSETTINGS: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(1, "Release"), (2, "Focus")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::FujiFilm::RAFData` -- 2 fields.
+/// `Image::ExifTool::FujiFilm::RAFData` -- 2 fields,
+/// 2 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FUJIFILM_RAFDATA: BinaryTable = BinaryTable {
     module: "FujiFilm",
@@ -45158,9 +46218,109 @@ pub static FUJIFILM_RAFDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 4,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberTruthy {
+                        member: "FujiWidth",
+                        negate: true,
+                    },
+                    Field {
+                        index: 4,
+                        sub: None,
+                        name: "RawImageWidth",
+                        format: Some(Fmt::Int32u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: true,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 4,
+                        sub: None,
+                        name: "RawImageHeight",
+                        format: Some(Fmt::Int32u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: true,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 8,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberTruthy {
+                        member: "FujiWidth",
+                        negate: true,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "RawImageWidth",
+                        format: Some(Fmt::Int32u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: true,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberTruthy {
+                        member: "FujiHeight",
+                        negate: true,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "RawImageHeight",
+                        format: Some(Fmt::Int32u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: true,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::FujiFilm::RAFHeader` -- 2 fields.
+/// `Image::ExifTool::FujiFilm::RAFHeader` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static FUJIFILM_RAFHEADER: BinaryTable = BinaryTable {
     module: "FujiFilm",
@@ -45198,9 +46358,11 @@ pub static FUJIFILM_RAFHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Uncompressed"), (2, "Lossless"), (3, "Lossy")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::GIF::Animation` -- 1 fields.
+/// `Image::ExifTool::GIF::Animation` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static GIF_ANIMATION: BinaryTable = BinaryTable {
     module: "GIF",
@@ -45220,9 +46382,11 @@ pub static GIF_ANIMATION: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::Expr(ExprId::ValValInfiniteB70B6F),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::GIF::MIDIControl` -- 6 fields.
+/// `Image::ExifTool::GIF::MIDIControl` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static GIF_MIDICONTROL: BinaryTable = BinaryTable {
     module: "GIF",
@@ -45300,9 +46464,11 @@ pub static GIF_MIDICONTROL: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::GIF::Screen` -- 7 fields.
+/// `Image::ExifTool::GIF::Screen` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static GIF_SCREEN: BinaryTable = BinaryTable {
     module: "GIF",
@@ -45411,9 +46577,11 @@ pub static GIF_SCREEN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::GIMP::Header` -- 4 fields.
+/// `Image::ExifTool::GIMP::Header` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static GIMP_HEADER: BinaryTable = BinaryTable {
     module: "GIMP",
@@ -45475,9 +46643,11 @@ pub static GIMP_HEADER: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::GIMP::Resolution` -- 2 fields.
+/// `Image::ExifTool::GIMP::Resolution` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static GIMP_RESOLUTION: BinaryTable = BinaryTable {
     module: "GIMP",
@@ -45509,9 +46679,11 @@ pub static GIMP_RESOLUTION: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::GM::mrlh` -- 1 fields.
+/// `Image::ExifTool::GM::mrlh` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static GM_MRLH: BinaryTable = BinaryTable {
     module: "GM",
@@ -45531,9 +46703,11 @@ pub static GM_MRLH: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::GoPro::fdsc` -- 4 fields.
+/// `Image::ExifTool::GoPro::fdsc` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static GOPRO_FDSC: BinaryTable = BinaryTable {
     module: "GoPro",
@@ -45585,9 +46759,11 @@ pub static GOPRO_FDSC: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::H264::Camera1` -- 5 fields.
+/// `Image::ExifTool::H264::Camera1` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static H264_CAMERA1: BinaryTable = BinaryTable {
     module: "H264",
@@ -45693,9 +46869,11 @@ pub static H264_CAMERA1: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::H264::Camera2` -- 1 fields.
+/// `Image::ExifTool::H264::Camera2` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static H264_CAMERA2: BinaryTable = BinaryTable {
     module: "H264",
@@ -45720,9 +46898,11 @@ pub static H264_CAMERA2: BinaryTable = BinaryTable {
             (255, "n/a"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::H264::FrameInfo` -- 2 fields.
+/// `Image::ExifTool::H264::FrameInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static H264_FRAMEINFO: BinaryTable = BinaryTable {
     module: "H264",
@@ -45754,9 +46934,11 @@ pub static H264_FRAMEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::H264::MakeModel` -- 1 fields.
+/// `Image::ExifTool::H264::MakeModel` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static H264_MAKEMODEL: BinaryTable = BinaryTable {
     module: "H264",
@@ -45787,9 +46969,11 @@ pub static H264_MAKEMODEL: BinaryTable = BinaryTable {
             (4356, "JVC"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::H264::RecInfo` -- 1 fields.
+/// `Image::ExifTool::H264::RecInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static H264_RECINFO: BinaryTable = BinaryTable {
     module: "H264",
@@ -45809,9 +46993,11 @@ pub static H264_RECINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(2, "XP+"), (4, "SP"), (5, "LP"), (6, "FXP"), (7, "MXP")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::H264::Shutter` -- 1 fields.
+/// `Image::ExifTool::H264::Shutter` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static H264_SHUTTER: BinaryTable = BinaryTable {
     module: "H264",
@@ -45840,9 +47026,11 @@ pub static H264_SHUTTER: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::HP::Type4` -- 5 fields.
+/// `Image::ExifTool::HP::Type4` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static HP_TYPE4: BinaryTable = BinaryTable {
     module: "HP",
@@ -45922,9 +47110,11 @@ pub static HP_TYPE4: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::HP::Type6` -- 5 fields.
+/// `Image::ExifTool::HP::Type6` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static HP_TYPE6: BinaryTable = BinaryTable {
     module: "HP",
@@ -46004,9 +47194,11 @@ pub static HP_TYPE6: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ICC_Profile::Chromaticity` -- 2 fields.
+/// `Image::ExifTool::ICC_Profile::Chromaticity` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ICC_PROFILE_CHROMATICITY: BinaryTable = BinaryTable {
     module: "ICC_Profile",
@@ -46044,9 +47236,11 @@ pub static ICC_PROFILE_CHROMATICITY: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ICC_Profile::ColorRep` -- 4 fields.
+/// `Image::ExifTool::ICC_Profile::ColorRep` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ICC_PROFILE_COLORREP: BinaryTable = BinaryTable {
     module: "ICC_Profile",
@@ -46147,9 +47341,11 @@ pub static ICC_PROFILE_COLORREP: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Limited"), (1, "Full")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ICC_Profile::ColorantTable` -- 7 fields.
+/// `Image::ExifTool::ICC_Profile::ColorantTable` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ICC_PROFILE_COLORANTTABLE: BinaryTable = BinaryTable {
     module: "ICC_Profile",
@@ -46231,9 +47427,11 @@ pub static ICC_PROFILE_COLORANTTABLE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ICC_Profile::Header` -- 15 fields.
+/// `Image::ExifTool::ICC_Profile::Header` -- 15 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ICC_PROFILE_HEADER: BinaryTable = BinaryTable {
     module: "ICC_Profile",
@@ -47271,9 +48469,11 @@ pub static ICC_PROFILE_HEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ICC_Profile::Measurement` -- 3 fields.
+/// `Image::ExifTool::ICC_Profile::Measurement` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ICC_PROFILE_MEASUREMENT: BinaryTable = BinaryTable {
     module: "ICC_Profile",
@@ -47328,9 +48528,11 @@ pub static ICC_PROFILE_MEASUREMENT: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ICC_Profile::ViewingConditions` -- 1 fields.
+/// `Image::ExifTool::ICC_Profile::ViewingConditions` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ICC_PROFILE_VIEWINGCONDITIONS: BinaryTable = BinaryTable {
     module: "ICC_Profile",
@@ -47359,9 +48561,11 @@ pub static ICC_PROFILE_VIEWINGCONDITIONS: BinaryTable = BinaryTable {
             (8, "F8"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ICO::IconDir` -- 4 fields.
+/// `Image::ExifTool::ICO::IconDir` -- 4 fields,
+/// 2 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ICO_ICONDIR: BinaryTable = BinaryTable {
     module: "ICO",
@@ -47425,9 +48629,84 @@ pub static ICO_ICONDIR: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 4,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberStrEq {
+                        member: "FileType",
+                        value: "ICO",
+                        negate: false,
+                    },
+                    Field {
+                        index: 4,
+                        sub: None,
+                        name: "ColorPlanes",
+                        format: Some(Fmt::Int16u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 4,
+                        sub: None,
+                        name: "HotspotX",
+                        format: Some(Fmt::Int16u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 6,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberStrEq {
+                        member: "FileType",
+                        value: "ICO",
+                        negate: false,
+                    },
+                    Field {
+                        index: 6,
+                        sub: None,
+                        name: "BitsPerPixel",
+                        format: Some(Fmt::Int16u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 6,
+                        sub: None,
+                        name: "HotspotY",
+                        format: Some(Fmt::Int16u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::ICO::Main` -- 3 fields.
+/// `Image::ExifTool::ICO::Main` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ICO_MAIN: BinaryTable = BinaryTable {
     module: "ICO",
@@ -47481,9 +48760,11 @@ pub static ICO_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ID3::v1` -- 7 fields.
+/// `Image::ExifTool::ID3::v1` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ID3_V1: BinaryTable = BinaryTable {
     module: "ID3",
@@ -47791,9 +49072,11 @@ pub static ID3_V1: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ID3::v1_Enh` -- 7 fields.
+/// `Image::ExifTool::ID3::v1_Enh` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ID3_V1_ENH: BinaryTable = BinaryTable {
     module: "ID3",
@@ -47904,9 +49187,11 @@ pub static ID3_V1_ENH: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ISO::BootRecord` -- 2 fields.
+/// `Image::ExifTool::ISO::BootRecord` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ISO_BOOTRECORD: BinaryTable = BinaryTable {
     module: "ISO",
@@ -47950,9 +49235,11 @@ pub static ISO_BOOTRECORD: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ISO::PrimaryVolume` -- 16 fields.
+/// `Image::ExifTool::ISO::PrimaryVolume` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ISO_PRIMARYVOLUME: BinaryTable = BinaryTable {
     module: "ISO",
@@ -48208,9 +49495,11 @@ pub static ISO_PRIMARYVOLUME: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ITC::Header` -- 1 fields.
+/// `Image::ExifTool::ITC::Header` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ITC_HEADER: BinaryTable = BinaryTable {
     module: "ITC",
@@ -48230,9 +49519,11 @@ pub static ITC_HEADER: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::StrEnum(&[("artw", "Artwork")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ITC::Item` -- 6 fields.
+/// `Image::ExifTool::ITC::Item` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ITC_ITEM: BinaryTable = BinaryTable {
     module: "ITC",
@@ -48325,9 +49616,11 @@ pub static ITC_ITEM: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::InfiRay::Factory` -- 20 fields.
+/// `Image::ExifTool::InfiRay::Factory` -- 20 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static INFIRAY_FACTORY: BinaryTable = BinaryTable {
     module: "InfiRay",
@@ -48539,9 +49832,11 @@ pub static INFIRAY_FACTORY: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::InfiRay::Isothermal` -- 4 fields.
+/// `Image::ExifTool::InfiRay::Isothermal` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static INFIRAY_ISOTHERMAL: BinaryTable = BinaryTable {
     module: "InfiRay",
@@ -48593,9 +49888,11 @@ pub static INFIRAY_ISOTHERMAL: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::InfiRay::MixMode` -- 4 fields.
+/// `Image::ExifTool::InfiRay::MixMode` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static INFIRAY_MIXMODE: BinaryTable = BinaryTable {
     module: "InfiRay",
@@ -48647,9 +49944,11 @@ pub static INFIRAY_MIXMODE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::InfiRay::OpMode` -- 6 fields.
+/// `Image::ExifTool::InfiRay::OpMode` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static INFIRAY_OPMODE: BinaryTable = BinaryTable {
     module: "InfiRay",
@@ -48721,9 +50020,11 @@ pub static INFIRAY_OPMODE: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf2fCValE99431),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::InfiRay::Picture` -- 10 fields.
+/// `Image::ExifTool::InfiRay::Picture` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static INFIRAY_PICTURE: BinaryTable = BinaryTable {
     module: "InfiRay",
@@ -48835,9 +50136,11 @@ pub static INFIRAY_PICTURE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::InfiRay::Sensor` -- 14 fields.
+/// `Image::ExifTool::InfiRay::Sensor` -- 14 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static INFIRAY_SENSOR: BinaryTable = BinaryTable {
     module: "InfiRay",
@@ -48989,9 +50292,11 @@ pub static INFIRAY_SENSOR: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::InfiRay::Version` -- 19 fields.
+/// `Image::ExifTool::InfiRay::Version` -- 19 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static INFIRAY_VERSION: BinaryTable = BinaryTable {
     module: "InfiRay",
@@ -49193,9 +50498,11 @@ pub static INFIRAY_VERSION: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::JPEG::AVI1` -- 1 fields.
+/// `Image::ExifTool::JPEG::AVI1` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG_AVI1: BinaryTable = BinaryTable {
     module: "JPEG",
@@ -49215,9 +50522,11 @@ pub static JPEG_AVI1: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(0, "Not Interleaved"), (1, "Odd"), (2, "Even")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::JPEG::Adobe` -- 4 fields.
+/// `Image::ExifTool::JPEG::Adobe` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG_ADOBE: BinaryTable = BinaryTable {
     module: "JPEG",
@@ -49273,9 +50582,11 @@ pub static JPEG_ADOBE: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::JPEG::AdobeCM` -- 1 fields.
+/// `Image::ExifTool::JPEG::AdobeCM` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG_ADOBECM: BinaryTable = BinaryTable {
     module: "JPEG",
@@ -49295,9 +50606,11 @@ pub static JPEG_ADOBECM: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::JPEG::HDRGainInfo` -- 1 fields.
+/// `Image::ExifTool::JPEG::HDRGainInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG_HDRGAININFO: BinaryTable = BinaryTable {
     module: "JPEG",
@@ -49317,9 +50630,11 @@ pub static JPEG_HDRGAININFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::JPEG::JPS` -- 4 fields.
+/// `Image::ExifTool::JPEG::JPS` -- 4 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG_JPS: BinaryTable = BinaryTable {
     module: "JPEG",
@@ -49389,9 +50704,59 @@ pub static JPEG_JPS: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Mono"), (1, "Stereo")]),
         },
     ],
+    variants: &[VariantGroup {
+        index: 12,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberCmp {
+                    member: "MediaType",
+                    op: CmpOp::Eq,
+                    value: 0,
+                },
+                Field {
+                    index: 12,
+                    sub: None,
+                    name: "JPSLayout",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Both Eyes"),
+                        (1, "Left Eye"),
+                        (2, "Right Eye"),
+                    ]),
+                },
+            ),
+            (
+                Cond::MemberCmp {
+                    member: "MediaType",
+                    op: CmpOp::Eq,
+                    value: 1,
+                },
+                Field {
+                    index: 12,
+                    sub: None,
+                    name: "JPSLayout",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (1, "Interleaved"),
+                        (2, "Side By Side"),
+                        (3, "Over Under"),
+                        (4, "Anaglyph"),
+                    ]),
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::JPEG::NITF` -- 12 fields.
+/// `Image::ExifTool::JPEG::NITF` -- 12 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG_NITF: BinaryTable = BinaryTable {
     module: "JPEG",
@@ -49538,9 +50903,11 @@ pub static JPEG_NITF: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf0xXVal0CF3C7),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::JPEG::SPIFF` -- 11 fields.
+/// `Image::ExifTool::JPEG::SPIFF` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG_SPIFF: BinaryTable = BinaryTable {
     module: "JPEG",
@@ -49688,9 +51055,11 @@ pub static JPEG_SPIFF: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Jpeg2000::CaptureResolution` -- 2 fields.
+/// `Image::ExifTool::Jpeg2000::CaptureResolution` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG2000_CAPTURERESOLUTION: BinaryTable = BinaryTable {
     module: "Jpeg2000",
@@ -49744,9 +51113,11 @@ pub static JPEG2000_CAPTURERESOLUTION: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Jpeg2000::ColorSpec` -- 3 fields.
+/// `Image::ExifTool::Jpeg2000::ColorSpec` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG2000_COLORSPEC: BinaryTable = BinaryTable {
     module: "Jpeg2000",
@@ -49805,9 +51176,11 @@ pub static JPEG2000_COLORSPEC: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Jpeg2000::DisplayResolution` -- 2 fields.
+/// `Image::ExifTool::Jpeg2000::DisplayResolution` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG2000_DISPLAYRESOLUTION: BinaryTable = BinaryTable {
     module: "Jpeg2000",
@@ -49861,9 +51234,11 @@ pub static JPEG2000_DISPLAYRESOLUTION: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Jpeg2000::FileType` -- 2 fields.
+/// `Image::ExifTool::Jpeg2000::FileType` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG2000_FILETYPE: BinaryTable = BinaryTable {
     module: "Jpeg2000",
@@ -49907,9 +51282,11 @@ pub static JPEG2000_FILETYPE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Jpeg2000::ImageHeader` -- 5 fields.
+/// `Image::ExifTool::Jpeg2000::ImageHeader` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static JPEG2000_IMAGEHEADER: BinaryTable = BinaryTable {
     module: "Jpeg2000",
@@ -49981,9 +51358,11 @@ pub static JPEG2000_IMAGEHEADER: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kandao::GPS` -- 4 fields.
+/// `Image::ExifTool::Kandao::GPS` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KANDAO_GPS: BinaryTable = BinaryTable {
     module: "Kandao",
@@ -50047,9 +51426,11 @@ pub static KANDAO_GPS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kandao::GPSX` -- 4 fields.
+/// `Image::ExifTool::Kandao::GPSX` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KANDAO_GPSX: BinaryTable = BinaryTable {
     module: "Kandao",
@@ -50113,9 +51494,11 @@ pub static KANDAO_GPSX: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kandao::IMU` -- 2 fields.
+/// `Image::ExifTool::Kandao::IMU` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KANDAO_IMU: BinaryTable = BinaryTable {
     module: "Kandao",
@@ -50147,9 +51530,11 @@ pub static KANDAO_IMU: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::MOV` -- 7 fields.
+/// `Image::ExifTool::Kodak::MOV` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_MOV: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -50237,9 +51622,11 @@ pub static KODAK_MOV: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fMmVal03B2CA),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::Main` -- 25 fields.
+/// `Image::ExifTool::Kodak::Main` -- 25 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_MAIN: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -50575,9 +51962,11 @@ pub static KODAK_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Normal")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::Processing` -- 1 fields.
+/// `Image::ExifTool::Kodak::Processing` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_PROCESSING: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -50603,9 +51992,11 @@ pub static KODAK_PROCESSING: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::Scrn` -- 3 fields.
+/// `Image::ExifTool::Kodak::Scrn` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_SCRN: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -50647,9 +52038,11 @@ pub static KODAK_SCRN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::Type2` -- 4 fields.
+/// `Image::ExifTool::Kodak::Type2` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_TYPE2: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -50701,9 +52094,11 @@ pub static KODAK_TYPE2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::Type3` -- 8 fields.
+/// `Image::ExifTool::Kodak::Type3` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_TYPE3: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -50825,9 +52220,11 @@ pub static KODAK_TYPE3: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::Type4` -- 1 fields.
+/// `Image::ExifTool::Kodak::Type4` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_TYPE4: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -50847,9 +52244,11 @@ pub static KODAK_TYPE4: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::Type5` -- 9 fields.
+/// `Image::ExifTool::Kodak::Type5` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_TYPE5: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -50975,9 +52374,11 @@ pub static KODAK_TYPE5: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "On"), (1, "Off")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::Type6` -- 6 fields.
+/// `Image::ExifTool::Kodak::Type6` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_TYPE6: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -51073,9 +52474,11 @@ pub static KODAK_TYPE6: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "No Flash"), (1, "Fired")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::Type7` -- 1 fields.
+/// `Image::ExifTool::Kodak::Type7` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_TYPE7: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -51101,9 +52504,11 @@ pub static KODAK_TYPE7: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Kodak::Type9` -- 6 fields.
+/// `Image::ExifTool::Kodak::Type9` -- 6 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KODAK_TYPE9: BinaryTable = BinaryTable {
     module: "Kodak",
@@ -51205,9 +52610,59 @@ pub static KODAK_TYPE9: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[VariantGroup {
+        index: 12,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberRegex {
+                    member: "Make",
+                    pattern: "Kodak",
+                    ignore_case: true,
+                    negate: false,
+                },
+                Field {
+                    index: 12,
+                    sub: None,
+                    name: "FNumber",
+                    format: Some(Fmt::Int16u),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: true,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: false,
+                    },
+                    print_conv: PrintConv::None,
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 12,
+                    sub: None,
+                    name: "FNumber",
+                    format: Some(Fmt::Int16u),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: true,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: false,
+                    },
+                    print_conv: PrintConv::None,
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::KyoceraRaw::Main` -- 11 fields.
+/// `Image::ExifTool::KyoceraRaw::Main` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static KYOCERARAW_MAIN: BinaryTable = BinaryTable {
     module: "KyoceraRaw",
@@ -51385,9 +52840,11 @@ pub static KYOCERARAW_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::Beef0003` -- 1 fields.
+/// `Image::ExifTool::LNK::Beef0003` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_BEEF0003: BinaryTable = BinaryTable {
     module: "LNK",
@@ -51985,9 +53442,11 @@ pub static LNK_BEEF0003: BinaryTable = BinaryTable {
             ("f5fb2c77-0e2f-4a16-a381-3e560c68bc83", "Removable Drives"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::Beef0004` -- 4 fields.
+/// `Image::ExifTool::LNK::Beef0004` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_BEEF0004: BinaryTable = BinaryTable {
     module: "LNK",
@@ -52068,9 +53527,11 @@ pub static LNK_BEEF0004: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::ConsoleData` -- 17 fields.
+/// `Image::ExifTool::LNK::ConsoleData` -- 17 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_CONSOLEDATA: BinaryTable = BinaryTable {
     module: "LNK",
@@ -52268,9 +53729,11 @@ pub static LNK_CONSOLEDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValYesNo0B6886),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::ConsoleFEData` -- 1 fields.
+/// `Image::ExifTool::LNK::ConsoleFEData` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_CONSOLEFEDATA: BinaryTable = BinaryTable {
     module: "LNK",
@@ -52455,9 +53918,11 @@ pub static LNK_CONSOLEFEDATA: BinaryTable = BinaryTable {
             (65001, "Unicode (UTF-8)"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::ControlPanelCPL` -- 1 fields.
+/// `Image::ExifTool::LNK::ControlPanelCPL` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_CONTROLPANELCPL: BinaryTable = BinaryTable {
     module: "LNK",
@@ -52477,9 +53942,11 @@ pub static LNK_CONTROLPANELCPL: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::Expr(ExprId::Sprintf0x8xControlPanelCPLVal02788B),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::ControlPanelInfo` -- 1 fields.
+/// `Image::ExifTool::LNK::ControlPanelInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_CONTROLPANELINFO: BinaryTable = BinaryTable {
     module: "LNK",
@@ -52512,9 +53979,11 @@ pub static LNK_CONTROLPANELINFO: BinaryTable = BinaryTable {
             (11, "Mobile PC"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::EnvVarData` -- 1 fields.
+/// `Image::ExifTool::LNK::EnvVarData` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_ENVVARDATA: BinaryTable = BinaryTable {
     module: "LNK",
@@ -52534,9 +54003,11 @@ pub static LNK_ENVVARDATA: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::GameFolderInfo` -- 1 fields.
+/// `Image::ExifTool::LNK::GameFolderInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_GAMEFOLDERINFO: BinaryTable = BinaryTable {
     module: "LNK",
@@ -52556,9 +54027,11 @@ pub static LNK_GAMEFOLDERINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::Expr(ExprId::Sprintf0x8xGameFolderVal6FD200),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::Item00Info` -- 4 fields.
+/// `Image::ExifTool::LNK::Item00Info` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_ITEM00INFO: BinaryTable = BinaryTable {
     module: "LNK",
@@ -52631,9 +54104,11 @@ pub static LNK_ITEM00INFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::MTPType2` -- 12 fields.
+/// `Image::ExifTool::LNK::MTPType2` -- 12 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_MTPTYPE2: BinaryTable = BinaryTable {
     module: "LNK",
@@ -57413,9 +58888,11 @@ pub static LNK_MTPTYPE2: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::Main` -- 25 fields.
+/// `Image::ExifTool::LNK::Main` -- 25 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_MAIN: BinaryTable = BinaryTable {
     module: "LNK",
@@ -57783,9 +59260,11 @@ pub static LNK_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::PropertyStore` -- 1 fields.
+/// `Image::ExifTool::LNK::PropertyStore` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_PROPERTYSTORE: BinaryTable = BinaryTable {
     module: "LNK",
@@ -58383,9 +59862,11 @@ pub static LNK_PROPERTYSTORE: BinaryTable = BinaryTable {
             ("f5fb2c77-0e2f-4a16-a381-3e560c68bc83", "Removable Drives"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::RootFolder` -- 2 fields.
+/// `Image::ExifTool::LNK::RootFolder` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_ROOTFOLDER: BinaryTable = BinaryTable {
     module: "LNK",
@@ -59009,9 +60490,11 @@ pub static LNK_ROOTFOLDER: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::TargetInfo` -- 2 fields.
+/// `Image::ExifTool::LNK::TargetInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_TARGETINFO: BinaryTable = BinaryTable {
     module: "LNK",
@@ -59049,9 +60532,11 @@ pub static LNK_TARGETINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::URI` -- 5 fields.
+/// `Image::ExifTool::LNK::URI` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_URI: BinaryTable = BinaryTable {
     module: "LNK",
@@ -59143,9 +60628,11 @@ pub static LNK_URI: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::LNK::UsersFilesFolder` -- 3 fields.
+/// `Image::ExifTool::LNK::UsersFilesFolder` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static LNK_USERSFILESFOLDER: BinaryTable = BinaryTable {
     module: "LNK",
@@ -60349,9 +61836,11 @@ pub static LNK_USERSFILESFOLDER: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::Background` -- 4 fields.
+/// `Image::ExifTool::MNG::Background` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_BACKGROUND: BinaryTable = BinaryTable {
     module: "MNG",
@@ -60408,9 +61897,11 @@ pub static MNG_BACKGROUND: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::BasisObject` -- 12 fields.
+/// `Image::ExifTool::MNG::BasisObject` -- 12 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_BASISOBJECT: BinaryTable = BinaryTable {
     module: "MNG",
@@ -60554,9 +62045,11 @@ pub static MNG_BASISOBJECT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::ClipObjects` -- 4 fields.
+/// `Image::ExifTool::MNG::ClipObjects` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_CLIPOBJECTS: BinaryTable = BinaryTable {
     module: "MNG",
@@ -60608,9 +62101,11 @@ pub static MNG_CLIPOBJECTS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::CloneObject` -- 7 fields.
+/// `Image::ExifTool::MNG::CloneObject` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_CLONEOBJECT: BinaryTable = BinaryTable {
     module: "MNG",
@@ -60692,9 +62187,11 @@ pub static MNG_CLONEOBJECT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::DefineObject` -- 5 fields.
+/// `Image::ExifTool::MNG::DefineObject` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_DEFINEOBJECT: BinaryTable = BinaryTable {
     module: "MNG",
@@ -60756,9 +62253,11 @@ pub static MNG_DEFINEOBJECT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::DeltaPNGHeader` -- 5 fields.
+/// `Image::ExifTool::MNG::DeltaPNGHeader` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_DELTAPNGHEADER: BinaryTable = BinaryTable {
     module: "MNG",
@@ -60829,9 +62328,11 @@ pub static MNG_DELTAPNGHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::ExportImage` -- 1 fields.
+/// `Image::ExifTool::MNG::ExportImage` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_EXPORTIMAGE: BinaryTable = BinaryTable {
     module: "MNG",
@@ -60851,9 +62352,11 @@ pub static MNG_EXPORTIMAGE: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::FramePriority` -- 2 fields.
+/// `Image::ExifTool::MNG::FramePriority` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_FRAMEPRIORITY: BinaryTable = BinaryTable {
     module: "MNG",
@@ -60885,9 +62388,11 @@ pub static MNG_FRAMEPRIORITY: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::JNGHeader` -- 10 fields.
+/// `Image::ExifTool::MNG::JNGHeader` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_JNGHEADER: BinaryTable = BinaryTable {
     module: "MNG",
@@ -61007,9 +62512,11 @@ pub static MNG_JNGHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Noninterlaced")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::Loop` -- 5 fields.
+/// `Image::ExifTool::MNG::Loop` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_LOOP: BinaryTable = BinaryTable {
     module: "MNG",
@@ -61080,9 +62587,11 @@ pub static MNG_LOOP: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::MNGHeader` -- 7 fields.
+/// `Image::ExifTool::MNG::MNGHeader` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_MNGHEADER: BinaryTable = BinaryTable {
     module: "MNG",
@@ -61164,9 +62673,11 @@ pub static MNG_MNGHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf0x8xValE92A9C),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::MagnifyObject` -- 10 fields.
+/// `Image::ExifTool::MNG::MagnifyObject` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_MAGNIFYOBJECT: BinaryTable = BinaryTable {
     module: "MNG",
@@ -61292,9 +62803,11 @@ pub static MNG_MAGNIFYOBJECT: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::MoveObjects` -- 4 fields.
+/// `Image::ExifTool::MNG::MoveObjects` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_MOVEOBJECTS: BinaryTable = BinaryTable {
     module: "MNG",
@@ -61346,9 +62859,11 @@ pub static MNG_MOVEOBJECTS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::PasteImage` -- 10 fields.
+/// `Image::ExifTool::MNG::PasteImage` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_PASTEIMAGE: BinaryTable = BinaryTable {
     module: "MNG",
@@ -61466,9 +62981,11 @@ pub static MNG_PASTEIMAGE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::PromoteParent` -- 3 fields.
+/// `Image::ExifTool::MNG::PromoteParent` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_PROMOTEPARENT: BinaryTable = BinaryTable {
     module: "MNG",
@@ -61510,9 +63027,11 @@ pub static MNG_PROMOTEPARENT: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Bit Replication"), (1, "Zero Fill")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::ShowObjects` -- 3 fields.
+/// `Image::ExifTool::MNG::ShowObjects` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_SHOWOBJECTS: BinaryTable = BinaryTable {
     module: "MNG",
@@ -61554,9 +63073,11 @@ pub static MNG_SHOWOBJECTS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MNG::TerminationAction` -- 4 fields.
+/// `Image::ExifTool::MNG::TerminationAction` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MNG_TERMINATIONACTION: BinaryTable = BinaryTable {
     module: "MNG",
@@ -61617,9 +63138,11 @@ pub static MNG_TERMINATIONACTION: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MOI::Main` -- 7 fields.
+/// `Image::ExifTool::MOI::Main` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MOI_MAIN: BinaryTable = BinaryTable {
     module: "MOI",
@@ -61725,9 +63248,11 @@ pub static MOI_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MPEG::Lame` -- 4 fields.
+/// `Image::ExifTool::MPEG::Lame` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MPEG_LAME: BinaryTable = BinaryTable {
     module: "MPEG",
@@ -61814,9 +63339,11 @@ pub static MPEG_LAME: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MPF::MPImage` -- 7 fields.
+/// `Image::ExifTool::MPF::MPImage` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MPF_MPIMAGE: BinaryTable = BinaryTable {
     module: "MPF",
@@ -61920,9 +63447,11 @@ pub static MPF_MPIMAGE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MRC::FEI12` -- 96 fields.
+/// `Image::ExifTool::MRC::FEI12` -- 96 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MRC_FEI12: BinaryTable = BinaryTable {
     module: "MRC",
@@ -63464,9 +64993,11 @@ pub static MRC_FEI12: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MRC::Main` -- 36 fields.
+/// `Image::ExifTool::MRC::Main` -- 36 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MRC_MAIN: BinaryTable = BinaryTable {
     module: "MRC",
@@ -63929,9 +65460,11 @@ pub static MRC_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MXF::Header` -- 1 fields.
+/// `Image::ExifTool::MXF::Header` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MXF_HEADER: BinaryTable = BinaryTable {
     module: "MXF",
@@ -63957,9 +65490,11 @@ pub static MXF_HEADER: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Microsoft::Stitch` -- 7 fields.
+/// `Image::ExifTool::Microsoft::Stitch` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MICROSOFT_STITCH: BinaryTable = BinaryTable {
     module: "Microsoft",
@@ -64052,9 +65587,11 @@ pub static MICROSOFT_STITCH: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Minolta::CameraInfoA100` -- 17 fields.
+/// `Image::ExifTool::Minolta::CameraInfoA100` -- 17 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTA_CAMERAINFOA100: BinaryTable = BinaryTable {
     module: "Minolta",
@@ -64261,9 +65798,11 @@ pub static MINOLTA_CAMERAINFOA100: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Wide"), (1, "Local"), (2, "Spot")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Minolta::CameraSettings` -- 50 fields.
+/// `Image::ExifTool::Minolta::CameraSettings` -- 50 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTA_CAMERASETTINGS: BinaryTable = BinaryTable {
     module: "Minolta",
@@ -64981,9 +66520,11 @@ pub static MINOLTA_CAMERASETTINGS: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Minolta::CameraSettings5D` -- 26 fields.
+/// `Image::ExifTool::Minolta::CameraSettings5D` -- 26 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTA_CAMERASETTINGS5D: BinaryTable = BinaryTable {
     module: "Minolta",
@@ -65381,9 +66922,11 @@ pub static MINOLTA_CAMERASETTINGS5D: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Minolta::CameraSettings7D` -- 26 fields.
+/// `Image::ExifTool::Minolta::CameraSettings7D` -- 26 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTA_CAMERASETTINGS7D: BinaryTable = BinaryTable {
     module: "Minolta",
@@ -65758,9 +67301,11 @@ pub static MINOLTA_CAMERASETTINGS7D: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Minolta::CameraSettingsA100` -- 78 fields.
+/// `Image::ExifTool::Minolta::CameraSettingsA100` -- 78 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTA_CAMERASETTINGSA100: BinaryTable = BinaryTable {
     module: "Minolta",
@@ -66886,9 +68431,11 @@ pub static MINOLTA_CAMERASETTINGSA100: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Minolta::ISInfoA100` -- 1 fields.
+/// `Image::ExifTool::Minolta::ISInfoA100` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTA_ISINFOA100: BinaryTable = BinaryTable {
     module: "Minolta",
@@ -66908,9 +68455,11 @@ pub static MINOLTA_ISINFOA100: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(0, "Off"), (10116, "On")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Minolta::MMA` -- 2 fields.
+/// `Image::ExifTool::Minolta::MMA` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTA_MMA: BinaryTable = BinaryTable {
     module: "Minolta",
@@ -66942,9 +68491,11 @@ pub static MINOLTA_MMA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Minolta::MOV1` -- 6 fields.
+/// `Image::ExifTool::Minolta::MOV1` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTA_MOV1: BinaryTable = BinaryTable {
     module: "Minolta",
@@ -67022,9 +68573,11 @@ pub static MINOLTA_MOV1: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fMmVal03B2CA),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Minolta::MOV2` -- 6 fields.
+/// `Image::ExifTool::Minolta::MOV2` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTA_MOV2: BinaryTable = BinaryTable {
     module: "Minolta",
@@ -67102,9 +68655,11 @@ pub static MINOLTA_MOV2: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fMmVal03B2CA),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Minolta::WBInfoA100` -- 64 fields.
+/// `Image::ExifTool::Minolta::WBInfoA100` -- 64 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTA_WBINFOA100: BinaryTable = BinaryTable {
     module: "Minolta",
@@ -68246,9 +69801,11 @@ pub static MINOLTA_WBINFOA100: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MinoltaRaw::PRD` -- 9 fields.
+/// `Image::ExifTool::MinoltaRaw::PRD` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTARAW_PRD: BinaryTable = BinaryTable {
     module: "MinoltaRaw",
@@ -68356,9 +69913,11 @@ pub static MINOLTARAW_PRD: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(1, "RGGB"), (4, "GBRG")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::MinoltaRaw::RIF` -- 27 fields.
+/// `Image::ExifTool::MinoltaRaw::RIF` -- 27 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTARAW_RIF: BinaryTable = BinaryTable {
     module: "MinoltaRaw",
@@ -68784,9 +70343,96 @@ pub static MINOLTARAW_RIF: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[VariantGroup {
+        index: 7,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberRegex {
+                    member: "Make",
+                    pattern: "^SONY",
+                    ignore_case: false,
+                    negate: true,
+                },
+                Field {
+                    index: 7,
+                    sub: None,
+                    name: "ColorMode",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Natural color"),
+                        (1, "Black & White"),
+                        (2, "Vivid color"),
+                        (3, "Solarization"),
+                        (4, "Adobe RGB"),
+                        (5, "Sepia"),
+                        (9, "Natural"),
+                        (12, "Portrait"),
+                        (13, "Natural sRGB"),
+                        (14, "Natural+ sRGB"),
+                        (15, "Landscape"),
+                        (16, "Evening"),
+                        (17, "Night Scene"),
+                        (18, "Night Portrait"),
+                        (132, "Embed Adobe RGB"),
+                    ]),
+                },
+            ),
+            (
+                Cond::MemberStrEq {
+                    member: "Model",
+                    value: "DSLR-A100",
+                    negate: false,
+                },
+                Field {
+                    index: 7,
+                    sub: None,
+                    name: "ColorMode",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Standard"),
+                        (1, "Vivid"),
+                        (2, "Portrait"),
+                        (3, "Landscape"),
+                        (4, "Sunset"),
+                        (5, "Night View/Portrait"),
+                        (6, "B&W"),
+                        (7, "Adobe RGB"),
+                        (12, "Neutral"),
+                        (13, "Clear"),
+                        (14, "Deep"),
+                        (15, "Light"),
+                        (16, "Autumn Leaves"),
+                        (17, "Sepia"),
+                        (18, "FL"),
+                        (19, "Vivid 2"),
+                        (20, "IN"),
+                        (21, "SH"),
+                        (22, "FL2"),
+                        (23, "FL3"),
+                        (100, "Neutral"),
+                        (101, "Clear"),
+                        (102, "Deep"),
+                        (103, "Light"),
+                        (104, "Night View"),
+                        (105, "Autumn Leaves"),
+                        (255, "Off"),
+                        (4294967295, "n/a"),
+                    ]),
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::MinoltaRaw::WBG` -- 1 fields.
+/// `Image::ExifTool::MinoltaRaw::WBG` -- 1 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static MINOLTARAW_WBG: BinaryTable = BinaryTable {
     module: "MinoltaRaw",
@@ -68806,9 +70452,47 @@ pub static MINOLTARAW_WBG: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[VariantGroup {
+        index: 4,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "DiMAGE A200\\b",
+                    ignore_case: false,
+                    negate: false,
+                },
+                Field {
+                    index: 4,
+                    sub: None,
+                    name: "WB_GBRGLevels",
+                    format: Some(Fmt::Int16u),
+                    count: 4,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::None,
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 4,
+                    sub: None,
+                    name: "WB_RGGBLevels",
+                    format: Some(Fmt::Int16u),
+                    count: 4,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::None,
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::Nikon::AFInfo` -- 3 fields.
+/// `Image::ExifTool::Nikon::AFInfo` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_AFINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -68869,9 +70553,11 @@ pub static NIKON_AFINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "(none)"), (2047, "All 11 Points")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::AFInfo2V0100` -- 9 fields.
+/// `Image::ExifTool::Nikon::AFInfo2V0100` -- 9 fields,
+/// 4 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_AFINFO2V0100: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -69036,9 +70722,425 @@ pub static NIKON_AFINFO2V0100: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 5,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "AFDetectionMethod",
+                        op: CmpOp::Eq,
+                        value: 0,
+                    },
+                    Field {
+                        index: 5,
+                        sub: None,
+                        name: "AFAreaMode",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Single Area"),
+                            (1, "Dynamic Area"),
+                            (2, "Dynamic Area (closest subject)"),
+                            (3, "Group Dynamic"),
+                            (4, "Dynamic Area (9 points)"),
+                            (5, "Dynamic Area (21 points)"),
+                            (6, "Dynamic Area (51 points)"),
+                            (7, "Dynamic Area (51 points, 3D-tracking)"),
+                            (8, "Auto-area"),
+                            (9, "Dynamic Area (3D-tracking)"),
+                            (10, "Single Area (wide)"),
+                            (11, "Dynamic Area (wide)"),
+                            (12, "Dynamic Area (wide, 3D-tracking)"),
+                            (13, "Group Area"),
+                            (14, "Dynamic Area (25 points)"),
+                            (15, "Dynamic Area (72 points)"),
+                            (16, "Group Area (HL)"),
+                            (17, "Group Area (VL)"),
+                            (18, "Dynamic Area (49 points)"),
+                            (128, "Single"),
+                            (129, "Auto (41 points)"),
+                            (130, "Subject Tracking (41 points)"),
+                            (131, "Face Priority (41 points)"),
+                            (192, "Pinpoint"),
+                            (193, "Single"),
+                            (194, "Dynamic"),
+                            (195, "Wide (S)"),
+                            (196, "Wide (L)"),
+                            (197, "Auto"),
+                            (199, "Auto"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 5,
+                        sub: None,
+                        name: "AFAreaMode",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Contrast-detect"),
+                            (1, "Contrast-detect (normal area)"),
+                            (2, "Contrast-detect (wide area)"),
+                            (3, "Contrast-detect (face priority)"),
+                            (4, "Contrast-detect (subject tracking)"),
+                            (128, "Single"),
+                            (129, "Auto (41 points)"),
+                            (130, "Subject Tracking (41 points)"),
+                            (131, "Face Priority (41 points)"),
+                            (192, "Pinpoint"),
+                            (193, "Single"),
+                            (194, "Dynamic"),
+                            (195, "Wide (S)"),
+                            (196, "Wide (L)"),
+                            (197, "Auto"),
+                            (198, "Auto (People)"),
+                            (199, "Auto (Animal)"),
+                            (200, "Normal-area AF"),
+                            (201, "Wide-area AF"),
+                            (202, "Face-priority AF"),
+                            (203, "Subject-tracking AF"),
+                            (204, "Dynamic Area (S)"),
+                            (205, "Dynamic Area (M)"),
+                            (206, "Dynamic Area (L)"),
+                            (207, "3D-tracking"),
+                            (208, "Wide-Area (C1/C2)"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 7,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 1,
+                    },
+                    Field {
+                        index: 7,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "(none)"),
+                            (1, "C6 (Center)"),
+                            (2, "B6"),
+                            (3, "A5"),
+                            (4, "D6"),
+                            (5, "E5"),
+                            (6, "C7"),
+                            (7, "B7"),
+                            (8, "A6"),
+                            (9, "D7"),
+                            (10, "E6"),
+                            (11, "C5"),
+                            (12, "B5"),
+                            (13, "A4"),
+                            (14, "D5"),
+                            (15, "E4"),
+                            (16, "C8"),
+                            (17, "B8"),
+                            (18, "A7"),
+                            (19, "D8"),
+                            (20, "E7"),
+                            (21, "C9"),
+                            (22, "B9"),
+                            (23, "A8"),
+                            (24, "D9"),
+                            (25, "E8"),
+                            (26, "C10"),
+                            (27, "B10"),
+                            (28, "A9"),
+                            (29, "D10"),
+                            (30, "E9"),
+                            (31, "C11"),
+                            (32, "B11"),
+                            (33, "D11"),
+                            (34, "C4"),
+                            (35, "B4"),
+                            (36, "A3"),
+                            (37, "D4"),
+                            (38, "E3"),
+                            (39, "C3"),
+                            (40, "B3"),
+                            (41, "A2"),
+                            (42, "D3"),
+                            (43, "E2"),
+                            (44, "C2"),
+                            (45, "B2"),
+                            (46, "A1"),
+                            (47, "D2"),
+                            (48, "E1"),
+                            (49, "C1"),
+                            (50, "B1"),
+                            (51, "D1"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 2,
+                    },
+                    Field {
+                        index: 7,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "(none)"),
+                            (1, "Center"),
+                            (2, "Top"),
+                            (3, "Bottom"),
+                            (4, "Mid-left"),
+                            (5, "Upper-left"),
+                            (6, "Lower-left"),
+                            (7, "Far Left"),
+                            (8, "Mid-right"),
+                            (9, "Upper-right"),
+                            (10, "Lower-right"),
+                            (11, "Far Right"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 3,
+                    },
+                    Field {
+                        index: 7,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "(none)"),
+                            (1, "C6 (Center)"),
+                            (2, "B6"),
+                            (3, "A2"),
+                            (4, "D6"),
+                            (5, "E2"),
+                            (6, "C7"),
+                            (7, "B7"),
+                            (8, "A3"),
+                            (9, "D7"),
+                            (10, "E3"),
+                            (11, "C5"),
+                            (12, "B5"),
+                            (13, "A1"),
+                            (14, "D5"),
+                            (15, "E1"),
+                            (16, "C8"),
+                            (17, "B8"),
+                            (18, "D8"),
+                            (19, "C9"),
+                            (20, "B9"),
+                            (21, "D9"),
+                            (22, "C10"),
+                            (23, "B10"),
+                            (24, "D10"),
+                            (25, "C11"),
+                            (26, "B11"),
+                            (27, "D11"),
+                            (28, "C4"),
+                            (29, "B4"),
+                            (30, "D4"),
+                            (31, "C3"),
+                            (32, "B3"),
+                            (33, "D3"),
+                            (34, "C2"),
+                            (35, "B2"),
+                            (36, "D2"),
+                            (37, "C1"),
+                            (38, "B1"),
+                            (39, "D1"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 0,
+                    },
+                    Field {
+                        index: 7,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "(none)")]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 8,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 1,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(7)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 2,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(2)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::IntEnum(&[(0, "(none)"), (2047, "All 11 Points")]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 3,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(5)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 0,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "(none)")]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 28,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "AFDetectionMethod",
+                        op: CmpOp::Eq,
+                        value: 1,
+                    },
+                    Field {
+                        index: 28,
+                        sub: None,
+                        name: "ContrastDetectAFInFocus",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 7,
+                    },
+                    Field {
+                        index: 28,
+                        sub: None,
+                        name: "AFPointsSelected",
+                        format: Some(Fmt::Undef(20)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::AFInfo2V0101` -- 10 fields.
+/// `Image::ExifTool::Nikon::AFInfo2V0101` -- 10 fields,
+/// 4 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_AFINFO2V0101: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -69219,9 +71321,557 @@ pub static NIKON_AFINFO2V0101: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 5,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "AFDetectionMethod",
+                        op: CmpOp::Eq,
+                        value: 0,
+                    },
+                    Field {
+                        index: 5,
+                        sub: None,
+                        name: "AFAreaMode",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: false,
+                            raw_conv: true,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Single Area"),
+                            (1, "Dynamic Area"),
+                            (2, "Dynamic Area (closest subject)"),
+                            (3, "Group Dynamic"),
+                            (4, "Dynamic Area (9 points)"),
+                            (5, "Dynamic Area (21 points)"),
+                            (6, "Dynamic Area (51 points)"),
+                            (7, "Dynamic Area (51 points, 3D-tracking)"),
+                            (8, "Auto-area"),
+                            (9, "Dynamic Area (3D-tracking)"),
+                            (10, "Single Area (wide)"),
+                            (11, "Dynamic Area (wide)"),
+                            (12, "Dynamic Area (wide, 3D-tracking)"),
+                            (13, "Group Area"),
+                            (14, "Dynamic Area (25 points)"),
+                            (15, "Dynamic Area (72 points)"),
+                            (16, "Group Area (HL)"),
+                            (17, "Group Area (VL)"),
+                            (18, "Dynamic Area (49 points)"),
+                            (128, "Single"),
+                            (129, "Auto (41 points)"),
+                            (130, "Subject Tracking (41 points)"),
+                            (131, "Face Priority (41 points)"),
+                            (192, "Pinpoint"),
+                            (193, "Single"),
+                            (194, "Dynamic"),
+                            (195, "Wide (S)"),
+                            (196, "Wide (L)"),
+                            (197, "Auto"),
+                            (199, "Auto"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 5,
+                        sub: None,
+                        name: "AFAreaMode",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: false,
+                            raw_conv: true,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Contrast-detect"),
+                            (1, "Contrast-detect (normal area)"),
+                            (2, "Contrast-detect (wide area)"),
+                            (3, "Contrast-detect (face priority)"),
+                            (4, "Contrast-detect (subject tracking)"),
+                            (128, "Single"),
+                            (129, "Auto (41 points)"),
+                            (130, "Subject Tracking (41 points)"),
+                            (131, "Face Priority (41 points)"),
+                            (192, "Pinpoint"),
+                            (193, "Single"),
+                            (194, "Dynamic"),
+                            (195, "Wide (S)"),
+                            (196, "Wide (L)"),
+                            (197, "Auto"),
+                            (198, "Auto (People)"),
+                            (199, "Auto (Animal)"),
+                            (200, "Normal-area AF"),
+                            (201, "Wide-area AF"),
+                            (202, "Face-priority AF"),
+                            (203, "Subject-tracking AF"),
+                            (204, "Dynamic Area (S)"),
+                            (205, "Dynamic Area (M)"),
+                            (206, "Dynamic Area (L)"),
+                            (207, "3D-tracking"),
+                            (208, "Wide-Area (C1/C2)"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 8,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 1,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(7)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 2,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(2)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::IntEnum(&[(0, "(none)"), (2047, "All 11 Points")]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 7,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(20)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 0,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "(none)")]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 48,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 1,
+                    },
+                    Field {
+                        index: 48,
+                        sub: None,
+                        name: "AFPointsInFocus",
+                        format: Some(Fmt::Undef(7)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 7,
+                    },
+                    Field {
+                        index: 48,
+                        sub: None,
+                        name: "AFPointsInFocus",
+                        format: Some(Fmt::Undef(20)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 68,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 1,
+                    },
+                    Field {
+                        index: 68,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "(none)"),
+                            (1, "C6 (Center)"),
+                            (2, "B6"),
+                            (3, "A5"),
+                            (4, "D6"),
+                            (5, "E5"),
+                            (6, "C7"),
+                            (7, "B7"),
+                            (8, "A6"),
+                            (9, "D7"),
+                            (10, "E6"),
+                            (11, "C5"),
+                            (12, "B5"),
+                            (13, "A4"),
+                            (14, "D5"),
+                            (15, "E4"),
+                            (16, "C8"),
+                            (17, "B8"),
+                            (18, "A7"),
+                            (19, "D8"),
+                            (20, "E7"),
+                            (21, "C9"),
+                            (22, "B9"),
+                            (23, "A8"),
+                            (24, "D9"),
+                            (25, "E8"),
+                            (26, "C10"),
+                            (27, "B10"),
+                            (28, "A9"),
+                            (29, "D10"),
+                            (30, "E9"),
+                            (31, "C11"),
+                            (32, "B11"),
+                            (33, "D11"),
+                            (34, "C4"),
+                            (35, "B4"),
+                            (36, "A3"),
+                            (37, "D4"),
+                            (38, "E3"),
+                            (39, "C3"),
+                            (40, "B3"),
+                            (41, "A2"),
+                            (42, "D3"),
+                            (43, "E2"),
+                            (44, "C2"),
+                            (45, "B2"),
+                            (46, "A1"),
+                            (47, "D2"),
+                            (48, "E1"),
+                            (49, "C1"),
+                            (50, "B1"),
+                            (51, "D1"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 2,
+                    },
+                    Field {
+                        index: 68,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "(none)"),
+                            (1, "Center"),
+                            (2, "Top"),
+                            (3, "Bottom"),
+                            (4, "Mid-left"),
+                            (5, "Upper-left"),
+                            (6, "Lower-left"),
+                            (7, "Far Left"),
+                            (8, "Mid-right"),
+                            (9, "Upper-right"),
+                            (10, "Lower-right"),
+                            (11, "Far Right"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 7,
+                    },
+                    Field {
+                        index: 68,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "(none)"),
+                            (1, "E9 (Center)"),
+                            (2, "D9"),
+                            (3, "C9"),
+                            (4, "B9"),
+                            (5, "A9"),
+                            (6, "F9"),
+                            (7, "G9"),
+                            (8, "H9"),
+                            (9, "I9"),
+                            (10, "E10"),
+                            (11, "D10"),
+                            (12, "C10"),
+                            (13, "B10"),
+                            (14, "A10"),
+                            (15, "F10"),
+                            (16, "G10"),
+                            (17, "H10"),
+                            (18, "I10"),
+                            (19, "E11"),
+                            (20, "D11"),
+                            (21, "C11"),
+                            (22, "B11"),
+                            (23, "A11"),
+                            (24, "F11"),
+                            (25, "G11"),
+                            (26, "H11"),
+                            (27, "I11"),
+                            (28, "E8"),
+                            (29, "D8"),
+                            (30, "C8"),
+                            (31, "B8"),
+                            (32, "A8"),
+                            (33, "F8"),
+                            (34, "G8"),
+                            (35, "H8"),
+                            (36, "I8"),
+                            (37, "E7"),
+                            (38, "D7"),
+                            (39, "C7"),
+                            (40, "B7"),
+                            (41, "A7"),
+                            (42, "F7"),
+                            (43, "G7"),
+                            (44, "H7"),
+                            (45, "I7"),
+                            (46, "E12"),
+                            (47, "D12"),
+                            (48, "C12"),
+                            (49, "B12"),
+                            (50, "A12"),
+                            (51, "F12"),
+                            (52, "G12"),
+                            (53, "H12"),
+                            (54, "I12"),
+                            (55, "E13"),
+                            (56, "D13"),
+                            (57, "C13"),
+                            (58, "B13"),
+                            (59, "A13"),
+                            (60, "F13"),
+                            (61, "G13"),
+                            (62, "H13"),
+                            (63, "I13"),
+                            (64, "E14"),
+                            (65, "D14"),
+                            (66, "C14"),
+                            (67, "B14"),
+                            (68, "A14"),
+                            (69, "F14"),
+                            (70, "G14"),
+                            (71, "H14"),
+                            (72, "I14"),
+                            (73, "E15"),
+                            (74, "D15"),
+                            (75, "C15"),
+                            (76, "B15"),
+                            (77, "A15"),
+                            (78, "F15"),
+                            (79, "G15"),
+                            (80, "H15"),
+                            (81, "I15"),
+                            (82, "E16"),
+                            (83, "D16"),
+                            (84, "C16"),
+                            (85, "B16"),
+                            (86, "A16"),
+                            (87, "F16"),
+                            (88, "G16"),
+                            (89, "H16"),
+                            (90, "I16"),
+                            (91, "E17"),
+                            (92, "D17"),
+                            (93, "C17"),
+                            (94, "B17"),
+                            (95, "A17"),
+                            (96, "F17"),
+                            (97, "G17"),
+                            (98, "H17"),
+                            (99, "I17"),
+                            (100, "E6"),
+                            (101, "D6"),
+                            (102, "C6"),
+                            (103, "B6"),
+                            (104, "A6"),
+                            (105, "F6"),
+                            (106, "G6"),
+                            (107, "H6"),
+                            (108, "I6"),
+                            (109, "E5"),
+                            (110, "D5"),
+                            (111, "C5"),
+                            (112, "B5"),
+                            (113, "A5"),
+                            (114, "F5"),
+                            (115, "G5"),
+                            (116, "H5"),
+                            (117, "I5"),
+                            (118, "E4"),
+                            (119, "D4"),
+                            (120, "C4"),
+                            (121, "B4"),
+                            (122, "A4"),
+                            (123, "F4"),
+                            (124, "G4"),
+                            (125, "H4"),
+                            (126, "I4"),
+                            (127, "E3"),
+                            (128, "D3"),
+                            (129, "C3"),
+                            (130, "B3"),
+                            (131, "A3"),
+                            (132, "F3"),
+                            (133, "G3"),
+                            (134, "H3"),
+                            (135, "I3"),
+                            (136, "E2"),
+                            (137, "D2"),
+                            (138, "C2"),
+                            (139, "B2"),
+                            (140, "A2"),
+                            (141, "F2"),
+                            (142, "G2"),
+                            (143, "H2"),
+                            (144, "I2"),
+                            (145, "E1"),
+                            (146, "D1"),
+                            (147, "C1"),
+                            (148, "B1"),
+                            (149, "A1"),
+                            (150, "F1"),
+                            (151, "G1"),
+                            (152, "H1"),
+                            (153, "I1"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "FocusPointSchema",
+                        op: CmpOp::Eq,
+                        value: 0,
+                    },
+                    Field {
+                        index: 68,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "(none)")]),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::AFInfo2V0200` -- 3 fields.
+/// `Image::ExifTool::Nikon::AFInfo2V0200` -- 3 fields,
+/// 2 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_AFINFO2V0200: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -69284,9 +71934,281 @@ pub static NIKON_AFINFO2V0200: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 7,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "PhaseDetectAF",
+                        op: CmpOp::Eq,
+                        value: 4,
+                    },
+                    Field {
+                        index: 7,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "(none)"),
+                            (1, "E8 (Center)"),
+                            (2, "D8"),
+                            (3, "C8"),
+                            (4, "B8"),
+                            (5, "A8"),
+                            (6, "F8"),
+                            (7, "G8"),
+                            (8, "H8"),
+                            (9, "I8"),
+                            (10, "E9"),
+                            (11, "D9"),
+                            (12, "C9"),
+                            (13, "B9"),
+                            (14, "A9"),
+                            (15, "F9"),
+                            (16, "G9"),
+                            (17, "H9"),
+                            (18, "I9"),
+                            (19, "E7"),
+                            (20, "D7"),
+                            (21, "C7"),
+                            (22, "B7"),
+                            (23, "A7"),
+                            (24, "F7"),
+                            (25, "G7"),
+                            (26, "H7"),
+                            (27, "I7"),
+                            (28, "E10"),
+                            (29, "D10"),
+                            (30, "C10"),
+                            (31, "B10"),
+                            (32, "A10"),
+                            (33, "F10"),
+                            (34, "G10"),
+                            (35, "H10"),
+                            (36, "I10"),
+                            (37, "E11"),
+                            (38, "D11"),
+                            (39, "C11"),
+                            (40, "B11"),
+                            (41, "A11"),
+                            (42, "F11"),
+                            (43, "G11"),
+                            (44, "H11"),
+                            (45, "I11"),
+                            (46, "E12"),
+                            (47, "D12"),
+                            (48, "C12"),
+                            (49, "B12"),
+                            (50, "A12"),
+                            (51, "F12"),
+                            (52, "G12"),
+                            (53, "H12"),
+                            (54, "I12"),
+                            (55, "E13"),
+                            (56, "D13"),
+                            (57, "C13"),
+                            (58, "B13"),
+                            (59, "A13"),
+                            (60, "F13"),
+                            (61, "G13"),
+                            (62, "H13"),
+                            (63, "I13"),
+                            (64, "E14"),
+                            (65, "D14"),
+                            (66, "C14"),
+                            (67, "B14"),
+                            (68, "A14"),
+                            (69, "F14"),
+                            (70, "G14"),
+                            (71, "H14"),
+                            (72, "I14"),
+                            (73, "E15"),
+                            (74, "D15"),
+                            (75, "C15"),
+                            (76, "B15"),
+                            (77, "A15"),
+                            (78, "F15"),
+                            (79, "G15"),
+                            (80, "H15"),
+                            (81, "I15"),
+                            (82, "E6"),
+                            (83, "D6"),
+                            (84, "C6"),
+                            (85, "B6"),
+                            (86, "A6"),
+                            (87, "F6"),
+                            (88, "G6"),
+                            (89, "H6"),
+                            (90, "I6"),
+                            (91, "E5"),
+                            (92, "D5"),
+                            (93, "C5"),
+                            (94, "B5"),
+                            (95, "A5"),
+                            (96, "F5"),
+                            (97, "G5"),
+                            (98, "H5"),
+                            (99, "I5"),
+                            (100, "E4"),
+                            (101, "D4"),
+                            (102, "C4"),
+                            (103, "B4"),
+                            (104, "A4"),
+                            (105, "F4"),
+                            (106, "G4"),
+                            (107, "H4"),
+                            (108, "I4"),
+                            (109, "E3"),
+                            (110, "D3"),
+                            (111, "C3"),
+                            (112, "B3"),
+                            (113, "A3"),
+                            (114, "F3"),
+                            (115, "G3"),
+                            (116, "H3"),
+                            (117, "I3"),
+                            (118, "E2"),
+                            (119, "D2"),
+                            (120, "C2"),
+                            (121, "B2"),
+                            (122, "A2"),
+                            (123, "F2"),
+                            (124, "G2"),
+                            (125, "H2"),
+                            (126, "I2"),
+                            (127, "E1"),
+                            (128, "D1"),
+                            (129, "C1"),
+                            (130, "B1"),
+                            (131, "A1"),
+                            (132, "F1"),
+                            (133, "G1"),
+                            (134, "H1"),
+                            (135, "I1"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "PhaseDetectAF",
+                        op: CmpOp::Eq,
+                        value: 5,
+                    },
+                    Field {
+                        index: 7,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "(none)"), (82, "F8 (Center)")]),
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "PhaseDetectAF",
+                        op: CmpOp::Eq,
+                        value: 6,
+                    },
+                    Field {
+                        index: 7,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "(none)"), (115, "F11 (Center)")]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 8,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "PhaseDetectAF",
+                        op: CmpOp::Eq,
+                        value: 4,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(17)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "PhaseDetectAF",
+                        op: CmpOp::Eq,
+                        value: 5,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(21)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberCmp {
+                        member: "PhaseDetectAF",
+                        op: CmpOp::Eq,
+                        value: 6,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(29)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::AFInfo2V0300` -- 10 fields.
+/// `Image::ExifTool::Nikon::AFInfo2V0300` -- 10 fields,
+/// 5 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_AFINFO2V0300: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -69467,9 +72389,715 @@ pub static NIKON_AFINFO2V0300: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 5,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "AFDetectionMethod",
+                        op: CmpOp::Eq,
+                        value: 0,
+                    },
+                    Field {
+                        index: 5,
+                        sub: None,
+                        name: "AFAreaMode",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Single Area"),
+                            (1, "Dynamic Area"),
+                            (2, "Dynamic Area (closest subject)"),
+                            (3, "Group Dynamic"),
+                            (4, "Dynamic Area (9 points)"),
+                            (5, "Dynamic Area (21 points)"),
+                            (6, "Dynamic Area (51 points)"),
+                            (7, "Dynamic Area (51 points, 3D-tracking)"),
+                            (8, "Auto-area"),
+                            (9, "Dynamic Area (3D-tracking)"),
+                            (10, "Single Area (wide)"),
+                            (11, "Dynamic Area (wide)"),
+                            (12, "Dynamic Area (wide, 3D-tracking)"),
+                            (13, "Group Area"),
+                            (14, "Dynamic Area (25 points)"),
+                            (15, "Dynamic Area (72 points)"),
+                            (16, "Group Area (HL)"),
+                            (17, "Group Area (VL)"),
+                            (18, "Dynamic Area (49 points)"),
+                            (128, "Single"),
+                            (129, "Auto (41 points)"),
+                            (130, "Subject Tracking (41 points)"),
+                            (131, "Face Priority (41 points)"),
+                            (192, "Pinpoint"),
+                            (193, "Single"),
+                            (194, "Dynamic"),
+                            (195, "Wide (S)"),
+                            (196, "Wide (L)"),
+                            (197, "Auto"),
+                            (199, "Auto"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 5,
+                        sub: None,
+                        name: "AFAreaMode",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Contrast-detect"),
+                            (1, "Contrast-detect (normal area)"),
+                            (2, "Contrast-detect (wide area)"),
+                            (3, "Contrast-detect (face priority)"),
+                            (4, "Contrast-detect (subject tracking)"),
+                            (128, "Single"),
+                            (129, "Auto (41 points)"),
+                            (130, "Subject Tracking (41 points)"),
+                            (131, "Face Priority (41 points)"),
+                            (192, "Pinpoint"),
+                            (193, "Single"),
+                            (194, "Dynamic"),
+                            (195, "Wide (S)"),
+                            (196, "Wide (L)"),
+                            (197, "Auto"),
+                            (198, "Auto (People)"),
+                            (199, "Auto (Animal)"),
+                            (200, "Normal-area AF"),
+                            (201, "Wide-area AF"),
+                            (202, "Face-priority AF"),
+                            (203, "Subject-tracking AF"),
+                            (204, "Dynamic Area (S)"),
+                            (205, "Dynamic Area (M)"),
+                            (206, "Dynamic Area (L)"),
+                            (207, "3D-tracking"),
+                            (208, "Wide-Area (C1/C2)"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 10,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::And(
+                        &Cond::MemberCmp {
+                            member: "FocusPointSchema",
+                            op: CmpOp::Eq,
+                            value: 1,
+                        },
+                        &Cond::MemberCmp {
+                            member: "AFCoordinatesAvailable",
+                            op: CmpOp::Eq,
+                            value: 0,
+                        },
+                    ),
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(7)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberCmp {
+                            member: "FocusPointSchema",
+                            op: CmpOp::Eq,
+                            value: 8,
+                        },
+                        &Cond::MemberCmp {
+                            member: "AFCoordinatesAvailable",
+                            op: CmpOp::Eq,
+                            value: 0,
+                        },
+                    ),
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(11)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberCmp {
+                            member: "FocusPointSchema",
+                            op: CmpOp::Eq,
+                            value: 9,
+                        },
+                        &Cond::MemberCmp {
+                            member: "AFCoordinatesAvailable",
+                            op: CmpOp::Eq,
+                            value: 0,
+                        },
+                    ),
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(14)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 47,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z 30|Z 50|Z fc)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::MemberTruthy {
+                            member: "AFAreaXPosition",
+                            negate: false,
+                        },
+                    ),
+                    Field {
+                        index: 47,
+                        sub: None,
+                        name: "FocusPositionHorizontal",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z 5|Z 6|Z 6_2|D780)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::MemberTruthy {
+                            member: "AFAreaXPosition",
+                            negate: false,
+                        },
+                    ),
+                    Field {
+                        index: 47,
+                        sub: None,
+                        name: "FocusPositionHorizontal",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z 7|Z 7_2)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::MemberTruthy {
+                            member: "AFAreaXPosition",
+                            negate: false,
+                        },
+                    ),
+                    Field {
+                        index: 47,
+                        sub: None,
+                        name: "FocusPositionHorizontal",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 49,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z 30|Z 50|Z fc)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::MemberTruthy {
+                            member: "AFAreaYPosition",
+                            negate: false,
+                        },
+                    ),
+                    Field {
+                        index: 49,
+                        sub: None,
+                        name: "FocusPositionVertical",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z 5|Z 6|Z 6_2|D780)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::MemberTruthy {
+                            member: "AFAreaYPosition",
+                            negate: false,
+                        },
+                    ),
+                    Field {
+                        index: 49,
+                        sub: None,
+                        name: "FocusPositionVertical",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z 7|Z 7_2)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::MemberTruthy {
+                            member: "AFAreaYPosition",
+                            negate: false,
+                        },
+                    ),
+                    Field {
+                        index: 49,
+                        sub: None,
+                        name: "FocusPositionVertical",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 56,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::And(
+                        &Cond::MemberCmp {
+                            member: "FocusPointSchema",
+                            op: CmpOp::Eq,
+                            value: 1,
+                        },
+                        &Cond::MemberCmp {
+                            member: "AFCoordinatesAvailable",
+                            op: CmpOp::Eq,
+                            value: 0,
+                        },
+                    ),
+                    Field {
+                        index: 56,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "(none)"),
+                            (1, "C6 (Center)"),
+                            (2, "B6"),
+                            (3, "A5"),
+                            (4, "D6"),
+                            (5, "E5"),
+                            (6, "C7"),
+                            (7, "B7"),
+                            (8, "A6"),
+                            (9, "D7"),
+                            (10, "E6"),
+                            (11, "C5"),
+                            (12, "B5"),
+                            (13, "A4"),
+                            (14, "D5"),
+                            (15, "E4"),
+                            (16, "C8"),
+                            (17, "B8"),
+                            (18, "A7"),
+                            (19, "D8"),
+                            (20, "E7"),
+                            (21, "C9"),
+                            (22, "B9"),
+                            (23, "A8"),
+                            (24, "D9"),
+                            (25, "E8"),
+                            (26, "C10"),
+                            (27, "B10"),
+                            (28, "A9"),
+                            (29, "D10"),
+                            (30, "E9"),
+                            (31, "C11"),
+                            (32, "B11"),
+                            (33, "D11"),
+                            (34, "C4"),
+                            (35, "B4"),
+                            (36, "A3"),
+                            (37, "D4"),
+                            (38, "E3"),
+                            (39, "C3"),
+                            (40, "B3"),
+                            (41, "A2"),
+                            (42, "D3"),
+                            (43, "E2"),
+                            (44, "C2"),
+                            (45, "B2"),
+                            (46, "A1"),
+                            (47, "D2"),
+                            (48, "E1"),
+                            (49, "C1"),
+                            (50, "B1"),
+                            (51, "D1"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberCmp {
+                            member: "FocusPointSchema",
+                            op: CmpOp::Eq,
+                            value: 8,
+                        },
+                        &Cond::MemberCmp {
+                            member: "AFCoordinatesAvailable",
+                            op: CmpOp::Eq,
+                            value: 0,
+                        },
+                    ),
+                    Field {
+                        index: 56,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "(none)"),
+                            (1, "E5 (Center)"),
+                            (2, "D5"),
+                            (3, "C5"),
+                            (4, "B5"),
+                            (5, "A5"),
+                            (6, "F5"),
+                            (7, "G5"),
+                            (8, "H5"),
+                            (9, "I5"),
+                            (10, "E6"),
+                            (11, "D6"),
+                            (12, "C6"),
+                            (13, "B6"),
+                            (14, "A6"),
+                            (15, "F6"),
+                            (16, "G6"),
+                            (17, "H6"),
+                            (18, "I6"),
+                            (19, "E4"),
+                            (20, "D4"),
+                            (21, "C4"),
+                            (22, "B4"),
+                            (23, "A4"),
+                            (24, "F4"),
+                            (25, "G4"),
+                            (26, "H4"),
+                            (27, "I4"),
+                            (28, "E7"),
+                            (29, "D7"),
+                            (30, "C7"),
+                            (31, "B7"),
+                            (32, "A7"),
+                            (33, "F7"),
+                            (34, "G7"),
+                            (35, "H7"),
+                            (36, "I7"),
+                            (37, "E3"),
+                            (38, "D3"),
+                            (39, "C3"),
+                            (40, "B3"),
+                            (41, "A3"),
+                            (42, "F3"),
+                            (43, "G3"),
+                            (44, "H3"),
+                            (45, "I3"),
+                            (46, "E8"),
+                            (47, "D8"),
+                            (48, "C8"),
+                            (49, "B8"),
+                            (50, "A8"),
+                            (51, "F8"),
+                            (52, "G8"),
+                            (53, "H8"),
+                            (54, "I8"),
+                            (55, "E2"),
+                            (56, "D2"),
+                            (57, "C2"),
+                            (58, "B2"),
+                            (59, "A2"),
+                            (60, "F2"),
+                            (61, "G2"),
+                            (62, "H2"),
+                            (63, "I2"),
+                            (64, "E9"),
+                            (65, "D9"),
+                            (66, "C9"),
+                            (67, "B9"),
+                            (68, "A9"),
+                            (69, "F9"),
+                            (70, "G9"),
+                            (71, "H9"),
+                            (72, "I9"),
+                            (73, "E1"),
+                            (74, "D1"),
+                            (75, "C1"),
+                            (76, "B1"),
+                            (77, "A1"),
+                            (78, "F1"),
+                            (79, "G1"),
+                            (80, "H1"),
+                            (81, "I1"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberCmp {
+                            member: "FocusPointSchema",
+                            op: CmpOp::Eq,
+                            value: 9,
+                        },
+                        &Cond::MemberCmp {
+                            member: "AFCoordinatesAvailable",
+                            op: CmpOp::Eq,
+                            value: 0,
+                        },
+                    ),
+                    Field {
+                        index: 56,
+                        sub: None,
+                        name: "PrimaryAFPoint",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "(none)"),
+                            (1, "D8 (Center)"),
+                            (2, "C8"),
+                            (3, "B8"),
+                            (4, "A8"),
+                            (5, "E8"),
+                            (6, "F8"),
+                            (7, "G8"),
+                            (8, "D9"),
+                            (9, "C9"),
+                            (10, "B9"),
+                            (11, "A9"),
+                            (12, "E9"),
+                            (13, "F9"),
+                            (14, "G9"),
+                            (15, "D10"),
+                            (16, "C10"),
+                            (17, "B10"),
+                            (18, "A10"),
+                            (19, "E10"),
+                            (20, "F10"),
+                            (21, "G10"),
+                            (22, "D7"),
+                            (23, "C7"),
+                            (24, "B7"),
+                            (25, "A7"),
+                            (26, "E7"),
+                            (27, "F7"),
+                            (28, "G7"),
+                            (29, "D6"),
+                            (30, "C6"),
+                            (31, "B6"),
+                            (32, "A6"),
+                            (33, "E6"),
+                            (34, "F6"),
+                            (35, "G6"),
+                            (36, "D11"),
+                            (37, "C11"),
+                            (38, "B11"),
+                            (39, "A11"),
+                            (40, "E11"),
+                            (41, "F11"),
+                            (42, "G11"),
+                            (43, "D12"),
+                            (44, "C12"),
+                            (45, "B12"),
+                            (46, "A12"),
+                            (47, "E12"),
+                            (48, "F12"),
+                            (49, "G12"),
+                            (50, "D13"),
+                            (51, "C13"),
+                            (52, "B13"),
+                            (53, "A13"),
+                            (54, "E13"),
+                            (55, "F13"),
+                            (56, "G13"),
+                            (57, "D14"),
+                            (58, "C14"),
+                            (59, "B14"),
+                            (60, "A14"),
+                            (61, "E14"),
+                            (62, "F14"),
+                            (63, "G14"),
+                            (64, "D15"),
+                            (65, "C15"),
+                            (66, "B15"),
+                            (67, "A15"),
+                            (68, "E15"),
+                            (69, "F15"),
+                            (70, "G15"),
+                            (71, "D5"),
+                            (72, "C5"),
+                            (73, "B5"),
+                            (74, "A5"),
+                            (75, "E5"),
+                            (76, "F5"),
+                            (77, "G5"),
+                            (78, "D4"),
+                            (79, "C4"),
+                            (80, "B4"),
+                            (81, "A4"),
+                            (82, "E4"),
+                            (83, "F4"),
+                            (84, "G4"),
+                            (85, "D3"),
+                            (86, "C3"),
+                            (87, "B3"),
+                            (88, "A3"),
+                            (89, "E3"),
+                            (90, "F3"),
+                            (91, "G3"),
+                            (92, "D2"),
+                            (93, "C2"),
+                            (94, "B2"),
+                            (95, "A2"),
+                            (96, "E2"),
+                            (97, "F2"),
+                            (98, "G2"),
+                            (99, "D1"),
+                            (100, "C1"),
+                            (101, "B1"),
+                            (102, "A1"),
+                            (103, "E1"),
+                            (104, "F1"),
+                            (105, "G1"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::AFInfo2V0400` -- 11 fields.
+/// `Image::ExifTool::Nikon::AFInfo2V0400` -- 11 fields,
+/// 2 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_AFINFO2V0400: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -69666,9 +73294,246 @@ pub static NIKON_AFINFO2V0400: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Out of Focus"), (1, "Focus")]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 67,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON Z50_2\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::And(
+                            &Cond::MemberTruthy {
+                                member: "AFAreaXPosition",
+                                negate: false,
+                            },
+                            &Cond::MemberCmp {
+                                member: "AFAreaXPosition",
+                                op: CmpOp::Ne,
+                                value: 0,
+                            },
+                        ),
+                    ),
+                    Field {
+                        index: 67,
+                        sub: None,
+                        name: "FocusPositionHorizontal",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z6_3|Z f|Z5_2)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::And(
+                            &Cond::MemberTruthy {
+                                member: "AFAreaXPosition",
+                                negate: false,
+                            },
+                            &Cond::MemberCmp {
+                                member: "AFAreaXPosition",
+                                op: CmpOp::Ne,
+                                value: 0,
+                            },
+                        ),
+                    ),
+                    Field {
+                        index: 67,
+                        sub: None,
+                        name: "FocusPositionHorizontal",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z 8|Z 9)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::And(
+                            &Cond::MemberTruthy {
+                                member: "AFAreaXPosition",
+                                negate: false,
+                            },
+                            &Cond::MemberCmp {
+                                member: "AFAreaXPosition",
+                                op: CmpOp::Ne,
+                                value: 0,
+                            },
+                        ),
+                    ),
+                    Field {
+                        index: 67,
+                        sub: None,
+                        name: "FocusPositionHorizontal",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 69,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON Z50_2\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::And(
+                            &Cond::MemberTruthy {
+                                member: "AFAreaYPosition",
+                                negate: false,
+                            },
+                            &Cond::MemberCmp {
+                                member: "AFAreaYPosition",
+                                op: CmpOp::Ne,
+                                value: 0,
+                            },
+                        ),
+                    ),
+                    Field {
+                        index: 69,
+                        sub: None,
+                        name: "FocusPositionVertical",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z6_3|Z f|Z5_2)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::And(
+                            &Cond::MemberTruthy {
+                                member: "AFAreaYPosition",
+                                negate: false,
+                            },
+                            &Cond::MemberCmp {
+                                member: "AFAreaYPosition",
+                                op: CmpOp::Ne,
+                                value: 0,
+                            },
+                        ),
+                    ),
+                    Field {
+                        index: 69,
+                        sub: None,
+                        name: "FocusPositionVertical",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z 8|Z 9)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::And(
+                            &Cond::MemberTruthy {
+                                member: "AFAreaYPosition",
+                                negate: false,
+                            },
+                            &Cond::MemberCmp {
+                                member: "AFAreaYPosition",
+                                op: CmpOp::Ne,
+                                value: 0,
+                            },
+                        ),
+                    ),
+                    Field {
+                        index: 69,
+                        sub: None,
+                        name: "FocusPositionVertical",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::AFTune` -- 4 fields.
+/// `Image::ExifTool::Nikon::AFTune` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_AFTUNE: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -69725,9 +73590,11 @@ pub static NIKON_AFTUNE: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Val0ValValFADF1F),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::AutoCaptureInfo` -- 11 fields.
+/// `Image::ExifTool::Nikon::AutoCaptureInfo` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_AUTOCAPTUREINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -69952,9 +73819,11 @@ pub static NIKON_AUTOCAPTUREINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::BarometerInfo` -- 2 fields.
+/// `Image::ExifTool::Nikon::BarometerInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_BAROMETERINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -69986,9 +73855,11 @@ pub static NIKON_BAROMETERINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValM5C5F88),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::BracketingInfoD500` -- 4 fields.
+/// `Image::ExifTool::Nikon::BracketingInfoD500` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_BRACKETINGINFOD500: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70155,9 +74026,11 @@ pub static NIKON_BRACKETINGINFOD500: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::BracketingInfoD810` -- 3 fields.
+/// `Image::ExifTool::Nikon::BracketingInfoD810` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_BRACKETINGINFOD810: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70297,9 +74170,11 @@ pub static NIKON_BRACKETINGINFOD810: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::CaptureOutput` -- 3 fields.
+/// `Image::ExifTool::Nikon::CaptureOutput` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_CAPTUREOUTPUT: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70341,9 +74216,11 @@ pub static NIKON_CAPTUREOUTPUT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ColorBalance1` -- 1 fields.
+/// `Image::ExifTool::Nikon::ColorBalance1` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_COLORBALANCE1: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70363,9 +74240,11 @@ pub static NIKON_COLORBALANCE1: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ColorBalance2` -- 1 fields.
+/// `Image::ExifTool::Nikon::ColorBalance2` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_COLORBALANCE2: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70385,9 +74264,11 @@ pub static NIKON_COLORBALANCE2: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ColorBalance3` -- 1 fields.
+/// `Image::ExifTool::Nikon::ColorBalance3` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_COLORBALANCE3: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70407,9 +74288,11 @@ pub static NIKON_COLORBALANCE3: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ColorBalance4` -- 1 fields.
+/// `Image::ExifTool::Nikon::ColorBalance4` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_COLORBALANCE4: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70429,9 +74312,11 @@ pub static NIKON_COLORBALANCE4: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ColorBalanceA` -- 8 fields.
+/// `Image::ExifTool::Nikon::ColorBalanceA` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_COLORBALANCEA: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70529,9 +74414,11 @@ pub static NIKON_COLORBALANCEA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ColorBalanceB` -- 9 fields.
+/// `Image::ExifTool::Nikon::ColorBalanceB` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_COLORBALANCEB: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70681,9 +74568,11 @@ pub static NIKON_COLORBALANCEB: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ColorBalanceC` -- 13 fields.
+/// `Image::ExifTool::Nikon::ColorBalanceC` -- 13 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_COLORBALANCEC: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70897,9 +74786,11 @@ pub static NIKON_COLORBALANCEC: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ColorBalanceUnknown` -- 1 fields.
+/// `Image::ExifTool::Nikon::ColorBalanceUnknown` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_COLORBALANCEUNKNOWN: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70919,9 +74810,11 @@ pub static NIKON_COLORBALANCEUNKNOWN: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ColorBalanceUnknown2` -- 1 fields.
+/// `Image::ExifTool::Nikon::ColorBalanceUnknown2` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_COLORBALANCEUNKNOWN2: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70941,9 +74834,74 @@ pub static NIKON_COLORBALANCEUNKNOWN2: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::DistortInfo` -- 1 fields.
+/// `Image::ExifTool::Nikon::CustomSettingsD500` -- 0 fields,
+/// 1 `_variants` groups (Step 23).
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static NIKON_CUSTOMSETTINGSD500: BinaryTable = BinaryTable {
+    module: "Nikon",
+    table: "CustomSettingsD500",
+    group0: "MakerNotes",
+    group2: "Camera",
+    first_entry: 0,
+    default_format: Fmt::Int8u,
+    offsets_sound_until: None,
+    fields: &[],
+    variants: &[VariantGroup {
+        index: 0,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "\\bD5\\b",
+                    ignore_case: false,
+                    negate: false,
+                },
+                Field {
+                    index: 0,
+                    sub: None,
+                    name: "CustomSettingsD5",
+                    format: Some(Fmt::Undef(90)),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                    },
+                    print_conv: PrintConv::None,
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 0,
+                    sub: None,
+                    name: "CustomSettingsD500",
+                    format: Some(Fmt::Undef(90)),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                    },
+                    print_conv: PrintConv::None,
+                },
+            ),
+        ],
+    }],
+};
+
+/// `Image::ExifTool::Nikon::DistortInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_DISTORTINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -70963,9 +74921,11 @@ pub static NIKON_DISTORTINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On"), (2, "On (underwater)")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::DistortionInfo` -- 5 fields.
+/// `Image::ExifTool::Nikon::DistortionInfo` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_DISTORTIONINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -71032,9 +74992,11 @@ pub static NIKON_DISTORTIONINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf5fValCD9331),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::FaceDetect` -- 14 fields.
+/// `Image::ExifTool::Nikon::FaceDetect` -- 14 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_FACEDETECT: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -71264,9 +75226,11 @@ pub static NIKON_FACEDETECT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::FileInfo` -- 4 fields.
+/// `Image::ExifTool::Nikon::FileInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_FILEINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -71318,9 +75282,11 @@ pub static NIKON_FILEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf4dVal57D3F5),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::FlashInfo0100` -- 12 fields.
+/// `Image::ExifTool::Nikon::FlashInfo0100` -- 12 fields,
+/// 3 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_FLASHINFO0100: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -71582,9 +75548,156 @@ pub static NIKON_FLASHINFO0100: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 10,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "FlashOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "FlashCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 17,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupAControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 17,
+                        sub: None,
+                        name: "FlashGroupAOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 17,
+                        sub: None,
+                        name: "FlashGroupACompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 18,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupBControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 18,
+                        sub: None,
+                        name: "FlashGroupBOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 18,
+                        sub: None,
+                        name: "FlashGroupBCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::FlashInfo0102` -- 13 fields.
+/// `Image::ExifTool::Nikon::FlashInfo0102` -- 13 fields,
+/// 4 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_FLASHINFO0102: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -71874,9 +75987,204 @@ pub static NIKON_FLASHINFO0102: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 10,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "FlashOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "FlashCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 18,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupAControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 18,
+                        sub: None,
+                        name: "FlashGroupAOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 18,
+                        sub: None,
+                        name: "FlashGroupACompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 19,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupBControlMode",
+                        op: CmpOp::Ge,
+                        value: 96,
+                    },
+                    Field {
+                        index: 19,
+                        sub: None,
+                        name: "FlashGroupBOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 19,
+                        sub: None,
+                        name: "FlashGroupBCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 20,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupCControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 20,
+                        sub: None,
+                        name: "FlashGroupCOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 20,
+                        sub: None,
+                        name: "FlashGroupCCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::FlashInfo0103` -- 17 fields.
+/// `Image::ExifTool::Nikon::FlashInfo0103` -- 17 fields,
+/// 4 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_FLASHINFO0103: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -72235,9 +76543,204 @@ pub static NIKON_FLASHINFO0103: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 10,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "FlashOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "FlashCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 19,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupAControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 19,
+                        sub: None,
+                        name: "FlashGroupAOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 19,
+                        sub: None,
+                        name: "FlashGroupACompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 20,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupBControlMode",
+                        op: CmpOp::Ge,
+                        value: 96,
+                    },
+                    Field {
+                        index: 20,
+                        sub: None,
+                        name: "FlashGroupBOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 20,
+                        sub: None,
+                        name: "FlashGroupBCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 21,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupCControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 21,
+                        sub: None,
+                        name: "FlashGroupCOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 21,
+                        sub: None,
+                        name: "FlashGroupCCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::FlashInfo0106` -- 14 fields.
+/// `Image::ExifTool::Nikon::FlashInfo0106` -- 14 fields,
+/// 4 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_FLASHINFO0106: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -72548,9 +77051,204 @@ pub static NIKON_FLASHINFO0106: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 39,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 39,
+                        sub: None,
+                        name: "FlashOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 39,
+                        sub: None,
+                        name: "FlashCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 40,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupAControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 40,
+                        sub: None,
+                        name: "FlashGroupAOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 40,
+                        sub: None,
+                        name: "FlashGroupACompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 41,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupBControlMode",
+                        op: CmpOp::Ge,
+                        value: 96,
+                    },
+                    Field {
+                        index: 41,
+                        sub: None,
+                        name: "FlashGroupBOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 41,
+                        sub: None,
+                        name: "FlashGroupBCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 42,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupCControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 42,
+                        sub: None,
+                        name: "FlashGroupCOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 42,
+                        sub: None,
+                        name: "FlashGroupCCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::FlashInfo0107` -- 14 fields.
+/// `Image::ExifTool::Nikon::FlashInfo0107` -- 14 fields,
+/// 3 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_FLASHINFO0107: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -72844,9 +77542,156 @@ pub static NIKON_FLASHINFO0107: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 40,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupAControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 40,
+                        sub: None,
+                        name: "FlashGroupAOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 40,
+                        sub: None,
+                        name: "FlashGroupACompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 41,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupBControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 41,
+                        sub: None,
+                        name: "FlashGroupBOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 41,
+                        sub: None,
+                        name: "FlashGroupBCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 42,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupCControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 42,
+                        sub: None,
+                        name: "FlashGroupCOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 42,
+                        sub: None,
+                        name: "FlashGroupCCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::FlashInfo0300` -- 17 fields.
+/// `Image::ExifTool::Nikon::FlashInfo0300` -- 17 fields,
+/// 3 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_FLASHINFO0300: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73199,9 +78044,156 @@ pub static NIKON_FLASHINFO0300: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValMm18ABDF),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 40,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupAControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 40,
+                        sub: None,
+                        name: "FlashGroupAOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 40,
+                        sub: None,
+                        name: "FlashGroupACompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 41,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupBControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 41,
+                        sub: None,
+                        name: "FlashGroupBOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 41,
+                        sub: None,
+                        name: "FlashGroupBCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 42,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "FlashGroupCControlMode",
+                        op: CmpOp::Ge,
+                        value: 6,
+                    },
+                    Field {
+                        index: 42,
+                        sub: None,
+                        name: "FlashGroupCOutput",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Val099FullSprintf0fVal10057F6C0),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 42,
+                        sub: None,
+                        name: "FlashGroupCCompensation",
+                        format: Some(Fmt::Int8s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Nikon::FlashInfoUnknown` -- 1 fields.
+/// `Image::ExifTool::Nikon::FlashInfoUnknown` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_FLASHINFOUNKNOWN: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73221,9 +78213,11 @@ pub static NIKON_FLASHINFOUNKNOWN: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::GEM` -- 1 fields.
+/// `Image::ExifTool::Nikon::GEM` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_GEM: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73249,9 +78243,11 @@ pub static NIKON_GEM: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::HDRInfo` -- 5 fields.
+/// `Image::ExifTool::Nikon::HDRInfo` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_HDRINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73332,9 +78328,11 @@ pub static NIKON_HDRINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::HDRInfo2` -- 3 fields.
+/// `Image::ExifTool::Nikon::HDRInfo2` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_HDRINFO2: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73383,9 +78381,11 @@ pub static NIKON_HDRINFO2: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ISOAutoInfoD810` -- 2 fields.
+/// `Image::ExifTool::Nikon::ISOAutoInfoD810` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_ISOAUTOINFOD810: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73503,9 +78503,11 @@ pub static NIKON_ISOAUTOINFOD810: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ISOInfo` -- 4 fields.
+/// `Image::ExifTool::Nikon::ISOInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_ISOINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73609,9 +78611,11 @@ pub static NIKON_ISOINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::IntervalInfoD6` -- 11 fields.
+/// `Image::ExifTool::Nikon::IntervalInfoD6` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_INTERVALINFOD6: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73775,9 +78779,11 @@ pub static NIKON_INTERVALINFOD6: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "TTL"), (1, "Manual"), (2, "Auto"), (3, "Off")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::IntervalInfoZ7II` -- 3 fields.
+/// `Image::ExifTool::Nikon::IntervalInfoZ7II` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_INTERVALINFOZ7II: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73838,9 +78844,11 @@ pub static NIKON_INTERVALINFOZ7II: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::JPGInfoD500` -- 1 fields.
+/// `Image::ExifTool::Nikon::JPGInfoD500` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_JPGINFOD500: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73863,9 +78871,11 @@ pub static NIKON_JPGINFOD500: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(0, "Size Priority"), (1, "Optimal Quality")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::LensData00` -- 8 fields.
+/// `Image::ExifTool::Nikon::LensData00` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_LENSDATA00: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -73987,9 +78997,11 @@ pub static NIKON_LENSDATA00: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::LensData01` -- 14 fields.
+/// `Image::ExifTool::Nikon::LensData01` -- 14 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_LENSDATA01: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -74201,9 +79213,11 @@ pub static NIKON_LENSDATA01: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fVal2C65CD),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::LensData0204` -- 14 fields.
+/// `Image::ExifTool::Nikon::LensData0204` -- 14 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_LENSDATA0204: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -74415,9 +79429,11 @@ pub static NIKON_LENSDATA0204: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fVal2C65CD),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::LensData0400` -- 2 fields.
+/// `Image::ExifTool::Nikon::LensData0400` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_LENSDATA0400: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -74449,9 +79465,11 @@ pub static NIKON_LENSDATA0400: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::LensData0402` -- 2 fields.
+/// `Image::ExifTool::Nikon::LensData0402` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_LENSDATA0402: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -74483,9 +79501,11 @@ pub static NIKON_LENSDATA0402: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::LensData0403` -- 2 fields.
+/// `Image::ExifTool::Nikon::LensData0403` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_LENSDATA0403: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -74517,9 +79537,11 @@ pub static NIKON_LENSDATA0403: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::LensData0800` -- 23 fields.
+/// `Image::ExifTool::Nikon::LensData0800` -- 23 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_LENSDATA0800: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -74939,9 +79961,11 @@ pub static NIKON_LENSDATA0800: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Z-mount"), (1, "F-mount")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::LensDataUnknown` -- 1 fields.
+/// `Image::ExifTool::Nikon::LensDataUnknown` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_LENSDATAUNKNOWN: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -74961,9 +79985,11 @@ pub static NIKON_LENSDATAUNKNOWN: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::LocationInfo` -- 5 fields.
+/// `Image::ExifTool::Nikon::LocationInfo` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_LOCATIONINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -75043,9 +80069,11 @@ pub static NIKON_LOCATIONINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MOV` -- 9 fields.
+/// `Image::ExifTool::Nikon::MOV` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MOV: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -75166,9 +80194,11 @@ pub static NIKON_MOV: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MakerNotes0x51` -- 2 fields.
+/// `Image::ExifTool::Nikon::MakerNotes0x51` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MAKERNOTES0X51: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -75219,9 +80249,11 @@ pub static NIKON_MAKERNOTES0X51: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MakerNotes0x56` -- 8 fields.
+/// `Image::ExifTool::Nikon::MakerNotes0x56` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MAKERNOTES0X56: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -75381,9 +80413,11 @@ pub static NIKON_MAKERNOTES0X56: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MenuInfoZ7II` -- 1 fields.
+/// `Image::ExifTool::Nikon::MenuInfoZ7II` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MENUINFOZ7II: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -75409,9 +80443,11 @@ pub static NIKON_MENUINFOZ7II: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MenuSettingsD850` -- 1 fields.
+/// `Image::ExifTool::Nikon::MenuSettingsD850` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MENUSETTINGSD850: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -75440,9 +80476,11 @@ pub static NIKON_MENUSETTINGSD850: BinaryTable = BinaryTable {
             (4, "1:1 (24x24)"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MenuSettingsZ6III` -- 41 fields.
+/// `Image::ExifTool::Nikon::MenuSettingsZ6III` -- 41 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MENUSETTINGSZ6III: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -76103,9 +81141,11 @@ pub static NIKON_MENUSETTINGSZ6III: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MenuSettingsZ7II` -- 18 fields.
+/// `Image::ExifTool::Nikon::MenuSettingsZ7II` -- 18 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MENUSETTINGSZ7II: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -76350,9 +81390,11 @@ pub static NIKON_MENUSETTINGSZ7II: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "TTL"), (1, "Manual"), (2, "Auto"), (3, "Off")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MenuSettingsZ8` -- 36 fields.
+/// `Image::ExifTool::Nikon::MenuSettingsZ8` -- 36 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MENUSETTINGSZ8: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -77001,9 +82043,11 @@ pub static NIKON_MENUSETTINGSZ8: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MenuSettingsZ8v1` -- 4 fields.
+/// `Image::ExifTool::Nikon::MenuSettingsZ8v1` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MENUSETTINGSZ8V1: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -77099,9 +82143,11 @@ pub static NIKON_MENUSETTINGSZ8V1: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MenuSettingsZ8v2` -- 16 fields.
+/// `Image::ExifTool::Nikon::MenuSettingsZ8v2` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MENUSETTINGSZ8V2: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -78323,9 +83369,11 @@ pub static NIKON_MENUSETTINGSZ8V2: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MenuSettingsZ9` -- 29 fields.
+/// `Image::ExifTool::Nikon::MenuSettingsZ9` -- 29 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MENUSETTINGSZ9: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -78875,9 +83923,11 @@ pub static NIKON_MENUSETTINGSZ9: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MenuSettingsZ9v3` -- 32 fields.
+/// `Image::ExifTool::Nikon::MenuSettingsZ9v3` -- 32 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MENUSETTINGSZ9V3: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -79470,9 +84520,11 @@ pub static NIKON_MENUSETTINGSZ9V3: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "1 Sec"), (1, "2 Sec"), (2, "3 Sec"), (3, "Max")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MenuSettingsZ9v4` -- 48 fields.
+/// `Image::ExifTool::Nikon::MenuSettingsZ9v4` -- 48 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MENUSETTINGSZ9V4: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -81666,9 +86718,11 @@ pub static NIKON_MENUSETTINGSZ9V4: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MoreSettingsD850` -- 2 fields.
+/// `Image::ExifTool::Nikon::MoreSettingsD850` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MORESETTINGSD850: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -81712,9 +86766,11 @@ pub static NIKON_MORESETTINGSD850: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "XQD Card"), (1, "SD Card")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MultiExposure` -- 4 fields.
+/// `Image::ExifTool::Nikon::MultiExposure` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MULTIEXPOSURE: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -81771,9 +86827,11 @@ pub static NIKON_MULTIEXPOSURE: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::MultiExposure2` -- 4 fields.
+/// `Image::ExifTool::Nikon::MultiExposure2` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_MULTIEXPOSURE2: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -81830,9 +86888,11 @@ pub static NIKON_MULTIEXPOSURE2: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::Offset13InfoZ9` -- 4 fields.
+/// `Image::ExifTool::Nikon::Offset13InfoZ9` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_OFFSET13INFOZ9: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -81908,9 +86968,11 @@ pub static NIKON_OFFSET13INFOZ9: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::OtherInfoD500` -- 1 fields.
+/// `Image::ExifTool::Nikon::OtherInfoD500` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_OTHERINFOD500: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -81944,9 +87006,11 @@ pub static NIKON_OTHERINFOD500: BinaryTable = BinaryTable {
             (3, "Highlight"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::PictureControl` -- 13 fields.
+/// `Image::ExifTool::Nikon::PictureControl` -- 13 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_PICTURECONTROL: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82153,9 +87217,11 @@ pub static NIKON_PICTURECONTROL: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Val0x7fNAVal58D144),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::PictureControl2` -- 14 fields.
+/// `Image::ExifTool::Nikon::PictureControl2` -- 14 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_PICTURECONTROL2: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82378,9 +87444,11 @@ pub static NIKON_PICTURECONTROL2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::PictureControl3` -- 15 fields.
+/// `Image::ExifTool::Nikon::PictureControl3` -- 15 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_PICTURECONTROL3: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82619,9 +87687,11 @@ pub static NIKON_PICTURECONTROL3: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::PictureControlUnknown` -- 1 fields.
+/// `Image::ExifTool::Nikon::PictureControlUnknown` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_PICTURECONTROLUNKNOWN: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82641,9 +87711,11 @@ pub static NIKON_PICTURECONTROLUNKNOWN: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::PortraitInfoZ7II` -- 1 fields.
+/// `Image::ExifTool::Nikon::PortraitInfoZ7II` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_PORTRAITINFOZ7II: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82669,9 +87741,11 @@ pub static NIKON_PORTRAITINFOZ7II: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ROC` -- 1 fields.
+/// `Image::ExifTool::Nikon::ROC` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_ROC: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82697,9 +87771,11 @@ pub static NIKON_ROC: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::RetouchInfo` -- 2 fields.
+/// `Image::ExifTool::Nikon::RetouchInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_RETOUCHINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82743,9 +87819,11 @@ pub static NIKON_RETOUCHINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(-1, "Off"), (1, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::RotationInfoD500` -- 4 fields.
+/// `Image::ExifTool::Nikon::RotationInfoD500` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_ROTATIONINFOD500: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82820,9 +87898,11 @@ pub static NIKON_ROTATIONINFOD500: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "On"), (1, "Off")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::SeqInfoD6` -- 3 fields.
+/// `Image::ExifTool::Nikon::SeqInfoD6` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_SEQINFOD6: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82883,9 +87963,11 @@ pub static NIKON_SEQINFOD6: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::SeqInfoZ9` -- 3 fields.
+/// `Image::ExifTool::Nikon::SeqInfoZ9` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_SEQINFOZ9: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82945,9 +88027,11 @@ pub static NIKON_SEQINFOZ9: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::SettingsInfoD810` -- 1 fields.
+/// `Image::ExifTool::Nikon::SettingsInfoD810` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_SETTINGSINFOD810: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -82974,9 +88058,11 @@ pub static NIKON_SETTINGSINFOD810: BinaryTable = BinaryTable {
             (3, "NEF Primary + JPG Secondary"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ShootingMenuD500` -- 6 fields.
+/// `Image::ExifTool::Nikon::ShootingMenuD500` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_SHOOTINGMENUD500: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -83158,9 +88244,11 @@ pub static NIKON_SHOOTINGMENUD500: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::ShotInfo` -- 10 fields.
+/// `Image::ExifTool::Nikon::ShotInfo` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_SHOTINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -83337,9 +88425,11 @@ pub static NIKON_SHOTINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::VRInfo` -- 3 fields.
+/// `Image::ExifTool::Nikon::VRInfo` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_VRINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -83381,9 +88471,11 @@ pub static NIKON_VRINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(2, "In-body"), (3, "In-body + Lens")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::VignetteInfo` -- 4 fields.
+/// `Image::ExifTool::Nikon::VignetteInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_VIGNETTEINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -83435,9 +88527,11 @@ pub static NIKON_VIGNETTEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf5fValCD9331),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Nikon::WorldTime` -- 3 fields.
+/// `Image::ExifTool::Nikon::WorldTime` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_WORLDTIME: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -83479,9 +88573,11 @@ pub static NIKON_WORLDTIME: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Y/M/D"), (1, "M/D/Y"), (2, "D/M/Y")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::Brightness` -- 2 fields.
+/// `Image::ExifTool::NikonCapture::Brightness` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_BRIGHTNESS: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -83519,9 +88615,11 @@ pub static NIKONCAPTURE_BRIGHTNESS: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::ColorBoost` -- 2 fields.
+/// `Image::ExifTool::NikonCapture::ColorBoost` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_COLORBOOST: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -83553,9 +88651,11 @@ pub static NIKONCAPTURE_COLORBOOST: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::CropData` -- 13 fields.
+/// `Image::ExifTool::NikonCapture::CropData` -- 13 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_CROPDATA: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -83727,9 +88827,11 @@ pub static NIKONCAPTURE_CROPDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::DLightingHQ` -- 3 fields.
+/// `Image::ExifTool::NikonCapture::DLightingHQ` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_DLIGHTINGHQ: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -83771,9 +88873,11 @@ pub static NIKONCAPTURE_DLIGHTINGHQ: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::DLightingHS` -- 2 fields.
+/// `Image::ExifTool::NikonCapture::DLightingHS` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_DLIGHTINGHS: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -83805,9 +88909,11 @@ pub static NIKONCAPTURE_DLIGHTINGHS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::Exposure` -- 4 fields.
+/// `Image::ExifTool::NikonCapture::Exposure` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_EXPOSURE: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -83874,9 +88980,11 @@ pub static NIKONCAPTURE_EXPOSURE: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::HighlightData` -- 3 fields.
+/// `Image::ExifTool::NikonCapture::HighlightData` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_HIGHLIGHTDATA: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -83918,9 +89026,11 @@ pub static NIKONCAPTURE_HIGHLIGHTDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::NoiseReduction` -- 9 fields.
+/// `Image::ExifTool::NikonCapture::NoiseReduction` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_NOISEREDUCTION: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -84026,9 +89136,11 @@ pub static NIKONCAPTURE_NOISEREDUCTION: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::PhotoEffects` -- 4 fields.
+/// `Image::ExifTool::NikonCapture::PhotoEffects` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_PHOTOEFFECTS: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -84080,9 +89192,11 @@ pub static NIKONCAPTURE_PHOTOEFFECTS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::PictureCtrl` -- 8 fields.
+/// `Image::ExifTool::NikonCapture::PictureCtrl` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_PICTURECTRL: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -84210,9 +89324,11 @@ pub static NIKONCAPTURE_PICTURECTRL: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::RedEyeData` -- 1 fields.
+/// `Image::ExifTool::NikonCapture::RedEyeData` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_REDEYEDATA: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -84232,9 +89348,11 @@ pub static NIKONCAPTURE_REDEYEDATA: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "Automatic"), (2, "Click on Eyes")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::UnsharpData` -- 17 fields.
+/// `Image::ExifTool::NikonCapture::UnsharpData` -- 17 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_UNSHARPDATA: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -84448,9 +89566,11 @@ pub static NIKONCAPTURE_UNSHARPDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCapture::WBAdjData` -- 6 fields.
+/// `Image::ExifTool::NikonCapture::WBAdjData` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCAPTURE_WBADJDATA: BinaryTable = BinaryTable {
     module: "NikonCapture",
@@ -84553,9 +89673,11 @@ pub static NIKONCAPTURE_WBADJDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD3` -- 62 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD3` -- 62 fields,
+/// 14 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD3: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -85646,9 +90768,825 @@ pub static NIKONCUSTOM_SETTINGSD3: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 2,
+            sub: Some(3),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 2,
+                        sub: Some(3),
+                        name: "AFPointIllumination",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x60,
+                            shift: 5,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "On in Continuous Shooting and Manual Focusing"),
+                            (1, "On During Manual Focusing"),
+                            (2, "On in Continuous Shooting Modes"),
+                            (3, "Off"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 2,
+                        sub: Some(3),
+                        name: "AFPointIllumination",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x6,
+                            shift: 1,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "Auto"), (1, "Off"), (2, "On")]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 7,
+            sub: Some(1),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 7,
+                        sub: Some(1),
+                        name: "CenterWeightedAreaSize",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xe0,
+                            shift: 5,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "8 mm"),
+                            (1, "12 mm"),
+                            (2, "15 mm"),
+                            (3, "20 mm"),
+                            (4, "Average"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 7,
+                        sub: Some(1),
+                        name: "CenterWeightedAreaSize",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xe0,
+                            shift: 5,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "6 mm"),
+                            (1, "8 mm"),
+                            (2, "10 mm"),
+                            (3, "13 mm"),
+                            (4, "Average"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 9,
+            sub: Some(3),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 9,
+                        sub: Some(3),
+                        name: "InitialZoomSetting",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xc,
+                            shift: 2,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "High Magnification"),
+                            (1, "Medium Magnification"),
+                            (2, "Low Magnification"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 9,
+                        sub: Some(3),
+                        name: "InitialZoomSetting",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xc,
+                            shift: 2,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Low Magnification"),
+                            (1, "Medium Magnification"),
+                            (2, "High Magnification"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 12,
+            sub: Some(2),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 12,
+                        sub: Some(2),
+                        name: "FileNumberSequence",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x2,
+                            shift: 1,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "On"), (1, "Off")]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 12,
+                        sub: Some(2),
+                        name: "FileNumberSequence",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x8,
+                            shift: 3,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "On"), (1, "Off")]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 14,
+            sub: Some(1),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 14,
+                        sub: Some(1),
+                        name: "PreviewButton",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf8,
+                            shift: 3,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (1, "Preview"),
+                            (2, "FV Lock"),
+                            (3, "AE/AF Lock"),
+                            (4, "AE Lock Only"),
+                            (5, "AE Lock (reset on release)"),
+                            (6, "AE Lock (hold)"),
+                            (7, "AF Lock Only"),
+                            (8, "Flash Off"),
+                            (9, "Bracketing Burst"),
+                            (10, "Matrix Metering"),
+                            (11, "Center-weighted Metering"),
+                            (12, "Spot Metering"),
+                            (13, "Virtual Horizon"),
+                            (15, "Playback"),
+                            (16, "My Menu Top"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 14,
+                        sub: Some(1),
+                        name: "FuncButton",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf8,
+                            shift: 3,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (1, "Preview"),
+                            (2, "FV Lock"),
+                            (3, "AE/AF Lock"),
+                            (4, "AE Lock Only"),
+                            (5, "AE Lock (reset on release)"),
+                            (6, "AE Lock (hold)"),
+                            (7, "AF Lock Only"),
+                            (9, "Flash Off"),
+                            (10, "Bracketing Burst"),
+                            (11, "Matrix Metering"),
+                            (12, "Center-weighted Metering"),
+                            (13, "Spot Metering"),
+                            (14, "Playback"),
+                            (15, "My Menu Top"),
+                            (16, "+ NEF (RAW)"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 14,
+            sub: Some(2),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 14,
+                        sub: Some(2),
+                        name: "PreviewButtonPlusDials",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x7,
+                            shift: 0,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (1, "Choose Image Area (FX/DX/5:4)"),
+                            (2, "One Step Speed/Aperture"),
+                            (3, "Choose Non-CPU Lens Number"),
+                            (5, "Choose Image Area (FX/DX)"),
+                            (6, "Shooting Bank Menu"),
+                            (7, "Dynamic AF Area"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 14,
+                        sub: Some(2),
+                        name: "FuncButtonPlusDials",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x7,
+                            shift: 0,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (2, "One Step Speed/Aperture"),
+                            (3, "Choose Non-CPU Lens Number"),
+                            (5, "Auto Bracketing"),
+                            (6, "Dynamic AF Area"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 15,
+            sub: Some(1),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 15,
+                        sub: Some(1),
+                        name: "FuncButton",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf8,
+                            shift: 3,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (1, "Preview"),
+                            (2, "FV Lock"),
+                            (3, "AE/AF Lock"),
+                            (4, "AE Lock Only"),
+                            (5, "AE Lock (reset on release)"),
+                            (6, "AE Lock (hold)"),
+                            (7, "AF Lock Only"),
+                            (8, "Flash Off"),
+                            (9, "Bracketing Burst"),
+                            (10, "Matrix Metering"),
+                            (11, "Center-weighted Metering"),
+                            (12, "Spot Metering"),
+                            (13, "Virtual Horizon"),
+                            (15, "Playback"),
+                            (16, "My Menu Top"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 15,
+                        sub: Some(1),
+                        name: "PreviewButton",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf8,
+                            shift: 3,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (1, "Preview"),
+                            (2, "FV Lock"),
+                            (3, "AE/AF Lock"),
+                            (4, "AE Lock Only"),
+                            (5, "AE Lock (reset on release)"),
+                            (6, "AE Lock (hold)"),
+                            (7, "AF Lock Only"),
+                            (9, "Flash Off"),
+                            (10, "Bracketing Burst"),
+                            (11, "Matrix Metering"),
+                            (12, "Center-weighted Metering"),
+                            (13, "Spot Metering"),
+                            (14, "Playback"),
+                            (15, "My Menu Top"),
+                            (16, "+ NEF (RAW)"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 15,
+            sub: Some(2),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 15,
+                        sub: Some(2),
+                        name: "FuncButtonPlusDials",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x7,
+                            shift: 0,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (1, "Choose Image Area (FX/DX/5:4)"),
+                            (2, "One Step Speed/Aperture"),
+                            (3, "Choose Non-CPU Lens Number"),
+                            (4, "Focus Point Selection"),
+                            (5, "Choose Image Area (FX/DX)"),
+                            (6, "Shooting Bank Menu"),
+                            (7, "Dynamic AF Area"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 15,
+                        sub: Some(2),
+                        name: "PreviewButtonPlusDials",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x7,
+                            shift: 0,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (2, "One Step Speed/Aperture"),
+                            (3, "Choose Non-CPU Lens Number"),
+                            (5, "Auto Bracketing"),
+                            (6, "Dynamic AF Area"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 16,
+            sub: Some(1),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 16,
+                        sub: Some(1),
+                        name: "AELockButton",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf8,
+                            shift: 3,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (1, "Preview"),
+                            (2, "FV Lock"),
+                            (3, "AE/AF Lock"),
+                            (4, "AE Lock Only"),
+                            (5, "AE Lock (reset on release)"),
+                            (6, "AE Lock (hold)"),
+                            (7, "AF Lock Only"),
+                            (8, "Flash Off"),
+                            (9, "Bracketing Burst"),
+                            (10, "Matrix Metering"),
+                            (11, "Center-weighted Metering"),
+                            (12, "Spot Metering"),
+                            (13, "Virtual Horizon"),
+                            (14, "AF On"),
+                            (15, "Playback"),
+                            (16, "My Menu Top"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 16,
+                        sub: Some(1),
+                        name: "AELockButton",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf8,
+                            shift: 3,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (1, "Preview"),
+                            (2, "FV Lock"),
+                            (3, "AE/AF Lock"),
+                            (4, "AE Lock Only"),
+                            (5, "AE Lock (reset on release)"),
+                            (6, "AE Lock (hold)"),
+                            (7, "AF Lock Only"),
+                            (8, "AF On"),
+                            (9, "Flash Off"),
+                            (10, "Bracketing Burst"),
+                            (11, "Matrix Metering"),
+                            (12, "Center-weighted Metering"),
+                            (13, "Spot Metering"),
+                            (14, "Playback"),
+                            (15, "My Menu Top"),
+                            (16, "+ NEF (RAW)"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 16,
+            sub: Some(2),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 16,
+                        sub: Some(2),
+                        name: "AELockButtonPlusDials",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x7,
+                            shift: 0,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (1, "Choose Image Area (FX/DX/5:4)"),
+                            (2, "One Step Speed/Aperture"),
+                            (3, "Choose Non-CPU Lens Number"),
+                            (5, "Choose Image Area (FX/DX)"),
+                            (6, "Shooting Bank Menu"),
+                            (7, "Dynamic AF Area"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 16,
+                        sub: Some(2),
+                        name: "AELockButtonPlusDials",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x7,
+                            shift: 0,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "None"),
+                            (3, "Choose Non-CPU Lens Number"),
+                            (5, "Auto Bracketing"),
+                            (6, "Dynamic AF Area"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 20,
+            sub: Some(1),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "D3[SX]?\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 20,
+                        sub: Some(1),
+                        name: "FlashSyncSpeed",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xe0,
+                            shift: 5,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "1/250 s (auto FP)"),
+                            (1, "1/250 s"),
+                            (2, "1/200 s"),
+                            (3, "1/160 s"),
+                            (4, "1/125 s"),
+                            (5, "1/100 s"),
+                            (6, "1/80 s"),
+                            (7, "1/60 s"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 20,
+                        sub: Some(1),
+                        name: "FlashSyncSpeed",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf0,
+                            shift: 4,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "1/320 s (auto FP)"),
+                            (1, "1/250 s (auto FP)"),
+                            (2, "1/250 s"),
+                            (3, "1/200 s"),
+                            (4, "1/160 s"),
+                            (5, "1/125 s"),
+                            (6, "1/100 s"),
+                            (7, "1/80 s"),
+                            (8, "1/60 s"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 21,
+            sub: Some(1),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "(D3S|D300S)\\b",
+                        ignore_case: false,
+                        negate: true,
+                    },
+                    Field {
+                        index: 21,
+                        sub: Some(1),
+                        name: "AutoBracketSet",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xc0,
+                            shift: 6,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "AE & Flash"),
+                            (1, "AE Only"),
+                            (2, "Flash Only"),
+                            (3, "WB Bracketing"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 21,
+                        sub: Some(1),
+                        name: "AutoBracketSet",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xe0,
+                            shift: 5,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "AE & Flash"),
+                            (1, "AE Only"),
+                            (2, "Flash Only"),
+                            (3, "WB Bracketing"),
+                            (4, "ADL Bracketing"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 21,
+            sub: Some(2),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "(D3S|D300S)\\b",
+                        ignore_case: false,
+                        negate: true,
+                    },
+                    Field {
+                        index: 21,
+                        sub: Some(2),
+                        name: "AutoBracketModeM",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x30,
+                            shift: 4,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Flash/Speed"),
+                            (1, "Flash/Speed/Aperture"),
+                            (2, "Flash/Aperture"),
+                            (3, "Flash Only"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 21,
+                        sub: Some(2),
+                        name: "AutoBracketModeM",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x18,
+                            shift: 3,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Flash/Speed"),
+                            (1, "Flash/Speed/Aperture"),
+                            (2, "Flash/Aperture"),
+                            (3, "Flash Only"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 21,
+            sub: Some(3),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "(D3S|D300S)\\b",
+                        ignore_case: false,
+                        negate: true,
+                    },
+                    Field {
+                        index: 21,
+                        sub: Some(3),
+                        name: "AutoBracketOrder",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x8,
+                            shift: 3,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "0,-,+"), (1, "-,0,+")]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 21,
+                        sub: Some(3),
+                        name: "AutoBracketOrder",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0x4,
+                            shift: 2,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "0,-,+"), (1, "-,0,+")]),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD4` -- 89 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD4` -- 89 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD4: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -87222,9 +93160,11 @@ pub static NIKONCUSTOM_SETTINGSD4: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD40` -- 22 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD40` -- 22 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD40: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -87585,9 +93525,11 @@ pub static NIKONCUSTOM_SETTINGSD40: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD5` -- 89 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD5` -- 89 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD5: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -89247,9 +95189,11 @@ pub static NIKONCUSTOM_SETTINGSD5: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD500` -- 89 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD500` -- 89 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD500: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -90861,9 +96805,11 @@ pub static NIKONCUSTOM_SETTINGSD500: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD5000` -- 26 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD5000` -- 26 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD5000: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -91271,9 +97217,11 @@ pub static NIKONCUSTOM_SETTINGSD5000: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD5100` -- 23 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD5100` -- 23 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD5100: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -91639,9 +97587,11 @@ pub static NIKONCUSTOM_SETTINGSD5100: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD5200` -- 26 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD5200` -- 26 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD5200: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -92051,9 +98001,11 @@ pub static NIKONCUSTOM_SETTINGSD5200: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ReturnFullIfVal099ImageExifToolExifPrint399F0D),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD610` -- 25 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD610` -- 25 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD610: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -92472,9 +98424,11 @@ pub static NIKONCUSTOM_SETTINGSD610: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD700` -- 70 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD700` -- 70 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD700: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -93657,9 +99611,11 @@ pub static NIKONCUSTOM_SETTINGSD700: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD7000` -- 64 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD7000` -- 64 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD7000: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -94729,9 +100685,11 @@ pub static NIKONCUSTOM_SETTINGSD7000: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD80` -- 48 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD80` -- 48 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD80: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -95524,9 +101482,11 @@ pub static NIKONCUSTOM_SETTINGSD80: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD800` -- 21 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD800` -- 21 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD800: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -95932,9 +101892,11 @@ pub static NIKONCUSTOM_SETTINGSD800: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD810` -- 86 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD810` -- 86 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD810: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -97393,9 +103355,11 @@ pub static NIKONCUSTOM_SETTINGSD810: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD850` -- 89 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD850` -- 89 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD850: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -99034,9 +104998,11 @@ pub static NIKONCUSTOM_SETTINGSD850: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsD90` -- 54 fields.
+/// `Image::ExifTool::NikonCustom::SettingsD90` -- 54 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSD90: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -99933,9 +105899,11 @@ pub static NIKONCUSTOM_SETTINGSD90: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsZ6III` -- 57 fields.
+/// `Image::ExifTool::NikonCustom::SettingsZ6III` -- 57 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSZ6III: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -101611,9 +107579,49 @@ pub static NIKONCUSTOM_SETTINGSZ6III: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "High"), (1, "Low")]),
         },
     ],
+    variants: &[VariantGroup {
+        index: 190,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberCmp {
+                    member: "CmdDialsReverseRotExposureComp",
+                    op: CmpOp::Eq,
+                    value: 0,
+                },
+                Field {
+                    index: 190,
+                    sub: None,
+                    name: "CmdDialsReverseRotation",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Shutter Speed & Aperture")]),
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 190,
+                    sub: None,
+                    name: "CmdDialsReverseRotation",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Exposure Compensation"),
+                        (1, "Exposure Compensation, Shutter Speed & Aperture"),
+                    ]),
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsZ8` -- 69 fields.
+/// `Image::ExifTool::NikonCustom::SettingsZ8` -- 69 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSZ8: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -103914,9 +109922,49 @@ pub static NIKONCUSTOM_SETTINGSZ8: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValSprintf1fSecVal1000Off2184A1),
         },
     ],
+    variants: &[VariantGroup {
+        index: 186,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberCmp {
+                    member: "CmdDialsReverseRotExposureComp",
+                    op: CmpOp::Eq,
+                    value: 0,
+                },
+                Field {
+                    index: 186,
+                    sub: None,
+                    name: "CmdDialsReverseRotation",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Shutter Speed & Aperture")]),
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 186,
+                    sub: None,
+                    name: "CmdDialsReverseRotation",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Exposure Compensation"),
+                        (1, "Exposure Compensation, Shutter Speed & Aperture"),
+                    ]),
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsZ9` -- 67 fields.
+/// `Image::ExifTool::NikonCustom::SettingsZ9` -- 67 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSZ9: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -106295,9 +112343,49 @@ pub static NIKONCUSTOM_SETTINGSZ9: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "Shutter Speed"), (2, "ISO")]),
         },
     ],
+    variants: &[VariantGroup {
+        index: 186,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberCmp {
+                    member: "CmdDialsReverseRotExposureComp",
+                    op: CmpOp::Eq,
+                    value: 0,
+                },
+                Field {
+                    index: 186,
+                    sub: None,
+                    name: "CmdDialsReverseRotation",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Shutter Speed & Aperture")]),
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 186,
+                    sub: None,
+                    name: "CmdDialsReverseRotation",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Exposure Compensation"),
+                        (1, "Exposure Compensation, Shutter Speed & Aperture"),
+                    ]),
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::NikonCustom::SettingsZ9v4` -- 67 fields.
+/// `Image::ExifTool::NikonCustom::SettingsZ9v4` -- 67 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKONCUSTOM_SETTINGSZ9V4: BinaryTable = BinaryTable {
     module: "NikonCustom",
@@ -108676,9 +114764,49 @@ pub static NIKONCUSTOM_SETTINGSZ9V4: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "Shutter Speed"), (2, "ISO")]),
         },
     ],
+    variants: &[VariantGroup {
+        index: 186,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberCmp {
+                    member: "CmdDialsReverseRotExposureComp",
+                    op: CmpOp::Eq,
+                    value: 0,
+                },
+                Field {
+                    index: 186,
+                    sub: None,
+                    name: "CmdDialsReverseRotation",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Shutter Speed & Aperture")]),
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 186,
+                    sub: None,
+                    name: "CmdDialsReverseRotation",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Exposure Compensation"),
+                        (1, "Exposure Compensation, Shutter Speed & Aperture"),
+                    ]),
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::Nintendo::CameraInfo` -- 5 fields.
+/// `Image::ExifTool::Nintendo::CameraInfo` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NINTENDO_CAMERAINFO: BinaryTable = BinaryTable {
     module: "Nintendo",
@@ -108757,9 +114885,11 @@ pub static NINTENDO_CAMERAINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::AFInfo` -- 1 fields.
+/// `Image::ExifTool::Olympus::AFInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_AFINFO: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -108779,9 +114909,11 @@ pub static OLYMPUS_AFINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::AFTargetInfo` -- 3 fields.
+/// `Image::ExifTool::Olympus::AFTargetInfo` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_AFTARGETINFO: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -108823,9 +114955,11 @@ pub static OLYMPUS_AFTARGETINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::AVI` -- 6 fields.
+/// `Image::ExifTool::Olympus::AVI` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_AVI: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -109207,9 +115341,11 @@ pub static OLYMPUS_AVI: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::DSS` -- 5 fields.
+/// `Image::ExifTool::Olympus::DSS` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_DSS: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -109289,9 +115425,11 @@ pub static OLYMPUS_DSS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::MOV1` -- 5 fields.
+/// `Image::ExifTool::Olympus::MOV1` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_MOV1: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -109657,9 +115795,11 @@ pub static OLYMPUS_MOV1: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fMmVal03B2CA),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::MOV2` -- 7 fields.
+/// `Image::ExifTool::Olympus::MOV2` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_MOV2: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -109747,9 +115887,11 @@ pub static OLYMPUS_MOV2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::MP4` -- 6 fields.
+/// `Image::ExifTool::Olympus::MP4` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_MP4: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -109843,9 +115985,11 @@ pub static OLYMPUS_MP4: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::MovableInfo` -- 4 fields.
+/// `Image::ExifTool::Olympus::MovableInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_MOVABLEINFO: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -109903,9 +116047,11 @@ pub static OLYMPUS_MOVABLEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::OLYM` -- 7 fields.
+/// `Image::ExifTool::Olympus::OLYM` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_OLYM: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -110291,9 +116437,11 @@ pub static OLYMPUS_OLYM: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::SubjectDetectInfo` -- 4 fields.
+/// `Image::ExifTool::Olympus::SubjectDetectInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_SUBJECTDETECTINFO: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -110354,9 +116502,11 @@ pub static OLYMPUS_SUBJECTDETECTINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::Thumbnail` -- 4 fields.
+/// `Image::ExifTool::Olympus::Thumbnail` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_THUMBNAIL: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -110408,9 +116558,11 @@ pub static OLYMPUS_THUMBNAIL: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::WAV` -- 22 fields.
+/// `Image::ExifTool::Olympus::WAV` -- 22 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_WAV: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -110762,9 +116914,11 @@ pub static OLYMPUS_WAV: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::prms` -- 5 fields.
+/// `Image::ExifTool::Olympus::prms` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_PRMS: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -111130,9 +117284,11 @@ pub static OLYMPUS_PRMS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::scrn` -- 1 fields.
+/// `Image::ExifTool::Olympus::scrn` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_SCRN: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -111152,9 +117308,11 @@ pub static OLYMPUS_SCRN: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::scrn2` -- 1 fields.
+/// `Image::ExifTool::Olympus::scrn2` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_SCRN2: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -111180,9 +117338,11 @@ pub static OLYMPUS_SCRN2: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::thmb` -- 1 fields.
+/// `Image::ExifTool::Olympus::thmb` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_THMB: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -111202,9 +117362,11 @@ pub static OLYMPUS_THMB: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Olympus::thmb2` -- 3 fields.
+/// `Image::ExifTool::Olympus::thmb2` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OLYMPUS_THMB2: BinaryTable = BinaryTable {
     module: "Olympus",
@@ -111246,9 +117408,11 @@ pub static OLYMPUS_THMB2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Opus::Header` -- 4 fields.
+/// `Image::ExifTool::Opus::Header` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static OPUS_HEADER: BinaryTable = BinaryTable {
     module: "Opus",
@@ -111306,9 +117470,11 @@ pub static OPUS_HEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PCX::Main` -- 15 fields.
+/// `Image::ExifTool::PCX::Main` -- 15 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PCX_MAIN: BinaryTable = BinaryTable {
     module: "PCX",
@@ -111512,9 +117678,11 @@ pub static PCX_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PGF::Main` -- 9 fields.
+/// `Image::ExifTool::PGF::Main` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PGF_MAIN: BinaryTable = BinaryTable {
     module: "PGF",
@@ -111631,9 +117799,11 @@ pub static PGF_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PNG::AnimationControl` -- 2 fields.
+/// `Image::ExifTool::PNG::AnimationControl` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PNG_ANIMATIONCONTROL: BinaryTable = BinaryTable {
     module: "PNG",
@@ -111671,9 +117841,11 @@ pub static PNG_ANIMATIONCONTROL: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PNG::CICodePoints` -- 4 fields.
+/// `Image::ExifTool::PNG::CICodePoints` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PNG_CICODEPOINTS: BinaryTable = BinaryTable {
     module: "PNG",
@@ -111774,9 +117946,11 @@ pub static PNG_CICODEPOINTS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PNG::ImageHeader` -- 7 fields.
+/// `Image::ExifTool::PNG::ImageHeader` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PNG_IMAGEHEADER: BinaryTable = BinaryTable {
     module: "PNG",
@@ -111870,9 +118044,11 @@ pub static PNG_IMAGEHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Noninterlaced"), (1, "Adam7 Interlace")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PNG::PhysicalPixel` -- 3 fields.
+/// `Image::ExifTool::PNG::PhysicalPixel` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PNG_PHYSICALPIXEL: BinaryTable = BinaryTable {
     module: "PNG",
@@ -111914,9 +118090,11 @@ pub static PNG_PHYSICALPIXEL: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Unknown"), (1, "meters")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PNG::PrimaryChromaticities` -- 8 fields.
+/// `Image::ExifTool::PNG::PrimaryChromaticities` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PNG_PRIMARYCHROMATICITIES: BinaryTable = BinaryTable {
     module: "PNG",
@@ -112056,9 +118234,11 @@ pub static PNG_PRIMARYCHROMATICITIES: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PNG::StereoImage` -- 1 fields.
+/// `Image::ExifTool::PNG::StereoImage` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PNG_STEREOIMAGE: BinaryTable = BinaryTable {
     module: "PNG",
@@ -112078,9 +118258,11 @@ pub static PNG_STEREOIMAGE: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(0, "Cross-fuse Layout"), (1, "Diverging-fuse Layout")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PNG::SubjectScale` -- 1 fields.
+/// `Image::ExifTool::PNG::SubjectScale` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PNG_SUBJECTSCALE: BinaryTable = BinaryTable {
     module: "PNG",
@@ -112100,9 +118282,11 @@ pub static PNG_SUBJECTSCALE: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(1, "meters"), (2, "radians")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PNG::VirtualPage` -- 3 fields.
+/// `Image::ExifTool::PNG::VirtualPage` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PNG_VIRTUALPAGE: BinaryTable = BinaryTable {
     module: "PNG",
@@ -112144,9 +118328,11 @@ pub static PNG_VIRTUALPAGE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PSP::Image` -- 8 fields.
+/// `Image::ExifTool::PSP::Image` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PSP_IMAGE: BinaryTable = BinaryTable {
     module: "PSP",
@@ -112238,9 +118424,11 @@ pub static PSP_IMAGE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Palm::MOBI` -- 8 fields.
+/// `Image::ExifTool::Palm::MOBI` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PALM_MOBI: BinaryTable = BinaryTable {
     module: "Palm",
@@ -112360,9 +118548,11 @@ pub static PALM_MOBI: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Palm::Main` -- 6 fields.
+/// `Image::ExifTool::Palm::Main` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PALM_MAIN: BinaryTable = BinaryTable {
     module: "Palm",
@@ -112481,9 +118671,11 @@ pub static PALM_MAIN: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Panasonic::Data1` -- 1 fields.
+/// `Image::ExifTool::Panasonic::Data1` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONIC_DATA1: BinaryTable = BinaryTable {
     module: "Panasonic",
@@ -112568,9 +118760,11 @@ pub static PANASONIC_DATA1: BinaryTable = BinaryTable {
             ("9 0", "Apo-Telyt-M 135mm f/3.4"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Panasonic::FaceDetInfo` -- 6 fields.
+/// `Image::ExifTool::Panasonic::FaceDetInfo` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
     module: "Panasonic",
@@ -112678,9 +118872,11 @@ pub static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Panasonic::FaceRecInfo` -- 10 fields.
+/// `Image::ExifTool::Panasonic::FaceRecInfo` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
     module: "Panasonic",
@@ -112852,9 +119048,11 @@ pub static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Panasonic::FocusInfo` -- 2 fields.
+/// `Image::ExifTool::Panasonic::FocusInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONIC_FOCUSINFO: BinaryTable = BinaryTable {
     module: "Panasonic",
@@ -112898,9 +119096,11 @@ pub static PANASONIC_FOCUSINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fMmVal03B2CA),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Panasonic::PANA` -- 13 fields.
+/// `Image::ExifTool::Panasonic::PANA` -- 13 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONIC_PANA: BinaryTable = BinaryTable {
     module: "Panasonic",
@@ -113120,9 +119320,11 @@ pub static PANASONIC_PANA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Panasonic::SerialInfo` -- 1 fields.
+/// `Image::ExifTool::Panasonic::SerialInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONIC_SERIALINFO: BinaryTable = BinaryTable {
     module: "Panasonic",
@@ -113142,9 +119344,11 @@ pub static PANASONIC_SERIALINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Panasonic::ShotInfo` -- 1 fields.
+/// `Image::ExifTool::Panasonic::ShotInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONIC_SHOTINFO: BinaryTable = BinaryTable {
     module: "Panasonic",
@@ -113164,9 +119368,11 @@ pub static PANASONIC_SHOTINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Panasonic::TimeInfo` -- 2 fields.
+/// `Image::ExifTool::Panasonic::TimeInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONIC_TIMEINFO: BinaryTable = BinaryTable {
     module: "Panasonic",
@@ -113204,9 +119410,11 @@ pub static PANASONIC_TIMEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Panasonic::Type2` -- 2 fields.
+/// `Image::ExifTool::Panasonic::Type2` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONIC_TYPE2: BinaryTable = BinaryTable {
     module: "Panasonic",
@@ -113238,9 +119446,11 @@ pub static PANASONIC_TYPE2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PanasonicRaw::WBInfo` -- 15 fields.
+/// `Image::ExifTool::PanasonicRaw::WBInfo` -- 15 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONICRAW_WBINFO: BinaryTable = BinaryTable {
     module: "PanasonicRaw",
@@ -113633,9 +119843,11 @@ pub static PANASONICRAW_WBINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PanasonicRaw::WBInfo2` -- 15 fields.
+/// `Image::ExifTool::PanasonicRaw::WBInfo2` -- 15 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PANASONICRAW_WBINFO2: BinaryTable = BinaryTable {
     module: "PanasonicRaw",
@@ -114028,9 +120240,11 @@ pub static PANASONICRAW_WBINFO2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Parrot::ARCoreAccel` -- 1 fields.
+/// `Image::ExifTool::Parrot::ARCoreAccel` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PARROT_ARCOREACCEL: BinaryTable = BinaryTable {
     module: "Parrot",
@@ -114056,9 +120270,11 @@ pub static PARROT_ARCOREACCEL: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Parrot::ARCoreAccel0` -- 1 fields.
+/// `Image::ExifTool::Parrot::ARCoreAccel0` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PARROT_ARCOREACCEL0: BinaryTable = BinaryTable {
     module: "Parrot",
@@ -114084,9 +120300,11 @@ pub static PARROT_ARCOREACCEL0: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Parrot::ARCoreGyro` -- 1 fields.
+/// `Image::ExifTool::Parrot::ARCoreGyro` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PARROT_ARCOREGYRO: BinaryTable = BinaryTable {
     module: "Parrot",
@@ -114112,9 +120330,11 @@ pub static PARROT_ARCOREGYRO: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Parrot::ARCoreGyro0` -- 1 fields.
+/// `Image::ExifTool::Parrot::ARCoreGyro0` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PARROT_ARCOREGYRO0: BinaryTable = BinaryTable {
     module: "Parrot",
@@ -114140,9 +120360,11 @@ pub static PARROT_ARCOREGYRO0: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Parrot::Automation` -- 8 fields.
+/// `Image::ExifTool::Parrot::Automation` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PARROT_AUTOMATION: BinaryTable = BinaryTable {
     module: "Parrot",
@@ -114286,9 +120508,11 @@ pub static PARROT_AUTOMATION: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Parrot::FollowMe` -- 5 fields.
+/// `Image::ExifTool::Parrot::FollowMe` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PARROT_FOLLOWME: BinaryTable = BinaryTable {
     module: "Parrot",
@@ -114374,9 +120598,11 @@ pub static PARROT_FOLLOWME: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Parrot::V1` -- 23 fields.
+/// `Image::ExifTool::Parrot::V1` -- 23 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PARROT_V1: BinaryTable = BinaryTable {
     module: "Parrot",
@@ -114738,9 +120964,11 @@ pub static PARROT_V1: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Parrot::V2` -- 21 fields.
+/// `Image::ExifTool::Parrot::V2` -- 21 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PARROT_V2: BinaryTable = BinaryTable {
     module: "Parrot",
@@ -115075,9 +121303,11 @@ pub static PARROT_V2: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Val22FAFA),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Parrot::V3` -- 25 fields.
+/// `Image::ExifTool::Parrot::V3` -- 25 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PARROT_V3: BinaryTable = BinaryTable {
     module: "Parrot",
@@ -115470,9 +121700,11 @@ pub static PARROT_V3: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::AEInfo` -- 17 fields.
+/// `Image::ExifTool::Pentax::AEInfo` -- 17 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_AEINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -115779,9 +122011,11 @@ pub static PENTAX_AEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Val90NAValFF23A0),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::AEInfo2` -- 12 fields.
+/// `Image::ExifTool::Pentax::AEInfo2` -- 12 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_AEINFO2: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -115997,9 +122231,11 @@ pub static PENTAX_AEINFO2: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::AEInfo3` -- 7 fields.
+/// `Image::ExifTool::Pentax::AEInfo3` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_AEINFO3: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -116123,9 +122359,11 @@ pub static PENTAX_AEINFO3: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintExposureTimeVal6037F3),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::AFInfo` -- 13 fields.
+/// `Image::ExifTool::Pentax::AFInfo` -- 13 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_AFINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -116372,9 +122610,11 @@ pub static PENTAX_AFINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::AFInfoK3III` -- 6 fields.
+/// `Image::ExifTool::Pentax::AFInfoK3III` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_AFINFOK3III: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -116496,9 +122736,11 @@ pub static PENTAX_AFINFOK3III: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::AFPointInfo` -- 1 fields.
+/// `Image::ExifTool::Pentax::AFPointInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_AFPOINTINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -116524,9 +122766,11 @@ pub static PENTAX_AFPOINTINFO: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::AWBInfo` -- 2 fields.
+/// `Image::ExifTool::Pentax::AWBInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_AWBINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -116558,9 +122802,11 @@ pub static PENTAX_AWBINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Subtle Correction"), (1, "Strong Correction")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::BatteryInfo` -- 7 fields.
+/// `Image::ExifTool::Pentax::BatteryInfo` -- 7 fields,
+/// 6 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -116694,9 +122940,396 @@ pub static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf2fVVal0F6F5C),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 0,
+            sub: Some(1),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "K-3 Mark III",
+                        ignore_case: false,
+                        negate: true,
+                    },
+                    Field {
+                        index: 0,
+                        sub: Some(1),
+                        name: "PowerSource",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf,
+                            shift: 0,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (1, "Camera Battery"),
+                            (2, "Body Battery"),
+                            (3, "Grip Battery"),
+                            (4, "External Power Supply"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 0,
+                        sub: Some(1),
+                        name: "PowerSource",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf,
+                            shift: 0,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (1, "Body Battery"),
+                            (2, "Grip Battery"),
+                            (4, "External Power Supply"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 1,
+            sub: Some(1),
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "(\\*ist|K100D|K200D|K10D|GX10|K20D|GX20|GX-1[LS]?)\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 1,
+                        sub: Some(1),
+                        name: "BodyBatteryState",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf0,
+                            shift: 4,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (1, "Empty or Missing"),
+                            (2, "Almost Empty"),
+                            (3, "Running Low"),
+                            (4, "Full"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "(K110D|K2000|K-m|K-3 Mark III)\\b",
+                        ignore_case: false,
+                        negate: true,
+                    },
+                    Field {
+                        index: 1,
+                        sub: Some(1),
+                        name: "BodyBatteryState",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xf0,
+                            shift: 4,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (1, "Empty or Missing"),
+                            (2, "Almost Empty"),
+                            (3, "Running Low"),
+                            (4, "Close to Full"),
+                            (5, "Full"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 1,
+            sub: Some(2),
+            alternatives: &[(
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "(K10D|GX10|K20D|GX20)\\b",
+                    ignore_case: false,
+                    negate: false,
+                },
+                Field {
+                    index: 1,
+                    sub: Some(2),
+                    name: "GripBatteryState",
+                    format: None,
+                    count: 1,
+                    mask: Some(Mask {
+                        bits: 0xf,
+                        shift: 0,
+                    }),
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (1, "Empty or Missing"),
+                        (2, "Almost Empty"),
+                        (3, "Running Low"),
+                        (4, "Full"),
+                    ]),
+                },
+            )],
+        },
+        VariantGroup {
+            index: 2,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "(K10D|GX10|K20D|GX20)\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 2,
+                        sub: None,
+                        name: "BodyBatteryADNoLoad",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::Expr(
+                            ExprId::SprintfD1fVDValVal818186Val15510035C1F87F,
+                        ),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "(\\*ist|K100D|K200D|GX-1[LS]?)\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 2,
+                        sub: None,
+                        name: "BodyBatteryADNoLoad",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "(645D|645Z|K-(1|01|3|5|7|30|50|70|500|r|x|S[12])|KP)\\b",
+                            ignore_case: false,
+                            negate: false,
+                        },
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "III",
+                            ignore_case: false,
+                            negate: true,
+                        },
+                    ),
+                    Field {
+                        index: 2,
+                        sub: None,
+                        name: "BodyBatteryVoltage1",
+                        format: Some(Fmt::Int16u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Sprintf2fVVal0F6F5C),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "K-3 Mark III",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 2,
+                        sub: None,
+                        name: "BodyBatteryState",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Empty or Missing"),
+                            (1, "Almost Empty"),
+                            (2, "Running Low"),
+                            (3, "Half Full"),
+                            (4, "Close to Full"),
+                            (5, "Full"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 3,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "(K10D|GX10|K20D|GX20)\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 3,
+                        sub: None,
+                        name: "BodyBatteryADLoad",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::Expr(
+                            ExprId::SprintfD1fVDValVal818186Val15210034BEDD54,
+                        ),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "(\\*ist|K100D|K200D)\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 3,
+                        sub: None,
+                        name: "BodyBatteryADLoad",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "K-3 Mark III",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 3,
+                        sub: None,
+                        name: "BodyBatteryPercent",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 4,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "(\\*ist|K10D|GX10|K20D|GX20|GX-1[LS]?)\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 4,
+                        sub: None,
+                        name: "GripBatteryADNoLoad",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "(645D|645Z|K-(1|01|3|5|7|30|50|70|500|r|x|S[12])|KP)\\b",
+                            ignore_case: false,
+                            negate: false,
+                        },
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "III",
+                            ignore_case: false,
+                            negate: true,
+                        },
+                    ),
+                    Field {
+                        index: 4,
+                        sub: None,
+                        name: "BodyBatteryVoltage2",
+                        format: Some(Fmt::Int16u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Sprintf2fVVal0F6F5C),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "K-3 Mark III",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 4,
+                        sub: None,
+                        name: "BodyBatteryVoltage",
+                        format: Some(Fmt::Int32u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Sprintf2fVVal0F6F5C),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Pentax::CAFPointInfo` -- 2 fields.
+/// `Image::ExifTool::Pentax::CAFPointInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_CAFPOINTINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -116740,9 +123373,11 @@ pub static PENTAX_CAFPOINTINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::CameraInfo` -- 4 fields.
+/// `Image::ExifTool::Pentax::CameraInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_CAMERAINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -116953,9 +123588,11 @@ pub static PENTAX_CAMERAINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::CameraSettings` -- 31 fields.
+/// `Image::ExifTool::Pentax::CameraSettings` -- 31 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -117531,9 +124168,11 @@ pub static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal0892CDF),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::ColorInfo` -- 2 fields.
+/// `Image::ExifTool::Pentax::ColorInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_COLORINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -117565,9 +124204,11 @@ pub static PENTAX_COLORINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::EVStepInfo` -- 3 fields.
+/// `Image::ExifTool::Pentax::EVStepInfo` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_EVSTEPINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -117609,9 +124250,11 @@ pub static PENTAX_EVSTEPINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::FaceInfo` -- 2 fields.
+/// `Image::ExifTool::Pentax::FaceInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_FACEINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -117649,9 +124292,11 @@ pub static PENTAX_FACEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::FaceInfoK3III` -- 64 fields.
+/// `Image::ExifTool::Pentax::FaceInfoK3III` -- 64 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_FACEINFOK3III: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -118675,9 +125320,11 @@ pub static PENTAX_FACEINFOK3III: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::FacePos` -- 32 fields.
+/// `Image::ExifTool::Pentax::FacePos` -- 32 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_FACEPOS: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -119201,9 +125848,11 @@ pub static PENTAX_FACEPOS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::FaceSize` -- 32 fields.
+/// `Image::ExifTool::Pentax::FaceSize` -- 32 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_FACESIZE: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -119727,9 +126376,11 @@ pub static PENTAX_FACESIZE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::FilterInfo` -- 22 fields.
+/// `Image::ExifTool::Pentax::FilterInfo` -- 22 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_FILTERINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -120601,9 +127252,11 @@ pub static PENTAX_FILTERINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::FlashInfo` -- 11 fields.
+/// `Image::ExifTool::Pentax::FlashInfo` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -120791,9 +127444,11 @@ pub static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "n/a"), (16, "Direct"), (48, "Bounce")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::Junk` -- 1 fields.
+/// `Image::ExifTool::Pentax::Junk` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_JUNK: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -120813,9 +127468,11 @@ pub static PENTAX_JUNK: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::Junk2` -- 8 fields.
+/// `Image::ExifTool::Pentax::Junk2` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_JUNK2: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -120907,9 +127564,11 @@ pub static PENTAX_JUNK2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::KelvinWB` -- 17 fields.
+/// `Image::ExifTool::Pentax::KelvinWB` -- 17 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_KELVINWB: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -121193,9 +127852,11 @@ pub static PENTAX_KELVINWB: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LensCorr` -- 4 fields.
+/// `Image::ExifTool::Pentax::LensCorr` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LENSCORR: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -121247,9 +127908,11 @@ pub static PENTAX_LENSCORR: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (16, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LensData` -- 9 fields.
+/// `Image::ExifTool::Pentax::LensData` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LENSDATA: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -121448,9 +128111,11 @@ pub static PENTAX_LENSDATA: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fValA23FF8),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LensInfo` -- 2 fields.
+/// `Image::ExifTool::Pentax::LensInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LENSINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -121844,9 +128509,11 @@ pub static PENTAX_LENSINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LensInfo2` -- 2 fields.
+/// `Image::ExifTool::Pentax::LensInfo2` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LENSINFO2: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -122246,9 +128913,11 @@ pub static PENTAX_LENSINFO2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LensInfo3` -- 2 fields.
+/// `Image::ExifTool::Pentax::LensInfo3` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LENSINFO3: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -122648,9 +129317,11 @@ pub static PENTAX_LENSINFO3: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LensInfo4` -- 2 fields.
+/// `Image::ExifTool::Pentax::LensInfo4` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LENSINFO4: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -123050,9 +129721,11 @@ pub static PENTAX_LENSINFO4: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LensInfo5` -- 2 fields.
+/// `Image::ExifTool::Pentax::LensInfo5` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LENSINFO5: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -123452,9 +130125,11 @@ pub static PENTAX_LENSINFO5: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LensInfoQ` -- 2 fields.
+/// `Image::ExifTool::Pentax::LensInfoQ` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LENSINFOQ: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -123492,9 +130167,11 @@ pub static PENTAX_LENSINFOQ: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LensRec` -- 2 fields.
+/// `Image::ExifTool::Pentax::LensRec` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LENSREC: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -123882,9 +130559,11 @@ pub static PENTAX_LENSREC: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Not attached"), (1, "Attached")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LevelInfo` -- 7 fields.
+/// `Image::ExifTool::Pentax::LevelInfo` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LEVELINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -124019,9 +130698,11 @@ pub static PENTAX_LEVELINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::LevelInfoK3III` -- 3 fields.
+/// `Image::ExifTool::Pentax::LevelInfoK3III` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_LEVELINFOK3III: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -124082,9 +130763,11 @@ pub static PENTAX_LEVELINFOK3III: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::MOV` -- 7 fields.
+/// `Image::ExifTool::Pentax::MOV` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_MOV: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -124179,9 +130862,11 @@ pub static PENTAX_MOV: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::PENT` -- 23 fields.
+/// `Image::ExifTool::Pentax::PENT` -- 23 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_PENT: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -124513,9 +131198,11 @@ pub static PENTAX_PENT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::PXTH` -- 1 fields.
+/// `Image::ExifTool::Pentax::PXTH` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_PXTH: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -124535,9 +131222,11 @@ pub static PENTAX_PXTH: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::PixelShiftInfo` -- 1 fields.
+/// `Image::ExifTool::Pentax::PixelShiftInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_PIXELSHIFTINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -124557,9 +131246,11 @@ pub static PENTAX_PIXELSHIFTINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::SRInfo` -- 4 fields.
+/// `Image::ExifTool::Pentax::SRInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_SRINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -124634,9 +131325,11 @@ pub static PENTAX_SRINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::ValMm18ABDF),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::SRInfo2` -- 1 fields.
+/// `Image::ExifTool::Pentax::SRInfo2` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_SRINFO2: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -124669,9 +131362,11 @@ pub static PENTAX_SRINFO2: BinaryTable = BinaryTable {
             (23, "On (AA simulation type 2)"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::ShotInfo` -- 1 fields.
+/// `Image::ExifTool::Pentax::ShotInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_SHOTINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -124704,9 +131399,11 @@ pub static PENTAX_SHOTINFO: BinaryTable = BinaryTable {
             (96, "Downwards"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::TempInfo` -- 6 fields.
+/// `Image::ExifTool::Pentax::TempInfo` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_TEMPINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -124814,9 +131511,11 @@ pub static PENTAX_TEMPINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fCVal612E5F),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::TimeInfo` -- 5 fields.
+/// `Image::ExifTool::Pentax::TimeInfo` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_TIMEINFO: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -125039,9 +131738,11 @@ pub static PENTAX_TIMEINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Pentax::WBLevels` -- 10 fields.
+/// `Image::ExifTool::Pentax::WBLevels` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
     module: "Pentax",
@@ -125153,9 +131854,11 @@ pub static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::PhotoCD::Main` -- 26 fields.
+/// `Image::ExifTool::PhotoCD::Main` -- 26 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PHOTOCD_MAIN: BinaryTable = BinaryTable {
     module: "PhotoCD",
@@ -125829,9 +132532,11 @@ pub static PHOTOCD_MAIN: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Photoshop::Header` -- 5 fields.
+/// `Image::ExifTool::Photoshop::Header` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PHOTOSHOP_HEADER: BinaryTable = BinaryTable {
     module: "Photoshop",
@@ -125902,9 +132607,11 @@ pub static PHOTOSHOP_HEADER: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Photoshop::ImageData` -- 1 fields.
+/// `Image::ExifTool::Photoshop::ImageData` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PHOTOSHOP_IMAGEDATA: BinaryTable = BinaryTable {
     module: "Photoshop",
@@ -125929,9 +132636,11 @@ pub static PHOTOSHOP_IMAGEDATA: BinaryTable = BinaryTable {
             (3, "ZIP with prediction"),
         ]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Photoshop::JPEG_Quality` -- 3 fields.
+/// `Image::ExifTool::Photoshop::JPEG_Quality` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PHOTOSHOP_JPEG_QUALITY: BinaryTable = BinaryTable {
     module: "Photoshop",
@@ -125989,9 +132698,11 @@ pub static PHOTOSHOP_JPEG_QUALITY: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(1, "3 Scans"), (2, "4 Scans"), (3, "5 Scans")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Photoshop::PixelInfo` -- 1 fields.
+/// `Image::ExifTool::Photoshop::PixelInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PHOTOSHOP_PIXELINFO: BinaryTable = BinaryTable {
     module: "Photoshop",
@@ -126011,9 +132722,11 @@ pub static PHOTOSHOP_PIXELINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Photoshop::PrintScaleInfo` -- 3 fields.
+/// `Image::ExifTool::Photoshop::PrintScaleInfo` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PHOTOSHOP_PRINTSCALEINFO: BinaryTable = BinaryTable {
     module: "Photoshop",
@@ -126059,9 +132772,11 @@ pub static PHOTOSHOP_PRINTSCALEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Photoshop::Resolution` -- 4 fields.
+/// `Image::ExifTool::Photoshop::Resolution` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PHOTOSHOP_RESOLUTION: BinaryTable = BinaryTable {
     module: "Photoshop",
@@ -126125,9 +132840,11 @@ pub static PHOTOSHOP_RESOLUTION: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(1, "inches"), (2, "cm")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Photoshop::SliceInfo` -- 1 fields.
+/// `Image::ExifTool::Photoshop::SliceInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PHOTOSHOP_SLICEINFO: BinaryTable = BinaryTable {
     module: "Photoshop",
@@ -126147,9 +132864,11 @@ pub static PHOTOSHOP_SLICEINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Photoshop::VersionInfo` -- 1 fields.
+/// `Image::ExifTool::Photoshop::VersionInfo` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static PHOTOSHOP_VERSIONINFO: BinaryTable = BinaryTable {
     module: "Photoshop",
@@ -126169,9 +132888,11 @@ pub static PHOTOSHOP_VERSIONINFO: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::AV1Config` -- 3 fields.
+/// `Image::ExifTool::QuickTime::AV1Config` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_AV1CONFIG: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -126232,9 +132953,11 @@ pub static QUICKTIME_AV1CONFIG: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::AudioProf` -- 7 fields.
+/// `Image::ExifTool::QuickTime::AudioProf` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_AUDIOPROF: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -126328,9 +133051,11 @@ pub static QUICKTIME_AUDIOPROF: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::Bitrate` -- 3 fields.
+/// `Image::ExifTool::QuickTime::Bitrate` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_BITRATE: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -126372,9 +133097,11 @@ pub static QUICKTIME_BITRATE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::ChannelLayout` -- 28 fields.
+/// `Image::ExifTool::QuickTime::ChannelLayout` -- 28 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_CHANNELLAYOUT: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -127442,9 +134169,11 @@ pub static QUICKTIME_CHANNELLAYOUT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::CleanAperture` -- 4 fields.
+/// `Image::ExifTool::QuickTime::CleanAperture` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_CLEANAPERTURE: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -127496,9 +134225,11 @@ pub static QUICKTIME_CLEANAPERTURE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::ColorRep` -- 5 fields.
+/// `Image::ExifTool::QuickTime::ColorRep` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_COLORREP: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -127612,9 +134343,11 @@ pub static QUICKTIME_COLORREP: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Limited"), (1, "Full")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::ContentLightLevel` -- 2 fields.
+/// `Image::ExifTool::QuickTime::ContentLightLevel` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_CONTENTLIGHTLEVEL: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -127646,9 +134379,11 @@ pub static QUICKTIME_CONTENTLIGHTLEVEL: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::DecodeConfig` -- 2 fields.
+/// `Image::ExifTool::QuickTime::DecodeConfig` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_DECODECONFIG: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -127680,9 +134415,11 @@ pub static QUICKTIME_DECODECONFIG: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::FileProf` -- 1 fields.
+/// `Image::ExifTool::QuickTime::FileProf` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_FILEPROF: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -127702,9 +134439,11 @@ pub static QUICKTIME_FILEPROF: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::FileType` -- 2 fields.
+/// `Image::ExifTool::QuickTime::FileType` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_FILETYPE: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -127927,9 +134666,11 @@ pub static QUICKTIME_FILETYPE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::Flip` -- 4 fields.
+/// `Image::ExifTool::QuickTime::Flip` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_FLIP: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -127981,9 +134722,11 @@ pub static QUICKTIME_FLIP: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::GenMediaInfo` -- 4 fields.
+/// `Image::ExifTool::QuickTime::GenMediaInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_GENMEDIAINFO: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -128067,9 +134810,11 @@ pub static QUICKTIME_GENMEDIAINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::HEVCConfig` -- 16 fields.
+/// `Image::ExifTool::QuickTime::HEVCConfig` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_HEVCCONFIG: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -128314,9 +135059,11 @@ pub static QUICKTIME_HEVCCONFIG: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::Handler` -- 3 fields.
+/// `Image::ExifTool::QuickTime::Handler` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_HANDLER: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -128422,9 +135169,11 @@ pub static QUICKTIME_HANDLER: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::HintHeader` -- 4 fields.
+/// `Image::ExifTool::QuickTime::HintHeader` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_HINTHEADER: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -128476,9 +135225,11 @@ pub static QUICKTIME_HINTHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::MediaHeader` -- 6 fields.
+/// `Image::ExifTool::QuickTime::MediaHeader` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_MEDIAHEADER: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -128586,9 +135337,11 @@ pub static QUICKTIME_MEDIAHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::MovieFragHdr` -- 1 fields.
+/// `Image::ExifTool::QuickTime::MovieFragHdr` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_MOVIEFRAGHDR: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -128608,9 +135361,11 @@ pub static QUICKTIME_MOVIEFRAGHDR: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::MovieHeader` -- 14 fields.
+/// `Image::ExifTool::QuickTime::MovieHeader` -- 14 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_MOVIEHEADER: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -128840,9 +135595,11 @@ pub static QUICKTIME_MOVIEHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::Preview` -- 4 fields.
+/// `Image::ExifTool::QuickTime::Preview` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_PREVIEW: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -128900,9 +135657,11 @@ pub static QUICKTIME_PREVIEW: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::SchemeType` -- 2 fields.
+/// `Image::ExifTool::QuickTime::SchemeType` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_SCHEMETYPE: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -128934,9 +135693,11 @@ pub static QUICKTIME_SCHEMETYPE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::SpatialAudio` -- 6 fields.
+/// `Image::ExifTool::QuickTime::SpatialAudio` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_SPATIALAUDIO: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -129008,9 +135769,11 @@ pub static QUICKTIME_SPATIALAUDIO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::TCMediaInfo` -- 5 fields.
+/// `Image::ExifTool::QuickTime::TCMediaInfo` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_TCMEDIAINFO: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -129072,9 +135835,11 @@ pub static QUICKTIME_TCMEDIAINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::TrackHeader` -- 10 fields.
+/// `Image::ExifTool::QuickTime::TrackHeader` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_TRACKHEADER: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -129234,9 +135999,11 @@ pub static QUICKTIME_TRACKHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::Video` -- 2 fields.
+/// `Image::ExifTool::QuickTime::Video` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_VIDEO: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -129274,9 +136041,11 @@ pub static QUICKTIME_VIDEO: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::VideoHeader` -- 2 fields.
+/// `Image::ExifTool::QuickTime::VideoHeader` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_VIDEOHEADER: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -129340,9 +136109,11 @@ pub static QUICKTIME_VIDEOHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::VideoProf` -- 7 fields.
+/// `Image::ExifTool::QuickTime::VideoProf` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_VIDEOPROF: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -129436,9 +136207,11 @@ pub static QUICKTIME_VIDEOPROF: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::cbmp` -- 2 fields.
+/// `Image::ExifTool::QuickTime::cbmp` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_CBMP: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -129470,9 +136243,11 @@ pub static QUICKTIME_CBMP: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::QuickTime::equi` -- 4 fields.
+/// `Image::ExifTool::QuickTime::equi` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static QUICKTIME_EQUI: BinaryTable = BinaryTable {
     module: "QuickTime",
@@ -129548,9 +136323,11 @@ pub static QUICKTIME_EQUI: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::ALPH` -- 3 fields.
+/// `Image::ExifTool::RIFF::ALPH` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_ALPH: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -129606,9 +136383,11 @@ pub static RIFF_ALPH: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "none"), (1, "Lossless")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::ANIM` -- 2 fields.
+/// `Image::ExifTool::RIFF::ANIM` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_ANIM: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -129640,9 +136419,11 @@ pub static RIFF_ANIM: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::ANMF` -- 1 fields.
+/// `Image::ExifTool::RIFF::ANMF` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_ANMF: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -129668,9 +136449,11 @@ pub static RIFF_ANMF: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::AVIHeader` -- 6 fields.
+/// `Image::ExifTool::RIFF::AVIHeader` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_AVIHEADER: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -129748,9 +136531,11 @@ pub static RIFF_AVIHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::Acidizer` -- 5 fields.
+/// `Image::ExifTool::RIFF::Acidizer` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_ACIDIZER: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -129837,9 +136622,11 @@ pub static RIFF_ACIDIZER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::AudioFormat` -- 5 fields.
+/// `Image::ExifTool::RIFF::AudioFormat` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_AUDIOFORMAT: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130151,9 +136938,11 @@ pub static RIFF_AUDIOFORMAT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::BroadcastExt` -- 7 fields.
+/// `Image::ExifTool::RIFF::BroadcastExt` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_BROADCASTEXT: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130253,9 +137042,11 @@ pub static RIFF_BROADCASTEXT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::CSET` -- 4 fields.
+/// `Image::ExifTool::RIFF::CSET` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_CSET: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130313,9 +137104,11 @@ pub static RIFF_CSET: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::ExtAVIHdr` -- 1 fields.
+/// `Image::ExifTool::RIFF::ExtAVIHdr` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_EXTAVIHDR: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130335,9 +137128,11 @@ pub static RIFF_EXTAVIHDR: BinaryTable = BinaryTable {
         omitted: Omitted::NONE,
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::Instrument` -- 7 fields.
+/// `Image::ExifTool::RIFF::Instrument` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_INSTRUMENT: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130419,9 +137214,11 @@ pub static RIFF_INSTRUMENT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::Sampler` -- 9 fields.
+/// `Image::ExifTool::RIFF::Sampler` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_SAMPLER: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130535,9 +137332,11 @@ pub static RIFF_SAMPLER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::StreamHeader` -- 3 fields.
+/// `Image::ExifTool::RIFF::StreamHeader` -- 3 fields,
+/// 3 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_STREAMHEADER: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130591,9 +137390,207 @@ pub static RIFF_STREAMHEADER: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 1,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberStrEq {
+                        member: "RIFFStreamType",
+                        value: "auds",
+                        negate: false,
+                    },
+                    Field {
+                        index: 1,
+                        sub: None,
+                        name: "AudioCodec",
+                        format: Some(Fmt::Str(4)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: false,
+                            raw_conv: true,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberStrEq {
+                        member: "RIFFStreamType",
+                        value: "vids",
+                        negate: false,
+                    },
+                    Field {
+                        index: 1,
+                        sub: None,
+                        name: "VideoCodec",
+                        format: Some(Fmt::Str(4)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: false,
+                            raw_conv: true,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 1,
+                        sub: None,
+                        name: "Codec",
+                        format: Some(Fmt::Str(4)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: false,
+                            raw_conv: true,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 5,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberStrEq {
+                        member: "RIFFStreamType",
+                        value: "auds",
+                        negate: false,
+                    },
+                    Field {
+                        index: 5,
+                        sub: None,
+                        name: "AudioSampleRate",
+                        format: Some(Fmt::Rational64u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::IntVal100051005DA1FC),
+                    },
+                ),
+                (
+                    Cond::MemberStrEq {
+                        member: "RIFFStreamType",
+                        value: "vids",
+                        negate: false,
+                    },
+                    Field {
+                        index: 5,
+                        sub: None,
+                        name: "VideoFrameRate",
+                        format: Some(Fmt::Rational64u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: false,
+                            raw_conv: true,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::IntVal10000510006E64E7),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 5,
+                        sub: None,
+                        name: "StreamSampleRate",
+                        format: Some(Fmt::Rational64u),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::IntVal10000510006E64E7),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 8,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberStrEq {
+                        member: "RIFFStreamType",
+                        value: "auds",
+                        negate: false,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "AudioSampleCount",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberStrEq {
+                        member: "RIFFStreamType",
+                        value: "vids",
+                        negate: false,
+                    },
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "VideoFrameCount",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 8,
+                        sub: None,
+                        name: "StreamSampleCount",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::RIFF::UserText` -- 6 fields.
+/// `Image::ExifTool::RIFF::UserText` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_USERTEXT: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130689,9 +137686,11 @@ pub static RIFF_USERTEXT: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::VP8` -- 5 fields.
+/// `Image::ExifTool::RIFF::VP8` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_VP8: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130773,9 +137772,11 @@ pub static RIFF_VP8: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::VP8L` -- 3 fields.
+/// `Image::ExifTool::RIFF::VP8L` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_VP8L: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130832,9 +137833,11 @@ pub static RIFF_VP8L: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::RIFF::VP8X` -- 3 fields.
+/// `Image::ExifTool::RIFF::VP8X` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RIFF_VP8X: BinaryTable = BinaryTable {
     module: "RIFF",
@@ -130888,9 +137891,11 @@ pub static RIFF_VP8X: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Reconyx::HyperFire` -- 18 fields.
+/// `Image::ExifTool::Reconyx::HyperFire` -- 18 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RECONYX_HYPERFIRE: BinaryTable = BinaryTable {
     module: "Reconyx",
@@ -131120,9 +138125,11 @@ pub static RECONYX_HYPERFIRE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Reconyx::HyperFire2` -- 25 fields.
+/// `Image::ExifTool::Reconyx::HyperFire2` -- 25 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RECONYX_HYPERFIRE2: BinaryTable = BinaryTable {
     module: "Reconyx",
@@ -131435,9 +138442,11 @@ pub static RECONYX_HYPERFIRE2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Reconyx::HyperFire4K` -- 24 fields.
+/// `Image::ExifTool::Reconyx::HyperFire4K` -- 24 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RECONYX_HYPERFIRE4K: BinaryTable = BinaryTable {
     module: "Reconyx",
@@ -131748,9 +138757,11 @@ pub static RECONYX_HYPERFIRE4K: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Reconyx::MicroFire` -- 29 fields.
+/// `Image::ExifTool::Reconyx::MicroFire` -- 29 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RECONYX_MICROFIRE: BinaryTable = BinaryTable {
     module: "Reconyx",
@@ -132139,9 +139150,11 @@ pub static RECONYX_MICROFIRE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Reconyx::UltraFire` -- 16 fields.
+/// `Image::ExifTool::Reconyx::UltraFire` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RECONYX_ULTRAFIRE: BinaryTable = BinaryTable {
     module: "Reconyx",
@@ -132370,9 +139383,11 @@ pub static RECONYX_ULTRAFIRE: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Red::RED1` -- 4 fields.
+/// `Image::ExifTool::Red::RED1` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RED_RED1: BinaryTable = BinaryTable {
     module: "Red",
@@ -132424,9 +139439,11 @@ pub static RED_RED1: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Red::RED2` -- 4 fields.
+/// `Image::ExifTool::Red::RED2` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RED_RED2: BinaryTable = BinaryTable {
     module: "Red",
@@ -132484,9 +139501,11 @@ pub static RED_RED2: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::IntVal10000510006E64E7),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Ricoh::FaceInfo` -- 10 fields.
+/// `Image::ExifTool::Ricoh::FaceInfo` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RICOH_FACEINFO: BinaryTable = BinaryTable {
     module: "Ricoh",
@@ -132652,9 +139671,11 @@ pub static RICOH_FACEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Ricoh::FirmwareInfo` -- 2 fields.
+/// `Image::ExifTool::Ricoh::FirmwareInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RICOH_FIRMWAREINFO: BinaryTable = BinaryTable {
     module: "Ricoh",
@@ -132686,9 +139707,11 @@ pub static RICOH_FIRMWAREINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Ricoh::ImageInfo` -- 11 fields.
+/// `Image::ExifTool::Ricoh::ImageInfo` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RICOH_IMAGEINFO: BinaryTable = BinaryTable {
     module: "Ricoh",
@@ -132844,9 +139867,11 @@ pub static RICOH_IMAGEINFO: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Ricoh::SerialInfo` -- 4 fields.
+/// `Image::ExifTool::Ricoh::SerialInfo` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static RICOH_SERIALINFO: BinaryTable = BinaryTable {
     module: "Ricoh",
@@ -132898,9 +139923,11 @@ pub static RICOH_SERIALINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Samsung::DualShotExtra` -- 3 fields.
+/// `Image::ExifTool::Samsung::DualShotExtra` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SAMSUNG_DUALSHOTEXTRA: BinaryTable = BinaryTable {
     module: "Samsung",
@@ -132960,9 +139987,11 @@ pub static SAMSUNG_DUALSHOTEXTRA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Samsung::MP4` -- 8 fields.
+/// `Image::ExifTool::Samsung::MP4` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SAMSUNG_MP4: BinaryTable = BinaryTable {
     module: "Samsung",
@@ -133072,9 +140101,11 @@ pub static SAMSUNG_MP4: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Samsung::Main` -- 3 fields.
+/// `Image::ExifTool::Samsung::Main` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SAMSUNG_MAIN: BinaryTable = BinaryTable {
     module: "Samsung",
@@ -133116,9 +140147,11 @@ pub static SAMSUNG_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Samsung::OrientationInfo` -- 2 fields.
+/// `Image::ExifTool::Samsung::OrientationInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SAMSUNG_ORIENTATIONINFO: BinaryTable = BinaryTable {
     module: "Samsung",
@@ -133150,9 +140183,11 @@ pub static SAMSUNG_ORIENTATIONINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Samsung::PictureWizard` -- 5 fields.
+/// `Image::ExifTool::Samsung::PictureWizard` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SAMSUNG_PICTUREWIZARD: BinaryTable = BinaryTable {
     module: "Samsung",
@@ -133246,9 +140281,11 @@ pub static SAMSUNG_PICTUREWIZARD: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Samsung::Thumbnail` -- 4 fields.
+/// `Image::ExifTool::Samsung::Thumbnail` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SAMSUNG_THUMBNAIL: BinaryTable = BinaryTable {
     module: "Samsung",
@@ -133300,9 +140337,11 @@ pub static SAMSUNG_THUMBNAIL: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Samsung::Thumbnail2` -- 4 fields.
+/// `Image::ExifTool::Samsung::Thumbnail2` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SAMSUNG_THUMBNAIL2: BinaryTable = BinaryTable {
     module: "Samsung",
@@ -133354,9 +140393,11 @@ pub static SAMSUNG_THUMBNAIL2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Samsung::sec` -- 5 fields.
+/// `Image::ExifTool::Samsung::sec` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SAMSUNG_SEC: BinaryTable = BinaryTable {
     module: "Samsung",
@@ -133418,9 +140459,11 @@ pub static SAMSUNG_SEC: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sanyo::FaceInfo` -- 2 fields.
+/// `Image::ExifTool::Sanyo::FaceInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SANYO_FACEINFO: BinaryTable = BinaryTable {
     module: "Sanyo",
@@ -133452,9 +140495,11 @@ pub static SANYO_FACEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sanyo::MOV` -- 7 fields.
+/// `Image::ExifTool::Sanyo::MOV` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SANYO_MOV: BinaryTable = BinaryTable {
     module: "Sanyo",
@@ -133567,9 +140612,11 @@ pub static SANYO_MOV: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf1fMmVal03B2CA),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sanyo::MP4` -- 9 fields.
+/// `Image::ExifTool::Sanyo::MP4` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SANYO_MP4: BinaryTable = BinaryTable {
     module: "Sanyo",
@@ -133695,9 +140742,11 @@ pub static SANYO_MP4: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sanyo::Thumbnail` -- 4 fields.
+/// `Image::ExifTool::Sanyo::Thumbnail` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SANYO_THUMBNAIL: BinaryTable = BinaryTable {
     module: "Sanyo",
@@ -133749,9 +140798,11 @@ pub static SANYO_THUMBNAIL: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sigma::WBSettings` -- 10 fields.
+/// `Image::ExifTool::Sigma::WBSettings` -- 10 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SIGMA_WBSETTINGS: BinaryTable = BinaryTable {
     module: "Sigma",
@@ -133863,9 +140914,11 @@ pub static SIGMA_WBSETTINGS: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::SigmaRaw::Header4` -- 4 fields.
+/// `Image::ExifTool::SigmaRaw::Header4` -- 4 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SIGMARAW_HEADER4: BinaryTable = BinaryTable {
     module: "SigmaRaw",
@@ -133923,9 +140976,11 @@ pub static SIGMARAW_HEADER4: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::AFStatus15` -- 18 fields.
+/// `Image::ExifTool::Sony::AFStatus15` -- 18 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_AFSTATUS15: BinaryTable = BinaryTable {
     module: "Sony",
@@ -134117,9 +141172,11 @@ pub static SONY_AFSTATUS15: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(-32768, "Out of Focus"), (0, "In Focus")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::AFStatus19` -- 30 fields.
+/// `Image::ExifTool::Sony::AFStatus19` -- 30 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_AFSTATUS19: BinaryTable = BinaryTable {
     module: "Sony",
@@ -134431,9 +141488,11 @@ pub static SONY_AFSTATUS19: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(-32768, "Out of Focus"), (0, "In Focus")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::AFStatus79` -- 95 fields.
+/// `Image::ExifTool::Sony::AFStatus79` -- 95 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_AFSTATUS79: BinaryTable = BinaryTable {
     module: "Sony",
@@ -135395,9 +142454,11 @@ pub static SONY_AFSTATUS79: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(-32768, "Out of Focus"), (0, "In Focus")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::CameraInfo` -- 31 fields.
+/// `Image::ExifTool::Sony::CameraInfo` -- 31 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_CAMERAINFO: BinaryTable = BinaryTable {
     module: "Sony",
@@ -135792,9 +142853,11 @@ pub static SONY_CAMERAINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::CameraInfo2` -- 16 fields.
+/// `Image::ExifTool::Sony::CameraInfo2` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_CAMERAINFO2: BinaryTable = BinaryTable {
     module: "Sony",
@@ -135998,9 +143061,11 @@ pub static SONY_CAMERAINFO2: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(-32768, "Out of Focus"), (0, "In Focus")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::CameraInfo3` -- 18 fields.
+/// `Image::ExifTool::Sony::CameraInfo3` -- 18 fields,
+/// 3 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_CAMERAINFO3: BinaryTable = BinaryTable {
     module: "Sony",
@@ -136363,9 +143428,161 @@ pub static SONY_CAMERAINFO3: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(-32768, "Out of Focus"), (0, "In Focus")]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 29,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^(SLT-|DSLR-A(560|580))\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 29,
+                        sub: None,
+                        name: "FocusMode",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Manual"),
+                            (1, "AF-S"),
+                            (2, "AF-C"),
+                            (3, "AF-A"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-A(450|500|550)\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 29,
+                        sub: None,
+                        name: "AFStatusTop-right",
+                        format: Some(Fmt::Int16s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (-32768, "Out of Focus"),
+                            (0, "In Focus"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 33,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^(SLT-|DSLR-A(560|580))\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 33,
+                        sub: None,
+                        name: "AFStatusActiveSensor",
+                        format: Some(Fmt::Int16s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (-32768, "Out of Focus"),
+                            (0, "In Focus"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-A(450|500|550)\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 33,
+                        sub: None,
+                        name: "AFStatusBottom",
+                        format: Some(Fmt::Int16s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (-32768, "Out of Focus"),
+                            (0, "In Focus"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 35,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^(SLT-|DSLR-A(560|580))\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 35,
+                        sub: None,
+                        name: "AFStatus15",
+                        format: Some(Fmt::Int16s),
+                        count: 18,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: false,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: true,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-A(450|500|550)\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 35,
+                        sub: None,
+                        name: "AFStatusMiddleHorizontal",
+                        format: Some(Fmt::Int16s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (-32768, "Out of Focus"),
+                            (0, "In Focus"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Sony::CameraSettings` -- 55 fields.
+/// `Image::ExifTool::Sony::CameraSettings` -- 55 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
     module: "Sony",
@@ -137198,9 +144415,11 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf4dVal069066),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::CameraSettings2` -- 45 fields.
+/// `Image::ExifTool::Sony::CameraSettings2` -- 45 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
     module: "Sony",
@@ -137870,9 +145089,11 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(5, "Adobe RGB"), (6, "sRGB")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::CameraSettings3` -- 68 fields.
+/// `Image::ExifTool::Sony::CameraSettings3` -- 68 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
     module: "Sony",
@@ -139387,9 +146608,11 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
             print_conv: PrintConv::Expr(ExprId::Sprintf3dValCD66A0),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::ExtraInfo` -- 3 fields.
+/// `Image::ExifTool::Sony::ExtraInfo` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_EXTRAINFO: BinaryTable = BinaryTable {
     module: "Sony",
@@ -139437,9 +146660,11 @@ pub static SONY_EXTRAINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::ExtraInfo2` -- 2 fields.
+/// `Image::ExifTool::Sony::ExtraInfo2` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_EXTRAINFO2: BinaryTable = BinaryTable {
     module: "Sony",
@@ -139471,9 +146696,11 @@ pub static SONY_EXTRAINFO2: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "Off"), (64, "On")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::ExtraInfo3` -- 6 fields.
+/// `Image::ExifTool::Sony::ExtraInfo3` -- 6 fields,
+/// 2 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_EXTRAINFO3: BinaryTable = BinaryTable {
     module: "Sony",
@@ -139583,9 +146810,152 @@ pub static SONY_EXTRAINFO3: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 20,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^SLT-",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 20,
+                        sub: None,
+                        name: "BatteryState",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (1, "Empty"),
+                            (2, "Low"),
+                            (3, "Half full"),
+                            (4, "Almost full"),
+                            (5, "Full"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 20,
+                        sub: None,
+                        name: "ExposureProgram",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (241, "Landscape"),
+                            (243, "Aperture-priority AE"),
+                            (245, "Portrait"),
+                            (246, "Auto"),
+                            (247, "Program AE"),
+                            (249, "Macro"),
+                            (252, "Sunset"),
+                            (253, "Sports"),
+                            (255, "Manual"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 20,
+                        sub: None,
+                        name: "ModeDialPosition",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (248, "No Flash"),
+                            (249, "Aperture-priority AE"),
+                            (250, "SCN"),
+                            (251, "Shutter speed priority AE"),
+                            (252, "Auto"),
+                            (253, "Program AE"),
+                            (254, "Panorama"),
+                            (255, "Manual"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 22,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 22,
+                        sub: None,
+                        name: "MemoryCardConfiguration",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (244, "MemoryStick in use, SD card present"),
+                            (245, "MemoryStick in use, SD slot empty"),
+                            (252, "SD card in use, MemoryStick present"),
+                            (254, "SD card in use, MemoryStick slot empty"),
+                        ]),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^(NEX-(3|5|5C|C3|VG10|VG10E))\\b",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 22,
+                        sub: None,
+                        name: "CameraOrientation",
+                        format: None,
+                        count: 1,
+                        mask: Some(Mask {
+                            bits: 0xc0,
+                            shift: 6,
+                        }),
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "Horizontal (normal)"),
+                            (1, "Rotate 90 CW"),
+                            (2, "Rotate 270 CW"),
+                            (3, "Rotate 180"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Sony::FaceInfo` -- 9 fields.
+/// `Image::ExifTool::Sony::FaceInfo` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_FACEINFO: BinaryTable = BinaryTable {
     module: "Sony",
@@ -139741,9 +147111,11 @@ pub static SONY_FACEINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::FaceInfo1` -- 8 fields.
+/// `Image::ExifTool::Sony::FaceInfo1` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_FACEINFO1: BinaryTable = BinaryTable {
     module: "Sony",
@@ -139883,9 +147255,11 @@ pub static SONY_FACEINFO1: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::FaceInfo2` -- 8 fields.
+/// `Image::ExifTool::Sony::FaceInfo2` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_FACEINFO2: BinaryTable = BinaryTable {
     module: "Sony",
@@ -140025,9 +147399,11 @@ pub static SONY_FACEINFO2: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::FaceInfoA` -- 15 fields.
+/// `Image::ExifTool::Sony::FaceInfoA` -- 15 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_FACEINFOA: BinaryTable = BinaryTable {
     module: "Sony",
@@ -140279,9 +147655,11 @@ pub static SONY_FACEINFOA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::FocusInfo` -- 17 fields.
+/// `Image::ExifTool::Sony::FocusInfo` -- 17 fields,
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_FOCUSINFO: BinaryTable = BinaryTable {
     module: "Sony",
@@ -140537,9 +147915,69 @@ pub static SONY_FOCUSINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[VariantGroup {
+        index: 14,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "^DSLR-A(230|290|330|380|390)$",
+                    ignore_case: false,
+                    negate: false,
+                },
+                Field {
+                    index: 14,
+                    sub: None,
+                    name: "DriveMode2",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (1, "Single Frame"),
+                        (2, "Continuous High"),
+                        (4, "Self-timer 10 sec"),
+                        (5, "Self-timer 2 sec, Mirror Lock-up"),
+                        (7, "Continuous Bracketing"),
+                        (10, "Remote Commander"),
+                        (11, "Continuous Self-timer"),
+                    ]),
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 14,
+                    sub: None,
+                    name: "DriveMode2",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (1, "Single Frame"),
+                        (2, "Continuous High"),
+                        (4, "Self-timer 10 sec"),
+                        (5, "Self-timer 2 sec, Mirror Lock-up"),
+                        (6, "Single-frame Bracketing"),
+                        (7, "Continuous Bracketing"),
+                        (10, "Remote Commander"),
+                        (11, "Mirror Lock-up"),
+                        (18, "Continuous Low"),
+                        (24, "White Balance Bracketing Low"),
+                        (25, "D-Range Optimizer Bracketing Low"),
+                        (40, "White Balance Bracketing High"),
+                        (41, "D-Range Optimizer Bracketing High"),
+                    ]),
+                },
+            ),
+        ],
+    }],
 };
 
-/// `Image::ExifTool::Sony::HiddenInfo` -- 2 fields.
+/// `Image::ExifTool::Sony::HiddenInfo` -- 2 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_HIDDENINFO: BinaryTable = BinaryTable {
     module: "Sony",
@@ -140571,9 +148009,11 @@ pub static SONY_HIDDENINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::ISOInfo` -- 3 fields.
+/// `Image::ExifTool::Sony::ISOInfo` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_ISOINFO: BinaryTable = BinaryTable {
     module: "Sony",
@@ -140633,9 +148073,11 @@ pub static SONY_ISOINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::MeterInfo` -- 16 fields.
+/// `Image::ExifTool::Sony::MeterInfo` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_METERINFO: BinaryTable = BinaryTable {
     module: "Sony",
@@ -140807,9 +148249,11 @@ pub static SONY_METERINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::MeterInfo9` -- 16 fields.
+/// `Image::ExifTool::Sony::MeterInfo9` -- 16 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_METERINFO9: BinaryTable = BinaryTable {
     module: "Sony",
@@ -141077,9 +148521,11 @@ pub static SONY_METERINFO9: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::MoreInfo0201` -- 3 fields.
+/// `Image::ExifTool::Sony::MoreInfo0201` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_MOREINFO0201: BinaryTable = BinaryTable {
     module: "Sony",
@@ -141139,9 +148585,11 @@ pub static SONY_MOREINFO0201: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::MoreInfo0401` -- 1 fields.
+/// `Image::ExifTool::Sony::MoreInfo0401` -- 1 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_MOREINFO0401: BinaryTable = BinaryTable {
     module: "Sony",
@@ -141167,9 +148615,11 @@ pub static SONY_MOREINFO0401: BinaryTable = BinaryTable {
         },
         print_conv: PrintConv::None,
     }],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::MoreSettings` -- 36 fields.
+/// `Image::ExifTool::Sony::MoreSettings` -- 36 fields,
+/// 11 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_MORESETTINGS: BinaryTable = BinaryTable {
     module: "Sony",
@@ -141790,9 +149240,605 @@ pub static SONY_MORESETTINGS: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "None"), (1, "Built-in"), (2, "External")]),
         },
     ],
+    variants: &[
+        VariantGroup {
+            index: 30,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 30,
+                        sub: None,
+                        name: "BrightnessValue",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 30,
+                        sub: None,
+                        name: "ExposureCompensationSet",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 31,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 31,
+                        sub: None,
+                        name: "ISO",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf0fValAutoAD1F9D),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 31,
+                        sub: None,
+                        name: "FlashExposureCompSet",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 32,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 32,
+                        sub: None,
+                        name: "FNumber",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NEX-(3|5|5C)",
+                        ignore_case: false,
+                        negate: true,
+                    },
+                    Field {
+                        index: 32,
+                        sub: None,
+                        name: "LiveViewAFMethod",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (0, "n/a"),
+                            (1, "Phase-detect AF"),
+                            (2, "Contrast AF"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 33,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 33,
+                        sub: None,
+                        name: "ExposureTime",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(
+                            ExprId::ValImageExifToolExifPrintExposureTimeVal833680,
+                        ),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NEX-(3|5|5C)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 33,
+                        sub: None,
+                        name: "ISO",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf0fValAutoAD1F9D),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 35,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 35,
+                        sub: None,
+                        name: "FocalLength2",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Sprintf1fMmVal03B2CA),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NEX-(3|5|5C)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 35,
+                        sub: None,
+                        name: "ExposureTime",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(
+                            ExprId::ValImageExifToolExifPrintExposureTimeVal833680,
+                        ),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 37,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NEX-(3|5|5C)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 37,
+                        sub: None,
+                        name: "FocalLength2",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Sprintf1fMmVal03B2CA),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: true,
+                    },
+                    Field {
+                        index: 37,
+                        sub: None,
+                        name: "ISO",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf0fValAutoAD1F9D),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 38,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 38,
+                        sub: None,
+                        name: "FlashExposureCompSet2",
+                        format: Some(Fmt::Int16s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NEX-(3|5|5C)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 38,
+                        sub: None,
+                        name: "ExposureCompensation2",
+                        format: Some(Fmt::Int16s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 38,
+                        sub: None,
+                        name: "FNumber",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ImageExifToolExifPrintFNumberVal30CE5C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 41,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 41,
+                        sub: None,
+                        name: "FocusPosition2",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::None,
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NEX-(3|5|5C)",
+                        ignore_case: false,
+                        negate: true,
+                    },
+                    Field {
+                        index: 41,
+                        sub: None,
+                        name: "FocalLength2",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::Sprintf1fMmVal03B2CA),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 42,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 42,
+                        sub: None,
+                        name: "FlashAction",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "Did not fire"), (1, "Fired")]),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NEX-(3|5|5C)",
+                        ignore_case: false,
+                        negate: true,
+                    },
+                    Field {
+                        index: 42,
+                        sub: None,
+                        name: "ExposureCompensation2",
+                        format: Some(Fmt::Int16s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 44,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 44,
+                        sub: None,
+                        name: "FocusMode2",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "AF"), (1, "MF")]),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NEX-(3|5|5C)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 44,
+                        sub: None,
+                        name: "FlashAction",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "Did not fire"), (1, "Fired")]),
+                    },
+                ),
+                (
+                    Cond::Always,
+                    Field {
+                        index: 44,
+                        sub: None,
+                        name: "FlashExposureCompSet2",
+                        format: Some(Fmt::Int16s),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::Expr(ExprId::ValSprintf1fVal00A047C),
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 46,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NEX-(3|5|5C)",
+                        ignore_case: false,
+                        negate: false,
+                    },
+                    Field {
+                        index: 46,
+                        sub: None,
+                        name: "FocusMode2",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "AF"), (1, "MF")]),
+                    },
+                ),
+                (
+                    Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^DSLR-(A450|A500|A550)",
+                        ignore_case: false,
+                        negate: true,
+                    },
+                    Field {
+                        index: 46,
+                        sub: None,
+                        name: "Orientation2",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[
+                            (1, "Horizontal (normal)"),
+                            (2, "Rotate 180"),
+                            (6, "Rotate 90 CW"),
+                            (8, "Rotate 270 CW"),
+                        ]),
+                    },
+                ),
+            ],
+        },
+    ],
 };
 
-/// `Image::ExifTool::Sony::PMP` -- 14 fields.
+/// `Image::ExifTool::Sony::PMP` -- 14 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_PMP: BinaryTable = BinaryTable {
     module: "Sony",
@@ -141985,9 +150031,11 @@ pub static SONY_PMP: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "No Flash"), (1, "Fired")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::Panorama` -- 11 fields.
+/// `Image::ExifTool::Sony::Panorama` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_PANORAMA: BinaryTable = BinaryTable {
     module: "Sony",
@@ -142109,9 +150157,11 @@ pub static SONY_PANORAMA: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::ShotInfo` -- 9 fields.
+/// `Image::ExifTool::Sony::ShotInfo` -- 9 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_SHOTINFO: BinaryTable = BinaryTable {
     module: "Sony",
@@ -142249,9 +150299,11 @@ pub static SONY_SHOTINFO: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Sony::Tag202a` -- 17 fields.
+/// `Image::ExifTool::Sony::Tag202a` -- 17 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static SONY_TAG202A: BinaryTable = BinaryTable {
     module: "Sony",
@@ -142535,9 +150587,11 @@ pub static SONY_TAG202A: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Stim::CropX` -- 5 fields.
+/// `Image::ExifTool::Stim::CropX` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static STIM_CROPX: BinaryTable = BinaryTable {
     module: "Stim",
@@ -142602,9 +150656,11 @@ pub static STIM_CROPX: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Stim::CropY` -- 5 fields.
+/// `Image::ExifTool::Stim::CropY` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static STIM_CROPY: BinaryTable = BinaryTable {
     module: "Stim",
@@ -142669,9 +150725,11 @@ pub static STIM_CROPY: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Theora::Identification` -- 11 fields.
+/// `Image::ExifTool::Theora::Identification` -- 11 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static THEORA_IDENTIFICATION: BinaryTable = BinaryTable {
     module: "Theora",
@@ -142833,9 +150891,11 @@ pub static THEORA_IDENTIFICATION: BinaryTable = BinaryTable {
             print_conv: PrintConv::IntEnum(&[(0, "4:2:0"), (2, "4:2:2"), (3, "4:4:4")]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::Vorbis::Identification` -- 6 fields.
+/// `Image::ExifTool::Vorbis::Identification` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static VORBIS_IDENTIFICATION: BinaryTable = BinaryTable {
     module: "Vorbis",
@@ -142925,9 +150985,11 @@ pub static VORBIS_IDENTIFICATION: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::WavPack::Main` -- 5 fields.
+/// `Image::ExifTool::WavPack::Main` -- 5 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static WAVPACK_MAIN: BinaryTable = BinaryTable {
     module: "WavPack",
@@ -143027,9 +151089,11 @@ pub static WAVPACK_MAIN: BinaryTable = BinaryTable {
             ]),
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ZIP::GZIP` -- 7 fields.
+/// `Image::ExifTool::ZIP::GZIP` -- 7 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ZIP_GZIP: BinaryTable = BinaryTable {
     module: "ZIP",
@@ -143137,9 +151201,11 @@ pub static ZIP_GZIP: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ZIP::Main` -- 8 fields.
+/// `Image::ExifTool::ZIP::Main` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ZIP_MAIN: BinaryTable = BinaryTable {
     module: "ZIP",
@@ -143262,9 +151328,11 @@ pub static ZIP_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ZIP::RAR` -- 6 fields.
+/// `Image::ExifTool::ZIP::RAR` -- 6 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ZIP_RAR: BinaryTable = BinaryTable {
     module: "ZIP",
@@ -143360,9 +151428,11 @@ pub static ZIP_RAR: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
-/// `Image::ExifTool::ZISRAW::Main` -- 3 fields.
+/// `Image::ExifTool::ZISRAW::Main` -- 3 fields,
+/// 0 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static ZISRAW_MAIN: BinaryTable = BinaryTable {
     module: "ZISRAW",
@@ -143416,6 +151486,7 @@ pub static ZISRAW_MAIN: BinaryTable = BinaryTable {
             print_conv: PrintConv::None,
         },
     ],
+    variants: &[],
 };
 
 /// Every generated binary table, for iteration and lookup.
@@ -143727,6 +151798,7 @@ pub static ALL_BINARY_TABLES: &[&BinaryTable] = &[
     &NIKON_COLORBALANCEC,
     &NIKON_COLORBALANCEUNKNOWN,
     &NIKON_COLORBALANCEUNKNOWN2,
+    &NIKON_CUSTOMSETTINGSD500,
     &NIKON_DISTORTINFO,
     &NIKON_DISTORTIONINFO,
     &NIKON_FACEDETECT,

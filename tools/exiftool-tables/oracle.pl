@@ -41,6 +41,60 @@ sub txt {
 
 sub clean { my $s = txt($_[0]); $s =~ s/[\t\n\r]+/ /g; return $s }
 
+# Emit every row for one tag-info entry `$e` at `$key`. Shared between a
+# plain (scalar-keyed) entry and one alternative of a Step 23 `_variants`
+# array -- the two carry identical fields (Name/Mask/Hook/SubDirectory/
+# Format/PrintConv), only how `$key` was built differs (see the caller).
+sub emit_entry {
+    my ($mod, $sym, $key, $e) = @_;
+    my $name = ref $e eq 'HASH' ? $e->{Name} : $e;
+    return unless defined $name && !ref $name;
+    print join("\t", $mod, $sym, $key, clean($name)), "\n";
+
+    return unless ref $e eq 'HASH';
+
+    # Mask/BitShift decide what the field's value even is: ExifTool
+    # reduces the word to ($val & Mask) >> BitShift before converting.
+    # BitShift is derived here the way ExifTool derives it -- lowest set
+    # bit, unless the table states one -- rather than read from
+    # dump_tables.pl's JSON, so the two paths stay independent.
+    my $mask = $e->{Mask};
+    if (defined $mask && !ref $mask && $mask) {
+        my $shift = $e->{BitShift};
+        unless (defined $shift) {
+            $shift = 0;
+            ++$shift until $mask & (1 << $shift);
+        }
+        print join("\t", $mod, $sym, $key, 'MASK', $mask, $shift), "\n";
+    }
+
+    # Hook and SubDirectory are the two constructs codegen.py records
+    # but cannot execute (see tools/exiftool-tables/codegen.py's
+    # `omitted_for`). Presence, not content, is what a caller needs to
+    # know -- a Hook can rewrite later fields' format/byte order
+    # in ways this generator does not run, and a SubDirectory means the
+    # bytes are the entry to a nested table, not this field's value.
+    print join("\t", $mod, $sym, $key, 'HOOK', ''), "\n" if defined $e->{Hook};
+    print join("\t", $mod, $sym, $key, 'SUBDIR', ''), "\n" if defined $e->{SubDirectory};
+
+    # A `var_*` Format is data-dependent width: ExifTool computes the
+    # real byte offset by walking the bytes, so the generator's static
+    # `index * increment` formula is unsound for every field at or
+    # past this one (`offsets_sound_until`).
+    my $fmt = $e->{Format};
+    print join("\t", $mod, $sym, $key, 'VARFMT', ''), "\n"
+        if defined $fmt && !ref $fmt && $fmt =~ /^var_/;
+
+    my $pc = $e->{PrintConv};
+    return unless ref $pc eq 'HASH';
+    for my $ck (sort keys %$pc) {
+        next if $ck =~ /^(BITMASK|OTHER|Notes|PrintHex|SeparateTable)$/;
+        next if ref $pc->{$ck};
+        print join("\t", $mod, $sym, $key, 'ENUM', clean($ck),
+                   clean($pc->{$ck})), "\n";
+    }
+}
+
 opendir(my $dh, "$LIB/Image/ExifTool") or die "opendir: $!";
 my @mods = sort map { s/\.pm$//r } grep { /\.pm$/ } readdir($dh);
 closedir $dh;
@@ -76,53 +130,26 @@ for my $mod (grep { !$skip{$_} } @mods) {
         for my $k (sort keys %$t) {
             next if $k !~ /^-?[\d.]+$/;
             my $e = $t->{$k};
-            next if ref $e eq 'ARRAY';          # variants: generator skips these
-            my $name = ref $e eq 'HASH' ? $e->{Name} : $e;
-            next unless defined $name && !ref $name;
-            print join("\t", $mod, $sym, $k, clean($name)), "\n";
-
-            next unless ref $e eq 'HASH';
-
-            # Mask/BitShift decide what the field's value even is: ExifTool
-            # reduces the word to ($val & Mask) >> BitShift before converting.
-            # BitShift is derived here the way ExifTool derives it -- lowest set
-            # bit, unless the table states one -- rather than read from
-            # dump_tables.pl's JSON, so the two paths stay independent.
-            my $mask = $e->{Mask};
-            if (defined $mask && !ref $mask && $mask) {
-                my $shift = $e->{BitShift};
-                unless (defined $shift) {
-                    $shift = 0;
-                    ++$shift until $mask & (1 << $shift);
+            if (ref $e eq 'ARRAY') {
+                # Step 23: `_variants` -- ExifTool's own arrayref-of-
+                # alternatives representation of a model-dependent layout
+                # (dump_tables.pl's `_variants`, which codegen.py compiles
+                # through a closed `Cond` grammar into `VariantGroup`).
+                # Alternatives share one offset, so the plain `$k` key would
+                # collide them into a single row; `"$k#$i"` (0-based array
+                # position -- the same order dump_tables.pl and codegen.py
+                # both walk the Perl array in) disambiguates without
+                # changing the plain-field key shape at all: a plain key is
+                # never built with `#` in it, so the two key spaces cannot
+                # collide with each other either.
+                my $i = 0;
+                for my $alt (@$e) {
+                    emit_entry($mod, $sym, "$k#$i", $alt);
+                    $i++;
                 }
-                print join("\t", $mod, $sym, $k, 'MASK', $mask, $shift), "\n";
+                next;
             }
-
-            # Hook and SubDirectory are the two constructs codegen.py records
-            # but cannot execute (see tools/exiftool-tables/codegen.py's
-            # `omitted_for`). Presence, not content, is what a caller needs to
-            # know -- a Hook can rewrite later fields' format/byte order
-            # in ways this generator does not run, and a SubDirectory means the
-            # bytes are the entry to a nested table, not this field's value.
-            print join("\t", $mod, $sym, $k, 'HOOK', ''), "\n" if defined $e->{Hook};
-            print join("\t", $mod, $sym, $k, 'SUBDIR', ''), "\n" if defined $e->{SubDirectory};
-
-            # A `var_*` Format is data-dependent width: ExifTool computes the
-            # real byte offset by walking the bytes, so the generator's static
-            # `index * increment` formula is unsound for every field at or
-            # past this one (`offsets_sound_until`).
-            my $fmt = $e->{Format};
-            print join("\t", $mod, $sym, $k, 'VARFMT', ''), "\n"
-                if defined $fmt && !ref $fmt && $fmt =~ /^var_/;
-
-            my $pc = $e->{PrintConv};
-            next unless ref $pc eq 'HASH';
-            for my $ck (sort keys %$pc) {
-                next if $ck =~ /^(BITMASK|OTHER|Notes|PrintHex|SeparateTable)$/;
-                next if ref $pc->{$ck};
-                print join("\t", $mod, $sym, $k, 'ENUM', clean($ck),
-                           clean($pc->{$ck})), "\n";
-            }
+            emit_entry($mod, $sym, $k, $e);
         }
     }
 }

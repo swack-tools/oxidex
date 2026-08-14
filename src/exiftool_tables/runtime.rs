@@ -14,6 +14,7 @@
 use crate::core::TagValue;
 use crate::io::ByteOrder;
 
+use super::cond;
 use super::{ALL_BINARY_TABLES, BinaryTable, Field, Fmt, Omitted, PrintConv};
 
 /// A value read directly from a generated binary-table field.
@@ -482,6 +483,51 @@ pub fn decode_binary_table(
     TableDecode { fields, refusals }
 }
 
+/// Resolve and decode `table.variants` (Step 23's `_variants` schema) against
+/// `ctx`, in addition to whatever [`decode_binary_table`] would decode from
+/// `table.fields`.
+///
+/// For each [`cond::VariantGroup`], [`cond::first_match`] walks its
+/// alternatives in ExifTool's `GetTagInfo` order and returns the first whose
+/// [`cond::Cond`] evaluates true against `ctx` -- applying any
+/// [`cond::Cond::SetMember`] side effects along the way, even from
+/// alternatives that lose (see `src/exiftool_tables/cond.rs`'s module doc for
+/// why that matters). A group with no matching alternative contributes
+/// nothing: that is the correct behaviour, not a refusal -- real ExifTool
+/// does not produce a tag for an index whose every `Condition` failed either.
+///
+/// The winning alternative's [`Field`] is otherwise decoded exactly like a
+/// `table.fields` entry (same [`Mask`], same [`super::PrintConv`], same
+/// `offsets_sound_until` soundness bound), because once a `Cond` picks it,
+/// its own semantics are fully resolved -- it carries no unresolved
+/// `Condition` for [`DecodedField::emit`] to refuse over (`conds.py`
+/// compiled it; there is nothing left omitted unless the alternative
+/// separately declares a `ValueConv`/`RawConv`/`Hook`/`SubDirectory`, which
+/// still gates [`DecodedField::emit`] the ordinary way).
+#[must_use]
+pub fn decode_binary_table_variants(
+    table: &'static BinaryTable,
+    data: &[u8],
+    byte_order: ByteOrder,
+    ctx: &mut cond::Ctx,
+) -> Vec<DecodedField> {
+    let mut out = Vec::new();
+    for group in table.variants {
+        let Some(field) = cond::first_match(group.alternatives, ctx) else {
+            continue;
+        };
+        if let Some(bound) = table.offsets_sound_until
+            && field.index > bound
+        {
+            continue;
+        }
+        if let Some(decoded) = decode_field(table, field, data, byte_order) {
+            out.push(decoded);
+        }
+    }
+    out
+}
+
 /// Decode one field's bytes, applying its [`Mask`] if it has one. `None` means
 /// the field's bytes did not fit in `data` -- a short read, not a refusal.
 fn decode_field(
@@ -709,6 +755,7 @@ mod tests {
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
             fields: FIELDS,
+            variants: &[],
         };
 
         let decode = decode_binary_table(
@@ -804,6 +851,7 @@ mod tests {
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
             fields: FIELDS,
+            variants: &[],
         };
 
         // int8u FORMAT, so index 4 is byte 4: the big-endian word 0xABCD.
@@ -971,6 +1019,7 @@ mod tests {
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
             fields: FIELDS,
+            variants: &[],
         };
 
         let decode = decode_binary_table(&TABLE, &[0x42], ByteOrder::Big);
@@ -1068,6 +1117,7 @@ mod tests {
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
             fields: FIELDS,
+            variants: &[],
         };
 
         // 0xFD & 0x7 == 5; the unmasked 0xFD matches no enum key at all.
@@ -1196,6 +1246,7 @@ mod tests {
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
             fields: FIELDS,
+            variants: &[],
         };
 
         let decode = decode_binary_table(&TABLE, &[1, 2, 3], ByteOrder::Big);
@@ -1249,11 +1300,108 @@ mod tests {
             default_format: Fmt::Int8u,
             offsets_sound_until: Some(3),
             fields: FIELDS,
+            variants: &[],
         };
 
         let decode = decode_binary_table(&TABLE, &[0, 0, 0, 0, 0, 9], ByteOrder::Big);
         assert_eq!(decode.fields().len(), 1, "only the sound field decodes");
         assert_eq!(decode.fields()[0].field.name, "BeforeBound");
         assert_eq!(decode.refusals().offset_unsound, 1);
+    }
+
+    /// `decode_binary_table_variants` end to end: first-match-wins over a
+    /// `VariantGroup`'s alternatives, and no field at all when nothing
+    /// matches -- modelled on Sony ExtraInfo3's 0x0016 split (DSLR ->
+    /// `MemoryCardConfiguration`, NEX -> `CameraOrientation`, everything
+    /// else -> nothing; see `src/parsers/tiff/makernotes/sony/amount.rs`).
+    #[test]
+    fn decode_binary_table_variants_first_match_wins_or_nothing() {
+        use super::cond::{Cond, Ctx, MemberValue};
+        use std::collections::HashMap;
+
+        static DSLR_FIELD: Field = Field {
+            index: 0,
+            sub: None,
+            name: "MemoryCardConfiguration",
+            format: Some(Fmt::Int8u),
+            count: 1,
+            mask: None,
+            omitted: Omitted::NONE,
+            print_conv: PrintConv::None,
+        };
+        static NEX_FIELD: Field = Field {
+            name: "CameraOrientation",
+            ..DSLR_FIELD
+        };
+        static ALTERNATIVES: &[(Cond, Field)] = &[
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "^DSLR-",
+                    ignore_case: false,
+                    negate: false,
+                },
+                DSLR_FIELD,
+            ),
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "^NEX-",
+                    ignore_case: false,
+                    negate: false,
+                },
+                NEX_FIELD,
+            ),
+        ];
+        static VARIANTS: &[super::cond::VariantGroup] = &[super::cond::VariantGroup {
+            index: 0,
+            sub: None,
+            alternatives: ALTERNATIVES,
+        }];
+        static TABLE: BinaryTable = BinaryTable {
+            module: "Test",
+            table: "Variants",
+            group0: "",
+            group2: "",
+            first_entry: 0,
+            default_format: Fmt::Int8u,
+            offsets_sound_until: None,
+            fields: &[],
+            variants: VARIANTS,
+        };
+
+        let mut dslr_members = HashMap::new();
+        dslr_members.insert("Model", MemberValue::Str("DSLR-A580".to_string()));
+        let decoded = decode_binary_table_variants(
+            &TABLE,
+            &[7],
+            ByteOrder::Big,
+            &mut Ctx::new(&mut dslr_members),
+        );
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].field.name, "MemoryCardConfiguration");
+        assert_eq!(decoded[0].emit(), Some(TagValue::Integer(7)));
+
+        let mut nex_members = HashMap::new();
+        nex_members.insert("Model", MemberValue::Str("NEX-5".to_string()));
+        let decoded = decode_binary_table_variants(
+            &TABLE,
+            &[7],
+            ByteOrder::Big,
+            &mut Ctx::new(&mut nex_members),
+        );
+        assert_eq!(decoded[0].field.name, "CameraOrientation");
+
+        // An SLT body matches neither alternative -- real ExifTool produces
+        // no tag at all for this offset under that model, and so must this.
+        let mut slt_members = HashMap::new();
+        slt_members.insert("Model", MemberValue::Str("SLT-A77".to_string()));
+        let decoded = decode_binary_table_variants(
+            &TABLE,
+            &[7],
+            ByteOrder::Big,
+            &mut Ctx::new(&mut slt_members),
+        );
+        assert!(decoded.is_empty());
     }
 }

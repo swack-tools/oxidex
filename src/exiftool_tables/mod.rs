@@ -37,15 +37,18 @@
 //! ```
 
 pub mod binary_tables;
+pub mod cond;
 pub mod exprs;
 pub mod runtime;
 
 pub use binary_tables::{
     ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, Mask, Omitted, PrintConv,
 };
+pub use cond::{CmpOp, Cond, Ctx, EffectSource, MemberValue, VariantGroup, first_match};
 pub use runtime::{
     Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
-    RefusalCounts, TableDecode, all_fractional_census, decode_binary_table, fractional_census,
+    RefusalCounts, TableDecode, all_fractional_census, decode_binary_table,
+    decode_binary_table_variants, fractional_census,
 };
 
 /// Look up a generated table by ExifTool module and table name,

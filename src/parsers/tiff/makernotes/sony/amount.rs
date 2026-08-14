@@ -704,21 +704,6 @@ const EXTRA_INFO2_MODELS: [&str; 5] = [
 /// /^(NEX-(3|5|5C|C3|VG10|VG10E))\b/'`.
 const EXTRA_INFO3_NEX_MODEL_RE: &str = r"^(NEX-(3|5|5C|C3|VG10|VG10E))\b";
 
-/// Sony.pm:6058-6067 and 6070-6079: `ExtraInfo3`'s two `CameraOrientation`
-/// variants (NEX 0x0016/mask 0xc0, non-NEX 0x0018/mask 0x30) share this enum.
-fn camera_orientation(value: i64) -> Option<String> {
-    Some(
-        match value {
-            0 => "Horizontal (normal)",
-            1 => "Rotate 90 CW",
-            2 => "Rotate 270 CW",
-            3 => "Rotate 180",
-            _ => return None,
-        }
-        .to_string(),
-    )
-}
-
 /// Decodes tag 0x0116, whose layout Sony.pm picks by model: `ExtraInfo`
 /// (A850/A900, forced big-endian), `ExtraInfo2` (A230/A290/A330/A380/A390),
 /// or `ExtraInfo3` (every other body that writes this tag, Sony.pm:868-871).
@@ -763,17 +748,29 @@ pub fn extract_extra_info(
         lines: "6070-6079 (non-NEX variant, mask 0x30)",
     };
 
-    // `ExtraInfo3` fields Sony.pm gates on `$$self{Model}`
-    // (Sony.pm:5951-5988, 6070-6079). `Field::omitted.condition` records that
-    // a `Condition` exists but not what it tests, so `emit` always refuses
-    // these -- the generic `_` arm below must not run for them, or a NEX body
-    // gets DSLR/SLT-only fields it never carries. That includes
-    // `CameraOrientation`: its masked byte at 0x18 happened to read 0 on the
-    // one NEX-VG10E sample this was checked against, coincidentally matching
-    // the *real* NEX-only reading at a different offset (0x16) -- a wrong
-    // value under the right name that a spot check cannot tell from a right
-    // one. Values are captured here and only emitted after the loop, once the
-    // model predicate has actually been evaluated.
+    // `ExtraInfo3` fields Sony.pm gates on `$$self{Model}` with a single,
+    // un-arrayed `Condition` (Sony.pm:5951-5988, 6070-6079 -- BatteryVoltage1/
+    // 2, ImageStabilization, and 0x0018's non-NEX `CameraOrientation`).
+    // `Field::omitted.condition` records that such a `Condition` exists but
+    // not what it tests, so `emit` always refuses these -- the generic `_`
+    // arm below must not run for them, or a NEX body gets DSLR/SLT-only
+    // fields it never carries. Values are captured here and only emitted
+    // after the loop, once the model predicate has actually been evaluated.
+    //
+    // 0x0016 (`MemoryCardConfiguration` for DSLR, `CameraOrientation` mask
+    // 0xc0 for NEX) and 0x0014 (`BatteryState`/`ExposureProgram`/
+    // `ModeDialPosition`) are a DIFFERENT shape: Sony.pm arrays multiple
+    // model-conditioned alternatives at the same offset
+    // (`dump_tables.pl`'s `_variants`). Before Step 23 the generator refused
+    // that shape outright, so `SONY_EXTRAINFO3.fields` had no entry at either
+    // offset and this function read byte 0x16 by hand, gated on the same
+    // model regex used below (see git history for that code). Step 23
+    // compiles `_variants` through a closed `Cond` grammar
+    // (`src/exiftool_tables/cond.rs`), so both offsets are now
+    // `SONY_EXTRAINFO3.variants` schema data, resolved the same way ExifTool's
+    // own `GetTagInfo` resolves them (first matching model condition wins) --
+    // see the `decode_binary_table_variants` call below, which retires that
+    // hand read.
     let mut battery_voltage1: Option<i64> = None;
     let mut battery_voltage2: Option<i64> = None;
     let mut image_stabilization_gated: Option<TagValue> = None;
@@ -864,6 +861,30 @@ pub fn extract_extra_info(
     if table_name != "ExtraInfo3" {
         return;
     }
+
+    // Step 23: 0x0016 and 0x0014's model-dispatched alternatives
+    // (`SONY_EXTRAINFO3.variants`, compiled by `conds.py` from Sony.pm's own
+    // `_variants` arrays -- see this function's earlier doc comment). Each
+    // `Cond` is evaluated the way `Image::ExifTool::GetTagInfo` evaluates a
+    // `_variants` array: first model match wins, no match means ExifTool
+    // reports nothing for that offset (true for SLT bodies at 0x0016, which
+    // matches neither the DSLR nor the NEX alternative -- Sony.pm defines no
+    // tag there for them either). `condition_resolved` at codegen time means
+    // every winning field carries `Omitted::NONE`, so a plain `emit()` is
+    // exactly right; no `RawAccess` escape hatch is needed here the way the
+    // gated `fields()` loop above needs one.
+    let mut members = HashMap::new();
+    members.insert(
+        "Model",
+        exiftool_tables::MemberValue::Str(model.to_string()),
+    );
+    let mut ctx = exiftool_tables::Ctx::new(&mut members);
+    for decoded in exiftool_tables::decode_binary_table_variants(table, data, order, &mut ctx) {
+        if let Some(TagValue::String(printed)) = decoded.emit() {
+            tags.insert(format!("Sony:{}", decoded.field.name), printed);
+        }
+    }
+
     if !model_matches(EXTRA_INFO3_NEX_MODEL_RE, model) {
         // Sony.pm:5951-5988: the negated condition holds, so ExifTool reports
         // these for every non-NEX body that writes `ExtraInfo3`. Confirmed
@@ -886,21 +907,6 @@ pub fn extract_extra_info(
             tags.insert("Sony:ImageStabilization".to_string(), printed);
         }
         if let Some(TagValue::String(printed)) = camera_orientation_non_nex {
-            tags.insert("Sony:CameraOrientation".to_string(), printed);
-        }
-    } else if let Some(&raw) = data.get(0x16) {
-        // Sony.pm:6058-6067 -- the NEX-only `CameraOrientation` variant
-        // (mask 0xc0). `0x0016` is a Perl array of two model-conditioned
-        // alternatives at the same offset (`MemoryCardConfiguration` for
-        // DSLR bodies, this one for NEX); the generator does not transcribe
-        // that shape, so `SONY_EXTRAINFO3` (`binary_tables.rs`) has no field
-        // at this offset at all -- there is no `decoded.raw` to read it from.
-        // Reading the byte directly here is not an approximation: it is the
-        // exact byte/mask Sony.pm names, gated on the exact model predicate
-        // above. Verified against the pinned oracle's `-v3` trace on
-        // SonyNEX-VG10E.jpg: byte 0x16 = 0x3e, `(0x3e & 0xc0) >> 6` = 0 ->
-        // "Horizontal (normal)", matching `-a -G1 -s`'s `CameraOrientation`.
-        if let Some(printed) = camera_orientation((i64::from(raw) & 0xc0) >> 6) {
             tags.insert("Sony:CameraOrientation".to_string(), printed);
         }
     }
@@ -1122,6 +1128,36 @@ mod tests {
         assert_eq!(
             tags.get("Sony:CameraOrientation"),
             Some(&"Horizontal (normal)".to_string())
+        );
+    }
+
+    #[test]
+    fn extra_info3_0x0016_variant_group_emits_memory_card_configuration_on_dslr_bodies() {
+        // Sony.pm:6058-6067's OTHER 0x0016 alternative -- `MemoryCardConfiguration`
+        // for `$$self{Model} =~ /^DSLR-/`, sharing the offset with the
+        // NEX-only `CameraOrientation` alternative the two tests above pin.
+        // Before Step 23, `SONY_EXTRAINFO3` had no field at 0x0016 at all (the
+        // generator refused the whole `_variants` array), so this tag could
+        // never be emitted regardless of model; compiling the array is a
+        // strict coverage gain, not just the `CameraOrientation` retirement.
+        // The sample's real byte 0x16 (0x3e = 62) has no PrintConv entry
+        // (Sony.pm only names 244/245/252/254), so this test substitutes a
+        // known enum value at that offset to exercise the DSLR branch's
+        // PrintConv end to end.
+        let mut bytes = EXTRA_INFO3_NEX_VG10E_BYTES;
+        bytes[0x16] = 244;
+        let mut tags = HashMap::new();
+        extract_extra_info(&bytes, Some("DSLR-A580"), IoByteOrder::Little, &mut tags);
+        assert_eq!(
+            tags.get("Sony:MemoryCardConfiguration"),
+            Some(&"MemoryStick in use, SD card present".to_string())
+        );
+        // The NEX-only CameraOrientation alternative must not also fire for
+        // a DSLR body sharing the same offset.
+        assert!(
+            !tags
+                .values()
+                .any(|v| v == "Rotate 90 CW" || v == "Rotate 270 CW")
         );
     }
 }
