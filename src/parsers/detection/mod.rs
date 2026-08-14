@@ -323,6 +323,8 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         && matches!(magic_bytes[3], 0x3f | 0xbf)
     {
         return Ok(FileFormat::DV);
+    }
+
     // MacOS `._` sidecar: `\0\x05\x16\x07\0.\0\0Mac OS X        `
     // (ExifTool.pm:992's `%magicNumber`) -- the AppleDouble magic with a
     // wildcard version byte at offset 5, which `signature!`'s literal-bytes
