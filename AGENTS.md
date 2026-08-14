@@ -113,6 +113,49 @@ state the instrument alongside the number in commits, PRs and review comments �
 result argues *against* adding a safety check, re-run it with the tool the
 harness itself uses before believing it.
 
+Five more, one session, each a proxy standing in for the thing being
+measured, made mechanical below rather than left as a story:
+
+1. **Implicit binary resolution.** `jpeg-tag-matrix` resolved oxidex from
+   `$repo/target/release/oxidex` by convention while `CARGO_TARGET_DIR` was
+   redirected. The path never existed; every subprocess spawn failed closed,
+   and the run reported `readable 2702 -> 0` on nine consecutive gate runs
+   before anyone checked which binary ran. Fix: `resolve_binary()`
+   (`scripts/instrument.py`, `src/bin/jpeg-tag-matrix/instrument.rs`) exits
+   loudly the moment a resolved path is not a file, before any subprocess
+   call — never silently proceed with a binary that doesn't exist.
+2. **A stale prebuilt binary.** A duplicate-loss scan graded a conveniently
+   already-built binary from an old commit, on top of an already-dirty tree.
+   Nothing said so; a bisect agent went looking for a regression that could
+   not exist. Fix: `staleness_note()` compares the binary's mtime against
+   HEAD's commit time and every dirty file's mtime, and the header warns when
+   the binary predates the source it should reflect.
+3. **A filter that ate the answer.** `grep -E "^TOTAL|files|match"` on
+   `conformance.py` output matched per-format rows containing "files" and
+   dropped the `TOTAL` line the run existed to produce. No general fix here
+   beyond the obvious: anchor greps (`^TOTAL\b`), or better, read
+   `--json-out` instead of grepping formatted text.
+4. **A stale supplied baseline.** Three separate agents credited a branch's
+   own pre-existing drift to their own change because the baseline they
+   diffed against was old. No tool catches this by itself; regenerate the
+   baseline from the same commit you are comparing against, don't reuse one
+   handed to you.
+5. **`&&` after a pipe tests the wrong command.**
+   `git push ... 2>&1 | tail -1 && echo "preserved"` printed "preserved"
+   on five consecutive failed pushes — `&&` sees `tail`'s exit status, which
+   is almost always 0, never `git push`'s. Check `${PIPESTATUS[0]}` (bash) or
+   avoid the pipe.
+
+Every measurement script under `tools/exiftool-tables/` and
+`src/bin/jpeg-tag-matrix/` prints an `=== instrument: <tool> ===` header
+before its first number: which oxidex (path, and a staleness warning per
+#2 above), which git commit and whether the tree is dirty, which ExifTool
+and its capability-probe result, and the corpus path and file count. A dirty
+tree refuses to measure at all unless `OXIDEX_ALLOW_DIRTY_TREE=1` is set,
+in which case the header says so. See `scripts/instrument.py`'s module
+docstring for the full rationale; `src/bin/jpeg-tag-matrix/instrument.rs`
+mirrors it for the one harness that isn't Python.
+
 ## Architecture
 Hexagonal (ports/adapters) with three layers:
 - **Application**: CLI, C FFI bindings

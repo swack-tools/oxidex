@@ -68,8 +68,10 @@ from pathlib import Path
 # output from standing in for the code that ships.
 import verify
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import instrument  # noqa: E402 -- git/instrument identity header
+
 HARNESS_PATH = REPO_ROOT / "src" / "bin" / "subdir_oracle_harness.rs"
 ORACLE_PL = REPO_ROOT / "tools" / "exiftool-tables" / "oracle.pl"
 DEFAULT_EXIFTOOL = "/tmp/oxidex-exiftool-cache/exiftool-pinned.sh"
@@ -411,6 +413,19 @@ def main():
             f"generated Rust ({args.generated_rs}), pinned ExifTool lib ({args.et_lib}) and "
             f"capability-probe carrier ({probe_file}) must all exist"
         )
+    git = instrument.git_state()
+    dirty_overridden = instrument.refuse_if_dirty(git, "verify_subdirs.py")
+    instrument.print_header(
+        tool="verify_subdirs.py",
+        git=git,
+        dirty_overridden=dirty_overridden,
+        extra=[
+            f"exiftool: {args.exiftool}",
+            f"perl:    {args.perl}  et_lib={args.et_lib}",
+            f"target:  {args.generated_rs}",
+        ],
+    )
+
     version = verify.oracle_version(args.et_lib)
     capability_probe(args.exiftool, args.perl, args.et_lib, version, probe_file)
 

@@ -47,6 +47,8 @@ import exprs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS_PATH = REPO_ROOT / "src" / "bin" / "expr_oracle_harness.rs"
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import instrument  # noqa: E402 -- git/instrument identity header
 
 SLOTS = ("ValueConv", "PrintConv", "RawConv")
 
@@ -427,6 +429,16 @@ def main():
         help="write the oracle-approved expression inventory for codegen; only written on PASS",
     )
     args = ap.parse_args()
+
+    git = instrument.git_state()
+    dirty_overridden = instrument.refuse_if_dirty(git, "verify_exprs.py")
+    instrument.print_header(
+        tool="verify_exprs.py",
+        git=git,
+        dirty_overridden=dirty_overridden,
+        extra=[f"perl:    {args.perl}  et_lib={args.et_lib}",
+               f"tables:  {args.tables_json}"],
+    )
 
     version, counter = census(args.tables_json)
     capability_probe(args.perl, args.et_lib, version)

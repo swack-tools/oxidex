@@ -56,9 +56,11 @@ from pathlib import Path
 
 # The single resolution point for "which ExifTool are we grading against".
 # Kept in scripts/ so the Rust harnesses, the fleet scripts and this tool all
-# answer that question the same way.
+# answer that question the same way. instrument answers the other half --
+# which oxidex, from what commit, over what corpus -- see its module doc.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import exiftool_oracle  # noqa: E402
+import instrument  # noqa: E402
 
 # Tags that describe the file on disk rather than its metadata. They differ by
 # construction (paths, timestamps, the tool's own version) and would swamp the
@@ -443,15 +445,18 @@ def main():
     ap.add_argument("--json-out")
     args = ap.parse_args()
 
-    # Resolve the oracle before reading a single file. A run that cannot say
-    # which ExifTool it graded against should not go on to report a number.
+    # Resolve every instrument before reading a single file. A run that
+    # cannot say which ExifTool, which oxidex, and from what commit it
+    # graded should not go on to report a number.
     try:
         oracle = (exiftool_oracle.resolve_tree(args.exiftool_dir)
                   if args.exiftool_dir else exiftool_oracle.shared())
     except exiftool_oracle.OracleError as exc:
         sys.exit(f"❌ {exc}")
-    print(f"oracle: {oracle.provenance()}")
-    print(f"        {oracle.display()}\n")
+
+    git = instrument.git_state()
+    dirty_overridden = instrument.refuse_if_dirty(git, "conformance.py")
+    binary = instrument.resolve_binary(args.oxidex, kind="oxidex")
 
     # A missing root is fatal rather than skipped. Corpora are optional by
     # configuration, not by accident: silently dropping one that was asked for
@@ -510,6 +515,16 @@ def main():
             + (f" matching --ext {args.ext}" if exts else "")
         )
 
+    instrument.print_header(
+        tool="conformance.py",
+        git=git,
+        binary=binary,
+        dirty_overridden=dirty_overridden,
+        oracle=oracle,
+        corpus_paths=args.corpus,
+        file_count=len(files),
+    )
+
     per_ext = defaultdict(Counter)
     rename_votes = defaultdict(Counter)
     missing_votes = Counter()
@@ -526,7 +541,7 @@ def main():
             continue
         scored_files += 1
         et_tags_seen += len(et)
-        ox = run_oxidex(args.oxidex, path)
+        ox = run_oxidex(str(binary.path), path)
         r = compare(et, ox)
         ext = (et.get("File:FileType") or et.get("FileType")
                or os.path.splitext(path)[1].lstrip(".")).upper()

@@ -43,6 +43,9 @@ TABLES = ROOT / "src/exiftool_tables/binary_tables.rs"
 ALLOWLIST = ROOT / "src/exiftool_tables/enabled.rs"
 SRC = ROOT / "src"
 
+sys.path.insert(0, str(ROOT / "scripts"))
+import instrument  # noqa: E402 -- git/instrument identity header
+
 # `module: "X",\n    table: "Y",` ... up to that table's `gate_a` literal.
 TABLE_RE = re.compile(
     r'pub static \w+: BinaryTable = BinaryTable \{\n'
@@ -127,6 +130,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json-out")
     args = ap.parse_args()
+
+    git = instrument.git_state()
+    dirty_overridden = instrument.refuse_if_dirty(git, "reachability.py")
+    instrument.print_header(
+        tool="reachability.py",
+        git=git,
+        dirty_overridden=dirty_overridden,
+        extra=[f"reads:   {TABLES.relative_to(ROOT)}, {ALLOWLIST.relative_to(ROOT)} "
+               "(committed artifacts, not a fresh dump -- no ExifTool or oxidex involved)"],
+    )
 
     tables = parse_tables()
     allowed = parse_allowlist()

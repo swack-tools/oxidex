@@ -368,9 +368,26 @@ pub fn run(args: ManifestArgs) -> anyhow::Result<()> {
     let base_fixture = repo.join("tests/fixtures/jpeg/tag_matrix_base.jpg");
     std::fs::create_dir_all(&work)?;
 
-    let ver_out = Command::new(&exiftool).arg("-ver").output()?;
-    let ver = String::from_utf8_lossy(&ver_out.stdout).trim().to_string();
-    println!("exiftool {ver}; work dir {}", work.display());
+    let git = crate::instrument::git_state(&repo);
+    let dirty_overridden = crate::instrument::refuse_if_dirty(&git, "jpeg-tag-matrix manifest");
+    let cache_dir = std::env::var("EXIFTOOL_CACHE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/oxidex-exiftool-cache"));
+    let et_identity = crate::instrument::exiftool_identity(&exiftool, &cache_dir);
+    let Some(ver) = et_identity.version.clone() else {
+        anyhow::bail!(
+            "❌ `{exiftool} -ver` failed -- cannot resolve the ExifTool this manifest is \
+             generated against. Fix $EXIFTOOL or install exiftool before proceeding."
+        );
+    };
+    crate::instrument::print_header(
+        "jpeg-tag-matrix manifest",
+        &git,
+        None,
+        dirty_overridden,
+        Some(&et_identity),
+        &[format!("work:    {}", work.display())],
+    );
 
     let mut all_entries: std::collections::HashMap<(String, String), ManifestTag> =
         std::collections::HashMap::new();

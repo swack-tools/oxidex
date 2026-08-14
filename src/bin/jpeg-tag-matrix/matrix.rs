@@ -31,7 +31,7 @@ pub struct RunArgs {
 pub fn run(args: RunArgs) -> anyhow::Result<()> {
     let exiftool = std::env::var("EXIFTOOL").unwrap_or_else(|_| "exiftool".into());
     let repo = std::env::current_dir()?;
-    let oxidex = std::env::var("OXIDEX")
+    let requested_oxidex = std::env::var("OXIDEX")
         .unwrap_or_else(|_| repo.join("target/release/oxidex").display().to_string());
     let work = std::env::var("TAGMATRIX_WORK")
         .map(std::path::PathBuf::from)
@@ -40,6 +40,22 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| repo.join("tests/fixtures/jpeg/tag_matrix_base.jpg"));
     let results_path = work.join("results.json");
+
+    // Every instrument resolved and reported before a single tag is
+    // compared. `resolve_binary` fails loudly here -- before any subprocess
+    // call -- rather than letting a binary resolved by convention but absent
+    // under a redirected CARGO_TARGET_DIR silently fail every read and
+    // report as a total regression (see instrument.rs's doc comment for the
+    // incident this closes: `readable 2702 -> 0` on nine consecutive runs).
+    let git = crate::instrument::git_state(&repo);
+    let dirty_overridden = crate::instrument::refuse_if_dirty(&git, "jpeg-tag-matrix run");
+    let binary = crate::instrument::resolve_binary(&requested_oxidex, "oxidex");
+    let oxidex = binary.path.display().to_string();
+    let cache_dir = std::env::var("EXIFTOOL_CACHE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/oxidex-exiftool-cache"));
+    let et_identity = crate::instrument::exiftool_identity(&exiftool, &cache_dir);
+
     let tools = Tools {
         exiftool: &exiftool,
         oxidex: &oxidex,
@@ -62,6 +78,29 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     if let Some(limit) = args.limit {
         tags.truncate(limit);
     }
+
+    // Printed (and persisted to `work/instrument.txt`) only now that the
+    // manifest is loaded, so the header can name the actual corpus size --
+    // `report::run` reads this same file back and echoes it ahead of its own
+    // regression numbers, so a `readable X -> Y` verdict is never printed
+    // without the instrument that produced it alongside it.
+    let header_text = crate::instrument::print_header(
+        "jpeg-tag-matrix run",
+        &git,
+        Some(&binary),
+        dirty_overridden,
+        Some(&et_identity),
+        &[
+            format!("base:    {}", base.display()),
+            format!(
+                "tags:    {} writable tag(s) from {}",
+                tags.len(),
+                work.join("exiftool_jpeg_tags.json").display()
+            ),
+        ],
+    );
+    std::fs::create_dir_all(&work).ok();
+    std::fs::write(work.join("instrument.txt"), &header_text).ok();
 
     let mut results: HashMap<String, ResultEntry> = HashMap::new();
     let mut skip_write = args.skip_write;

@@ -35,6 +35,20 @@ from typing import NamedTuple
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PIN_FILE = REPO_ROOT / ".exiftool-version"
 
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import exiftool_oracle  # noqa: E402 -- capability-aware perl selection
+import instrument  # noqa: E402 -- git/instrument identity header
+
+# The perl this verifier runs `oracle.pl` and the ExifTool-version probe
+# under. Resolved once, by capability (not a bare "perl" off PATH -- see
+# AGENTS.md "A matching -ver is not a working oracle"): a perl that cannot
+# load Archive::Zip still loads Image::ExifTool.pm and still reports the
+# right $VERSION, so a version-only check here would not have caught the
+# same wrong-interpreter failure exiftool_oracle.py exists to catch.
+_PERL = exiftool_oracle.choose_perl()
+if _PERL is None:
+    sys.exit("❌ no usable perl found to run oracle.pl / probe ExifTool.pm")
+
 # Whitespace-tolerant on purpose: the generated file is run through rustfmt
 # before it is committed, which wraps every `Field { .. }` across several lines.
 # The original single-line patterns silently matched nothing after that change,
@@ -575,7 +589,7 @@ def parse_rust(path):
 
 def load_oracle(lib, oracle_pl):
     out = subprocess.run(
-        ["perl", oracle_pl, lib],
+        [_PERL, oracle_pl, lib],
         capture_output=True, check=True, text=True, encoding="utf-8",
     ).stdout
     names, enums, masks = {}, defaultdict(dict), {}
@@ -636,7 +650,7 @@ def load_oracle(lib, oracle_pl):
 def oracle_version(lib):
     """The ExifTool release living in `lib`, read the same way the oracle does."""
     return subprocess.run(
-        ["perl", f"-I{lib}", "-e",
+        [_PERL, f"-I{lib}", "-e",
          "require Image::ExifTool; print $Image::ExifTool::VERSION"],
         capture_output=True, check=True, text=True, encoding="utf-8",
     ).stdout.strip()
@@ -773,7 +787,26 @@ def main():
     args = ap.parse_args()
 
     version = check_version(args.generated_rs, args.exiftool_lib)
-    print(f"ExifTool {version}")
+
+    git = instrument.git_state()
+    dirty_overridden = instrument.refuse_if_dirty(git, "verify.py")
+    missing = exiftool_oracle.missing_modules(_PERL)
+    capability = (
+        f"perl {_PERL} loads {', '.join(exiftool_oracle.REQUIRED_MODULES)}: OK"
+        if not missing else
+        f"perl {_PERL} DEGRADED -- missing {', '.join(missing)} "
+        "(affects only tests that need those modules; this verifier does not)"
+    )
+    instrument.print_header(
+        tool="verify.py",
+        git=git,
+        dirty_overridden=dirty_overridden,
+        extra=[
+            f"exiftool: {version} (lib {args.exiftool_lib})",
+            f"perl:    {_PERL} -- {capability}",
+            f"target:  {args.generated_rs}",
+        ],
+    )
     (
         gen_fields, gen_enums, gen_masks, gen_hooks, gen_subdirs, gen_subdir_edges,
         gen_sound_until, gen_variant_keys, gen_bitmasks, gen_other_ids, gen_print_hexes,

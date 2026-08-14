@@ -294,6 +294,22 @@ pub fn run(args: ReportArgs) -> anyhow::Result<()> {
     let out_matrix = repo.join("docs/reference/jpeg-tag-matrix.md");
     let baseline_path = repo.join("docs/reference/jpeg-tag-baseline.json");
 
+    // `matrix::run` writes the instrument header it printed into
+    // `work/instrument.txt` (oxidex path, git identity, ExifTool
+    // capability). Echo it here so a `readable X -> Y` regression verdict --
+    // this subcommand's whole reason to exist -- never prints without the
+    // instrument that produced the numbers sitting right above it.
+    match std::fs::read_to_string(work.join("instrument.txt")) {
+        Ok(header) => print!("{header}"),
+        Err(_) => println!(
+            "=== instrument: jpeg-tag-matrix report ===\n\
+             \u{26a0}\u{fe0f}  no {} -- results.json was not produced by a `run` from this \
+             binary in this `TAGMATRIX_WORK`; the numbers below cannot be attributed to a \
+             specific oxidex binary or commit.\n",
+            work.join("instrument.txt").display()
+        ),
+    }
+
     let results: HashMap<String, ResultEntry> =
         serde_json::from_str(&std::fs::read_to_string(&results_path)?)?;
     let mut rows: Vec<Row> = results

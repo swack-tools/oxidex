@@ -2,6 +2,7 @@
 //! and report generation against a committed regression baseline.
 //! Rust port of scripts/{generate_exiftool_manifest,jpeg_tag_matrix,jpeg_tag_report}.py.
 
+mod instrument;
 mod manifest;
 mod matrix;
 mod report;

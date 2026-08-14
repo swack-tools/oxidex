@@ -95,6 +95,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import exiftool_oracle  # noqa: E402
+import instrument  # noqa: E402
 
 IGNORE_NAMES = {
     "SourceFile", "ExifToolVersion", "FileName", "Directory",
@@ -220,13 +221,13 @@ def main() -> int:
                   if args.exiftool_dir else exiftool_oracle.shared())
     except exiftool_oracle.OracleError as exc:
         sys.exit(f"❌ {exc}")
-    print(f"oracle: {oracle.provenance()}")
-    print(f"        {oracle.display()}\n")
+
+    git = instrument.git_state()
+    dirty_overridden = instrument.refuse_if_dirty(git, "duplicate_loss_scan.py")
+    binary = instrument.resolve_binary(args.oxidex, kind="oxidex")
 
     if not os.path.isdir(args.corpus):
         sys.exit(f"❌ corpus root not found: {args.corpus}")
-    if not os.path.isfile(args.oxidex):
-        sys.exit(f"❌ oxidex binary not found: {args.oxidex} (build it first: cargo build --bin oxidex)")
 
     files = sorted(
         p for p in (os.path.join(args.corpus, f) for f in os.listdir(args.corpus))
@@ -235,10 +236,21 @@ def main() -> int:
     if not files:
         sys.exit(f"❌ no files found under {args.corpus}")
 
+    instrument.print_header(
+        tool="duplicate_loss_scan.py",
+        git=git,
+        binary=binary,
+        dirty_overridden=dirty_overridden,
+        oracle=oracle,
+        corpus_paths=[args.corpus],
+        file_count=len(files),
+        extra=["note:    `-a -G1 -s` text mode, group1-qualified (see module docstring)"],
+    )
+
     results: list[FileResult] = []
     shown = 0
     for i, path in enumerate(files, 1):
-        fr = scan_file(oracle.command(), args.oxidex, path)
+        fr = scan_file(oracle.command(), str(binary.path), path)
         results.append(fr)
         print(f"[{i}/{len(files)}] {os.path.basename(path)}: "
               f"{len(fr.oracle_repeated)} repeated, {len(fr.oracle_distinct)} distinct, "
@@ -280,6 +292,9 @@ def main() -> int:
     if args.json_out:
         payload = {
             "oracle": oracle.provenance(),
+            "oxidex": str(binary.path),
+            "commit": git.commit,
+            "dirty": git.dirty,
             "files_scanned": len(files),
             "files_with_repeats": files_with_repeats,
             "total_repeated": total_repeated,
