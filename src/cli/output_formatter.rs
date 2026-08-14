@@ -335,6 +335,33 @@ fn exiftool_json_number(s: &str) -> Option<serde_json::Value> {
     }
 }
 
+/// The single dispatch point for turning a display-ready string into a JSON
+/// value, matching `exiftool`'s own `EscapeJSON` (:3801-3809): a bare JSON
+/// boolean for the literal strings `true`/`false`, an unquoted JSON number
+/// for anything matching [`EXIFTOOL_JSON_NUMBER`], and a quoted JSON string
+/// otherwise. ExifTool applies this test uniformly to every PrintConv'd
+/// value regardless of which tag produced it, so every caller that already
+/// has a final display string -- the plain `TagValue::String` arm below and
+/// `friendly_enum_name`'s labels alike -- must funnel through here instead
+/// of each inventing its own typing. Before this helper existed,
+/// `friendly_enum_name`'s early return wrapped its label in
+/// `serde_json::Value::String` unconditionally, so ApertureValue (which
+/// takes that path) stayed a quoted `"14.0"` in JSON while sibling APEX tags
+/// like MaxApertureValue (which reach the plain `TagValue::String` arm)
+/// correctly went unquoted -- oxidex disagreeing with itself on two tags
+/// ExifTool renders the same way.
+fn json_string_value(s: &str) -> serde_json::Value {
+    if s.eq_ignore_ascii_case("true") {
+        serde_json::Value::Bool(true)
+    } else if s.eq_ignore_ascii_case("false") {
+        serde_json::Value::Bool(false)
+    } else if let Some(n) = exiftool_json_number(s) {
+        n
+    } else {
+        serde_json::Value::String(s.to_string())
+    }
+}
+
 /// Converts a TagValue to a serde_json::Value for Perl ExifTool-compatible output
 ///
 /// This unwraps the TagValue enum and produces simple JSON values:
@@ -351,7 +378,11 @@ fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Va
     if let Some(name) = tag_name
         && let Some(label) = friendly_enum_name(name, value)
     {
-        return serde_json::Value::String(label);
+        // Route every friendly-enum label through the same true/false/
+        // number/string typing as a plain `TagValue::String` -- see
+        // `json_string_value`'s doc comment for why this must not special-
+        // case by tag name.
+        return json_string_value(&label);
     }
 
     match value {
@@ -359,15 +390,7 @@ fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Va
             // Mirror the `exiftool` script's JSON typing (around line 3807):
             // `return lc($str) if $str =~ /^(true|false)$/i` emits a bare
             // JSON boolean for these two literal strings, not a quoted one.
-            if s.eq_ignore_ascii_case("true") {
-                serde_json::Value::Bool(true)
-            } else if s.eq_ignore_ascii_case("false") {
-                serde_json::Value::Bool(false)
-            } else if let Some(n) = exiftool_json_number(s) {
-                n
-            } else {
-                serde_json::Value::String(s.clone())
-            }
+            json_string_value(s)
         }
         TagValue::Integer(i) => serde_json::json!(*i),
         TagValue::Float(f) => serde_json::json!(*f),
@@ -1158,9 +1181,15 @@ mod tests {
             format_tag_value_short("ExifIFD:ApertureValue", &stored),
             "1.5"
         );
+        // Text mode renders the APEX-converted value as the string "1.5"
+        // (asserted above), but the pinned oracle's `-j` emits ApertureValue
+        // unquoted (exiftool:3801/:3809's EscapeJSON numeric test), same as
+        // its sibling MaxApertureValue. `friendly_enum_name`'s ApertureValue
+        // label must still run through that same numeric-string check, not
+        // wrap unconditionally as a JSON string.
         assert_eq!(
             tag_value_to_json(Some("ExifIFD:ApertureValue"), &stored),
-            serde_json::Value::String("1.5".to_string())
+            serde_json::json!(1.5)
         );
     }
 
