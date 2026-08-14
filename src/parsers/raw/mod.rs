@@ -5,6 +5,7 @@
 
 // Submodules
 pub mod format_detection;
+pub mod kyocera;
 pub mod metadata;
 
 // Format-specific parsers
@@ -14,4 +15,5 @@ pub mod sigma_lens_types;
 
 // Re-export the public API
 pub use format_detection::{RawFormat, detect_raw_format};
+pub use kyocera::looks_like_kyocera_raw;
 pub use metadata::parse_raw_metadata;

@@ -12,6 +12,7 @@ pub mod mkv;
 pub mod mp4;
 pub mod mts;
 pub mod mxf;
+pub mod swf;
 pub mod webm;
 
 pub use asf::{AsfParser, parse_asf_metadata};
@@ -21,4 +22,5 @@ pub use mkv::{MkvParser, parse_mkv_metadata};
 pub use mp4::{Mp4Parser, parse_mp4_metadata};
 pub use mts::{MtsParser, parse_mts_metadata};
 pub use mxf::{MxfParser, parse_mxf_metadata};
+pub use swf::parse_swf_metadata;
 pub use webm::{WebmParser, parse_webm_metadata};

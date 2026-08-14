@@ -348,7 +348,17 @@ pub fn parse_raw_metadata(data: &[u8], format: RawFormat) -> Result<MetadataMap>
         RawFormat::CanonCRW => parse_canon_crw(data, format),
 
         // Generic/fallback formats
-        // Attempt TIFF parsing as most raw formats are TIFF-based
+        //
+        // ExifTool's own magic number for the shared `RAW` extension is
+        // `(.{25}ARECOYK|II|MM)` (ExifTool.pm's %magicNumber): a `.raw` file
+        // is either Kyocera Contax N Digital RAW or a TIFF-based format
+        // (typically Panasonic RAW). Check the Kyocera signature first, the
+        // same order ExifTool's own `['RAW','TIFF']` candidate list tries --
+        // then fall back to TIFF parsing as most other raw formats are
+        // TIFF-based.
+        RawFormat::GenericRAW if crate::parsers::raw::looks_like_kyocera_raw(data) => {
+            crate::parsers::raw::kyocera::parse_kyocera_raw_metadata(data)
+        }
         RawFormat::GenericRAW | RawFormat::GenericCAM | RawFormat::GenericREV => {
             parse_tiff_based_raw(data, format).or_else(|_| {
                 // If TIFF parsing fails, return minimal metadata

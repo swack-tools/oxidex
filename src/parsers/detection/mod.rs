@@ -223,11 +223,53 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::MRC);
     }
 
+    // SWF: `^[FC]WS[^\x00]` (Flash.pm:599, `$buff =~ /^(F|C)WS([^\0])/`) --
+    // the fourth byte (the version) must be present and non-zero, which is
+    // outside `signature!`'s literal-bytes grammar the same way PCX's and
+    // MRC's byte-range alternations are. Before this existed, a `.swf` file
+    // had no route past `add_identity_tags`: a correct `File:FileType: SWF`
+    // over zero of the header/stage/XMP tags `swf.rs`'s parser now reads.
+    if crate::filetype::matches_magic("SWF", magic_bytes) {
+        return Ok(FileFormat::SWF);
+    }
+
+    // PPM/PGM/PBM: `^P[1-6]\s+` (Other.pm's `ProcessPPM`, one shared
+    // `FileType: PPM` for all three NetPBM ASCII/binary variants).
+    if crate::filetype::matches_magic("PPM", magic_bytes) {
+        return Ok(FileFormat::PPM);
+    }
+
+    // RealAudio (.ra) binary format: `^\.ra\xfd` (Real.pm:523's
+    // `.ra\xfd` alternative -- the other three, `.RMF` (RealMedia) and the
+    // URL-metafile prefixes (RAM/RPM), are handled elsewhere: `.RMF` is out
+    // of this pass's scope, and the URL forms are matched by `ram_url` below.
+    // Real.pm:565 reads the big-endian `u16` version right after this
+    // 4-byte signature to select `AudioV3`/`AudioV4`/`AudioV5`.
+    if magic_bytes.starts_with(b".ra\xfd") {
+        return Ok(FileFormat::RA);
+    }
+
     // MOI: `^V6` (MOI.pm's `ProcessMOI`, `$buff =~ /^V6/`). A two-byte magic
     // is weak on its own; `moi.rs`'s parser re-validates the 256-byte header
     // length and (when known) the embedded file-size field before accepting.
     if magic_bytes.starts_with(b"V6") {
         return Ok(FileFormat::MOI);
+    }
+
+    // Kyocera Contax N Digital RAW: `.{25}ARECOYK` -- the reversed ASCII
+    // literal "KYOCERA" at byte offset 0x19 (`KyoceraRaw.pm:121`,
+    // `substr($buff, 0x19, 7) eq 'ARECOYK'`). ExifTool's own magic number for
+    // the shared `RAW` extension is `(.{25}ARECOYK|II|MM)`
+    // (`ExifTool.pm`'s `%magicNumber`): this is the non-TIFF half of that
+    // alternation, so it must run ahead of the plain-text/binary fallback the
+    // same way MOI's `V6` does. Before this existed, a Kyocera `.raw` file
+    // had no TIFF magic to trip the extension-gated `CameraRaw` override in
+    // `core::operations`, fell through to `add_identity_tags`, and reported a
+    // correct `File:FileType: RAW` over zero of its eleven real tags.
+    if crate::parsers::raw::looks_like_kyocera_raw(magic_bytes) {
+        return Ok(FileFormat::CameraRaw(
+            crate::parsers::raw::RawFormat::GenericRAW,
+        ));
     }
 
     // ITC: `^.{4}itch` -- iTunes Cover Flow's first block is always an
@@ -477,6 +519,27 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
     // reaches its Real-specific extractor rather than the TXT parser.
     if crate::parsers::audio::ram::ram_url(magic_bytes).is_some() {
         return Ok(FileFormat::RAM);
+    }
+
+    // PICT: `^(.{10}|.{522})(\x11\x01|\x00\x11)` (PICT.pm's own magic,
+    // ExifTool.pm's `%magicNumber`) -- a version opcode at one of two
+    // possible offsets depending on whether the file carries the older
+    // 512-byte all-zero header. Unlike every check above, this one is not
+    // anchored at offset 0: it is only two non-wildcard bytes, ten or 522
+    // bytes into the file, which is weak enough to false-positive against
+    // arbitrary binary content at that offset (a `.jpg`'s EXIF payload
+    // tripped it when this ran early, misrouting the whole file to the PICT
+    // parser and losing every real JPEG tag). Real ExifTool never has this
+    // collision because it only tries a type's magic number among the
+    // candidates its own extension names; `detect_format` has no filename to
+    // narrow with, so the next-best mitigation is running this dead last,
+    // after every stronger, offset-0-anchored signature above has had its
+    // chance -- and the `w > 0 && h > 0` bounding-rect check inside
+    // `pict::parse_pict_metadata` itself is a second gate past this one.
+    if crate::filetype::matches_magic("PICT", magic_bytes)
+        && crate::parsers::image::pict::parse_pict_metadata(reader).is_ok()
+    {
+        return Ok(FileFormat::PICT);
     }
 
     // Plain text detection (fallback for files that look like text)

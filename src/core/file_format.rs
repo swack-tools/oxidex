@@ -102,6 +102,9 @@ pub enum FileFormat {
     /// FLV (Flash Video) format (.flv)
     FLV,
 
+    /// SWF (Shockwave Flash) format (.swf)
+    SWF,
+
     /// AVI (Audio Video Interleave) format (.avi)
     AVI,
 
@@ -143,6 +146,9 @@ pub enum FileFormat {
 
     /// RealAudio metafile containing a streaming URL (.ram)
     RAM,
+
+    /// RealAudio binary audio format (.ra)
+    RA,
 
     /// Olympus Digital Speech Standard audio (.dss, .ds2)
     DSS,
@@ -383,6 +389,12 @@ pub enum FileFormat {
     /// Audible audiobook (.aa)
     AA,
 
+    /// Macintosh QuickDraw Picture (.pict)
+    PICT,
+
+    /// NetPBM Portable Pixmap/Graymap/Bitmap (.ppm, .pgm, .pbm)
+    PPM,
+
     /// Unknown or unsupported format
     Unknown,
 }
@@ -419,6 +431,7 @@ impl FileFormat {
             FileFormat::MKV => "MKV",
             FileFormat::WEBM => "WebM",
             FileFormat::FLV => "FLV",
+            FileFormat::SWF => "SWF",
             FileFormat::AVI => "AVI",
             FileFormat::MTS => "MTS",
             FileFormat::ASF => "ASF",
@@ -433,6 +446,7 @@ impl FileFormat {
             FileFormat::APE => "APE",
             FileFormat::MPC => "MPC",
             FileFormat::RAM => "RAM",
+            FileFormat::RA => "RA",
             FileFormat::DSS => "DSS",
             FileFormat::ZIP => "ZIP",
             FileFormat::DOCX => "DOCX",
@@ -509,6 +523,8 @@ impl FileFormat {
             FileFormat::PGF => "PGF",
             FileFormat::MRC => "MRC",
             FileFormat::AA => "AA",
+            FileFormat::PICT => "PICT",
+            FileFormat::PPM => "PPM",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -547,6 +563,7 @@ impl FileFormat {
             FileFormat::MKV => &["mkv"],
             FileFormat::WEBM => &["webm"],
             FileFormat::FLV => &["flv"],
+            FileFormat::SWF => &["swf"],
             FileFormat::AVI => &["avi"],
             FileFormat::MTS => &["mts", "m2ts"],
             FileFormat::ASF => &["asf", "wmv", "wma"],
@@ -561,6 +578,7 @@ impl FileFormat {
             FileFormat::APE => &["ape"],
             FileFormat::MPC => &["mpc"],
             FileFormat::RAM => &["ram"],
+            FileFormat::RA => &["ra"],
             FileFormat::DSS => &["dss", "ds2"],
             FileFormat::ZIP => &["zip"],
             FileFormat::DOCX => &["docx"],
@@ -640,6 +658,8 @@ impl FileFormat {
             FileFormat::PGF => &["pgf"],
             FileFormat::MRC => &["mrc"],
             FileFormat::AA => &["aa"],
+            FileFormat::PICT => &["pict", "pct"],
+            FileFormat::PPM => &["ppm", "pgm", "pbm"],
             FileFormat::Unknown => &[],
         }
     }

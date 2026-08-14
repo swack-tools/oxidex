@@ -23,6 +23,7 @@ use crate::parsers::audio::mpc::parse_mpc_metadata;
 use crate::parsers::audio::ogg::parse_ogg_metadata;
 use crate::parsers::audio::opus::parse_opus_metadata;
 use crate::parsers::audio::ram::parse_ram_metadata;
+use crate::parsers::audio::real_audio::parse_real_audio_metadata;
 use crate::parsers::audio::wav::parse_wav_metadata;
 use crate::parsers::document::eml::parse_eml_metadata;
 use crate::parsers::document::epub::parse_epub_metadata;
@@ -52,6 +53,8 @@ use crate::parsers::image::pcx::parse_pcx_metadata;
 use crate::parsers::image::pfm::parse_pfm_metadata;
 use crate::parsers::image::pgf::parse_pgf_metadata;
 use crate::parsers::image::photocd::parse_pcd_metadata;
+use crate::parsers::image::pict::parse_pict_metadata;
+use crate::parsers::image::ppm::parse_ppm_metadata;
 use crate::parsers::image::radiance::parse_radiance_metadata;
 use crate::parsers::image::xcf::parse_xcf_metadata;
 // Note: HEIF uses parse_quicktime_metadata since HEIF is ISOBMFF-based
@@ -103,6 +106,7 @@ use crate::parsers::video::flv::parse_flv_metadata;
 use crate::parsers::video::mkv::parse_mkv_metadata;
 use crate::parsers::video::mts::parse_mts_metadata;
 use crate::parsers::video::mxf::parse_mxf_metadata;
+use crate::parsers::video::swf::parse_swf_metadata;
 use crate::parsers::video::webm::parse_webm_metadata;
 use crate::parsers::xmp::generic_xml::parse_xml_file;
 use crate::parsers::xmp::parse_xmp_file;
@@ -155,6 +159,7 @@ pub fn dispatch_format_parser(
         FileFormat::MKV => convert_string_error(parse_mkv_metadata(reader), "MKV"),
         FileFormat::WEBM => convert_string_error(parse_webm_metadata(reader), "WebM"),
         FileFormat::FLV => convert_string_error(parse_flv_metadata(reader), "FLV"),
+        FileFormat::SWF => convert_string_error(parse_swf_metadata(reader), "SWF"),
         FileFormat::AVI => convert_string_error(parse_avi_metadata(reader), "AVI"),
         FileFormat::MTS => convert_string_error(parse_mts_metadata(reader), "MTS"),
         FileFormat::ASF => convert_string_error(parse_asf_metadata(reader), "ASF"),
@@ -169,6 +174,7 @@ pub fn dispatch_format_parser(
         FileFormat::APE => convert_string_error(parse_ape_metadata(reader), "APE"),
         FileFormat::MPC => convert_string_error(parse_mpc_metadata(reader), "MPC"),
         FileFormat::RAM => convert_string_error(parse_ram_metadata(reader), "RAM"),
+        FileFormat::RA => convert_string_error(parse_real_audio_metadata(reader), "RA"),
         FileFormat::DSS => convert_string_error(parse_dss_metadata(reader), "DSS"),
         FileFormat::ZIP => convert_string_error(parse_zip_metadata(reader), "ZIP"),
         FileFormat::DOCX => convert_string_error(parse_docx_metadata(reader), "DOCX"),
@@ -273,6 +279,8 @@ pub fn dispatch_format_parser(
         FileFormat::PGF => convert_string_error(parse_pgf_metadata(reader), "PGF"),
         FileFormat::MRC => convert_string_error(parse_mrc_metadata(reader), "MRC"),
         FileFormat::AA => convert_string_error(parse_aa_metadata(reader), "AA"),
+        FileFormat::PICT => convert_string_error(parse_pict_metadata(reader), "PICT"),
+        FileFormat::PPM => convert_string_error(parse_ppm_metadata(reader), "PPM"),
         _ => Err(ExifToolError::unsupported_format(format!(
             "Format {:?} not yet supported in this iteration",
             format

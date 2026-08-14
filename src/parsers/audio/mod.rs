@@ -14,6 +14,7 @@ pub mod mpc;
 pub mod ogg;
 pub mod opus;
 pub mod ram;
+pub mod real_audio;
 pub mod wav;
 
 pub use aac::AacParser;

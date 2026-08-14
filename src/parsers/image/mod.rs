@@ -18,6 +18,8 @@ pub mod pcx;
 pub mod pfm;
 pub mod pgf;
 pub mod photocd;
+pub mod pict;
+pub mod ppm;
 pub mod psd;
 pub mod radiance;
 pub mod svg;
