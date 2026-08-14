@@ -379,18 +379,11 @@ fn parse_avih_chunk(
         let frame_rate_str = format_trimmed_decimal(rounded);
         metadata.insert(
             "RIFF:FrameRate".to_string(),
-            TagValue::new_string(frame_rate_str.clone()),
+            TagValue::new_string(frame_rate_str),
         );
         metadata.insert(
             "RIFF:VideoFrameRate".to_string(),
             TagValue::new_integer(frame_rate.round() as i64),
-        );
-        // AVI:FrameRate is an oxidex-only alias; ExifTool has no AVI group and
-        // reports AVI tags under RIFF. It therefore MUST mirror RIFF:FrameRate
-        // verbatim -- see the 2026-07-26 note on AVI:Duration below.
-        metadata.insert(
-            "AVI:FrameRate".to_string(),
-            TagValue::new_string(frame_rate_str),
         );
     }
 
@@ -401,16 +394,9 @@ fn parse_avih_chunk(
         "RIFF:ImageWidth".to_string(),
         TagValue::new_integer(width as i64),
     );
-    // Add AVI:Width tag
-    metadata.insert("AVI:Width".to_string(), TagValue::new_integer(width as i64));
 
     metadata.insert(
         "RIFF:ImageHeight".to_string(),
-        TagValue::new_integer(height as i64),
-    );
-    // Add AVI:Height tag
-    metadata.insert(
-        "AVI:Height".to_string(),
         TagValue::new_integer(height as i64),
     );
 
@@ -437,25 +423,6 @@ fn parse_avih_chunk(
         let duration_str = format!("{:.2}", duration_secs);
         metadata.insert(
             "RIFF:Duration".to_string(),
-            TagValue::new_string(duration_str.clone()),
-        );
-        // AVI:Duration is an oxidex-only alias and MUST mirror RIFF:Duration.
-        //
-        // ExifTool 13.55 has no AVI group at all -- it reports AVI tags under
-        // RIFF (and Duration under Composite):
-        //   $ exiftool -G1 -Duration RIFF.avi
-        //   [Composite]  Duration  : 15.53 s
-        //   $ exiftool -G1 -Duration Pentax.avi
-        //   [Composite]  Duration  : 25.00 s
-        // Until 2026-07-26 this insert re-derived the value as `mm:ss`, so
-        // RIFF.avi emitted `RIFF:Duration: 15.53` next to `AVI:Duration: 0:16`
-        // (Pentax.avi: `25.00` next to `0:25`). Because the comparison harness
-        // strips the group prefix before matching, one logical tag with two
-        // renderings makes the gap list non-deterministic; its
-        // duplicate_emissions detector keys on the exact tag string and so
-        // scores 0 for this shape.
-        metadata.insert(
-            "AVI:Duration".to_string(),
             TagValue::new_string(duration_str),
         );
     }
@@ -699,17 +666,6 @@ fn parse_stream_header(
             "RIFF:VideoCodec".to_string(),
             TagValue::new_string(fourcc_str.clone()),
         );
-        // AVI:VideoCodec mirrors RIFF:VideoCodec. ExifTool 13.55 prints the raw
-        // FourCC, never a friendly name:
-        //   $ exiftool -G1 -VideoCodec RIFF.avi
-        //   [RIFF]  Video Codec  : mjpg
-        // Until 2026-07-26 this insert ran the FourCC through
-        // convert_fourcc_to_codec_name(), so RIFF.avi and Pentax.avi both
-        // emitted `RIFF:VideoCodec: mjpg` next to `AVI:VideoCodec: Motion JPEG`.
-        metadata.insert(
-            "AVI:VideoCodec".to_string(),
-            TagValue::new_string(fourcc_str.clone()),
-        );
     } else if stream_type == *b"auds" && is_first_audio {
         // Audio codec from strh is usually empty, strf has more info; ExifTool
         // still emits an (empty) RIFF:AudioCodec tag in that case.
@@ -722,14 +678,6 @@ fn parse_stream_header(
             "RIFF:AudioCodec".to_string(),
             TagValue::new_string(value.clone()),
         );
-        // Same rule as AVI:VideoCodec above: mirror the RIFF: value rather than
-        // re-deriving a friendly name. Both AVI samples in combined-samples have
-        // an empty audio FourCC (`[RIFF] Audio Codec :` for RIFF.avi and
-        // Pentax.avi under exiftool 13.55), so this branch is exercised by the
-        // synthetic-strh unit test rather than by a corpus file.
-        if fourcc_is_present {
-            metadata.insert("AVI:AudioCodec".to_string(), TagValue::new_string(value));
-        }
     }
 
     // Video frame count and rate
@@ -973,11 +921,6 @@ fn parse_audio_format(
         "RIFF:NumChannels".to_string(),
         TagValue::new_integer(channels as i64),
     );
-    // Add AVI:Channels tag for format-specific output
-    metadata.insert(
-        "AVI:Channels".to_string(),
-        TagValue::new_integer(channels as i64),
-    );
 
     // SampleRate - overwrites the value from strh
     metadata.insert(
@@ -989,25 +932,12 @@ fn parse_audio_format(
         "RIFF:AudioSampleRate".to_string(),
         TagValue::new_integer(samples_per_sec as i64),
     );
-    // Add AVI:SampleRate tag for format-specific output
-    metadata.insert(
-        "AVI:SampleRate".to_string(),
-        TagValue::new_integer(samples_per_sec as i64),
-    );
 
     // AvgBytesPerSec
     metadata.insert(
         "RIFF:AvgBytesPerSec".to_string(),
         TagValue::new_integer(avg_bytes_per_sec as i64),
     );
-    // Add AVI:AudioBitRate tag (convert bytes/sec to bits/sec)
-    if avg_bytes_per_sec > 0 {
-        let bit_rate = (avg_bytes_per_sec as i64) * 8;
-        metadata.insert(
-            "AVI:AudioBitRate".to_string(),
-            TagValue::new_integer(bit_rate),
-        );
-    }
 
     // BitsPerSample
     if bits_per_sample > 0 {
@@ -1145,9 +1075,10 @@ mod tests {
         }
     }
 
-    /// ExifTool 13.55 has no AVI group at all -- it reports AVI tags under
-    /// RIFF -- so every `AVI:` key oxidex emits is an alias that must mirror
-    /// its `RIFF:` counterpart verbatim:
+    /// ExifTool 13.59 maps AVI through `RIFF.pm:50` and dispatches its
+    /// `RIFF::Main` table at `RIFF.pm:338-339`; there is no AVI family-1
+    /// override, so oxidex must emit these under `RIFF:` and nothing under
+    /// `AVI:`:
     ///
     /// ```text
     /// $ exiftool -G1 -FrameRate -Duration -VideoCodec -AudioCodec \
@@ -1158,49 +1089,22 @@ mod tests {
     /// [RIFF]          Audio Codec                     :
     /// ```
     ///
-    /// Before 2026-07-26 oxidex emitted, from that same file, `RIFF:FrameRate:
-    /// 15` next to `AVI:FrameRate: 15.000 fps`, `RIFF:Duration: 15.53` next to
-    /// `AVI:Duration: 0:16`, and `RIFF:VideoCodec: mjpg` next to
-    /// `AVI:VideoCodec: Motion JPEG`.
+    /// Until this test's predecessor was retired, avih/strh/strf each inserted
+    /// an `AVI:` alias immediately after the `RIFF:` value it had just written
+    /// -- a same-chunk double insert, not a second provenance. The alias is
+    /// gone; what survives is the pinning of the `RIFF:` side, so a future
+    /// re-derivation cannot reintroduce the divergent rendering under either
+    /// name.
     ///
     /// 40000 us/frame is 25 fps and 391 frames is 15.64 s, chosen so the old
     /// renderings ("25.000 fps", "0:16") differ from the correct ones ("25",
     /// "15.64") in both digits and shape.
     #[test]
-    fn avi_aliases_mirror_their_riff_counterparts() {
+    fn synthetic_avi_pins_riff_renderings_and_emits_no_avi_group() {
         let data = synthetic_avi(40_000, 391, &[(b"vids", b"MJPG", 0), (b"auds", b"VORB", 0)]);
         let reader = TestReader::new(data);
         let metadata = parse_avi_metadata(&reader).unwrap();
 
-        // Collected rather than asserted pair-by-pair so a regression in any
-        // one alias is reported even when an earlier one has already drifted.
-        let mut drifted = Vec::new();
-        for (riff_key, avi_key) in [
-            ("RIFF:FrameRate", "AVI:FrameRate"),
-            ("RIFF:Duration", "AVI:Duration"),
-            ("RIFF:VideoCodec", "AVI:VideoCodec"),
-            ("RIFF:AudioCodec", "AVI:AudioCodec"),
-        ] {
-            let riff = metadata.get(riff_key);
-            assert!(riff.is_some(), "{riff_key} should have been emitted");
-            if metadata.get(avi_key) != riff {
-                drifted.push(format!(
-                    "{avi_key}={:?} does not mirror {riff_key}={:?}",
-                    metadata.get(avi_key),
-                    riff,
-                ));
-            }
-        }
-        assert!(
-            drifted.is_empty(),
-            "AVI: aliases must mirror their RIFF: counterparts; a re-derived \
-             value here is what made the tag-comparison harness \
-             non-deterministic:\n  {}",
-            drifted.join("\n  "),
-        );
-
-        // Pin the RIFF: side against ExifTool's own renderings so the mirror
-        // assertions above cannot be satisfied by making both sides wrong.
         assert_eq!(
             metadata.get("RIFF:FrameRate"),
             Some(&TagValue::String("25".to_string())),
@@ -1213,6 +1117,20 @@ mod tests {
             metadata.get("RIFF:VideoCodec"),
             Some(&TagValue::String("MJPG".to_string())),
             "ExifTool prints the raw FourCC, not a friendly codec name",
+        );
+        assert!(
+            metadata.get("RIFF:AudioCodec").is_some(),
+            "an auds strh must still emit RIFF:AudioCodec",
+        );
+
+        let avi_keys: Vec<_> = metadata
+            .iter()
+            .map(|(key, _)| key.clone())
+            .filter(|key| key.starts_with("AVI:"))
+            .collect();
+        assert!(
+            avi_keys.is_empty(),
+            "ExifTool has no AVI family-1 group; fabricated aliases returned: {avi_keys:?}",
         );
 
         assert_no_divergent_prefixed_duplicates(&metadata);

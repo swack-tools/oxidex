@@ -5,6 +5,8 @@ use oxidex::parsers::video::parse_avi_metadata;
 use serde_json::Value;
 use std::path::Path;
 
+const CORPUS_ROOT: &str = "/tmp/oxidex-exiftool-cache/combined-samples";
+
 /// The value as it reaches output, for the variants these parsers emit.
 ///
 /// Anything else is reported verbatim so a value stored in an unexpected shape
@@ -15,6 +17,53 @@ fn printed(value: &TagValue) -> String {
         TagValue::Integer(n) => n.to_string(),
         TagValue::Float(f) => f.to_string(),
         other => format!("<unexpected TagValue variant: {:?}>", other),
+    }
+}
+
+/// ExifTool 13.59's `RIFF.pm:338` Main table owns AVI files and has no AVI
+/// family-1 override. These real corpus carriers previously emitted eight
+/// same-chunk `AVI:` aliases alongside their RIFF values.
+#[test]
+fn real_avi_carriers_keep_riff_values_without_an_avi_group() {
+    for (file, expected) in [
+        (
+            "Pentax.avi",
+            [
+                ("RIFF:FrameRate", TagValue::String("24".to_string())),
+                ("RIFF:ImageWidth", TagValue::Integer(1280)),
+                ("RIFF:ImageHeight", TagValue::Integer(720)),
+                ("RIFF:Duration", TagValue::String("25.00".to_string())),
+                ("RIFF:VideoCodec", TagValue::String("mjpg".to_string())),
+                ("RIFF:NumChannels", TagValue::Integer(1)),
+                ("RIFF:SampleRate", TagValue::Integer(32000)),
+                ("RIFF:AvgBytesPerSec", TagValue::Integer(64000)),
+            ],
+        ),
+        (
+            "RIFF.avi",
+            [
+                ("RIFF:FrameRate", TagValue::String("15".to_string())),
+                ("RIFF:ImageWidth", TagValue::Integer(320)),
+                ("RIFF:ImageHeight", TagValue::Integer(240)),
+                ("RIFF:Duration", TagValue::String("15.53".to_string())),
+                ("RIFF:VideoCodec", TagValue::String("mjpg".to_string())),
+                ("RIFF:NumChannels", TagValue::Integer(1)),
+                ("RIFF:SampleRate", TagValue::Integer(11024)),
+                ("RIFF:AvgBytesPerSec", TagValue::Integer(11024)),
+            ],
+        ),
+    ] {
+        let path = Path::new(CORPUS_ROOT).join(file);
+        let reader = BufferedReader::new(&path).expect("real AVI carrier must be available");
+        let metadata = parse_avi_metadata(&reader).expect("real AVI carrier must parse");
+
+        for (tag, value) in expected {
+            assert_eq!(metadata.get(tag), Some(&value), "{file}: {tag}");
+        }
+        assert!(
+            metadata.iter().all(|(key, _)| !key.starts_with("AVI:")),
+            "{file}: fabricated AVI family-1 group returned"
+        );
     }
 }
 
