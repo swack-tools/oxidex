@@ -1138,6 +1138,25 @@ fn extract_sample_description(
         String::new()
     };
 
+    // Family-1 group for this track's stsd-derived tags, matching the
+    // `Track1..TrackN` convention Step 19 established for tkhd
+    // (`extract_track_header`) in place of the `_N` suffix. SourceImageWidth/
+    // SourceImageHeight (QuickTime.pm:7633-7634, `VisualSampleDesc` index
+    // 16/17) carry no `Priority` override, so unlike `TrackID`
+    // (`Priority => 0`, QuickTime.pm:1522-1524) ExifTool's `FoundTag` lets
+    // each later track's normal-priority occurrence displace the last
+    // (`ExifTool.pm:9564`'s `$priority >= $oldPriority`, both sides `1`) --
+    // confirmed against the pinned oracle: CanonRaw.cr3's bare
+    // `QuickTime:SourceImageWidth`/`SourceImageHeight` are Track3's 6288/4056,
+    // not Track1's 6000/4000. `Instance::default()` (rather than
+    // `Instance(track_index + 1)`) is used below so `TagSink::record`'s
+    // cross-instance guard -- which exists to replicate ExifTool's
+    // `DOC_NUM` sub-document check and is what makes `TrackID` stick to
+    // Track1 -- does not apply here; QuickTime's `Track1..N` grouping is
+    // done via `SET_GROUP1` (QuickTime.pm:10354), never `DOC_NUM`, so no
+    // such guard exists in the real tool for these tags.
+    let group1 = format!("Track{}", track_index + 1);
+
     metadata.insert(
         format!("QuickTime:SampleDescriptionCount{}", track_suffix),
         TagValue::Integer(entry_count as i64),
@@ -1273,9 +1292,12 @@ fn extract_sample_description(
                         format!("QuickTime:ImageWidth{}", track_suffix),
                         TagValue::Integer(width as i64),
                     );
-                    metadata.insert(
-                        format!("QuickTime:SourceImageWidth{}", track_suffix),
+                    metadata.insert_occurrence(
+                        "QuickTime:SourceImageWidth",
                         TagValue::Integer(width as i64),
+                        SHIM_DEFAULT_PRIORITY,
+                        &group1,
+                        Instance::default(),
                     );
                 }
 
@@ -1290,9 +1312,12 @@ fn extract_sample_description(
                         format!("QuickTime:ImageHeight{}", track_suffix),
                         TagValue::Integer(height as i64),
                     );
-                    metadata.insert(
-                        format!("QuickTime:SourceImageHeight{}", track_suffix),
+                    metadata.insert_occurrence(
+                        "QuickTime:SourceImageHeight",
                         TagValue::Integer(height as i64),
+                        SHIM_DEFAULT_PRIORITY,
+                        &group1,
+                        Instance::default(),
                     );
                 }
 
@@ -3776,6 +3801,75 @@ mod tests {
             .expect("sample description should parse");
 
         assert_eq!(metadata.get_string("QuickTime:MetaFormat"), Some("CTMD"));
+    }
+
+    #[test]
+    fn extract_sample_description_emits_family1_track_groups_for_source_image_dimensions() {
+        // QuickTime.pm:7633-7634: VisualSampleDesc's int16u indices 16/17
+        // (byte offsets 32/34 of the video sample entry) are SourceImageWidth/
+        // SourceImageHeight, with no `Priority` override -- unlike `TrackID`
+        // (Priority => 0, QuickTime.pm:1522-1524). Regression for the
+        // CanonRaw.cr3 defect: oxidex used to mangle repeat tracks into
+        // `SourceImageHeight_2`/`_3` instead of retaining them as separate
+        // `Track1`/`Track2`/`Track3` occurrences, and (independently) pinned
+        // Track1's value to the bare key forever instead of letting each
+        // later track's normal-priority occurrence win, as the pinned oracle
+        // does (bare `QuickTime:SourceImageWidth`/`SourceImageHeight` on
+        // CanonRaw.cr3 are Track3's 6288/4056, not Track1's 6000/4000).
+        fn video_stsd_with_dimensions(width: u16, height: u16) -> [u8; 8 + 86] {
+            let mut data = [0u8; 8 + 86];
+            data[7] = 1; // entry count
+            let entry = &mut data[8..];
+            entry[0..4].copy_from_slice(&86u32.to_be_bytes()); // entry size
+            entry[4..8].copy_from_slice(b"avc1"); // format/codec ID
+            entry[32..34].copy_from_slice(&width.to_be_bytes());
+            entry[34..36].copy_from_slice(&height.to_be_bytes());
+            data
+        }
+
+        let mut metadata = MetadataMap::new();
+        for (index, (width, height)) in [(6000u16, 4000u16), (1624, 1080), (6288, 4056)]
+            .into_iter()
+            .enumerate()
+        {
+            let bytes = video_stsd_with_dimensions(width, height);
+            let stsd = Atom {
+                atom_type: FourCC::from_string("stsd").expect("valid atom type"),
+                data: &bytes,
+                header_size: 8,
+            };
+            extract_sample_description(&stsd, &mut metadata, index, false)
+                .expect("sample description should parse");
+        }
+
+        // The bare key follows Track3's value -- the last normal-priority
+        // occurrence recorded -- not Track1's, matching the pinned oracle.
+        assert_eq!(
+            metadata.get_integer("QuickTime:SourceImageWidth"),
+            Some(6288)
+        );
+        assert_eq!(
+            metadata.get_integer("QuickTime:SourceImageHeight"),
+            Some(4056)
+        );
+
+        // No `_2`/`_3` name-mangled tags exist; every track's value is
+        // retained as its own Track-N occurrence instead.
+        assert!(metadata.get("QuickTime:SourceImageWidth_2").is_none());
+        assert!(metadata.get("QuickTime:SourceImageHeight_2").is_none());
+        assert!(metadata.get("QuickTime:SourceImageWidth_3").is_none());
+        assert!(metadata.get("QuickTime:SourceImageHeight_3").is_none());
+
+        let width_occurrences = metadata.occurrences_for("QuickTime:SourceImageWidth");
+        assert_eq!(width_occurrences.len(), 3, "all three tracks retained");
+        for (index, (occurrence, expected_width)) in width_occurrences
+            .iter()
+            .zip([6000i64, 1624, 6288])
+            .enumerate()
+        {
+            assert_eq!(occurrence.raw, TagValue::Integer(expected_width));
+            assert_eq!(&*occurrence.group1, format!("Track{}", index + 1));
+        }
     }
 
     #[test]
