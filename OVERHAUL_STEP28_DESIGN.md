@@ -1,6 +1,41 @@
 # Step 28 design checkpoint — one BinaryData engine, instrument-gated enablement
 
-**Status: awaiting maintainer sign-off. No implementation has started.**
+**Status: DECIDED by the maintainer 2026-08-13. Implementation authorized, with one
+strategy change that is larger than the questions I asked.**
+
+- **D4 — FOLD ALL THREE ENGINES AT ONCE.** Overrides my incremental recommendation.
+- **D1/D2 — the maintainer redirected the question**: rather than choosing which corpus
+  gates enablement, *manufacture the corpus*. Use ExifTool itself to WRITE the tables onto
+  sample files, so a table with no natural sample gets a synthetic one.
+- **D3 — the denominator is ALL of ExifTool's source.** Anything ExifTool can parse is a
+  target, and a construct we cannot parse COUNTS AGAINST US. Refusals are not neutral
+  bookkeeping; they are the gap.
+
+**The synthesis idea is verified working.** Writing into a real binary table and reading it
+back through the pinned oracle:
+
+    $ exiftool -overwrite_original -Canon:SelfTimer=5 Canon.jpg
+    $ exiftool -a -G1 -s -Canon:SelfTimer Canon.jpg
+    [Canon]  SelfTimer : 5 s
+    $ exiftool -v3 Canon.jpg | grep CameraSettings
+      | | | 0)  CanonCameraSettings (SubDirectory) -->
+
+There is already precedent in-repo: `jpeg-tag-matrix` writes a value with ExifTool into a
+clean JPEG and requires oxidex to read it back — 4,819 tags are already tested this way.
+Step 28's enablement gate becomes an extension of that harness rather than a new mechanism.
+
+REACH, measured — synthesis is powerful but NOT universal:
+- ExifTool declares **7,235 writable tags** in total.
+- **424 of 726 ProcessBinaryData tables (58%)** carry table-level `WRITABLE`/`WRITE_PROC`.
+- The remaining ~42% cannot be synthesised: encrypted Nikon tables, computed/derived
+  values, and read-only records. Those still need real samples or stay refused-and-counted.
+- Synthesis also needs a CARRIER of the right make: a Canon table needs a Canon file,
+  because the MakerNote must be present for ExifTool to write into it.
+
+(Measurement caveat recorded so nobody repeats it: `exiftool -listw -Canon:all` does NOT
+filter by group — it returns the global 7,235 for every group. Per-group writable counts
+need a different approach.)
+
 Orchestrator-authored (plan rule 7 — never delegated). Committed to the branch so step
 worktrees carry it; the Step 10 and Step 15 artifacts were untracked and invisible to their
 implementing agents.
