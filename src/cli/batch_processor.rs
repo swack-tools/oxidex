@@ -29,6 +29,19 @@ pub struct BatchStats {
     pub files_updated: usize,
     /// Number of files that encountered errors
     pub errors: usize,
+    /// Number of files a directory walk found but never attempted to read,
+    /// because their extension is not one `crate::filetype`'s table (see
+    /// [`is_supported_file`]) recognizes at all.
+    ///
+    /// This is the count that used to not exist: a directory walk gated on
+    /// a hand-maintained extension allow-list dropped every file with an
+    /// extension missing from that list with no error, no warning and no
+    /// number anywhere in the output -- a run over a directory containing
+    /// only such files reported success having read zero of them. Every
+    /// file this field counts was positively identified as unreadable (an
+    /// extension absent from ExifTool's own `%fileTypeLookup`-derived
+    /// table), not merely omitted from a list someone forgot to extend.
+    pub unidentified: usize,
 }
 
 impl BatchStats {
@@ -38,6 +51,7 @@ impl BatchStats {
             files_read: 0,
             files_updated: 0,
             errors: 0,
+            unidentified: 0,
         }
     }
 
@@ -52,39 +66,14 @@ impl BatchStats {
         if self.errors > 0 {
             println!("    {} files could not be read", self.errors);
         }
+        if self.unidentified > 0 {
+            println!(
+                "    {} files skipped (extension not recognized)",
+                self.unidentified
+            );
+        }
     }
 }
-
-/// Supported image and media file extensions
-const SUPPORTED_EXTENSIONS: &[&str] = &[
-    // JPEG
-    "jpg", "jpeg", "jpe", "jfif", // TIFF
-    "tif", "tiff", // PNG
-    "png",  // Video
-    "mp4", "m4v", "m4a", "m4b", "mov", // PDF
-    "pdf", // Camera Raw - Canon
-    "cr2", "cr3", "crw", // Camera Raw - Nikon
-    "nef", "nrw", // Camera Raw - Sony
-    "arw", "arq", "ari", "sr2", "srf", "srw", // Camera Raw - Fujifilm
-    "raf", // Camera Raw - Olympus
-    "orf", "ori", // Camera Raw - Pentax
-    "pef", // Camera Raw - Panasonic
-    "rw2", "rwl", // Camera Raw - Hasselblad
-    "3fr", "fff", // Camera Raw - Phase One
-    "iiq", // Camera Raw - Mamiya
-    "mef", // Camera Raw - Leaf
-    "mos", // Camera Raw - Kodak
-    "dcr", "kdc", // Camera Raw - Minolta
-    "mdc", "mrw", // Camera Raw - Epson
-    "erf", // Camera Raw - Sigma
-    "x3f", // Camera Raw - GoPro
-    "gpr", // Camera Raw - DNG (Adobe Digital Negative)
-    "dng", // Camera Raw - HEIF
-    "hif", // Camera Raw - Light
-    "lri", // Camera Raw - Sinar
-    "sti", // Camera Raw - Generic/Other
-    "raw", "cam", "rev",
-];
 
 /// Main entry point for batch processing operations.
 ///
@@ -126,14 +115,16 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
     }
 
     // Collect all files to process
-    let files = collect_files(path, args.recursive)?;
+    let (files, unidentified) = collect_files(path, args.recursive)?;
 
     if files.is_empty() {
         eprintln!(
             "Warning: No supported image files found in {}",
             path.display()
         );
-        return Ok(BatchStats::new());
+        let mut stats = BatchStats::new();
+        stats.unidentified = unidentified;
+        return Ok(stats);
     }
 
     // Determine operation mode
@@ -149,14 +140,17 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
     }
 
     // Process files based on mode
-    if is_write_mode {
-        batch_write(files, &modifications, args)
+    let mut stats = if is_write_mode {
+        batch_write(files, &modifications, args)?
     } else {
-        batch_read(files, args)
-    }
+        batch_read(files, args)?
+    };
+    stats.unidentified = unidentified;
+    Ok(stats)
 }
 
-/// Collects all supported image files from the given path.
+/// Collects all identifiable files from the given path, and counts (without
+/// reading) every file it skips.
 ///
 /// # Arguments
 ///
@@ -165,9 +159,14 @@ pub fn batch_process(path: &Path, args: &CliArgs) -> Result<BatchStats> {
 ///
 /// # Returns
 ///
-/// Vector of PathBuf objects for all supported image files found
-fn collect_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
+/// `(files, unidentified)`: the files to attempt, and a count of files this
+/// walk declined to queue because [`is_supported_file`] could not recognize
+/// their extension. That count is never dropped -- see
+/// [`BatchStats::unidentified`] -- it travels back up through
+/// [`batch_process`] into the stats the caller prints.
+fn collect_files(path: &Path, recursive: bool) -> Result<(Vec<PathBuf>, usize)> {
     let mut files = Vec::new();
+    let mut unidentified = 0usize;
 
     if path.is_file() {
         // Single file - check if supported
@@ -175,6 +174,7 @@ fn collect_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
             files.push(path.to_path_buf());
         } else {
             eprintln!("Warning: File type not supported: {}", path.display());
+            unidentified += 1;
         }
     } else if path.is_dir() {
         // Directory - walk and collect files
@@ -192,8 +192,13 @@ fn collect_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
         for entry in walker {
             match entry {
                 Ok(entry) => {
-                    if entry.file_type().is_file() && is_supported_file(entry.path()) {
+                    if !entry.file_type().is_file() {
+                        continue;
+                    }
+                    if is_supported_file(entry.path()) {
                         files.push(entry.path().to_path_buf());
+                    } else {
+                        unidentified += 1;
                     }
                 }
                 Err(e) => {
@@ -203,28 +208,49 @@ fn collect_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
         }
     }
 
-    Ok(files)
+    Ok((files, unidentified))
 }
 
-/// Checks if a file has a supported extension.
+/// Whether a file's extension is one that identification can recognize at
+/// all.
 ///
-/// This function is exposed publicly for testing purposes.
+/// This is a fast pre-filter, not the identification itself. A file that
+/// passes still goes through the exact same magic-number pipeline
+/// single-file mode uses --
+/// [`read_metadata_with_detector_and_options`](crate::core::operations::read_metadata_with_detector_and_options)
+/// -- which is what actually decides whether the file can be read; a
+/// recognized extension whose header disagrees, or whose format has no
+/// parser, is still counted correctly afterward (as a read error or, per
+/// `add_identity_tags`'s "detected is not parsed" fallback, as a success
+/// carrying only identity tags). This function exists only to avoid
+/// mmap'ing and probing every stray file (`.DS_Store`, a `.git` object) in
+/// a large tree before it can find that out.
 ///
-/// # Arguments
+/// It used to be a hand-maintained ~90-entry list, which is exactly the
+/// defect AGENTS.md warns against: it silently fell behind the ~40+
+/// extensions OxiDex added real parsers for later (MP3, ZIP, DOCX, TXT,
+/// HTML, EPUB, and more all have working parsers in
+/// `crate::core::format_dispatch` yet were absent from that list), so
+/// `oxidex -r` skipped them with no error, no warning and no count -- a
+/// run over a directory of nothing but such files reported success having
+/// read zero of them.
 ///
-/// * `path` - File path to check
+/// This is backed instead by `crate::filetype`'s extension table, which is
+/// generated from ExifTool's own `%fileTypeLookup`/`%fileTypeExt` (see
+/// `crate::core::operations::add_identity_tags`'s doc comment) and so
+/// cannot drift the same way. ExifTool's own default recursive scan
+/// applies the identical filter for the identical reason: `ScanDir`
+/// (`exiftool:4370-4378`) skips a file when `GetFileType($file)`
+/// (`ExifTool.pm:4214`, keyed on `%fileTypeLookup`) comes back empty,
+/// unless `-ext` was given.
 ///
-/// # Returns
-///
-/// `true` if the file has a supported image/media extension, `false` otherwise
+/// Files this returns `false` for are never queued for a read, but they
+/// are never silently dropped either: [`collect_files`] counts every one
+/// into `BatchStats::unidentified`, which is printed in the final summary.
 pub fn is_supported_file(path: &Path) -> bool {
-    if let Some(ext) = path.extension()
-        && let Some(ext_str) = ext.to_str()
-    {
-        let ext_lower = ext_str.to_lowercase();
-        return SUPPORTED_EXTENSIONS.contains(&ext_lower.as_str());
-    }
-    false
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| crate::filetype::identify_by_extension(ext).is_some())
 }
 
 /// Performs batch read operations on a collection of files.
@@ -308,6 +334,7 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
         files_read: success_count.load(Ordering::Relaxed),
         files_updated: 0,
         errors: error_count.load(Ordering::Relaxed),
+        unidentified: 0,
     })
 }
 
@@ -361,6 +388,7 @@ pub fn batch_write(
         files_read: file_count,
         files_updated: success_count.load(Ordering::Relaxed),
         errors: error_count.load(Ordering::Relaxed),
+        unidentified: 0,
     })
 }
 
