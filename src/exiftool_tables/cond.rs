@@ -137,6 +137,28 @@ pub enum CmpOp {
     Ge,
 }
 
+/// Perl's stringwise comparison operators. Kept distinct from [`CmpOp`] so a
+/// generated `lt`/`ge` can never accidentally become a numeric comparison.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrCmpOp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl StrCmpOp {
+    #[must_use]
+    fn apply(self, lhs: &str, rhs: &str) -> bool {
+        match self {
+            Self::Lt => lhs < rhs,
+            Self::Le => lhs <= rhs,
+            Self::Gt => lhs > rhs,
+            Self::Ge => lhs >= rhs,
+        }
+    }
+}
+
 impl CmpOp {
     #[must_use]
     const fn apply(self, lhs: i64, rhs: i64) -> bool {
@@ -191,6 +213,15 @@ pub enum Cond {
         value: &'static str,
         negate: bool,
     },
+    /// `$$self{Member} lt/le/gt/ge "str"`. This is Perl's stringwise
+    /// (lexicographic) ordering, never numeric ordering. The pinned binary
+    /// table population is Nikon firmware versions (Nikon.pm:9188,9198,
+    /// 9217,9227).
+    MemberStrCmp {
+        member: &'static str,
+        op: StrCmpOp,
+        value: &'static str,
+    },
     /// `$$self{Member} =~ /pattern/[i]` / `!~` (`negate` for `!~`).
     /// `pattern` is Rust `regex` syntax already translated from the Perl
     /// source by `conds.py` (e.g. `\0` -> `\x00`); it is restricted to a
@@ -227,6 +258,9 @@ pub enum Cond {
     /// matching Perl's `and`). A 3+-clause chain nests: see the enum's own
     /// doc comment.
     And(&'static Cond, &'static Cond),
+    /// `<left> or <right>`. `left` is evaluated first and `right` only when
+    /// it is false, exactly as Perl's low-precedence `or` short-circuits.
+    Or(&'static Cond, &'static Cond),
     /// `($$self{Member} = <source>) [and <then>]` -- see this module's doc
     /// comment. The assignment always executes; the assigned value's Perl
     /// truthiness gates `then` as `and` would, and IS the result when `then`
@@ -268,6 +302,9 @@ impl Cond {
                     matches!(ctx.members.get(*member), Some(MemberValue::Str(s)) if s == value);
                 eq ^ negate
             }
+            Cond::MemberStrCmp { member, op, value } => {
+                op.apply(perl_string(ctx.members.get(*member)).as_str(), value)
+            }
             Cond::MemberRegex {
                 member,
                 pattern,
@@ -306,6 +343,7 @@ impl Cond {
                 // its (unused) side effects.
                 left.eval(ctx) && right.eval(ctx)
             }
+            Cond::Or(left, right) => left.eval(ctx) || right.eval(ctx),
             Cond::SetMember {
                 member,
                 source,
@@ -328,6 +366,18 @@ impl Cond {
                 }
             }
         }
+    }
+}
+
+/// The subset of Perl stringification needed by [`Cond::MemberStrCmp`]. An
+/// absent scalar stringifies to `""`; a numeric data member is decimal. The
+/// firmware conditions are guarded by a preceding truthiness check, but this
+/// keeps the atom's standalone semantics honest as well.
+fn perl_string(v: Option<&MemberValue>) -> String {
+    match v {
+        None => String::new(),
+        Some(MemberValue::Str(s)) => s.clone(),
+        Some(MemberValue::Num(n)) => n.to_string(),
     }
 }
 
@@ -599,5 +649,36 @@ mod tests {
             negate: true,
         };
         assert!(ne.eval(&mut Ctx::new(&mut members)));
+    }
+
+    #[test]
+    fn member_string_comparison_is_lexicographic_not_numeric() {
+        // Nikon.pm:9188 compares firmware strings with `lt`, not `<`.
+        let mut members = ctx_with(&[("FirmwareVersion", MemberValue::Str("10.00".to_string()))]);
+        let lt = Cond::MemberStrCmp {
+            member: "FirmwareVersion",
+            op: StrCmpOp::Lt,
+            value: "2.00",
+        };
+        assert!(lt.eval(&mut Ctx::new(&mut members)));
+    }
+
+    #[test]
+    fn or_short_circuits_right_hand_side() {
+        // A true left arm must keep a right-side condition (and its possible
+        // effect) unevaluated, matching Perl's `or`.
+        static LEFT: Cond = Cond::MemberTruthy {
+            member: "Matched",
+            negate: false,
+        };
+        static RIGHT: Cond = Cond::SetMember {
+            member: "MustNotBeSet",
+            source: EffectSource::Const(1),
+            then: None,
+        };
+        let condition = Cond::Or(&LEFT, &RIGHT);
+        let mut members = ctx_with(&[("Matched", MemberValue::Num(1))]);
+        assert!(condition.eval(&mut Ctx::new(&mut members)));
+        assert!(!members.contains_key("MustNotBeSet"));
     }
 }

@@ -226,8 +226,8 @@ mod tests {
     }
 
     /// Step 27's accounting identity, the sequel to the one above: every
-    /// `SubDirectory`-carrying field (63 in `fields:` + 5 inside `_variants`
-    /// groups = 68, matching `codegen.py`'s `omitted_subdirectory` REPORT
+    /// `SubDirectory`-carrying field (63 in `fields:` + 10 inside `_variants`
+    /// groups = 73, matching `codegen.py`'s `omitted_subdirectory` REPORT
     /// line) either gets a modeled [`subdir::SubdirEdge`] or is refused with
     /// a reason -- never silently neither. At 13.59 the only refusal reason
     /// live is a `ProcessProc` override (Panasonic `PANA`'s three
@@ -236,7 +236,7 @@ mod tests {
     /// ProcessProc-routed field, `JPEG-likeData`, never reaches this check at
     /// all: its `Format => 'undef[$size-0x10]'` is a data-dependent width
     /// this generator already refuses on unrelated grounds
-    /// (`tag_fmt_unsupported`), so it is not among the 68 flagged fields to
+    /// (`tag_fmt_unsupported`), so it is not among the 73 flagged fields to
     /// begin with. `subdir.rs`'s module doc has the full citation). A future
     /// regen that starts silently dropping edges it used to model, or
     /// silently modeling one it should refuse (e.g. a table that starts
@@ -275,10 +275,10 @@ mod tests {
             }
         }
         assert_eq!(
-            flagged, 68,
+            flagged, 73,
             "SubDirectory-carrying fields (fields + variants)"
         );
-        assert_eq!(modeled, 64, "fields that got a modeled SubdirEdge");
+        assert_eq!(modeled, 69, "fields that got a modeled SubdirEdge");
         assert_eq!(
             process_proc_refused, 4,
             "fields refused for a custom ProcessProc (Panasonic PANA ExifData x3, MakerNoteLeica5 x1)"

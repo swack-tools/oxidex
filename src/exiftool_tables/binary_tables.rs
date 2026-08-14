@@ -30,14 +30,14 @@
 pub const EXIFTOOL_VERSION: &str = "13.59";
 
 // `EffectSource` (`Cond::SetMember`) is imported unconditionally like its
-// sibling `Cond`/`CmpOp`/`VariantGroup` types even though this particular
+// sibling `Cond`/`CmpOp`/`StrCmpOp`/`VariantGroup` types even though this particular
 // generation run may not have compiled any `Condition` using the
 // assignment-as-condition idiom (see `src/exiftool_tables/cond.rs`) -- a
 // conditional `use` would depend on which conditions the pinned tree happens
 // to carry this release, which is exactly the kind of generator-output
 // nondeterminism `codegen.py`'s own module doc warns against elsewhere.
 #[allow(unused_imports)]
-use super::cond::{CmpOp, Cond, EffectSource, VariantGroup};
+use super::cond::{CmpOp, Cond, EffectSource, StrCmpOp, VariantGroup};
 // Step 27: same "imported unconditionally" reasoning as EffectSource above --
 // which of these a given generation run actually constructs depends on which
 // SubDirectory Start/Base shapes the pinned tree happens to carry (today:
@@ -2268,7 +2268,7 @@ pub static BPG_MAIN: BinaryTable = BinaryTable {
 };
 
 /// `Image::ExifTool::Canon::AFConfig` -- 26 fields,
-/// 0 `_variants` groups (Step 23).
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_AFCONFIG: BinaryTable = BinaryTable {
     module: "Canon",
@@ -2280,11 +2280,7 @@ pub static CANON_AFCONFIG: BinaryTable = BinaryTable {
     offsets_sound_until: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[
-            ("enum_int_partial", 4),
-            ("tag_variant_cond_unsupported", 1),
-            ("tag_variant_skipped", 1),
-        ],
+        blocked_by: &[("enum_int_partial", 4)],
     },
     fields: &[
         Field {
@@ -2654,7 +2650,54 @@ pub static CANON_AFCONFIG: BinaryTable = BinaryTable {
             subdir: None,
         },
     ],
-    variants: &[],
+    variants: &[VariantGroup {
+        index: 7,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::MemberRegex {
+                    member: "Model",
+                    pattern: "EOS R\\d",
+                    ignore_case: false,
+                    negate: false,
+                },
+                Field {
+                    index: 7,
+                    sub: None,
+                    name: "USMLensElectronicMF",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Disable After One-Shot"),
+                        (1, "One-Shot -> Enabled"),
+                        (2, "One-Shot -> Enabled (magnify)"),
+                        (3, "Disable in AF Mode"),
+                    ]),
+                    subdir: None,
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 7,
+                    sub: None,
+                    name: "USMLensElectronicMF",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Enable After AF"),
+                        (1, "Disable After AF"),
+                        (2, "Disable in AF Mode"),
+                    ]),
+                    subdir: None,
+                },
+            ),
+        ],
+    }],
 };
 
 /// `Image::ExifTool::Canon::AFMicroAdj` -- 2 fields,
@@ -30729,7 +30772,7 @@ pub static CANON_COLORDATA3: BinaryTable = BinaryTable {
 };
 
 /// `Image::ExifTool::Canon::ColorData4` -- 16 fields,
-/// 0 `_variants` groups (Step 23).
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static CANON_COLORDATA4: BinaryTable = BinaryTable {
     module: "Canon",
@@ -30740,12 +30783,7 @@ pub static CANON_COLORDATA4: BinaryTable = BinaryTable {
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
     priority: None,
-    gate_a: GateA {
-        blocked_by: &[
-            ("tag_variant_cond_unsupported", 1),
-            ("tag_variant_skipped", 1),
-        ],
-    },
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -31023,7 +31061,61 @@ pub static CANON_COLORDATA4: BinaryTable = BinaryTable {
             subdir: None,
         },
     ],
-    variants: &[],
+    variants: &[VariantGroup {
+        index: 719,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::Or(
+                    &Cond::MemberCmp {
+                        member: "ColorDataVersion",
+                        op: CmpOp::Eq,
+                        value: 6,
+                    },
+                    &Cond::MemberCmp {
+                        member: "ColorDataVersion",
+                        op: CmpOp::Eq,
+                        value: 7,
+                    },
+                ),
+                Field {
+                    index: 719,
+                    sub: None,
+                    name: "NormalWhiteLevel",
+                    format: Some(Fmt::Int16u),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: true,
+                        condition: false,
+                        hook: false,
+                        subdirectory: false,
+                    },
+                    print_conv: PrintConv::None,
+                    subdir: None,
+                },
+            ),
+            (
+                Cond::MemberCmp {
+                    member: "ColorDataVersion",
+                    op: CmpOp::Eq,
+                    value: 9,
+                },
+                Field {
+                    index: 719,
+                    sub: None,
+                    name: "PerChannelBlackLevel",
+                    format: Some(Fmt::Int16u),
+                    count: 4,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::None,
+                    subdir: None,
+                },
+            ),
+        ],
+    }],
 };
 
 /// `Image::ExifTool::Canon::ColorData5` -- 6 fields,
@@ -33662,7 +33754,7 @@ pub static CANON_FOCALLENGTH: BinaryTable = BinaryTable {
     priority: None,
     gate_a: GateA {
         blocked_by: &[
-            ("tag_variant_cond_unsupported", 2),
+            ("tag_variant_field_unsupported", 2),
             ("tag_variant_skipped", 2),
         ],
     },
@@ -54248,7 +54340,7 @@ pub static JPEG2000_COLORSPEC: BinaryTable = BinaryTable {
     priority: None,
     gate_a: GateA {
         blocked_by: &[
-            ("tag_variant_cond_unsupported", 1),
+            ("tag_variant_field_unsupported", 1),
             ("tag_variant_skipped", 1),
         ],
     },
@@ -75367,7 +75459,7 @@ pub static NIKON_AFINFO2V0100: BinaryTable = BinaryTable {
 };
 
 /// `Image::ExifTool::Nikon::AFInfo2V0101` -- 10 fields,
-/// 4 `_variants` groups (Step 23).
+/// 5 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_AFINFO2V0101: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -75379,12 +75471,7 @@ pub static NIKON_AFINFO2V0101: BinaryTable = BinaryTable {
     offsets_sound_until: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[
-            ("conv_dropped", 4),
-            ("enum_int_partial", 1),
-            ("tag_variant_cond_unsupported", 1),
-            ("tag_variant_skipped", 1),
-        ],
+        blocked_by: &[("conv_dropped", 6), ("enum_int_partial", 1)],
     },
     fields: &[
         Field {
@@ -75767,6 +75854,120 @@ pub static NIKON_AFINFO2V0101: BinaryTable = BinaryTable {
                         mask: None,
                         omitted: Omitted::NONE,
                         print_conv: PrintConv::IntEnum(&[(0, "(none)")]),
+                        subdir: None,
+                    },
+                ),
+            ],
+        },
+        VariantGroup {
+            index: 28,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::MemberCmp {
+                        member: "AFDetectionMethod",
+                        op: CmpOp::Eq,
+                        value: 1,
+                    },
+                    Field {
+                        index: 28,
+                        sub: None,
+                        name: "ContrastDetectAFInFocus",
+                        format: None,
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted::NONE,
+                        print_conv: PrintConv::IntEnum(&[(0, "No"), (1, "Yes")]),
+                        subdir: None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberCmp {
+                            member: "FocusPointSchema",
+                            op: CmpOp::Eq,
+                            value: 1,
+                        },
+                        &Cond::Or(
+                            &Cond::MemberCmp {
+                                member: "AFAreaMode",
+                                op: CmpOp::Eq,
+                                value: 8,
+                            },
+                            &Cond::Or(
+                                &Cond::MemberCmp {
+                                    member: "AFAreaMode",
+                                    op: CmpOp::Eq,
+                                    value: 9,
+                                },
+                                &Cond::MemberCmp {
+                                    member: "AFAreaMode",
+                                    op: CmpOp::Eq,
+                                    value: 13,
+                                },
+                            ),
+                        ),
+                    ),
+                    Field {
+                        index: 28,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(7)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                        subdir: None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberCmp {
+                            member: "FocusPointSchema",
+                            op: CmpOp::Eq,
+                            value: 7,
+                        },
+                        &Cond::Or(
+                            &Cond::MemberCmp {
+                                member: "AFAreaMode",
+                                op: CmpOp::Eq,
+                                value: 8,
+                            },
+                            &Cond::Or(
+                                &Cond::MemberCmp {
+                                    member: "AFAreaMode",
+                                    op: CmpOp::Eq,
+                                    value: 9,
+                                },
+                                &Cond::MemberCmp {
+                                    member: "AFAreaMode",
+                                    op: CmpOp::Eq,
+                                    value: 13,
+                                },
+                            ),
+                        ),
+                    ),
+                    Field {
+                        index: 28,
+                        sub: None,
+                        name: "AFPointsSelected",
+                        format: Some(Fmt::Undef(20)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
                         subdir: None,
                     },
                 ),
@@ -77396,7 +77597,7 @@ pub static NIKON_AFINFO2V0300: BinaryTable = BinaryTable {
 };
 
 /// `Image::ExifTool::Nikon::AFInfo2V0400` -- 11 fields,
-/// 2 `_variants` groups (Step 23).
+/// 3 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_AFINFO2V0400: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -77408,11 +77609,7 @@ pub static NIKON_AFINFO2V0400: BinaryTable = BinaryTable {
     offsets_sound_until: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[
-            ("conv_dropped", 6),
-            ("tag_variant_cond_unsupported", 1),
-            ("tag_variant_skipped", 1),
-        ],
+        blocked_by: &[("conv_dropped", 9)],
     },
     fields: &[
         Field {
@@ -77613,6 +77810,129 @@ pub static NIKON_AFINFO2V0400: BinaryTable = BinaryTable {
         },
     ],
     variants: &[
+        VariantGroup {
+            index: 10,
+            sub: None,
+            alternatives: &[
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z 8|Z 9)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::Or(
+                            &Cond::MemberCmp {
+                                member: "AFAreaModeUsed",
+                                op: CmpOp::Eq,
+                                value: 197,
+                            },
+                            &Cond::MemberCmp {
+                                member: "AFAreaModeUsed",
+                                op: CmpOp::Eq,
+                                value: 207,
+                            },
+                        ),
+                    ),
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(51)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                        subdir: None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON (Z6_3|Z f|Z5_2)\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::Or(
+                            &Cond::MemberCmp {
+                                member: "AFAreaModeUsed",
+                                op: CmpOp::Eq,
+                                value: 197,
+                            },
+                            &Cond::MemberCmp {
+                                member: "AFAreaModeUsed",
+                                op: CmpOp::Eq,
+                                value: 207,
+                            },
+                        ),
+                    ),
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(38)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                        subdir: None,
+                    },
+                ),
+                (
+                    Cond::And(
+                        &Cond::MemberRegex {
+                            member: "Model",
+                            pattern: "^NIKON Z50_2\\b",
+                            ignore_case: true,
+                            negate: false,
+                        },
+                        &Cond::Or(
+                            &Cond::MemberCmp {
+                                member: "AFAreaModeUsed",
+                                op: CmpOp::Eq,
+                                value: 197,
+                            },
+                            &Cond::MemberCmp {
+                                member: "AFAreaModeUsed",
+                                op: CmpOp::Eq,
+                                value: 207,
+                            },
+                        ),
+                    ),
+                    Field {
+                        index: 10,
+                        sub: None,
+                        name: "AFPointsUsed",
+                        format: Some(Fmt::Undef(29)),
+                        count: 1,
+                        mask: None,
+                        omitted: Omitted {
+                            value_conv: true,
+                            raw_conv: false,
+                            condition: false,
+                            hook: false,
+                            subdirectory: false,
+                        },
+                        print_conv: PrintConv::None,
+                        subdir: None,
+                    },
+                ),
+            ],
+        },
         VariantGroup {
             index: 67,
             sub: None,
@@ -85249,6 +85569,225 @@ pub static NIKON_MENUINFOZ7II: BinaryTable = BinaryTable {
         }),
     }],
     variants: &[],
+};
+
+/// `Image::ExifTool::Nikon::MenuInfoZ8` -- 0 fields,
+/// 1 `_variants` groups (Step 23).
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static NIKON_MENUINFOZ8: BinaryTable = BinaryTable {
+    module: "Nikon",
+    table: "MenuInfoZ8",
+    group0: "MakerNotes",
+    group2: "Camera",
+    first_entry: 0,
+    default_format: Fmt::Int8u,
+    offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
+    fields: &[],
+    variants: &[VariantGroup {
+        index: 16,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::And(
+                    &Cond::MemberTruthy {
+                        member: "FirmwareVersion",
+                        negate: false,
+                    },
+                    &Cond::MemberStrCmp {
+                        member: "FirmwareVersion",
+                        op: StrCmpOp::Lt,
+                        value: "02.00",
+                    },
+                ),
+                Field {
+                    index: 16,
+                    sub: None,
+                    name: "MenuSettingsOffsetZ8v1",
+                    format: Some(Fmt::Int32u),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                    },
+                    print_conv: PrintConv::None,
+                    subdir: Some(SubdirEdge {
+                        module: "Nikon",
+                        table: "MenuSettingsZ8v1",
+                        start: Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val)),
+                        base: None,
+                        byte_order: None,
+                        validate: false,
+                    }),
+                },
+            ),
+            (
+                Cond::And(
+                    &Cond::MemberTruthy {
+                        member: "FirmwareVersion",
+                        negate: false,
+                    },
+                    &Cond::MemberStrCmp {
+                        member: "FirmwareVersion",
+                        op: StrCmpOp::Ge,
+                        value: "02.00",
+                    },
+                ),
+                Field {
+                    index: 16,
+                    sub: None,
+                    name: "MenuSettingsOffsetZ8v2",
+                    format: Some(Fmt::Int32u),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                    },
+                    print_conv: PrintConv::None,
+                    subdir: Some(SubdirEdge {
+                        module: "Nikon",
+                        table: "MenuSettingsZ8v2",
+                        start: Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val)),
+                        base: None,
+                        byte_order: None,
+                        validate: false,
+                    }),
+                },
+            ),
+        ],
+    }],
+};
+
+/// `Image::ExifTool::Nikon::MenuInfoZ9` -- 0 fields,
+/// 1 `_variants` groups (Step 23).
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static NIKON_MENUINFOZ9: BinaryTable = BinaryTable {
+    module: "Nikon",
+    table: "MenuInfoZ9",
+    group0: "MakerNotes",
+    group2: "Camera",
+    first_entry: 0,
+    default_format: Fmt::Int8u,
+    offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
+    fields: &[],
+    variants: &[VariantGroup {
+        index: 16,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::And(
+                    &Cond::MemberTruthy {
+                        member: "FirmwareVersion",
+                        negate: false,
+                    },
+                    &Cond::MemberStrCmp {
+                        member: "FirmwareVersion",
+                        op: StrCmpOp::Lt,
+                        value: "03.00",
+                    },
+                ),
+                Field {
+                    index: 16,
+                    sub: None,
+                    name: "MenuSettingsOffsetZ9",
+                    format: Some(Fmt::Int32u),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                    },
+                    print_conv: PrintConv::None,
+                    subdir: Some(SubdirEdge {
+                        module: "Nikon",
+                        table: "MenuSettingsZ9",
+                        start: Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val)),
+                        base: None,
+                        byte_order: None,
+                        validate: false,
+                    }),
+                },
+            ),
+            (
+                Cond::And(
+                    &Cond::MemberTruthy {
+                        member: "FirmwareVersion",
+                        negate: false,
+                    },
+                    &Cond::MemberStrCmp {
+                        member: "FirmwareVersion",
+                        op: StrCmpOp::Lt,
+                        value: "04.00",
+                    },
+                ),
+                Field {
+                    index: 16,
+                    sub: None,
+                    name: "MenuSettingsOffsetZ9v3",
+                    format: Some(Fmt::Int32u),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                    },
+                    print_conv: PrintConv::None,
+                    subdir: Some(SubdirEdge {
+                        module: "Nikon",
+                        table: "MenuSettingsZ9v3",
+                        start: Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val)),
+                        base: None,
+                        byte_order: None,
+                        validate: false,
+                    }),
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 16,
+                    sub: None,
+                    name: "MenuSettingsOffsetZ9v4",
+                    format: Some(Fmt::Int32u),
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted {
+                        value_conv: false,
+                        raw_conv: false,
+                        condition: false,
+                        hook: false,
+                        subdirectory: true,
+                    },
+                    print_conv: PrintConv::None,
+                    subdir: Some(SubdirEdge {
+                        module: "Nikon",
+                        table: "MenuSettingsZ9v4",
+                        start: Start::Expr(&StartExpr::Add(&StartExpr::DirStart, &StartExpr::Val)),
+                        base: None,
+                        byte_order: None,
+                        validate: false,
+                    }),
+                },
+            ),
+        ],
+    }],
 };
 
 /// `Image::ExifTool::Nikon::MenuSettingsD850` -- 1 fields,
@@ -93674,7 +94213,7 @@ pub static NIKON_SHOTINFO: BinaryTable = BinaryTable {
 };
 
 /// `Image::ExifTool::Nikon::VRInfo` -- 3 fields,
-/// 0 `_variants` groups (Step 23).
+/// 1 `_variants` groups (Step 23).
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
 pub static NIKON_VRINFO: BinaryTable = BinaryTable {
     module: "Nikon",
@@ -93685,12 +94224,7 @@ pub static NIKON_VRINFO: BinaryTable = BinaryTable {
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
     priority: None,
-    gate_a: GateA {
-        blocked_by: &[
-            ("tag_variant_cond_unsupported", 1),
-            ("tag_variant_skipped", 1),
-        ],
-    },
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -93726,7 +94260,58 @@ pub static NIKON_VRINFO: BinaryTable = BinaryTable {
             subdir: None,
         },
     ],
-    variants: &[],
+    variants: &[VariantGroup {
+        index: 6,
+        sub: None,
+        alternatives: &[
+            (
+                Cond::Or(
+                    &Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NIKON Z (30|5|50|6|6_2|7|7_2|8|f|fc|9)\\b",
+                        ignore_case: true,
+                        negate: false,
+                    },
+                    &Cond::MemberRegex {
+                        member: "Model",
+                        pattern: "^NIKON Z(5_2|50_2|6_3)\\b",
+                        ignore_case: true,
+                        negate: false,
+                    },
+                ),
+                Field {
+                    index: 6,
+                    sub: None,
+                    name: "VRMode",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "Normal"), (3, "Sport")]),
+                    subdir: None,
+                },
+            ),
+            (
+                Cond::Always,
+                Field {
+                    index: 6,
+                    sub: None,
+                    name: "VRMode",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    omitted: Omitted::NONE,
+                    print_conv: PrintConv::IntEnum(&[
+                        (0, "Normal"),
+                        (1, "On (1)"),
+                        (2, "Active"),
+                        (3, "Sport"),
+                    ]),
+                    subdir: None,
+                },
+            ),
+        ],
+    }],
 };
 
 /// `Image::ExifTool::Nikon::VignetteInfo` -- 4 fields,
@@ -161047,6 +161632,8 @@ pub static ALL_BINARY_TABLES: &[&BinaryTable] = &[
     &NIKON_MAKERNOTES0X51,
     &NIKON_MAKERNOTES0X56,
     &NIKON_MENUINFOZ7II,
+    &NIKON_MENUINFOZ8,
+    &NIKON_MENUINFOZ9,
     &NIKON_MENUSETTINGSD850,
     &NIKON_MENUSETTINGSZ6III,
     &NIKON_MENUSETTINGSZ7II,

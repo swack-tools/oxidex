@@ -819,14 +819,14 @@ PRELUDE = '''//! ExifTool binary tag tables, generated from ExifTool's own Perl 
 __VERSION_BLOCK__
 
 // `EffectSource` (`Cond::SetMember`) is imported unconditionally like its
-// sibling `Cond`/`CmpOp`/`VariantGroup` types even though this particular
+// sibling `Cond`/`CmpOp`/`StrCmpOp`/`VariantGroup` types even though this particular
 // generation run may not have compiled any `Condition` using the
 // assignment-as-condition idiom (see `src/exiftool_tables/cond.rs`) -- a
 // conditional `use` would depend on which conditions the pinned tree happens
 // to carry this release, which is exactly the kind of generator-output
 // nondeterminism `codegen.py`'s own module doc warns against elsewhere.
 #[allow(unused_imports)]
-use super::cond::{CmpOp, Cond, EffectSource, VariantGroup};
+use super::cond::{CmpOp, Cond, EffectSource, StrCmpOp, VariantGroup};
 // Step 27: same "imported unconditionally" reasoning as EffectSource above --
 // which of these a given generation run actually constructs depends on which
 // SubDirectory Start/Base shapes the pinned tree happens to carry (today:

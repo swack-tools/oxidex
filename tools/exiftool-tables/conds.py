@@ -6,7 +6,7 @@ a maintainer-approved seventh (bitmask).
 Same doctrine as `exprs.py` (this file's sibling for `ValueConv`/`PrintConv`):
 a `Condition` string compiles only if every one of its constructs is
 recognised and provably reproduced; anything else -- a three-way `or` chain,
-a `$format`/`$count`-sized-format eval, a `lt`/`ge` string comparison, a bare
+a `$format`/`$count`-sized-format eval, a bare
 function call like `GetByteOrder()` -- fails to parse and `compile_cond`
 returns `None`. There is no partial mode: a `_variants` array is only emitted
 as a schema `Variant` group when EVERY alternative's `Condition` (or absence
@@ -22,7 +22,7 @@ across six shapes; bitmask is the maintainer-approved seventh, the largest
 cluster in the residue):
   1. `$$self{Member} == / != N`            -> MemberCmp
   2. `$$self{Member} =~ /regex/`           -> MemberRegex
-  3. conjunction of the above (`A and B`)  -> And (nested for 3+ clauses)
+  3. boolean combinations (`A and B`, `A or B`) -> And/Or
   4. bare `$$self{Member}` / `not ...`     -> MemberTruthy
   5. `$$self{Member} eq / ne "str"`        -> MemberStrEq
   6. `$$valPt =~ /regex/`                  -> ValPtRegex
@@ -35,16 +35,25 @@ the ExifTool assignment-as-condition idiom (`($$self{Member} = EXPR) and
 module doc for the ExifTool.pm citation on why that idiom needs its own
 shape rather than folding into a comparison.
 
+String `lt`/`le`/`gt`/`ge` comparisons are a separate, deliberately small
+shape (`MemberStrCmp`): Perl's string ordering is lexicographic, not numeric,
+so `"10.00" lt "2.00"` is true. The only binary-table population is Nikon
+firmware versions (Nikon.pm:9188,9198,9217,9227); `cond.rs` compares the UTF-8
+byte sequences, whose lexicographic ordering is the same as Perl's code-point
+ordering for these ASCII firmware strings.
+
 Regex patterns are validated structurally, not by a character allowlist:
 `_regex_atoms_ok` walks Python's own `re` parser's AST (the same engine used
 to prove the pattern is even syntactically sane) and admits only the opcodes
 a vetted, closed subset needs -- literals, alternation, grouping, `^`/`$`/`\b`
 anchors, character classes, and the `?` (0-or-1) quantifier. Lookaround,
-backreferences, `.`/`\d`/`\w` shorthand classes, and `*`/`+`/`{m,n}` general
-quantifiers are all refused: none of them appear in the pinned tree's
-binary-table `_variants` population, and admitting general quantifiers would
-require verifying Perl's and Rust's `regex` crate engines agree on
-catastrophic-backtracking-adjacent behaviour, not just on what matches.
+backreferences, `.`/`\w` shorthand classes, and `*`/`+`/`{m,n}` general
+quantifiers are all refused. A narrowly-scoped exception admits `\d` only in
+a Model regex: the one pinned use is Canon.pm:9381's ASCII Canon model family
+spelling (`EOS R` followed by an ASCII digit), and Perl and Rust agree for
+that actual model-name domain. Other shorthand categories, and `\d` in
+byte/value domains, remain refused rather than assuming their Unicode
+semantics agree.
 `tools/exiftool-tables/verify_cond.py` differentially checks every pattern
 this module accepts against the pinned ExifTool's own Perl regex engine
 before trusting it; passing the AST allowlist is necessary, not sufficient.
@@ -86,6 +95,7 @@ _RE_NUM_ATOM = re.compile(
     rf"^{_MEMBER}\s*(==|!=|>=|<=|>|<)\s*(-?(?:0[xX][0-9a-fA-F]+|\d+))$"
 )
 _RE_STR_ATOM = re.compile(rf'^{_MEMBER}\s*(eq|ne)\s*"([^"]*)"$')
+_RE_STR_CMP_ATOM = re.compile(rf'^{_MEMBER}\s*(lt|le|gt|ge)\s*"([^"]*)"$')
 _RE_BARE_ATOM = re.compile(rf"^(not\s+)?{_MEMBER}$")
 _RE_VALPT_ATOM = re.compile(r"^\$\$valPt\s*(=~|!~)\s*/((?:[^/\\]|\\.)*)/([a-z]*)$")
 _RE_BITAND_BARE = re.compile(rf"^{_MEMBER}\s*&\s*(0[xX][0-9a-fA-F]+|\d+)$")
@@ -100,32 +110,34 @@ _RE_SETMEMBER = re.compile(rf"^\(\s*{_MEMBER}\s*=\s*(\$count|-?\d+)\s*\)$")
 _RE_SETMEMBER_BARE = re.compile(rf"^{_MEMBER}\s*=\s*(\$count|-?\d+)$")
 
 _CMP_OP = {"==": "Eq", "!=": "Ne", ">=": "Ge", "<=": "Le", ">": "Gt", "<": "Lt"}
+_STR_CMP_OP = {"lt": "Lt", "le": "Le", "gt": "Gt", "ge": "Ge"}
 
 # Opcodes the regex-pattern AST walk admits. Anything else (ANY `.`,
-# CATEGORY `\d`/`\w`/`\s`, ASSERT/ASSERT_NOT lookaround, GROUPREF
-# backreferences, general MIN_REPEAT/MAX_REPEAT with max != 1) is refused.
+# CATEGORY shorthand (except Model-domain `\d`), ASSERT/ASSERT_NOT lookaround,
+# GROUPREF backreferences, general MIN_REPEAT/MAX_REPEAT with max != 1) is
+# refused.
 _ALLOWED_REGEX_OPS = {"literal", "in", "branch", "subpattern", "at", "max_repeat"}
 
 
-def _regex_ast_ok(node):
+def _regex_ast_ok(node, allow_model_ascii_digit=False):
     for op, av in node:
         opname = op.name.lower() if hasattr(op, "name") else str(op).lower()
         if opname not in _ALLOWED_REGEX_OPS:
             return False
         if opname == "subpattern":
             # av = (group_number, add_flags, del_flags, subpattern)
-            if not _regex_ast_ok(av[3]):
+            if not _regex_ast_ok(av[3], allow_model_ascii_digit):
                 return False
         elif opname == "branch":
             # av = (None, [branch1, branch2, ...])
             for branch in av[1]:
-                if not _regex_ast_ok(branch):
+                if not _regex_ast_ok(branch, allow_model_ascii_digit):
                     return False
         elif opname == "max_repeat":
             lo, hi, sub = av
             if (lo, hi) not in ((0, 1), (1, 1)):
                 return False
-            if not _regex_ast_ok(sub):
+            if not _regex_ast_ok(sub, allow_model_ascii_digit):
                 return False
         elif opname == "in":
             # av: list of (LITERAL, ord) / (RANGE, (lo, hi)) / (NEGATE, None)
@@ -133,7 +145,17 @@ def _regex_ast_ok(node):
                 item_name = (
                     item_op.name.lower() if hasattr(item_op, "name") else str(item_op).lower()
                 )
-                if item_name not in ("literal", "range", "negate"):
+                if item_name in ("literal", "range", "negate"):
+                    continue
+                # Python represents `\d` as CATEGORY_DIGIT inside an IN
+                # node. This is deliberately *not* a general shorthand
+                # allowlist: the Model-only domain proof is in this module's
+                # docstring.
+                if not (
+                    allow_model_ascii_digit
+                    and item_name == "category"
+                    and getattr(item_av, "name", str(item_av)) == "CATEGORY_DIGIT"
+                ):
                     return False
         elif opname == "at":
             at_name = av.name if hasattr(av, "name") else str(av)
@@ -142,7 +164,7 @@ def _regex_ast_ok(node):
     return True
 
 
-def _validate_regex_pattern(pattern):
+def _validate_regex_pattern(pattern, allow_model_ascii_digit=False):
     """Structural validation via Python's own regex-parser AST, not a
     character allowlist -- see module docstring. Raises CondCompileError if
     the pattern is unparseable or uses a construct outside the vetted subset.
@@ -154,7 +176,7 @@ def _validate_regex_pattern(pattern):
         ast = sre_parse.parse(pattern)
     except re.error as e:
         raise CondCompileError(f"unparseable regex {pattern!r}: {e}") from e
-    if not _regex_ast_ok(ast):
+    if not _regex_ast_ok(ast, allow_model_ascii_digit):
         raise CondCompileError(f"regex {pattern!r} uses a construct outside the vetted subset")
     return pattern
 
@@ -180,7 +202,7 @@ def _compile_atom(text):
         op, pattern, flags = m.group(3), m.group(4), m.group(5)
         if any(f not in "i" for f in flags):
             raise CondCompileError(f"unsupported regex flags {flags!r}")
-        _validate_regex_pattern(pattern)
+        _validate_regex_pattern(pattern, allow_model_ascii_digit=(member == "Model"))
         rust_pattern = pattern.replace("\\0", "\\x00")
         negate = "true" if op == "!~" else "false"
         ic = "true" if "i" in flags else "false"
@@ -207,6 +229,15 @@ def _compile_atom(text):
         return (
             f"Cond::MemberStrEq {{ member: {_rust_str(member)}, "
             f"value: {_rust_str(s)}, negate: {negate} }}"
+        )
+
+    m = _RE_STR_CMP_ATOM.match(text)
+    if m:
+        member = _member_name(text)
+        op, s = m.group(3), m.group(4)
+        return (
+            f"Cond::MemberStrCmp {{ member: {_rust_str(member)}, "
+            f"op: StrCmpOp::{_STR_CMP_OP[op]}, value: {_rust_str(s)} }}"
         )
 
     m = _RE_BITAND_CMP.match(text)
@@ -289,9 +320,114 @@ def _compile_setmember(text):
     return None
 
 
+def _strip_outer_parens(text):
+    """Drop one pair of parens only when it encloses the entire expression."""
+    text = text.strip()
+    if not (text.startswith("(") and text.endswith(")")):
+        return text
+    depth = 0
+    quote = None
+    in_regex = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+            continue
+        if in_regex:
+            if ch == "/":
+                in_regex = False
+            continue
+        if ch in "\"'":
+            quote = ch
+        elif ch == "/" and text[:i].rstrip().endswith(("=~", "!~")):
+            in_regex = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0 and i != len(text) - 1:
+                return text
+    return text[1:-1].strip() if depth == 0 and not quote and not in_regex else text
+
+
+def _split_top_level(text, keyword):
+    """Split a closed-grammar Boolean expression on a top-level keyword.
+
+    Quoted strings and slash regexes are opaque, so `and`/`or` text within an
+    accepted atom cannot become syntax accidentally.
+    """
+    parts, start, depth = [], 0, 0
+    quote = None
+    in_regex = False
+    escaped = False
+    needle = f" {keyword} "
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif quote:
+            if ch == quote:
+                quote = None
+        elif in_regex:
+            if ch == "/":
+                in_regex = False
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "/" and text[:i].rstrip().endswith(("=~", "!~")):
+            in_regex = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and text.startswith(needle, i):
+            parts.append(text[start:i].strip())
+            i += len(needle)
+            start = i
+            continue
+        i += 1
+    if parts:
+        parts.append(text[start:].strip())
+        return parts
+    return None
+
+
+def _compile_boolean_expr(text):
+    """Parse the closed Boolean grammar using Perl's `and`/`or` precedence.
+
+    `and` binds more tightly than `or`; both short-circuit left-to-right.
+    Right-nesting the emitted binary nodes preserves the same evaluation order.
+    """
+    text = _strip_outer_parens(text)
+    for keyword, variant in (("or", "Or"), ("and", "And")):
+        parts = _split_top_level(text, keyword)
+        if not parts:
+            continue
+        compiled = [_compile_boolean_expr(p) for p in parts]
+        if any(c is None for c in compiled):
+            return None
+        expr = compiled[-1]
+        for c in reversed(compiled[:-1]):
+            expr = f"Cond::{variant}(&{c}, &{expr})"
+        return expr
+    try:
+        return _compile_atom(text)
+    except CondCompileError:
+        return None
+
+
 def compile_cond_atoms_conjunction(text):
-    """Compile `text` as either a single atom or an `and`-conjunction of
-    atoms (right-folded into nested `Cond::And`), or a `SetMember` idiom.
+    """Compile a closed-grammar Boolean expression or a `SetMember` idiom.
+
     Returns Rust source text for a `Cond` value, or None if nothing in this
     grammar matches (caller decides whether that is a hard refusal)."""
     text = re.sub(r"\s+", " ", text.strip())
@@ -299,17 +435,7 @@ def compile_cond_atoms_conjunction(text):
         sm = _compile_setmember(text)
         if sm is not None:
             return sm
-        if " and " in text:
-            parts = [p.strip() for p in text.split(" and ")]
-            compiled = [_compile_atom(p) for p in parts]
-            # Right-fold: `A and B and C` -> And(A, And(B, C)) -- same
-            # left-to-right short-circuit order as Perl's left-associative
-            # `and` chain (see conds.py module docstring).
-            expr = compiled[-1]
-            for c in reversed(compiled[:-1]):
-                expr = f"Cond::And(&{c}, &{expr})"
-            return expr
-        return _compile_atom(text)
+        return _compile_boolean_expr(text)
     except CondCompileError:
         return None
 
