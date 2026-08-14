@@ -1279,6 +1279,11 @@ verify-tables version="":
 
     python3 tools/exiftool-tables/verify.py "$GENERATED" "$LIB" \
         --oracle tools/exiftool-tables/oracle.pl
+    # Step 27's structure check above proves an edge was transcribed. This
+    # live-Perl oracle proves its generated Start/Base arithmetic evaluates
+    # identically (ExifTool.pm:10118-10137), using this exact pinned tree.
+    python3 tools/exiftool-tables/verify_subdirs.py "$GENERATED" "$LIB" \
+        --exiftool "$CACHE/exiftool-$VERSION/exiftool"
 
 # Tag-machinery overhaul Step 28: the reachability census -- which of the
 # generated ProcessBinaryData tables the generic engine may walk, and why not.

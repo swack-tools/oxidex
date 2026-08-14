@@ -413,7 +413,8 @@ jobs:
   # This re-parses the COMMITTED Rust and diffs it against a ground-truth dump
   # taken independently from ExifTool's Perl symbol table, so it fails on a
   # fabricated or drifted entry rather than on a mismatched formatting guess.
-  # No Rust build is needed: verify.py reads the .rs as text.
+  # verify.py reads Rust as text; verify_subdirs.py additionally builds a
+  # throwaway harness to execute the committed Start/Base forms.
   verify-tables:
     name: Verify Generated Tables
     # 2x on purpose: this is a tarball fetch plus a perl/python pass over one
@@ -457,6 +458,9 @@ jobs:
           curl -sSL -o et.tar.gz \
             "https://github.com/exiftool/exiftool/archive/refs/tags/${ET_VERSION}.tar.gz"
           tar xzf et.tar.gz
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt
       - name: Verify committed tables against ExifTool
         env:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
@@ -465,6 +469,13 @@ jobs:
             src/exiftool_tables/binary_tables.rs \
             "exiftool-${ET_VERSION}/lib" \
             --oracle tools/exiftool-tables/oracle.pl
+          # verify.py independently checks which edges should be present;
+          # this runs their actual Start/Base arithmetic against the pinned
+          # ProcessBinaryData Perl eval scope (ExifTool.pm:10118-10137).
+          python3 tools/exiftool-tables/verify_subdirs.py \
+            src/exiftool_tables/binary_tables.rs \
+            "exiftool-${ET_VERSION}/lib" \
+            --exiftool "exiftool-${ET_VERSION}/exiftool"
       # Step 14 (tag-machinery overhaul): tier 1 above is binary_tables.rs;
       # tier 2 is everything downstream of it that regen.sh never touches --
       # the MakerNote sub-directory tables, the Nikon AF-point grids and the
@@ -477,9 +488,6 @@ jobs:
       # step above and diffing the result against what is committed is the
       # tier-2 analogue of verify.py: it fails on a stale or hand-edited
       # generated file instead of on a formatting guess.
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-        with:
-          components: rustfmt
       - name: Rerun tier-2 generators and diff against committed output
         env:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
