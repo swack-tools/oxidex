@@ -100,8 +100,8 @@ the Rust side.
 | class | count | meaning |
 |---|---:|---|
 | enabled | **5** | both gates; the engine walks it |
-| eligible | **350** | gate A passes, no gate B measurement possible yet |
-| refused | **258** | gate A blocks it |
+| eligible | **351** | gate A passes, no gate B measurement possible yet |
+| refused | **257** | gate A blocks it |
 
 Gate A's refusal reasons, by tables affected (a table can trip several):
 
@@ -116,12 +116,12 @@ Gate A's refusal reasons, by tables affected (a table can trip several):
 | `tag_variant_cond_unsupported` | 8 |
 | `tag_var_format` | 7 |
 | `offsets_sound_until` | 4 |
-| `tag_bad_index` | 4 |
+| `tag_bad_index` | 1 |
 | `subdir_refused_processproc` | 1 |
 | `tag_variant_field_unsupported` | 1 |
 
 This is design D3 read literally: a construct we cannot parse counts against
-us. 258 refusals is the scoreboard, and `expr_unsupported` alone — 141 tables
+us. 257 refusals is the scoreboard, and `expr_unsupported` alone — 141 tables
 blocked because at least one `PrintConv` expression did not translate — says
 where the next unit of work buys the most enablement.
 
@@ -145,7 +145,7 @@ it. Two routes exist, and both were measured:
    therefore enables nothing yet.** That is a measurement, not an omission —
    and it is the concrete thing to fix if the next step wants the edges to pay.
 
-The remaining 350 eligible tables have no live call site at all. Enabling one
+The remaining 351 eligible tables have no live call site at all. Enabling one
 would produce no tags and no measurement — enablement on no evidence, which is
 what opt-in exists to prevent.
 
@@ -201,7 +201,7 @@ control-vs-change on one instrument, and that comparison is the zero above.
   change); `just reachability`; a byte-identical regeneration check on
   `binary_tables.rs` before touching `codegen.py`.
 * **Not run:** `just ci-standard` and any release build (gated centrally);
-  gate B for the 350 eligible tables (they have no call site, so there is
+  gate B for the 351 eligible tables (they have no call site, so there is
   nothing to measure); the corpus-synthesis harness
   (`tools/exiftool-tables/synth_*.py`) as an enablement gate — it measures
   whether a table's tags can be *written and read back*, which is a different

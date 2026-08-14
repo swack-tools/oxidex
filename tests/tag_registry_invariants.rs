@@ -123,6 +123,40 @@ fn registry_tag_names_are_shaped_like_exiftool_tag_names() {
     );
 }
 
+/// Real tags whose name collides with a display value of their OWN table, and
+/// which `-listx` cannot vouch for because it does not document
+/// SubDirectory-only container tags at all.
+///
+/// Step 30 moved the registry off `-listx` and onto `dump_tables.pl`'s dump of
+/// the real Perl tables, which is why these appear now and did not before: the
+/// same change is what finally made `ExifOffset`/`GPSInfo`/`InteropOffset`
+/// present instead of carried forward by hand. Each of these three is a bare
+/// `Name` + `SubDirectory` entry in the pinned 13.59 tree, quoted below, and
+/// each collides by coincidence with a `PrintConv` value of its own table
+/// (`Matroska` `TrackType` 0x01/0x02; `LNK` `Flags` BITMASK bit 1).
+///
+/// This is an exemption from the NAME rule only. The subtler id rule below
+/// (`registry_tag_ids_are_not_print_conv_keys_in_disguise`) still applies to
+/// them unconditionally, and it passes: a real container tag's id is its EBML
+/// element id or flag mask, never the PrintConv key that spells the same word.
+///
+/// Listed one per line, with the citation that put it here, so adding a fourth
+/// is a reviewable diff rather than a loosened rule. The general fix -- having
+/// the generator mark SubDirectory containers in the YAML so this test can
+/// exempt them structurally -- is deliberately NOT taken here: it changes the
+/// registry schema, which Step 30 kept unchanged on purpose.
+const SUBDIRECTORY_CONTAINERS_LISTX_OMITS: &[(&str, &str)] = &[
+    // Matroska.pm:363 `0x60 => { Name => 'Video',
+    //   SubDirectory => { TagTable => 'Image::ExifTool::Matroska::Main' } }`
+    ("Matroska::Main", "Video"),
+    // Matroska.pm:420 `0x61 => { Name => 'Audio',
+    //   SubDirectory => { TagTable => 'Image::ExifTool::Matroska::Main' } }`
+    ("Matroska::Main", "Audio"),
+    // LNK.pm:402 `0x20000 => { Name => 'LinkInfo',
+    //   SubDirectory => { TagTable => 'Image::ExifTool::LNK::LinkInfo' } }`
+    ("LNK::Main", "LinkInfo"),
+];
+
 #[test]
 fn registry_lists_no_print_conv_display_value_as_a_tag() {
     let Some(xml) = exiftool_listx() else {
@@ -143,9 +177,19 @@ fn registry_lists_no_print_conv_display_value_as_a_tag() {
     // PrintConv (e.g. `Compression` is both a real EXIF tag and a value
     // elsewhere).
     let mut violations = Vec::new();
+    // Every exemption must still be doing work. One that stops matching --
+    // because the registry dropped the tag, or a later ExifTool renamed the
+    // colliding PrintConv value -- is a rule that has quietly gone slack, the
+    // same failure mode `enabled.rs`'s `every_allowlist_entry_names_a_real_table`
+    // exists to catch.
+    let mut exempted: HashSet<(String, String)> = HashSet::new();
     for domain in DOMAINS {
         for e in entries(domain) {
             if real.contains(&(e.table.clone(), e.name.clone())) {
+                continue;
+            }
+            if SUBDIRECTORY_CONTAINERS_LISTX_OMITS.contains(&(e.table.as_str(), e.name.as_str())) {
+                exempted.insert((e.table.clone(), e.name.clone()));
                 continue;
             }
             let is_display_value = values
@@ -166,6 +210,13 @@ fn registry_lists_no_print_conv_display_value_as_a_tag() {
         violations.len(),
         violations.join("\n")
     );
+    for (table, name) in SUBDIRECTORY_CONTAINERS_LISTX_OMITS {
+        assert!(
+            exempted.contains(&((*table).to_string(), (*name).to_string())),
+            "{table}::{name} is exempted but no longer collides -- drop the \
+             SUBDIRECTORY_CONTAINERS_LISTX_OMITS line instead of leaving it slack"
+        );
+    }
 }
 
 /// The subtlest shape of the same bug, and the one that actually misnames tags.

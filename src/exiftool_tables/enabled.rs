@@ -71,7 +71,7 @@ pub static ENABLED: &[(&str, &str)] = &[
     //   measures nothing about it. It was briefly listed here on the strength
     //   of that sentence, which is why `reachability.py` now strips comments
     //   before counting call sites.
-    // * The other 349 gate-A-passing tables have no live call site at all
+    // * The other 350 gate-A-passing tables have no live call site at all
     //   (see `just reachability`). Enabling one would produce no tags and no
     //   measurement -- enablement on no evidence, which is the thing design
     //   D1 exists to prevent.

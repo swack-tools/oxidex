@@ -294,8 +294,56 @@ mod tests {
     /// `tools/exiftool-tables/reachability.py` reports from, which is the
     /// point: the reachability census is generated, not hand-audited, and
     /// this test is what stops the two from drifting apart. At 13.59 the
-    /// split is 0 enabled / 355 eligible / 258 refused of 613 -- see
+    /// split is 5 enabled / 351 eligible / 257 refused of 613 -- see
     /// `enabled.rs` for why `eligible` is not `enabled`.
+    ///
+    /// # Why 356 and not Step 28's 355
+    ///
+    /// Step 30 widened `dump_tables.pl`'s `TABLE_META` to match ExifTool.pm's
+    /// own `%specialTags` (ExifTool.pm:1230) -- the canonical list ExifTool
+    /// uses to keep table-level directives out of its own tag lookup
+    /// (ExifTool.pm:5791, 9017, 9130, 9269). The old hand-picked subset
+    /// omitted `PRINT_CONV`, so the three `H264` tables that declare a
+    /// table-wide default `PrintConv` leaked the literal key `PRINT_CONV`
+    /// into `tags`, where `parse_index` could not read it as an index and
+    /// charged each table a `tag_bad_index` refusal (`codegen.py`, the
+    /// `GATE_A_DISQUALIFYING` tuple).
+    ///
+    /// `H264::Camera1` and `H264::Camera2` are still refused on their own
+    /// merits (`enum_int_partial`, `expr_unsupported`). `H264::Shutter`'s
+    /// ONLY blocker was that phantom, so removing it moved exactly one table
+    /// refused -> eligible. `ALL_BINARY_TABLES.len()` is unchanged at 613:
+    /// nothing was newly ADMITTED as a table, which is what separates this
+    /// from the `Sony::sonyLensTypes` / `Shortcuts.pm` admission bugs Step 30
+    /// also fixed.
+    ///
+    /// The move is real, checked against `%Image::ExifTool::H264::Shutter` in
+    /// the pinned tree. It declares one tag, `1.1 ExposureTime`, and every
+    /// part of it is transcribed or explicitly refused: `Mask => 0x7fff` is
+    /// modeled, `PrintConv => PrintExposureTime` is modeled as
+    /// `ExprId::ImageExifToolExifPrintExposureTimeVal6037F3`, and `RawConv`
+    /// and `ValueConv` are refused through `Omitted` -- which
+    /// `GATE_A_DISQUALIFYING` deliberately does not count, being the design's
+    /// own explicit-refusal flags.
+    ///
+    /// The table-level `PRINT_CONV` this now drops is NOT a silent conversion
+    /// loss here. ExifTool applies it only to a tag that declares no
+    /// `PrintConv` of its own (ExifTool.pm:3541) and to auto-generated
+    /// Unknown tags (ExifTool.pm:9195), which the generator skips anyway.
+    /// Five tables in the pinned tree declare one -- `H264::Camera1`,
+    /// `H264::Camera2`, `H264::Shutter`, `Nikon::Main`, `PrintIM::Main` --
+    /// and of those, the two non-H264 are not `ProcessBinaryData` tables so
+    /// are never emitted, while all three H264 tables have zero tags lacking
+    /// their own `PrintConv`. Blast radius at 13.59 is empty. If a future
+    /// release adds a bare tag to such a table, `codegen.py` will emit
+    /// `PrintConv::None` where ExifTool prints a string and nothing will
+    /// count it -- teach `gen_table` to inherit `meta["PRINT_CONV"]`, or to
+    /// refuse the table, before that happens.
+    ///
+    /// The widening stayed surgical rather than "drop anything ALL-CAPS":
+    /// `Parrot::V2` still trips `tag_bad_index`, because Parrot.pm spells its
+    /// table-level key `Groups` rather than `GROUPS`, and `%specialTags` does
+    /// not list it -- so ExifTool does not special-case it either.
     #[test]
     fn every_table_lands_in_exactly_one_enablement_class() {
         let (mut enabled, mut eligible, mut refused) = (0usize, 0usize, 0usize);
@@ -318,8 +366,12 @@ mod tests {
             "every table must land in exactly one class"
         );
         assert_eq!(ALL_BINARY_TABLES.len(), 613, "tables emitted");
-        assert_eq!(eligible + enabled, 355, "tables passing gate A");
-        assert_eq!(refused, 258, "tables gate A blocks");
+        assert_eq!(
+            eligible + enabled,
+            356,
+            "tables passing gate A (355 at Step 28, +1 for H264::Shutter -- see above)"
+        );
+        assert_eq!(refused, 257, "tables gate A blocks");
     }
 
     /// A refused table must say WHY, in the generator's own counter names.
