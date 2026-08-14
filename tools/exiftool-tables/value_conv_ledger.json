@@ -4,12 +4,12 @@
   "oracle_ledger": "tools/exiftool-tables/expr_oracle_ledger.json",
   "schema": 1,
   "value_conv": {
-    "compiled": 0,
-    "refused": 1251,
+    "compiled": 831,
+    "refused": 420,
     "refused_by_reason": {
       "input_domain": 10,
       "nonexpr": 57,
-      "oracle": 839,
+      "oracle": 8,
       "shape": 345
     },
     "top_refused_expressions": [
