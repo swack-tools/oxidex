@@ -333,16 +333,26 @@ mod tests {
 
     #[test]
     fn test_cloned_unreliable_yaml_descriptor_remains_strict() {
-        let descriptor = crate::tag_db::tag_registry::get_tag_descriptor("PNG:ImageWidth")
+        // `PNG:ImageWidth` used to be this test's example, back when the
+        // registry carried no real `type` data for it (the old sync_tags
+        // baseline: 1.1% of tags typed) and `get_tag_descriptor` fell back to
+        // `ValueType::String` by default. As of Step 30's dump_tables.pl-
+        // sourced registry, `PNG:ImageWidth` carries its real declared type
+        // (`int32u`) reliably, so it no longer demonstrates an *unreliable*
+        // descriptor. `PNG:BitDepth` (PNG.pm's ImageHeader table) still has
+        // no parseable `type` in the generated YAML and is not in the manual
+        // `TAG_REGISTRY`, so it still falls back to the unreliable
+        // `ValueType::String` default this test exists to pin.
+        let descriptor = crate::tag_db::tag_registry::get_tag_descriptor("PNG:BitDepth")
             .expect("expected YAML-backed PNG descriptor")
             .clone();
-        let value = TagValue::new_integer(640);
+        let value = TagValue::new_integer(8);
 
         let result = validate_tag_value(&descriptor, &value);
 
         assert!(result.is_err());
         if let Err(ExifToolError::InvalidTagValue { tag_name, reason }) = result {
-            assert_eq!(tag_name, "PNG:ImageWidth");
+            assert_eq!(tag_name, "PNG:BitDepth");
             assert!(reason.contains("expected String"));
             assert!(reason.contains("got Integer"));
         } else {

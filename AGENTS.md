@@ -39,13 +39,16 @@ layout — `FORMAT`, `FIRST_ENTRY`, per-field `Format`, `Mask`, `SubDirectory`
 edges, and enum `PrintConv` maps. Re-deriving by hand a binary record ExifTool
 already declares is the expensive way to close a gap. See `docs/TRANSCRIPTION.md`.
 
-**Tag knowledge is not tag coverage.** `src/tag_sync` ingests `exiftool -f -listx`,
-which is the *documentation* view: it carries `count encoding id index lang name
-type version writable` and nothing else. It has no `SubDirectory`, `FORMAT`,
-`FIRST_ENTRY`, `ValueConv`, `Condition` or `DataMember` — that is, no layout. So
-it can tell you a tag exists but never how to read one, and a rising
-`oxidex-tags-*` count is **not** evidence of rising extraction coverage. Only a
-comparison run measures coverage.
+**Tag knowledge is not tag coverage.** The `oxidex-tags-*` YAML registries are
+generated from `dump_tables.pl`'s dump of ExifTool's real Perl tag tables
+(`src/tag_sync::tag_records_from_dump_json`, run via `cargo run --release --bin
+gen_tag_registry` and wired into `tools/exiftool-tables/regen.sh`), not from
+`exiftool -f -listx`'s *documentation* view. A rising `oxidex-tags-*` count is
+still **not** evidence of rising extraction coverage — the registry says a tag
+exists, not that any parser reads it — so a comparison run is what actually
+measures coverage. (`-listx` and `src/tag_sync::parse_listx` remain, kept
+strictly as the independent oracle `tests/tag_registry_invariants.rs` grades
+the registry against; they no longer generate it.)
 
 **Measure the gap by kind before costing the work.**
 `python3 tools/exiftool-tables/conformance.py <corpus> --exiftool-dir <src> --oxidex <bin>`

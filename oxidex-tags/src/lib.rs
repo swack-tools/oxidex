@@ -40,28 +40,6 @@ pub use oxidex_tags_specialty as specialty;
 pub use oxidex_tags_core::types::*;
 pub use oxidex_tags_shared::{Tag, TagDatabase, TagTable};
 
-// Backward compatibility: stub implementation for old generated tag registry
-// The new YAML-based system doesn't use this, but old code may reference it
-use std::collections::HashMap;
-use std::sync::LazyLock;
-
-/// Stub for backward compatibility with old generated tag system
-/// In the new YAML-based system, this is empty as tags are accessed differently
-pub static GENERATED_TAG_REGISTRY: LazyLock<HashMap<String, TagDescriptor>> =
-    LazyLock::new(HashMap::new);
-
-/// Get the count of tags in the generated registry
-/// Returns 0 in the new YAML-based system (tags are counted differently)
-pub fn generated_tag_count() -> usize {
-    0
-}
-
-/// Get a tag descriptor by name from the generated registry
-/// Returns None in the new YAML-based system (use get_tag_table instead)
-pub fn get_generated_tag_descriptor(_name: &str) -> Option<&'static TagDescriptor> {
-    None
-}
-
 /// Get a tag table from any domain by name.
 ///
 /// This function performs a unified search across all domain-specific tag databases.

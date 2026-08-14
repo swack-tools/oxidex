@@ -1,26 +1,34 @@
-//! ExifTool tag database sync: parses `exiftool -f -listx` XML output into
-//! `TagRecord`s and regenerates the `oxidex-tags-*` YAML tag databases.
+//! ExifTool tag database sync.
 //!
-//! # `-listx` is the documentation view, not the reader's view
-//!
-//! `-listx` emits exactly these per-tag attributes: `count`, `encoding`, `id`,
-//! `index`, `lang`, `name`, `type`, `version`, `writable`. It carries no
+//! As of Step 30 (see `AGENTS.md`, "Tag knowledge is not tag coverage"), the
+//! `oxidex-tags-*` YAML databases are generated from `dump_tables.pl`'s dump
+//! of ExifTool's *real* Perl symbol table -- see
+//! [`tag_records_from_dump_json`] -- not from `exiftool -f -listx`. `-listx`
+//! is the documentation view: it emits exactly `count`, `encoding`, `id`,
+//! `index`, `lang`, `name`, `type`, `version`, `writable` per tag, with no
 //! `SubDirectory`/`TagTable` edges, no `FORMAT`/`FIRST_ENTRY`, no per-field
-//! `Format`, `Mask`, `DataMember`, `Condition`, `ValueConv` or `RawConv`.
+//! `Format`, `Mask`, `DataMember`, `Condition`, `ValueConv` or `RawConv`. That
+//! is the byte layout, so it can tell you a tag *exists* but never how to
+//! *read* it -- which is why a growing `-listx`-derived count never implied
+//! growing extraction coverage, and why the generator no longer uses it.
 //!
-//! Those omissions are the byte layout, so this module can tell you a tag
-//! *exists* but never how to *read* it. That asymmetry is why OxiDex's tag
-//! coverage has historically trailed its tag knowledge, and why a growing
-//! count here does not imply a growing number of extracted tags.
+//! [`parse_listx`] and its siblings remain: `tests/tag_registry_invariants.rs`
+//! runs them against a live pinned `exiftool -f -listx` as an *independent*
+//! oracle, to catch PrintConv display values that leaked into the registry as
+//! tags. That role is deliberately kept separate from generation -- an oracle
+//! that shares code with the thing it grades would only catch its own bugs
+//! consistently, never actually rule them out.
 //!
-//! When layout is what you need, use [`crate::exiftool_tables`], which reads
-//! ExifTool's real Perl structures out of the interpreter's symbol table
-//! instead of its generated documentation.
+//! When layout is what you need at read time (not registry generation), use
+//! [`crate::exiftool_tables`], which reads the same real Perl structures
+//! through a narrower, per-format lens.
 
 use anyhow::{Context, Result};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 /// A single ExifTool tag as reported by `exiftool -f -listx`.
 #[derive(Debug, Clone, PartialEq)]
@@ -240,6 +248,465 @@ pub fn parse_domain_yaml(yaml: &str) -> Vec<TagRecord> {
     out
 }
 
+static SPACE_LOWER_UPPER_DIGIT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"([a-z])([A-Z\d])").expect("static regex"));
+static SPACE_ACRONYM_WORD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"([A-Z])([A-Z][a-z])").expect("static regex"));
+static SPACE_DIGIT_UPPER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d)([A-Z]\S)").expect("static regex"));
+
+/// Replicates `ExifTool.pm::MakeDescription()` (ExifTool.pm:6465-6483), the
+/// algorithm `-listx` uses to synthesize a `<desc>` for every tag whose source
+/// table declares no explicit `Description`. `dump_tables.pl` only ever
+/// carries an *explicit* `Description` key — it reads the table literally, it
+/// does not run ExifTool's display layer — so a tag relying on the
+/// synthesized form needs it computed here too, or its `description` field
+/// goes from a real value (the old `-listx`-sourced pipeline) to nothing (a
+/// naive read of the dump). Verified against a real exiftool 13.59 `-f
+/// -listx` dump: every one of its 33,698 tags carries a `<desc lang='en'>`,
+/// so `description` in the generated registry is likewise never `None`.
+///
+/// The TagID-suffix branch of the Perl (`s/ (0x[\da-f]+)$//i ... $desc .= '
+/// ' . $tagID`) is for ExifTool's synthetic tags whose *Name* is itself a hex
+/// ID; every name here is a real tag name, so that branch never applies and
+/// is not reproduced.
+fn make_description(tag_name: &str) -> String {
+    let mut desc = String::new();
+    let mut chars = tag_name.chars();
+    if let Some(first) = chars.next() {
+        desc.extend(first.to_uppercase());
+        desc.push_str(chars.as_str());
+    }
+    let desc: String = desc
+        .chars()
+        .map(|c| if c == '_' { ' ' } else { c })
+        .collect();
+    let desc = SPACE_LOWER_UPPER_DIGIT.replace_all(&desc, "$1 $2");
+    let desc = SPACE_ACRONYM_WORD.replace_all(&desc, "$1 $2");
+    let desc = SPACE_DIGIT_UPPER.replace_all(&desc, "$1 $2");
+    desc.into_owned()
+}
+
+/// Strips a trailing ExifTool count suffix (`string[6]`, `binary[16]`) down to
+/// the bare format name (`string`, `binary`). `-listx` reports element count
+/// through its own separate `count=` attribute, which `TagRecord` has no slot
+/// for (matching `parse_listx`, which never reads `count` either) — so the
+/// `type` field carries only the format name on both generation paths.
+fn strip_format_count(format: &str) -> &str {
+    format.split('[').next().unwrap_or(format).trim()
+}
+
+/// Resolves ExifTool's `WRITABLE` inheritance for one tag: the tag's own
+/// `Writable` wins if present; failing that, the table's `WRITABLE` applies.
+/// A resolved value of `"0"`/empty/`"false"` means not writable; anything
+/// else (a type name, or the boolean toggle `"1"`) means writable. Verified
+/// against real dumps: `Canon::CameraInfo1DX`'s `FirmwareVersion` (index 640)
+/// declares `Writable => 0` and reads back `writable='false'` from `-listx`
+/// despite `Format => 'string[6]'` being present, and `QuickTime::Keys`
+/// entries with no per-tag `Writable` at all read `writable='true'` because
+/// the table declares `WRITABLE => 1`.
+fn resolve_writable(entry: &serde_json::Value, table_writable: Option<&str>) -> bool {
+    let own = entry.get("Writable").and_then(|v| v.as_str());
+    let effective = own.or(table_writable);
+    !matches!(effective, None | Some("0" | "" | "false"))
+}
+
+/// Resolves the `type` `-listx` would report for one tag: a per-tag
+/// `Writable` that names a real format (not the boolean toggle `"0"`/`"1"`)
+/// wins; failing that, a binary `Format`; failing that, ExifTool's own
+/// "unknown/composite" spelling `?` — every one of a real dump's 33,698 tags
+/// carries a `type` attribute, `?` included, so this never returns `None`.
+/// A declared numeric type is only safe to publish when the tag is
+/// single-valued. `Tag`/`TagRecord` has no `Count` field (matching `-listx`,
+/// which reports element count through its own separate `count=` attribute
+/// that `parse_listx` never captured either), so there is nowhere to record
+/// "int8u, four of them" — and downstream, `src/cli/value_parser.rs` reads
+/// only the type name: a `ValueType::Integer`/`Float`/`Rational` tag goes
+/// through `parse_integer`/`parse_float`/`parse_rational`, all of which parse
+/// a single scalar and reject `"3 3 3 3"` with "Not an integer".
+///
+/// Before this generator, essentially no tag had a `type` at all (the old
+/// registry's own baseline: 1.1% typed), so that branch was never reached for
+/// these tags — a declared-but-unreliable type sent every one of them through
+/// the `None | Some(ValueType::String)` fallback instead, which passes the
+/// raw multi-value string down to the writer verbatim and works. Publishing
+/// `int8u` for DNG's `DNGVersion` (Exif.pm 0xc612, `Count => 4`) is more
+/// accurate than omitting it, but it is also a regression the CLI cannot
+/// act on correctly yet — confirmed by hand: `oxidex -EXIF:DNGVersion="3 3 3
+/// 3"` fails with "Not an integer" once the type is trusted. Per AGENTS.md,
+/// "never approximate a conversion" — a type the write path cannot honor is
+/// worse than no type, so a numeric type is only published when `Count` is
+/// absent or `"1"` -- with one more tell an absent `Count` does not cover.
+/// ExifTool's `XPTitle`/`XPComment`/`XPKeywords`/`XPSubject` family (Exif.pm
+/// 0x9c9b-0x9c9e) declares `Format => 'undef'` (an unbounded binary blob)
+/// alongside `Writable => 'int8u'` (the *per-element* type for writing it as
+/// a byte sequence) and no `Count` at all -- ExifTool only states `Count` for
+/// a *fixed*-length array, and these are variable-length UCS2 text stored as
+/// bytes. Confirmed by hand: with the type trusted, `oxidex -XPTitle=...`
+/// mis-parses the sample as a lone scalar the same way an untrusted `Count`
+/// array does. So `Format` present and naming an unbounded/binary layout
+/// while `Writable` names a scalar numeric per-element type is exactly as
+/// unreliable as `Count` > 1, even though `Count` itself is silent.
+fn is_scalar_count(entry: &serde_json::Value) -> bool {
+    let count_says_scalar = match entry.get("Count").and_then(|v| v.as_str()) {
+        None => true,
+        Some(count) => count == "1",
+    };
+    if !count_says_scalar {
+        return false;
+    }
+    let format_says_unbounded_blob = entry
+        .get("Format")
+        .and_then(|v| v.as_str())
+        .map(strip_format_count)
+        .is_some_and(|f| matches!(f.to_ascii_lowercase().as_str(), "undef" | "binary"));
+    !format_says_unbounded_blob
+}
+
+/// Whether `resolve_type`'s candidate type string is one whose value_parser.rs
+/// consumer (`ValueType::Integer`/`Float`/`Rational`) parses a single scalar.
+/// `String`/`Binary`/`DateTime` pass the raw argument through unsplit, so a
+/// multi-value count never trips them.
+fn is_scalar_only_type_family(type_name: &str) -> bool {
+    let normalized = type_name.to_ascii_lowercase();
+    normalized.starts_with("int")
+        || normalized.starts_with("rational")
+        || matches!(normalized.as_str(), "float" | "double" | "real")
+}
+
+fn resolve_type(entry: &serde_json::Value) -> Option<String> {
+    let candidate = if let Some(w) = entry.get("Writable").and_then(|v| v.as_str()) {
+        (!matches!(w, "0" | "1" | "" | "false" | "true")).then(|| strip_format_count(w).to_string())
+    } else {
+        None
+    };
+    let candidate = candidate.or_else(|| {
+        entry
+            .get("Format")
+            .and_then(|v| v.as_str())
+            .map(strip_format_count)
+            .filter(|f| !f.is_empty())
+            .map(str::to_string)
+    });
+
+    match candidate {
+        Some(type_name) if is_scalar_only_type_family(&type_name) && !is_scalar_count(entry) => {
+            Some("?".to_string())
+        }
+        Some(type_name) => Some(type_name),
+        None => Some("?".to_string()),
+    }
+}
+
+/// Expands ExifTool's array-of-conditional-variants tag shape
+/// (`dump_tag_entry`'s `_variants`, e.g. Canon `CameraInfo`'s 33
+/// model-dependent layouts) into one entry per variant. `-listx` does the
+/// same thing at the XML level — Canon's `SerialNumber` (id 12) appears as
+/// three separate `<tag id='12' index='0/1/2'>` elements — and `parse_listx`
+/// already turns each into its own `TagRecord` with no `index` field, so this
+/// matches that shape rather than introducing one.
+fn expand_variants(tag_val: &serde_json::Value) -> Vec<&serde_json::Value> {
+    match tag_val.get("_variants").and_then(|v| v.as_array()) {
+        Some(variants) => variants.iter().collect(),
+        None => vec![tag_val],
+    }
+}
+
+fn entry_name(entry: &serde_json::Value) -> Option<String> {
+    entry
+        .get("Name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// The same tag-name shape `tests/tag_registry_invariants.rs` checks the
+/// generated registry against
+/// (`registry_tag_names_are_shaped_like_exiftool_tag_names`): starts
+/// alphanumeric or `_`, then only alphanumeric, `_` or `-`.
+fn looks_like_tag_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphanumeric() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Recognizes a plain PrintConv/lookup hash that `dump_tables.pl`'s admission
+/// heuristic let through as if it were a tag table.
+///
+/// That heuristic (`dump_tables.pl`'s `dump_module`) admits a hash that
+/// either declares table-level metadata (`GROUPS`, `WRITABLE`, ...) or has at
+/// least one struct-valued entry. An `OTHER => sub {...}` fallback callback —
+/// a normal idiom for "how to print an id with no listed name" inside a
+/// lookup hash — is itself struct-valued, so a hash that is otherwise
+/// entirely `id => 'Display Name'` pairs (`Sony::sonyLensTypes`,
+/// `Nikon::nikonLensIDs`, `Exif::flash`, ...) passes the identical gate a
+/// real tag table does, and its display strings would otherwise land in the
+/// registry as fake tags — the exact bug class
+/// `registry_tag_names_are_shaped_like_exiftool_tag_names` exists to catch,
+/// coming from a different source than the one that test was originally
+/// written against (`-listx` nesting PrintConv `<key>` rows as if they were
+/// `<tag>` rows).
+///
+/// Verified against a real ExifTool 13.59 dump: exactly seven module-wide
+/// tables have this shape, contributing 1,758 non-tag rows, all lens/flash/
+/// subfile-type lookups; every genuine table with no metadata in the same
+/// dump is 100% tag-name-shaped. Applying the same shape rule here, keyed
+/// on the absence of table metadata, fixes the leak at the source rather
+/// than hand-listing table names a future ExifTool release could add to.
+fn is_probably_a_value_lookup_table(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    names: &[String],
+) -> bool {
+    if meta.is_some_and(|m| !m.is_empty()) || names.is_empty() {
+        return false;
+    }
+    let unshaped = names.iter().filter(|n| !looks_like_tag_name(n)).count();
+    (unshaped as f64 / names.len() as f64) > 0.5
+}
+
+fn entry_description(entry: &serde_json::Value, tag_name: &str) -> String {
+    entry
+        .get("Description")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| make_description(tag_name))
+}
+
+/// Parses `dump_tables.pl`'s JSON dump — ExifTool's real Perl tag tables, read
+/// out of the live symbol table rather than through `-listx`'s documentation
+/// filter — into the same flat `TagRecord` shape [`parse_listx`] produces.
+/// This is the primary source [`generate_domain_yaml`] is fed from as of Step
+/// 30 (`AGENTS.md`, "Tag knowledge is not tag coverage").
+///
+/// Three things fall out of reading the real tables instead of `-listx`:
+///
+/// - **No carry-forward.** `-listx` omits every tag with no printable value,
+///   which is most of the `SubDirectory` pointers oxidex needs to find
+///   anything (`ExifOffset` 0x8769, `GPSInfo` 0x8825, `InteropOffset`
+///   0xA005). Those are ordinary entries here, so the 1,029-row
+///   carry-forward `sync_tags` used to preserve them (and the corrupt legacy
+///   rows that carry-forward could never distinguish from genuine ones) is
+///   gone outright rather than ported.
+/// - **Composite tags are merged by hand.** ExifTool assembles the single
+///   `Image::ExifTool::Composite` package `-listx` reports from every
+///   module's own `%Composite` sub-table at `require`-time
+///   (`AddCompositeTags`); `dump_tables.pl` walks `.pm` files directly and
+///   never observes that merge. This reconstructs it: every module's
+///   `Composite` table folds into one `"Composite"` table, with ids
+///   disambiguated by module prefix exactly as `-listx` does (`Exif-LensID`
+///   vs `Exif-LensID-2`) — keyed by the tag's *source* hash key, not `Name`;
+///   `Exif::Composite` defines both `LensID` and `LensID-2` with `Name =>
+///   'LensID'` on each, so the key is what keeps them distinct.
+/// - **`WRITABLE`/type inheritance and missing descriptions are resolved by
+///   hand** ([`resolve_writable`], [`resolve_type`], [`make_description`]),
+///   since `-listx` reports those fully resolved and the raw dump does not.
+pub fn tag_records_from_dump_json(json: &str) -> Result<Vec<TagRecord>> {
+    let doc: serde_json::Value =
+        serde_json::from_str(json).context("failed to parse dump_tables.pl JSON")?;
+    let modules = doc
+        .get("modules")
+        .and_then(|v| v.as_object())
+        .context("dump JSON missing a 'modules' object")?;
+
+    let mut records = Vec::new();
+
+    for (module_name, module_val) in modules {
+        // `Shortcuts.pm` defines named aliases to OTHER tags
+        // (`CommonIFD0 => ['IFD0:Make', 'IFD0:Model', ...]`), not tags of its
+        // own -- ExifTool's own `-listx` excludes it entirely (verified: zero
+        // `<table name='Shortcuts::...'>` in a real dump). Its list values
+        // are plain strings, so `dump_tag_entry`'s `_variants`/shorthand
+        // handling turns each aliased reference into a fake tag whose name is
+        // a group-qualified string like `"IFD0:Make"` -- caught by
+        // `tests/tag_registry_invariants.rs::registry_tag_names_are_shaped_like_exiftool_tag_names`,
+        // since `:` is not a valid tag-name character.
+        if module_name == "Shortcuts" {
+            continue;
+        }
+
+        let Some(tables) = module_val.get("tables").and_then(|v| v.as_object()) else {
+            continue;
+        };
+
+        for (table_symbol, table_val) in tables {
+            let Some(tags) = table_val.get("tags").and_then(|v| v.as_object()) else {
+                continue;
+            };
+
+            if table_symbol == "Composite" {
+                for (tag_key, tag_val) in tags {
+                    for entry in expand_variants(tag_val) {
+                        let Some(name) = entry_name(entry) else {
+                            continue;
+                        };
+                        records.push(TagRecord {
+                            table: "Composite".to_string(),
+                            id: format!("{module_name}-{tag_key}"),
+                            name: name.clone(),
+                            writable: resolve_writable(entry, None),
+                            type_name: resolve_type(entry),
+                            description: Some(entry_description(entry, &name)),
+                        });
+                    }
+                }
+                continue;
+            }
+
+            let full_name = table_val
+                .get("full_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let table_name = full_name
+                .strip_prefix("Image::ExifTool::")
+                .unwrap_or(full_name)
+                .to_string();
+            if table_name.is_empty() {
+                continue;
+            }
+
+            let table_meta = table_val.get("meta").and_then(|m| m.as_object());
+            let table_writable = table_meta
+                .and_then(|m| m.get("WRITABLE"))
+                .and_then(|w| w.as_str());
+
+            // Expand variants up front so the whole table can be classified
+            // (see `is_probably_a_value_lookup_table`) before any of its rows
+            // are committed -- a table found to be a lookup hash in disguise
+            // is skipped in full, not row-by-row.
+            let candidates: Vec<(&String, &serde_json::Value)> = tags
+                .iter()
+                .flat_map(|(tag_key, tag_val)| {
+                    expand_variants(tag_val)
+                        .into_iter()
+                        .map(move |entry| (tag_key, entry))
+                })
+                .collect();
+            let names: Vec<String> = candidates
+                .iter()
+                .filter_map(|(_, entry)| entry_name(entry))
+                .collect();
+            if is_probably_a_value_lookup_table(table_meta, &names) {
+                continue;
+            }
+
+            // ExifTool's own conditional dispatch can bind ONE id to several
+            // DIFFERENT names, tried in declaration order until a Condition
+            // matches -- and `generate_domain_yaml` re-sorts every table's
+            // tags alphabetically for diffable output, which would otherwise
+            // let `TAG_ID_TO_NAME_INDEX`'s first-wins reverse index
+            // (`src/tag_db/mod.rs`) pick whichever name sorts first
+            // alphabetically, not whichever ExifTool would actually apply.
+            // Two real, opposite-shaped cases:
+            //
+            // - Exif.pm 0x117: mostly `StripByteCounts` (its Condition only
+            //   excludes three specific formats), `JpgFromRawLength` only as
+            //   a DNG SubIFD2 special case. One variant is the practical
+            //   default; the id should resolve to its name.
+            // - Exif.pm 0x202 declares NINE variants (`ThumbnailLength`,
+            //   `PreviewImageLength`, `JpgFromRawLength`, `OtherImageLength`)
+            //   each scoped to a specific `DIR_NAME`/`TIFF_TYPE`, with no
+            //   variant that covers the ordinary case. And 0x927c is
+            //   `\@Image::ExifTool::MakerNotes::Main`, a *routing table* of
+            //   ~94 manufacturer-specific SubDirectory targets
+            //   (`MakerNoteApple`, `MakerNoteCanon`, ...) that `dump_tag_entry`
+            //   cannot tell apart from an ordinary conditional-format list --
+            //   both are just a Perl ARRAY ref to it. Neither id has a
+            //   default; which name is right depends on context (`Make`,
+            //   `DIR_NAME`) this static, context-free index does not have.
+            //   Picking any one of them mislabels every file it is wrong for
+            //   -- the exact "plausible but wrong is worse than absent" case
+            //   AGENTS.md warns about, worse than the honest hex-fallback key
+            //   this used to leave in place.
+            //
+            // The reliable structural difference: ExifTool's own `WriteGroup`
+            // marks a variant as scoped to one specific IFD/context (Exif.pm
+            // 0x202's four names all declare one; 0x927c's ~94 MakerNote
+            // routes all declare one). A variant that leaves `WriteGroup`
+            // unset inherits the table's own default and is the
+            // general-purpose case -- true of 0x117's `StripByteCounts`, and
+            // of every truly single-name tag (format-only variants, like
+            // Canon's `SerialNumber`, never scope `WriteGroup` per variant).
+            // So: with more than one distinct name for an id, only the
+            // first-declared `WriteGroup`-less variant's name may claim the
+            // plain id; if every variant scopes a `WriteGroup`, none does and
+            // the id stays a hex fallback for lookups the way it always
+            // reached this table. `dump_tables.pl` does not carry `WriteGroup`
+            // as data (it is not in its curated `TAG_KEYS`), only records its
+            // presence in `_extra_keys`, which is enough to ask "is this
+            // variant scoped" without needing the scope's actual value.
+            fn has_write_group(entry: &serde_json::Value) -> bool {
+                entry
+                    .get("_extra_keys")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|keys| keys.iter().any(|k| k.as_str() == Some("WriteGroup")))
+            }
+
+            let mut winner_name_for_id: HashMap<&str, Option<&str>> = HashMap::new();
+            for (tag_key, entry) in &candidates {
+                let Some(name) = entry.get("Name").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                winner_name_for_id
+                    .entry(tag_key.as_str())
+                    .and_modify(|winner| {
+                        // A later variant can only become the recorded
+                        // winner if none has been found yet and this one is
+                        // unscoped; an already-found winner (from an earlier
+                        // variant) is never displaced.
+                        if winner.is_none() && !has_write_group(entry) {
+                            *winner = Some(name);
+                        }
+                    })
+                    .or_insert_with(|| (!has_write_group(entry)).then_some(name));
+            }
+            // A single distinct name always wins outright, `WriteGroup`
+            // or not -- scoping which IFD an already-unambiguous name
+            // writes to is not the same question as which of several names
+            // reads an id.
+            for (tag_key, entry) in &candidates {
+                if let Some(name) = entry.get("Name").and_then(|v| v.as_str())
+                    && let Some(winner) = winner_name_for_id.get_mut(tag_key.as_str())
+                    && winner.is_none_or(|w| w != name)
+                    && candidates
+                        .iter()
+                        .filter(|(k, _)| k.as_str() == tag_key.as_str())
+                        .filter_map(|(_, e)| e.get("Name").and_then(|v| v.as_str()))
+                        .all(|n| n == name)
+                {
+                    *winner = Some(name);
+                }
+            }
+
+            for (tag_key, entry) in candidates {
+                let Some(name) = entry_name(entry) else {
+                    continue;
+                };
+                let id = if winner_name_for_id.get(tag_key.as_str()).copied().flatten()
+                    == Some(name.as_str())
+                {
+                    tag_key.clone()
+                } else {
+                    format!("{tag_key}#{name}")
+                };
+                records.push(TagRecord {
+                    table: table_name.clone(),
+                    id,
+                    name: name.clone(),
+                    writable: resolve_writable(entry, table_writable),
+                    type_name: resolve_type(entry),
+                    description: Some(entry_description(entry, &name)),
+                });
+            }
+        }
+    }
+
+    Ok(records)
+}
+
 /// Parses a `-listx` id, which is decimal (`41986`) for numeric tables and
 /// hex (`0x829a`) elsewhere. Returns `None` for the shapes that are neither —
 /// FlashPix's `0016,0042` and NikonCustom's bit-positions like `1.1`.
@@ -355,7 +822,28 @@ pub fn get_domain_for_table(table_name: &str) -> &'static str {
 pub const DOMAINS: [&str; 6] = ["core", "camera", "media", "image", "document", "specialty"];
 
 fn escape_yaml_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    // Beyond backslash/quote, dump_tables.pl-sourced ids can carry real
+    // control bytes -- FlashPix's Main table is keyed by raw OLE compound-file
+    // stream names like `\x01CompObj` (a literal 0x01 byte), which `-listx`
+    // never emitted since it worked from resolved text, not raw hash keys.
+    // YAML's double-quoted scalar forbids literal control characters
+    // (`serde_yaml` refuses them with "control characters are not allowed"),
+    // so anything below U+0020 other than the ones with a named escape needs
+    // `\xHH` — the same escape a `\\`/`\"` pair already relies on being valid
+    // inside a double-quoted scalar.
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Renders the YAML tag database for one `oxidex-tags-*` domain crate from

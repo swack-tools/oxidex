@@ -3,11 +3,10 @@
 //! This module provides a static registry of 500+ metadata tags covering EXIF (300+),
 //! GPS (30+), XMP (100+), IPTC (50+), PDF (10+), and QuickTime (10+) formats.
 //! This is a manual implementation. Automated tag generation now lives in
-//! `src/tag_sync/` and `src/bin/sync_tags.rs` (run explicitly via
-//! `cargo run --bin sync_tags`, not as part of the build).
+//! `src/tag_sync/` and `src/bin/gen_tag_registry.rs` (run explicitly via
+//! `cargo run --bin gen_tag_registry`, not as part of the build).
 
 use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
-use oxidex_tags::GENERATED_TAG_REGISTRY;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -593,6 +592,32 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             true,
             ValueType::DateTime,
             "Date and time when original image was captured".to_string(),
+            vec![
+                "2024:03:15 14:30:45".to_string(),
+                "2024:11:25 16:42:10".to_string(),
+            ],
+        ),
+    );
+
+    // Exif.pm 0x9004: `Writable => 'string'` on the wire, same as every EXIF
+    // date/time tag -- ExifTool has no distinct "date" wire type, so the
+    // dump-sourced YAML registry (`src/tag_sync`) reports it as `type:
+    // "string"`, which `parse_yaml_value_type` resolves to `ValueType::String`
+    // rather than `DateTime`. `DateTimeOriginal` above needs this exact same
+    // manual override for the identical reason; `CreateDate` just never had
+    // one, and previously got away with it only because the registry this
+    // replaced fabricated a literal `type: datetime` string that was never a
+    // real ExifTool value (see AGENTS.md, "Tag knowledge is not tag
+    // coverage" -- that generator's own type coverage baseline was 1.1%).
+    registry.insert(
+        "EXIF:CreateDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9004),
+            "EXIF:CreateDate".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::DateTime,
+            "Date and time when the file was created".to_string(),
             vec![
                 "2024:03:15 14:30:45".to_string(),
                 "2024:11:25 16:42:10".to_string(),
@@ -6971,11 +6996,6 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
         return Some(descriptor);
     }
 
-    // Try generated registry direct match
-    if let Some(descriptor) = GENERATED_TAG_REGISTRY.get(name) {
-        return Some(descriptor);
-    }
-
     // Try YAML registry direct match
     if let Some(entry) = YAML_TAG_ENTRIES.get(name) {
         return Some(&entry.descriptor);
@@ -7002,18 +7022,15 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
         return YAML_TAG_ENTRIES.get(name).map(|entry| &entry.descriptor);
     };
 
-    TAG_REGISTRY
-        .get(normalized_name.as_str())
-        .or_else(|| GENERATED_TAG_REGISTRY.get(normalized_name.as_str()))
-        .or_else(|| {
-            YAML_TAG_ENTRIES
-                .get(normalized_name.as_str())
-                .map(|entry| &entry.descriptor)
-        })
+    TAG_REGISTRY.get(normalized_name.as_str()).or_else(|| {
+        YAML_TAG_ENTRIES
+            .get(normalized_name.as_str())
+            .map(|entry| &entry.descriptor)
+    })
 }
 
 pub(crate) fn has_reliable_value_type(name: &str) -> bool {
-    if TAG_REGISTRY.contains_key(name) || GENERATED_TAG_REGISTRY.contains_key(name) {
+    if TAG_REGISTRY.contains_key(name) {
         return true;
     }
     if let Some(entry) = YAML_TAG_ENTRIES.get(name) {
@@ -7033,7 +7050,6 @@ pub(crate) fn has_reliable_value_type(name: &str) -> bool {
 
     normalized_name.is_some_and(|normalized_name| {
         TAG_REGISTRY.contains_key(normalized_name.as_str())
-            || GENERATED_TAG_REGISTRY.contains_key(normalized_name.as_str())
             || YAML_TAG_ENTRIES
                 .get(normalized_name.as_str())
                 .is_some_and(|entry| entry.reliable_value_type)
@@ -7099,9 +7115,6 @@ pub(crate) fn descriptor_has_reliable_value_type(descriptor: &TagDescriptor) -> 
     if TAG_REGISTRY
         .get(name)
         .is_some_and(|registered| std::ptr::eq(registered, descriptor))
-        || GENERATED_TAG_REGISTRY
-            .get(name)
-            .is_some_and(|registered| std::ptr::eq(registered, descriptor))
     {
         return true;
     }
@@ -7114,15 +7127,12 @@ pub(crate) fn descriptor_has_reliable_value_type(descriptor: &TagDescriptor) -> 
 
 /// Returns the total number of unique tags reachable through descriptor lookup.
 ///
-/// This mirrors `get_tag_descriptor()` by counting the manual registry,
-/// generated domain registry, and YAML-backed descriptors.
+/// This mirrors `get_tag_descriptor()` by counting the manual registry and
+/// YAML-backed descriptors.
 pub fn tag_count() -> usize {
-    let mut tags = HashSet::with_capacity(
-        TAG_REGISTRY.len() + GENERATED_TAG_REGISTRY.len() + YAML_TAG_ENTRIES.len(),
-    );
+    let mut tags = HashSet::with_capacity(TAG_REGISTRY.len() + YAML_TAG_ENTRIES.len());
 
     tags.extend(TAG_REGISTRY.keys().copied());
-    tags.extend(GENERATED_TAG_REGISTRY.keys().map(String::as_str));
     tags.extend(YAML_TAG_ENTRIES.keys().map(String::as_str));
 
     tags.len()

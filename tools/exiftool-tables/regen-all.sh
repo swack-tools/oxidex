@@ -4,10 +4,14 @@
 # generation tiers -- against the SAME pinned ExifTool source tree.
 #
 # Tier 1 (tools/exiftool-tables/regen.sh) produces binary_tables.rs, the
-# filetype tables, Composite definitions and FITS keywords. Tier 2 is
-# everything downstream of it that regen.sh never touched: the MakerNote
-# sub-directory tables (codegen_subdirs.py), the Nikon AF-point name grids
-# (dump_af_points.pl + codegen_af_points.py), and the six one-off
+# filetype tables, Composite definitions, FITS keywords, and (as of Step 30 --
+# see AGENTS.md, "Tag knowledge is not tag coverage") the six
+# oxidex-tags-*/src/*_tags.yaml registries, via `gen_tag_registry` reading the
+# same dump_tables.pl JSON tier 1 already produces -- one extraction pass, one
+# pin gate, not a second one running on its own schedule against `exiftool -f
+# -listx`. Tier 2 is everything downstream of regen.sh that it never touched:
+# the MakerNote sub-directory tables (codegen_subdirs.py), the Nikon AF-point
+# name grids (dump_af_points.pl + codegen_af_points.py), and the six one-off
 # `scripts/gen_*.pl` transcriptions (Leica lens types, Canon custom
 # functions, InfiRay/Qualcomm APPn tables, Samsung and Olympus lookups).
 #

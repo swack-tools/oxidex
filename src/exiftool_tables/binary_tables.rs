@@ -49562,11 +49562,7 @@ pub static H264_CAMERA1: BinaryTable = BinaryTable {
     offsets_sound_until: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[
-            ("enum_int_partial", 1),
-            ("expr_unsupported", 1),
-            ("tag_bad_index", 1),
-        ],
+        blocked_by: &[("enum_int_partial", 1), ("expr_unsupported", 1)],
     },
     fields: &[
         Field {
@@ -49685,7 +49681,7 @@ pub static H264_CAMERA2: BinaryTable = BinaryTable {
     offsets_sound_until: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("enum_int_partial", 1), ("tag_bad_index", 1)],
+        blocked_by: &[("enum_int_partial", 1)],
     },
     fields: &[Field {
         index: 1,
@@ -49823,9 +49819,7 @@ pub static H264_SHUTTER: BinaryTable = BinaryTable {
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
     priority: None,
-    gate_a: GateA {
-        blocked_by: &[("tag_bad_index", 1)],
-    },
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1,
         sub: Some(1),

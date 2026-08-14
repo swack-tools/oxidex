@@ -81,11 +81,25 @@ unshift @INC, $EXIFTOOL_LIB;
 require Image::ExifTool;
 
 # Keys that describe the table itself rather than a tag within it.
+#
+# This started as a hand-picked subset of ExifTool.pm's own %specialTags (the
+# canonical list ExifTool itself uses to keep these out of its tag lookup --
+# see ExifTool.pm, "special tag names (not used for tag info)"). The
+# subset omitted PRINT_CONV (a table-wide default PrintConv expression),
+# TABLE_DESC (documentation blurb), TABLE_NAME, SHORT_NAME and
+# EXTRACT_UNKNOWN, so a table carrying one of those five leaked it into
+# `tags` as if it were a real tag entry -- Step 30's tag-registry generator
+# turned exactly this into fake tags (`H264::Camera1`'s `PRINT_CONV`,
+# `Microsoft::MP`'s `TABLE_DESC`) before this list was widened to match.
+# PARSE_PROC and DID_TAG_ID are not in ExifTool's %specialTags but are
+# genuine table-level flags used elsewhere in ExifTool.pm's dispatch, kept
+# from this script's original list.
 my %TABLE_META = map { $_ => 1 } qw(
     GROUPS WRITE_PROC CHECK_PROC PROCESS_PROC WRITABLE NOTES FORMAT
     FIRST_ENTRY DATAMEMBER VARS PRIORITY TAG_PREFIX WRITE_GROUP
     SET_GROUP1 PREFERRED IS_OFFSET IS_SUBDIR NAMESPACE PARSE_PROC
     AVOID LANG_INFO DID_TAG_ID PERMANENT INIT_TABLE
+    PRINT_CONV TABLE_DESC TABLE_NAME SHORT_NAME EXTRACT_UNKNOWN SRC_TABLE
 );
 
 # Per-tag keys worth carrying across.  Anything not listed is dropped rather

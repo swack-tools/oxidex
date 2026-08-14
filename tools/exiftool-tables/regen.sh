@@ -77,6 +77,17 @@ python3 "$HERE/codegen_fits.py" "$JSON" \
     -o "$ROOT/src/parsers/specialized/fits/tables.rs"
 
 echo
+echo ">> regenerating the oxidex-tags-* registry from the same JSON dump"
+# One extraction pass, one pin gate (Step 30 / AGENTS.md "Tag knowledge is not
+# tag coverage"): the six oxidex-tags-*/src/*_tags.yaml databases used to be
+# regenerated separately, from `exiftool -f -listx` (the documentation view,
+# via the retired `sync_tags` binary). They are generated from this same
+# dump_tables.pl JSON now, through `gen_tag_registry`
+# (`src/tag_sync::tag_records_from_dump_json`) -- same source, same pin, same
+# run.
+(cd "$ROOT" && cargo run --release --bin gen_tag_registry -- "$JSON")
+
+echo
 echo ">> formatting generated sources"
 # rustfmt is part of generation, not an afterthought: without it the committed
 # files (which do get formatted) differ from freshly generated ones on every

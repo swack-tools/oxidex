@@ -29,20 +29,31 @@ fn build_rs_no_longer_exists() {
     assert!(
         !build_rs.exists(),
         "build.rs should stay deleted — tag generation lives in src/tag_sync/ + \
-         src/bin/sync_tags.rs, run explicitly rather than as a build.rs side effect"
+         src/bin/gen_tag_registry.rs, run explicitly (via tools/exiftool-tables/regen.sh) \
+         rather than as a build.rs side effect"
     );
 }
 
+/// `sync_tags.rs` (which shelled out to `exiftool -f -listx`, the
+/// documentation view — see `AGENTS.md`, "Tag knowledge is not tag
+/// coverage") was retired in Step 30 of the tag-machinery overhaul.
+/// `gen_tag_registry.rs` replaced it, generating the same YAML shape from
+/// `dump_tables.pl`'s dump of ExifTool's real Perl tag tables instead.
 #[test]
-fn sync_tags_binary_targets_active_domain_crates() {
-    let sync_tags = repo_file("src/bin/sync_tags.rs");
-
+fn sync_tags_binary_was_retired_in_favor_of_gen_tag_registry() {
+    let sync_tags = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/sync_tags.rs");
     assert!(
-        sync_tags.contains(r#"format!("oxidex-tags-{domain}/src/{domain}_tags.yaml")"#),
-        "sync_tags.rs should regenerate YAML in the active oxidex-tags-* domain crates"
+        !sync_tags.exists(),
+        "sync_tags.rs should stay deleted — replaced by gen_tag_registry.rs"
+    );
+
+    let gen_tag_registry = repo_file("src/bin/gen_tag_registry.rs");
+    assert!(
+        gen_tag_registry.contains(r#"format!("oxidex-tags-{domain}/src/{domain}_tags.yaml")"#),
+        "gen_tag_registry.rs should regenerate YAML in the active oxidex-tags-* domain crates"
     );
     assert!(
-        !sync_tags.contains("exiftool-tags-{}/src/{}_tags.yaml"),
-        "sync_tags.rs should not target obsolete exiftool-tags-* crate paths"
+        !gen_tag_registry.contains("exiftool-tags-{}/src/{}_tags.yaml"),
+        "gen_tag_registry.rs should not target obsolete exiftool-tags-* crate paths"
     );
 }
