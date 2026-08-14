@@ -428,6 +428,7 @@ def measure_format(
     oracle_script: Path,
     format_name: str,
     corpus_dir: Path = CORPUS_DIR,
+    binary_note: Optional[str] = None,
 ) -> FormatCapability:
     """Ask the binary at the tip whether `format_name` is already covered.
 
@@ -475,6 +476,12 @@ def measure_format(
     )
     if missing:
         reason += f". Missing: {', '.join(missing[:10])}" + (", ..." if len(missing) > 10 else "")
+    if binary_note:
+        # A stale binary measured here reported `readable 2702 -> 0` once and
+        # `MISSING 11` for five already-routed formats once -- both looked
+        # exactly like real gaps. The note must ride in the verdict itself,
+        # not a side channel nobody prints.
+        reason += f". WARNING: {binary_note}"
 
     return FormatCapability(
         format_name=format_name,
@@ -611,7 +618,9 @@ def check_scope(
     binary = resolve_oxidex_binary(repo_root, override=binary_override)
 
     formats = [
-        measure_format(repo_root, binary.path, oracle_script, fmt, corpus_dir=corpus_dir)
+        measure_format(
+            repo_root, binary.path, oracle_script, fmt, corpus_dir=corpus_dir, binary_note=binary.note
+        )
         for fmt in scope.get("formats", [])
     ]
     tags = [

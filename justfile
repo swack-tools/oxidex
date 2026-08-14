@@ -1379,3 +1379,20 @@ check-staleness version="":
 
     echo
     echo "✅ check-staleness: fixtures, drift baselines and anchors all current for ExifTool $VERSION"
+
+# Fleet coordination tooling (tools/fleet/) -- see docs/FLEET.md.
+# Full gate on a branch: clones the hub, runs fmt/clippy/build/test/
+# verify-tables/ratchet, writes ~/gatelogs/gate-<tag>.{log,verdict,json}.
+gate branch tag:
+    tools/fleet/gate.sh {{branch}} {{tag}}
+
+# Fleet python suite (fleetlib CAS, claims, queue, verdict admissibility,
+# drift, intent/ledger). Needs a FRESH release binary for the ledger tests --
+# a stale one reports MISSING for formats the tip parses (measured: 11
+# phantom-missing SWF tags from a one-day-old binary).
+fleet-test: build-bin-release
+    cd tools/fleet && python3 -m unittest discover -s tests -v
+
+# Host health: toolchain id, oracle capability probe, corpus count, disk.
+fleet-doctor host:
+    python3 tools/fleet/doctor.py {{host}}
