@@ -3,7 +3,7 @@
 //!
 //! # Opt-in, one line per table (design D1)
 //!
-//! 592 of the 613 transcribed tables have never executed. Assuming they work
+//! 590 of the 613 transcribed tables have never executed. Assuming they work
 //! inverts the burden of proof, and this project's doctrine is that absence
 //! beats a confident wrong value (`AGENTS.md`, "never approximate a
 //! conversion"). So a table is OFF until it is listed here, and listing it is
@@ -43,6 +43,35 @@ use super::BinaryTable;
 /// Every entry carries the evidence that put it here, in the comment above
 /// it. An entry with no measurement behind it is a coverage lie.
 pub static ENABLED: &[(&str, &str)] = &[
+    // APE::NewHeader -- `src/parsers/audio/ape.rs`'s `parse_new_header`, the
+    // MAC 3.98+ audio header (APE.pm:65-78, reached from APE.pm:156-161).
+    // Corpus carriers: `APE.ape` (the only MAC descriptor in all 4,238
+    // files; `APE.mpc` is a Musepack tag trailer with no MAC header).
+    //
+    // Gate B, `tools/exiftool-tables/conformance.py` over
+    // `/tmp/oxidex-exiftool-cache/combined-samples` --recursive --min-files
+    // 3875 --min-tags 5000, pinned 13.59 oracle
+    // (`exiftool-pinned.sh -ver` = 13.59, `OOXML.docx` -> `DOCX`), debug
+    // binaries built at 38144a2c (control) and this branch (treatment):
+    //
+    //     control  TOTAL 4238 437050 match 21 rename 1671 value 11610 missing 10602 extra 97.0%
+    //     enabled  TOTAL 4238 437050 match 21 rename 1671 value 11610 missing 10602 extra 97.0%
+    //
+    // Zero new VALUE, zero new EXTRA -- and zero of anything else: every
+    // per-format row is byte-identical, `APE 1 22 0 0 0 0` on both sides.
+    //
+    // This one is a FOLD, not a coverage gain, and the comment says so
+    // because a reader who assumed otherwise would mis-read the delta.
+    // `ape.rs` already decoded all seven fields correctly from thirteen
+    // hand-written `u16_at`/`u32_at` offsets; what the line buys is that
+    // those offsets are gone and the record now reads through the one
+    // `ReadValue` (ExifTool.pm:6286). The evidence a fold needs is exactly
+    // the null result above: enabling it changed nothing an oracle can see.
+    // Per-field against the pinned oracle on `APE.ape`: CompressionLevel
+    // 3000, BlocksPerFrame 73728, FinalFrameBlocks 42662, TotalFrames 2,
+    // BitsPerSample 16, Channels 2, SampleRate 44100 -- pinned by
+    // `tests/ape_new_header_binary_table.rs` against the real carrier.
+    ("APE", "NewHeader"),
     // Canon::CMP1 -- `src/parsers/raw/metadata.rs:4788`, the CR3 `CMP1` box.
     // Corpus carriers: `CanonRaw.cr3` plus the Canon vendor directory.
     ("Canon", "CMP1"),
@@ -71,7 +100,18 @@ pub static ENABLED: &[(&str, &str)] = &[
     //   measures nothing about it. It was briefly listed here on the strength
     //   of that sentence, which is why `reachability.py` now strips comments
     //   before counting call sites.
-    // * The other 349 gate-A-passing tables have no live call site at all
+    // * APE::OldHeader passes gate A and DOES have a live call site --
+    //   `ape.rs`'s `parse_old_header`, reached from APE.pm:149-151 for MAC
+    //   3.97 and earlier. It is still not listed, because the corpus holds
+    //   exactly two APE files and both report version 3990 in their
+    //   descriptor, so every byte of `OldHeader` is unexercised and a gate B
+    //   run would measure nothing about it. It is the first table to sit in
+    //   the state this file's header describes: coverage held hostage to
+    //   corpus acquisition, published as `eligible` by `just reachability`
+    //   rather than quietly enabled. (Its `APEVersion` also carries a
+    //   `ValueConv => '$val / 1000'` the transcription refuses, so the
+    //   division stays hand-written under `RawAccess` either way.)
+    // * The other 348 gate-A-passing tables have no live call site at all
     //   (see `just reachability`). Enabling one would produce no tags and no
     //   measurement -- enablement on no evidence, which is the thing design
     //   D1 exists to prevent.
@@ -142,7 +182,7 @@ mod tests {
     }
 
     /// Opt-in is the whole design (D1). If a future change makes `is_enabled`
-    /// default to true, every one of the 592 never-executed tables starts
+    /// default to true, every one of the 590 never-executed tables starts
     /// producing tags at once and no delta is attributable -- the exact
     /// failure mode section 4 of the design argues against.
     #[test]

@@ -28,7 +28,10 @@
 use crate::core::formatters::convert_duration;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::io::EndianReader;
+use crate::exiftool_tables::{
+    Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
+};
+use crate::io::{ByteOrder, EndianReader};
 use encoding_rs::UTF_8;
 
 /// MAC file signature
@@ -116,6 +119,15 @@ impl FormatParser for ApeParser {
 /// descriptor itself. Reading 3.98+ fields at fixed offsets in the
 /// descriptor -- the shape of the previous implementation -- lands in the
 /// MD5/reserved area and yields zeros.
+///
+/// The version test and the two descriptor lengths are `APE.pm:147-160`
+/// verbatim; the *field layouts* the two branches then walk are not written
+/// out here at all. They are `Image::ExifTool::APE::OldHeader` (APE.pm:45-62)
+/// and `Image::ExifTool::APE::NewHeader` (APE.pm:65-78), both already
+/// transcribed into `exiftool_tables`, and both walked through the one
+/// `ProcessBinaryData` port (Step 28). Before that fold this function carried
+/// its own thirteen hand-written `u16_at`/`u32_at` offsets -- a second,
+/// unverified copy of a byte layout ExifTool already declares.
 fn parse_mac_audio_header(
     reader: &dyn FileReader,
     descriptor: &[u8],
@@ -125,19 +137,10 @@ fn parse_mac_audio_header(
     let version = desc.u16_at(4).unwrap_or(0);
 
     if version <= MAC_OLD_HEADER_MAX_VERSION {
-        // Old layout: fields are indexed from just past the signature.
-        let header = &descriptor[4..];
-        let h = EndianReader::little_endian(header);
-        // ExifTool's ValueConv is $val / 1000, printed as e.g. 3.97.
-        metadata.insert(
-            "APE:APEVersion".to_string(),
-            TagValue::new_string(format_version(h.u16_at(0).unwrap_or(0))),
-        );
-        insert_int(metadata, "CompressionLevel", h.u16_at(2).map(i64::from));
-        insert_int(metadata, "Channels", h.u16_at(6).map(i64::from));
-        insert_int(metadata, "SampleRate", h.u32_at(8).map(i64::from));
-        insert_int(metadata, "TotalFrames", h.u32_at(20).map(i64::from));
-        insert_int(metadata, "FinalFrameBlocks", h.u32_at(24).map(i64::from));
+        // `APE.pm:150` -- `$buff = substr($buff, 4)`: the old table's index 0
+        // is the version int16u that follows the signature, not the
+        // signature itself.
+        parse_old_header(&descriptor[4..], metadata);
         return Ok(());
     }
 
@@ -153,57 +156,108 @@ fn parse_mac_audio_header(
     }
 
     let header = reader.read(descriptor_len, header_len as usize)?;
-    let h = EndianReader::little_endian(header);
-
-    // ExifTool reports CompressionLevel as the raw code (1000/2000/...),
-    // with no PrintConv, so it must not be mapped to a name here.
-    let blocks_per_frame = h.u32_at(4);
-    let final_frame_blocks = h.u32_at(8);
-    let total_frames = h.u32_at(12);
-    let sample_rate = h.u32_at(20);
-
-    insert_int(metadata, "CompressionLevel", h.u16_at(0).map(i64::from));
-    insert_int(metadata, "BlocksPerFrame", blocks_per_frame.map(i64::from));
-    insert_int(
-        metadata,
-        "FinalFrameBlocks",
-        final_frame_blocks.map(i64::from),
-    );
-    insert_int(metadata, "TotalFrames", total_frames.map(i64::from));
-    insert_int(metadata, "BitsPerSample", h.u16_at(16).map(i64::from));
-    insert_int(metadata, "Channels", h.u16_at(18).map(i64::from));
-    insert_int(metadata, "SampleRate", sample_rate.map(i64::from));
-
-    // Image::ExifTool::APE::Composite::Duration:
-    // ((TotalFrames - 1) * BlocksPerFrame + FinalFrameBlocks) / SampleRate
-    if let (Some(sample_rate), Some(total_frames), Some(blocks_per_frame), Some(final_frame_blocks)) = (
-        sample_rate,
-        total_frames,
-        blocks_per_frame,
-        final_frame_blocks,
-    ) && sample_rate != 0
-        && total_frames != 0
-    {
-        let samples = u64::from(total_frames - 1) * u64::from(blocks_per_frame)
-            + u64::from(final_frame_blocks);
-        metadata.insert(
-            "APE:Duration".to_string(),
-            TagValue::new_string(convert_duration(samples as f64 / f64::from(sample_rate))),
-        );
-    }
+    parse_new_header(header, metadata);
 
     Ok(())
 }
 
-fn insert_int(metadata: &mut MetadataMap, name: &str, value: Option<i64>) {
-    if let Some(value) = value {
-        metadata.insert(format!("APE:{}", name), TagValue::new_integer(value));
+/// `Image::ExifTool::APE::OldHeader` (APE.pm:45-62), for MAC 3.97 and
+/// earlier: `FORMAT => 'int16u'`, six declared keys at 0/1/3/4/10/12.
+///
+/// Not enabled on the Step 28 allowlist, and deliberately so: the corpus
+/// carries two APE files and both are 3.98+, so no gate B run can measure
+/// this table. It still reads through `find_table`, which is what makes it
+/// visible to `just reachability` as gate-A-passing, hand-wired and
+/// *unmeasured* rather than invisible.
+fn parse_old_header(header: &[u8], metadata: &mut MetadataMap) {
+    /// APE.pm:51-53 -- `ValueConv => '$val / 1000'`. A division the
+    /// transcription will not guess at, so the schema records
+    /// `Omitted::value_conv` and `emit` withholds the field. Its silence
+    /// means "not transcribed", never "not a tag" (`AGENTS.md`): ExifTool
+    /// really does report `3.97` here, so the conversion is supplied by hand
+    /// under the acknowledgment `RawAccess` requires.
+    const APE_VERSION: PerlCitation = PerlCitation {
+        module: "APE",
+        table: "OldHeader",
+        tag: "APEVersion",
+        lines: "51-53",
+    };
+
+    let Some(table) = find_table("APE", "OldHeader") else {
+        return;
+    };
+    for decoded in decode_binary_table(table, header, ByteOrder::Little).fields() {
+        let name = decoded.field.name;
+        if let Some(value) = decoded.emit() {
+            metadata.insert(format!("APE:{name}"), value);
+        } else if name == "APEVersion"
+            && let Some(access) = RawAccess::new(decoded, Acknowledged::VALUE_CONV, &APE_VERSION)
+            && let DecodedValue::Integer(raw) = *access.raw()
+        {
+            metadata.insert(
+                "APE:APEVersion".to_string(),
+                TagValue::new_string(format_version(raw)),
+            );
+        }
     }
 }
 
-/// Formats a MAC version code the way ExifTool's `$val / 1000` does.
-fn format_version(version: u16) -> String {
-    format!("{}", f64::from(version) / 1000.0)
+/// `Image::ExifTool::APE::NewHeader` (APE.pm:65-78), for MAC 3.98 and later:
+/// `FORMAT => 'int16u'`, seven declared keys at 0/2/4/6/8/9/10.
+///
+/// Every one of the seven is `Omitted::NONE` with `PrintConv::None` -- the
+/// Perl declares no `ValueConv`, no `PrintConv` and no `Condition` on any of
+/// them, so `emit` never refuses here and the table is the whole of the
+/// record's meaning. In particular CompressionLevel is reported as the raw
+/// code (1000/2000/...) because APE.pm:70 gives it no `PrintConv`, and
+/// FormatFlags at key 1 is commented out there (APE.pm:71), so it is not a
+/// tag ExifTool emits.
+fn parse_new_header(header: &[u8], metadata: &mut MetadataMap) {
+    let Some(table) = find_table("APE", "NewHeader") else {
+        return;
+    };
+    let decode = decode_binary_table(table, header, ByteOrder::Little);
+    for decoded in decode.fields() {
+        if let Some(value) = decoded.emit() {
+            metadata.insert(format!("APE:{}", decoded.field.name), value);
+        }
+    }
+
+    let scalar = |name: &str| -> Option<u64> {
+        decode
+            .fields()
+            .iter()
+            .find(|decoded| decoded.field.name == name)
+            .and_then(|decoded| match decoded.emit() {
+                Some(TagValue::Integer(value)) => u64::try_from(value).ok(),
+                _ => None,
+            })
+    };
+
+    // `Image::ExifTool::APE::Composite::Duration` (APE.pm:81-93):
+    // `(($val[1] - 1) * $val[2] + $val[3]) / $val[0]`, guarded by
+    // `$val[0] && $val[1]`. A Composite, not a binary field -- it has no
+    // entry in `NewHeader` and the engine cannot produce it.
+    if let (Some(sample_rate), Some(total_frames), Some(blocks_per_frame), Some(final_frame_blocks)) = (
+        scalar("SampleRate"),
+        scalar("TotalFrames"),
+        scalar("BlocksPerFrame"),
+        scalar("FinalFrameBlocks"),
+    ) && sample_rate != 0
+        && total_frames != 0
+    {
+        let samples = (total_frames - 1) * blocks_per_frame + final_frame_blocks;
+        metadata.insert(
+            "APE:Duration".to_string(),
+            TagValue::new_string(convert_duration(samples as f64 / sample_rate as f64)),
+        );
+    }
+}
+
+/// Formats a MAC version code the way ExifTool's `$val / 1000` does
+/// (APE.pm:52).
+fn format_version(version: i64) -> String {
+    format!("{}", version as f64 / 1000.0)
 }
 
 /// Locates and parses the APE tag block at the end of the file.
