@@ -118,8 +118,9 @@ CARRIER_MAP = {
 # the full derivation, including the two model-dispatched cases: Sony's
 # ExtraInfo/ExtraInfo2/ExtraInfo3 selection in amount.rs::extract_extra_info,
 # and Canon's ShotInfo/AFInfo selection in raw/metadata.rs::canon_crw_tag_key).
-# This set independently reproduces the task's stated "22 reachable" figure
-# exactly.
+#
+# A call site is not a reachable table. This set is the 21 that are both --
+# see DEAD_LOOKUPS below for the 22nd call site and why it is held apart.
 REACHABLE = {
     ("Pentax", "MOV"),
     ("EXE", "Main"),
@@ -132,7 +133,6 @@ REACHABLE = {
     ("Casio", "QVCI"),
     ("Canon", "CMP1"),
     ("Canon", "ShotInfo"),
-    ("Canon", "AFInfo"),
     ("CanonVRD", "Ver2"),
     ("Canon", "FileInfo"),
     ("Canon", "CameraSettings"),
@@ -144,4 +144,31 @@ REACHABLE = {
     ("Sony", "ExtraInfo3"),
     ("DJI", "ThermalParams2"),
 }
-assert len(REACHABLE) == 22, f"expected 22 reachable tables, derived {len(REACHABLE)}"
+
+# Call sites whose table codegen.py deliberately never emits, so `find_table`
+# returns None for them at every runtime -- a live call, a dead lookup, and
+# never a reachable table.
+#
+# `%Image::ExifTool::Canon::AFInfo` (Canon.pm:6433) is real under exactly that
+# name, but its PROCESS_PROC is \&ProcessSerialData (Canon.pm:6434), so
+# is_binary_table (codegen.py:177) rejects it and gen_table (codegen.py:568)
+# counts it under `table_not_binary`. That refusal is correct: serial keys are
+# sequence numbers, not byte offsets. src/exiftool_tables/mod.rs's
+# UNEMITTED_TABLES is the Rust-side registry of this same fact, and its
+# `unemitted_tables_are_genuinely_absent` test retires the entry if a future
+# regeneration ever emits the table.
+#
+# Folding these into REACHABLE is what produced the "22 reachable" figure that
+# docs/reference/corpus-synthesis.md had to correct by hand. Splitting the two
+# means the correction is now derived, so the next dead lookup lands in the
+# right bucket without anyone noticing it by eye.
+DEAD_LOOKUPS = {
+    ("Canon", "AFInfo"),
+}
+
+# Every find_table call site, live or dead. The 22 the grep finds.
+CALL_SITES = REACHABLE | DEAD_LOOKUPS
+
+assert not (REACHABLE & DEAD_LOOKUPS), "a table cannot be both live and dead"
+assert len(CALL_SITES) == 22, f"expected 22 find_table call sites, derived {len(CALL_SITES)}"
+assert len(REACHABLE) == 21, f"expected 21 reachable tables, derived {len(REACHABLE)}"

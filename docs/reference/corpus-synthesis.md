@@ -148,6 +148,54 @@ is **592**, not 591. This is flagged separately here rather than silently
 reconciled to the task's number; the call site itself is a one-line latent
 bug worth a follow-up (spawned separately, see below).
 
+**Resolved.** `%Image::ExifTool::Canon::AFInfo` is a real table under exactly
+that name (Canon.pm:6433) — it is not a rename, and the lookup is not a typo.
+Its `PROCESS_PROC` is `\&ProcessSerialData` (Canon.pm:6434, sub at
+Canon.pm:10518), so `is_binary_table` (codegen.py:177) rejects it and
+`gen_table` (codegen.py:568) counts it under `table_not_binary`. That refusal
+is correct and was not relaxed: in a serial record the keys are sequence
+numbers, not byte offsets — key 8 `AFAreaXPositions` is `int16s[$val{0}]`, so
+key 9 begins wherever key 8 ended, at a position that depends on the value of
+key 0 in the file being read. A flat `BinaryTable` would place every field at
+`index * 2` and report confident integers from meaningless offsets under real
+ExifTool tag names.
+
+So the call site is dead until the generator grows a serial-record kind, and
+the fix makes that state *explicit* rather than silent:
+
+* `src/exiftool_tables`'s `UNEMITTED_TABLES` registry records the module,
+  table, `GROUPS => { 0 => ... }`, Perl citation, the generator's own refusal
+  counter, and what would unblock it. `find_unemitted_table` is what
+  `canon_crw_tag_key` now consults, so its `MakerNotes:` prefix is transcribed
+  from `%Canon::AFInfo`'s own `GROUPS` (Canon.pm:6437) instead of borrowed from
+  `ShotInfo` (Canon.pm:2778) — the two agree, which is why the dead lookup
+  produced correct output for as long as it did, but agreement is a
+  coincidence, not a derivation.
+* `unemitted_tables_are_genuinely_absent` fails the day a regeneration starts
+  emitting the table, so the entry retires itself.
+* `synth_carriers.py` now splits `REACHABLE` (21) from `DEAD_LOOKUPS` (1), with
+  `CALL_SITES` as their union (22), and `synth_classify.py` asserts both halves
+  against the emitted set. The 22-vs-21 correction above is therefore derived
+  from now on rather than reconciled by hand.
+
+The fix is output-neutral, measured two ways:
+
+* `oxidex -j` run under both the pre-fix and post-fix debug binaries over all
+  **4238** corpus files — **0 files with differing output**, byte-for-byte.
+* `tools/exiftool-tables/conformance.py --recursive --min-files 3875
+  --min-tags 5000` against pinned ExifTool 13.59, run on each binary in turn:
+  `TOTAL 4238 436960 match / 21 rename / 1671 value / 11700 missing / 10604
+  extra` for both. The two reports differ only in the tie-break ordering of
+  equal-count rows in the "top tags" listings; every numeric column is
+  identical.
+
+Note that this same-instrument baseline is itself 2 match / 2 value / 4 extra
+away from the `436958 / 1673 / 10608` figure quoted when this follow-up was
+handed over. The gap is present in the *unmodified* tree, so it predates this
+change and is not explained by it; it is recorded here rather than reconciled,
+since the earlier figure's build profile and tree state are not recoverable
+from the number alone.
+
 ## Subset generation: 37 tables, empirically round-tripped
 
 Selected across 15 modules (Canon, CanonCustom, CanonRaw, CanonVRD, FujiFilm,

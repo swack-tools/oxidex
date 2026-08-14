@@ -31,7 +31,7 @@ use crate::core::formatters::{
 use crate::core::tag_conversion::apply_tile_offsets_value_conv;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::exiftool_tables::{decode_binary_table, find_table};
+use crate::exiftool_tables::{decode_binary_table, find_table, find_unemitted_table};
 use crate::io::ByteOrder as TableByteOrder;
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
@@ -6622,16 +6622,40 @@ fn read_ciff_u32(data: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes))
 }
 
+/// Group-qualify a CRW tag against the ExifTool table the CIFF record maps to.
+///
+/// Two kinds of table arrive here and they need opposite handling, which the
+/// previous `find_table("Canon", table_name).or_else(|| find_table("Canon",
+/// "ShotInfo"))` chain collapsed into one:
+///
+/// * `ShotInfo` is emitted, so it is the authority on its own field names. A
+///   name it does not declare is a typo or a stale transcription, and emitting
+///   it anyway would put an invented tag under a real ExifTool group -- the
+///   failure AGENTS.md's "never approximate a conversion" rule is about. It
+///   now returns `None` instead.
+/// * `AFInfo` is *never* emitted and never will be under the current generator
+///   (`ProcessSerialData`; see [`crate::exiftool_tables::UNEMITTED_TABLES`]). Its lookup returned
+///   `None` on every CRW ever read, and the `or_else` then borrowed
+///   `ShotInfo`'s `group0` -- which produced the right answer only because the
+///   two tables happen to agree on `MakerNotes` (Canon.pm:6437 vs
+///   Canon.pm:2778). A coincidence, not a derivation: the moment they
+///   disagreed, every AF tag would have been filed under the wrong group with
+///   nothing to notice. The group now comes from the registry, transcribed
+///   from `%Canon::AFInfo`'s own `GROUPS`.
+///
+/// Field names for a registered-unemitted table are passed through
+/// unvalidated, because there is no table to validate them against. That is
+/// the cost of the generator's refusal, and it is stated here rather than
+/// hidden: the decode above is hand-written against Canon.pm:6433-6500 and the
+/// names it passes are pinned by
+/// `canon_crw_af_names_match_the_pinned_perl` below.
 fn canon_crw_tag_key(table_name: &str, field_name: &str) -> Option<String> {
-    let requested_table = find_table("Canon", table_name);
-    let group = requested_table
-        .or_else(|| find_table("Canon", "ShotInfo"))?
-        .group0;
-    let registered_name = requested_table
-        .and_then(|table| table.fields.iter().find(|field| field.name == field_name))
-        .map(|field| field.name)
-        .unwrap_or(field_name);
-    Some(format!("{group}:{registered_name}"))
+    if let Some(unemitted) = find_unemitted_table("Canon", table_name) {
+        return Some(format!("{}:{field_name}", unemitted.group0));
+    }
+    let table = find_table("Canon", table_name)?;
+    let field = table.fields.iter().find(|field| field.name == field_name)?;
+    Some(format!("{}:{}", table.group0, field.name))
 }
 
 fn insert_canon_crw_tag(
@@ -10499,5 +10523,69 @@ mod rational_array_tests {
     #[test]
     fn x3f_lensmodel_maps_to_lens_type() {
         assert_eq!(map_x3f_property_name("LENSMODEL"), "SigmaRaw:LensType");
+    }
+
+    /// The `AFInfo` branch is reached because the table is *registered* absent,
+    /// not because a lookup happened to miss.
+    ///
+    /// This is the contract the dead `find_table("Canon", "AFInfo")` used to
+    /// fake. It returned `None` on every CRW, an `or_else` borrowed
+    /// `ShotInfo`'s group, and the output was right by coincidence -- so no
+    /// test could tell the working path from the broken one. Pinning the group
+    /// to `%Canon::AFInfo`'s own `GROUPS` (Canon.pm:6437) makes the two
+    /// distinguishable: this assertion now fails if the registry entry is
+    /// dropped, where before it passed either way.
+    #[test]
+    fn canon_crw_af_tags_take_their_group_from_the_unemitted_registry() {
+        assert!(
+            crate::exiftool_tables::find_table("Canon", "AFInfo").is_none(),
+            "Canon::AFInfo is ProcessSerialData (Canon.pm:6434); codegen refuses it"
+        );
+        assert_eq!(
+            canon_crw_tag_key("AFInfo", "AFAreaXPositions").as_deref(),
+            Some("MakerNotes:AFAreaXPositions"),
+        );
+    }
+
+    /// Every name the CRW 0x1038 decode emits is a real `%Canon::AFInfo` key.
+    ///
+    /// Nothing else checks these. For an emitted table `canon_crw_tag_key`
+    /// validates the name against the table and now returns `None` when it
+    /// does not match; for `AFInfo` there is no table, so the names are
+    /// unvalidated at runtime by construction and this list is the only thing
+    /// standing between a typo and an invented tag under a real ExifTool group.
+    /// Keys per Canon.pm:6433-6500.
+    #[test]
+    fn canon_crw_af_names_match_the_pinned_perl() {
+        for name in [
+            "AFImageHeight",    // key 5
+            "AFAreaWidth",      // key 6
+            "AFAreaHeight",     // key 7
+            "AFAreaXPositions", // key 8
+            "AFAreaYPositions", // key 9
+        ] {
+            assert_eq!(
+                canon_crw_tag_key("AFInfo", name).as_deref(),
+                Some(format!("MakerNotes:{name}").as_str()),
+            );
+        }
+    }
+
+    /// An emitted table refuses a field it does not declare.
+    ///
+    /// The old `unwrap_or(field_name)` passed any string through, so a
+    /// mistyped `ShotInfo` field would have been emitted as
+    /// `MakerNotes:<typo>` -- a tag ExifTool has never heard of, under a group
+    /// that makes it look transcribed. `ShotInfo` really does declare
+    /// `AEBBracketValue`, so the positive case is unchanged.
+    #[test]
+    fn canon_crw_emitted_table_validates_its_field_names() {
+        assert_eq!(
+            canon_crw_tag_key("ShotInfo", "AEBBracketValue").as_deref(),
+            Some("MakerNotes:AEBBracketValue"),
+        );
+        assert_eq!(canon_crw_tag_key("ShotInfo", "NotARealShotInfoField"), None);
+        // A table neither emitted nor registered stays a miss, not a fallback.
+        assert_eq!(canon_crw_tag_key("NoSuchTable", "AEBBracketValue"), None);
     }
 }

@@ -22,9 +22,14 @@ A table is:
                        structural/computed table; ExifTool itself refuses to
                        write it, so synthesis cannot produce coverage here no
                        matter what sample exists).
-Already-reachable tables (the 22) are reported separately, not folded into
-these three buckets -- they are not part of the "591 unreachable" gap this
+Already-reachable tables (the 21) are reported separately, not folded into
+these three buckets -- they are not part of the "592 unreachable" gap this
 harness measures.
+
+21, not 22: one of the 22 find_table call sites asks for Canon::AFInfo, which
+codegen.py never emitted (ProcessSerialData, Canon.pm:6434). synth_carriers
+holds it in DEAD_LOOKUPS rather than REACHABLE, and this module asserts the
+split against the emitted set instead of trusting either list.
 """
 import argparse
 import json
@@ -33,7 +38,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from synth_carriers import CARRIER_MAP, REACHABLE  # noqa: E402
+from synth_carriers import CARRIER_MAP, DEAD_LOOKUPS, REACHABLE  # noqa: E402
 
 
 def parse_emitted_tables(rs_path: Path) -> list[tuple[str, str]]:
@@ -124,6 +129,24 @@ def main() -> None:
     emitted = parse_emitted_tables(args.binary_tables)
     print(f"Loading {args.tables_json} ...", file=sys.stderr)
     tables_data = json.loads(args.tables_json.read_text())["modules"]
+
+    # Both halves of synth_carriers' split, checked against the ground truth
+    # rather than assumed. A DEAD_LOOKUPS entry that turns up in `emitted` is a
+    # table the generator has started emitting, and the call site should be
+    # using it; a REACHABLE entry that is absent is a second dead lookup of the
+    # kind that inflated this harness's own first reachability figure.
+    emitted_set = set(emitted)
+    resurrected = sorted(DEAD_LOOKUPS & emitted_set)
+    assert not resurrected, (
+        f"{resurrected} listed in synth_carriers.DEAD_LOOKUPS but now emitted; "
+        f"move to REACHABLE and drop the src/exiftool_tables UNEMITTED_TABLES entry"
+    )
+    newly_dead = sorted(REACHABLE - emitted_set)
+    assert not newly_dead, (
+        f"{newly_dead} listed in synth_carriers.REACHABLE but absent from "
+        f"{args.binary_tables}; that find_table call site is dead -- register it in "
+        f"DEAD_LOOKUPS and in src/exiftool_tables' UNEMITTED_TABLES"
+    )
 
     rows = []
     counts = {"reachable": 0, "synthesizable": 0, "needs-real-sample": 0, "unwritable": 0, "no-perl-data": 0}

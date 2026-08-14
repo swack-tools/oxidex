@@ -68,6 +68,90 @@ pub fn find_table(module: &str, table: &str) -> Option<&'static BinaryTable> {
         .find(|t| t.module == module && t.table == table)
 }
 
+/// A table a live call site asks [`find_table`] for that the generator
+/// deliberately never emits.
+///
+/// [`find_table`] answering `None` is ambiguous on its own: it means either
+/// "ExifTool has no such table" or "ExifTool has it and `codegen.py` refused
+/// it". A caller cannot tell the two apart, so a lookup that can never succeed
+/// looks exactly like one that merely missed -- and a `.or_else(...)` fallback
+/// written for the second case silently swallows the first. That is how
+/// `raw/metadata.rs::canon_crw_tag_key`'s `find_table("Canon", "AFInfo")` sat
+/// dead: it returned `None` on every CRW ever read, the fallback produced a
+/// plausible answer anyway, and nothing counted the miss. The corpus-synthesis
+/// harness only found it by grepping call sites against the emitted set (613
+/// tables, 22 call sites, 21 live -- see `docs/reference/corpus-synthesis.md`).
+///
+/// This registry is the disambiguation. An entry here asserts, and
+/// [`unemitted_tables_are_genuinely_absent`] tests, that the table really is
+/// missing from [`ALL_BINARY_TABLES`], and records why in terms of the
+/// generator's own refusal counter. The test fails the day a regeneration
+/// starts emitting the table, which is exactly when the call site should stop
+/// consulting this list and start using the real thing.
+///
+/// [`unemitted_tables_are_genuinely_absent`]: self::tests::unemitted_tables_are_genuinely_absent
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnemittedTable {
+    /// ExifTool module, as [`find_table`]'s first argument.
+    pub module: &'static str,
+    /// ExifTool table name, as [`find_table`]'s second argument. This is the
+    /// *real* Perl name -- an entry here is not a spelling correction.
+    pub table: &'static str,
+    /// `GROUPS => { 0 => ... }` transcribed from the Perl. Callers need a
+    /// group prefix and there is no [`BinaryTable::group0`] to read it from;
+    /// taking it from a *different* table that happens to agree is a
+    /// coincidence, not a derivation.
+    pub group0: &'static str,
+    /// `<file>:<line>` of the table's `%Image::ExifTool::...` assignment in
+    /// the ExifTool release named by [`EXIFTOOL_VERSION`].
+    pub perl: &'static str,
+    /// The `stats` key `tools/exiftool-tables/codegen.py` increments when it
+    /// refuses this table, so the count here and the count there are the same
+    /// number.
+    pub refusal: &'static str,
+    /// What the generator would have to learn to emit this table.
+    pub unblocked_by: &'static str,
+}
+
+/// Every [`UnemittedTable`] a non-test call site in `src/` depends on.
+///
+/// One entry today. `%Image::ExifTool::Canon::AFInfo` is a real table under
+/// exactly that name (Canon.pm:6433), but its `PROCESS_PROC` is
+/// `\&ProcessSerialData` (Canon.pm:6434, sub at Canon.pm:10518), not
+/// `ProcessBinaryData`, so `is_binary_table` (codegen.py:177) rejects it and
+/// `gen_table` (codegen.py:568) counts it under `table_not_binary`.
+///
+/// That refusal is correct and must not be relaxed to make the lookup succeed.
+/// In a serial record the keys are *sequence numbers*, not offsets: key 8
+/// (`AFAreaXPositions`) is `int16s[$val{0}]`, so key 9 begins wherever key 8
+/// ended, which depends on the value of key 0 in the file being read. A flat
+/// `BinaryTable` would place every field at `index * 2` and report confident
+/// integers from meaningless offsets under real ExifTool tag names --
+/// codegen.py's comment at line 550 names this very table as the reason the
+/// `PROCESS_PROC` check exists at all.
+pub const UNEMITTED_TABLES: &[UnemittedTable] = &[UnemittedTable {
+    module: "Canon",
+    table: "AFInfo",
+    group0: "MakerNotes",
+    perl: "Canon.pm:6433",
+    refusal: "table_not_binary",
+    unblocked_by: "a serial-record table kind in codegen.py: sequence-numbered \
+                   keys whose widths resolve against earlier decoded values, \
+                   which the fixed `index * increment` BinaryTable shape cannot \
+                   express",
+}];
+
+/// Look up a deliberately-unemitted table, e.g. `("Canon", "AFInfo")`.
+///
+/// A `Some` here and a `Some` from [`find_table`] are mutually exclusive by
+/// construction; see [`UNEMITTED_TABLES`].
+#[must_use]
+pub fn find_unemitted_table(module: &str, table: &str) -> Option<&'static UnemittedTable> {
+    UNEMITTED_TABLES
+        .iter()
+        .find(|t| t.module == module && t.table == table)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +188,61 @@ mod tests {
             "binary_tables.rs was transcribed from ExifTool {EXIFTOOL_VERSION}, but \
              .exiftool-version pins {pinned}; regenerate with `just regen-tables`"
         );
+    }
+
+    /// Each [`UNEMITTED_TABLES`] entry must name a table that really is
+    /// absent, and this test is how the entry retires itself.
+    ///
+    /// The registry exists to let a caller say "this lookup can never succeed"
+    /// out loud. That claim is only worth anything while it is true: if a
+    /// regeneration teaches `codegen.py` to emit `Canon::AFInfo`, an entry
+    /// still asserting its absence would route the caller past a table that
+    /// now exists -- the same silent-fallback failure the registry was written
+    /// to end, just pointing the other way. So the assertion is deliberately
+    /// two-sided: absence is checked, and the failure message says to delete
+    /// the entry rather than to restore the absence.
+    #[test]
+    fn unemitted_tables_are_genuinely_absent() {
+        for entry in UNEMITTED_TABLES {
+            assert!(
+                find_table(entry.module, entry.table).is_none(),
+                "{}::{} is listed in UNEMITTED_TABLES (refused by codegen as \
+                 `{}`, {}) but ExifTool {EXIFTOOL_VERSION}'s tables now emit \
+                 it; drop the entry and have the caller use find_table",
+                entry.module,
+                entry.table,
+                entry.refusal,
+                entry.perl,
+            );
+            assert!(
+                !entry.group0.is_empty() && !entry.perl.is_empty(),
+                "{}::{} must carry the group and the Perl citation it stands in for",
+                entry.module,
+                entry.table,
+            );
+        }
+    }
+
+    /// `Canon::AFInfo` is refused for a reason that is not "it does not exist".
+    ///
+    /// Three sibling modules do emit an `AFInfo`, so a bare
+    /// `find_table(_, "AFInfo") == None` proves nothing about the name -- it is
+    /// specifically Canon's that `ProcessSerialData` keeps out. Pinning both
+    /// halves keeps a future reader from "fixing" the Canon miss by copying a
+    /// sibling's layout, which would decode sequence numbers as byte offsets.
+    #[test]
+    fn canon_afinfo_is_refused_while_its_siblings_are_emitted() {
+        let entry = find_unemitted_table("Canon", "AFInfo").expect("registered");
+        assert_eq!(entry.group0, "MakerNotes", "Canon.pm:6437 GROUPS");
+        assert_eq!(entry.refusal, "table_not_binary");
+        assert!(find_table("Canon", "AFInfo").is_none());
+        // Same table name, different modules, genuinely ProcessBinaryData.
+        for module in ["Nikon", "Olympus", "Pentax"] {
+            assert!(
+                find_table(module, "AFInfo").is_some(),
+                "{module}::AFInfo is emitted; only Canon's is serial"
+            );
+        }
     }
 
     #[test]
