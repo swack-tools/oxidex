@@ -168,6 +168,14 @@ trybuild = "1"
 opt-level = 3
 lto = true
 codegen-units = 1
+# Stripping the cdylib on macOS mis-aligns its LINKEDIT string pool (`ld:
+# mis-aligned LINKEDIT string pool`) and breaks any downstream link against
+# liboxidex.dylib -- see tests/ffi_c_integration.rs, which fails this way in
+# --release on Apple Silicon and Intel Darwin. Cargo builds lib+staticlib+
+# cdylib as one rustc invocation for this [lib] target, so `strip` here can't
+# be scoped to just the cdylib; `.cargo/config.toml` overrides it back to
+# `-C strip=none` for `*-apple-darwin` targets only, so this `true` still
+# governs Linux (and any other platform) unchanged.
 strip = true
 panic = 'abort'
 

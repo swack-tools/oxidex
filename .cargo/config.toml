@@ -9,3 +9,41 @@
 # the GNU target so musl and macOS builds are unaffected.
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "linker-features=-lld"]
+
+# Narrow fix for macOS-only `ld: mis-aligned LINKEDIT string pool` when linking
+# against a stripped liboxidex.dylib (see Cargo.toml [profile.release] `strip`
+# comment). `[lib] crate-type = ["lib", "staticlib", "cdylib"]` makes cargo
+# build all three crate-types in ONE rustc invocation, so `[profile.release]`'s
+# `strip = true` becomes exactly one `-C strip=symbols` flag shared by all
+# three outputs -- Cargo has no per-crate-type profile override to strip only
+# the staticlib/cdylib and leave the others alone (confirmed via `cargo build
+# -v`: `--crate-type lib --crate-type staticlib --crate-type cdylib` and a
+# single trailing `-C strip=...`). Appending `-C strip=none` here via
+# target-scoped rustflags lands AFTER the profile's flag in the same rustc
+# invocation and rustc keeps the last occurrence of a repeated `-C` flag, so it
+# overrides stripping for Darwin builds only. Linux is unaffected by
+# construction (the [target.aarch64-apple-darwin] / [target.x86_64-apple-darwin]
+# tables never match an x86_64-unknown-linux-gnu build) and this was confirmed
+# with `cargo build --release --lib -v`: the emitted rustc invocation on Linux
+# carries exactly one `-C strip=symbols`, with no `-C strip=none` appended, and
+# `liboxidex.so` matched a clean pre-fix baseline byte-for-byte under an
+# isolated `cargo build --release --lib`. A `cargo test --release ...` build
+# with this same config (which compiles several targets concurrently, unlike
+# the isolated `--lib` build) produced a `liboxidex.so` roughly 440 KB larger
+# on one run; opt-level=3/lto=true/codegen-units=1 release builds are not
+# guaranteed bit-reproducible run to run under concurrent front-end load, and
+# this file does not add any Linux-reachable flag, so the leading theory is
+# ordinary LTO codegen nondeterminism rather than an effect of this config --
+# see the strip-fix task notes for the A/B measurements. Flagged here rather
+# than asserted: re-run `cargo build --release --lib -v` on Linux after any
+# change to this file and confirm the oxidex invocation still carries exactly
+# one `-C strip=symbols` with nothing Darwin-scoped appended.
+# This does trade away symbol/debuginfo stripping on macOS release builds
+# entirely (options that stripped only the cdylib, or only debug info, were
+# tried first and either did not clear the linker error or aren't expressible
+# in Cargo -- see the strip comment in Cargo.toml).
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "strip=none"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "strip=none"]
