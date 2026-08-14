@@ -22,6 +22,7 @@ pub mod obj;
 pub mod pcap;
 pub mod plist;
 pub mod prefetch;
+pub mod red;
 pub mod registry;
 pub mod sqlite;
 pub mod stl;

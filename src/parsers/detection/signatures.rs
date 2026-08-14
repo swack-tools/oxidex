@@ -78,6 +78,18 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"PCD_IPI", 2048, FileFormat::PCD),
     signature!(b"8BPS", 0, FileFormat::PSD),
     signature!(b"\xFFWPC", 0, FileFormat::WPG),
+    // CZI: `^ZISRAWFILE\x00{6}` -- ZISRAW.pm:174's own `ProcessCZI` check,
+    // all literal bytes at offset 0.
+    signature!(b"ZISRAWFILE\x00\x00\x00\x00\x00\x00", 0, FileFormat::CZI),
+    // PSP: `^Paint Shop Pro Image File\x0a\x1a\x00{5}` -- PSP.pm:232-233's
+    // own `ProcessPSP` check is an exact 32-byte string equality, so the
+    // whole signature is literal bytes and belongs here rather than in
+    // `detect_format`'s hand-written prefix checks.
+    signature!(
+        b"Paint Shop Pro Image File\x0a\x1a\x00\x00\x00\x00\x00",
+        0,
+        FileFormat::PSP
+    ),
     signature!(b"\x00\x00\x01\x00", 0, FileFormat::ICO),
     signature!(b"FLIF", 0, FileFormat::FLIF),
     signature!(b"gimp xcf ", 0, FileFormat::XCF),

@@ -155,6 +155,40 @@ pub fn mac_time_to_local_exif_datetime(mac_time: u64) -> Option<String> {
     ))
 }
 
+/// Renders a Unix time through ExifTool's `ConvertUnixTime($val, 1)` --
+/// `localtime` plus a `TimeZoneString` offset suffix (ExifTool.pm:6784-6810,
+/// the `else` branch at :6804-6806).
+///
+/// This is the rendering `PSP::Creator`'s CreateDate/ModifyDate ask for
+/// (PSP.pm:106-118, `ValueConv => 'Image::ExifTool::ConvertUnixTime($val,1)'`
+/// followed by `PrintConv => '$self->ConvertDateTime($val)'`, which with no
+/// `-dateFormat` option returns its input unchanged). It differs from
+/// [`unix_to_iso8601`] in exactly the way ExifTool's second argument does:
+/// local wall-clock components and an explicit `+HH:MM` offset, rather than
+/// UTC.
+///
+/// ExifTool.pm:6787 short-circuits `$time == 0` to `'0000:00:00 00:00:00'`
+/// before any timezone work, so that case is reproduced first.
+pub fn unix_to_local_exif_datetime(unix_time: i64) -> Option<String> {
+    // ExifTool.pm:6787.
+    if unix_time == 0 {
+        return Some("0000:00:00 00:00:00".to_string());
+    }
+    use chrono::{Datelike, Offset, Timelike};
+    let utc = chrono::DateTime::from_timestamp(unix_time, 0)?;
+    let local = utc.with_timezone(&chrono::Local);
+    let offset_secs = local.offset().fix().local_minus_utc();
+    Some(format_local_datetime(
+        local.year(),
+        local.month(),
+        local.day(),
+        local.hour(),
+        local.minute(),
+        local.second(),
+        offset_secs,
+    ))
+}
+
 /// Pure formatter behind [`mac_time_to_local_exif_datetime`]: date/time
 /// components plus a UTC offset in seconds -> ExifTool's
 /// `YYYY:MM:DD HH:MM:SS±ZZ:ZZ` rendering. Split out from the system-timezone

@@ -22,6 +22,7 @@
 //!
 //! - ExifTool source: `lib/Image/ExifTool/MOI.pm`
 
+use crate::core::formatters::convert_bitrate;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::exiftool_tables::{
     Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
@@ -220,42 +221,6 @@ fn convert_duration(time: f64) -> String {
         return format!("{sign}{d} days {h}:{m:02}:{:02}", time as i64);
     }
     format!("{sign}{h}:{m:02}:{:02}", time as i64)
-}
-
-/// ExifTool.pm:6900-6912 `ConvertBitrate`.
-fn convert_bitrate(mut bitrate: f64) -> String {
-    let units = ["bps", "kbps", "Mbps", "Gbps"];
-    let mut unit_index = 0;
-    while bitrate >= 1000.0 && unit_index < units.len() - 1 {
-        bitrate /= 1000.0;
-        unit_index += 1;
-    }
-    let number = if bitrate < 100.0 {
-        // Perl's "%.3g": three significant digits, trimmed of trailing zeros.
-        format_significant(bitrate, 3)
-    } else {
-        format!("{:.0}", bitrate)
-    };
-    format!("{number} {}", units[unit_index])
-}
-
-/// Perl's `%.Ng` formatting: `N` significant digits, no trailing zeros or
-/// decimal point, no exponent for the magnitudes this call site ever sees.
-fn format_significant(value: f64, digits: i32) -> String {
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    let magnitude = value.abs().log10().floor() as i32;
-    let decimals = (digits - 1 - magnitude).max(0);
-    let formatted = format!("{value:.*}", decimals as usize);
-    if formatted.contains('.') {
-        formatted
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string()
-    } else {
-        formatted
-    }
 }
 
 #[cfg(test)]

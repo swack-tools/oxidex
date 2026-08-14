@@ -6,6 +6,7 @@
 
 pub mod asf;
 pub mod avi;
+pub mod dv;
 pub mod flv;
 pub mod h264;
 pub mod mkv;

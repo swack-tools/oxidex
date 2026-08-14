@@ -62,10 +62,13 @@ use crate::parsers::canon_vrd::{parse_dr4_file, parse_vrd_file};
 use crate::parsers::elf::parse_elf_metadata;
 use crate::parsers::flir_fpf::parse_fpf_metadata;
 use crate::parsers::icc::parse_icc_file;
+use crate::parsers::image::czi::parse_czi_metadata;
 use crate::parsers::image::ico::parse_ico_metadata;
 use crate::parsers::image::jpeg2000::parse_jpeg2000_metadata;
 use crate::parsers::image::jxl::parse_jxl_metadata;
+use crate::parsers::image::pmp::parse_pmp_metadata;
 use crate::parsers::image::psd::parse_psd_metadata;
+use crate::parsers::image::psp::parse_psp_metadata;
 use crate::parsers::image::svg::parse_svg_metadata;
 use crate::parsers::image::webp::parse_webp_metadata;
 use crate::parsers::image::wpg::parse_wpg_metadata;
@@ -92,6 +95,7 @@ use crate::parsers::specialized::obj::parse_obj_metadata;
 use crate::parsers::specialized::pcap::parse_pcap_metadata;
 use crate::parsers::specialized::plist::parse_plist_metadata;
 use crate::parsers::specialized::prefetch::parse_prefetch_metadata;
+use crate::parsers::specialized::red::parse_r3d_metadata;
 use crate::parsers::specialized::registry::parse_registry_metadata;
 use crate::parsers::specialized::sqlite::parse_sqlite_metadata;
 use crate::parsers::specialized::stl::parse_stl_metadata;
@@ -102,6 +106,7 @@ use crate::parsers::text::txt::parse_txt_metadata;
 use crate::parsers::text::vcf::parse_vcf_metadata;
 use crate::parsers::video::asf::parse_asf_metadata;
 use crate::parsers::video::avi::parse_avi_metadata;
+use crate::parsers::video::dv::parse_dv_metadata;
 use crate::parsers::video::flv::parse_flv_metadata;
 use crate::parsers::video::mkv::parse_mkv_metadata;
 use crate::parsers::video::mts::parse_mts_metadata;
@@ -278,6 +283,11 @@ pub fn dispatch_format_parser(
         FileFormat::PCX => convert_string_error(parse_pcx_metadata(reader), "PCX"),
         FileFormat::PGF => convert_string_error(parse_pgf_metadata(reader), "PGF"),
         FileFormat::MRC => convert_string_error(parse_mrc_metadata(reader), "MRC"),
+        FileFormat::R3D => convert_string_error(parse_r3d_metadata(reader), "R3D"),
+        FileFormat::PSP => convert_string_error(parse_psp_metadata(reader), "PSP"),
+        FileFormat::PMP => convert_string_error(parse_pmp_metadata(reader), "PMP"),
+        FileFormat::DV => convert_string_error(parse_dv_metadata(reader), "DV"),
+        FileFormat::CZI => convert_string_error(parse_czi_metadata(reader), "CZI"),
         FileFormat::AA => convert_string_error(parse_aa_metadata(reader), "AA"),
         FileFormat::PICT => convert_string_error(parse_pict_metadata(reader), "PICT"),
         FileFormat::PPM => convert_string_error(parse_ppm_metadata(reader), "PPM"),

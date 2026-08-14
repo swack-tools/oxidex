@@ -289,6 +289,42 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::AA);
     }
 
+    // R3D: `^\x00\x00..RED(1|2)` (Red.pm:225's own `ProcessR3D` check). The
+    // two free size bytes at offsets 2-3 and the version alternation are
+    // outside `signature!`'s literal-bytes grammar, same reason MRC and PCX
+    // are checked here.
+    if magic_bytes.len() >= 8
+        && magic_bytes[0] == 0
+        && magic_bytes[1] == 0
+        && &magic_bytes[4..7] == b"RED"
+        && matches!(magic_bytes[7], b'1' | b'2')
+    {
+        return Ok(FileFormat::R3D);
+    }
+
+    // PMP: `^.{8}\x00{3}\x7c.{112}\xff\xd8\xff\xdb` (Sony.pm:11374's own
+    // `ProcessPMP` check). Two fixed byte groups at offsets 8 and 124 with
+    // free bytes between them -- outside `signature!`'s single-run grammar,
+    // same reason MRC and PCX are checked here.
+    if magic_bytes.len() >= 128
+        && magic_bytes[8..12] == [0, 0, 0, 0x7c]
+        && magic_bytes[124..128] == [0xff, 0xd8, 0xff, 0xdb]
+    {
+        return Ok(FileFormat::PMP);
+    }
+
+    // DV: `^\x1f\x07\x00[\x3f\xbf]` (ExifTool.pm's `%magicNumber`, the same
+    // pattern DV.pm:158 scans for). The alternation on byte 3 is outside
+    // `signature!`'s literal-bytes grammar.
+    if magic_bytes.len() >= 4
+        && magic_bytes[0] == 0x1f
+        && magic_bytes[1] == 0x07
+        && magic_bytes[2] == 0x00
+        && matches!(magic_bytes[3], 0x3f | 0xbf)
+    {
+        return Ok(FileFormat::DV);
+    }
+
     // Phase 2: Check simple signatures from lookup table
     for sig in SIMPLE_SIGNATURES {
         let end = sig.offset as usize + sig.bytes.len();

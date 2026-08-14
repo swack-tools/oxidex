@@ -155,6 +155,16 @@ pub fn format_with_unit(tag_name: &str, value: &str) -> String {
         return format_focal_length_mm(value);
     }
 
+    // `Red:FocalLength` (Red.pm:142) is a bare shorthand -- `0x406b =>
+    // 'FocalLength'` with no PrintConv at all -- so the pinned oracle prints
+    // `24`, not `24 mm`. This is the same shape as the Canon note above but
+    // the opposite outcome: Canon.pm:3138 *declares* `"$val mm"`, Red.pm
+    // declares nothing, and appending a unit ExifTool never wrote would put a
+    // wrong value under a real tag name.
+    if base_name == "FocalLength" && tag_name.starts_with("Red:") {
+        return value.to_string();
+    }
+
     // Handle millimeter suffix for focal length tags
     if MM_SUFFIX_TAGS.contains(&base_name) {
         return format_with_mm_suffix(value);

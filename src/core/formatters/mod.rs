@@ -4,6 +4,7 @@
 //! human-readable strings matching ExifTool's output format.
 
 pub mod audio_encoding;
+pub mod bitrate;
 pub mod cfa_pattern;
 pub mod composite_image_exposure_times;
 pub mod duration;
@@ -25,6 +26,7 @@ pub mod ycbcr_subsampling;
 
 // Re-export main formatting functions for convenience
 pub use audio_encoding::audio_encoding_name;
+pub use bitrate::convert_bitrate;
 pub use cfa_pattern::decode_cfa_pattern;
 pub use composite_image_exposure_times::format_composite_image_exposure_times;
 pub use duration::convert_duration;

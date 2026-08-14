@@ -205,6 +205,12 @@ mod pgf_integration_tests;
 #[path = "integration/mrc_integration_tests.rs"]
 mod mrc_integration_tests;
 
+#[path = "integration/red_integration_tests.rs"]
+mod red_integration_tests;
+
+#[path = "integration/detected_not_parsed_tests.rs"]
+mod detected_not_parsed_tests;
+
 #[path = "integration/aa_integration_tests.rs"]
 mod aa_integration_tests;
 

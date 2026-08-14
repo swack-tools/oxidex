@@ -395,6 +395,21 @@ pub enum FileFormat {
     /// NetPBM Portable Pixmap/Graymap/Bitmap (.ppm, .pgm, .pbm)
     PPM,
 
+    /// Redcode R3D video, written by RED digital cinema cameras (.r3d)
+    R3D,
+
+    /// Paint Shop Pro image (.psp, .pspimage and friends)
+    PSP,
+
+    /// Sony DSC-F1 proprietary still image (.pmp)
+    PMP,
+
+    /// Raw Digital Video stream (.dv)
+    DV,
+
+    /// Zeiss Integrated Software RAW microscopy image (.czi)
+    CZI,
+
     /// Unknown or unsupported format
     Unknown,
 }
@@ -525,6 +540,11 @@ impl FileFormat {
             FileFormat::AA => "AA",
             FileFormat::PICT => "PICT",
             FileFormat::PPM => "PPM",
+            FileFormat::R3D => "R3D",
+            FileFormat::PSP => "PSP",
+            FileFormat::PMP => "PMP",
+            FileFormat::DV => "DV",
+            FileFormat::CZI => "CZI",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -660,6 +680,11 @@ impl FileFormat {
             FileFormat::AA => &["aa"],
             FileFormat::PICT => &["pict", "pct"],
             FileFormat::PPM => &["ppm", "pgm", "pbm"],
+            FileFormat::R3D => &["r3d"],
+            FileFormat::PSP => &["psp", "pspimage", "pspframe", "pspshape", "psptube", "tub"],
+            FileFormat::PMP => &["pmp"],
+            FileFormat::DV => &["dv"],
+            FileFormat::CZI => &["czi"],
             FileFormat::Unknown => &[],
         }
     }

@@ -3,6 +3,7 @@
 pub mod avif;
 pub mod bmp;
 pub mod bpg;
+pub mod czi;
 pub mod djvu;
 pub mod dpx;
 pub mod embedded;
@@ -19,8 +20,10 @@ pub mod pfm;
 pub mod pgf;
 pub mod photocd;
 pub mod pict;
+pub mod pmp;
 pub mod ppm;
 pub mod psd;
+pub mod psp;
 pub mod radiance;
 pub mod svg;
 pub mod webp;
