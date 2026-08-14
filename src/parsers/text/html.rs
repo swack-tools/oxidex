@@ -261,7 +261,7 @@ fn lookup<'a>(table: &'a [TagDef], key: &str) -> Option<&'a TagDef> {
 /// HTML 4 character entity references, sorted by name for binary search.
 /// Transcribed verbatim from `%entityNum` in `HTML.pm` (253 entries).
 #[rustfmt::skip]
-static ENTITY_NUM: &[(&str, u32)] = &[
+pub(crate) static ENTITY_NUM: &[(&str, u32)] = &[
     ("AElig", 198), ("Aacute", 193), ("Acirc", 194), ("Agrave", 192),
     ("Alpha", 913), ("Aring", 197), ("Atilde", 195), ("Auml", 196),
     ("Beta", 914), ("Ccedil", 199), ("Chi", 935), ("Dagger", 8225),
@@ -348,7 +348,7 @@ fn entity_value(table: &[(&str, u32)], name: &str) -> Option<u32> {
 /// `Image::ExifTool::XMP::UnescapeXML`, with the entity table supplied by the
 /// caller. Unknown entities are left as written, exactly as `UnescapeChar`
 /// does when the name is not in the table and is not a numeric reference.
-fn unescape(text: &str, table: &[(&str, u32)]) -> String {
+pub(crate) fn unescape(text: &str, table: &[(&str, u32)]) -> String {
     if !text.contains('&') {
         return text.to_string();
     }

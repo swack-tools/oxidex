@@ -190,6 +190,24 @@ mod ram_integration_tests;
 #[path = "integration/dss_integration_tests.rs"]
 mod dss_integration_tests;
 
+#[path = "integration/moi_integration_tests.rs"]
+mod moi_integration_tests;
+
+#[path = "integration/pcx_integration_tests.rs"]
+mod pcx_integration_tests;
+
+#[path = "integration/itc_integration_tests.rs"]
+mod itc_integration_tests;
+
+#[path = "integration/pgf_integration_tests.rs"]
+mod pgf_integration_tests;
+
+#[path = "integration/mrc_integration_tests.rs"]
+mod mrc_integration_tests;
+
+#[path = "integration/aa_integration_tests.rs"]
+mod aa_integration_tests;
+
 #[path = "integration/wpg_integration_tests.rs"]
 mod wpg_integration_tests;
 

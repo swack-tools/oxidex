@@ -5,6 +5,7 @@
 //! backward compatibility. The same applies to Mach-O parser which has been
 //! moved to `crate::parsers::macho`.
 
+pub mod aa;
 pub mod dwg;
 pub mod dxf;
 pub mod evtx;
@@ -12,8 +13,11 @@ pub mod fit;
 pub mod fits;
 pub mod gltf;
 pub mod hdf5;
+pub mod itc;
 pub mod lnk;
 pub mod lytro;
+pub mod moi;
+pub mod mrc;
 pub mod obj;
 pub mod pcap;
 pub mod plist;

@@ -47,7 +47,9 @@ use crate::parsers::image::exr::parse_exr_metadata;
 use crate::parsers::image::flif::parse_flif_metadata;
 use crate::parsers::image::gif::parse_gif_metadata;
 use crate::parsers::image::miff::parse_miff_metadata;
+use crate::parsers::image::pcx::parse_pcx_metadata;
 use crate::parsers::image::pfm::parse_pfm_metadata;
+use crate::parsers::image::pgf::parse_pgf_metadata;
 use crate::parsers::image::photocd::parse_pcd_metadata;
 use crate::parsers::image::radiance::parse_radiance_metadata;
 use crate::parsers::image::xcf::parse_xcf_metadata;
@@ -69,6 +71,7 @@ use crate::parsers::pdf::parse_pdf_metadata;
 use crate::parsers::pe::parse_pe_metadata;
 use crate::parsers::png::parse_png_metadata;
 use crate::parsers::quicktime::parse_quicktime_metadata;
+use crate::parsers::specialized::aa::parse_aa_metadata;
 use crate::parsers::specialized::dwg::parse_dwg_metadata;
 use crate::parsers::specialized::dxf::parse_dxf_metadata;
 use crate::parsers::specialized::evtx::parse_evtx_metadata;
@@ -76,8 +79,11 @@ use crate::parsers::specialized::fit::parse_fit_metadata;
 use crate::parsers::specialized::fits::{parse_dicom_metadata, parse_fits_metadata};
 use crate::parsers::specialized::gltf::parse_gltf_metadata;
 use crate::parsers::specialized::hdf5::parse_hdf5_metadata;
+use crate::parsers::specialized::itc::parse_itc_metadata;
 use crate::parsers::specialized::lnk::parse_lnk_metadata;
 use crate::parsers::specialized::lytro::parse_lytro_metadata;
+use crate::parsers::specialized::moi::parse_moi_metadata;
+use crate::parsers::specialized::mrc::parse_mrc_metadata;
 use crate::parsers::specialized::obj::parse_obj_metadata;
 use crate::parsers::specialized::pcap::parse_pcap_metadata;
 use crate::parsers::specialized::plist::parse_plist_metadata;
@@ -242,6 +248,12 @@ pub fn dispatch_format_parser(
         FileFormat::DR4 => parse_dr4_file(reader),
         FileFormat::FPF => parse_fpf_metadata(reader),
         FileFormat::MIE => convert_string_error(parse_mie_metadata(reader), "MIE"),
+        FileFormat::MOI => convert_string_error(parse_moi_metadata(reader), "MOI"),
+        FileFormat::ITC => convert_string_error(parse_itc_metadata(reader), "ITC"),
+        FileFormat::PCX => convert_string_error(parse_pcx_metadata(reader), "PCX"),
+        FileFormat::PGF => convert_string_error(parse_pgf_metadata(reader), "PGF"),
+        FileFormat::MRC => convert_string_error(parse_mrc_metadata(reader), "MRC"),
+        FileFormat::AA => convert_string_error(parse_aa_metadata(reader), "AA"),
         _ => Err(ExifToolError::unsupported_format(format!(
             "Format {:?} not yet supported in this iteration",
             format

@@ -358,6 +358,25 @@ pub enum FileFormat {
     /// MIE (Meta Information Encapsulation) format (.mie)
     MIE,
 
+    /// MOD Information file, written by some JVC/Canon/Panasonic camcorders
+    /// alongside a MOD or TOD video (.moi)
+    MOI,
+
+    /// iTunes Cover Flow cache (.itc)
+    ITC,
+
+    /// PC Paintbrush image (.pcx)
+    PCX,
+
+    /// Progressive Graphics File (.pgf)
+    PGF,
+
+    /// Medical Research Council electron-microscopy image (.mrc)
+    MRC,
+
+    /// Audible audiobook (.aa)
+    AA,
+
     /// Unknown or unsupported format
     Unknown,
 }
@@ -477,6 +496,12 @@ impl FileFormat {
             FileFormat::FPF => "FPF",
             FileFormat::DICOM => "DICOM",
             FileFormat::MIE => "MIE",
+            FileFormat::MOI => "MOI",
+            FileFormat::ITC => "ITC",
+            FileFormat::PCX => "PCX",
+            FileFormat::PGF => "PGF",
+            FileFormat::MRC => "MRC",
+            FileFormat::AA => "AA",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -598,6 +623,12 @@ impl FileFormat {
             FileFormat::FPF => &["fpf"],
             FileFormat::DICOM => &["dcm", "dicom"],
             FileFormat::MIE => &["mie"],
+            FileFormat::MOI => &["moi"],
+            FileFormat::ITC => &["itc"],
+            FileFormat::PCX => &["pcx"],
+            FileFormat::PGF => &["pgf"],
+            FileFormat::MRC => &["mrc"],
+            FileFormat::AA => &["aa"],
             FileFormat::Unknown => &[],
         }
     }

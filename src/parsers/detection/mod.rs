@@ -207,6 +207,46 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::MIE);
     }
 
+    // PCX: `^\x0a[\x00-\x05]\x01[\x01\x02\x04\x08].{64}[\x00-\x02]`
+    // (PCX.pm's own inline check, `ProcessPCX`). The two byte-range
+    // alternations at offsets 1 and 3 are outside `signature!`'s literal-bytes
+    // grammar, same reason FITS and MIE are checked here.
+    if crate::filetype::matches_magic("PCX", magic_bytes) {
+        return Ok(FileFormat::PCX);
+    }
+
+    // MRC: `^.{64}[\x01-\x03]\x00\x00\x00...MAP[\x00 ](\x44\x44|\x44\x41|\x11\x11)\x00\x00`
+    // (ExifTool.pm's `%magicNumber`, generated from MRC.pm's header layout).
+    // The alternation on the machine-stamp bytes at offset ~212 is outside
+    // the literal-bytes grammar.
+    if crate::filetype::matches_magic("MRC", magic_bytes) {
+        return Ok(FileFormat::MRC);
+    }
+
+    // MOI: `^V6` (MOI.pm's `ProcessMOI`, `$buff =~ /^V6/`). A two-byte magic
+    // is weak on its own; `moi.rs`'s parser re-validates the 256-byte header
+    // length and (when known) the embedded file-size field before accepting.
+    if magic_bytes.starts_with(b"V6") {
+        return Ok(FileFormat::MOI);
+    }
+
+    // ITC: `^.{4}itch` -- iTunes Cover Flow's first block is always an
+    // `itch` header box (ITC.pm's `ProcessITC`).
+    if magic_bytes.len() >= 8 && &magic_bytes[4..8] == b"itch" {
+        return Ok(FileFormat::ITC);
+    }
+
+    // PGF: `^PGF` (PGF.pm's `ProcessPGF`, `$buff =~ /^PGF(.)/`).
+    if magic_bytes.starts_with(b"PGF") {
+        return Ok(FileFormat::PGF);
+    }
+
+    // AA: `^.{4}\x57\x90\x75\x36` (Audible.pm's `ProcessAA`) -- a 4-byte
+    // magic number sitting after the file's own big-endian size field.
+    if magic_bytes.len() >= 8 && &magic_bytes[4..8] == b"\x57\x90\x75\x36" {
+        return Ok(FileFormat::AA);
+    }
+
     // Phase 2: Check simple signatures from lookup table
     for sig in SIMPLE_SIGNATURES {
         let end = sig.offset as usize + sig.bytes.len();
