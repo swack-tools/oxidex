@@ -172,6 +172,14 @@ _TOKEN_SPEC = [
     ("SELFCONVERTDATETIME", r"\$self->ConvertDateTime"),
     ("SELFDECODE", r"\$self->Decode"),
     ("SELFTOK", r"\$self"),
+    # Composite ValueConv/PrintConv/RawConv index into ExifTool's `@val`
+    # array ($val[0], $val[1], ...) rather than using the scalar `$val` an
+    # ordinary tag's conversion sees -- must be tried before VAL below, or
+    # "$val[0]" would lex as VAL followed by unconsumed "[0]" and refuse.
+    # Only used by compile_composite(); the scalar grammar never produces
+    # this token because ordinary (non-Composite) conversions never contain
+    # "$val[".
+    ("VALIDX", r"\$val\[(\d+)\]"),
     ("VAL", r"\$val"),
     ("NUM", r"0[xX][0-9a-fA-F]+|\d+\.\d+(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|\d+(?:[eE][+-]?\d+)?"),
     ("STR", r'"(?:[^"\\]|\\.)*"' + r"|'(?:[^'\\]|\\.)*'"),
@@ -364,6 +372,10 @@ class _Parser:
         if kind == "VAL":
             self._eat("VAL")
             return ("f64", "{v}")
+        if kind == "VALIDX":
+            _, idxtext = self._eat("VALIDX")
+            idx = re.match(r"\$val\[(\d+)\]", idxtext).group(1)
+            return ("f64", "{v" + idx + "}")
         if kind == "LPAREN":
             self._eat("LPAREN")
             v = self.parse_ternary()
@@ -924,6 +936,89 @@ def translate_or_compile_any(expr):
     if t:
         return ("num", t[0], t[1])
     return compile_any(expr)
+
+
+# =============================================================================
+# compile_composite() -- the $val[N]-indexed sibling of compile(), for
+# Composite ValueConv/PrintConv/RawConv text (codegen_composite.py's use,
+# not codegen.py's). ExifTool's Composite conversions see the whole `@val`
+# array, referenced as `$val[0]`, `$val[1]`, ... -- a different shape from
+# the single scalar `$val` an ordinary tag's conversion sees, which is what
+# compile()/translate() above assume throughout (VAL always renders as the
+# lone placeholder "{v}").
+#
+# A bare `$val` (no brackets) is legal inside a Composite conversion too --
+# not a mistake, and not the same thing as an ordinary tag's $val: ExifTool
+# aliases it to $val[0] for exactly this case (ExifTool.pm:3611-3612's `$val
+# = ref $conv eq 'CODE' ? \@val : $val[0];`, evaluated before every
+# Composite RawConv/ValueConv/PrintConv `eval`). FLIR.pm:1313's
+# `ValueConv => '14387.6515/$val'` on a single-Require composite is exactly
+# this shape, not a scalar-tag conversion that wandered into this file by
+# accident.
+#
+# Reuses every existing grammar rule (arithmetic, ternary, sprintf, ...)
+# unchanged: the only new surface is the VALIDX token above and this
+# pre-normalisation pass, so a construct this compiler already refuses for
+# the scalar grammar (a regex match, a `split`, a `$self->` call, a second
+# distinct interpolation) is refused here too, for the same reason.
+_BARE_VAL_RE = re.compile(r"\$val(?!\[)")
+_VPLACEHOLDER_RE = re.compile(r"\{v(\d+)\}")
+_COMPOSITE_COMPILE_CACHE = {}
+
+
+def compile_composite(expr):
+    """Compile a Composite conversion expression over `$val[N]` (and bare
+    `$val`, aliased to `$val[0]`) into Rust.
+
+    Returns `(rust_type, rust_code, indices_used)` -- `rust_code` uses
+    "{v0}", "{v1}", ... placeholders, one per referenced index, and
+    `indices_used` is the sorted list of ints actually referenced (so a
+    caller building a fixed-arity Inputs slice knows which positions the
+    generated code actually reads). Returns None if `expr` is missing or
+    falls outside the closed grammar, exactly like compile() -- refused and
+    counted, never approximated.
+    """
+    if expr is None:
+        return None
+    s = normalize(expr)
+    s = _BARE_VAL_RE.sub("$val[0]", s)
+    if s in _COMPOSITE_COMPILE_CACHE:
+        return _COMPOSITE_COMPILE_CACHE[s]
+    result = _compile_composite_uncached(s)
+    _COMPOSITE_COMPILE_CACHE[s] = result
+    return result
+
+
+def _compile_composite_uncached(s):
+    try:
+        toks = _tokenize(s)
+        vt, code = _Parser(toks).parse_top()
+    except ExprCompileError:
+        return None
+    except (IndexError, RecursionError):
+        return None
+
+    vt, code = _as_f64((vt, code))
+    if vt == "f64":
+        rust_type = "f64"
+    elif vt == "f64_int":
+        rust_type = "f64_int"
+    elif vt == "string":
+        rust_type = "String"
+    elif vt == "f64_option":
+        rust_type = "Option<f64>"
+    else:
+        # A bare "bool" or "undef" as the whole expression has no
+        # corresponding ValueConv/PrintConv output shape.
+        return None
+
+    indices = sorted({int(m) for m in _VPLACEHOLDER_RE.findall(code)})
+    if not indices:
+        # A composite conversion that never actually reads $val[N] anywhere
+        # (a bare numeric/string literal) is not a real translation of a
+        # Composite -- ExifTool composites always derive from their inputs.
+        return None
+    return (rust_type, code, indices)
 
 
 def known_num_domain_exprs():

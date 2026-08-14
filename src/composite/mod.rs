@@ -15,6 +15,7 @@
 //! composite whose computation is not implemented simply never fires.
 
 pub mod compute;
+mod generated_compute;
 pub mod tables;
 
 pub use tables::{COMPOSITES, Composite};
@@ -153,6 +154,31 @@ fn resolve(map: &MetadataMap, name: &str) -> Option<String> {
     resolve_dependency(map, &key)
 }
 
+/// Iteration order for one [`apply`] pass: every non-`Inhibit` Composite
+/// first, in `COMPOSITES` order, then every `Inhibit`-bearing one.
+///
+/// ExifTool's own `BuildCompositeTags` defers an `Inhibit`-bearing tag until
+/// everything else has had its chance, specifically so it does not race a
+/// same-named primary that has not been attempted yet in this same pass
+/// (ExifTool.pm:4049-4052's `unless ($$inhibit{$index} and $allBuilt) { push
+/// @deferredTags, ... }`, which holds a tag like `LensID-2` back until the
+/// *last* internal iteration, "ignoring Composite Inhibit tags" only once
+/// nothing else remains buildable -- ExifTool.pm:4157). Two ordering passes
+/// (this one, plus the outer `MAX_PASSES` fixpoint loop) is the whole of
+/// that mechanism this crate needs: only two ExifTool composites declare
+/// `Inhibit` at all (`Exif::LensID-2`, `XMP::LensID`), both against the same
+/// target (`Composite:LensID`), and that target is never itself
+/// `Inhibit`-bearing, so one non-inhibit-first ordering per pass is already
+/// enough to guarantee the primary is attempted before either fallback in
+/// the very first pass it could fire in.
+fn pass_order() -> Vec<usize> {
+    let mut order: Vec<usize> = (0..COMPOSITES.len())
+        .filter(|&i| COMPOSITES[i].inhibit.is_empty())
+        .collect();
+    order.extend((0..COMPOSITES.len()).filter(|&i| !COMPOSITES[i].inhibit.is_empty()));
+    order
+}
+
 /// Compute every Composite tag whose inputs are available, and insert them.
 ///
 /// Returns the number of tags added. Existing tags are never overwritten: a
@@ -163,17 +189,26 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // it once up front rather than per composite.
     let make = resolve(map, "Make");
     let file_type = resolve(map, "FileType");
-    // Composites this run produced. They may be recomputed on a later pass
-    // once more of their optional inputs exist; tags that came from the file
-    // are never touched.
-    let mut ours: HashSet<&str> = HashSet::new();
+    // Composites this run produced, keyed by each definition's own index
+    // into COMPOSITES -- NOT by `comp.name`. Two distinct table rows can
+    // share one output Name (`Exif::LensID` and `Exif::LensID-2` both
+    // produce `Composite:LensID`; see `Composite::inhibit`'s doc comment),
+    // and keying this set by name alone would let firing the first make
+    // `already_ours` true for the *second* too, letting it re-fire later in
+    // the very same pass and overwrite -- via the `map.remove` a genuine
+    // same-definition refinement is allowed below -- a value that was never
+    // its own to refine. Indexing by position keeps "I am revisiting my own
+    // prior guess" and "someone else already claimed this name" distinct.
+    let mut ours: HashSet<usize> = HashSet::new();
+    let order = pass_order();
 
     for _pass in 0..MAX_PASSES {
         let mut added_this_pass = 0;
 
-        for comp in COMPOSITES {
+        for &idx in &order {
+            let comp = &COMPOSITES[idx];
             let key = format!("Composite:{}", comp.name);
-            let already_ours = ours.contains(comp.name);
+            let already_ours = ours.contains(&idx);
             // Exif.pm guards this join with
             // `not defined $$self{VALUE}{DateTimeOriginal}`. An extracted
             // DateTimeOriginal in any source group wins over the synthesized
@@ -190,7 +225,29 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             // needs ScaleFactor35efl, which is itself derived. Without this it
             // would be frozen at "34.0 mm" instead of gaining its 35 mm
             // equivalent. Values read from the file are still never replaced.
+            //
+            // This ALSO blocks any other Composite definition that shares
+            // this output name once one of them has claimed the key -- see
+            // `ours`'s own doc comment just above.
             if !already_ours && (map.contains_key(&key) || map.contains_key(comp.name)) {
+                continue;
+            }
+
+            // ExifTool.pm's `Inhibit` (ExifTool.pm:4080-4089's `if
+            // ($$inhibit{$index}) { $found = 0; last; }`): the mirror image
+            // of `Require` -- if ANY of these indexed dependencies resolves
+            // to a value, this definition must not fire, full stop, even if
+            // its own Require/Desire are otherwise satisfied. `LensID-2`
+            // (Exif.pm:5362-5385) and XMP's own `LensID` (XMP.pm:2789-2801)
+            // both inhibit on `Composite:LensID`, so neither ever computes
+            // while the LensType-based primary already has -- see
+            // `pass_order`'s doc comment for why the primary is guaranteed
+            // to have been attempted first within this same pass.
+            if comp
+                .inhibit
+                .iter()
+                .any(|&(_, dep)| resolve(map, dep).is_some())
+            {
                 continue;
             }
 
@@ -298,7 +355,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                 if !already_ours {
                     added += 1;
                 }
-                ours.insert(comp.name);
+                ours.insert(idx);
                 if changed {
                     added_this_pass += 1;
                 }
@@ -751,6 +808,127 @@ mod tests {
         let mut m = MetadataMap::new();
         assert_eq!(apply(&mut m), 0);
     }
+
+    #[test]
+    fn pass_order_defers_every_inhibit_bearing_composite() {
+        // The whole correctness of Inhibit gating rests on the primary
+        // always being attempted before its inhibit-bearing alternates
+        // within the same pass (see `pass_order`'s doc comment). Pin that
+        // ordering property directly, independent of any one composite's
+        // implementation status.
+        let order = pass_order();
+        assert_eq!(order.len(), COMPOSITES.len());
+        let first_inhibit_pos = order
+            .iter()
+            .position(|&i| !COMPOSITES[i].inhibit.is_empty())
+            .expect("at least one Inhibit-bearing composite is generated");
+        assert!(
+            order[..first_inhibit_pos]
+                .iter()
+                .all(|&i| COMPOSITES[i].inhibit.is_empty()),
+            "an Inhibit-bearing composite was ordered before a non-inhibit one"
+        );
+        assert!(
+            order[first_inhibit_pos..]
+                .iter()
+                .all(|&i| !COMPOSITES[i].inhibit.is_empty()),
+            "a non-inhibit composite was ordered after an Inhibit-bearing one"
+        );
+    }
+
+    #[test]
+    fn exif_lens_id_and_lens_id_2_are_both_generated_with_the_inhibit_wired() {
+        // Regression pin for the codegen dedup fix: Exif.pm defines LensID
+        // twice under one Name ('LensID' and 'LensID-2', Exif.pm:5362-5385),
+        // and the old (module, Name) dedup key silently dropped the second
+        // one -- see codegen_composite.py's own comment on this. Both must
+        // survive table generation, and only the alternate (`LensID-2`)
+        // carries an `Inhibit` on `Composite:LensID`.
+        let exif_lens_ids: Vec<&Composite> = COMPOSITES
+            .iter()
+            .filter(|c| c.module == "Exif" && c.name == "LensID")
+            .collect();
+        assert_eq!(
+            exif_lens_ids.len(),
+            2,
+            "expected Exif's primary LensID and its LensID-2 fallback"
+        );
+        let primary = exif_lens_ids
+            .iter()
+            .find(|c| !c.require.is_empty())
+            .expect("the LensType-requiring primary");
+        assert!(primary.inhibit.is_empty());
+        assert_eq!(primary.require, &[(0, "LensType")]);
+
+        let fallback = exif_lens_ids
+            .iter()
+            .find(|c| c.require.is_empty())
+            .expect("the Desire-only LensID-2 fallback");
+        assert_eq!(fallback.inhibit, &[(4, "Composite:LensID")]);
+    }
+
+    #[test]
+    fn xmp_lens_id_also_carries_its_inhibit_on_the_exif_primary() {
+        // XMP.pm's own LensID (XMP.pm:2789-2801) is a *different* module, so
+        // it never collided with Exif's under the old dedup key -- but it
+        // was still silently dropping its `Inhibit` field before this step,
+        // since the generator never read `Inhibit` at all.
+        let xmp_lens_id = COMPOSITES
+            .iter()
+            .find(|c| c.module == "XMP" && c.name == "LensID")
+            .expect("generated XMP LensID composite");
+        assert_eq!(xmp_lens_id.inhibit, &[(6, "Composite:LensID")]);
+    }
+
+    #[test]
+    fn inhibited_lens_id_fallback_never_overwrites_the_primarys_answer() {
+        // Exif's primary LensID composite only has a narrow hand-written
+        // implementation today (the Canon "n/a"/65535 unknown-lens
+        // fallback, `compute::compute`'s `("Exif", "LensID")` arm) -- but
+        // that is enough to exercise the real Inhibit-gated ordering
+        // end-to-end: seed BOTH the primary's inputs (which fire) and
+        // LensID-2's own inputs (LensModel/Lens/Make, which would let it
+        // attempt to fire too), and confirm the primary's answer survives
+        // untouched. `pass_order` guarantees the primary is attempted
+        // first in this same pass; `Composite:LensID` being already
+        // populated is what then keeps LensID-2 from ever landing --
+        // whether via its own (currently absent) implementation or via a
+        // future one, this must stay true.
+        let mut m = map_of(&[
+            ("ExifIFD:LensType", "n/a"),
+            ("ExifIFD:MinFocalLength", "18"),
+            ("ExifIFD:MaxFocalLength", "55"),
+            ("ExifIFD:LensModel", "EF 50mm f/1.8"),
+            ("ExifIFD:Lens", "50mm F1.8"),
+            ("IFD0:Make", "Canon"),
+        ]);
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:LensID"),
+            Some("Unknown 18-55mm"),
+            "the LensType-based primary must win, not the LensModel/Lens fallback"
+        );
+    }
+
+    #[test]
+    fn lens_id_2_does_not_fire_without_the_primary_when_unimplemented() {
+        // Honest-state pin: LensID-2 has no computation of its own
+        // registered in compute.rs (it is listed in
+        // codegen_composite.py's "no registered computation" triage), so
+        // even when the primary genuinely cannot fire (no LensType at
+        // all) and LensID-2's own Inhibit target is absent -- meaning the
+        // Inhibit gate correctly lets it ATTEMPT -- Composite:LensID
+        // still ends up absent rather than silently wrong. This is the
+        // "refused and counted, never approximated" rule, not a bug: it
+        // stays true only until someone adds real LensID-2 logic.
+        let mut m = map_of(&[
+            ("ExifIFD:LensModel", "EF 50mm f/1.8"),
+            ("ExifIFD:Lens", "50mm F1.8"),
+            ("IFD0:Make", "Canon"),
+        ]);
+        apply(&mut m);
+        assert_eq!(m.get_string("Composite:LensID"), None);
+    }
 }
 
 #[cfg(test)]
@@ -841,6 +1019,68 @@ mod step22_bare_name_arbitration_regression {
         assert_eq!(
             composite_string(EXIFTOOL_JPG, "Composite:LightValue"),
             Some("10.9".to_string())
+        );
+    }
+}
+
+#[cfg(test)]
+mod step29_generated_expression_regression {
+    //! Step 29 (R6): pinned-corpus regressions for the three Composites
+    //! `codegen_composite.py`'s `$val[N]` grammar compiler
+    //! (`tools/exiftool-tables/exprs.py::compile_composite`) auto-derives
+    //! with zero hand-written code in `compute.rs` -- see
+    //! `src/composite/generated_compute.rs`. Each value below is quoted
+    //! from the pinned 13.59 oracle (`exiftool -G1 -s -a`), on a real
+    //! sample from `combined-samples` that exercises the composite.
+
+    use std::path::Path;
+
+    fn composite_string(path: &str, key: &str) -> Option<String> {
+        let path = Path::new(path);
+        if !path.is_file() {
+            eprintln!("skip: pinned fixture {} not present", path.display());
+            return Some("<skipped: fixture absent>".to_string());
+        }
+        let report = crate::core::operations::read_metadata_report(path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        report
+            .metadata
+            .get_string(key)
+            .map(std::string::ToString::to_string)
+    }
+
+    const FLIR_JPG: &str = "/tmp/oxidex-exiftool-cache/combined-samples/FLIR.jpg";
+    const PANASONIC_RW2: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic.rw2";
+
+    /// FLIR.pm:1311-1315: `PeakSpectralSensitivity => { Require =>
+    /// 'FLIR:PlanckB', ValueConv => '14387.6515/$val', PrintConv =>
+    /// 'sprintf("%.1f um", $val)' }`. The bare `$val` here is the single
+    /// Require'd input aliased to `$val[0]` (ExifTool.pm:3611-3612), not a
+    /// scalar-tag conversion -- see `compile_composite`'s own doc comment.
+    /// Pinned oracle on `FLIR.jpg` (`PlanckB` = 1374.5): `"10.5 um"`.
+    #[test]
+    fn flir_peak_spectral_sensitivity_matches_the_pinned_oracle() {
+        assert_eq!(
+            composite_string(FLIR_JPG, "Composite:PeakSpectralSensitivity"),
+            Some("10.5 um".to_string())
+        );
+    }
+
+    /// PanasonicRaw.pm's `ImageWidth`/`ImageHeight` (`ValueConv => '$val[1]
+    /// - $val[0]'` over `SensorRightBorder`/`SensorLeftBorder` and
+    /// `SensorBottomBorder`/`SensorTopBorder`) have no PrintConv, so the
+    /// generated arm's `print` is the same `perl_num`-formatted value.
+    /// Pinned oracle on `Panasonic.rw2`
+    /// (SensorLeftBorder/Right/Top/Bottom = 8/3656/6/2742): `3648`/`2736`.
+    #[test]
+    fn panasonicraw_image_size_matches_the_pinned_oracle() {
+        assert_eq!(
+            composite_string(PANASONIC_RW2, "Composite:ImageWidth"),
+            Some("3648".to_string())
+        );
+        assert_eq!(
+            composite_string(PANASONIC_RW2, "Composite:ImageHeight"),
+            Some("2736".to_string())
         );
     }
 }

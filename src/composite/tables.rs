@@ -29,9 +29,20 @@ pub struct Composite {
     pub require: &'static [(usize, &'static str)],
     /// Indexed optional inputs; absent positions are passed through as `None`.
     pub desire: &'static [(usize, &'static str)],
+    /// If ANY of these indexed dependencies resolves to a value, this
+    /// Composite does not fire at all this pass -- ExifTool's
+    /// `BuildCompositeTags` (ExifTool.pm:4070-4079) treats an `Inhibit`
+    /// entry as the mirror image of `Require`: present means refuse,
+    /// absent is simply not an input. Used by exactly two ExifTool
+    /// composites, both yielding to a same-named primary that can produce
+    /// a better answer when it fires: Exif.pm's `LensID-2` (the
+    /// LensModel/Lens text fallback) inhibits on `Composite:LensID` (the
+    /// LensType-based primary), and XMP.pm's own `LensID` (the
+    /// XMP-aux:LensID numeric fallback) inhibits on the same target.
+    pub inhibit: &'static [(usize, &'static str)],
 }
 
-/// Every Composite definition ExifTool declares (104 total).
+/// Every Composite definition ExifTool declares (105 total).
 pub static COMPOSITES: &[Composite] = &[
     Composite {
         name: "Duration",
@@ -40,6 +51,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "AIFF:SampleRate"), (1, "AIFF:NumSampleFrames")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "Duration",
@@ -53,6 +65,7 @@ pub static COMPOSITES: &[Composite] = &[
             (3, "APE:FinalFrameBlocks"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "RunTimeSincePowerUp",
@@ -61,6 +74,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Apple:RunTimeValue"), (1, "Apple:RunTimeScale")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ConditionalFEC",
@@ -69,6 +83,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "FlashExposureComp"), (1, "FlashBits")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "DigitalZoom",
@@ -81,6 +96,7 @@ pub static COMPOSITES: &[Composite] = &[
             (2, "Canon:DigitalZoom"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "DriveMode",
@@ -89,6 +105,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "ContinuousDrive"), (1, "SelfTimer")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "FileNumber",
@@ -97,6 +114,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "DirectoryIndex"), (1, "FileIndex")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "FlashType",
@@ -105,6 +123,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "FlashBits")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ISO",
@@ -117,6 +136,7 @@ pub static COMPOSITES: &[Composite] = &[
             (1, "Canon:BaseISO"),
             (2, "Canon:AutoISO"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "Lens",
@@ -125,6 +145,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Canon:MinFocalLength"), (1, "Canon:MaxFocalLength")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "Lens35efl",
@@ -137,6 +158,7 @@ pub static COMPOSITES: &[Composite] = &[
             (3, "Lens"),
         ],
         desire: &[(2, "ScaleFactor35efl")],
+        inhibit: &[],
     },
     Composite {
         name: "OriginalDecisionData",
@@ -145,6 +167,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "OriginalDecisionDataOffset")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "RedEyeReduction",
@@ -153,6 +176,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "CanonFlashMode"), (1, "FlashBits")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ShootingMode",
@@ -161,6 +185,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "CanonExposureMode"), (1, "EasyMode")],
         desire: &[(2, "BulbDuration")],
+        inhibit: &[],
     },
     Composite {
         name: "ShutterCurtainHack",
@@ -169,6 +194,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(1, "FlashBits")],
         desire: &[(0, "ShutterCurtainSync")],
+        inhibit: &[],
     },
     Composite {
         name: "WB_RGGBLevels",
@@ -188,6 +214,7 @@ pub static COMPOSITES: &[Composite] = &[
             (10, "WB_RGGBLevelsShade"),
             (11, "WB_RGGBLevelsKelvin"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "Aperture",
@@ -196,6 +223,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[],
         desire: &[(0, "FNumber"), (1, "ApertureValue")],
+        inhibit: &[],
     },
     Composite {
         name: "BlueBalance",
@@ -216,6 +244,7 @@ pub static COMPOSITES: &[Composite] = &[
             (9, "WBBlueLevel"),
             (10, "WBGreenLevel"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "CFAPattern",
@@ -224,6 +253,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "CFARepeatPatternDim"), (1, "CFAPattern2")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "CircleOfConfusion",
@@ -232,6 +262,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "ScaleFactor35efl")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "DOF",
@@ -251,6 +282,7 @@ pub static COMPOSITES: &[Composite] = &[
             (7, "FocusDistanceLower"),
             (8, "FocusDistanceUpper"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "DateTimeOriginal",
@@ -263,6 +295,7 @@ pub static COMPOSITES: &[Composite] = &[
             (1, "DateCreated"),
             (2, "TimeCreated"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "FOV",
@@ -271,6 +304,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "FocalLength"), (1, "ScaleFactor35efl")],
         desire: &[(2, "FocusDistance")],
+        inhibit: &[],
     },
     Composite {
         name: "FocalLength35efl",
@@ -279,6 +313,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "FocalLength")],
         desire: &[(1, "ScaleFactor35efl")],
+        inhibit: &[],
     },
     Composite {
         name: "GPSPosition",
@@ -287,6 +322,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 0,
         require: &[(0, "GPSLatitude"), (1, "GPSLongitude")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "HyperfocalDistance",
@@ -299,6 +335,7 @@ pub static COMPOSITES: &[Composite] = &[
             (2, "CircleOfConfusion"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ImageSize",
@@ -311,6 +348,7 @@ pub static COMPOSITES: &[Composite] = &[
             (3, "ExifImageHeight"),
             (4, "RawImageCroppedSize"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "JpgFromRaw",
@@ -319,6 +357,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "JpgFromRawStart"), (1, "JpgFromRawLength")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "LensID",
@@ -340,6 +379,21 @@ pub static COMPOSITES: &[Composite] = &[
             (11, "LensFocalLength"),
             (12, "RFLensType"),
         ],
+        inhibit: &[],
+    },
+    Composite {
+        name: "LensID",
+        module: "Exif",
+        group2: "Camera",
+        priority: 1,
+        require: &[],
+        desire: &[
+            (0, "LensModel"),
+            (1, "Lens"),
+            (2, "XMP-aux:LensID"),
+            (3, "Make"),
+        ],
+        inhibit: &[(4, "Composite:LensID")],
     },
     Composite {
         name: "LightValue",
@@ -348,6 +402,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Aperture"), (1, "ShutterSpeed"), (2, "ISO")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "Megapixels",
@@ -356,6 +411,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "ImageSize")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "OtherImage",
@@ -364,6 +420,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "OtherImageStart"), (1, "OtherImageLength")],
         desire: &[(2, "OtherImageStart (1)"), (3, "OtherImageLength (1)")],
+        inhibit: &[],
     },
     Composite {
         name: "PreviewImage",
@@ -376,6 +433,7 @@ pub static COMPOSITES: &[Composite] = &[
             (3, "PreviewImageStart (1)"),
             (4, "PreviewImageLength (1)"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "PreviewImageSize",
@@ -384,6 +442,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "PreviewImageWidth"), (1, "PreviewImageHeight")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "PreviewJXL",
@@ -392,6 +451,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "PreviewJXLStart"), (1, "PreviewJXLLength")],
         desire: &[(2, "PreviewJXLStart (1)"), (3, "PreviewJXLLength (1)")],
+        inhibit: &[],
     },
     Composite {
         name: "RedBalance",
@@ -412,6 +472,7 @@ pub static COMPOSITES: &[Composite] = &[
             (9, "WBRedLevel"),
             (10, "WBGreenLevel"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "ScaleFactor35efl",
@@ -437,6 +498,7 @@ pub static COMPOSITES: &[Composite] = &[
             (14, "ImageWidth"),
             (15, "ImageHeight"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "ShutterSpeed",
@@ -449,6 +511,7 @@ pub static COMPOSITES: &[Composite] = &[
             (1, "ShutterSpeedValue"),
             (2, "BulbDuration"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "SubSecCreateDate",
@@ -460,6 +523,7 @@ pub static COMPOSITES: &[Composite] = &[
             (1, "EXIF:SubSecTimeDigitized"),
             (2, "EXIF:OffsetTimeDigitized"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "SubSecDateTimeOriginal",
@@ -471,6 +535,7 @@ pub static COMPOSITES: &[Composite] = &[
             (1, "EXIF:SubSecTimeOriginal"),
             (2, "EXIF:OffsetTimeOriginal"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "SubSecModifyDate",
@@ -479,6 +544,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "EXIF:ModifyDate")],
         desire: &[(1, "EXIF:SubSecTime"), (2, "EXIF:OffsetTime")],
+        inhibit: &[],
     },
     Composite {
         name: "ThumbnailImage",
@@ -487,6 +553,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "ThumbnailOffset"), (1, "ThumbnailLength")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ThumbnailTIFF",
@@ -506,6 +573,7 @@ pub static COMPOSITES: &[Composite] = &[
             (9, "StripByteCounts"),
         ],
         desire: &[(10, "PlanarConfiguration"), (11, "Orientation")],
+        inhibit: &[],
     },
     Composite {
         name: "Duration",
@@ -514,6 +582,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "FLAC:SampleRate"), (1, "FLAC:TotalSamples")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "PeakSpectralSensitivity",
@@ -522,6 +591,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "FLIR:PlanckB")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "PreviewImage",
@@ -530,6 +600,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "ScreenNail")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSAltitude",
@@ -543,6 +614,7 @@ pub static COMPOSITES: &[Composite] = &[
             (2, "XMP:GPSAltitude"),
             (3, "XMP:GPSAltitudeRef"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "GPSDateTime",
@@ -551,6 +623,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "GPS:GPSDateStamp"), (1, "GPS:GPSTimeStamp")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSDestLatitude",
@@ -559,6 +632,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "GPS:GPSDestLatitude"), (1, "GPS:GPSDestLatitudeRef")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSDestLongitude",
@@ -567,6 +641,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "GPS:GPSDestLongitude"), (1, "GPS:GPSDestLongitudeRef")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSLatitude",
@@ -575,6 +650,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "GPS:GPSLatitude"), (1, "GPS:GPSLatitudeRef")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSLongitude",
@@ -583,6 +659,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "GPS:GPSLongitude"), (1, "GPS:GPSLongitudeRef")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "DateTimeOriginal",
@@ -596,6 +673,7 @@ pub static COMPOSITES: &[Composite] = &[
             (2, "ID3:Date"),
             (3, "ID3:Time"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "DateTimeCreated",
@@ -604,6 +682,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "IPTC:DateCreated"), (1, "IPTC:TimeCreated")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "DigitalCreationDateTime",
@@ -615,6 +694,7 @@ pub static COMPOSITES: &[Composite] = &[
             (1, "IPTC:DigitalCreationTime"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "VolumeSize",
@@ -623,6 +703,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "ISO:VolumeBlockCount"), (1, "ISO:VolumeBlockSize")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "DateCreated",
@@ -631,6 +712,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Kodak:YearCreated"), (1, "Kodak:MonthDayCreated")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "WB_RGBLevels",
@@ -647,6 +729,7 @@ pub static COMPOSITES: &[Composite] = &[
             (6, "WB_RGBLevels5"),
             (7, "WB_RGBLevelsShade"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "AudioBitrate",
@@ -660,6 +743,7 @@ pub static COMPOSITES: &[Composite] = &[
             (3, "MPEG:VBRFrames"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "Duration",
@@ -675,6 +759,7 @@ pub static COMPOSITES: &[Composite] = &[
             (5, "MPEG:SampleRate"),
             (6, "MPEG:MPEGAudioVersion"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "MPImage",
@@ -687,6 +772,7 @@ pub static COMPOSITES: &[Composite] = &[
             (2, "MPImageType"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "AutoFocus",
@@ -695,6 +781,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Nikon:FocusMode")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ContrastDetectAF",
@@ -703,6 +790,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Nikon:FocusMode"), (1, "Nikon:AFDetectionMethod")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "LensID",
@@ -720,6 +808,7 @@ pub static COMPOSITES: &[Composite] = &[
             (7, "Nikon:LensType"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "LensSpec",
@@ -728,6 +817,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Nikon:Lens"), (1, "Nikon:LensType")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "PhaseDetectAF",
@@ -739,6 +829,7 @@ pub static COMPOSITES: &[Composite] = &[
             (1, "Nikon:AFDetectionMethod"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ExtenderStatus",
@@ -751,6 +842,7 @@ pub static COMPOSITES: &[Composite] = &[
             (2, "MaxApertureValue"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "LensType",
@@ -759,6 +851,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "LensTypeMake"), (1, "LensTypeModel")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ZoomedPreviewImage",
@@ -767,6 +860,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "ZoomedPreviewStart"), (1, "ZoomedPreviewLength")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "AdvancedSceneMode",
@@ -775,6 +869,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Model"), (1, "SceneMode"), (2, "AdvancedSceneType")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ImageHeight",
@@ -783,6 +878,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "IFD0:SensorTopBorder"), (1, "IFD0:SensorBottomBorder")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ImageWidth",
@@ -791,6 +887,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "IFD0:SensorLeftBorder"), (1, "IFD0:SensorRightBorder")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSDateTime",
@@ -803,6 +900,7 @@ pub static COMPOSITES: &[Composite] = &[
             (2, "SampleTime"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "ImageHeight",
@@ -814,6 +912,7 @@ pub static COMPOSITES: &[Composite] = &[
             (0, "Main:PostScript:ImageData"),
             (1, "PostScript:BoundingBox"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "ImageWidth",
@@ -825,6 +924,7 @@ pub static COMPOSITES: &[Composite] = &[
             (0, "Main:PostScript:ImageData"),
             (1, "PostScript:BoundingBox"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "AvgBitrate",
@@ -833,6 +933,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 0,
         require: &[(0, "QuickTime::MediaDataSize"), (1, "QuickTime::Duration")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "CDDBDiscPlayTime",
@@ -841,6 +942,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "CDDB1Info")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "CDDBDiscTracks",
@@ -849,6 +951,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "CDDB1Info")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSAltitude",
@@ -857,6 +960,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 0,
         require: &[(0, "QuickTime:GPSCoordinates")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSAltitudeRef",
@@ -865,6 +969,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 0,
         require: &[(0, "QuickTime:GPSCoordinates")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSLatitude",
@@ -873,6 +978,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "QuickTime:GPSCoordinates")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSLongitude",
@@ -881,6 +987,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "QuickTime:GPSCoordinates")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "Rotation",
@@ -892,6 +999,7 @@ pub static COMPOSITES: &[Composite] = &[
             (1, "QuickTime:HandlerType"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "Duration",
@@ -900,6 +1008,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "RIFF:FrameRate"), (1, "RIFF:FrameCount")],
         desire: &[(2, "VideoFrameRate"), (3, "VideoFrameCount")],
+        inhibit: &[],
     },
     Composite {
         name: "LensID",
@@ -908,6 +1017,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Ricoh:LensFirmware")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "RicohPitch",
@@ -916,6 +1026,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Ricoh:Accelerometer")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "RicohRoll",
@@ -924,6 +1035,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Ricoh:Accelerometer")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "DepthMapTiff",
@@ -936,6 +1048,7 @@ pub static COMPOSITES: &[Composite] = &[
             (2, "DepthMapHeight"),
         ],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "SingleShotDepthMapTiff",
@@ -944,6 +1057,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "SingleShotDepthMap"), (1, "SegWidth"), (2, "SegHeight")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "WB_RGGBLevels",
@@ -952,6 +1066,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "WB_RGGBLevelsUncorrected"), (1, "WB_RGGBLevelsBlack")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "FocusDistance",
@@ -960,6 +1075,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Sony:FocusPosition"), (1, "FocalLength")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "FocusDistance2",
@@ -968,6 +1084,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Sony:FocusPosition2"), (1, "FocalLengthIn35mmFormat")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSDateTime",
@@ -976,6 +1093,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Sony:GPSDateStamp"), (1, "Sony:GPSTimeStamp")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSLatitude",
@@ -984,6 +1102,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Sony:GPSLatitude"), (1, "Sony:GPSLatitudeRef")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSLongitude",
@@ -992,6 +1111,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Sony:GPSLongitude"), (1, "Sony:GPSLongitudeRef")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "HiddenData",
@@ -1000,6 +1120,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Sony:HiddenDataOffset"), (1, "Sony:HiddenDataLength")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "IDCPreviewImage",
@@ -1008,6 +1129,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "IDCPreviewStart"), (1, "IDCPreviewLength")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "Duration",
@@ -1016,6 +1138,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "Vorbis:NominalBitrate"), (1, "FileSize")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "Flash",
@@ -1031,6 +1154,7 @@ pub static COMPOSITES: &[Composite] = &[
             (4, "XMP:FlashRedEyeMode"),
             (5, "XMP:Flash"),
         ],
+        inhibit: &[],
     },
     Composite {
         name: "GPSDestLatitudeRef",
@@ -1039,6 +1163,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "XMP-exif:GPSDestLatitude")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSDestLongitudeRef",
@@ -1047,6 +1172,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "XMP-exif:GPSDestLongitude")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSLatitudeRef",
@@ -1055,6 +1181,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "XMP-exif:GPSLatitude")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "GPSLongitudeRef",
@@ -1063,6 +1190,7 @@ pub static COMPOSITES: &[Composite] = &[
         priority: 1,
         require: &[(0, "XMP-exif:GPSLongitude")],
         desire: &[],
+        inhibit: &[],
     },
     Composite {
         name: "LensID",
@@ -1076,5 +1204,6 @@ pub static COMPOSITES: &[Composite] = &[
             (4, "LensModel"),
             (5, "MaxApertureValue"),
         ],
+        inhibit: &[(6, "Composite:LensID")],
     },
 ];

@@ -58,7 +58,12 @@ impl Computed {
 /// Handles the rational forms that reach composites unconverted (`1/200`) and
 /// trailing units (`50.0 mm`), because the inputs are print-formatted values
 /// rather than raw ones.
-fn f(v: Option<&str>) -> Option<f64> {
+// `pub(super)`, not private: `generated_compute.rs` (the auto-derived
+// $val[N]-expression sibling of this file, codegen_composite.py's output)
+// reuses this exact parser rather than duplicating it, so a rational-input
+// or unit-suffix fix made here does not silently drift out of sync with the
+// generated arms.
+pub(super) fn f(v: Option<&str>) -> Option<f64> {
     let s = v?.trim();
     if s.is_empty() {
         return None;
@@ -74,7 +79,7 @@ fn f(v: Option<&str>) -> Option<f64> {
     s[..end].parse::<f64>().ok()
 }
 
-fn get<'a>(i: Inputs<'a>, n: usize) -> Option<&'a str> {
+pub(super) fn get<'a>(i: Inputs<'a>, n: usize) -> Option<&'a str> {
     i.get(n).copied().flatten()
 }
 
@@ -735,6 +740,26 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         // Canon body records LensType as 65535 (displayed as `n/a`) and no
         // lens lookup entry exists. Keep this narrow: known lens labels need
         // the full model-matching routine and are intentionally left alone.
+        //
+        // This arm is ALSO the dispatch target for the *other* Exif-module
+        // `LensID`: `LensID-2` (Exif.pm:5362-5385, `Desire => {0 =>
+        // 'LensModel', 1 => 'Lens', 2 => 'XMP-aux:LensID', 3 => 'Make'}`,
+        // `Inhibit => {4 => 'Composite:LensID'}`). Both rows share the
+        // `("Exif", "LensID")` key `compute()` is looked up by (its Name,
+        // not its ExifTool tagID -- `tables::Composite` has no separate
+        // tagID field), so a call arriving with `LensID-2`'s inputs lands
+        // here too, with `i[0]` holding LensModel instead of LensType. That
+        // is harmless rather than a silent misfire: `i.len()` for
+        // `LensID-2` is 4 (its highest Desire index is 3), so `get(i, 4)`
+        // and `get(i, 5)` are always out-of-bounds `None` for that call,
+        // and the `?` on `f(get(i, 4))` below returns `None` before
+        // `i[0]`'s value (whatever it means for that row) is ever used.
+        // `LensID-2` has no real implementation of its own -- it is
+        // deliberately absent from `compute()`, which is why the "no
+        // registered computation" triage in `codegen_composite.py` cannot
+        // see it: that check is precision-limited to the `(module, name)`
+        // dispatch key, and this is the one place in the whole Composite
+        // table where two distinct rows share one.
         ("Exif", "LensID") => {
             if !matches!(get(i, 0).map(str::trim), Some("n/a" | "N/A" | "65535")) {
                 return None;
@@ -1328,7 +1353,15 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::same(value)
         }
 
-        _ => None,
+        // Every hand-written arm above is tried first; only a `(module,
+        // name)` pair none of them recognises falls through to the
+        // generated $val[N]-compiled arms (see `super::generated_compute`'s
+        // own doc comment). A pair present in BOTH would be unreachable
+        // here regardless -- codegen_composite.py already refuses to
+        // auto-derive one this file already hand-implements -- so this is
+        // strictly additive coverage, never a silent override of a
+        // hand-verified translation.
+        _ => super::generated_compute::compute_generated(module, name, i),
     }
 }
 
