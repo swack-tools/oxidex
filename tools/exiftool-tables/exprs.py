@@ -155,8 +155,8 @@ def coverage(expr_counter):
 # an approximation of the general case: `Image::ExifTool::ConvertDateTime`
 # reformats its input only when `$self->Options('DateFormat')` is set (a `-d`
 # CLI flag neither oxidex nor its comparison harnesses ever pass), and
-# returns $date unchanged otherwise -- read ExifTool.pm's ConvertDateTime
-# yourself before assuming otherwise. verify_exprs.py's oracle probes this
+# returns $date unchanged otherwise (Image/ExifTool.pm:6574-6578,
+# 6621-6622, pinned 13.59). verify_exprs.py's oracle probes this
 # under the same no-DateFormat conditions oxidex actually runs under.
 # =============================================================================
 
@@ -854,10 +854,20 @@ _COMPILE_CACHE = {}
 
 
 def _compile_uncached(s):
+    # `VALIDX` exists solely for compile_composite(): ordinary tag
+    # conversions receive one scalar `$val`, while Composite conversions
+    # receive `@val` (ExifTool.pm:3611-3612).  The shared lexer must know
+    # both spellings, but accepting `$val[N]` here would leak a composite
+    # placeholder (`{vN}`) into the scalar harness/codegen path.  Refuse it
+    # before parsing; only compile_composite() may turn that syntax into a
+    # positional input.  This is a soundness gate, not a convenience check.
+    # See Image/ExifTool.pm:3611-3612 (pinned 13.59).
+    if "$val[" in s:
+        return None
     if _CONVERTDATETIME_RE.match(s):
-        # Identity: see the module docstring above -- ConvertDateTime only
-        # reformats when $self->Options('DateFormat') is set, which no path
-        # that reaches this generator ever does.
+        # Identity: ConvertDateTime only reformats when DateFormat is set;
+        # Image/ExifTool.pm:6574-6578,6621-6622 (pinned 13.59). No path that
+        # reaches this generator sets it.
         return ("str", "String", "{v}.to_string()")
 
     m = _DECODE_UCS2_RE.match(s)
@@ -1030,5 +1040,21 @@ def known_num_domain_exprs():
     out = dict(TRANSLATIONS)
     for e, result in _COMPILE_CACHE.items():
         if result and result[0] == "num" and e not in out:
+            out[e] = (result[1], result[2])
+    return out
+
+
+def known_exprs():
+    """Every translation compiler has accepted in this process, by text.
+
+    Unlike :func:`known_num_domain_exprs`, this includes the string and byte
+    domains.  R2's ValueConv carriage and the PrintConv string path need this
+    complete set to build an ExprId for a conversion the differential oracle
+    has approved.  The caller must still consult that oracle's ledger before
+    shipping an entry; this function is only an enum-construction inventory.
+    """
+    out = dict(TRANSLATIONS)
+    for e, result in _COMPILE_CACHE.items():
+        if result and e not in out:
             out[e] = (result[1], result[2])
     return out

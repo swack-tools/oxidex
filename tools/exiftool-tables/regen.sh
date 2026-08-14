@@ -41,6 +41,8 @@ CACHE="${OXIDEX_ET_CACHE:-$ROOT/target/exiftool-src}"
 LIB="$CACHE/exiftool-$VERSION/lib"
 OUT="$ROOT/src/exiftool_tables/binary_tables.rs"
 JSON="$CACHE/tables-$VERSION.json"
+EXPR_LEDGER="$ROOT/tools/exiftool-tables/expr_oracle_ledger.json"
+VALUE_CONV_LEDGER="$ROOT/tools/exiftool-tables/value_conv_ledger.json"
 
 if [[ ! -d "$LIB" ]]; then
     echo ">> fetching ExifTool $VERSION"
@@ -58,8 +60,17 @@ echo ">> coverage analysis"
 python3 "$HERE/analyze.py" "$JSON"
 
 echo
+echo ">> differential expression oracle (must PASS before conversion rollout)"
+# R2's non-negotiable ordering: codegen receives a PASS-only ledger, never a
+# grammar-shaped expression.  verify_exprs.py capability-probes the pinned
+# Perl library before evaluating any conversion (Image/ExifTool.pm:9378).
+python3 "$HERE/verify_exprs.py" "$JSON" \
+    --perl "$(command -v perl)" --et-lib "$LIB" --ledger-out "$EXPR_LEDGER"
+
+echo
 echo ">> generating Rust"
-python3 "$HERE/codegen.py" "$JSON" -o "$OUT"
+python3 "$HERE/codegen.py" "$JSON" -o "$OUT" \
+    --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
 echo
 echo ">> extracting file-identification tables"

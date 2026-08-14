@@ -510,6 +510,7 @@ mod tests {
             count: 1,
             mask: None,
             omitted: super::super::Omitted::NONE,
+            value_conv: None,
             print_conv: super::super::PrintConv::None,
             subdir: None,
         };

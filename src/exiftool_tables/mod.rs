@@ -45,8 +45,8 @@ pub mod runtime;
 pub mod subdir;
 
 pub use binary_tables::{
-    ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, GateA, Mask, Omitted,
-    OtherId, PrintConv,
+    ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, ExprValue, Field, Fmt, GateA, Mask,
+    Omitted, OtherId, PrintConv,
 };
 pub use cond::{CmpOp, Cond, Ctx, EffectSource, MemberValue, VariantGroup, first_match};
 pub use enabled::{ENABLED, is_enabled};
@@ -294,23 +294,22 @@ mod tests {
     /// `tools/exiftool-tables/reachability.py` reports from, which is the
     /// point: the reachability census is generated, not hand-audited, and
     /// this test is what stops the two from drifting apart. At 13.59 the
-    /// split is 8 enabled / 372 eligible / 233 refused of 613 -- see
+    /// split is 7 enabled / 396 eligible / 210 refused of 613 -- see
     /// `enabled.rs` for why `eligible` is not `enabled`.
     ///
-    /// Step 25 moved 25 tables refused -> eligible (350 -> 375) and none the
-    /// other way: `enum_int_partial` (50 tables) and `enum_str_partial` (16)
-    /// stopped being gate A blockers once a `BITMASK`/`OTHER`-carrying enum
-    /// became fully transcribable, and what is left of that population is
-    /// the narrower `other_unregistered` (29).
-    ///
-    /// `enabled` has since moved 5 -> 8, one measured allowlist line at a
-    /// time and never as a side effect of regeneration: `APE::NewHeader`
-    /// (85598504) and `H264::RecInfo` (aa9b47ad) each added a line without
-    /// updating this count, so it read 5 while the artifacts said 7 -- the
-    /// exact drift this test exists to catch, caught late. `Font::PFM`
-    /// (`enabled.rs`) is the eighth. `eligible + enabled` is unchanged at
-    /// 380 throughout, because enabling a table moves it between classes
-    /// rather than creating one.
+    /// Step 25 moved tables refused -> eligible by fully transcribing enums
+    /// carrying a `BITMASK` or a registered `OTHER` (`PrintConv::Bitmask` /
+    /// `PrintConv::PartialEnumInt`) instead of dropping them as partial.
+    /// Step 24's rebase-time regeneration (carrying oracle-verified
+    /// ValueConv ExprIds) moved a further batch refused -> eligible for a
+    /// different reason: it shares `exprs.py`'s TRANSLATIONS/grammar
+    /// compiler with PrintConv, so the same ledger growth that unlocked
+    /// ValueConv coverage also translated PrintConv expressions that used to
+    /// hit `expr_unsupported`/`conv_dropped` -- both
+    /// `GATE_A_DISQUALIFYING`. The *enabled* set moved separately (5 -> 7)
+    /// when APE::NewHeader and H264::RecInfo were wired to live call sites
+    /// -- gate B is a measured allowlist, orthogonal to gate A's static
+    /// count -- so the engine walks seven tables.
     #[test]
     fn every_table_lands_in_exactly_one_enablement_class() {
         let (mut enabled, mut eligible, mut refused) = (0usize, 0usize, 0usize);
@@ -333,12 +332,20 @@ mod tests {
             "every table must land in exactly one class"
         );
         assert_eq!(ALL_BINARY_TABLES.len(), 613, "tables emitted");
-        assert_eq!(eligible + enabled, 380, "tables passing gate A");
-        assert_eq!(refused, 233, "tables gate A blocks");
-        // Raised 5 -> 7 by APE::NewHeader and H264::RecInfo, then -> 8 by
-        // Font::PFM. Every one of those branches was green alone; this line is
-        // the only place their combination is visible, which is why it keeps
-        // conflicting and why a per-branch gate cannot protect it.
+        assert_eq!(eligible + enabled, 403, "tables passing gate A");
+        assert_eq!(refused, 210, "tables gate A blocks");
+        // Raised 5 -> 7 when APE::NewHeader and H264::RecInfo were wired to live
+        // call sites. Each of those branches was green in isolation; the assertion
+        // only broke once both were on the same tree, which is precisely the
+        // cross-branch interaction a per-branch gate cannot see.
+        //
+        // 380 -> 403 eligible+enabled (233 -> 210 refused) is Step 24's own
+        // rebase-time regeneration, not a hand edit: carrying oracle-verified
+        // ValueConv ExprIds shares `exprs.py`'s TRANSLATIONS/grammar compiler
+        // with PrintConv, so the same ledger growth that unlocked ValueConv
+        // coverage also translated PrintConv expressions that previously hit
+        // `expr_unsupported`/`conv_dropped` -- both GATE_A_DISQUALIFYING. See
+        // `tools/exiftool-tables/codegen.py`'s `GATE_A_DISQUALIFYING`.
         assert_eq!(enabled, 8, "tables both gates enable");
     }
 

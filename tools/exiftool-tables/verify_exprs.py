@@ -35,6 +35,7 @@ bug. Every other result (String) is compared as exact text, because that
 text IS the tag value a caller sees.
 """
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -182,8 +183,8 @@ def build_perl_script(jobs, et_lib):
         "my $self = new Image::ExifTool;",
         "binmode STDOUT, ':utf8';",
         # ExifTool itself runs every ValueConv/PrintConv/RawConv string
-        # through `eval $conv` from inside ExifTool.pm (see e.g. its line
-        # 9378) -- `eval STRING` resolves barewords in the *calling* code's
+        # through `eval $conv` from inside ExifTool.pm (13.59:3656-3664) --
+        # `eval STRING` resolves barewords in the *calling* code's
         # package, so a conversion that calls a bareword sub ExifTool.pm
         # itself defines (IsInt, IsFloat, ...) only resolves there, not in
         # `main`. Running the oracle's evals from `main` instead was a
@@ -359,6 +360,11 @@ def main():
     ap.add_argument("--et-lib", default="/tmp/oxidex-exiftool-cache/exiftool/lib")
     ap.add_argument("--timeout", type=int, default=180)
     ap.add_argument("--sample-lines", type=int, default=15)
+    ap.add_argument(
+        "--ledger-out",
+        type=Path,
+        help="write the oracle-approved expression inventory for codegen; only written on PASS",
+    )
     args = ap.parse_args()
 
     version, counter = census(args.tables_json)
@@ -420,18 +426,21 @@ def main():
     total_pass = sum(s[0] for s in per_expr.values())
     total_fail = sum(s[1] for s in per_expr.values())
     total_skip = sum(s[2] for s in per_expr.values())
-    exprs_all_pass = sum(1 for s in per_expr.values() if s[1] == 0)
-    exprs_any_fail = sum(1 for s in per_expr.values() if s[1] > 0)
+    # An all-errored probe set has established no equivalence.  It must not
+    # enter the ledger merely because it has no disagreement; R2 is
+    # oracle-first, not absence-of-evidence-first.
+    exprs_all_pass = sum(1 for s in per_expr.values() if s[0] > 0 and s[1] == 0)
+    exprs_any_fail = sum(1 for s in per_expr.values() if s[1] > 0 or s[0] == 0)
 
     print()
     print(f"probe-level: PASS {total_pass}  FAIL {total_fail}  SKIP(perl errored) {total_skip}")
-    print(f"expression-level: PASS (0 failing probes) {exprs_all_pass}/{len(by_expr)}"
-          f"   FAIL (>=1 failing probe) {exprs_any_fail}/{len(by_expr)}")
+    print(f"expression-level: PASS (>=1 match, 0 failing probes) {exprs_all_pass}/{len(by_expr)}"
+          f"   FAIL (disagreement or no comparable probe) {exprs_any_fail}/{len(by_expr)}")
     print()
     print(f"sample of {min(args.sample_lines, len(per_expr))} per-expression results:")
     for raw in sorted(per_expr)[: args.sample_lines]:
         p, f, sk = per_expr[raw]
-        status = "PASS" if f == 0 else "FAIL"
+        status = "PASS" if p > 0 and f == 0 else "FAIL"
         s = re.sub(r"\s+", " ", raw.strip())[:70]
         print(f"  {status}  probes(pass={p} fail={f} skip={sk})  {s}")
 
@@ -451,8 +460,38 @@ def main():
 
     print()
     if exprs_any_fail:
-        print(f"RESULT: FAIL -- {exprs_any_fail} expression(s) disagree with the pinned Perl oracle")
+        print(f"RESULT: FAIL -- {exprs_any_fail} expression(s) disagree with the pinned Perl oracle "
+              "or had no comparable probe")
         raise SystemExit(1)
+    if args.ledger_out:
+        # This artifact is the ORACLE-FIRST hand-off: codegen may enable an
+        # expression only when its normalized source appears here, and also
+        # verifies the dump digest below.  Shape acceptance alone is never a
+        # shipping permission.  The underlying semantics are ExifTool.pm's
+        # eval of conversion text at 3656-3664 (pinned 13.59).
+        verified = sorted(exprs.normalize(e) for e, s in per_expr.items() if s[0] > 0 and s[1] == 0)
+        verified_uses = sum(counter[e] for e, s in per_expr.items() if s[0] > 0 and s[1] == 0)
+        artifact = {
+            "schema": 1,
+            "exiftool_version": version,
+            "tables_sha256": hashlib.sha256(Path(args.tables_json).read_bytes()).hexdigest(),
+            "instrument": {
+                "perl": args.perl,
+                "et_lib": str(args.et_lib),
+                "rust": "cargo run --quiet --bin expr_oracle_harness",
+            },
+            "probe_counts": {"pass": total_pass, "fail": total_fail, "skip": total_skip},
+            "expression_counts": {
+                "verified": len(verified),
+                "translated": len(by_expr),
+                "total": len(counter),
+            },
+            "use_counts": {"verified": verified_uses, "total": sum(counter.values())},
+            "verified_expressions": verified,
+        }
+        args.ledger_out.parent.mkdir(parents=True, exist_ok=True)
+        args.ledger_out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"wrote oracle ledger  {args.ledger_out}")
     print("RESULT: PASS -- every translated expression agreed with the pinned Perl oracle "
           f"on every probe ({total_pass} probe comparisons, {total_skip} skipped as "
           "inapplicable-to-probe Perl errors)")

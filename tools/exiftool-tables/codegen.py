@@ -49,6 +49,52 @@ SCALAR_FORMATS = {
 SIZED_RE = re.compile(r"^(\w+)\[(\d+)\]$")
 
 
+def load_oracle_ledger(path, tables_json, version):
+    """Return oracle-approved normalized expressions, or refuse all of them.
+
+    R2 deliberately makes the proof artifact a generation input.  A grammar
+    match is only a shape claim; a ValueConv/PrintConv is enabled only after
+    verify_exprs.py compared its generated Rust against the pinned Perl.
+    The digest prevents an old ledger from approving a changed ExifTool dump.
+    ExifTool queues `ValueConv` before `PrintConv` at
+    Image/ExifTool.pm:3524-3525 and evaluates conversion text at :3656-3664
+    (pinned 13.59).
+    """
+    if path is None:
+        return None
+    try:
+        ledger = json.load(open(path, encoding="utf-8"))
+        digest = hashlib.sha256(open(tables_json, "rb").read()).hexdigest()
+        if (
+            ledger.get("schema") != 1
+            or ledger.get("exiftool_version") != version
+            or ledger.get("tables_sha256") != digest
+            or ledger.get("probe_counts", {}).get("fail") != 0
+        ):
+            return None
+        return set(ledger["verified_expressions"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def value_domain(format_name, count):
+    """The one scalar input domain a compiled expression may consume.
+
+    ProcessBinaryData reads and masks raw data at ExifTool.pm:10076-10079,
+    then passes it to FoundTag at :10163.  GetValue queues ValueConv at
+    :3524-3525 and executes it at :3530-3664 before PrintConv.  An array's
+    Perl list semantics are not the scalar compiler's semantics, so R2
+    refuses it instead of applying a scalar translation element-wise.
+    """
+    if count != 1:
+        return None
+    if format_name.startswith("string"):
+        return "str"
+    if format_name.startswith("undef"):
+        return "bytes"
+    return "num"
+
+
 def rust_str(s):
     """Escape a Python str into a Rust string literal body."""
     out = s.replace("\\", "\\\\").replace('"', '\\"')
@@ -114,7 +160,7 @@ def _rust_pairs(pairs):
     return ", ".join(f'({k}, "{rust_str(v)}")' for k, v in pairs)
 
 
-def conv_for(tag, stats):
+def conv_for(tag, stats, input_domain, verified_exprs):
     """Return Rust PrintConv construction, or None if this tag must lose it."""
     pc = tag.get("PrintConv")
     if not isinstance(pc, dict):
@@ -241,23 +287,33 @@ def conv_for(tag, stats):
 
     if kind == "expr":
         raw = pc.get("expr")
-        t = exprs.translate_or_compile(raw)
-        if t:
-            # translate_or_compile() tries the hand-verified TRANSLATIONS
-            # exact-match table first, then Step 15's grammar compiler
-            # (exprs.compile()) -- counted separately so a coverage report
-            # can tell curated translations from mechanically-derived ones.
-            if exprs.normalize(raw) in exprs.TRANSLATIONS:
-                stats["expr_translated"] += 1
-            else:
-                stats["expr_compiled"] += 1
-            # Translated expressions are emitted by name so the generated code
-            # stays readable and the mapping stays auditable.
-            return f"PrintConv::Expr(ExprId::{expr_ident(raw)})"
-        stats["expr_unsupported"] += 1
-        stats["unsupported_exprs"][exprs.normalize(raw or "")] += 1
-        return "PrintConv::None"
-
+        t = exprs.translate_or_compile_any(raw)
+        normalized = exprs.normalize(raw or "")
+        if not t:
+            stats["expr_unsupported"] += 1
+            stats["unsupported_exprs"][normalized] += 1
+            return "PrintConv::None"
+        domain, _rty, _code = t
+        if domain != input_domain:
+            # Do not let render() fall through to raw bytes after accepting
+            # an expression whose `$val` domain is wrong.  That would look
+            # like a successful tag with a silently skipped PrintConv.
+            stats["expr_refused_input_domain"] += 1
+            return "PrintConv::None"
+        if verified_exprs is None or normalized not in verified_exprs:
+            stats["expr_refused_oracle"] += 1
+            return "PrintConv::None"
+        # translate_or_compile_any() tries the hand-verified TRANSLATIONS
+        # exact-match table first, then Step 15's grammar compiler -- counted
+        # separately so a coverage report can tell curated translations from
+        # mechanically-derived ones.
+        if normalized in exprs.TRANSLATIONS:
+            stats["expr_translated"] += 1
+        else:
+            stats["expr_compiled"] += 1
+        # Translated expressions are emitted by name so the generated code
+        # stays readable and the mapping stays auditable.
+        return f"PrintConv::Expr(ExprId::{expr_ident(raw)})"
     stats["conv_dropped"] += 1
     return "PrintConv::None"
 
@@ -347,7 +403,40 @@ def mask_for(tag, stats):
     return f"Some(Mask {{ bits: {mask:#x}, shift: {shift} }})"
 
 
-def omitted_for(tag, stats, condition_resolved=False):
+def value_conv_for(tag, stats, input_domain, verified_exprs):
+    """Compile one scalar ValueConv only after oracle approval.
+
+    `ProcessBinaryData` has already read/masked `$val` at ExifTool.pm:10076-
+    10079 and passes it to FoundTag at :10163.  GetValue queues ValueConv at
+    :3524-3525 and runs it at :3530-3664 before PrintConv. R2 carries that
+    executable ExprId on Field rather than recording an opaque
+    `value_conv: true`. Every other shape remains an explicit Omitted refusal.
+    """
+    vc = tag.get("ValueConv")
+    if vc is None:
+        return "None", False
+    if not isinstance(vc, dict) or vc.get("kind") != "expr":
+        stats["value_conv_refused_nonexpr"] += 1
+        return "None", False
+    raw = vc.get("expr")
+    normalized = exprs.normalize(raw or "")
+    compiled = exprs.translate_or_compile_any(raw)
+    if not compiled:
+        stats["value_conv_refused_shape"] += 1
+        stats["value_conv_refused_expressions"][normalized] += 1
+        return "None", False
+    domain, _rty, _code = compiled
+    if input_domain is None or domain != input_domain:
+        stats["value_conv_refused_input_domain"] += 1
+        return "None", False
+    if verified_exprs is None or normalized not in verified_exprs:
+        stats["value_conv_refused_oracle"] += 1
+        return "None", False
+    stats["value_conv_compiled"] += 1
+    return f"Some(ExprId::{expr_ident(raw)})", True
+
+
+def omitted_for(tag, stats, condition_resolved=False, value_conv_modeled=False):
     """Flag the semantics ExifTool applies that this schema does not reproduce.
 
     `condition_resolved` is set by `compile_variant_group`'s call through
@@ -392,6 +481,8 @@ def omitted_for(tag, stats, condition_resolved=False):
         ("SubDirectory", "subdirectory"),
     ):
         if member == "condition" and condition_resolved:
+            continue
+        if member == "value_conv" and value_conv_modeled:
             continue
         if tag.get(key) is not None:
             flags.append(member)
@@ -493,7 +584,8 @@ def _merge_stats(dst, src):
 
 
 def gen_field_literal(
-    tag, idx, sub, stats, var_sound_until, record_offset_hazard=True, condition_resolved=False
+    tag, idx, sub, stats, var_sound_until, default_format, verified_exprs,
+    record_offset_hazard=True, condition_resolved=False,
 ):
     """Build one `Field {...}` Rust literal for `tag` at offset `idx`/`sub`.
 
@@ -569,7 +661,10 @@ def gen_field_literal(
         # the word at that offset. Omit it rather than report the word.
         return None, var_sound_until
 
-    pc = conv_for(tag, stats)
+    format_name = f if isinstance(f, str) else default_format
+    input_domain = value_domain(format_name, count)
+    vc, value_conv_modeled = value_conv_for(tag, stats, input_domain, verified_exprs)
+    pc = conv_for(tag, stats, input_domain, verified_exprs)
     if sub is not None:
         # A fractional key names a slice of the word at int(key); `Mask` is
         # what says which bits. The runtime decodes the ones that declare
@@ -585,13 +680,14 @@ def gen_field_literal(
     field_src = (
         f'Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
         f"format: {fmt_expr}, count: {count}, mask: {mask}, "
-        f"omitted: {omitted_for(tag, stats, condition_resolved)}, print_conv: {pc}, "
+        f"omitted: {omitted_for(tag, stats, condition_resolved, value_conv_modeled)}, "
+        f"value_conv: {vc}, print_conv: {pc}, "
         f"subdir: {subdir_src} }}"
     )
     return field_src, var_sound_until
 
 
-def compile_variant_group(tag, idx, sub, stats, var_sound_until):
+def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format, verified_exprs):
     """Compile a `_variants` array (`dump_tables.pl`'s arrayref-of-alternatives
     shape) into a `VariantGroup`, per Step 23.
 
@@ -628,6 +724,7 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until):
     trial_stats["unsupported_exprs"] = Counter()
     trial_stats["pc_directives_dropped"] = Counter()
     trial_stats["other_unregistered_bodies"] = Counter()
+    trial_stats["value_conv_refused_expressions"] = Counter()
     alt_srcs = []
     local_var_sound_until = var_sound_until
     for v in variants:
@@ -647,6 +744,8 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until):
             sub,
             trial_stats,
             local_var_sound_until,
+            default_format,
+            verified_exprs,
             record_offset_hazard=False,
             condition_resolved=True,
         )
@@ -757,7 +856,7 @@ def gate_a_for(table_stats, offset_hazard):
     return (not reasons), reasons
 
 
-def gen_table(mod_name, tbl_name, tbl, stats):
+def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs):
     """Emit one `BinaryTable` literal, or `None` if the table is not one.
 
     Step 28: every counter this table's fields touch is tallied into a LOCAL
@@ -798,6 +897,7 @@ def gen_table(mod_name, tbl_name, tbl, stats):
     stats["unsupported_exprs"] = Counter()
     stats["pc_directives_dropped"] = Counter()
     stats["other_unregistered_bodies"] = Counter()
+    stats["value_conv_refused_expressions"] = Counter()
 
     rows = []
     variant_rows = []
@@ -828,7 +928,9 @@ def gen_table(mod_name, tbl_name, tbl, stats):
             # `Condition` and per-field shape allow it; refused (and counted
             # by exactly one of the `tag_variant_*_unsupported` reasons)
             # atomically otherwise -- see `compile_variant_group`.
-            built = compile_variant_group(tag, idx, sub, stats, var_sound_until)
+            built = compile_variant_group(
+                tag, idx, sub, stats, var_sound_until, fmt_name, verified_exprs
+            )
             if built is None:
                 stats["tag_variant_skipped"] += 1
                 continue
@@ -838,7 +940,9 @@ def gen_table(mod_name, tbl_name, tbl, stats):
             variant_rows.append(f"    {group_src},")
             continue
 
-        field_src, var_sound_until = gen_field_literal(tag, idx, sub, stats, var_sound_until)
+        field_src, var_sound_until = gen_field_literal(
+            tag, idx, sub, stats, var_sound_until, fmt_name, verified_exprs
+        )
         if field_src is None:
             continue
         if var_sound_until is not None and idx > var_sound_until:
@@ -1123,6 +1227,10 @@ pub struct Field {
     pub mask: Option<Mask>,
     /// What ExifTool does to this field that the transcription does not.
     pub omitted: Omitted,
+    /// Oracle-approved `ValueConv`, applied after mask and before PrintConv.
+    /// `None` means there was none, or the generator refused it and left the
+    /// corresponding `Omitted::value_conv` flag set.
+    pub value_conv: Option<ExprId>,
     pub print_conv: PrintConv,
     /// `Some` when `omitted.subdirectory` is set AND this field's
     /// `SubDirectory.Start`/`Base`/`ProcessProc`/`ByteOrder`/`Validate` fall
@@ -1278,46 +1386,72 @@ impl PrintConv {
 
 
 def gen_expr_enum(used):
-    """Emit the ExprId enum for every translated expression actually used."""
+    """Emit typed ExprId execution for every oracle-approved use.
+
+    PrintConv wants a display string; ValueConv needs the actual converted
+    value so a following PrintConv sees ExifTool's post-conversion `$val`
+    (GetValue: ExifTool.pm:3524-3525, 3530-3664). Keeping those paths distinct avoids
+    the old lossy `ExprId::apply -> String` shortcut.
+    """
     if not used:
         return (
             "\n/// No Perl expressions were translated in this build.\n"
             "#[derive(Clone, Copy, Debug)]\npub enum ExprId {}\n\n"
+            "#[derive(Clone, Debug)]\npub enum ExprValue { Number(f64), String(String) }\n\n"
             "impl ExprId {\n"
             "    #[must_use]\n"
-            "    pub fn apply(&self, _val: f64) -> Option<String> { None }\n}\n"
+            "    pub fn apply(&self, _val: f64) -> Option<String> { None }\n"
+            "    #[must_use]\n"
+            "    pub fn apply_str(&self, _val: &str) -> Option<String> { None }\n"
+            "    #[must_use]\n"
+            "    pub fn apply_bytes(&self, _val: &[u8]) -> Option<String> { None }\n"
+            "    #[must_use]\n"
+            "    pub fn value_num(&self, _val: f64) -> Option<ExprValue> { None }\n"
+            "    #[must_use]\n"
+            "    pub fn value_str(&self, _val: &str) -> Option<ExprValue> { None }\n"
+            "    #[must_use]\n"
+            "    pub fn value_bytes(&self, _val: &[u8]) -> Option<ExprValue> { None }\n}\n"
         )
     variants = "\n".join(f"    /// `{rust_str(e)}`\n    {i}," for i, e in sorted(used.items()))
-    arms = []
+    render_num = []
+    render_str = []
+    render_bytes = []
+    value_num = []
+    value_str = []
+    value_bytes = []
     for ident, expr in sorted(used.items()):
-        rty, rexpr = exprs.translate_or_compile(expr)
+        domain, rty, rexpr = exprs.translate_or_compile_any(expr)
         body = rexpr.replace("{v}", "val")
         # perl_num, not a bare format!("{}", ...) / format!("{v}"): Perl's
         # own numeric-to-string conversion goes through %.15g (scientific
         # notation outside ~[1e-4, 1e15)), which Rust's Display for f64 never
         # produces on its own -- see exprs.rs::perl_num's doc comment for the
         # verify_exprs.py failure that found this.
-        if rty == "f64":
-            arms.append(
-                f"            ExprId::{ident} => "
-                f"Some(crate::exiftool_tables::exprs::perl_num({body})),"
-            )
-        elif rty == "f64_int":
+        if domain == "num" and rty == "f64":
+            render_num.append(f"            ExprId::{ident} => Some(crate::exiftool_tables::exprs::perl_num({body})),")
+            value_num.append(f"            ExprId::{ident} => Some(ExprValue::Number({body})),")
+        elif domain == "num" and rty == "f64_int":
             # Perl's int() returns an integer (IV): exact decimal digits,
             # never %.15g's scientific notation, regardless of magnitude --
             # see exprs.rs::perl_int and exprs.py's _NUMERIC_VTYPES docstring.
-            arms.append(
-                f"            ExprId::{ident} => "
-                f"Some(crate::exiftool_tables::exprs::perl_int({body})),"
-            )
-        elif rty == "String":
-            arms.append(f"            ExprId::{ident} => Some({body}),")
-        else:  # Option<f64>
-            arms.append(
-                f"            ExprId::{ident} => "
-                f"({body}).map(crate::exiftool_tables::exprs::perl_num),"
-            )
-    arm_body = "\n".join(arms)
+            render_num.append(f"            ExprId::{ident} => Some(crate::exiftool_tables::exprs::perl_int({body})),")
+            value_num.append(f"            ExprId::{ident} => Some(ExprValue::Number({body})),")
+        elif domain == "num" and rty == "String":
+            render_num.append(f"            ExprId::{ident} => Some({body}),")
+            value_num.append(f"            ExprId::{ident} => Some(ExprValue::String({body})),")
+        elif domain == "num":  # Option<f64>
+            render_num.append(f"            ExprId::{ident} => ({body}).map(crate::exiftool_tables::exprs::perl_num),")
+            value_num.append(f"            ExprId::{ident} => ({body}).map(ExprValue::Number),")
+        elif domain == "str":
+            render_str.append(f"            ExprId::{ident} => Some({body}),")
+            value_str.append(f"            ExprId::{ident} => Some(ExprValue::String({body})),")
+        else:  # bytes
+            render_bytes.append(f"            ExprId::{ident} => Some({body}),")
+            value_bytes.append(f"            ExprId::{ident} => Some(ExprValue::String({body})),")
+
+    def arms_or_none(arms):
+        return "\n".join([*arms, "            _ => None,"])
+
     return f"""
 /// Perl conversions with a hand-verified Rust equivalent.
 ///
@@ -1328,11 +1462,58 @@ pub enum ExprId {{
 {variants}
 }}
 
+/// Exact output of an oracle-approved ValueConv before PrintConv runs.
+#[derive(Clone, Debug)]
+pub enum ExprValue {{
+    Number(f64),
+    String(String),
+}}
+
 impl ExprId {{
     #[must_use]
     pub fn apply(&self, val: f64) -> Option<String> {{
         match self {{
-{arm_body}
+{arms_or_none(render_num)}
+        }}
+    }}
+
+    #[must_use]
+    pub fn apply_str(&self, val: &str) -> Option<String> {{
+        let _ = val;
+        match self {{
+{arms_or_none(render_str)}
+        }}
+    }}
+
+    #[must_use]
+    pub fn apply_bytes(&self, val: &[u8]) -> Option<String> {{
+        let _ = val;
+        match self {{
+{arms_or_none(render_bytes)}
+        }}
+    }}
+
+    #[must_use]
+    pub fn value_num(&self, val: f64) -> Option<ExprValue> {{
+        let _ = val;
+        match self {{
+{arms_or_none(value_num)}
+        }}
+    }}
+
+    #[must_use]
+    pub fn value_str(&self, val: &str) -> Option<ExprValue> {{
+        let _ = val;
+        match self {{
+{arms_or_none(value_str)}
+        }}
+    }}
+
+    #[must_use]
+    pub fn value_bytes(&self, val: &[u8]) -> Option<ExprValue> {{
+        let _ = val;
+        match self {{
+{arms_or_none(value_bytes)}
         }}
     }}
 }}
@@ -1358,6 +1539,7 @@ REPORT = (
         ("string enums", "enum_str"),
         ("exprs translated (exact match)", "expr_translated"),
         ("exprs translated (grammar-compiled, Step 15)", "expr_compiled"),
+        ("ValueConv ExprIds (R2, oracle-approved)", "value_conv_compiled"),
         ("masked fields", "tag_masked"),
         ("bit fields (frac + Mask)", "tag_fractional_masked"),
         ("SubDirectory edges modeled (Step 27)", "subdir_edge_modeled"),
@@ -1374,6 +1556,12 @@ REPORT = (
     )),
     ("refused, not approximated", (
         ("exprs unsupported", "expr_unsupported"),
+        ("exprs refused: input domain", "expr_refused_input_domain"),
+        ("exprs refused: no matching oracle PASS ledger", "expr_refused_oracle"),
+        ("ValueConv non-expression shape", "value_conv_refused_nonexpr"),
+        ("ValueConv outside closed grammar", "value_conv_refused_shape"),
+        ("ValueConv input domain/array", "value_conv_refused_input_domain"),
+        ("ValueConv without matching oracle PASS", "value_conv_refused_oracle"),
         ("other PrintConv", "conv_dropped"),
         ("variant tags", "tag_variant_skipped"),
         ("  of which Condition outside the closed grammar", "tag_variant_cond_unsupported"),
@@ -1411,15 +1599,25 @@ def main():
     ap.add_argument("tables_json")
     ap.add_argument("-o", "--out", required=True)
     ap.add_argument("--modules", nargs="*", help="limit to these modules")
+    ap.add_argument("--expr-ledger", help="PASS-only ledger from verify_exprs.py")
+    ap.add_argument("--value-conv-ledger-out", help="write R2 ValueConv refusal/coverage ledger")
     args = ap.parse_args()
 
     with open(args.tables_json, encoding="utf-8") as fh:
         doc = json.load(fh)
+    version = str(doc.get("exiftool_version") or "").strip()
+    if not version:
+        raise SystemExit(
+            "tables JSON has no exiftool_version -- regenerate it with "
+            "dump_tables.pl; an unstamped table set cannot be verified"
+        )
+    verified_exprs = load_oracle_ledger(args.expr_ledger, args.tables_json, version)
 
     stats = Counter()
     stats["unsupported_exprs"] = Counter()
     stats["pc_directives_dropped"] = Counter()
     stats["other_unregistered_bodies"] = Counter()
+    stats["value_conv_refused_expressions"] = Counter()
     chunks = []
     index_rows = []
 
@@ -1430,7 +1628,9 @@ def main():
         if not mod:
             continue
         for tbl_name in sorted(mod["tables"]):
-            out = gen_table(mod_name, tbl_name, mod["tables"][tbl_name], stats)
+            out = gen_table(
+                mod_name, tbl_name, mod["tables"][tbl_name], stats, verified_exprs
+            )
             if out:
                 chunks.append(out)
                 ident = re.sub(r"[^A-Za-z0-9]", "_", f"{mod_name}_{tbl_name}").upper()
@@ -1439,13 +1639,12 @@ def main():
     # Collect the expressions actually referenced so the enum has no dead arms.
     # Iterate in sorted order: set iteration order varies between runs, and a
     # generator whose output depends on it cannot be checked into git.
-    # known_num_domain_exprs() is TRANSLATIONS union every numeric-domain
-    # expression Step 15's grammar compiler (exprs.compile()) accepted while
-    # gen_table ran above -- gen_conv() populates that cache as a side effect
-    # of every translate_or_compile() call, so it is complete by this point.
+    # known_exprs() includes string/bytes expressions as well: ConvertDateTime
+    # is the first R2 string path, and ValueConv needs its real result rather
+    # than the old boolean refusal marker.
     used = {}
     joined = "".join(chunks)
-    for e in sorted(exprs.known_num_domain_exprs()):
+    for e in sorted(exprs.known_exprs()):
         ident = expr_ident(e)
         if ident in used and used[ident] != e:
             raise SystemExit(
@@ -1467,12 +1666,6 @@ def main():
     # one reports hundreds of differences that read as generator bugs rather
     # than as "wrong ExifTool". dump_tables.pl already recorded the version;
     # carrying it into the artifact is what lets verify.py say which it is.
-    version = str(doc.get("exiftool_version") or "").strip()
-    if not version:
-        raise SystemExit(
-            "tables JSON has no exiftool_version -- regenerate it with "
-            "dump_tables.pl; an unstamped table set cannot be verified"
-        )
     version_block = (
         "/// The ExifTool release these tables were transcribed from.\n"
         "///\n"
@@ -1493,6 +1686,32 @@ def main():
     ue = stats.pop("unsupported_exprs")
     pcd = stats.pop("pc_directives_dropped")
     oub = stats.pop("other_unregistered_bodies")
+    vc_refused = stats.pop("value_conv_refused_expressions")
+    if args.value_conv_ledger_out:
+        refused_reasons = {
+            key.removeprefix("value_conv_refused_"): value
+            for key, value in stats.items()
+            if key.startswith("value_conv_refused_")
+        }
+        ledger = {
+            "schema": 1,
+            "exiftool_version": version,
+            "instrument": "tools/exiftool-tables/codegen.py --expr-ledger (verify_exprs.py PASS ledger)",
+            "oracle_ledger": args.expr_ledger,
+            "value_conv": {
+                "compiled": stats["value_conv_compiled"],
+                "refused": sum(refused_reasons.values()),
+                "refused_by_reason": dict(sorted(refused_reasons.items())),
+                "top_refused_expressions": [
+                    {"expression": expression, "uses": uses}
+                    for expression, uses in vc_refused.most_common(25)
+                ],
+            },
+        }
+        with open(args.value_conv_ledger_out, "w", encoding="utf-8") as fh:
+            json.dump(ledger, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        print(f"wrote ValueConv ledger  {args.value_conv_ledger_out}")
     print(f"wrote {args.out}")
     printed = set()
     for heading, rows in REPORT:
@@ -1526,6 +1745,11 @@ def main():
     if ue:
         print("\n  top unsupported expressions (translate these next):")
         for e, n in ue.most_common(10):
+            flat = e if len(e) <= 58 else e[:55] + "..."
+            print(f"    {n:>4}  {flat}")
+    if vc_refused:
+        print("\n  top refused ValueConv expressions (R2):")
+        for e, n in vc_refused.most_common(10):
             flat = e if len(e) <= 58 else e[:55] + "..."
             print(f"    {n:>4}  {flat}")
 

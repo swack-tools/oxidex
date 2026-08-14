@@ -472,9 +472,14 @@ fn walk(
         if omitted.any() {
             continue;
         }
-        let value = match super::runtime::render(field.print_conv, &raw) {
+        let Some(converted) = super::runtime::apply_value_conv(field.value_conv, &raw) else {
+            // A verified ValueConv may faithfully return Perl undef.  That is
+            // tag suppression, not permission to emit the raw value.
+            continue;
+        };
+        let value = match super::runtime::render(field.print_conv, &converted) {
             Some(rendered) => TagValue::String(rendered),
-            None => super::runtime::to_tag_value(&raw),
+            None => super::runtime::to_tag_value(&converted),
         };
         out.push(Emitted {
             module: table.module,
@@ -805,6 +810,7 @@ mod tests {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
+            value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
         },
@@ -819,6 +825,7 @@ mod tests {
                 value_conv: true,
                 ..Omitted::NONE
             },
+            value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
         },

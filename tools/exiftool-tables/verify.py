@@ -61,6 +61,12 @@ FIELD_RE = re.compile(
     r'|Some\(\s*Mask\s*\{\s*bits:\s*(?P<mask_bits>0[xX][0-9a-fA-F_]+|\d+),\s*'
     r'shift:\s*(?P<mask_shift>\d+),?\s*\}\s*,?\s*\)),\s*'
     r'omitted:\s*(?P<omitted>Omitted::NONE|Omitted\s*\{[^{}]*\}),\s*'
+    # R2 carries an oracle-approved ValueConv ExprId between Omitted and
+    # PrintConv. It must be matched as a required schema member so adding the
+    # field cannot make this independent verifier silently parse zero tables;
+    # its value is not captured (nothing downstream needs to compare it), just
+    # consumed so the fixed-width prefix keeps lining up ahead of print_conv.
+    r'value_conv:\s*(?:None|Some\(\s*ExprId::\w+\s*\)),\s*'
     # Step 25: neither `print_conv:` nor `subdir:` has its value captured
     # inline anymore. `subdir:`'s value (`None` or `Some(SubdirEdge { ... })`,
     # arbitrarily nested via `Start::Expr(&...)`) never could be -- a

@@ -15,7 +15,7 @@ use crate::core::TagValue;
 use crate::io::ByteOrder;
 
 use super::cond;
-use super::{ALL_BINARY_TABLES, BinaryTable, Field, Fmt, Omitted, PrintConv};
+use super::{ALL_BINARY_TABLES, BinaryTable, ExprValue, Field, Fmt, Omitted, PrintConv};
 
 /// A value read directly from a generated binary-table field.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,7 +50,24 @@ impl DecodedValue {
     }
 
     fn integer(&self) -> Option<i64> {
-        self.as_integer()
+        self.as_integer().or_else(|| match self {
+            // Perl hash PrintConv keys see an integral NV (for example
+            // the result of `$val + 1`) as the same key as the matching
+            // IV.  Preserve that post-ValueConv lookup behaviour instead
+            // of making a converted `2.0` miss an enum keyed by `2`.
+            // GetValue queues ValueConv before PrintConv and evaluates
+            // it before reporting: Image/ExifTool.pm:3524-3525,
+            // 3530-3664 (pinned 13.59).
+            Self::Float(value)
+                if value.is_finite()
+                    && value.fract() == 0.0
+                    && *value >= i64::MIN as f64
+                    && *value <= i64::MAX as f64 =>
+            {
+                Some(*value as i64)
+            }
+            _ => None,
+        })
     }
 
     fn number(&self) -> Option<f64> {
@@ -107,11 +124,54 @@ impl DecodedField {
         if self.field.omitted.any() {
             return None;
         }
-        Some(match render(self.field.print_conv, &self.raw) {
+        let value = apply_value_conv(self.field.value_conv, &self.raw)?;
+        Some(match render(self.field.print_conv, &value) {
             Some(rendered) => TagValue::String(rendered),
-            None => to_tag_value(&self.raw),
+            None => to_tag_value(&value),
         })
     }
+}
+
+/// Apply the oracle-approved ValueConv carried by a generated field.
+///
+/// ExifTool reads/masks at `Image/ExifTool.pm:10076-10079` and passes raw
+/// data to FoundTag at :10163. `GetValue` then queues ValueConv ahead of
+/// PrintConv (:3524-3525) and evaluates it at :3530-3664. `None` means either
+/// there was no ValueConv or the conversion returned Perl `undef`; the latter
+/// suppresses the tag rather than falling back to its raw bytes.
+#[must_use]
+pub fn apply_value_conv(
+    conversion: Option<super::ExprId>,
+    value: &DecodedValue,
+) -> Option<DecodedValue> {
+    let Some(conversion) = conversion else {
+        return Some(value.clone());
+    };
+    let output = match value {
+        DecodedValue::Integer(_)
+        | DecodedValue::Float(_)
+        | DecodedValue::UnsignedRational(..)
+        | DecodedValue::SignedRational(..) => conversion.value_num(value.number()?),
+        DecodedValue::String(value) => conversion.value_str(value),
+        DecodedValue::Undefined(value) => conversion.value_bytes(value),
+        // R2 deliberately does not compile array ValueConvs.  If a future
+        // compiler proves ExifTool's list semantics, this branch is the one
+        // that must change; applying a scalar ExprId each-element today would
+        // be an approximation.
+        DecodedValue::Array(_) => None,
+    }?;
+    Some(match output {
+        ExprValue::Number(value)
+            if value.is_finite()
+                && value.fract() == 0.0
+                && value >= i64::MIN as f64
+                && value <= i64::MAX as f64 =>
+        {
+            DecodedValue::Integer(value as i64)
+        }
+        ExprValue::Number(value) => DecodedValue::Float(value),
+        ExprValue::String(value) => DecodedValue::String(value),
+    })
 }
 
 /// Render a [`DecodedValue`] as a [`TagValue`] with no conversion applied.
@@ -650,7 +710,15 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
                 .find(|(candidate, _)| *candidate == key)
                 .map(|(_, rendered)| (*rendered).to_string())
         }
-        PrintConv::Expr(expression) => expression.apply(value.number()?),
+        PrintConv::Expr(expression) => match value {
+            DecodedValue::Integer(_)
+            | DecodedValue::Float(_)
+            | DecodedValue::UnsignedRational(..)
+            | DecodedValue::SignedRational(..) => expression.apply(value.number()?),
+            DecodedValue::String(value) => expression.apply_str(value),
+            DecodedValue::Undefined(value) => expression.apply_bytes(value),
+            DecodedValue::Array(_) => None,
+        },
         PrintConv::Bitmask { exact, bits } => {
             let value = value.integer()?;
             Some(
@@ -845,11 +913,16 @@ mod tests {
             get("ISO").and_then(DecodedField::emit),
             Some(TagValue::Integer(200))
         );
-        // `ExposureTime` (Pentax.pm's `%MOV` key 38) carries a `ValueConv` this
-        // schema does not reproduce, so `emit` refuses it -- the field is not
-        // simply absent; it decoded fine and is withheld.
-        assert!(get("ExposureTime").unwrap().field.omitted.value_conv);
-        assert_eq!(get("ExposureTime").and_then(DecodedField::emit), None);
+        // Pentax.pm:1472-1478 runs `$val * 1e-5` before PrintExposureTime.
+        // R2 carries that oracle-approved ExprId instead of withholding the
+        // field under `omitted.value_conv`; this zero fixture therefore
+        // reaches the same `0` display ExifTool's helper returns.
+        assert!(get("ExposureTime").unwrap().field.value_conv.is_some());
+        assert!(!get("ExposureTime").unwrap().field.omitted.value_conv);
+        assert_eq!(
+            get("ExposureTime").and_then(DecodedField::emit),
+            Some(TagValue::String("0".to_string()))
+        );
     }
 
     /// A fractional key without a `Mask` no longer stays refused (Step 11):
@@ -868,6 +941,7 @@ mod tests {
                 count: 1,
                 mask: None,
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -879,6 +953,7 @@ mod tests {
                 count: 1,
                 mask: None,
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::Expr(ExprId::Sprintf0fValB74070),
                 subdir: None,
             },
@@ -890,6 +965,7 @@ mod tests {
                 count: 3,
                 mask: None,
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -952,6 +1028,7 @@ mod tests {
                     shift: 0,
                 }),
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -966,6 +1043,7 @@ mod tests {
                     shift: 8,
                 }),
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::IntEnum(&[(0xB, "Eleven")]),
                 subdir: None,
             },
@@ -980,6 +1058,7 @@ mod tests {
                     shift: 12,
                 }),
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -992,6 +1071,7 @@ mod tests {
                 count: 1,
                 mask: None,
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -1164,6 +1244,7 @@ mod tests {
                 hook: false,
                 subdirectory: false,
             },
+            value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
         }];
@@ -1232,6 +1313,7 @@ mod tests {
                     shift: 0,
                 }),
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::IntEnum(&[(1, "Upright"), (5, "Rotated")]),
                 subdir: None,
             },
@@ -1247,6 +1329,7 @@ mod tests {
                     shift: 4,
                 }),
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -1266,6 +1349,7 @@ mod tests {
                     hook: false,
                     subdirectory: false,
                 },
+                value_conv: None,
                 print_conv: PrintConv::IntEnum(&[(0, "Wrong")]),
                 subdir: None,
             },
@@ -1328,6 +1412,7 @@ mod tests {
                 hook: false,
                 subdirectory: false,
             },
+            value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
         };
@@ -1416,6 +1501,7 @@ mod tests {
                     hook: false,
                     subdirectory: false,
                 },
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -1433,6 +1519,7 @@ mod tests {
                     hook: false,
                     subdirectory: false,
                 },
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -1444,6 +1531,7 @@ mod tests {
                 count: 1,
                 mask: None,
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -1491,6 +1579,7 @@ mod tests {
                 count: 1,
                 mask: None,
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -1502,6 +1591,7 @@ mod tests {
                 count: 1,
                 mask: None,
                 omitted: Omitted::NONE,
+                value_conv: None,
                 print_conv: PrintConv::None,
                 subdir: None,
             },
@@ -1544,6 +1634,7 @@ mod tests {
             count: 1,
             mask: None,
             omitted: Omitted::NONE,
+            value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
         };
