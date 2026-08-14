@@ -418,6 +418,26 @@ pub fn read_metadata_with_detector_and_options(
         }
     }
 
+    // Step 3c: An MPC file carrying a leading ID3v2 tag opens with the same
+    // three bytes ("ID3") as a plain MP3, so `detect_format` -- which never
+    // sees a filename -- resolves it to `FileFormat::MP3`. Real ExifTool
+    // does not have this ambiguity: it assigns FileType from the `.mpc`
+    // extension directly (a single-candidate `%fileTypeExt` lookup) and
+    // dispatches to `MPC::ProcessMPC`, which is what finds the real `MP+`
+    // signature 263 bytes in, behind the ID3v2 tag (`MPC.pm:79-116`,
+    // `ID3.pm:1691-1698`). A file with no leading ID3 tag needs no override:
+    // it opens directly with `MP+` and the `signature!` table in
+    // `parsers/detection/signatures.rs` already resolves it to
+    // `FileFormat::MPC` unaided.
+    if format == FileFormat::MP3
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("mpc"))
+    {
+        format = FileFormat::MPC;
+    }
+
     // Step 4: Route to appropriate parser based on detected format and extract format-specific metadata
     //
     // Detection returning Unknown, or a parser refusing the file, still leaves
@@ -599,6 +619,18 @@ pub fn read_metadata_report_with_detector_and_options(
         {
             format = FileFormat::CameraRaw(raw_format);
         }
+    }
+
+    // Step 3c: see the identical override's comment in
+    // `read_metadata_with_detector_and_options`, above -- both entry points
+    // detect format independently, so both need it.
+    if format == FileFormat::MP3
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("mpc"))
+    {
+        format = FileFormat::MPC;
     }
 
     // Step 4: Dispatch. JPEG and PNG go through their diagnostics-carrying
@@ -2132,21 +2164,27 @@ mod tests {
     }
 
     #[test]
-    fn mie_reports_identified_only() {
+    fn mie_reports_parsed() {
         let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/MIE.mie");
         if !path.is_file() {
             eprintln!("skipping: pinned fixture not present at {}", path.display());
             return;
         }
 
-        let report =
-            read_metadata_report(path).expect("MIE identifies even though it has no parser");
+        let report = read_metadata_report(path).expect("MIE now has a real parser");
 
-        assert_eq!(report.status, ParseStatus::IdentifiedOnly);
+        // Step 32 routed `FileFormat::MIE` to `mie.rs`'s standalone-document
+        // parser -- this file used to bottom out in `add_identity_tags`
+        // (`IdentifiedOnly`) because nothing dispatched it at all.
+        assert_eq!(report.status, ParseStatus::Parsed);
         assert_eq!(report.metadata.get_string("File:FileType"), Some("MIE"));
+        assert_eq!(
+            report.metadata.get_string("MIE-Camera:Make"),
+            Some("FUJIFILM")
+        );
         assert!(
             report.diagnostics.is_empty(),
-            "the ~40-format no-parser fallback is not itself a diagnosable problem"
+            "a clean MIE.mie read should not produce any diagnostics"
         );
     }
 

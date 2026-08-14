@@ -40,6 +40,11 @@ const APE_TAG_SIGNATURE: &[u8] = b"APETAGEX";
 /// Size of an APE tag header/footer block.
 const APE_TAG_BLOCK_LEN: u64 = 32;
 
+/// ID3v1 signature and fixed trailer length, checked so the APE footer scan
+/// can skip past a trailing ID3v1 tag (`APE.pm:167-169`).
+const ID3V1_SIGNATURE: &[u8] = b"TAG";
+const ID3V1_TRAILER_LEN: u64 = 128;
+
 /// Last MAC version that uses the pre-3.98 header layout.
 const MAC_OLD_HEADER_MAX_VERSION: u16 = 3970;
 
@@ -93,7 +98,7 @@ impl FormatParser for ApeParser {
         let mut metadata = MetadataMap::with_capacity(24);
 
         parse_mac_audio_header(reader, descriptor, &mut metadata)?;
-        parse_ape_tag(reader, &mut metadata)?;
+        parse_ape_trailer(reader, &mut metadata)?;
 
         Ok(metadata)
     }
@@ -202,17 +207,49 @@ fn format_version(version: u16) -> String {
 }
 
 /// Locates and parses the APE tag block at the end of the file.
-fn parse_ape_tag(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
+///
+/// Container-independent: it looks only at the *last* 32 bytes of whatever
+/// `reader` wraps, the same way `APE::ProcessAPE` does in ExifTool --
+/// `APE.pm`'s trailer scan never checks for a leading `MAC ` descriptor,
+/// which is how ExifTool reads an APEv2 tag off the tail of an MP3
+/// (`ID3::ProcessMP3`, `ID3.pm:1718-1721`) or, per `MPC.pm:111-113`
+/// (`ProcessMPC`'s final `Image::ExifTool::APE::ProcessAPE($et, $dirInfo)`
+/// call), a Musepack file. `mpc.rs` is exactly that second caller: it never
+/// sees a `MAC ` descriptor at all, only the trailing tag this function
+/// finds by walking backward from EOF.
+pub(crate) fn parse_ape_trailer(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
     let file_size = reader.size();
     if file_size < APE_TAG_BLOCK_LEN {
         return Ok(());
     }
 
-    // The footer is the LAST 32 bytes, not the first "APETAGEX" found in a
-    // trailing window: when a tag carries both a header and a footer, the
-    // first match is the header, whose own `size` field then points the
-    // data start 32 bytes too far and drops the first item.
-    let footer_offset = file_size - APE_TAG_BLOCK_LEN;
+    // The footer sits 32 bytes before EOF -- unless a trailing ID3v1 tag
+    // follows it, in which case it sits 32 bytes before *that* instead
+    // (`APE.pm:167-169`: `my $footPos = -32; $footPos -= $$et{DoneID3} if
+    // $$et{DoneID3} > 1`, where `DoneID3` is the ID3v1 trailer's own byte
+    // length once `ID3::ProcessID3` has found one). `APE.mpc` is laid out
+    // exactly `[audio][APE tag][ID3v1]`: without this adjustment the last 32
+    // bytes are the ID3v1 tag's own tail, not `APETAGEX`, and the trailer is
+    // silently missed.
+    let id3v1_trailer_len = if file_size >= ID3V1_TRAILER_LEN {
+        let tail = reader.read(file_size - ID3V1_TRAILER_LEN, ID3V1_TRAILER_LEN as usize)?;
+        if tail.starts_with(ID3V1_SIGNATURE) {
+            ID3V1_TRAILER_LEN
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    let Some(footer_offset) = file_size.checked_sub(APE_TAG_BLOCK_LEN + id3v1_trailer_len) else {
+        return Ok(());
+    };
+
+    // The footer is the LAST 32 bytes (of the audio+tag region), not the
+    // first "APETAGEX" found in a trailing window: when a tag carries both
+    // a header and a footer, the first match is the header, whose own
+    // `size` field then points the data start 32 bytes too far and drops
+    // the first item.
     let footer = reader.read(footer_offset, APE_TAG_BLOCK_LEN as usize)?;
     if &footer[0..8] != APE_TAG_SIGNATURE {
         return Ok(());

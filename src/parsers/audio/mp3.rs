@@ -630,7 +630,13 @@ fn strip_brackets_and_duplicate(val: &str) -> String {
 }
 
 /// Parse ID3v1 tag
-fn parse_id3v1(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
+///
+/// Crate-visible for the same reason [`parse_id3v2_header`]/
+/// [`parse_id3v2_frames`] are: `mpc.rs`'s trailing-ID3v1 tag is byte-for-byte
+/// the same structure (`ID3.pm`'s `%audioFormats` -- MPC shares
+/// `ID3::ProcessID3` with MP3), so a second reader here would be a second
+/// place for the v1 field table to drift.
+pub(crate) fn parse_id3v1(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
     if data.len() < 128 || &data[0..3] != ID3V1_SIGNATURE {
         return Err(ExifToolError::parse_error("Invalid ID3v1 tag"));
     }

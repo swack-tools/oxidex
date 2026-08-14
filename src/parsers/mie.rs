@@ -360,6 +360,600 @@ fn combine_mime(old: &str, new_type: &str) -> Option<String> {
     Some(format!("{new_type_part}/{old_subtype}-{new_subtype}"))
 }
 
+// ============================================================================
+// Standalone `.mie` document parser
+// ============================================================================
+//
+// Everything above this point exists to read a MIE trailer *appended* to
+// another format (a JPEG's `zmie` marker). A standalone `.mie` file is the
+// same element grammar with no host file around it, and until this step
+// nothing routed `FileFormat::MIE` to a parser at all -- `add_identity_tags`
+// named it correctly (`File:FileType: MIE`, off the same `%magicNumber`
+// pattern [`document_mime_type`] cites) and stopped there, so a real `.mie`
+// file reported zero of its own tags (`Detected is not parsed`, AGENTS.md).
+//
+// This walks the file's element tree with the same primitives
+// [`subfile_identifier`] already uses ([`mie_data_length`], the `~ format
+// tagLen dataLen tag data` element shape, `format & 0xf0 == 0x10` group
+// detection, the zero-`TagLength` terminator rule at MIE.pm:1483-1512's
+// `unless ($tagLen) { ... last }`), but where that function only chases one
+// path (`0Type`/`2MIME`) to sharpen a MIME type, this one visits every
+// element and emits a tag for each one recognised in [`MieTable::leaf`],
+// against the nine group tables reachable from `t/images/MIE.mie`
+// (`Main` MIE.pm:124-219, `Meta` 219-286 -- pure routing, no leaf tags of
+// its own in this fixture -- `Camera` 565-624, `Flash` 693-708, `Lens`
+// 649-682, `Orient` 629-649, `Doc` 294-321, `Geo` 321-346, `Image` 438-479,
+// `Thumbnail` 509-532).
+
+use crate::core::FileReader;
+
+/// Parses metadata from a standalone `.mie` file.
+pub fn parse_mie_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
+    let size = reader.size() as usize;
+    let data = reader.read(0, size).map_err(|e| e.to_string())?;
+    let mut metadata = MetadataMap::new();
+    parse_mie_document(data, &mut metadata);
+    Ok(metadata)
+}
+
+/// The group tables reachable from `t/images/MIE.mie`'s top-level `0MIE`
+/// group. `Skip` is not one of MIE.pm's own tables -- it stands in for any
+/// group this walker does not recognise, so its content is still consumed
+/// (keeping the element stream in sync) without emitting tags for it or
+/// misattributing its children to the enclosing table.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MieTable {
+    Main,
+    Meta,
+    Camera,
+    Flash,
+    Lens,
+    Orient,
+    Doc,
+    Geo,
+    Image,
+    Thumbnail,
+    Skip,
+}
+
+/// How an element's raw bytes become a [`TagValue`].
+#[derive(Clone, Copy)]
+enum MieValue {
+    /// Text, decoded per the element's own format byte (`0x20` Latin-1,
+    /// `0x28` UTF-8, `0x29` UTF-16, `0x2a` UTF-32).
+    Str,
+    /// A `List => 1` tag: `_list`-format bytes split on NUL, or a single
+    /// non-list value treated as a one-item list either way -- MIE.pm's
+    /// `References` in `t/images/MIE.mie` is `List => 1` but encoded as a
+    /// single plain string, and displays unchanged. Joined with `", "`,
+    /// ExifTool's default list-value separator.
+    StringList,
+    /// A plain integer, no `PrintConv` (`ColorTemperature`, `ISO`, ...).
+    Int,
+    /// A single rational, no `PrintConv`: displayed as `numerator /
+    /// denominator` reduced to a decimal (`FNumber`, `Rotation`, ...).
+    Rational,
+    /// `Camera::ExposureTime`'s own `PrintConv =>
+    /// 'Image::ExifTool::Exif::PrintExposureTime($val)'` (`MPC.pm` FLAC
+    /// heritage aside, `Exif.pm:5701-5711`): sub-quarter-second values print
+    /// as `1/N`, everything else as a trimmed one-decimal number.
+    ExposureTime,
+    /// `ImageSize`/`ThumbnailImageSize`: a sequence of integers, `PrintConv
+    /// => '$val=~tr/ /x/;$val'` joins them with `x` (`Image.pm:456-464`).
+    Dimensions,
+    /// `Resolution`: the same `tr/ /x/` join over a sequence of rationals,
+    /// plus MIE's units suffix (`ProcessMIEGroup`, MIE.pm:1655-1658:
+    /// `$val .= "($units)" if defined $units`) when the on-disk tag name
+    /// carried one -- `t/images/MIE.mie` writes the literal tag bytes
+    /// `Resolution(/cm)`, not the `/in` default.
+    Resolution,
+    /// Raw bytes (`SubfileData`, `ThumbnailImage`), rendered the same way
+    /// `ape.rs`'s cover-art item is: `TagValue::Binary`.
+    Binary,
+}
+
+impl MieTable {
+    /// This table's declared `GROUPS => { 1 => ... }`, or `None` for `Meta`
+    /// and `Skip`, neither of which emits a tag directly.
+    fn group1(self) -> Option<&'static str> {
+        match self {
+            MieTable::Main => Some("MIE-Main"),
+            MieTable::Meta | MieTable::Skip => None,
+            MieTable::Camera => Some("MIE-Camera"),
+            MieTable::Flash => Some("MIE-Flash"),
+            MieTable::Lens => Some("MIE-Lens"),
+            MieTable::Orient => Some("MIE-Orient"),
+            MieTable::Doc => Some("MIE-Doc"),
+            MieTable::Geo => Some("MIE-Geo"),
+            MieTable::Image => Some("MIE-Image"),
+            MieTable::Thumbnail => Some("MIE-Thumbnail"),
+        }
+    }
+
+    /// The child table a group-format element named `tag` opens from this
+    /// table, per this table's own `SubDirectory` entries. `Skip` for a
+    /// group `Skip` itself does not recognise, so its content is walked
+    /// (and safely discarded) rather than mis-attributed to the parent.
+    fn child(self, tag: &str) -> MieTable {
+        use MieTable::*;
+        match (self, tag) {
+            (Main, "Meta") => Meta,
+            (Meta, "Camera") => Camera,
+            (Meta, "Document") => Doc,
+            (Meta, "Geo") => Geo,
+            (Meta, "Image") => Image,
+            (Meta, "Thumbnail") => Thumbnail,
+            (Camera, "Flash") => Flash,
+            (Camera, "Lens") => Lens,
+            (Camera, "Orientation") => Orient,
+            _ => Skip,
+        }
+    }
+
+    /// The output tag name and value kind for a leaf element named `tag`
+    /// directly inside this table, or `None` for anything this table
+    /// doesn't declare (MIE.pm's own many other tags -- `Brightness`,
+    /// `GPS`, `Audio`, etc -- are out of scope: no sample in the corpus
+    /// exercises them, see this module's `parse_mie_document` doc comment).
+    fn leaf(self, tag: &str) -> Option<(&'static str, MieValue)> {
+        use MieValue::*;
+        match (self, tag) {
+            (MieTable::Main, "0Type") => Some(("SubfileType", Str)),
+            (MieTable::Main, "0Vers") => Some(("MIEVersion", Str)),
+            (MieTable::Main, "1Name") => Some(("SubfileName", Str)),
+            (MieTable::Main, "2MIME") => Some(("SubfileMIMEType", Str)),
+            (MieTable::Main, "data") => Some(("SubfileData", Binary)),
+
+            (MieTable::Camera, "ColorTemperature") => Some(("ColorTemperature", Int)),
+            (MieTable::Camera, "Contrast") => Some(("Contrast", Int)),
+            (MieTable::Camera, "ExposureComp") => Some(("ExposureCompensation", Rational)),
+            (MieTable::Camera, "ExposureMode") => Some(("ExposureMode", Str)),
+            (MieTable::Camera, "ExposureTime") => Some(("ExposureTime", ExposureTime)),
+            (MieTable::Camera, "FocusMode") => Some(("FocusMode", Str)),
+            (MieTable::Camera, "ISO") => Some(("ISO", Int)),
+            (MieTable::Camera, "Make") => Some(("Make", Str)),
+            (MieTable::Camera, "Model") => Some(("Model", Str)),
+            (MieTable::Camera, "OwnerName") => Some(("OwnerName", Str)),
+            (MieTable::Camera, "Saturation") => Some(("Saturation", Int)),
+            (MieTable::Camera, "SerialNumber") => Some(("SerialNumber", Str)),
+            (MieTable::Camera, "Sharpness") => Some(("Sharpness", Int)),
+            (MieTable::Camera, "ShootingMode") => Some(("ShootingMode", Str)),
+
+            (MieTable::Flash, "ExposureComp") => Some(("FlashExposureComp", Rational)),
+            (MieTable::Flash, "GuideNumber") => Some(("FlashGuideNumber", Str)),
+
+            (MieTable::Lens, "FNumber") => Some(("FNumber", Rational)),
+            (MieTable::Lens, "MaxAperture") => Some(("MaxAperture", Rational)),
+            (MieTable::Lens, "MinAperture") => Some(("MinAperture", Rational)),
+
+            (MieTable::Orient, "Rotation") => Some(("Rotation", Rational)),
+
+            (MieTable::Doc, "Comment") => Some(("Comment", Str)),
+            (MieTable::Doc, "Copyright") => Some(("Copyright", Str)),
+            (MieTable::Doc, "CreateDate") => Some(("CreateDate", Str)),
+            (MieTable::Doc, "Keywords") => Some(("Keywords", StringList)),
+            (MieTable::Doc, "ModifyDate") => Some(("ModifyDate", Str)),
+            (MieTable::Doc, "OriginalDate") => Some(("DateTimeOriginal", Str)),
+            (MieTable::Doc, "References") => Some(("References", StringList)),
+            (MieTable::Doc, "Software") => Some(("Software", Str)),
+            (MieTable::Doc, "Title") => Some(("Title", Str)),
+            (MieTable::Doc, "URL") => Some(("URL", Str)),
+
+            (MieTable::Geo, "City") => Some(("City", Str)),
+            (MieTable::Geo, "Country") => Some(("Country", Str)),
+            (MieTable::Geo, "State") => Some(("State", Str)),
+
+            (MieTable::Image, "ColorSpace") => Some(("ColorSpace", Str)),
+            (MieTable::Image, "Components") => Some(("ComponentsConfiguration", Str)),
+            (MieTable::Image, "ImageSize") => Some(("ImageSize", Dimensions)),
+            (MieTable::Image, "Resolution") => Some(("Resolution", Resolution)),
+
+            (MieTable::Thumbnail, "ImageSize") => Some(("ThumbnailImageSize", Dimensions)),
+            (MieTable::Thumbnail, "data") => Some(("ThumbnailImage", Binary)),
+
+            _ => None,
+        }
+    }
+}
+
+/// Walks a standalone MIE file's element tree, recording a tag for every
+/// leaf [`MieTable::leaf`] recognises.
+///
+/// Mirrors [`subfile_identifier`]'s file-level header handling (MIE.pm:1701:
+/// `/^~(\x10|\x18)\x04(.)0MIE/s`) and its element loop's group/terminator
+/// handling, generalized from "track one path" to "visit every element" --
+/// see this module's own doc comment above for the fuller comparison.
+fn parse_mie_document(file: &[u8], metadata: &mut MetadataMap) {
+    let Some(header) = file.get(0..8) else {
+        return;
+    };
+    if header[0] != b'~' || header[2] != 4 || &header[4..8] != b"0MIE" {
+        return;
+    }
+    let doc_little_endian = match header[1] {
+        0x10 => false,
+        0x18 => true,
+        _ => return,
+    };
+
+    let mut pos = 8usize;
+    if header[3] > 252 {
+        let Some((_, extension_width)) = mie_data_length(file, pos, header[3], doc_little_endian)
+        else {
+            return;
+        };
+        pos += extension_width;
+    }
+
+    // Stack of (byte order, table, end offset) frames, one per group
+    // currently open. An inline group's (`data_len == 0`) real boundary is
+    // its own terminator, not a declared length, so it is given `file.len()`
+    // here and the terminator branch below pops it instead.
+    let mut stack: Vec<(bool, MieTable, usize)> =
+        vec![(doc_little_endian, MieTable::Main, file.len())];
+
+    while let Some(&(little_endian, table, end)) = stack.last() {
+        if pos >= end {
+            stack.pop();
+            continue;
+        }
+        let Some(elem_header) = file.get(pos..pos + 4) else {
+            break;
+        };
+        if elem_header[0] != b'~' {
+            break;
+        }
+        let format = elem_header[1];
+        let tag_len = usize::from(elem_header[2]);
+        let len_code = elem_header[3];
+
+        let tag_start = pos + 4;
+        let Some(tag_bytes) = file.get(tag_start..tag_start + tag_len) else {
+            break;
+        };
+        let tag_end = tag_start + tag_len;
+        let Some((data_len, extension_width)) =
+            mie_data_length(file, tag_end, len_code, little_endian)
+        else {
+            break;
+        };
+        let data_start = tag_end + extension_width;
+        let Some(data) = file.get(data_start..data_start + data_len) else {
+            break;
+        };
+        pos = data_start + data_len;
+
+        if tag_len == 0 {
+            // Group terminator (MIE.pm:1483-1512's `unless ($tagLen) { ...
+            // last }`): closes the innermost open frame regardless of the
+            // format byte.
+            stack.pop();
+            continue;
+        }
+
+        let Ok(raw_tag) = std::str::from_utf8(tag_bytes) else {
+            continue;
+        };
+
+        if format & 0xf0 == 0x10 {
+            let group_little_endian = format & 0x08 != 0;
+            let child = table.child(raw_tag);
+            let child_end = if data_len == 0 {
+                file.len()
+            } else {
+                data_start + data_len
+            };
+            stack.push((group_little_endian, child, child_end));
+            continue;
+        }
+
+        record_mie_leaf(table, raw_tag, format, data, little_endian, metadata);
+    }
+}
+
+/// Decodes one leaf element and records it, keyed `"{group1}:{name}"` (or
+/// `"{group1}:{name}-{lang}"` for a localized tag).
+fn record_mie_leaf(
+    table: MieTable,
+    raw_tag: &str,
+    format: u8,
+    data: &[u8],
+    little_endian: bool,
+    metadata: &mut MetadataMap,
+) {
+    let Some(group1) = table.group1() else {
+        return;
+    };
+    // ProcessMIEGroup strips a trailing `(units)` from the raw tag bytes
+    // before table lookup (MIE.pm:1495: `$units = $1 if $tag =~
+    // s/\((.*)\)$//;`), then a trailing `-xx_YY` locale code
+    // (MIE.pm:1521-1524).
+    let (tag_no_units, units) = split_units(raw_tag);
+    let (base_tag, lang) = split_lang(tag_no_units);
+
+    let Some((name, kind)) = table.leaf(base_tag) else {
+        return;
+    };
+
+    let value = match kind {
+        MieValue::Str => decode_string(data, format, little_endian).map(TagValue::new_string),
+        // A `List => 1` tag's items become a `TagValue::Array`, matching
+        // `iptc_parser.rs`'s `collapse_iptc_entries` convention -- except
+        // ExifTool itself prints a single-item list as a bare scalar
+        // (`References` in `t/images/MIE.mie`), so a one-element list stays
+        // a plain string here too rather than a one-element array.
+        MieValue::StringList => decode_string_list(data, format, little_endian).map(|mut items| {
+            if items.len() == 1 {
+                TagValue::new_string(items.remove(0))
+            } else {
+                TagValue::Array(items.into_iter().map(TagValue::new_string).collect())
+            }
+        }),
+        // Stored as a string, not `TagValue::Integer`: `exiftool_compat`'s
+        // formatter applies `PrintConv` purely by bare tag name, with no
+        // group awareness, and `Contrast`/`Saturation`/`Sharpness` collide
+        // with EXIF's own same-named 0/1/2 enums (Exif.pm) even though
+        // MIE.pm declares no `PrintConv` for any of them (`Contrast =>
+        // { Writable => 'int8s' }`, `MPC.pm`/`MIE.pm`). A string sidesteps
+        // every `value.as_integer()`-gated rule in that dispatch and always
+        // renders identically to the bare integer for the fields that don't
+        // collide (`ColorTemperature`, `ISO`).
+        MieValue::Int => {
+            decode_int(data, format, little_endian).map(|v| TagValue::new_string(v.to_string()))
+        }
+        MieValue::Rational => decode_rational(data, format, little_endian)
+            .map(|(n, d)| TagValue::new_string(format_decimal(n, d))),
+        MieValue::ExposureTime => decode_rational(data, format, little_endian)
+            .map(|(n, d)| TagValue::new_string(format_exposure_time(n, d))),
+        MieValue::Dimensions => {
+            decode_dimensions(data, format, little_endian).map(TagValue::new_string)
+        }
+        MieValue::Resolution => decode_resolution(data, format, little_endian, units),
+        MieValue::Binary => Some(TagValue::Binary(data.to_vec())),
+    };
+
+    let Some(value) = value else {
+        return;
+    };
+
+    let key = match lang {
+        Some(lang) => format!("{group1}:{name}-{lang}"),
+        None => format!("{group1}:{name}"),
+    };
+    metadata.insert(key, value);
+}
+
+/// Strips a trailing `(units)` suffix from a raw on-disk MIE tag name.
+fn split_units(tag: &str) -> (&str, Option<&str>) {
+    if tag.ends_with(')')
+        && let Some(open) = tag.rfind('(')
+    {
+        return (&tag[..open], Some(&tag[open + 1..tag.len() - 1]));
+    }
+    (tag, None)
+}
+
+/// Strips a trailing `-xx_YY` locale suffix (MIE.pm:1521:
+/// `/^(\w+)-([a-z]{2}_[A-Z]{2})$/`) from a raw on-disk MIE tag name.
+fn split_lang(tag: &str) -> (&str, Option<&str>) {
+    if let Some(dash) = tag.rfind('-') {
+        let (base, rest) = (&tag[..dash], &tag[dash + 1..]);
+        let bytes = rest.as_bytes();
+        let is_lang_code = bytes.len() == 5
+            && bytes[0].is_ascii_lowercase()
+            && bytes[1].is_ascii_lowercase()
+            && bytes[2] == b'_'
+            && bytes[3].is_ascii_uppercase()
+            && bytes[4].is_ascii_uppercase()
+            && !base.is_empty();
+        if is_lang_code {
+            return (base, Some(rest));
+        }
+    }
+    (tag, None)
+}
+
+/// Decodes `data` as text per MIE's format byte: `0x20` Latin-1 (ISO
+/// 8859-1, a direct byte-to-codepoint mapping), `0x28` UTF-8, `0x29`
+/// UTF-16, `0x2a` UTF-32 (`%mieFormat`, MIE.pm:30-63).
+fn decode_string(data: &[u8], format: u8, little_endian: bool) -> Option<String> {
+    match format {
+        0x20 => Some(data.iter().map(|&b| b as char).collect()),
+        0x28 => std::str::from_utf8(data).ok().map(str::to_string),
+        0x29 => decode_utf16(data, little_endian),
+        0x2a => decode_utf32(data, little_endian),
+        _ => None,
+    }
+}
+
+fn decode_utf16(data: &[u8], little_endian: bool) -> Option<String> {
+    if data.is_empty() || data.len() % 2 != 0 {
+        return None;
+    }
+    let units: Vec<u16> = data
+        .chunks_exact(2)
+        .map(|c| {
+            if little_endian {
+                u16::from_le_bytes([c[0], c[1]])
+            } else {
+                u16::from_be_bytes([c[0], c[1]])
+            }
+        })
+        .collect();
+    String::from_utf16(&units).ok()
+}
+
+fn decode_utf32(data: &[u8], little_endian: bool) -> Option<String> {
+    if data.is_empty() || data.len() % 4 != 0 {
+        return None;
+    }
+    let mut out = String::new();
+    for c in data.chunks_exact(4) {
+        let word = [c[0], c[1], c[2], c[3]];
+        let code_point = if little_endian {
+            u32::from_le_bytes(word)
+        } else {
+            u32::from_be_bytes(word)
+        };
+        out.push(char::from_u32(code_point)?);
+    }
+    Some(out)
+}
+
+/// Decodes a `List => 1` tag's items: `_list`-format bytes split on NUL
+/// (`ProcessMIEGroup`, MIE.pm:1652-1654), or -- since the file may still
+/// encode a single-item list as a plain non-list value, as `References`
+/// does in `t/images/MIE.mie` -- one item for any other text format.
+fn decode_string_list(data: &[u8], format: u8, little_endian: bool) -> Option<Vec<String>> {
+    match format {
+        0x30 => Some(
+            data.split(|&b| b == 0)
+                .map(|chunk| chunk.iter().map(|&b| b as char).collect())
+                .collect(),
+        ),
+        0x38 => Some(
+            data.split(|&b| b == 0)
+                .filter_map(|chunk| std::str::from_utf8(chunk).ok().map(str::to_string))
+                .collect(),
+        ),
+        _ => decode_string(data, format, little_endian).map(|s| vec![s]),
+    }
+}
+
+/// Decodes a signed or unsigned integer of `bytes.len()` width (1-8 bytes)
+/// in the given byte order.
+fn decode_int_signed(bytes: &[u8], little_endian: bool, signed: bool) -> Option<i64> {
+    if bytes.is_empty() || bytes.len() > 8 {
+        return None;
+    }
+    let mut value: u64 = 0;
+    if little_endian {
+        for (i, &b) in bytes.iter().enumerate() {
+            value |= u64::from(b) << (8 * i);
+        }
+    } else {
+        for &b in bytes {
+            value = (value << 8) | u64::from(b);
+        }
+    }
+    if signed {
+        let bits = bytes.len() * 8;
+        if bits < 64 && value & (1u64 << (bits - 1)) != 0 {
+            return Some(value as i64 - (1i64 << bits));
+        }
+    }
+    Some(value as i64)
+}
+
+/// `int8u`/`int16u`/.../`int8s`/... (`0x40-0x4b`, MIE.pm:41-48).
+fn decode_int(data: &[u8], format: u8, little_endian: bool) -> Option<i64> {
+    let signed = matches!(format, 0x48..=0x4b);
+    decode_int_signed(data, little_endian, signed)
+}
+
+/// A single rational: the data is evenly split in half, numerator first
+/// (`rational32u` `0x52`, `rational64u` `0x53`, `rational32s` `0x5a`,
+/// `rational64s` `0x5b`, MIE.pm:49-52).
+fn decode_rational(data: &[u8], format: u8, little_endian: bool) -> Option<(i64, i64)> {
+    if data.is_empty() || data.len() % 2 != 0 {
+        return None;
+    }
+    let half = data.len() / 2;
+    let (num, den) = data.split_at(half);
+    let signed = matches!(format, 0x5a | 0x5b);
+    Some((
+        decode_int_signed(num, little_endian, signed)?,
+        decode_int_signed(den, little_endian, signed)?,
+    ))
+}
+
+/// ExifTool's default numeric rendering for a rational with no `PrintConv`:
+/// the reduced decimal, trailing `.0` implicitly absent since Rust's `f64`
+/// `Display` already omits it (`4.0_f64` prints `"4"`).
+fn format_decimal(numerator: i64, denominator: i64) -> String {
+    if denominator == 0 {
+        return numerator.to_string();
+    }
+    format!("{}", numerator as f64 / denominator as f64)
+}
+
+/// `Exif.pm:5701-5711`'s `PrintExposureTime`.
+fn format_exposure_time(numerator: i64, denominator: i64) -> String {
+    if denominator == 0 {
+        return numerator.to_string();
+    }
+    let secs = numerator as f64 / denominator as f64;
+    if secs > 0.0 && secs < 0.25001 {
+        return format!("1/{}", (0.5 + 1.0 / secs) as i64);
+    }
+    let formatted = format!("{secs:.1}");
+    formatted
+        .strip_suffix(".0")
+        .map(str::to_string)
+        .unwrap_or(formatted)
+}
+
+/// The per-component byte width of a plain (non-rational) integer format.
+fn int_width(format: u8) -> Option<usize> {
+    match format {
+        0x40 | 0x48 => Some(1),
+        0x41 | 0x49 => Some(2),
+        0x42 | 0x4a => Some(4),
+        0x43 | 0x4b => Some(8),
+        _ => None,
+    }
+}
+
+/// `ImageSize`/`ThumbnailImageSize`: a sequence of integers joined with `x`
+/// (`PrintConv => '$val=~tr/ /x/;$val'`, e.g. `Image.pm:456-464`).
+fn decode_dimensions(data: &[u8], format: u8, little_endian: bool) -> Option<String> {
+    let width = int_width(format)?;
+    if data.is_empty() || data.len() % width != 0 {
+        return None;
+    }
+    let signed = matches!(format, 0x48..=0x4b);
+    let parts: Option<Vec<String>> = data
+        .chunks_exact(width)
+        .map(|chunk| decode_int_signed(chunk, little_endian, signed).map(|v| v.to_string()))
+        .collect();
+    parts.map(|p| p.join("x"))
+}
+
+/// `Resolution`: the same `x`-joined sequence as [`decode_dimensions`], but
+/// over rationals, with the on-disk units suffix (already split off by
+/// [`split_units`]) appended in parens (MIE.pm:1655-1658).
+fn decode_resolution(
+    data: &[u8],
+    format: u8,
+    little_endian: bool,
+    units: Option<&str>,
+) -> Option<TagValue> {
+    let half = match format {
+        0x52 | 0x5a => 2,
+        0x53 | 0x5b => 4,
+        _ => return None,
+    };
+    let component = half * 2;
+    if data.is_empty() || data.len() % component != 0 {
+        return None;
+    }
+    let signed = matches!(format, 0x5a | 0x5b);
+    let mut parts = Vec::new();
+    for chunk in data.chunks_exact(component) {
+        let (num, den) = chunk.split_at(half);
+        let num = decode_int_signed(num, little_endian, signed)?;
+        let den = decode_int_signed(den, little_endian, signed)?;
+        parts.push(format_decimal(num, den));
+    }
+    let mut joined = parts.join("x");
+    if let Some(units) = units {
+        joined.push('(');
+        joined.push_str(units);
+        joined.push(')');
+    }
+    Some(TagValue::new_string(joined))
+}
+
 #[cfg(test)]
 mod document_mime_tests {
     use super::*;

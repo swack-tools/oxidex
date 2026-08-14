@@ -19,6 +19,7 @@ use crate::parsers::audio::ape::parse_ape_metadata;
 use crate::parsers::audio::dss::parse_dss_metadata;
 use crate::parsers::audio::flac::parse_flac_metadata;
 use crate::parsers::audio::mp3::parse_mp3_metadata;
+use crate::parsers::audio::mpc::parse_mpc_metadata;
 use crate::parsers::audio::ogg::parse_ogg_metadata;
 use crate::parsers::audio::opus::parse_opus_metadata;
 use crate::parsers::audio::ram::parse_ram_metadata;
@@ -61,6 +62,7 @@ use crate::parsers::image::svg::parse_svg_metadata;
 use crate::parsers::image::webp::parse_webp_metadata;
 use crate::parsers::image::wpg::parse_wpg_metadata;
 use crate::parsers::macho::parse_macho_metadata;
+use crate::parsers::mie::parse_mie_metadata;
 use crate::parsers::pdf::parse_pdf_metadata;
 use crate::parsers::pe::parse_pe_metadata;
 use crate::parsers::png::parse_png_metadata;
@@ -155,6 +157,7 @@ pub fn dispatch_format_parser(
         FileFormat::OGG => convert_string_error(parse_ogg_metadata(reader), "OGG"),
         FileFormat::OPUS => convert_string_error(parse_opus_metadata(reader), "Opus"),
         FileFormat::APE => convert_string_error(parse_ape_metadata(reader), "APE"),
+        FileFormat::MPC => convert_string_error(parse_mpc_metadata(reader), "MPC"),
         FileFormat::RAM => convert_string_error(parse_ram_metadata(reader), "RAM"),
         FileFormat::DSS => convert_string_error(parse_dss_metadata(reader), "DSS"),
         FileFormat::ZIP => convert_string_error(parse_zip_metadata(reader), "ZIP"),
@@ -234,6 +237,7 @@ pub fn dispatch_format_parser(
         FileFormat::VRD => parse_vrd_file(reader),
         FileFormat::DR4 => parse_dr4_file(reader),
         FileFormat::FPF => parse_fpf_metadata(reader),
+        FileFormat::MIE => convert_string_error(parse_mie_metadata(reader), "MIE"),
         _ => Err(ExifToolError::unsupported_format(format!(
             "Format {:?} not yet supported in this iteration",
             format

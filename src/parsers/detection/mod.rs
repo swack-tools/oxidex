@@ -195,6 +195,18 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::FITS);
     }
 
+    // MIE: `~[\x10\x18]\x04.0MIE` (`ExifTool.pm:993`) mixes a two-byte
+    // alternation with a wildcard byte, which `signature!`'s literal-bytes
+    // table can't express (the same reason FITS is checked here rather than
+    // there). `filetype::matches_magic` already carries this pattern
+    // (generated from the same `%magicNumber` table `add_identity_tags`
+    // reads for the ~40 formats with no parser), so MIE was already
+    // correctly named `File:FileType` before this step -- just never routed
+    // to `mie.rs`'s own parser.
+    if crate::filetype::matches_magic("MIE", magic_bytes) {
+        return Ok(FileFormat::MIE);
+    }
+
     // Phase 2: Check simple signatures from lookup table
     for sig in SIMPLE_SIGNATURES {
         let end = sig.offset as usize + sig.bytes.len();

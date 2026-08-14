@@ -138,6 +138,9 @@ pub enum FileFormat {
     /// APE (Monkey's Audio) format (.ape)
     APE,
 
+    /// Musepack audio format (.mpc)
+    MPC,
+
     /// RealAudio metafile containing a streaming URL (.ram)
     RAM,
 
@@ -346,6 +349,9 @@ pub enum FileFormat {
     /// DICOM medical image (.dcm)
     DICOM,
 
+    /// MIE (Meta Information Encapsulation) format (.mie)
+    MIE,
+
     /// Unknown or unsupported format
     Unknown,
 }
@@ -394,6 +400,7 @@ impl FileFormat {
             FileFormat::OGG => "OGG",
             FileFormat::OPUS => "Opus",
             FileFormat::APE => "APE",
+            FileFormat::MPC => "MPC",
             FileFormat::RAM => "RAM",
             FileFormat::DSS => "DSS",
             FileFormat::ZIP => "ZIP",
@@ -461,6 +468,7 @@ impl FileFormat {
             FileFormat::DR4 => "DR4",
             FileFormat::FPF => "FPF",
             FileFormat::DICOM => "DICOM",
+            FileFormat::MIE => "MIE",
             FileFormat::Unknown => "Unknown",
         }
     }
@@ -511,6 +519,7 @@ impl FileFormat {
             FileFormat::OGG => &["ogg"],
             FileFormat::OPUS => &["opus"],
             FileFormat::APE => &["ape"],
+            FileFormat::MPC => &["mpc"],
             FileFormat::RAM => &["ram"],
             FileFormat::DSS => &["dss", "ds2"],
             FileFormat::ZIP => &["zip"],
@@ -578,6 +587,7 @@ impl FileFormat {
             FileFormat::DR4 => &["dr4"],
             FileFormat::FPF => &["fpf"],
             FileFormat::DICOM => &["dcm", "dicom"],
+            FileFormat::MIE => &["mie"],
             FileFormat::Unknown => &[],
         }
     }

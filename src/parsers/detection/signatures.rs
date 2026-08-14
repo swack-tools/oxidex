@@ -95,6 +95,13 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     signature!(b"ID3", 0, FileFormat::MP3),
     signature!(b"FLV", 0, FileFormat::FLV),
     signature!(b"MAC ", 0, FileFormat::APE),
+    // Musepack. `MPC.pm:998` gives the magic as `(MP\+|ID3)`; the `ID3`
+    // alternative is ambiguous with MP3's own leading tag and is instead
+    // resolved by extension in `detect_format_with_mode`
+    // (`src/core/operations.rs`) once the generic MP3 signature below has
+    // matched -- see that override's own comment. A file with no leading
+    // ID3v2 tag opens directly with `MP+` and is unambiguous here.
+    signature!(b"MP+", 0, FileFormat::MPC),
     signature!(b"\x02dss", 0, FileFormat::DSS),
     signature!(b"\x03ds2", 0, FileFormat::DSS),
     signature!(b"\x1A\x45\xDF\xA3", 0, FileFormat::MKV),
