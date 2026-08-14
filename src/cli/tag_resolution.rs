@@ -27,7 +27,7 @@
 use crate::cli::args::CliArgs;
 use crate::core::exiftool_compat::format_for_exiftool;
 use crate::core::read_options::ReadOptions;
-use crate::core::tag_occurrence::TagOccurrence;
+use crate::core::tag_occurrence::{Instance, TagOccurrence};
 use crate::core::{MetadataMap, TagValue};
 use std::collections::HashSet;
 
@@ -198,52 +198,58 @@ pub fn resolve_requested_tags<'a>(
                 occurrence,
             }));
         } else {
-            // `FoundTag`'s own tie rule (`ExifTool.pm:9564`), replicated
+            // `FoundTag`'s own tie rule (`ExifTool.pm:9541-9564`), replicated
             // here exactly as `TagSink::record` applies it incrementally
             // rather than as a flat `max_by_key((priority, order))`: fold
             // the matches in file order, and an arrival displaces the
             // running winner only when `new.priority >= effective_old_
-            // priority`, where a running winner whose own priority is `0`
-            // is promoted to `1` for that comparison
-            // (`ExifTool.pm:9541-9551`, "promote existing 0-priority tag so
-            // it takes precedence over a new 0-tag"). A flat `max_by_key`
-            // gets `Priority => 0` families wrong: among several 0-priority
-            // arrivals it picks the one with the largest `order` (the
-            // LAST), the opposite of the FIRST-wins default JPEG COM's
-            // `Comment` and JUMBF's `JUMDType`/`JUMDLabel` both need and
-            // that `TagSink::record`'s own winner projection already gives
-            // `-j`'s default (non-`-TAG`) output path -- this bug was
-            // invisible for `Comment` (an explicit `-Comment` request
-            // silently returned the wrong one of two occurrences) until the
-            // Stage 4 duplicate-loss scan
-            // (`tools/exiftool-tables/duplicate_loss_scan.py`) started
-            // retaining JUMBF's occurrences too and made the same
-            // mis-resolution visible there.
+            // priority` AND the instance guard below allows it, where a
+            // running winner whose own priority is `0` is promoted to `1`
+            // for that comparison (`ExifTool.pm:9541-9551`, "promote
+            // existing 0-priority tag so it takes precedence over a new
+            // 0-tag"). A flat `max_by_key` gets `Priority => 0` families
+            // wrong: among several 0-priority arrivals it picks the one
+            // with the largest `order` (the LAST), the opposite of the
+            // FIRST-wins default JPEG COM's `Comment` and JUMBF's
+            // `JUMDType`/`JUMDLabel` both need and that `TagSink::record`'s
+            // own winner projection already gives `-j`'s default
+            // (non-`-TAG`) output path -- this bug was invisible for
+            // `Comment` (an explicit `-Comment` request silently returned
+            // the wrong one of two occurrences) until the Stage 4
+            // duplicate-loss scan (`tools/exiftool-tables/
+            // duplicate_loss_scan.py`) started retaining JUMBF's
+            // occurrences too and made the same mis-resolution visible
+            // there.
             //
-            // This ports rule 1 of `TagSink::record`'s two rules
-            // (priority-0 promotion) only, not rule 2 (the DOC_NUM/
-            // `Instance` guard for sub-document/track occurrences) --
-            // and rule 2's absence is a REAL, separate, still-open bug,
-            // not a case this function never sees: `-TrackID` against
-            // `CanonRaw.cr3` returns Track4's `4` here (largest `order`
-            // among four equal-priority ties) where the correct answer,
-            // matching `TagSink::record`'s own winner projection (what
-            // default non-`-TAG` `-j` output uses) and the pinned oracle's
-            // `-TrackID` default, is Track1's `1`. Porting rule 2 here
-            // needs the fold to also track the running winner's `Instance`
-            // (displacing only same-instance or default-instance
-            // arrivals), which is more than this pass's scope -- flagged
-            // rather than silently left implied-correct.
+            // Rule 2, the DOC_NUM/`Instance` guard, rides along in the same
+            // fold: an occurrence recorded under a non-default
+            // sub-document/track `Instance` never displaces a winner
+            // recorded under a *different* `Instance`, regardless of
+            // priority (`ExifTool.pm:9564`'s `(not $$self{DOC_NUM} or ...)`).
+            // Without it, `-TrackID` against `CanonRaw.cr3` returns Track4's
+            // `4` here (largest `order` among four equal-priority ties)
+            // where the correct answer, matching `TagSink::record`'s own
+            // winner projection (what default non-`-TAG` `-j` output uses)
+            // and the pinned oracle's `-TrackID` default, is Track1's `1`.
             matches.sort_by_key(|occurrence| occurrence.order);
             let mut remaining = matches.into_iter();
             let mut winner = remaining.next().expect("matches is non-empty");
             for candidate in remaining {
+                // ExifTool.pm:9541-9551: promote an existing Priority => 0
+                // winner to 1 for the comparison, so a later Priority => 0
+                // arrival never displaces the first one.
                 let effective_old_priority = if winner.priority == 0 {
                     1
                 } else {
                     winner.priority
                 };
-                if candidate.priority >= effective_old_priority {
+                // ExifTool.pm:9564's `(not $$self{DOC_NUM} or ...)`: an
+                // occurrence recorded under a non-default sub-document/track
+                // Instance never displaces a winner recorded under a
+                // *different* Instance, regardless of priority.
+                let instance_ok = candidate.instance == Instance::default()
+                    || candidate.instance == winner.instance;
+                if candidate.priority >= effective_old_priority && instance_ok {
                     winner = candidate;
                 }
             }
@@ -579,6 +585,57 @@ mod tests {
         let resolved = resolve_requested_tags(&metadata, &["FocalLength".to_string()], false);
         assert_eq!(resolved.len(), 1);
         assert_eq!(&*resolved[0].occurrence.group0, "ExifIFD");
+    }
+
+    #[test]
+    fn bare_request_never_lets_a_later_instance_displace_an_earlier_one() {
+        // Mirrors CanonRaw.cr3's four equal-priority `tkhd` TrackID
+        // occurrences (Track1..Track4, ExifTool.pm:9564's DOC_NUM/Instance
+        // guard, QuickTime.pm:1522-1524's `Priority => 0` on TrackID). Only
+        // Track1's occurrence may ever win a bare `-TrackID` request: each
+        // later track carries a *different* Instance than the incumbent
+        // winner, so rule 2 must block it regardless of `order`/priority.
+        // Before this fix, `resolve_requested_tags`'s flat `max_by_key`
+        // picked Track4's -- the largest `order` among the ties -- which is
+        // exactly the bug this test pins against silently returning.
+        let mut metadata = MetadataMap::new();
+        for track in 1..=4u32 {
+            metadata.insert_occurrence(
+                "QuickTime:TrackID",
+                TagValue::new_integer(track as i64),
+                0,
+                "Track",
+                Instance(track),
+            );
+        }
+        let resolved = resolve_requested_tags(&metadata, &["TrackID".to_string()], false);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].occurrence.raw, TagValue::new_integer(1));
+        assert_eq!(resolved[0].occurrence.instance, Instance(1));
+    }
+
+    #[test]
+    fn bare_request_still_lets_the_last_default_instance_occurrence_win() {
+        // The QuickTime counter-case the same guard must NOT break:
+        // SourceImageWidth is grouped per-track via SET_GROUP1
+        // (QuickTime.pm:10354), not DOC_NUM, so its occurrences are all
+        // recorded under the default Instance and ordinary (non-zero)
+        // priority -- the LAST track's value is meant to win, matching the
+        // pinned oracle's own `-SourceImageWidth` answer on CanonRaw.cr3
+        // (Track3's 6288, not Track1's 6000).
+        let mut metadata = MetadataMap::new();
+        for width in [6000, 6288] {
+            metadata.insert_occurrence(
+                "QuickTime:SourceImageWidth",
+                TagValue::new_integer(width),
+                1,
+                "Track",
+                Instance::default(),
+            );
+        }
+        let resolved = resolve_requested_tags(&metadata, &["SourceImageWidth".to_string()], false);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].occurrence.raw, TagValue::new_integer(6288));
     }
 
     #[test]
