@@ -555,7 +555,95 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until):
     return group_src, local_var_sound_until
 
 
+# Step 28 Gate A -- static soundness, computable at codegen time with no
+# corpus at all.
+#
+# The design (OVERHAUL_STEP28_DESIGN.md section 3) states it as: "Every field
+# in the table is either fully transcribed or carries an explicit refusal
+# flag, and the table has no `offsets_sound_until` hazard."
+#
+# The two halves of that sentence are different failure modes, and only the
+# second one is visible in the emitted Rust:
+#
+# * A field carrying an explicit refusal flag is FINE. `Omitted`'s five flags
+#   are the refusal; `DecodedField::emit` and the engine both withhold the
+#   field, loudly and countably. A table full of them passes Gate A -- it just
+#   reports less.
+# * A field the generator DROPPED is not fine. It is absent from the emitted
+#   table with nothing to mark its place, so nothing downstream can tell
+#   "ExifTool has no tag here" from "we could not transcribe the tag here".
+#   Enabling such a table means silently under-reporting an offset ExifTool
+#   reads -- the `AGENTS.md` "a gap in a transcribed table is not evidence the
+#   tag does not exist" trap, promoted from a documentation hazard to a
+#   runtime one.
+# * A CONVERSION the generator dropped is worse than either, and is why this
+#   gate counts `expr_unsupported`/`conv_dropped`/`enum_*_partial` too. Those
+#   fields ARE emitted, with `PrintConv::None`, so the engine reports the raw
+#   number where ExifTool prints a string. That is not a missing tag, it is a
+#   plausible wrong VALUE under a real ExifTool tag name -- precisely what
+#   Gate B would catch on the corpus, and what Gate A can refuse for free on
+#   the tables the corpus never covers.
+#
+# Counters that are NOT disqualifying, and why:
+#   tag_unknown_skipped   ExifTool itself hides these behind -u; not reporting
+#                         them is what ExifTool does by default (ExifTool.pm:9945).
+#   tag_fractional_bare   Step 11 settled this: ExifTool.pm:9957 reads the whole
+#                         word at floor(index) regardless of Mask, so a maskless
+#                         fractional field is fully transcribed, not partial.
+#   omitted_*             the explicit refusal flags the design names.
+GATE_A_DISQUALIFYING = (
+    # fields dropped outright -- nothing marks the offset
+    "tag_fmt_unsupported",
+    "tag_var_format",
+    "tag_mask_unreadable",
+    "tag_bad_index",
+    "tag_no_name",
+    "tag_variant_skipped",
+    "tag_variant_cond_unsupported",
+    "tag_variant_field_unsupported",
+    # conversions dropped -- the field is emitted, but renders the wrong thing
+    "expr_unsupported",
+    "conv_dropped",
+    "enum_int_partial",
+    "enum_str_partial",
+    # SubDirectory edges refused -- the pointer is emitted with no target, so
+    # every tag on the far side is silently absent
+    "subdir_refused_processproc",
+    "subdir_refused_byteorder",
+    "subdir_refused_validate",
+    "subdir_refused_tagtable",
+    "subdir_refused_start",
+    "subdir_refused_base",
+)
+
+
+def gate_a_for(table_stats, offset_hazard):
+    """`(passes, reasons)` for one table's own counters.
+
+    `reasons` is a sorted `(counter, n)` list, emitted verbatim into the
+    generated Rust so a refusal is readable at the point of refusal rather
+    than only in a report nobody opens -- and so the reachability report
+    (`tools/exiftool-tables/reachability.py`) can be generated FROM the
+    tables instead of hand-audited alongside them.
+    """
+    reasons = sorted(
+        (key, table_stats[key]) for key in GATE_A_DISQUALIFYING if table_stats[key]
+    )
+    if offset_hazard:
+        reasons.append(("offsets_sound_until", 1))
+    return (not reasons), reasons
+
+
 def gen_table(mod_name, tbl_name, tbl, stats):
+    """Emit one `BinaryTable` literal, or `None` if the table is not one.
+
+    Step 28: every counter this table's fields touch is tallied into a LOCAL
+    `Counter` first and merged into the run-wide `stats` afterwards, so the
+    generator can compute Gate A -- "is every field of THIS table either fully
+    transcribed or explicitly refused?" -- from the same numbers the run
+    summary prints, rather than from a second, unverified pass over the JSON.
+    See `gate_a_for` and `src/exiftool_tables/enabled.rs`.
+    """
     meta = tbl.get("meta") or {}
     # PROCESS_PROC is the only honest signal for "this is a flat byte record".
     # Checking it only when FORMAT is absent -- which this generator used to do
@@ -581,6 +669,11 @@ def gen_table(mod_name, tbl_name, tbl, stats):
         first_entry = int(str(meta.get("FIRST_ENTRY", "0")), 0)
     except ValueError:
         first_entry = 0
+
+    # Step 28 Gate A: field-level counters for THIS table only.
+    stats, run_stats = Counter(), stats
+    stats["unsupported_exprs"] = Counter()
+    stats["pc_directives_dropped"] = Counter()
 
     rows = []
     variant_rows = []
@@ -630,6 +723,9 @@ def gen_table(mod_name, tbl_name, tbl, stats):
         stats["tag_emitted"] += 1
 
     if not rows and not variant_rows:
+        # Refusals still count against us (Step 28 D3) even when nothing was
+        # emitted to hang them off: the run summary is the denominator.
+        _merge_stats(run_stats, stats)
         return None
 
     stats["table_emitted"] += 1
@@ -648,6 +744,28 @@ def gen_table(mod_name, tbl_name, tbl, stats):
     else:
         sound_until_expr = "None"
 
+    # ExifTool.pm:9471 -- `$priority = $$tbl{PRIORITY}`, consulted by FoundTag
+    # when a name collides. `PRIORITY => 0` means "never displace a value
+    # already reported under this name"; 86 of the pinned tree's tables set
+    # it, and until Step 28 the generated schema dropped it, so every folded
+    # engine had to hardcode its own copy (canon/camera_info.rs's
+    # `merge_priority0`, shared/tag_priority.rs).
+    try:
+        priority = meta.get("PRIORITY")
+        priority_expr = "None" if priority is None else f"Some({int(str(priority), 0)})"
+    except (TypeError, ValueError):
+        priority_expr = "None"
+
+    passes, reasons = gate_a_for(stats, var_sound_hit)
+    if passes:
+        run_stats["gate_a_pass"] += 1
+    else:
+        run_stats["gate_a_fail"] += 1
+    reasons_expr = "&[]" if not reasons else "&[" + ", ".join(
+        f'("{k}", {n})' for k, n in reasons
+    ) + "]"
+    _merge_stats(run_stats, stats)
+
     body = "\n".join(rows)
     variants_body = "\n".join(variant_rows)
     variants_expr = (
@@ -665,6 +783,8 @@ pub static {ident}: BinaryTable = BinaryTable {{
     first_entry: {first_entry},
     default_format: Fmt::{default_fmt[0]},
     offsets_sound_until: {sound_until_expr},
+    priority: {priority_expr},
+    gate_a: GateA {{ blocked_by: {reasons_expr} }},
     fields: &[
 {body}
     ],
@@ -861,6 +981,40 @@ pub struct Field {
     pub subdir: Option<SubdirEdge>,
 }
 
+/// Step 28 Gate A -- whether this table is *statically* sound enough to hand
+/// to the generic engine, decided at codegen time with no corpus at all.
+///
+/// A table passes when `blocked_by` is empty: every field ExifTool declares
+/// was either fully transcribed or emitted with an explicit [`Omitted`] flag,
+/// every `PrintConv` was reproduced exactly, every `SubDirectory` edge was
+/// compiled, and no refused `var_*` field left a live
+/// [`BinaryTable::offsets_sound_until`] hazard.
+///
+/// `blocked_by` names the `codegen.py` counters that fired, with their counts,
+/// so a refusal is legible where the table is rather than only in a report --
+/// and so `tools/exiftool-tables/reachability.py` can GENERATE the
+/// enabled/eligible/refused-with-reason census instead of anyone hand-auditing
+/// it. See `codegen.py`'s `GATE_A_DISQUALIFYING` for why each counter
+/// disqualifies and, just as importantly, why `tag_unknown_skipped`,
+/// `tag_fractional_bare` and the `omitted_*` flags do not.
+///
+/// Gate A alone never enables a table (Step 28 D1, opt-in): passing it makes a
+/// table *eligible*, and `src/exiftool_tables/enabled.rs` -- Gate B's measured
+/// allowlist -- decides.
+#[derive(Clone, Copy, Debug)]
+pub struct GateA {
+    /// `(counter, n)` pairs, sorted, empty exactly when the gate passes.
+    pub blocked_by: &'static [(&'static str, u32)],
+}
+
+impl GateA {
+    /// True when nothing blocked this table.
+    #[must_use]
+    pub const fn passes(self) -> bool {
+        self.blocked_by.is_empty()
+    }
+}
+
 /// A `ProcessBinaryData` table.
 #[derive(Clone, Copy, Debug)]
 pub struct BinaryTable {
@@ -881,6 +1035,15 @@ pub struct BinaryTable {
     /// `var_*` field exists in this table, or none of the emitted fields fall
     /// after it.
     pub offsets_sound_until: Option<i64>,
+    /// ExifTool's table-level `PRIORITY` (ExifTool.pm:9471, consulted by
+    /// `FoundTag` when a tag name collides). `Some(0)` -- 86 of the pinned
+    /// tree's 1,512 tables -- means a value from this table must never
+    /// displace one already reported under the same name. Before Step 28 this
+    /// was dropped from the schema and each engine hardcoded its own copy.
+    pub priority: Option<i64>,
+    /// Step 28 Gate A: static soundness, computed by `codegen.py` from its
+    /// own per-table refusal counters. See [`GateA`].
+    pub gate_a: GateA,
     pub fields: &'static [Field],
     /// Step 23's `_variants` schema: offsets ExifTool's own table declares
     /// as a Perl arrayref of model-dependent alternatives (`dump_tables.pl`'s
@@ -913,6 +1076,15 @@ impl BinaryTable {
             Some(f) => f,
             None => self.default_format,
         }
+    }
+
+    /// Step 28: whether the generic engine
+    /// ([`crate::exiftool_tables::engine::process_binary_data`]) may walk
+    /// this table -- Gate A *and* Gate B's measured allowlist. See
+    /// `src/exiftool_tables/enabled.rs`.
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        super::enabled::is_enabled(self)
     }
 }
 
@@ -1006,6 +1178,10 @@ impl ExprId {{
 # enum either, and filing it under the same heading as one is what turned a
 # partial transcription into a reported success.
 REPORT = (
+    ("Step 28 Gate A (static soundness; a table is ELIGIBLE, not enabled)", (
+        ("tables passing gate A", "gate_a_pass"),
+        ("tables blocked by gate A", "gate_a_fail"),
+    )),
     ("transcribed", (
         ("tables emitted", "table_emitted"),
         ("tags emitted", "tag_emitted"),

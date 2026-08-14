@@ -80,7 +80,8 @@ export default defineConfig({
             { text: 'FFI API', link: '/reference/ffi-api' },
             { text: 'Tag Database', link: '/reference/tag-database' },
             { text: 'MakerNotes', link: '/reference/makernotes' },
-            { text: 'ExifTool Coverage', link: '/reference/tag-coverage-analysis' }
+            { text: 'ExifTool Coverage', link: '/reference/tag-coverage-analysis' },
+            { text: 'BinaryData Engine', link: '/reference/binary-data-engine' }
           ]
         },
         {

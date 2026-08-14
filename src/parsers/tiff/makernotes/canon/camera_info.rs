@@ -30,6 +30,9 @@ use super::camera_info_tables::{
 };
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::formatters::perl_number as format_perl_number;
+use crate::exiftool_tables::engine::{self, Cursor, Step};
+use crate::exiftool_tables::{Fmt as TableFmt, runtime::DecodedValue};
+use crate::io::ByteOrder as IoByteOrder;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 /// TIFF field types, as they appear in the MakerNote IFD entry for tag 0x0D.
@@ -154,9 +157,14 @@ fn walk(
     ctx: &mut Ctx<'_>,
     out: &mut HashMap<String, String>,
 ) {
-    let increment = table.default_fmt.size() as i64;
-    let size = data.len() as i64;
-    let mut var_size: i64 = 0;
+    // Step 28: the offset arithmetic is `exiftool_tables::engine::Cursor`,
+    // the single port of ExifTool.pm:9957-9964 -- `int($index) * $increment +
+    // $varSize`, the negative-index wrap at ExifTool.pm:9959-9962, and
+    // `last if $more <= 0` at ExifTool.pm:9964. This module wrote all three by
+    // hand until the fold; they are identical statements, and having one copy
+    // is the point of Step 28.
+    let increment = i64::from(table.default_fmt.size());
+    let mut cursor = Cursor::new(data.len() as i64, increment);
 
     let fields = table.fields;
     let mut i = 0usize;
@@ -171,19 +179,14 @@ fn walk(
         let group = &fields[i..j];
         i = j;
 
-        // A negative key counts elements back from the end of the record.
-        let mut entry = idx * increment + var_size;
-        if entry < 0 {
-            entry += size;
-            if entry < 0 {
-                continue;
-            }
-        }
-        let more = size - entry;
-        if more <= 0 {
-            // `last if $more <= 0` -- the rest of the table is out of range.
-            break;
-        }
+        // A negative key counts elements back from the end of the record
+        // (ExifTool.pm:9959-9962); `Step::Stop` is ExifTool's own `last`
+        // (ExifTool.pm:9964), not a `next`.
+        let (entry, more) = match cursor.step(idx) {
+            Step::At { entry, more } => (entry, more),
+            Step::Skip => continue,
+            Step::Stop => break,
+        };
 
         let Some(field) = group
             .iter()
@@ -201,14 +204,19 @@ fn walk(
         let value = read_value(data, entry as usize, fmt, more as usize, byte_order);
 
         // The Hook runs after this field's own offset is fixed, so it only
-        // moves the fields that come after it.
-        apply_hook(field, ctx, &mut var_size);
+        // moves the fields that come after it (ExifTool.pm:10049-10053 runs
+        // after ExifTool.pm:9957 has already computed `$entry`).
+        apply_hook(field, ctx, &mut cursor);
 
         let Some(mut value) = value else {
             continue;
         };
         if let (Some(mask), Val::Int(n)) = (field.mask, &value) {
-            // ExifTool derives BitShift from the mask's lowest set bit.
+            // ExifTool.pm:10079, with BitShift derived from the mask's lowest
+            // set bit (ExifTool.pm:5893-5898). Kept inline rather than routed
+            // through `engine::apply_mask` because this table set carries a
+            // bare `i64` mask, not the generated schema's `Mask { bits,
+            // shift }` -- the arithmetic is the same statement either way.
             let shift = mask.trailing_zeros();
             value = Val::Int((n & mask) >> shift);
         }
@@ -236,7 +244,7 @@ fn walk(
     }
 }
 
-fn apply_hook(field: &F, ctx: &Ctx<'_>, var_size: &mut i64) {
+fn apply_hook(field: &F, ctx: &Ctx<'_>, cursor: &mut Cursor) {
     for rule in field.hook {
         let holds = match rule.cmp {
             Cmp::Lt => ctx.canon_firm < rule.firm,
@@ -249,11 +257,11 @@ fn apply_hook(field: &F, ctx: &Ctx<'_>, var_size: &mut i64) {
             // `($$self{CanonFirm} ? A : B)` -- B is the arm taken when no
             // firmware string matched, and is normally 0x10000, which ends the
             // walk on the next field rather than reading it at a wrong offset.
-            *var_size += if ctx.canon_firm == 0 {
+            cursor.shift(if ctx.canon_firm == 0 {
                 rule.zero_delta
             } else {
                 rule.delta
-            };
+            });
         }
     }
 }
@@ -262,45 +270,50 @@ fn apply_hook(field: &F, ctx: &Ctx<'_>, var_size: &mut i64) {
 // Reading
 // ---------------------------------------------------------------------------
 
+/// This table set's `Fmt` in the generated-schema vocabulary the shared
+/// `ReadValue` speaks. Every variant here has an exact counterpart there --
+/// `camera_info_tables.rs`'s enum is a subset of `exiftool_tables::Fmt`,
+/// missing only the float/rational formats CameraInfo never uses -- so this
+/// is a renaming, not a conversion, and it cannot lose a format.
+const fn shared_fmt(fmt: Fmt) -> TableFmt {
+    match fmt {
+        Fmt::Int8u => TableFmt::Int8u,
+        Fmt::Int8s => TableFmt::Int8s,
+        Fmt::Int16u => TableFmt::Int16u,
+        Fmt::Int16s => TableFmt::Int16s,
+        // `int16uRev` is read with the byte order reversed relative to the
+        // rest of the record -- Canon really does mix endianness inside one
+        // table, and the shared reader honours that the same way.
+        Fmt::Int16uRev => TableFmt::Int16uRev,
+        Fmt::Int32u => TableFmt::Int32u,
+        Fmt::Int32s => TableFmt::Int32s,
+        Fmt::Str(n) => TableFmt::Str(n),
+        Fmt::Undef(n) => TableFmt::Undef(n),
+    }
+}
+
+/// Step 28: one `ReadValue` (ExifTool.pm:6286) for all three folded engines.
+///
+/// This module's own reader refused a field with fewer than `size()` bytes
+/// left; ExifTool shortens the count instead (ExifTool.pm:6301-6303) and
+/// reports what fits, which for a `string[N]` running into the end of a
+/// record is the difference between the string ExifTool prints and no tag at
+/// all.
 fn read_value(data: &[u8], at: usize, fmt: Fmt, more: usize, byte_order: ByteOrder) -> Option<Val> {
-    let need = fmt.size() as usize;
-    if need == 0 || more < need {
-        // `$count < 1 and return undef` -- not enough data left for one element.
-        return None;
-    }
-    let bytes = data.get(at..at + need)?;
-    let le = matches!(byte_order, ByteOrder::LittleEndian);
-    Some(match fmt {
-        Fmt::Int8u => Val::Int(bytes[0] as i64),
-        Fmt::Int8s => Val::Int(bytes[0] as i8 as i64),
-        Fmt::Int16u => Val::Int(u16_at(bytes, le) as i64),
-        Fmt::Int16s => Val::Int(u16_at(bytes, le) as i16 as i64),
-        // `int16uRev` is read with the byte order reversed relative to the rest
-        // of the record -- Canon really does mix endianness inside one table.
-        Fmt::Int16uRev => Val::Int(u16_at(bytes, !le) as i64),
-        Fmt::Int32u => Val::Int(u32_at(bytes, le) as i64),
-        Fmt::Int32s => Val::Int(u32_at(bytes, le) as i32 as i64),
-        Fmt::Str(_) => {
-            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-            Val::Str(String::from_utf8_lossy(&bytes[..end]).into_owned())
-        }
-        Fmt::Undef(_) => Val::Bytes(bytes.to_vec()),
-    })
-}
-
-fn u16_at(b: &[u8], le: bool) -> u16 {
-    if le {
-        u16::from_le_bytes([b[0], b[1]])
-    } else {
-        u16::from_be_bytes([b[0], b[1]])
-    }
-}
-
-fn u32_at(b: &[u8], le: bool) -> u32 {
-    if le {
-        u32::from_le_bytes([b[0], b[1], b[2], b[3]])
-    } else {
-        u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+    let order = match byte_order {
+        ByteOrder::LittleEndian => IoByteOrder::Little,
+        ByteOrder::BigEndian => IoByteOrder::Big,
+    };
+    let more = i64::try_from(more).ok()?;
+    match engine::read_value(data, at, shared_fmt(fmt), 1, more, order)? {
+        DecodedValue::Integer(n) => Some(Val::Int(n)),
+        DecodedValue::String(s) => Some(Val::Str(s)),
+        DecodedValue::Undefined(b) => Some(Val::Bytes(b)),
+        // CameraInfo declares no float, rational or array field, so the
+        // shared reader cannot return one for a `shared_fmt` output. Refusing
+        // rather than inventing a rendering keeps that true if it ever stops
+        // being.
+        _ => None,
     }
 }
 

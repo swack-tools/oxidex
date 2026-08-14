@@ -192,6 +192,40 @@ pub struct Field {
     pub subdir: Option<SubdirEdge>,
 }
 
+/// Step 28 Gate A -- whether this table is *statically* sound enough to hand
+/// to the generic engine, decided at codegen time with no corpus at all.
+///
+/// A table passes when `blocked_by` is empty: every field ExifTool declares
+/// was either fully transcribed or emitted with an explicit [`Omitted`] flag,
+/// every `PrintConv` was reproduced exactly, every `SubDirectory` edge was
+/// compiled, and no refused `var_*` field left a live
+/// [`BinaryTable::offsets_sound_until`] hazard.
+///
+/// `blocked_by` names the `codegen.py` counters that fired, with their counts,
+/// so a refusal is legible where the table is rather than only in a report --
+/// and so `tools/exiftool-tables/reachability.py` can GENERATE the
+/// enabled/eligible/refused-with-reason census instead of anyone hand-auditing
+/// it. See `codegen.py`'s `GATE_A_DISQUALIFYING` for why each counter
+/// disqualifies and, just as importantly, why `tag_unknown_skipped`,
+/// `tag_fractional_bare` and the `omitted_*` flags do not.
+///
+/// Gate A alone never enables a table (Step 28 D1, opt-in): passing it makes a
+/// table *eligible*, and `src/exiftool_tables/enabled.rs` -- Gate B's measured
+/// allowlist -- decides.
+#[derive(Clone, Copy, Debug)]
+pub struct GateA {
+    /// `(counter, n)` pairs, sorted, empty exactly when the gate passes.
+    pub blocked_by: &'static [(&'static str, u32)],
+}
+
+impl GateA {
+    /// True when nothing blocked this table.
+    #[must_use]
+    pub const fn passes(self) -> bool {
+        self.blocked_by.is_empty()
+    }
+}
+
 /// A `ProcessBinaryData` table.
 #[derive(Clone, Copy, Debug)]
 pub struct BinaryTable {
@@ -212,6 +246,15 @@ pub struct BinaryTable {
     /// `var_*` field exists in this table, or none of the emitted fields fall
     /// after it.
     pub offsets_sound_until: Option<i64>,
+    /// ExifTool's table-level `PRIORITY` (ExifTool.pm:9471, consulted by
+    /// `FoundTag` when a tag name collides). `Some(0)` -- 86 of the pinned
+    /// tree's 1,512 tables -- means a value from this table must never
+    /// displace one already reported under the same name. Before Step 28 this
+    /// was dropped from the schema and each engine hardcoded its own copy.
+    pub priority: Option<i64>,
+    /// Step 28 Gate A: static soundness, computed by `codegen.py` from its
+    /// own per-table refusal counters. See [`GateA`].
+    pub gate_a: GateA,
     pub fields: &'static [Field],
     /// Step 23's `_variants` schema: offsets ExifTool's own table declares
     /// as a Perl arrayref of model-dependent alternatives (`dump_tables.pl`'s
@@ -244,6 +287,15 @@ impl BinaryTable {
             Some(f) => f,
             None => self.default_format,
         }
+    }
+
+    /// Step 28: whether the generic engine
+    /// ([`crate::exiftool_tables::engine::process_binary_data`]) may walk
+    /// this table -- Gate A *and* Gate B's measured allowlist. See
+    /// `src/exiftool_tables/enabled.rs`.
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        super::enabled::is_enabled(self)
     }
 }
 
@@ -933,6 +985,10 @@ pub static AIFF_COMMON: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -1008,6 +1064,10 @@ pub static AIFF_FORMATVERS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -1039,6 +1099,8 @@ pub static APE_NEWHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -1132,6 +1194,8 @@ pub static APE_OLDHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -1220,6 +1284,10 @@ pub static ASF_FILEPROPERTIES: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 7)],
+    },
     fields: &[
         Field {
             index: 64,
@@ -1280,6 +1348,10 @@ pub static ASF_STREAMPROPERTIES: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 48,
@@ -1661,6 +1733,14 @@ pub static BMP_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("enum_int_partial", 1),
+            ("expr_unsupported", 3),
+            ("tag_fmt_unsupported", 3),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -2010,6 +2090,8 @@ pub static BMP_OS2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -2081,6 +2163,10 @@ pub static BPG_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 3), ("tag_var_format", 3)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -2192,6 +2278,14 @@ pub static CANON_AFCONFIG: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("enum_int_partial", 4),
+            ("tag_variant_cond_unsupported", 1),
+            ("tag_variant_skipped", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 1,
@@ -2574,6 +2668,8 @@ pub static CANON_AFMICROADJ: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -2616,6 +2712,8 @@ pub static CANON_AMBIENCE: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1,
         sub: None,
@@ -2651,6 +2749,8 @@ pub static CANON_ASPECTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -2731,6 +2831,8 @@ pub static CANON_CMP1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 8,
@@ -2769,6 +2871,10 @@ pub static CANON_CAMERAINFO1000D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -3751,6 +3857,8 @@ pub static CANON_CAMERAINFO1D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -4743,6 +4851,10 @@ pub static CANON_CAMERAINFO1DX: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -5696,6 +5808,10 @@ pub static CANON_CAMERAINFO1DMKII: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 3)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -6588,6 +6704,10 @@ pub static CANON_CAMERAINFO1DMKIII: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -7603,6 +7723,10 @@ pub static CANON_CAMERAINFO1DMKIIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 3)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -8442,6 +8566,10 @@ pub static CANON_CAMERAINFO1DMKIV: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -9421,6 +9549,10 @@ pub static CANON_CAMERAINFO40D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -10377,6 +10509,10 @@ pub static CANON_CAMERAINFO450D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -11316,6 +11452,10 @@ pub static CANON_CAMERAINFO500D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -12329,6 +12469,10 @@ pub static CANON_CAMERAINFO50D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -13342,6 +13486,10 @@ pub static CANON_CAMERAINFO550D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -14323,6 +14471,10 @@ pub static CANON_CAMERAINFO5D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1), ("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -16369,6 +16521,10 @@ pub static CANON_CAMERAINFO5DMKII: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -17448,6 +17604,10 @@ pub static CANON_CAMERAINFO5DMKIII: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -18452,6 +18612,10 @@ pub static CANON_CAMERAINFO600D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -19433,6 +19597,10 @@ pub static CANON_CAMERAINFO60D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -20367,6 +20535,10 @@ pub static CANON_CAMERAINFO650D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -21371,6 +21543,10 @@ pub static CANON_CAMERAINFO6D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -22318,6 +22494,10 @@ pub static CANON_CAMERAINFO70D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -23195,6 +23375,10 @@ pub static CANON_CAMERAINFO750D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -24107,6 +24291,10 @@ pub static CANON_CAMERAINFO7D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -25123,6 +25311,10 @@ pub static CANON_CAMERAINFO80D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -25976,6 +26168,8 @@ pub static CANON_CAMERAINFOG5XII: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 659,
@@ -26060,6 +26254,10 @@ pub static CANON_CAMERAINFOPOWERSHOT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -26172,6 +26370,10 @@ pub static CANON_CAMERAINFOPOWERSHOT2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -26335,6 +26537,8 @@ pub static CANON_CAMERAINFOR6: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2522,
@@ -26379,6 +26583,8 @@ pub static CANON_CAMERAINFOR6M2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 3369,
         sub: None,
@@ -26404,6 +26610,8 @@ pub static CANON_CAMERAINFOR6M3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 2157,
         sub: None,
@@ -26429,6 +26637,8 @@ pub static CANON_CAMERAINFOUNKNOWN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 363,
@@ -26479,6 +26689,8 @@ pub static CANON_CAMERAINFOUNKNOWN32: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: -3,
@@ -26597,6 +26809,10 @@ pub static CANON_CAMERASETTINGS: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 5), ("expr_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -28040,6 +28256,8 @@ pub static CANON_COLORBALANCE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -28193,6 +28411,8 @@ pub static CANON_COLORCOEFS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -28429,6 +28649,8 @@ pub static CANON_COLORCOEFS2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -28665,6 +28887,8 @@ pub static CANON_COLORDATA1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 25,
@@ -28901,6 +29125,8 @@ pub static CANON_COLORDATA10: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -29232,6 +29458,8 @@ pub static CANON_COLORDATA11: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -29535,6 +29763,8 @@ pub static CANON_COLORDATA12: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -29800,6 +30030,8 @@ pub static CANON_COLORDATA2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 24,
@@ -30097,6 +30329,8 @@ pub static CANON_COLORDATA3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -30505,6 +30739,13 @@ pub static CANON_COLORDATA4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("tag_variant_cond_unsupported", 1),
+            ("tag_variant_skipped", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -30796,6 +31037,8 @@ pub static CANON_COLORDATA5: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -30981,6 +31224,8 @@ pub static CANON_COLORDATA6: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -31306,6 +31551,8 @@ pub static CANON_COLORDATA7: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -31771,6 +32018,8 @@ pub static CANON_COLORDATA8: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -32176,6 +32425,8 @@ pub static CANON_COLORDATA9: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -32484,6 +32735,8 @@ pub static CANON_COLORDATAUNKNOWN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -32509,6 +32762,10 @@ pub static CANON_COLORINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 2)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -32570,6 +32827,10 @@ pub static CANON_CONTRASTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[Field {
         index: 4,
         sub: None,
@@ -32595,6 +32856,8 @@ pub static CANON_CROPINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -32655,6 +32918,10 @@ pub static CANON_EXPOSUREINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2)],
+    },
     fields: &[Field {
         index: 2,
         sub: None,
@@ -32686,6 +32953,8 @@ pub static CANON_FACEDETECT1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -32883,6 +33152,8 @@ pub static CANON_FACEDETECT2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -32921,6 +33192,8 @@ pub static CANON_FACEDETECT3: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 3,
         sub: None,
@@ -32946,6 +33219,13 @@ pub static CANON_FILEINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("tag_variant_cond_unsupported", 1),
+            ("tag_variant_skipped", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 3,
@@ -33352,6 +33632,8 @@ pub static CANON_FLAGS: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1,
         sub: None,
@@ -33377,6 +33659,13 @@ pub static CANON_FOCALLENGTH: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("tag_variant_cond_unsupported", 2),
+            ("tag_variant_skipped", 2),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -33427,6 +33716,8 @@ pub static CANON_FOCUSBRACKETINGINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -33520,6 +33811,8 @@ pub static CANON_HDRINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -33564,6 +33857,8 @@ pub static CANON_LENSINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -33595,6 +33890,8 @@ pub static CANON_LEVELINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -33696,6 +33993,8 @@ pub static CANON_LIGHTINGOPT: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -33799,6 +34098,10 @@ pub static CANON_LOGINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 2)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -33939,6 +34242,8 @@ pub static CANON_MEASUREDCOLOR: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1,
         sub: None,
@@ -33964,6 +34269,8 @@ pub static CANON_MODIFIEDINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -34168,6 +34475,10 @@ pub static CANON_MOVIEINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -34296,6 +34607,8 @@ pub static CANON_MULTIEXP: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -34350,6 +34663,8 @@ pub static CANON_MYCOLORS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 2,
         sub: None,
@@ -34390,6 +34705,10 @@ pub static CANON_PSINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 34)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -34990,6 +35309,10 @@ pub static CANON_PSINFO2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 38)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -35670,6 +35993,8 @@ pub static CANON_PANORAMA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -35714,6 +36039,8 @@ pub static CANON_PREVIEWIMAGEINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -35795,6 +36122,8 @@ pub static CANON_PROCESSING: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -36049,6 +36378,8 @@ pub static CANON_RAWBURSTINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -36087,6 +36418,8 @@ pub static CANON_SENSORINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -36213,6 +36546,10 @@ pub static CANON_SERIALINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -36244,6 +36581,10 @@ pub static CANON_SHOTINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 5)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -36785,6 +37126,10 @@ pub static CANON_TIMEINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -36870,6 +37215,8 @@ pub static CANON_VIGNETTINGCORR: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -36985,6 +37332,8 @@ pub static CANON_VIGNETTINGCORR2: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 5,
@@ -37045,6 +37394,8 @@ pub static CANON_VIGNETTINGCORRUNKNOWN: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -37070,6 +37421,8 @@ pub static CANON_WBINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -37196,6 +37549,10 @@ pub static CANONCUSTOM_PERSONALFUNCVALUES: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -37500,6 +37857,10 @@ pub static CANONCUSTOM_PERSONALFUNCS: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 29)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -37835,6 +38196,8 @@ pub static CANONRAW_DECODERTABLE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -37884,6 +38247,8 @@ pub static CANONRAW_EXPOSUREINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Float,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -37945,6 +38310,8 @@ pub static CANONRAW_FLASHINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Float,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -37983,6 +38350,8 @@ pub static CANONRAW_IMAGEFORMAT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -38026,6 +38395,8 @@ pub static CANONRAW_IMAGEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -38119,6 +38490,8 @@ pub static CANONRAW_RAWJPGINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -38184,6 +38557,10 @@ pub static CANONRAW_TIMESTAMP: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -38245,6 +38622,8 @@ pub static CANONRAW_WHITESAMPLE: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -38327,6 +38706,10 @@ pub static CANONVRD_CROPINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -38464,6 +38847,10 @@ pub static CANONVRD_DLOINFO: BinaryTable = BinaryTable {
     first_entry: 1,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -38502,6 +38889,8 @@ pub static CANONVRD_DR4HEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 3,
         sub: None,
@@ -39014,6 +39403,8 @@ pub static CANONVRD_DUSTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 2,
         sub: None,
@@ -39039,6 +39430,8 @@ pub static CANONVRD_GAMMAINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Double,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -39216,6 +39609,8 @@ pub static CANONVRD_STAMPINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 2,
         sub: None,
@@ -39241,6 +39636,8 @@ pub static CANONVRD_STAMPTOOL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -39266,6 +39663,10 @@ pub static CANONVRD_TONECURVE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 4)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -39392,6 +39793,10 @@ pub static CANONVRD_VER1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 8)],
+    },
     fields: &[
         Field {
             index: 2,
@@ -39933,6 +40338,14 @@ pub static CANONVRD_VER2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: Some(88),
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("tag_fmt_unsupported", 1),
+            ("tag_var_format", 1),
+            ("offsets_sound_until", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 2,
@@ -41821,6 +42234,8 @@ pub static CASIO_FACEINFO1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -42041,6 +42456,8 @@ pub static CASIO_FACEINFO2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -42283,6 +42700,10 @@ pub static CASIO_QVCI: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 44,
@@ -42365,6 +42786,8 @@ pub static DJI_THERMALPARAMS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 36,
@@ -42557,6 +42980,10 @@ pub static DJI_THERMALPARAMS2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -42639,6 +43066,8 @@ pub static DJI_THERMALPARAMS3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -42717,6 +43146,14 @@ pub static DNG_IMAGESEQ: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: Some(0),
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("tag_fmt_unsupported", 3),
+            ("tag_var_format", 3),
+            ("offsets_sound_until", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 3,
@@ -42766,6 +43203,8 @@ pub static DNG_PROFILEDYNAMICRANGE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -42815,6 +43254,10 @@ pub static DPX_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -43399,6 +43842,10 @@ pub static DSF_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -43503,6 +43950,8 @@ pub static DJVU_FORM: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -43535,6 +43984,8 @@ pub static DJVU_INFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -43643,6 +44094,10 @@ pub static EXE_AR: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[Field {
         index: 16,
         sub: None,
@@ -43674,6 +44129,8 @@ pub static EXE_CHM: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -43831,6 +44288,10 @@ pub static EXE_DEBUGNB10: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -43892,6 +44353,10 @@ pub static EXE_DEBUGRSDS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -43936,6 +44401,8 @@ pub static EXE_ELF: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -44079,6 +44546,10 @@ pub static EXE_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -44323,6 +44794,10 @@ pub static EXE_PEF: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 2,
@@ -44378,6 +44853,8 @@ pub static EXE_PEVERSION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -44505,6 +44982,14 @@ pub static FLAC_PICTURE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: Some(1),
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("tag_fmt_unsupported", 3),
+            ("tag_var_format", 2),
+            ("offsets_sound_until", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -44609,6 +45094,8 @@ pub static FLIR_AFF1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -44664,6 +45151,8 @@ pub static FLIR_AFF5: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 18,
@@ -44719,6 +45208,10 @@ pub static FLIR_CAMERAINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 5)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -45314,6 +45807,10 @@ pub static FLIR_COARSEDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -45398,6 +45895,10 @@ pub static FLIR_EMBEDDEDIMAGE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -45470,6 +45971,10 @@ pub static FLIR_FPF: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 32,
@@ -45934,6 +46439,10 @@ pub static FLIR_GPSINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -46205,6 +46714,10 @@ pub static FLIR_GPS_UUID: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Float,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -46254,6 +46767,10 @@ pub static FLIR_GAINDEADDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -46338,6 +46855,8 @@ pub static FLIR_HEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 4,
         sub: None,
@@ -46363,6 +46882,8 @@ pub static FLIR_METERLINK: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 26,
@@ -46655,6 +47176,8 @@ pub static FLIR_MOREINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 5,
         sub: None,
@@ -46680,6 +47203,10 @@ pub static FLIR_PAINTDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -46764,6 +47291,10 @@ pub static FLIR_PALETTEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -46919,6 +47450,8 @@ pub static FLIR_PARAMS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Float,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -47041,6 +47574,8 @@ pub static FLIR_PIP: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -47134,6 +47669,10 @@ pub static FLIR_RAWDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -47218,6 +47757,8 @@ pub static FLIR_SERIALNUMS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 126,
         sub: None,
@@ -47243,6 +47784,10 @@ pub static FLASHPIX_COMPOBJ: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -47268,6 +47813,10 @@ pub static FLASHPIX_DOP: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 4)],
+    },
     fields: &[
         Field {
             index: 20,
@@ -47412,6 +47961,8 @@ pub static FLASHPIX_PREVIEWINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 13,
@@ -47450,6 +48001,8 @@ pub static FLASHPIX_SUBIMAGEHDR: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -47532,6 +48085,8 @@ pub static FONT_PFM: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -47812,6 +48367,8 @@ pub static FOTOSTATION_SOFTEDIT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -47980,6 +48537,10 @@ pub static FUJIFILM_AFCSETTINGS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -48055,6 +48616,10 @@ pub static FUJIFILM_DRIVESETTINGS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -48103,6 +48668,8 @@ pub static FUJIFILM_FFMV: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -48128,6 +48695,10 @@ pub static FUJIFILM_FOCUSSETTINGS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 2)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -48218,6 +48789,8 @@ pub static FUJIFILM_MOV: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -48295,6 +48868,8 @@ pub static FUJIFILM_PRIORITYSETTINGS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -48339,6 +48914,8 @@ pub static FUJIFILM_RAFDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -48491,6 +49068,8 @@ pub static FUJIFILM_RAFHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 60,
@@ -48535,6 +49114,8 @@ pub static GIF_ANIMATION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1,
         sub: None,
@@ -48560,6 +49141,10 @@ pub static GIF_MIDICONTROL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -48648,6 +49233,8 @@ pub static GIF_SCREEN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -48768,6 +49355,10 @@ pub static GIMP_HEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1)],
+    },
     fields: &[
         Field {
             index: 9,
@@ -48838,6 +49429,8 @@ pub static GIMP_RESOLUTION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Float,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -48876,6 +49469,10 @@ pub static GM_MRLH: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -48901,6 +49498,8 @@ pub static GOPRO_FDSC: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 8,
@@ -48961,6 +49560,14 @@ pub static H264_CAMERA1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("enum_int_partial", 1),
+            ("expr_unsupported", 1),
+            ("tag_bad_index", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -49076,6 +49683,10 @@ pub static H264_CAMERA2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1), ("tag_bad_index", 1)],
+    },
     fields: &[Field {
         index: 1,
         sub: None,
@@ -49106,6 +49717,8 @@ pub static H264_FRAMEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -49144,6 +49757,8 @@ pub static H264_MAKEMODEL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -49180,6 +49795,8 @@ pub static H264_RECINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -49205,6 +49822,10 @@ pub static H264_SHUTTER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_bad_index", 1)],
+    },
     fields: &[Field {
         index: 1,
         sub: Some(1),
@@ -49239,6 +49860,8 @@ pub static HP_TYPE4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 12,
@@ -49328,6 +49951,8 @@ pub static HP_TYPE6: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 12,
@@ -49417,6 +50042,10 @@ pub static ICC_PROFILE_CHROMATICITY: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 4)],
+    },
     fields: &[
         Field {
             index: 8,
@@ -49461,6 +50090,8 @@ pub static ICC_PROFILE_COLORREP: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 8,
@@ -49570,6 +50201,8 @@ pub static ICC_PROFILE_COLORANTTABLE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 8,
@@ -49663,6 +50296,10 @@ pub static ICC_PROFILE_HEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 5), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -50720,6 +51357,10 @@ pub static ICC_PROFILE_MEASUREMENT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 8,
@@ -50782,6 +51423,10 @@ pub static ICC_PROFILE_VIEWINGCONDITIONS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2)],
+    },
     fields: &[Field {
         index: 32,
         sub: None,
@@ -50816,6 +51461,8 @@ pub static ICO_ICONDIR: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -50965,6 +51612,8 @@ pub static ICO_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -51033,6 +51682,8 @@ pub static ID3_V1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 3,
@@ -51352,6 +52003,8 @@ pub static ID3_V1_ENH: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -51474,6 +52127,8 @@ pub static ISO_BOOTRECORD: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 7,
@@ -51524,6 +52179,10 @@ pub static ISO_PRIMARYVOLUME: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 5)],
+    },
     fields: &[
         Field {
             index: 8,
@@ -51800,6 +52459,8 @@ pub static ITC_HEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 16,
         sub: None,
@@ -51825,6 +52486,8 @@ pub static ITC_ITEM: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -51928,6 +52591,8 @@ pub static INFIRAY_FACTORY: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -52164,6 +52829,8 @@ pub static INFIRAY_ISOTHERMAL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -52224,6 +52891,8 @@ pub static INFIRAY_MIXMODE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -52284,6 +52953,8 @@ pub static INFIRAY_OPMODE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -52366,6 +53037,8 @@ pub static INFIRAY_PICTURE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -52492,6 +53165,8 @@ pub static INFIRAY_SENSOR: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -52662,6 +53337,10 @@ pub static INFIRAY_VERSION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -52887,6 +53566,8 @@ pub static JPEG_AVI1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -52912,6 +53593,10 @@ pub static JPEG_ADOBE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 2)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -52976,6 +53661,8 @@ pub static JPEG_ADOBECM: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -53001,6 +53688,10 @@ pub static JPEG_HDRGAININFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[Field {
         index: 6,
         sub: None,
@@ -53026,6 +53717,10 @@ pub static JPEG_JPS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 8,
@@ -53154,6 +53849,8 @@ pub static JPEG_NITF: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -53317,6 +54014,10 @@ pub static JPEG_SPIFF: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -53480,6 +54181,10 @@ pub static JPEG2000_CAPTURERESOLUTION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 8,
@@ -53540,6 +54245,13 @@ pub static JPEG2000_COLORSPEC: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("tag_variant_cond_unsupported", 1),
+            ("tag_variant_skipped", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -53606,6 +54318,10 @@ pub static JPEG2000_DISPLAYRESOLUTION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 8,
@@ -53666,6 +54382,10 @@ pub static JPEG2000_FILETYPE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -53716,6 +54436,10 @@ pub static JPEG2000_IMAGEHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -53797,6 +54521,10 @@ pub static KANDAO_GPS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -53869,6 +54597,10 @@ pub static KANDAO_GPSX: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -53941,6 +54673,10 @@ pub static KANDAO_IMU: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 8,
@@ -53979,6 +54715,10 @@ pub static KODAK_MOV: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -54078,6 +54818,10 @@ pub static KODAK_MAIN: BinaryTable = BinaryTable {
     first_entry: 8,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -54443,6 +55187,8 @@ pub static KODAK_PROCESSING: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 20,
         sub: None,
@@ -54474,6 +55220,10 @@ pub static KODAK_SCRN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -54523,6 +55273,8 @@ pub static KODAK_TYPE2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 8,
@@ -54583,6 +55335,10 @@ pub static KODAK_TYPE3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 12,
@@ -54717,6 +55473,8 @@ pub static KODAK_TYPE4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 32,
         sub: None,
@@ -54742,6 +55500,8 @@ pub static KODAK_TYPE5: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 20,
@@ -54881,6 +55641,8 @@ pub static KODAK_TYPE6: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 16,
@@ -54987,6 +55749,8 @@ pub static KODAK_TYPE7: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -55018,6 +55782,10 @@ pub static KODAK_TYPE9: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 16,
@@ -55180,6 +55948,10 @@ pub static KYOCERARAW_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -55373,6 +56145,8 @@ pub static LNK_BEEF0003: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 8,
         sub: None,
@@ -55976,6 +56750,10 @@ pub static LNK_BEEF0004: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 2,
@@ -56065,6 +56843,10 @@ pub static LNK_CONSOLEDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 4)],
+    },
     fields: &[
         Field {
             index: 8,
@@ -56284,6 +57066,8 @@ pub static LNK_CONSOLEFEDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 8,
         sub: None,
@@ -56474,6 +57258,10 @@ pub static LNK_CONTROLPANELCPL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2)],
+    },
     fields: &[Field {
         index: 4,
         sub: None,
@@ -56499,6 +57287,8 @@ pub static LNK_CONTROLPANELINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 8,
         sub: None,
@@ -56537,6 +57327,10 @@ pub static LNK_ENVVARDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[Field {
         index: 8,
         sub: None,
@@ -56562,6 +57356,8 @@ pub static LNK_GAMEFOLDERINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 4,
         sub: None,
@@ -56587,6 +57383,10 @@ pub static LNK_ITEM00INFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 6,
@@ -56668,6 +57468,10 @@ pub static LNK_MTPTYPE2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 38,
@@ -61464,6 +62268,10 @@ pub static LNK_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1), ("tag_fmt_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 20,
@@ -61959,6 +62767,8 @@ pub static LNK_PROPERTYSTORE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 12,
         sub: None,
@@ -62562,6 +63372,8 @@ pub static LNK_ROOTFOLDER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 3,
@@ -63192,6 +64004,10 @@ pub static LNK_TARGETINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 8,
@@ -63236,6 +64052,10 @@ pub static LNK_URI: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 6)],
+    },
     fields: &[
         Field {
             index: 3,
@@ -63337,6 +64157,8 @@ pub static LNK_USERSFILESFOLDER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -64548,6 +65370,8 @@ pub static MNG_BACKGROUND: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -64613,6 +65437,8 @@ pub static MNG_BASISOBJECT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -64773,6 +65599,8 @@ pub static MNG_CLIPOBJECTS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -64833,6 +65661,8 @@ pub static MNG_CLONEOBJECT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -64926,6 +65756,8 @@ pub static MNG_DEFINEOBJECT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -64997,6 +65829,8 @@ pub static MNG_DELTAPNGHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65077,6 +65911,10 @@ pub static MNG_EXPORTIMAGE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -65102,6 +65940,8 @@ pub static MNG_FRAMEPRIORITY: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65140,6 +65980,8 @@ pub static MNG_JNGHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65274,6 +66116,8 @@ pub static MNG_LOOP: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65354,6 +66198,8 @@ pub static MNG_MNGHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65447,6 +66293,8 @@ pub static MNG_MAGNIFYOBJECT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65587,6 +66435,8 @@ pub static MNG_MOVEOBJECTS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65647,6 +66497,8 @@ pub static MNG_PASTEIMAGE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65779,6 +66631,8 @@ pub static MNG_PROMOTEPARENT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65828,6 +66682,8 @@ pub static MNG_SHOWOBJECTS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65877,6 +66733,8 @@ pub static MNG_TERMINATIONACTION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -65946,6 +66804,10 @@ pub static MOI_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 5)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -66063,6 +66925,10 @@ pub static MPEG_LAME: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 9,
@@ -66158,6 +67024,8 @@ pub static MPF_MPIMAGE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -66273,6 +67141,10 @@ pub static MRC_FEI12: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -67915,6 +68787,10 @@ pub static MRC_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -68418,6 +69294,10 @@ pub static MXF_HEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2)],
+    },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -68449,6 +69329,8 @@ pub static MICROSOFT_STITCH: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Float,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -68553,6 +69435,10 @@ pub static MINOLTA_CAMERAINFOA100: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 12)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -68781,6 +69667,10 @@ pub static MINOLTA_CAMERASETTINGS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 2), ("expr_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -69553,6 +70443,10 @@ pub static MINOLTA_CAMERASETTINGS5D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 10,
@@ -69981,6 +70875,10 @@ pub static MINOLTA_CAMERASETTINGS7D: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1), ("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -70386,6 +71284,10 @@ pub static MINOLTA_CAMERASETTINGSA100: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 3)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -71594,6 +72496,8 @@ pub static MINOLTA_ISINFOA100: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -71619,6 +72523,8 @@ pub static MINOLTA_MMA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -71657,6 +72563,10 @@ pub static MINOLTA_MOV1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -71745,6 +72655,10 @@ pub static MINOLTA_MOV2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -71833,6 +72747,10 @@ pub static MINOLTA_WBINFOA100: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1)],
+    },
     fields: &[
         Field {
             index: 14,
@@ -73043,6 +73961,8 @@ pub static MINOLTARAW_PRD: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -73164,6 +74084,10 @@ pub static MINOLTARAW_RIF: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1), ("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -73708,6 +74632,8 @@ pub static MINOLTARAW_WBG: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -73771,6 +74697,10 @@ pub static NIKON_AFINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -73839,6 +74769,10 @@ pub static NIKON_AFINFO2V0100: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 3), ("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -74443,6 +75377,15 @@ pub static NIKON_AFINFO2V0101: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("conv_dropped", 4),
+            ("enum_int_partial", 1),
+            ("tag_variant_cond_unsupported", 1),
+            ("tag_variant_skipped", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -75196,6 +76139,10 @@ pub static NIKON_AFINFO2V0200: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 3), ("enum_int_partial", 2)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -75542,6 +76489,10 @@ pub static NIKON_AFINFO2V0300: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 9)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -76455,6 +77406,14 @@ pub static NIKON_AFINFO2V0400: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("conv_dropped", 6),
+            ("tag_variant_cond_unsupported", 1),
+            ("tag_variant_skipped", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -76908,6 +77867,8 @@ pub static NIKON_AFTUNE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -76973,6 +77934,10 @@ pub static NIKON_AUTOCAPTUREINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -77213,6 +78178,8 @@ pub static NIKON_BAROMETERINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -77251,6 +78218,8 @@ pub static NIKON_BRACKETINGINFOD500: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 15,
@@ -77426,6 +78395,8 @@ pub static NIKON_BRACKETINGINFOD810: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 15,
@@ -77573,6 +78544,8 @@ pub static NIKON_CAPTUREOUTPUT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -77622,6 +78595,8 @@ pub static NIKON_COLORBALANCE1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -77647,6 +78622,8 @@ pub static NIKON_COLORBALANCE2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -77672,6 +78649,8 @@ pub static NIKON_COLORBALANCE3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -77697,6 +78676,8 @@ pub static NIKON_COLORBALANCE4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -77722,6 +78703,8 @@ pub static NIKON_COLORBALANCEA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 624,
@@ -77832,6 +78815,8 @@ pub static NIKON_COLORBALANCEB: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -77995,6 +78980,8 @@ pub static NIKON_COLORBALANCEC: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -78226,6 +79213,8 @@ pub static NIKON_COLORBALANCEUNKNOWN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -78251,6 +79240,8 @@ pub static NIKON_COLORBALANCEUNKNOWN2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -78276,6 +79267,8 @@ pub static NIKON_CUSTOMSETTINGSD500: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[],
     variants: &[VariantGroup {
         index: 0,
@@ -78355,6 +79348,8 @@ pub static NIKON_DISTORTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 4,
         sub: None,
@@ -78380,6 +79375,8 @@ pub static NIKON_DISTORTIONINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -78456,6 +79453,8 @@ pub static NIKON_FACEDETECT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -78704,6 +79703,8 @@ pub static NIKON_FILEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -78764,6 +79765,14 @@ pub static NIKON_FLASHINFO0100: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("enum_int_partial", 1),
+            ("enum_str_partial", 1),
+            ("expr_unsupported", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -79193,6 +80202,10 @@ pub static NIKON_FLASHINFO0102: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1), ("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -79701,6 +80714,10 @@ pub static NIKON_FLASHINFO0103: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1), ("expr_unsupported", 4)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -80282,6 +81299,10 @@ pub static NIKON_FLASHINFO0106: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1), ("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -80812,6 +81833,10 @@ pub static NIKON_FLASHINFO0107: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1), ("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -81275,6 +82300,10 @@ pub static NIKON_FLASHINFO0300: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1), ("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -81800,6 +82829,8 @@ pub static NIKON_FLASHINFOUNKNOWN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -81825,6 +82856,8 @@ pub static NIKON_GEM: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -81856,6 +82889,8 @@ pub static NIKON_HDRINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -81946,6 +82981,8 @@ pub static NIKON_HDRINFO2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -82002,6 +83039,8 @@ pub static NIKON_ISOAUTOINFOD810: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -82126,6 +83165,8 @@ pub static NIKON_ISOINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -82238,6 +83279,8 @@ pub static NIKON_INTERVALINFOD6: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 380,
@@ -82417,6 +83460,10 @@ pub static NIKON_INTERVALINFOZ7II: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 36,
@@ -82485,6 +83532,8 @@ pub static NIKON_JPGINFOD500: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 36,
         sub: None,
@@ -82513,6 +83562,8 @@ pub static NIKON_LENSDATA00: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -82647,6 +83698,8 @@ pub static NIKON_LENSDATA01: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -82877,6 +83930,8 @@ pub static NIKON_LENSDATA0204: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -83107,6 +84162,8 @@ pub static NIKON_LENSDATA0400: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -83145,6 +84202,8 @@ pub static NIKON_LENSDATA0402: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -83183,6 +84242,8 @@ pub static NIKON_LENSDATA0403: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -83221,6 +84282,10 @@ pub static NIKON_LENSDATA0800: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -83668,6 +84733,8 @@ pub static NIKON_LENSDATAUNKNOWN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -83693,6 +84760,8 @@ pub static NIKON_LOCATIONINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -83782,6 +84851,10 @@ pub static NIKON_MOV: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -83916,6 +84989,8 @@ pub static NIKON_MAKERNOTES0X51: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -83973,6 +85048,8 @@ pub static NIKON_MAKERNOTES0X56: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -84145,6 +85222,8 @@ pub static NIKON_MENUINFOZ7II: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 16,
         sub: None,
@@ -84183,6 +85262,8 @@ pub static NIKON_MENUSETTINGSD850: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1757,
         sub: None,
@@ -84217,6 +85298,8 @@ pub static NIKON_MENUSETTINGSZ6III: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 360,
@@ -84930,6 +86013,8 @@ pub static NIKON_MENUSETTINGSZ7II: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 90,
@@ -85197,6 +86282,8 @@ pub static NIKON_MENUSETTINGSZ8: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 72,
@@ -85886,6 +86973,8 @@ pub static NIKON_MENUSETTINGSZ8V1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -86004,6 +87093,8 @@ pub static NIKON_MENUSETTINGSZ8V2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -87260,6 +88351,8 @@ pub static NIKON_MENUSETTINGSZ9: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 140,
@@ -87850,6 +88943,8 @@ pub static NIKON_MENUSETTINGSZ9V3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 72,
@@ -88486,6 +89581,10 @@ pub static NIKON_MENUSETTINGSZ9V4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 72,
@@ -90739,6 +91838,8 @@ pub static NIKON_MORESETTINGSD850: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 36,
@@ -90789,6 +91890,8 @@ pub static NIKON_MULTIEXPOSURE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -90854,6 +91957,8 @@ pub static NIKON_MULTIEXPOSURE2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -90919,6 +92024,10 @@ pub static NIKON_OFFSET13INFOZ9: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 3048,
@@ -91003,6 +92112,8 @@ pub static NIKON_OTHERINFOD500: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 532,
         sub: None,
@@ -91042,6 +92153,10 @@ pub static NIKON_PICTURECONTROL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 2), ("expr_unsupported", 6)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -91266,6 +92381,10 @@ pub static NIKON_PICTURECONTROL2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 2), ("expr_unsupported", 8)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -91507,6 +92626,10 @@ pub static NIKON_PICTURECONTROL3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 2), ("expr_unsupported", 9)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -91765,6 +92888,8 @@ pub static NIKON_PICTURECONTROLUNKNOWN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -91790,6 +92915,10 @@ pub static NIKON_PORTRAITINFOZ7II: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[Field {
         index: 160,
         sub: None,
@@ -91821,6 +92950,8 @@ pub static NIKON_ROC: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -91852,6 +92983,8 @@ pub static NIKON_RETOUCHINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -91902,6 +93035,8 @@ pub static NIKON_ROTATIONINFOD500: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 26,
@@ -91985,6 +93120,10 @@ pub static NIKON_SEQINFOD6: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 36,
@@ -92053,6 +93192,10 @@ pub static NIKON_SEQINFOZ9: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 32,
@@ -92120,6 +93263,8 @@ pub static NIKON_SETTINGSINFOD810: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 316,
         sub: None,
@@ -92152,6 +93297,8 @@ pub static NIKON_SHOOTINGMENUD500: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -92344,6 +93491,8 @@ pub static NIKON_SHOTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -92535,6 +93684,13 @@ pub static NIKON_VRINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("tag_variant_cond_unsupported", 1),
+            ("tag_variant_skipped", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -92584,6 +93740,8 @@ pub static NIKON_VIGNETTEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -92644,6 +93802,10 @@ pub static NIKON_WORLDTIME: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -92693,6 +93855,8 @@ pub static NIKONCAPTURE_BRIGHTNESS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -92737,6 +93901,8 @@ pub static NIKONCAPTURE_COLORBOOST: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -92775,6 +93941,8 @@ pub static NIKONCAPTURE_CROPDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 30,
@@ -92964,6 +94132,8 @@ pub static NIKONCAPTURE_DLIGHTINGHQ: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -93013,6 +94183,8 @@ pub static NIKONCAPTURE_DLIGHTINGHS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -93051,6 +94223,8 @@ pub static NIKONCAPTURE_EXPOSURE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -93126,6 +94300,8 @@ pub static NIKONCAPTURE_HIGHLIGHTDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -93175,6 +94351,8 @@ pub static NIKONCAPTURE_NOISEREDUCTION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -93294,6 +94472,8 @@ pub static NIKONCAPTURE_PHOTOEFFECTS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -93354,6 +94534,8 @@ pub static NIKONCAPTURE_PICTURECTRL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -93494,6 +94676,8 @@ pub static NIKONCAPTURE_REDEYEDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -93519,6 +94703,8 @@ pub static NIKONCAPTURE_UNSHARPDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -93754,6 +94940,8 @@ pub static NIKONCAPTURE_WBADJDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -93867,6 +95055,8 @@ pub static NIKONCUSTOM_SETTINGSD3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -95866,6 +97056,10 @@ pub static NIKONCUSTOM_SETTINGSD4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -97533,6 +98727,8 @@ pub static NIKONCUSTOM_SETTINGSD40: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -97920,6 +99116,10 @@ pub static NIKONCUSTOM_SETTINGSD5: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -99673,6 +100873,10 @@ pub static NIKONCUSTOM_SETTINGSD500: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -101378,6 +102582,8 @@ pub static NIKONCUSTOM_SETTINGSD5000: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -101816,6 +103022,8 @@ pub static NIKONCUSTOM_SETTINGSD5100: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -102209,6 +103417,8 @@ pub static NIKONCUSTOM_SETTINGSD5200: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -102649,6 +103859,8 @@ pub static NIKONCUSTOM_SETTINGSD610: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -103097,6 +104309,8 @@ pub static NIKONCUSTOM_SETTINGSD700: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -104354,6 +105568,8 @@ pub static NIKONCUSTOM_SETTINGSD7000: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -105492,6 +106708,8 @@ pub static NIKONCUSTOM_SETTINGSD80: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -106337,6 +107555,8 @@ pub static NIKONCUSTOM_SETTINGSD800: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 12,
@@ -106768,6 +107988,10 @@ pub static NIKONCUSTOM_SETTINGSD810: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -108317,6 +109541,10 @@ pub static NIKONCUSTOM_SETTINGSD850: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -110049,6 +111277,8 @@ pub static NIKONCUSTOM_SETTINGSD90: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -111004,6 +112234,8 @@ pub static NIKONCUSTOM_SETTINGSZ6III: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 3,
@@ -112781,6 +114013,8 @@ pub static NIKONCUSTOM_SETTINGSZ8: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -115195,6 +116429,8 @@ pub static NIKONCUSTOM_SETTINGSZ9: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -117685,6 +118921,8 @@ pub static NIKONCUSTOM_SETTINGSZ9V4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -120175,6 +121413,10 @@ pub static NINTENDO_CAMERAINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -120263,6 +121505,8 @@ pub static OLYMPUS_AFINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1580,
         sub: None,
@@ -120288,6 +121532,8 @@ pub static OLYMPUS_AFTARGETINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -120337,6 +121583,8 @@ pub static OLYMPUS_AVI: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 18,
@@ -120736,6 +121984,10 @@ pub static OLYMPUS_DSS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 12,
@@ -120825,6 +122077,10 @@ pub static OLYMPUS_MOV1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -121200,6 +122456,10 @@ pub static OLYMPUS_MOV2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -121299,6 +122559,10 @@ pub static OLYMPUS_MP4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -121417,6 +122681,8 @@ pub static OLYMPUS_MOVABLEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -121490,6 +122756,10 @@ pub static OLYMPUS_OLYM: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 14,
@@ -121887,6 +123157,8 @@ pub static OLYMPUS_SUBJECTDETECTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -121956,6 +123228,8 @@ pub static OLYMPUS_THUMBNAIL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -122016,6 +123290,10 @@ pub static OLYMPUS_WAV: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 19)],
+    },
     fields: &[
         Field {
             index: 12,
@@ -122394,6 +123672,8 @@ pub static OLYMPUS_PRMS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 18,
@@ -122769,6 +124049,10 @@ pub static OLYMPUS_SCRN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -122794,6 +124078,8 @@ pub static OLYMPUS_SCRN2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 2,
         sub: None,
@@ -122832,6 +124118,10 @@ pub static OLYMPUS_THMB: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -122857,6 +124147,10 @@ pub static OLYMPUS_THMB2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -122906,6 +124200,8 @@ pub static OPUS_HEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -122972,6 +124268,8 @@ pub static PCX_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -123195,6 +124493,8 @@ pub static PGF_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(2),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 3,
@@ -123325,6 +124625,10 @@ pub static PNG_ANIMATIONCONTROL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -123369,6 +124673,8 @@ pub static PNG_CICODEPOINTS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -123478,6 +124784,8 @@ pub static PNG_IMAGEHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -123583,6 +124891,8 @@ pub static PNG_PHYSICALPIXEL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -123632,6 +124942,8 @@ pub static PNG_PRIMARYCHROMATICITIES: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -123784,6 +125096,8 @@ pub static PNG_STEREOIMAGE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -123809,6 +125123,10 @@ pub static PNG_SUBJECTSCALE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2), ("tag_var_format", 2)],
+    },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -123834,6 +125152,8 @@ pub static PNG_VIRTUALPAGE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -123883,6 +125203,8 @@ pub static PSP_IMAGE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -123987,6 +125309,10 @@ pub static PALM_MOBI: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -124119,6 +125445,10 @@ pub static PALM_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -124248,6 +125578,10 @@ pub static PANASONIC_DATA1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1)],
+    },
     fields: &[Field {
         index: 22,
         sub: None,
@@ -124338,6 +125672,8 @@ pub static PANASONIC_FACEDETINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -124456,6 +125792,8 @@ pub static PANASONIC_FACERECINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -124642,6 +125980,8 @@ pub static PANASONIC_FOCUSINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -124692,6 +126032,13 @@ pub static PANASONIC_PANA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("subdir_refused_processproc", 4),
+            ("tag_fmt_unsupported", 10),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -124929,6 +126276,8 @@ pub static PANASONIC_SERIALINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 4,
         sub: None,
@@ -124954,6 +126303,8 @@ pub static PANASONIC_SHOTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -124979,6 +126330,10 @@ pub static PANASONIC_TIMEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -125023,6 +126378,8 @@ pub static PANASONIC_TYPE2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -125061,6 +126418,8 @@ pub static PANASONICRAW_WBINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -125473,6 +126832,8 @@ pub static PANASONICRAW_WBINFO2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -125885,6 +127246,8 @@ pub static PARROT_ARCOREACCEL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 5,
         sub: None,
@@ -125916,6 +127279,8 @@ pub static PARROT_ARCOREACCEL0: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 9,
         sub: None,
@@ -125947,6 +127312,8 @@ pub static PARROT_ARCOREGYRO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 5,
         sub: None,
@@ -125978,6 +127345,8 @@ pub static PARROT_ARCOREGYRO0: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 9,
         sub: None,
@@ -126009,6 +127378,8 @@ pub static PARROT_AUTOMATION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -126165,6 +127536,8 @@ pub static PARROT_FOLLOWME: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -126260,6 +127633,8 @@ pub static PARROT_V1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -126649,6 +128024,10 @@ pub static PARROT_V2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_bad_index", 1)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -127009,6 +128388,8 @@ pub static PARROT_V3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -127431,6 +128812,10 @@ pub static PENTAX_AEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 2)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -127759,6 +129144,8 @@ pub static PENTAX_AEINFO2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -127991,6 +129378,8 @@ pub static PENTAX_AEINFO3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 16,
@@ -128126,6 +129515,10 @@ pub static PENTAX_AFINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 1)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -128390,6 +129783,10 @@ pub static PENTAX_AFINFOK3III: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -128522,6 +129919,10 @@ pub static PENTAX_AFPOINTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 3)],
+    },
     fields: &[Field {
         index: 2,
         sub: None,
@@ -128553,6 +129954,8 @@ pub static PENTAX_AWBINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -128591,6 +129994,8 @@ pub static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -129136,6 +130541,10 @@ pub static PENTAX_CAFPOINTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -129186,6 +130595,10 @@ pub static PENTAX_CAMERAINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -129405,6 +130818,10 @@ pub static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 5)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -130016,6 +131433,8 @@ pub static PENTAX_COLORINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 16,
@@ -130054,6 +131473,8 @@ pub static PENTAX_EVSTEPINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -130103,6 +131524,8 @@ pub static PENTAX_FACEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -130147,6 +131570,8 @@ pub static PENTAX_FACEINFOK3III: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -131239,6 +132664,8 @@ pub static PENTAX_FACEPOS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -131799,6 +133226,8 @@ pub static PENTAX_FACESIZE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -132359,6 +133788,10 @@ pub static PENTAX_FILTERINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 20)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -133257,6 +134690,8 @@ pub static PENTAX_FLASHINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -133460,6 +134895,8 @@ pub static PENTAX_JUNK: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 12,
         sub: None,
@@ -133485,6 +134922,10 @@ pub static PENTAX_JUNK2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 18,
@@ -133589,6 +135030,8 @@ pub static PENTAX_KELVINWB: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -133894,6 +135337,8 @@ pub static PENTAX_LENSCORR: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -133954,6 +135399,13 @@ pub static PENTAX_LENSDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("tag_variant_field_unsupported", 1),
+            ("tag_variant_skipped", 1),
+        ],
+    },
     fields: &[
         Field {
             index: 0,
@@ -134166,6 +135618,10 @@ pub static PENTAX_LENSINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -134573,6 +136029,10 @@ pub static PENTAX_LENSINFO2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -134986,6 +136446,10 @@ pub static PENTAX_LENSINFO3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -135399,6 +136863,10 @@ pub static PENTAX_LENSINFO4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -135812,6 +137280,10 @@ pub static PENTAX_LENSINFO5: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -136225,6 +137697,8 @@ pub static PENTAX_LENSINFOQ: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 12,
@@ -136269,6 +137743,10 @@ pub static PENTAX_LENSREC: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_str_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -136663,6 +138141,8 @@ pub static PENTAX_LEVELINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -136809,6 +138289,8 @@ pub static PENTAX_LEVELINFOK3III: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -136877,6 +138359,8 @@ pub static PENTAX_MOV: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -136983,6 +138467,10 @@ pub static PENTAX_PENT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 3), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -137342,6 +138830,10 @@ pub static PENTAX_PXTH: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -137367,6 +138859,8 @@ pub static PENTAX_PIXELSHIFTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -137392,6 +138886,10 @@ pub static PENTAX_SRINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1), ("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -137475,6 +138973,8 @@ pub static PENTAX_SRINFO2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1,
         sub: None,
@@ -137513,6 +139013,8 @@ pub static PENTAX_SHOTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1,
         sub: None,
@@ -137551,6 +139053,8 @@ pub static PENTAX_TEMPINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 10,
@@ -137669,6 +139173,8 @@ pub static PENTAX_TIMEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -137901,6 +139407,8 @@ pub static PENTAX_WBLEVELS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -138027,6 +139535,10 @@ pub static PHOTOCD_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 7,
@@ -138731,6 +140243,8 @@ pub static PHOTOSHOP_HEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 6,
@@ -138811,6 +140325,8 @@ pub static PHOTOSHOP_IMAGEDATA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -138841,6 +140357,8 @@ pub static PHOTOSHOP_JPEG_QUALITY: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -138906,6 +140424,8 @@ pub static PHOTOSHOP_PIXELINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 4,
         sub: None,
@@ -138931,6 +140451,8 @@ pub static PHOTOSHOP_PRINTSCALEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -138984,6 +140506,8 @@ pub static PHOTOSHOP_RESOLUTION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -139056,6 +140580,14 @@ pub static PHOTOSHOP_SLICEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: Some(20),
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[
+            ("tag_fmt_unsupported", 1),
+            ("tag_var_format", 1),
+            ("offsets_sound_until", 1),
+        ],
+    },
     fields: &[Field {
         index: 24,
         sub: None,
@@ -139081,6 +140613,10 @@ pub static PHOTOSHOP_VERSIONINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 2), ("tag_var_format", 2)],
+    },
     fields: &[Field {
         index: 4,
         sub: None,
@@ -139106,6 +140642,8 @@ pub static QUICKTIME_AV1CONFIG: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -139174,6 +140712,10 @@ pub static QUICKTIME_AUDIOPROF: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -139279,6 +140821,8 @@ pub static QUICKTIME_BITRATE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -139328,6 +140872,8 @@ pub static QUICKTIME_CHANNELLAYOUT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -140428,6 +141974,8 @@ pub static QUICKTIME_CLEANAPERTURE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Rational64s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -140488,6 +142036,8 @@ pub static QUICKTIME_COLORREP: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -140611,6 +142161,8 @@ pub static QUICKTIME_CONTENTLIGHTLEVEL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -140649,6 +142201,8 @@ pub static QUICKTIME_DECODECONFIG: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -140687,6 +142241,8 @@ pub static QUICKTIME_FILEPROF: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1,
         sub: None,
@@ -140712,6 +142268,10 @@ pub static QUICKTIME_FILETYPE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -140941,6 +142501,10 @@ pub static QUICKTIME_FLIP: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -141001,6 +142565,10 @@ pub static QUICKTIME_GENMEDIAINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -141093,6 +142661,8 @@ pub static QUICKTIME_HEVCCONFIG: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -141358,6 +142928,10 @@ pub static QUICKTIME_HANDLER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -141471,6 +143045,10 @@ pub static QUICKTIME_HINTHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 2,
@@ -141531,6 +143109,10 @@ pub static QUICKTIME_MEDIAHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 4)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -141649,6 +143231,8 @@ pub static QUICKTIME_MOVIEFRAGHDR: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1,
         sub: None,
@@ -141674,6 +143258,10 @@ pub static QUICKTIME_MOVIEHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 9), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -141922,6 +143510,10 @@ pub static QUICKTIME_PREVIEW: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -141988,6 +143580,10 @@ pub static QUICKTIME_SCHEMETYPE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -142026,6 +143622,10 @@ pub static QUICKTIME_SPATIALAUDIO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -142108,6 +143708,10 @@ pub static QUICKTIME_TCMEDIAINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 4,
@@ -142179,6 +143783,10 @@ pub static QUICKTIME_TRACKHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 3), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -142353,6 +143961,8 @@ pub static QUICKTIME_VIDEO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -142397,6 +144007,8 @@ pub static QUICKTIME_VIDEOHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -142467,6 +144079,10 @@ pub static QUICKTIME_VIDEOPROF: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 4), ("tag_fmt_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -142572,6 +144188,8 @@ pub static QUICKTIME_CBMP: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -142610,6 +144228,8 @@ pub static QUICKTIME_EQUI: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -142694,6 +144314,8 @@ pub static RIFF_ALPH: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -142757,6 +144379,10 @@ pub static RIFF_ANIM: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -142795,6 +144421,10 @@ pub static RIFF_ANMF: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[Field {
         index: 12,
         sub: None,
@@ -142826,6 +144456,10 @@ pub static RIFF_AVIHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -142914,6 +144548,10 @@ pub static RIFF_ACIDIZER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -143010,6 +144648,8 @@ pub static RIFF_AUDIOFORMAT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -143331,6 +144971,10 @@ pub static RIFF_BROADCASTEXT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -143442,6 +145086,8 @@ pub static RIFF_CSET: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -143508,6 +145154,8 @@ pub static RIFF_EXTAVIHDR: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 0,
         sub: None,
@@ -143533,6 +145181,8 @@ pub static RIFF_INSTRUMENT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -143626,6 +145276,10 @@ pub static RIFF_SAMPLER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -143753,6 +145407,10 @@ pub static RIFF_STREAMHEADER: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -144019,6 +145677,10 @@ pub static RIFF_USERTEXT: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 28,
@@ -144125,6 +145787,8 @@ pub static RIFF_VP8: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -144216,6 +145880,8 @@ pub static RIFF_VP8L: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -144280,6 +145946,8 @@ pub static RIFF_VP8X: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -144341,6 +146009,10 @@ pub static RECONYX_HYPERFIRE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 3), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -144593,6 +146265,10 @@ pub static RECONYX_HYPERFIRE2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 3), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 16,
@@ -144935,6 +146611,10 @@ pub static RECONYX_HYPERFIRE4K: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 26,
@@ -145274,6 +146954,10 @@ pub static RECONYX_MICROFIRE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 4), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 16,
@@ -145696,6 +147380,10 @@ pub static RECONYX_ULTRAFIRE: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 24,
@@ -145945,6 +147633,10 @@ pub static RED_RED1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 7,
@@ -146005,6 +147697,8 @@ pub static RED_RED2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 7,
@@ -146071,6 +147765,8 @@ pub static RICOH_FACEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 181,
@@ -146251,6 +147947,8 @@ pub static RICOH_FIRMWAREINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -146289,6 +147987,8 @@ pub static RICOH_IMAGEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -146460,6 +148160,8 @@ pub static RICOH_SERIALINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -146520,6 +148222,8 @@ pub static SAMSUNG_DUALSHOTEXTRA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 8,
@@ -146587,6 +148291,10 @@ pub static SAMSUNG_MP4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -146716,6 +148424,10 @@ pub static SAMSUNG_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -146765,6 +148477,8 @@ pub static SAMSUNG_ORIENTATIONINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Rational64s,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -146803,6 +148517,8 @@ pub static SAMSUNG_PICTUREWIZARD: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -146906,6 +148622,8 @@ pub static SAMSUNG_THUMBNAIL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -146966,6 +148684,8 @@ pub static SAMSUNG_THUMBNAIL2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -147026,6 +148746,10 @@ pub static SAMSUNG_SEC: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -147097,6 +148821,8 @@ pub static SANYO_FACEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -147135,6 +148861,10 @@ pub static SANYO_MOV: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -147259,6 +148989,10 @@ pub static SANYO_MP4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -147412,6 +149146,8 @@ pub static SANYO_THUMBNAIL: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -147472,6 +149208,8 @@ pub static SIGMA_WBSETTINGS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Float,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -147598,6 +149336,8 @@ pub static SIGMARAW_HEADER4: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -147664,6 +149404,10 @@ pub static SONY_AFSTATUS15: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 18)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -147878,6 +149622,10 @@ pub static SONY_AFSTATUS19: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 30)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -148224,6 +149972,10 @@ pub static SONY_AFSTATUS79: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 95)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -149285,6 +151037,10 @@ pub static SONY_CAMERAINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 1), ("enum_int_partial", 24)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -149715,6 +151471,10 @@ pub static SONY_CAMERAINFO2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 1), ("enum_int_partial", 12)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -149939,6 +151699,10 @@ pub static SONY_CAMERAINFO3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("conv_dropped", 1), ("enum_int_partial", 13)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -150487,6 +152251,10 @@ pub static SONY_CAMERASETTINGS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -151379,6 +153147,10 @@ pub static SONY_CAMERASETTINGS2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -152098,6 +153870,10 @@ pub static SONY_CAMERASETTINGS3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 3)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -153685,6 +155461,10 @@ pub static SONY_EXTRAINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 1,
@@ -153740,6 +155520,8 @@ pub static SONY_EXTRAINFO2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 4,
@@ -153778,6 +155560,8 @@ pub static SONY_EXTRAINFO3: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -154044,6 +155828,10 @@ pub static SONY_FACEINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -154213,6 +156001,8 @@ pub static SONY_FACEINFO1: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -154365,6 +156155,8 @@ pub static SONY_FACEINFO2: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -154517,6 +156309,8 @@ pub static SONY_FACEINFOA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 2,
@@ -154788,6 +156582,8 @@ pub static SONY_FOCUSINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 16,
@@ -155125,6 +156921,8 @@ pub static SONY_HIDDENINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -155163,6 +156961,8 @@ pub static SONY_ISOINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -155230,6 +157030,10 @@ pub static SONY_METERINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 16)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -155422,6 +157226,10 @@ pub static SONY_METERINFO9: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 16)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -155710,6 +157518,8 @@ pub static SONY_MOREINFO0201: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 283,
@@ -155777,6 +157587,8 @@ pub static SONY_MOREINFO0401: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[Field {
         index: 1102,
         sub: None,
@@ -155808,6 +157620,8 @@ pub static SONY_MORESETTINGS: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -157087,6 +158901,10 @@ pub static SONY_PMP: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 2)],
+    },
     fields: &[
         Field {
             index: 8,
@@ -157298,6 +159116,8 @@ pub static SONY_PANORAMA: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -157435,6 +159255,10 @@ pub static SONY_SHOTINFO: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 2,
@@ -157600,6 +159424,8 @@ pub static SONY_TAG202A: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 1,
@@ -157905,6 +159731,8 @@ pub static STIM_CROPX: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -157979,6 +159807,8 @@ pub static STIM_CROPY: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 0,
@@ -158053,6 +159883,10 @@ pub static THEORA_IDENTIFICATION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("enum_int_partial", 1), ("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -158230,6 +160064,10 @@ pub static VORBIS_IDENTIFICATION: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 3)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -158330,6 +160168,8 @@ pub static WAVPACK_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int32u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
     fields: &[
         Field {
             index: 6,
@@ -158439,6 +160279,10 @@ pub static ZIP_GZIP: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 2,
@@ -158558,6 +160402,10 @@ pub static ZIP_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int16u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 2,
@@ -158693,6 +160541,10 @@ pub static ZIP_RAR: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1), ("tag_fmt_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 0,
@@ -158799,6 +160651,10 @@ pub static ZISRAW_MAIN: BinaryTable = BinaryTable {
     first_entry: 0,
     default_format: Fmt::Int8u,
     offsets_sound_until: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("expr_unsupported", 1)],
+    },
     fields: &[
         Field {
             index: 32,

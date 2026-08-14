@@ -46,6 +46,9 @@
 use std::collections::HashMap;
 
 use super::tag_priority;
+use crate::exiftool_tables::engine::{self, Cursor, Step};
+use crate::exiftool_tables::{Fmt as TableFmt, runtime::DecodedValue};
+use crate::io::ByteOrder as IoByteOrder;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 /// How the bytes at a field's offset are read.
@@ -289,68 +292,69 @@ enum Elem {
     Text(String),
 }
 
-fn read_u16(bytes: &[u8], order: ByteOrder) -> u16 {
-    match order {
-        ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
-        ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
+/// This module's `Fmt` in the generated-schema vocabulary the shared
+/// `ReadValue` speaks. Every variant has an exact counterpart there -- this
+/// enum is a subset of `exiftool_tables::Fmt`, missing only the rational
+/// formats these sub-directory tables never declare -- so this is a renaming,
+/// not a conversion, and it cannot lose a format.
+const fn shared_fmt(fmt: Fmt) -> TableFmt {
+    match fmt {
+        Fmt::U8 => TableFmt::Int8u,
+        Fmt::I8 => TableFmt::Int8s,
+        Fmt::U16 => TableFmt::Int16u,
+        Fmt::I16 => TableFmt::Int16s,
+        // ExifTool's `int16uRev` is an int16u stored the other way round
+        // from the rest of the record; the shared reader flips it the same
+        // way (`exiftool_tables::runtime::decode_value_of`).
+        Fmt::U16Rev => TableFmt::Int16uRev,
+        Fmt::U32 => TableFmt::Int32u,
+        Fmt::I32 => TableFmt::Int32s,
+        Fmt::F32 => TableFmt::Float,
+        Fmt::F64 => TableFmt::Double,
+        Fmt::Str(n) => TableFmt::Str(n),
+        Fmt::Undef(n) => TableFmt::Undef(n),
     }
 }
 
-/// ExifTool's `int16uRev` is an int16u stored the other way round from the rest
-/// of the record.
-const fn flipped(order: ByteOrder) -> ByteOrder {
-    match order {
-        ByteOrder::LittleEndian => ByteOrder::BigEndian,
-        ByteOrder::BigEndian => ByteOrder::LittleEndian,
-    }
-}
-
-fn read_u32(bytes: &[u8], order: ByteOrder) -> u32 {
-    let b = [bytes[0], bytes[1], bytes[2], bytes[3]];
-    match order {
-        ByteOrder::LittleEndian => u32::from_le_bytes(b),
-        ByteOrder::BigEndian => u32::from_be_bytes(b),
-    }
-}
-
-/// Reads one element of `fmt` at `at`, or `None` if it does not fit.
+/// Reads one element of `fmt` at `at` through the single `ReadValue` port
+/// (ExifTool.pm:6286) Step 28 folded the three engines onto.
+///
+/// `more` is ExifTool's own `$more` -- the bytes of record left at `at` --
+/// which is what lets the shared reader apply ExifTool's count shortening
+/// (ExifTool.pm:6301-6303) rather than this module's older all-or-nothing
+/// bounds check. For the scalar formats the two agree exactly; for a
+/// `string[n]`/`undef[n]` running into the end of a truncated record,
+/// ExifTool reports the bytes that fit and this now does too.
+///
+/// `string` is truncated at the first NUL and nothing else
+/// (`$vals[0] =~ s/\0.*//s if $format eq 'string'`, ExifTool.pm:6311): no
+/// trailing-whitespace trim, which would disagree with ExifTool on padded
+/// fields. `undef` is rendered here as space-separated decimals, which is
+/// this table set's own convention and stays this module's business, not the
+/// shared reader's.
 fn read_elem(record: &[u8], at: usize, fmt: Fmt, order: ByteOrder) -> Option<Elem> {
-    let need = fmt.size();
-    let bytes = record.get(at..at.checked_add(need)?)?;
-    Some(match fmt {
-        Fmt::U8 => Elem::Num(i64::from(bytes[0])),
-        Fmt::I8 => Elem::Num(i64::from(bytes[0] as i8)),
-        Fmt::U16 => Elem::Num(i64::from(read_u16(bytes, order))),
-        Fmt::I16 => Elem::Num(i64::from(read_u16(bytes, order) as i16)),
-        Fmt::U16Rev => Elem::Num(i64::from(read_u16(bytes, flipped(order)))),
-        Fmt::U32 => Elem::Num(i64::from(read_u32(bytes, order))),
-        Fmt::I32 => Elem::Num(i64::from(read_u32(bytes, order) as i32)),
-        Fmt::F32 => Elem::Real(f64::from(f32::from_bits(read_u32(bytes, order)))),
-        Fmt::F64 => {
-            let hi = u64::from(read_u32(&bytes[0..4], order));
-            let lo = u64::from(read_u32(&bytes[4..8], order));
-            let bits = match order {
-                ByteOrder::LittleEndian => hi | (lo << 32),
-                ByteOrder::BigEndian => (hi << 32) | lo,
-            };
-            Elem::Real(f64::from_bits(bits))
-        }
-        Fmt::Str(_) => {
-            // ExifTool truncates a `string[n]` at the first NUL and does nothing
-            // else: `$vals[0] =~ s/\0.*//s if $format eq 'string'` (ExifTool.pm
-            // ReadValue, 13.55:6288). It does not trim trailing whitespace, and
-            // adding a trim here would disagree with it on padded fields.
-            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-            Elem::Text(String::from_utf8_lossy(&bytes[..end]).into_owned())
-        }
-        Fmt::Undef(_) => Elem::Text(
+    let order = match order {
+        ByteOrder::LittleEndian => IoByteOrder::Little,
+        ByteOrder::BigEndian => IoByteOrder::Big,
+    };
+    let more = i64::try_from(record.len().saturating_sub(at)).ok()?;
+    match engine::read_value(record, at, shared_fmt(fmt), 1, more, order)? {
+        DecodedValue::Integer(n) => Some(Elem::Num(n)),
+        DecodedValue::Float(v) => Some(Elem::Real(v)),
+        DecodedValue::String(s) => Some(Elem::Text(s)),
+        DecodedValue::Undefined(bytes) => Some(Elem::Text(
             bytes
                 .iter()
-                .map(|b| b.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(" "),
-        ),
-    })
+        )),
+        // No field in these tables declares a rational or an array format, so
+        // the shared reader cannot produce one from a `shared_fmt` output.
+        DecodedValue::UnsignedRational(..)
+        | DecodedValue::SignedRational(..)
+        | DecodedValue::Array(_) => None,
+    }
 }
 
 fn render(elem: &Elem, conv: PrintConv) -> String {
@@ -424,7 +428,14 @@ pub(crate) fn decode_binary_subdir_with(
     members: &mut Members,
     tags: &mut HashMap<String, String>,
 ) {
+    // Step 28: one port of ExifTool.pm:9957-9964's offset arithmetic. This
+    // module had no `varSize` and no negative indices, and skipped an
+    // out-of-range field where ExifTool ends the walk (`last if $more <= 0`,
+    // ExifTool.pm:9964) -- equivalent for an ascending fixed-width table,
+    // which is all these are, but "equivalent by argument" is exactly the
+    // kind of claim three separate copies stopped being able to make.
     let unit = table.default_format.size();
+    let cursor = Cursor::new(record.len() as i64, unit as i64);
 
     // Generated tables are already sorted by index; ExifTool visits them in
     // ascending order so a DataMember is set before any gate that reads it.
@@ -452,11 +463,13 @@ pub(crate) fn decode_binary_subdir_with(
         }
 
         let fmt = field.format.unwrap_or(table.default_format);
-        let Some(start) = usize::try_from(field.index)
-            .ok()
-            .and_then(|i| i.checked_mul(unit))
-        else {
-            continue;
+        let (start, _more) = match cursor.step(field.index) {
+            Step::At { entry, more } => match usize::try_from(entry) {
+                Ok(entry) => (entry, more),
+                Err(_) => continue,
+            },
+            Step::Skip => continue,
+            Step::Stop => break,
         };
 
         let mut parts = Vec::with_capacity(field.count);

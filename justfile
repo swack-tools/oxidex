@@ -1280,6 +1280,26 @@ verify-tables version="":
     python3 tools/exiftool-tables/verify.py "$GENERATED" "$LIB" \
         --oracle tools/exiftool-tables/oracle.pl
 
+# Tag-machinery overhaul Step 28: the reachability census -- which of the
+# generated ProcessBinaryData tables the generic engine may walk, and why not.
+#
+# GENERATED, not hand-audited: it reads gate A out of the committed
+# src/exiftool_tables/binary_tables.rs and gate B's allowlist out of
+# src/exiftool_tables/enabled.rs, so it cannot disagree with the artifacts it
+# describes. Needs neither Perl nor a corpus. `cargo test
+# every_table_lands_in_exactly_one_enablement_class` pins the same split from
+# the Rust side.
+#
+# Step 28 table reachability: enabled / eligible / refused-with-reason.
+reachability json-out="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "{{json-out}}" ]]; then
+        python3 tools/exiftool-tables/reachability.py --json-out "{{json-out}}"
+    else
+        python3 tools/exiftool-tables/reachability.py
+    fi
+
 # Tag-machinery overhaul Step 16 (R5 stage 1 / R9(a)): staleness/consistency
 # checks for hand-embedded ExifTool facts that have no committed generator at
 # all -- lens databases, MakerNote model-ID tables, the six generator-less

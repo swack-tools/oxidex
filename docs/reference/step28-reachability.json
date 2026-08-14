@@ -1,0 +1,8073 @@
+{
+  "eligible": 350,
+  "enabled": 5,
+  "gate_a_refusal_reasons": {
+    "conv_dropped": 14,
+    "enum_int_partial": 50,
+    "enum_str_partial": 16,
+    "expr_unsupported": 141,
+    "offsets_sound_until": 4,
+    "subdir_refused_processproc": 1,
+    "tag_bad_index": 4,
+    "tag_fmt_unsupported": 86,
+    "tag_var_format": 7,
+    "tag_variant_cond_unsupported": 8,
+    "tag_variant_field_unsupported": 1,
+    "tag_variant_skipped": 9
+  },
+  "per_table": [
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "AIFF",
+      "status": "refused",
+      "table": "Common"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "AIFF",
+      "status": "refused",
+      "table": "FormatVers"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "APE",
+      "status": "eligible",
+      "table": "NewHeader"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "APE",
+      "status": "eligible",
+      "table": "OldHeader"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          7
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ASF",
+      "status": "refused",
+      "table": "FileProperties"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ASF",
+      "status": "refused",
+      "table": "StreamProperties"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          3
+        ],
+        [
+          "tag_fmt_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 22,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "BMP",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "BMP",
+      "status": "eligible",
+      "table": "OS2"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          3
+        ],
+        [
+          "tag_var_format",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "BPG",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          4
+        ],
+        [
+          "tag_variant_cond_unsupported",
+          1
+        ],
+        [
+          "tag_variant_skipped",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 26,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "AFConfig"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "AFMicroAdj"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "Ambience"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "AspectInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": true,
+      "module": "Canon",
+      "status": "enabled",
+      "table": "CMP1"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo"
+        ]
+      ],
+      "fields": 21,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo1000D"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 15,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "CameraInfo1D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo2"
+        ]
+      ],
+      "fields": 18,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo1DX"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 16,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo1DmkII"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          3
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo"
+        ]
+      ],
+      "fields": 22,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo1DmkIII"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 13,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo1DmkIIN"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo"
+        ]
+      ],
+      "fields": 21,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo1DmkIV"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo"
+        ]
+      ],
+      "fields": 20,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo40D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo"
+        ]
+      ],
+      "fields": 19,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo450D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo"
+        ]
+      ],
+      "fields": 22,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo500D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo"
+        ]
+      ],
+      "fields": 22,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo50D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo"
+        ]
+      ],
+      "fields": 20,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo550D"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 59,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo5D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo"
+        ]
+      ],
+      "fields": 25,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo5DmkII"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo2"
+        ]
+      ],
+      "fields": 21,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo5DmkIII"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo2"
+        ]
+      ],
+      "fields": 20,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo600D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo2"
+        ],
+        [
+          "Canon",
+          "PSInfo2"
+        ]
+      ],
+      "fields": 18,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo60D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo2"
+        ]
+      ],
+      "fields": 21,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo650D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo2"
+        ]
+      ],
+      "fields": 18,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo6D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo2"
+        ]
+      ],
+      "fields": 16,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo70D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 16,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo750D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "PSInfo"
+        ]
+      ],
+      "fields": 23,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo7D"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 15,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfo80D"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "CameraInfoG5XII"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfoPowerShot"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 9,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraInfoPowerShot2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "CameraInfoR6"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "CameraInfoR6m2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "CameraInfoR6m3"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "CameraInfoUnknown"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "CameraInfoUnknown32"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          5
+        ],
+        [
+          "expr_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 40,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "Canon",
+      "status": "refused",
+      "table": "CameraSettings"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 11,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorBalance"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 20,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorCoefs"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 20,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorCoefs2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 20,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData1"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 27,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData10"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 25,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData11"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 21,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData12"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 25,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 34,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData3"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_variant_cond_unsupported",
+          1
+        ],
+        [
+          "tag_variant_skipped",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Canon",
+          "ColorCoefs"
+        ]
+      ],
+      "fields": 16,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "ColorData4"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "Canon",
+          "ColorCoefs"
+        ],
+        [
+          "Canon",
+          "ColorCoefs2"
+        ]
+      ],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData5"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 27,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData6"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 34,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData7"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 30,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData8"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 25,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorData9"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ColorDataUnknown"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "ColorInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "ContrastInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "CropInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "ExposureInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 11,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "FaceDetect1"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "FaceDetect2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "FaceDetect3"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_variant_cond_unsupported",
+          1
+        ],
+        [
+          "tag_variant_skipped",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 19,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "Canon",
+      "status": "refused",
+      "table": "FileInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "Flags"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_variant_cond_unsupported",
+          2
+        ],
+        [
+          "tag_variant_skipped",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "FocalLength"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "FocusBracketingInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "HDRInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "LensInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "LevelInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "LightingOpt"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "LogInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "MeasuredColor"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 11,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "ModifiedInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 8,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "MovieInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "MultiExp"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "MyColors"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          34
+        ]
+      ],
+      "edges": [],
+      "fields": 45,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "PSInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          38
+        ]
+      ],
+      "edges": [],
+      "fields": 51,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "PSInfo2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "Panorama"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "PreviewImageInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 15,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "Processing"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "RawBurstInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "SensorInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "SerialInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          5
+        ]
+      ],
+      "edges": [],
+      "fields": 29,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "Canon",
+      "status": "refused",
+      "table": "ShotInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "refused",
+      "table": "TimeInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 9,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "VignettingCorr"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "VignettingCorr2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "VignettingCorrUnknown"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Canon",
+      "status": "eligible",
+      "table": "WBInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 24,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "CanonCustom",
+      "status": "refused",
+      "table": "PersonalFuncValues"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          29
+        ]
+      ],
+      "edges": [],
+      "fields": 29,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "CanonCustom",
+      "status": "refused",
+      "table": "PersonalFuncs"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonRaw",
+      "status": "eligible",
+      "table": "DecoderTable"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonRaw",
+      "status": "eligible",
+      "table": "ExposureInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonRaw",
+      "status": "eligible",
+      "table": "FlashInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonRaw",
+      "status": "eligible",
+      "table": "ImageFormat"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonRaw",
+      "status": "eligible",
+      "table": "ImageInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonRaw",
+      "status": "eligible",
+      "table": "RawJpgInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "CanonRaw",
+      "status": "refused",
+      "table": "TimeStamp"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonRaw",
+      "status": "eligible",
+      "table": "WhiteSample"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 11,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "CanonVRD",
+      "status": "refused",
+      "table": "CropInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "CanonVRD",
+      "status": "refused",
+      "table": "DLOInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonVRD",
+      "status": "eligible",
+      "table": "DR4Header"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonVRD",
+      "status": "eligible",
+      "table": "DustInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 13,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonVRD",
+      "status": "eligible",
+      "table": "GammaInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonVRD",
+      "status": "eligible",
+      "table": "StampInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "CanonVRD",
+      "status": "eligible",
+      "table": "StampTool"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          4
+        ]
+      ],
+      "edges": [],
+      "fields": 10,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "CanonVRD",
+      "status": "refused",
+      "table": "ToneCurve"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          8
+        ]
+      ],
+      "edges": [],
+      "fields": 43,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "CanonVRD",
+      "status": "refused",
+      "table": "Ver1"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ],
+        [
+          "tag_var_format",
+          1
+        ],
+        [
+          "offsets_sound_until",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "CanonVRD",
+          "DLOInfo"
+        ]
+      ],
+      "fields": 143,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "CanonVRD",
+      "status": "refused",
+      "table": "Ver2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 12,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Casio",
+      "status": "eligible",
+      "table": "FaceInfo1"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 13,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Casio",
+      "status": "eligible",
+      "table": "FaceInfo2"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "Casio",
+      "status": "refused",
+      "table": "QVCI"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 16,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "DJI",
+      "status": "eligible",
+      "table": "ThermalParams"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "DJI",
+      "status": "refused",
+      "table": "ThermalParams2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "DJI",
+      "status": "eligible",
+      "table": "ThermalParams3"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          3
+        ],
+        [
+          "tag_var_format",
+          3
+        ],
+        [
+          "offsets_sound_until",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "DNG",
+      "status": "refused",
+      "table": "ImageSeq"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "DNG",
+      "status": "eligible",
+      "table": "ProfileDynamicRange"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 39,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "DPX",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "DSF",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "DjVu",
+      "status": "eligible",
+      "table": "Form"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "DjVu",
+      "status": "eligible",
+      "table": "Info"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "EXE",
+      "status": "refused",
+      "table": "AR"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "EXE",
+      "status": "eligible",
+      "table": "CHM"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "EXE",
+      "status": "refused",
+      "table": "DebugNB10"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "EXE",
+      "status": "refused",
+      "table": "DebugRSDS"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "EXE",
+      "status": "eligible",
+      "table": "ELF"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 13,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "EXE",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "EXE",
+      "status": "refused",
+      "table": "PEF"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "EXE",
+      "status": "eligible",
+      "table": "PEVersion"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          3
+        ],
+        [
+          "tag_var_format",
+          2
+        ],
+        [
+          "offsets_sound_until",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLAC",
+      "status": "refused",
+      "table": "Picture"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "eligible",
+      "table": "AFF1"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "eligible",
+      "table": "AFF5"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          5
+        ]
+      ],
+      "edges": [],
+      "fields": 45,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "refused",
+      "table": "CameraInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "refused",
+      "table": "CoarseData"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "refused",
+      "table": "EmbeddedImage"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 36,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "refused",
+      "table": "FPF"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 15,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "refused",
+      "table": "GPSInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "refused",
+      "table": "GPS_UUID"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "refused",
+      "table": "GainDeadData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "eligible",
+      "table": "Header"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 16,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "eligible",
+      "table": "MeterLink"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "eligible",
+      "table": "MoreInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "refused",
+      "table": "PaintData"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 11,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "refused",
+      "table": "PaletteInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "eligible",
+      "table": "Params"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "eligible",
+      "table": "PiP"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "refused",
+      "table": "RawData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FLIR",
+      "status": "eligible",
+      "table": "SerialNums"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FlashPix",
+      "status": "refused",
+      "table": "CompObj"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          4
+        ]
+      ],
+      "edges": [],
+      "fields": 10,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FlashPix",
+      "status": "refused",
+      "table": "DOP"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FlashPix",
+      "status": "eligible",
+      "table": "PreviewInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FlashPix",
+      "status": "eligible",
+      "table": "SubimageHdr"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 24,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Font",
+      "status": "eligible",
+      "table": "PFM"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FotoStation",
+      "status": "eligible",
+      "table": "SoftEdit"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FujiFilm",
+      "status": "refused",
+      "table": "AFCSettings"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FujiFilm",
+      "status": "refused",
+      "table": "DriveSettings"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FujiFilm",
+      "status": "eligible",
+      "table": "FFMV"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "FujiFilm",
+      "status": "refused",
+      "table": "FocusSettings"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FujiFilm",
+      "status": "eligible",
+      "table": "MOV"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FujiFilm",
+      "status": "eligible",
+      "table": "PrioritySettings"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FujiFilm",
+      "status": "eligible",
+      "table": "RAFData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "FujiFilm",
+      "status": "eligible",
+      "table": "RAFHeader"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "GIF",
+      "status": "eligible",
+      "table": "Animation"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "GIF",
+      "status": "refused",
+      "table": "MIDIControl"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "GIF",
+      "status": "eligible",
+      "table": "Screen"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "GIMP",
+      "status": "refused",
+      "table": "Header"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "GIMP",
+      "status": "eligible",
+      "table": "Resolution"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "GM",
+      "status": "refused",
+      "table": "mrlh"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "GoPro",
+      "status": "eligible",
+      "table": "fdsc"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_bad_index",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "H264",
+      "status": "refused",
+      "table": "Camera1"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "tag_bad_index",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "H264",
+      "status": "refused",
+      "table": "Camera2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "H264",
+      "status": "eligible",
+      "table": "FrameInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "H264",
+      "status": "eligible",
+      "table": "MakeModel"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "H264",
+      "status": "eligible",
+      "table": "RecInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_bad_index",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "H264",
+      "status": "refused",
+      "table": "Shutter"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "HP",
+      "status": "eligible",
+      "table": "Type4"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "HP",
+      "status": "eligible",
+      "table": "Type6"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          4
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ICC_Profile",
+      "status": "refused",
+      "table": "Chromaticity"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "ICC_Profile",
+      "status": "eligible",
+      "table": "ColorRep"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "ICC_Profile",
+      "status": "eligible",
+      "table": "ColorantTable"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          5
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 15,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ICC_Profile",
+      "status": "refused",
+      "table": "Header"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ICC_Profile",
+      "status": "refused",
+      "table": "Measurement"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ICC_Profile",
+      "status": "refused",
+      "table": "ViewingConditions"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "ICO",
+      "status": "eligible",
+      "table": "IconDir"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "ICO",
+          "IconDir"
+        ]
+      ],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "ICO",
+      "status": "eligible",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": true,
+      "module": "ID3",
+      "status": "enabled",
+      "table": "v1"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "ID3",
+      "status": "eligible",
+      "table": "v1_Enh"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "ISO",
+      "status": "eligible",
+      "table": "BootRecord"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          5
+        ]
+      ],
+      "edges": [],
+      "fields": 16,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ISO",
+      "status": "refused",
+      "table": "PrimaryVolume"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "ITC",
+      "status": "eligible",
+      "table": "Header"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "ITC",
+      "status": "eligible",
+      "table": "Item"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 20,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "InfiRay",
+      "status": "eligible",
+      "table": "Factory"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "InfiRay",
+      "status": "eligible",
+      "table": "Isothermal"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "InfiRay",
+      "status": "eligible",
+      "table": "MixMode"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "InfiRay",
+      "status": "eligible",
+      "table": "OpMode"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "InfiRay",
+      "status": "eligible",
+      "table": "Picture"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 14,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "InfiRay",
+      "status": "eligible",
+      "table": "Sensor"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 19,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "InfiRay",
+      "status": "refused",
+      "table": "Version"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "JPEG",
+      "status": "eligible",
+      "table": "AVI1"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "JPEG",
+      "status": "refused",
+      "table": "Adobe"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "JPEG",
+      "status": "eligible",
+      "table": "AdobeCM"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "JPEG",
+      "status": "refused",
+      "table": "HDRGainInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "JPEG",
+      "status": "refused",
+      "table": "JPS"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 12,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "JPEG",
+      "status": "eligible",
+      "table": "NITF"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 11,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "JPEG",
+      "status": "refused",
+      "table": "SPIFF"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Jpeg2000",
+      "status": "refused",
+      "table": "CaptureResolution"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_variant_cond_unsupported",
+          1
+        ],
+        [
+          "tag_variant_skipped",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Jpeg2000",
+      "status": "refused",
+      "table": "ColorSpec"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Jpeg2000",
+      "status": "refused",
+      "table": "DisplayResolution"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Jpeg2000",
+      "status": "refused",
+      "table": "FileType"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Jpeg2000",
+      "status": "refused",
+      "table": "ImageHeader"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Kandao",
+      "status": "refused",
+      "table": "GPS"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Kandao",
+      "status": "refused",
+      "table": "GPSX"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Kandao",
+      "status": "refused",
+      "table": "IMU"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "refused",
+      "table": "MOV"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 25,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "eligible",
+      "table": "Processing"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "refused",
+      "table": "Scrn"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "eligible",
+      "table": "Type2"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 8,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "refused",
+      "table": "Type3"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "eligible",
+      "table": "Type4"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 9,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "eligible",
+      "table": "Type5"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "eligible",
+      "table": "Type6"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "eligible",
+      "table": "Type7"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 8,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Kodak",
+      "status": "refused",
+      "table": "Type9"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 11,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "KyoceraRaw",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "eligible",
+      "table": "Beef0003"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "refused",
+      "table": "Beef0004"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          4
+        ]
+      ],
+      "edges": [],
+      "fields": 17,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "refused",
+      "table": "ConsoleData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "eligible",
+      "table": "ConsoleFEData"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "refused",
+      "table": "ControlPanelCPL"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "eligible",
+      "table": "ControlPanelInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "refused",
+      "table": "EnvVarData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "eligible",
+      "table": "GameFolderInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "refused",
+      "table": "Item00Info"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 12,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "refused",
+      "table": "MTPType2"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          3
+        ]
+      ],
+      "edges": [
+        [
+          "LNK",
+          "ItemID"
+        ],
+        [
+          "LNK",
+          "LinkInfo"
+        ],
+        [
+          "LNK",
+          "UnknownData"
+        ],
+        [
+          "LNK",
+          "EnvVarData"
+        ],
+        [
+          "LNK",
+          "ConsoleData"
+        ],
+        [
+          "LNK",
+          "TrackerData"
+        ],
+        [
+          "LNK",
+          "ConsoleFEData"
+        ],
+        [
+          "LNK",
+          "UnknownData"
+        ],
+        [
+          "LNK",
+          "UnknownData"
+        ],
+        [
+          "LNK",
+          "UnknownData"
+        ],
+        [
+          "LNK",
+          "UnknownData"
+        ],
+        [
+          "LNK",
+          "UnknownData"
+        ],
+        [
+          "LNK",
+          "UnknownData"
+        ],
+        [
+          "LNK",
+          "UnknownData"
+        ]
+      ],
+      "fields": 25,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "eligible",
+      "table": "PropertyStore"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "eligible",
+      "table": "RootFolder"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "refused",
+      "table": "TargetInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          6
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "refused",
+      "table": "URI"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "LNK",
+      "status": "eligible",
+      "table": "UsersFilesFolder"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "Background"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 12,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "BasisObject"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "ClipObjects"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "CloneObject"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "DefineObject"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "DeltaPNGHeader"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "refused",
+      "table": "ExportImage"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "FramePriority"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "JNGHeader"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "Loop"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "MNGHeader"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "MagnifyObject"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "MoveObjects"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "PasteImage"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "PromoteParent"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "ShowObjects"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MNG",
+      "status": "eligible",
+      "table": "TerminationAction"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          5
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "MOI",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "MPEG",
+      "status": "refused",
+      "table": "Lame"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": true,
+      "module": "MPF",
+      "status": "enabled",
+      "table": "MPImage"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 96,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "MRC",
+      "status": "refused",
+      "table": "FEI12"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 36,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "MRC",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "MXF",
+      "status": "refused",
+      "table": "Header"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Microsoft",
+      "status": "eligible",
+      "table": "Stitch"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          12
+        ]
+      ],
+      "edges": [],
+      "fields": 17,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Minolta",
+      "status": "refused",
+      "table": "CameraInfoA100"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          2
+        ],
+        [
+          "expr_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 50,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Minolta",
+      "status": "refused",
+      "table": "CameraSettings"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 26,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Minolta",
+      "status": "refused",
+      "table": "CameraSettings5D"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 26,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Minolta",
+      "status": "refused",
+      "table": "CameraSettings7D"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 78,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Minolta",
+      "status": "refused",
+      "table": "CameraSettingsA100"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Minolta",
+      "status": "eligible",
+      "table": "ISInfoA100"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Minolta",
+      "status": "eligible",
+      "table": "MMA"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Minolta",
+      "status": "refused",
+      "table": "MOV1"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Minolta",
+      "status": "refused",
+      "table": "MOV2"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 64,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Minolta",
+      "status": "refused",
+      "table": "WBInfoA100"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 9,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MinoltaRaw",
+      "status": "eligible",
+      "table": "PRD"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 29,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "MinoltaRaw",
+      "status": "refused",
+      "table": "RIF"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "MinoltaRaw",
+      "status": "eligible",
+      "table": "WBG"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "AFInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          3
+        ],
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 21,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "AFInfo2V0100"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          4
+        ],
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "tag_variant_cond_unsupported",
+          1
+        ],
+        [
+          "tag_variant_skipped",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 22,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "AFInfo2V0101"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          3
+        ],
+        [
+          "enum_int_partial",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 9,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "AFInfo2V0200"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          9
+        ]
+      ],
+      "edges": [],
+      "fields": 24,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "AFInfo2V0300"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          6
+        ],
+        [
+          "tag_variant_cond_unsupported",
+          1
+        ],
+        [
+          "tag_variant_skipped",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 17,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "AFInfo2V0400"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "AFTune"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 11,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "AutoCaptureInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "BarometerInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "BracketingInfoD500"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "BracketingInfoD810"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "CaptureOutput"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ColorBalance1"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ColorBalance2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ColorBalance3"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ColorBalance4"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ColorBalanceA"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 9,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ColorBalanceB"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 13,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ColorBalanceC"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ColorBalanceUnknown"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ColorBalanceUnknown2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "NikonCustom",
+          "SettingsD5"
+        ],
+        [
+          "NikonCustom",
+          "SettingsD500"
+        ]
+      ],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "CustomSettingsD500"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "DistortInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "DistortionInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 14,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "FaceDetect"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "FileInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "enum_str_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 18,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "FlashInfo0100"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 21,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "FlashInfo0102"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          4
+        ]
+      ],
+      "edges": [],
+      "fields": 25,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "FlashInfo0103"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 22,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "FlashInfo0106"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 20,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "FlashInfo0107"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 23,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "FlashInfo0300"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "FlashInfoUnknown"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "GEM"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "HDRInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "HDRInfo2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ISOAutoInfoD810"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ISOInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 11,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "IntervalInfoD6"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "IntervalInfoZ7II"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "JPGInfoD500"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "LensData00"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 14,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "LensData01"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 14,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "LensData0204"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "LensData0400"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "LensData0402"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "LensData0403"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 23,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "LensData0800"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "LensDataUnknown"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "LocationInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 9,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "MOV"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MakerNotes0x51"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MakerNotes0x56"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "Nikon",
+          "MenuSettingsZ7II"
+        ]
+      ],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MenuInfoZ7II"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MenuSettingsD850"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "NikonCustom",
+          "SettingsZ6III"
+        ]
+      ],
+      "fields": 41,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MenuSettingsZ6III"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 18,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MenuSettingsZ7II"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 36,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MenuSettingsZ8"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "Nikon",
+          "MenuSettingsZ8"
+        ],
+        [
+          "NikonCustom",
+          "SettingsZ8"
+        ]
+      ],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MenuSettingsZ8v1"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "Nikon",
+          "MenuSettingsZ8"
+        ],
+        [
+          "NikonCustom",
+          "SettingsZ8"
+        ]
+      ],
+      "fields": 16,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MenuSettingsZ8v2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "NikonCustom",
+          "SettingsZ9"
+        ]
+      ],
+      "fields": 29,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MenuSettingsZ9"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "NikonCustom",
+          "SettingsZ9"
+        ]
+      ],
+      "fields": 32,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MenuSettingsZ9v3"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "NikonCustom",
+          "SettingsZ9v4"
+        ]
+      ],
+      "fields": 48,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "MenuSettingsZ9v4"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MoreSettingsD850"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MultiExposure"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "MultiExposure2"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "Offset13InfoZ9"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "OtherInfoD500"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          2
+        ],
+        [
+          "expr_unsupported",
+          6
+        ]
+      ],
+      "edges": [],
+      "fields": 13,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "PictureControl"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          2
+        ],
+        [
+          "expr_unsupported",
+          8
+        ]
+      ],
+      "edges": [],
+      "fields": 14,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "PictureControl2"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          2
+        ],
+        [
+          "expr_unsupported",
+          9
+        ]
+      ],
+      "edges": [],
+      "fields": 15,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "PictureControl3"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "PictureControlUnknown"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "PortraitInfoZ7II"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ROC"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "RetouchInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "RotationInfoD500"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "SeqInfoD6"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "SeqInfoZ9"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "SettingsInfoD810"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ShootingMenuD500"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "ShotInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_variant_cond_unsupported",
+          1
+        ],
+        [
+          "tag_variant_skipped",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "VRInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "eligible",
+      "table": "VignetteInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nikon",
+      "status": "refused",
+      "table": "WorldTime"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "Brightness"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "ColorBoost"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 13,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "CropData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "DLightingHQ"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "DLightingHS"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "Exposure"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "HighlightData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 9,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "NoiseReduction"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "PhotoEffects"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "PictureCtrl"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "RedEyeData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 17,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "UnsharpData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCapture",
+      "status": "eligible",
+      "table": "WBAdjData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 90,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD3"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 89,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "refused",
+      "table": "SettingsD4"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 22,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD40"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 89,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "NikonCustom",
+      "status": "refused",
+      "table": "SettingsD5"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 89,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "refused",
+      "table": "SettingsD500"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 26,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD5000"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 23,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD5100"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 26,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD5200"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 25,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD610"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 70,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD700"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 64,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD7000"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 48,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD80"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 21,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD800"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 86,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "refused",
+      "table": "SettingsD810"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 89,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "refused",
+      "table": "SettingsD850"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 54,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsD90"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 59,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsZ6III"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 71,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsZ8"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 69,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsZ9"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 69,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "NikonCustom",
+      "status": "eligible",
+      "table": "SettingsZ9v4"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Nintendo",
+      "status": "refused",
+      "table": "CameraInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "eligible",
+      "table": "AFInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "eligible",
+      "table": "AFTargetInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "Olympus",
+          "thmb2"
+        ]
+      ],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "eligible",
+      "table": "AVI"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "Olympus",
+      "status": "refused",
+      "table": "DSS"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "refused",
+      "table": "MOV1"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "refused",
+      "table": "MOV2"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Olympus",
+          "MovableInfo"
+        ],
+        [
+          "Olympus",
+          "MovableInfo"
+        ]
+      ],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "refused",
+      "table": "MP4"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "Olympus",
+          "Thumbnail"
+        ]
+      ],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "eligible",
+      "table": "MovableInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "refused",
+      "table": "OLYM"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "eligible",
+      "table": "SubjectDetectInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "eligible",
+      "table": "Thumbnail"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          19
+        ]
+      ],
+      "edges": [],
+      "fields": 22,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "refused",
+      "table": "WAV"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "eligible",
+      "table": "prms"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "refused",
+      "table": "scrn"
+    },
+    {
+      "blocked_by": [],
+      "edges": [
+        [
+          "Olympus",
+          "scrn"
+        ]
+      ],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "eligible",
+      "table": "scrn2"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "refused",
+      "table": "thmb"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Olympus",
+      "status": "refused",
+      "table": "thmb2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Opus",
+      "status": "eligible",
+      "table": "Header"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 15,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PCX",
+      "status": "eligible",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 9,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PGF",
+      "status": "eligible",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "PNG",
+      "status": "refused",
+      "table": "AnimationControl"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PNG",
+      "status": "eligible",
+      "table": "CICodePoints"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PNG",
+      "status": "eligible",
+      "table": "ImageHeader"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PNG",
+      "status": "eligible",
+      "table": "PhysicalPixel"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PNG",
+      "status": "eligible",
+      "table": "PrimaryChromaticities"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PNG",
+      "status": "eligible",
+      "table": "StereoImage"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ],
+        [
+          "tag_var_format",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "PNG",
+      "status": "refused",
+      "table": "SubjectScale"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PNG",
+      "status": "eligible",
+      "table": "VirtualPage"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PSP",
+      "status": "eligible",
+      "table": "Image"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 8,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Palm",
+      "status": "refused",
+      "table": "MOBI"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Palm",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Panasonic",
+      "status": "refused",
+      "table": "Data1"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Panasonic",
+      "status": "eligible",
+      "table": "FaceDetInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Panasonic",
+      "status": "eligible",
+      "table": "FaceRecInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Panasonic",
+      "status": "eligible",
+      "table": "FocusInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "subdir_refused_processproc",
+          4
+        ],
+        [
+          "tag_fmt_unsupported",
+          10
+        ]
+      ],
+      "edges": [],
+      "fields": 13,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Panasonic",
+      "status": "refused",
+      "table": "PANA"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Panasonic",
+      "status": "eligible",
+      "table": "SerialInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Panasonic",
+      "status": "eligible",
+      "table": "ShotInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Panasonic",
+      "status": "refused",
+      "table": "TimeInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Panasonic",
+      "status": "eligible",
+      "table": "Type2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 15,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PanasonicRaw",
+      "status": "eligible",
+      "table": "WBInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 15,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "PanasonicRaw",
+      "status": "eligible",
+      "table": "WBInfo2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Parrot",
+      "status": "eligible",
+      "table": "ARCoreAccel"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Parrot",
+      "status": "eligible",
+      "table": "ARCoreAccel0"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Parrot",
+      "status": "eligible",
+      "table": "ARCoreGyro"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Parrot",
+      "status": "eligible",
+      "table": "ARCoreGyro0"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Parrot",
+      "status": "eligible",
+      "table": "Automation"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Parrot",
+      "status": "eligible",
+      "table": "FollowMe"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 23,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Parrot",
+      "status": "eligible",
+      "table": "V1"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_bad_index",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 21,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Parrot",
+      "status": "refused",
+      "table": "V2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 25,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Parrot",
+      "status": "eligible",
+      "table": "V3"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 17,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "AEInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 12,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "AEInfo2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "AEInfo3"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 13,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "AFInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "AFInfoK3III"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "AFPointInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "AWBInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 22,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "BatteryInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "CAFPointInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "CameraInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          5
+        ]
+      ],
+      "edges": [],
+      "fields": 31,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "CameraSettings"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "ColorInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "EVStepInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "FaceInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 64,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "FaceInfoK3III"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 32,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "FacePos"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 32,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "FaceSize"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          20
+        ]
+      ],
+      "edges": [],
+      "fields": 22,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "FilterInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 11,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "FlashInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "Junk"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 8,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "Junk2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 17,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "KelvinWB"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "LensCorr"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_variant_field_unsupported",
+          1
+        ],
+        [
+          "tag_variant_skipped",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 9,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "LensData"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Pentax",
+          "LensData"
+        ]
+      ],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "LensInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Pentax",
+          "LensData"
+        ]
+      ],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "LensInfo2"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Pentax",
+          "LensData"
+        ]
+      ],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "LensInfo3"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Pentax",
+          "LensData"
+        ]
+      ],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "LensInfo4"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Pentax",
+          "LensData"
+        ]
+      ],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "LensInfo5"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "LensInfoQ"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_str_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "LensRec"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "LevelInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "LevelInfoK3III"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": true,
+      "module": "Pentax",
+      "status": "enabled",
+      "table": "MOV"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          3
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 23,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "PENT"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "PXTH"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "PixelShiftInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "refused",
+      "table": "SRInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "SRInfo2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "ShotInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 6,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "TempInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "TimeInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Pentax",
+      "status": "eligible",
+      "table": "WBLevels"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 26,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "PhotoCD",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Photoshop",
+      "status": "eligible",
+      "table": "Header"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Photoshop",
+      "status": "eligible",
+      "table": "ImageData"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Photoshop",
+      "status": "eligible",
+      "table": "JPEG_Quality"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Photoshop",
+      "status": "eligible",
+      "table": "PixelInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Photoshop",
+      "status": "eligible",
+      "table": "PrintScaleInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Photoshop",
+      "status": "eligible",
+      "table": "Resolution"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ],
+        [
+          "tag_var_format",
+          1
+        ],
+        [
+          "offsets_sound_until",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Photoshop",
+      "status": "refused",
+      "table": "SliceInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          2
+        ],
+        [
+          "tag_var_format",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Photoshop",
+      "status": "refused",
+      "table": "VersionInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "AV1Config"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "AudioProf"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "Bitrate"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 28,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "ChannelLayout"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "CleanAperture"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "ColorRep"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "ContentLightLevel"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "DecodeConfig"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "FileProf"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "FileType"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "Flip"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "GenMediaInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 16,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "HEVCConfig"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "Handler"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "HintHeader"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          4
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "MediaHeader"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "MovieFragHdr"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          9
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 14,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "MovieHeader"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "Preview"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "SchemeType"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "SpatialAudio"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "TCMediaInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          3
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 10,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "TrackHeader"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "Video"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "VideoHeader"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          4
+        ],
+        [
+          "tag_fmt_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "refused",
+      "table": "VideoProf"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "cbmp"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "QuickTime",
+      "status": "eligible",
+      "table": "equi"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "eligible",
+      "table": "ALPH"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 2,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "refused",
+      "table": "ANIM"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 1,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "refused",
+      "table": "ANMF"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "refused",
+      "table": "AVIHeader"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "refused",
+      "table": "Acidizer"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "eligible",
+      "table": "AudioFormat"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "refused",
+      "table": "BroadcastExt"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "eligible",
+      "table": "CSET"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "eligible",
+      "table": "ExtAVIHdr"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 7,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "eligible",
+      "table": "Instrument"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 9,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "refused",
+      "table": "Sampler"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 12,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "refused",
+      "table": "StreamHeader"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "refused",
+      "table": "UserText"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "eligible",
+      "table": "VP8"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "eligible",
+      "table": "VP8L"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "RIFF",
+      "status": "eligible",
+      "table": "VP8X"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          3
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 18,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Reconyx",
+      "status": "refused",
+      "table": "HyperFire"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          3
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 25,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Reconyx",
+      "status": "refused",
+      "table": "HyperFire2"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 24,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Reconyx",
+      "status": "refused",
+      "table": "HyperFire4K"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          4
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 29,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Reconyx",
+      "status": "refused",
+      "table": "MicroFire"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 16,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Reconyx",
+      "status": "refused",
+      "table": "UltraFire"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 4,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Red",
+      "status": "refused",
+      "table": "RED1"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Red",
+      "status": "eligible",
+      "table": "RED2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Ricoh",
+      "status": "eligible",
+      "table": "FaceInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Ricoh",
+      "status": "eligible",
+      "table": "FirmwareInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 11,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Ricoh",
+      "status": "eligible",
+      "table": "ImageInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Ricoh",
+      "status": "eligible",
+      "table": "SerialInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Samsung",
+      "status": "eligible",
+      "table": "DualShotExtra"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Samsung",
+          "Thumbnail"
+        ]
+      ],
+      "fields": 8,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Samsung",
+      "status": "refused",
+      "table": "MP4"
+    },
+    {
+      "blocked_by": [
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "Samsung",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Samsung",
+      "status": "eligible",
+      "table": "OrientationInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Samsung",
+      "status": "eligible",
+      "table": "PictureWizard"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Samsung",
+      "status": "eligible",
+      "table": "Thumbnail"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Samsung",
+      "status": "eligible",
+      "table": "Thumbnail2"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 5,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Samsung",
+      "status": "refused",
+      "table": "sec"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sanyo",
+      "status": "eligible",
+      "table": "FaceInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sanyo",
+      "status": "refused",
+      "table": "MOV"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Sanyo",
+          "Thumbnail"
+        ],
+        [
+          "Sanyo",
+          "Thumbnail"
+        ]
+      ],
+      "fields": 9,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sanyo",
+      "status": "refused",
+      "table": "MP4"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sanyo",
+      "status": "eligible",
+      "table": "Thumbnail"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 10,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sigma",
+      "status": "eligible",
+      "table": "WBSettings"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 4,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "SigmaRaw",
+      "status": "eligible",
+      "table": "Header4"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          18
+        ]
+      ],
+      "edges": [],
+      "fields": 18,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "AFStatus15"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          30
+        ]
+      ],
+      "edges": [],
+      "fields": 30,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "AFStatus19"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          95
+        ]
+      ],
+      "edges": [],
+      "fields": 95,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "AFStatus79"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          1
+        ],
+        [
+          "enum_int_partial",
+          24
+        ]
+      ],
+      "edges": [],
+      "fields": 31,
+      "gate_a": false,
+      "hand_wired": true,
+      "module": "Sony",
+      "status": "refused",
+      "table": "CameraInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          1
+        ],
+        [
+          "enum_int_partial",
+          12
+        ]
+      ],
+      "edges": [],
+      "fields": 16,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "CameraInfo2"
+    },
+    {
+      "blocked_by": [
+        [
+          "conv_dropped",
+          1
+        ],
+        [
+          "enum_int_partial",
+          13
+        ]
+      ],
+      "edges": [
+        [
+          "Sony",
+          "AFStatus15"
+        ]
+      ],
+      "fields": 24,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "CameraInfo3"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 55,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "CameraSettings"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 45,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "CameraSettings2"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 68,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "CameraSettings3"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "ExtraInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "ExtraInfo2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 11,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "ExtraInfo3"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 9,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "FaceInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "FaceInfo1"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 8,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "FaceInfo2"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 15,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "FaceInfoA"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 19,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "FocusInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 2,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "HiddenInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "ISOInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          16
+        ]
+      ],
+      "edges": [],
+      "fields": 16,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "MeterInfo"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          16
+        ]
+      ],
+      "edges": [],
+      "fields": 16,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "MeterInfo9"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 3,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "MoreInfo0201"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 1,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "MoreInfo0401"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 60,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "MoreSettings"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          2
+        ]
+      ],
+      "edges": [],
+      "fields": 14,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "PMP"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 11,
+      "gate_a": true,
+      "hand_wired": true,
+      "module": "Sony",
+      "status": "enabled",
+      "table": "Panorama"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [
+        [
+          "Sony",
+          "FaceInfo1"
+        ],
+        [
+          "Sony",
+          "FaceInfo2"
+        ]
+      ],
+      "fields": 9,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "refused",
+      "table": "ShotInfo"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 17,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Sony",
+      "status": "eligible",
+      "table": "Tag202a"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Stim",
+      "status": "eligible",
+      "table": "CropX"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "Stim",
+      "status": "eligible",
+      "table": "CropY"
+    },
+    {
+      "blocked_by": [
+        [
+          "enum_int_partial",
+          1
+        ],
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 11,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Theora",
+      "status": "refused",
+      "table": "Identification"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          3
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "Vorbis",
+      "status": "refused",
+      "table": "Identification"
+    },
+    {
+      "blocked_by": [],
+      "edges": [],
+      "fields": 5,
+      "gate_a": true,
+      "hand_wired": false,
+      "module": "WavPack",
+      "status": "eligible",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 7,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ZIP",
+      "status": "refused",
+      "table": "GZIP"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 8,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ZIP",
+      "status": "refused",
+      "table": "Main"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ],
+        [
+          "tag_fmt_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 6,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ZIP",
+      "status": "refused",
+      "table": "RAR"
+    },
+    {
+      "blocked_by": [
+        [
+          "expr_unsupported",
+          1
+        ]
+      ],
+      "edges": [],
+      "fields": 3,
+      "gate_a": false,
+      "hand_wired": false,
+      "module": "ZISRAW",
+      "status": "refused",
+      "table": "Main"
+    }
+  ],
+  "refused": 258,
+  "tables": 613
+}

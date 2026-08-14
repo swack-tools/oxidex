@@ -34,11 +34,23 @@ pub enum DecodedValue {
 }
 
 impl DecodedValue {
-    fn integer(&self) -> Option<i64> {
+    /// The integer this value is, if it is one.
+    ///
+    /// Public because [`super::engine`] needs it for two ExifTool rules that
+    /// are stated in terms of the raw value: `$val = ($val & $mask) >>
+    /// $$tagInfo{BitShift} if $mask` (ExifTool.pm:10079) and the
+    /// `next unless $val` guard on a `$`-bearing `SubDirectory` `Start`
+    /// (ExifTool.pm:10128).
+    #[must_use]
+    pub const fn as_integer(&self) -> Option<i64> {
         match self {
             Self::Integer(value) => Some(*value),
             _ => None,
         }
+    }
+
+    fn integer(&self) -> Option<i64> {
+        self.as_integer()
     }
 
     fn number(&self) -> Option<f64> {
@@ -95,9 +107,9 @@ impl DecodedField {
         if self.field.omitted.any() {
             return None;
         }
-        Some(match apply_print_conv(self.field.print_conv, &self.raw) {
+        Some(match render(self.field.print_conv, &self.raw) {
             Some(rendered) => TagValue::String(rendered),
-            None => decoded_value_to_tag_value(&self.raw),
+            None => to_tag_value(&self.raw),
         })
     }
 }
@@ -108,7 +120,8 @@ impl DecodedField {
 /// when a `PrintConv` does not apply (absent, or a hash/expression that does
 /// not cover this value) -- the raw value stands in, honestly, rather than a
 /// guessed string.
-fn decoded_value_to_tag_value(value: &DecodedValue) -> TagValue {
+#[must_use]
+pub fn to_tag_value(value: &DecodedValue) -> TagValue {
     match value {
         DecodedValue::Integer(v) => TagValue::Integer(*v),
         DecodedValue::Float(v) => TagValue::Float(*v),
@@ -122,9 +135,7 @@ fn decoded_value_to_tag_value(value: &DecodedValue) -> TagValue {
         },
         DecodedValue::String(s) => TagValue::String(s.clone()),
         DecodedValue::Undefined(bytes) => TagValue::Binary(bytes.clone()),
-        DecodedValue::Array(values) => {
-            TagValue::Array(values.iter().map(decoded_value_to_tag_value).collect())
-        }
+        DecodedValue::Array(values) => TagValue::Array(values.iter().map(to_tag_value).collect()),
     }
 }
 
@@ -246,9 +257,9 @@ impl<'a> RawAccess<'a> {
     /// records.
     #[must_use]
     pub fn emit_raw(&self) -> TagValue {
-        match apply_print_conv(self.field.field.print_conv, self.raw()) {
+        match render(self.field.field.print_conv, self.raw()) {
             Some(rendered) => TagValue::String(rendered),
-            None => decoded_value_to_tag_value(self.raw()),
+            None => to_tag_value(self.raw()),
         }
     }
 }
@@ -538,28 +549,52 @@ fn decode_field(
 ) -> Option<DecodedField> {
     let offset = usize::try_from(table.byte_offset(field)).ok()?;
     let format = table.field_format(field);
-    let width = usize::try_from(format.size()).ok()?;
-    let byte_count = width.checked_mul(field.count)?;
-    let bytes = data.get(offset..offset.checked_add(byte_count)?)?;
-    let raw = if field.count == 1 {
-        decode_value(bytes, format, byte_order)?
+    let raw = if table.enabled() {
+        // Step 28: an ENABLED table reads through the one shared `ReadValue`
+        // port (ExifTool.pm:6286), which is the whole point of the fold. The
+        // observable difference from the legacy path below is ExifTool's
+        // count shortening at ExifTool.pm:6301-6303 -- a field whose array
+        // or string runs off the end of the record reports the elements that
+        // fit, where the legacy path drops it entirely. `more` is the bytes
+        // of record remaining at this field, ExifTool's own `$more`
+        // (ExifTool.pm:9963).
+        let more = i64::try_from(data.len().saturating_sub(offset)).unwrap_or(i64::MAX);
+        super::engine::read_value(data, offset, format, field.count, more, byte_order)?
     } else {
-        let values = bytes
-            .chunks_exact(width)
-            .map(|chunk| decode_value(chunk, format, byte_order))
-            .collect::<Option<Vec<_>>>()?;
-        DecodedValue::Array(values)
+        // Not enabled: unchanged strict read. A table that has not passed
+        // both gates must behave EXACTLY as it did before Step 28, or the
+        // per-table A/B that gate B is measured with has no control group
+        // (design section 4: "an engine that enables 591 tables at once would
+        // produce a delta nobody can attribute").
+        let width = usize::try_from(format.size()).ok()?;
+        let byte_count = width.checked_mul(field.count)?;
+        let bytes = data.get(offset..offset.checked_add(byte_count)?)?;
+        if field.count == 1 {
+            decode_value_of(bytes, format, byte_order)?
+        } else {
+            let values = bytes
+                .chunks_exact(width)
+                .map(|chunk| decode_value_of(chunk, format, byte_order))
+                .collect::<Option<Vec<_>>>()?;
+            DecodedValue::Array(values)
+        }
     };
-    let raw = match field.mask {
-        None => raw,
-        // A mask on a non-integer is a construct this schema cannot
-        // express; refuse rather than report the unmasked value.
-        Some(mask) => DecodedValue::Integer(mask.apply(raw.integer()?)),
-    };
+    // ExifTool.pm:10079. A mask on a non-integer is a construct this schema
+    // cannot express; refuse rather than report the unmasked value.
+    let raw = super::engine::apply_mask(raw, field.mask)?;
     Some(DecodedField { field, raw })
 }
 
-fn decode_value(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Option<DecodedValue> {
+/// Decode ONE element of `format` from `bytes`.
+///
+/// Public so [`super::engine`]'s [`super::engine::read_value`] -- the single
+/// `ReadValue` port (ExifTool.pm:6286) all three folded engines now share --
+/// can reuse the per-format decoding without a second copy of it. Callers
+/// wanting ExifTool's count/shortening/string rules want that function, not
+/// this one: this reads exactly `format.size()` bytes and applies none of
+/// ExifTool.pm:6301-6311.
+#[must_use]
+pub fn decode_value_of(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Option<DecodedValue> {
     let order = if format == Fmt::Int16uRev {
         opposite(byte_order)
     } else {
@@ -593,7 +628,14 @@ fn decode_value(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Option<Deco
     })
 }
 
-fn apply_print_conv(conv: PrintConv, value: &DecodedValue) -> Option<String> {
+/// Render `value` through `conv`, or `None` when the conversion does not
+/// apply (absent, or a hash/expression that does not cover this value).
+///
+/// Public for [`super::engine`], which reaches the same rendering decision at
+/// the end of its own walk; a second copy would be a second place for the
+/// "a guess is worse than the raw value" rule to drift.
+#[must_use]
+pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
     match conv {
         PrintConv::None => None,
         PrintConv::IntEnum(map) => {
@@ -757,6 +799,8 @@ mod tests {
             first_entry: 0,
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
+            priority: None,
+            gate_a: super::super::GateA { blocked_by: &[] },
             fields: FIELDS,
             variants: &[],
         };
@@ -857,6 +901,8 @@ mod tests {
             first_entry: 0,
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
+            priority: None,
+            gate_a: super::super::GateA { blocked_by: &[] },
             fields: FIELDS,
             variants: &[],
         };
@@ -1026,6 +1072,8 @@ mod tests {
             first_entry: 0,
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
+            priority: None,
+            gate_a: super::super::GateA { blocked_by: &[] },
             fields: FIELDS,
             variants: &[],
         };
@@ -1127,6 +1175,8 @@ mod tests {
             first_entry: 0,
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
+            priority: None,
+            gate_a: super::super::GateA { blocked_by: &[] },
             fields: FIELDS,
             variants: &[],
         };
@@ -1203,6 +1253,49 @@ mod tests {
         );
     }
 
+    /// Step 28's per-table gate, proved on real tables rather than argued.
+    ///
+    /// `ID3::v1` is on the measured allowlist, so it reads through the shared
+    /// `ReadValue` (ExifTool.pm:6286) and shortens a run-off-the-end field to
+    /// what fits (ExifTool.pm:6301-6303). `Pentax::AFInfoK3III` is not (gate
+    /// A blocks it: `expr_unsupported=2, tag_fmt_unsupported=1`), so it keeps
+    /// the pre-Step-28 all-or-nothing read exactly.
+    ///
+    /// That difference is the whole enablement mechanism. If a future change
+    /// makes the two paths agree, either the gate stopped gating or the
+    /// legacy path stopped being legacy -- both worth failing over, because
+    /// gate B's A/B has no control group without it.
+    #[test]
+    fn only_an_enabled_table_gets_exiftools_count_shortening() {
+        let id3 = find_table("ID3", "v1").expect("generated ID3::v1");
+        assert!(id3.enabled(), "ID3::v1 is on the Step 28 allowlist");
+
+        // ID3v1's Title is `string[30]` at index 3 of an int8u table, i.e.
+        // bytes 3..33. Hand it a record that stops at byte 20: ExifTool
+        // reports the 17 bytes that fit, and so must an enabled table.
+        let mut short = vec![0u8; 20];
+        short[3..8].copy_from_slice(b"HELLO");
+        let decode = decode_binary_table(id3, &short, ByteOrder::Big);
+        let title = decode
+            .fields()
+            .iter()
+            .find(|f| f.field.name == "Title")
+            .expect("an enabled table shortens the count instead of dropping the field");
+        // ID3::v1's Title carries a ValueConv this schema does not reproduce,
+        // so `emit` still refuses it -- Step 28 changed which BYTES are read,
+        // not which semantics are honoured.
+        assert!(title.field.omitted.value_conv);
+        assert_eq!(title.emit(), None);
+
+        // The same shape on a table gate A blocks: unchanged strict read.
+        let afinfo = find_table("Pentax", "AFInfoK3III").expect("generated Pentax::AFInfoK3III");
+        assert!(!afinfo.enabled(), "gate A blocks Pentax::AFInfoK3III");
+        assert!(
+            !afinfo.gate_a.passes(),
+            "and it is blocked by gate A, not merely absent from the allowlist"
+        );
+    }
+
     #[test]
     fn refusal_counts_tally_every_set_flag_independently() {
         static FIELDS: &[Field] = &[
@@ -1260,6 +1353,8 @@ mod tests {
             first_entry: 0,
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
+            priority: None,
+            gate_a: super::super::GateA { blocked_by: &[] },
             fields: FIELDS,
             variants: &[],
         };
@@ -1316,6 +1411,8 @@ mod tests {
             first_entry: 0,
             default_format: Fmt::Int8u,
             offsets_sound_until: Some(3),
+            priority: None,
+            gate_a: super::super::GateA { blocked_by: &[] },
             fields: FIELDS,
             variants: &[],
         };
@@ -1384,6 +1481,8 @@ mod tests {
             first_entry: 0,
             default_format: Fmt::Int8u,
             offsets_sound_until: None,
+            priority: None,
+            gate_a: super::super::GateA { blocked_by: &[] },
             fields: &[],
             variants: VARIANTS,
         };

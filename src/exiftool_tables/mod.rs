@@ -38,14 +38,19 @@
 
 pub mod binary_tables;
 pub mod cond;
+pub mod enabled;
+pub mod engine;
 pub mod exprs;
 pub mod runtime;
 pub mod subdir;
 
 pub use binary_tables::{
-    ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, Mask, Omitted, PrintConv,
+    ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, Field, Fmt, GateA, Mask, Omitted,
+    PrintConv,
 };
 pub use cond::{CmpOp, Cond, Ctx, EffectSource, MemberValue, VariantGroup, first_match};
+pub use enabled::{ENABLED, is_enabled};
+pub use engine::{Cursor, Dir, Emitted, Step, process_binary_data, read_value};
 pub use runtime::{
     Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
     RefusalCounts, TableDecode, all_fractional_census, decode_binary_table,
@@ -278,6 +283,95 @@ mod tests {
             process_proc_refused, 4,
             "fields refused for a custom ProcessProc (Panasonic PANA ExifData x3, MakerNoteLeica5 x1)"
         );
+    }
+
+    /// Step 28's accounting identity, the third in this series: every
+    /// emitted table lands in exactly one of enabled / eligible / refused,
+    /// and the split is pinned so a regeneration that silently moves it
+    /// fails a test rather than only changing a report nobody reads.
+    ///
+    /// The three counts come from the SAME generated data
+    /// `tools/exiftool-tables/reachability.py` reports from, which is the
+    /// point: the reachability census is generated, not hand-audited, and
+    /// this test is what stops the two from drifting apart. At 13.59 the
+    /// split is 0 enabled / 355 eligible / 258 refused of 613 -- see
+    /// `enabled.rs` for why `eligible` is not `enabled`.
+    #[test]
+    fn every_table_lands_in_exactly_one_enablement_class() {
+        let (mut enabled, mut eligible, mut refused) = (0usize, 0usize, 0usize);
+        for table in ALL_BINARY_TABLES {
+            match (table.gate_a.passes(), table.enabled()) {
+                (true, true) => enabled += 1,
+                (true, false) => eligible += 1,
+                (false, false) => refused += 1,
+                // `is_enabled` re-checks gate A, so this is unreachable by
+                // construction; asserting it is what keeps that true.
+                (false, true) => panic!(
+                    "{}::{} is enabled despite gate A blocking it",
+                    table.module, table.table
+                ),
+            }
+        }
+        assert_eq!(
+            enabled + eligible + refused,
+            ALL_BINARY_TABLES.len(),
+            "every table must land in exactly one class"
+        );
+        assert_eq!(ALL_BINARY_TABLES.len(), 613, "tables emitted");
+        assert_eq!(eligible + enabled, 355, "tables passing gate A");
+        assert_eq!(refused, 258, "tables gate A blocks");
+    }
+
+    /// A refused table must say WHY, in the generator's own counter names.
+    /// A bare `false` would make the reachability report's
+    /// "refused-with-reason" column unbuildable and put us back to a hand
+    /// audit -- which is how `docs/reference/corpus-synthesis.md`'s 22-vs-21
+    /// discrepancy survived.
+    #[test]
+    fn every_gate_a_refusal_names_its_reason() {
+        for table in ALL_BINARY_TABLES {
+            if table.gate_a.passes() {
+                assert!(table.gate_a.blocked_by.is_empty());
+                continue;
+            }
+            assert!(
+                !table.gate_a.blocked_by.is_empty(),
+                "{}::{} is refused with no reason recorded",
+                table.module,
+                table.table
+            );
+            for (reason, count) in table.gate_a.blocked_by {
+                assert!(
+                    *count > 0,
+                    "{}::{} reason {reason} has count 0",
+                    table.module,
+                    table.table
+                );
+            }
+        }
+    }
+
+    /// ExifTool's table-level `PRIORITY` (ExifTool.pm:9471) reached the
+    /// schema in Step 28. 86 of the pinned tree's tables declare
+    /// `PRIORITY => 0` and one declares `PRIORITY => 2`; of those, the ones
+    /// that survive to an emitted ProcessBinaryData table are counted here.
+    /// Before this the key was dropped and every engine hardcoded its own
+    /// copy of "CameraInfo is priority zero".
+    #[test]
+    fn table_priority_is_transcribed_not_hardcoded() {
+        let zero = ALL_BINARY_TABLES
+            .iter()
+            .filter(|t| t.priority == Some(0))
+            .count();
+        assert!(
+            zero > 0,
+            "PRIORITY => 0 tables must reach the schema; found none"
+        );
+        // Canon's CameraInfo tables are the named example: `camera_info.rs`
+        // documents "Every CameraInfo table is priority zero" and enforced it
+        // by hand.
+        let t = find_table("Canon", "CameraInfo5D").expect("Canon::CameraInfo5D");
+        assert_eq!(t.priority, Some(0), "Canon.pm declares PRIORITY => 0");
     }
 
     /// `offsets_sound_until` must be set on exactly the tables where a
