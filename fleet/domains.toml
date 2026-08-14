@@ -1,0 +1,39 @@
+# Conflict domains -- FLEET_SPEC.md M6 ("Merge train"), T1.2.
+#
+# A conflict domain is a file that encodes a cross-cutting invariant, where
+# file-disjointness between two branches does NOT prove they are safe to
+# combine. `verdict.is_admissible` treats a domain hit -- by the branch's own
+# write_set, or by any commit that landed on the tip between a verdict's
+# base_tip and the current tip -- as disqualifying, independent of ordinary
+# write-set overlap.
+#
+# Seeded from three incidents that already happened (see
+# `tools/fleet/tests/test_verdict_fixtures.py`, which replays each one and
+# asserts `is_admissible` rejects it):
+#
+#   * `src/exiftool_tables/mod.rs`'s own test history: `enabled` went
+#     5 -> 7 across two independently-green table-wiring branches
+#     (APE::NewHeader, H264::RecInfo), each bumping `enabled.rs`, and the
+#     per-branch `assert_eq!(enabled, 5)` couldn't see the sibling's edit.
+#   * `tools/exiftool-tables/verify_subdirs.py:208` unpacking 8 values from
+#     an 11-tuple after a branch merged behind Step 25's tuple-width change,
+#     killing `just verify-tables`.
+#   * `error[E0599]: no variant named 'Sprintf0fValB74070' found for enum
+#     'ExprId'` at `src/exiftool_tables/runtime.rs:1094`, because a
+#     hand-written reference in `runtime.rs` and the GENERATED
+#     `binary_tables.rs` came from different branches.
+#
+# A branch touching any of these goes through the merge train solo and is
+# always re-gated against the exact current tip (T2.2's job, not this
+# file's). When a bisect lands on a branch that was file-disjoint from the
+# rest of its batch, that is evidence of a *missing* domain here -- log it
+# and add it; this list is expected to grow, not stay fixed at six.
+
+domains = [
+  "src/exiftool_tables/mod.rs",            # census invariants
+  "src/exiftool_tables/enabled.rs",        # Gate B allowlist
+  "src/exiftool_tables/binary_tables.rs",  # GENERATED
+  "src/exiftool_tables/runtime.rs",        # references the generated ExprId enum
+  "tools/exiftool-tables/verify_subdirs.py",
+  "src/bin/jpeg-tag-matrix/baseline.json",
+]
