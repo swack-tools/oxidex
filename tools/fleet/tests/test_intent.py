@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""Tests for tools/fleet/intent.py -- the intent registry.
+
+Fixture discipline for the HUB (the `Hub` instance backing
+`refs/fleet/intents/*`) matches `test_fleetlib.py`/`test_claim.py`: every
+test spins up its own throwaway `git init --bare` repo under the system
+temp directory in `setUp`, asserted before any test body runs, and NEVER
+touches the production hub (work2.oxidex.net).
+
+The SOURCE repo (used for `git log` history checks and for building/running
+the oxidex binary the capability ledger measures) is a separate concern --
+it is THIS checkout (`REPO_ROOT` below), the same real repo `test_ledger.py`
+uses, because the whole point of the acceptance test below is to prove a
+real, un-mocked capability ledger refuses a real duplicate at the real tip.
+
+THE NON-NEGOTIABLE ACCEPTANCE TEST is
+`TestAcceptance.test_solo_ryzen5_intent_is_refused_by_capability_ledger`.
+Per the T1.4 task brief: if it registers successfully, the capability-ledger
+check is decorative, and the fix belongs in `ledger.py`/`intent.py`, not in
+loosening this test.
+
+Plain `unittest`, standard library only (no pytest in this environment).
+
+Run with:
+    python3 -m unittest discover -s tools/fleet/tests -v
+"""
+
+from __future__ import annotations
+
+import multiprocessing
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+
+# See test_claim.py's own comment on this exact issue: `tools/fleet/queue.py`
+# (a sibling module on other fleet branches, not present on this one, but
+# worth pinning defensively anyway) can shadow the stdlib `queue` module for
+# a `spawn`-started child that re-derives `sys.path`. `fork` instead
+# duplicates this already-running interpreter's `sys.modules`, so no fresh
+# "queue" import ever happens in the child. Harmless if "fork" is already
+# the default; only meaningfully protective on platforms where it isn't.
+try:
+    multiprocessing.set_start_method("fork", force=True)
+except (RuntimeError, ValueError):
+    pass
+_MP_CONTEXT = multiprocessing.get_context("fork")
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import ledger  # noqa: E402
+from fleetlib import Hub  # noqa: E402
+from intent import (  # noqa: E402
+    check_capability_ledger,
+    check_history,
+    check_open_intent_overlap,
+    intent_ref,
+    list_open_intents,
+    register,
+    withdraw,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _run_git(args, cwd=None, input_bytes=None):
+    return subprocess.run(args, cwd=cwd, input=input_bytes, capture_output=True)
+
+
+def _oracle_available() -> bool:
+    return ledger.probe_capability().ok
+
+
+def _corpus_available() -> bool:
+    return ledger.CORPUS_DIR.is_dir()
+
+
+def _ensure_binary_built(timeout: int = 420):
+    candidate = REPO_ROOT / "target" / "release" / "oxidex"
+    if candidate.is_file():
+        return candidate
+    result = subprocess.run(
+        ["cargo", "build", "--release", "--bin", "oxidex"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        timeout=timeout,
+    )  # nosec B603 B607
+    if result.returncode != 0 or not candidate.is_file():
+        raise RuntimeError(f"could not build oxidex --release: exit {result.returncode}")
+    return candidate
+
+
+class IntentTestCase(unittest.TestCase):
+    """Base fixture: a throwaway bare repo standing in for the hub, exactly
+    like `test_fleetlib.py`'s fixture (this file does not redefine it --
+    T1.4 must build on `fleetlib`, not reinvent its test discipline).
+    """
+
+    def setUp(self):
+        self._tmp_root = tempfile.mkdtemp(prefix="intent-test-")
+        self.hub_path = str(Path(self._tmp_root) / "hub.git")
+        self.workdir = str(Path(self._tmp_root) / "cache")
+
+        init = _run_git(["git", "init", "--quiet", "--bare", self.hub_path])
+        self.assertEqual(init.returncode, 0, msg=init.stderr.decode())
+
+        resolved = str(Path(self.hub_path).resolve())
+        system_tmp = str(Path(tempfile.gettempdir()).resolve())
+        self.assertTrue(
+            resolved.startswith(system_tmp),
+            msg=f"test hub {resolved!r} is not under the system temp dir {system_tmp!r}",
+        )
+        self.assertNotIn("work2.oxidex.net", resolved)
+
+        self.hub = Hub(url=self.hub_path, workdir=self.workdir)
+
+    def tearDown(self):
+        shutil.rmtree(self._tmp_root, ignore_errors=True)
+
+    def fresh_hub(self) -> Hub:
+        other_workdir = tempfile.mkdtemp(prefix="intent-test-cache2-")
+        self.addCleanup(shutil.rmtree, other_workdir, ignore_errors=True)
+        return Hub(url=self.hub_path, workdir=other_workdir)
+
+
+class TestFixtureGuard(IntentTestCase):
+    def test_hub_url_is_a_temp_path(self):
+        resolved = str(Path(self.hub.url).resolve())
+        self.assertTrue(resolved.startswith(str(Path(tempfile.gettempdir()).resolve())))
+        self.assertNotIn("work2.oxidex.net", resolved)
+
+
+# --------------------------------------------------------------------- #
+# Check 1: open-intent overlap (fast, no oracle/binary needed)
+# --------------------------------------------------------------------- #
+
+
+class TestOpenIntentOverlap(IntentTestCase):
+    def test_no_open_intents_means_no_overlap(self):
+        result = check_open_intent_overlap(self.hub, "new-slug", {"formats": ["XYZ"]})
+        self.assertFalse(result.hit)
+
+    def test_overlapping_format_is_caught(self):
+        self.hub.create(
+            intent_ref("existing"),
+            {
+                "slug": "existing",
+                "title": "t",
+                "scope": {"formats": ["MRC"], "tags": [], "files": []},
+                "status": "open",
+                "claimed_by": "host-a",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            },
+        )
+        result = check_open_intent_overlap(self.hub, "new-slug", {"formats": ["mrc"], "tags": [], "files": []})
+        self.assertTrue(result.hit)
+        self.assertIn("existing", result.detail)
+
+    def test_withdrawn_intent_does_not_count_as_overlap(self):
+        self.hub.create(
+            intent_ref("withdrawn-one"),
+            {
+                "slug": "withdrawn-one",
+                "title": "t",
+                "scope": {"formats": ["MRC"], "tags": [], "files": []},
+                "status": "withdrawn",
+                "claimed_by": "host-a",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            },
+        )
+        result = check_open_intent_overlap(self.hub, "new-slug", {"formats": ["MRC"], "tags": [], "files": []})
+        self.assertFalse(result.hit)
+
+    def test_overlapping_file_glob_prefix_is_caught(self):
+        self.hub.create(
+            intent_ref("files-one"),
+            {
+                "slug": "files-one",
+                "title": "t",
+                "scope": {"formats": [], "tags": [], "files": ["src/parsers/raw/**"]},
+                "status": "open",
+                "claimed_by": "host-a",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            },
+        )
+        result = check_open_intent_overlap(
+            self.hub, "new-slug", {"formats": [], "tags": [], "files": ["src/parsers/raw/kyocera.rs"]}
+        )
+        self.assertTrue(result.hit)
+
+
+# --------------------------------------------------------------------- #
+# Check 2: history
+# --------------------------------------------------------------------- #
+
+
+class TestHistory(unittest.TestCase):
+    def test_5cef5b3d_is_found_by_history_grep(self):
+        # 5cef5b3d's commit body literally says "KyoceraRaw.raw" and
+        # "SWF, PICT, PPM, RA" -- history is a cheap dedup signal and
+        # SHOULD find this. (The acceptance test elsewhere confirms this is
+        # not the reason intent.register cites, though -- see
+        # TestAcceptance.)
+        result = check_history(REPO_ROOT, {"formats": ["SWF"], "tags": []})
+        self.assertTrue(result.hit)
+
+    def test_novel_token_is_not_found(self):
+        result = check_history(REPO_ROOT, {"formats": ["ZzyzxNoSuchFormatEverToken"], "tags": []})
+        self.assertFalse(result.hit)
+
+
+# --------------------------------------------------------------------- #
+# Check 3: capability ledger wrapper
+# --------------------------------------------------------------------- #
+
+
+@unittest.skipUnless(_oracle_available(), "pinned ExifTool oracle not usable in this environment")
+@unittest.skipUnless(_corpus_available(), "combined-samples corpus not present in this environment")
+class TestCapabilityLedgerCheck(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        _ensure_binary_built()
+
+    def test_empty_scope_is_not_a_hit(self):
+        result = check_capability_ledger(REPO_ROOT, {"formats": [], "tags": []})
+        self.assertFalse(result.hit)
+
+    def test_covered_format_is_a_hit_citing_measured_evidence(self):
+        result = check_capability_ledger(REPO_ROOT, {"formats": ["SWF"], "tags": []})
+        self.assertTrue(result.hit)
+        self.assertIn("MISSING 0", result.detail)
+
+    def test_uncovered_format_is_not_a_hit(self):
+        result = check_capability_ledger(REPO_ROOT, {"formats": ["MRC"], "tags": []})
+        self.assertFalse(result.hit)
+
+    def test_broken_oracle_fails_closed_as_a_hit(self):
+        # A ledger that cannot be trusted must refuse the WHOLE
+        # registration rather than silently let it through -- see
+        # check_capability_ledger's docstring.
+        result = check_capability_ledger(
+            REPO_ROOT, {"formats": ["SWF"], "tags": []}, ledger_kwargs={"oracle_script": Path("/nonexistent/oracle.sh")}
+        )
+        self.assertTrue(result.hit)
+        self.assertIn("unusable", result.detail)
+
+
+# --------------------------------------------------------------------- #
+# THE ACCEPTANCE TEST
+# --------------------------------------------------------------------- #
+
+
+@unittest.skipUnless(_oracle_available(), "pinned ExifTool oracle not usable in this environment")
+@unittest.skipUnless(_corpus_available(), "combined-samples corpus not present in this environment")
+class TestAcceptance(IntentTestCase):
+    @classmethod
+    def setUpClass(cls):
+        _ensure_binary_built()
+
+    def test_solo_ryzen5_intent_is_refused_by_capability_ledger(self):
+        """THE non-negotiable acceptance test from the T1.4 task brief.
+
+        Registering the `solo-ryzen5`/`route-legacy-formats` intent --
+        SWF, PICT, PPM, RA, KyoceraRAW -- against the current tip must be
+        REFUSED, because `5cef5b3d` already routed and measured all five.
+        The refusal must cite the capability-ledger check specifically
+        (with real MISSING counts), not merely the fact that a commit
+        message happens to mention the same words.
+        """
+        result = register(
+            self.hub,
+            REPO_ROOT,
+            slug="route-legacy-formats",
+            title="Route SWF, PICT, PPM, RA, Kyocera RAW",
+            scope={"formats": ["SWF", "PICT", "PPM", "RA", "KyoceraRAW"], "tags": [], "files": []},
+            claimed_by="solo-ryzen5",
+        )
+
+        self.assertFalse(result.ok, "solo-ryzen5's intent registered successfully -- the ledger check is decorative")
+        self.assertIsNotNone(result.reason)
+        self.assertTrue(
+            result.reason.startswith("[capability-ledger]"),
+            f"refusal must be PRIMARILY attributed to the capability-ledger check, got: {result.reason!r}",
+        )
+        # Not just "a check named capability-ledger fired" -- its own
+        # detail text must carry real measured numbers, proving this is a
+        # behavioral verdict and not a text match wearing the right label.
+        self.assertIn("MISSING 0", result.reason)
+        self.assertIn("already covered at the tip", result.reason)
+
+        # The history check must ALSO have fired independently (5cef5b3d's
+        # message really does mention these tokens) -- but it must not be
+        # what register() cites as the reason. This is the direct proof
+        # that a naive history-grep-only implementation would have passed
+        # this acceptance test for the wrong reason; ours does not rely on
+        # it being the primary one.
+        history_results = [c for c in result.checks if c.name == "history"]
+        self.assertEqual(len(history_results), 1)
+        self.assertTrue(history_results[0].hit, "expected history to ALSO independently flag this (sanity check)")
+
+        ledger_results = [c for c in result.checks if c.name == "capability-ledger"]
+        self.assertEqual(len(ledger_results), 1)
+        self.assertTrue(ledger_results[0].hit)
+        for fmt in ("SWF", "PICT", "PPM", "RA", "KyoceraRAW"):
+            self.assertIn(fmt, ledger_results[0].detail)
+
+        # And the ref must genuinely not exist on the hub.
+        self.assertIsNone(self.hub.sha(intent_ref("route-legacy-formats")))
+
+    def test_genuinely_new_format_registers_fine(self):
+        # ZISRAW is a REAL, currently-open gap: 31 of 34 comparable tags
+        # are MISSING against the pinned oracle on ZISRAW.czi (verified by
+        # hand while building this suite -- see the T1.4 report), and no
+        # commit on the tip mentions it, so `check_history` also stays
+        # clean. (MRC was tried first and rejected as the example here: it
+        # IS a real gap too, but c2c54c40's message already says "route
+        # ... MRC", so `check_history` correctly flags it independently of
+        # the ledger -- a good demonstration that history is a real check,
+        # a bad choice for a test that wants to isolate the ledger.) An
+        # intent to close a clean gap like ZISRAW's must be allowed through.
+        result = register(
+            self.hub,
+            REPO_ROOT,
+            slug="close-zisraw-gap",
+            title="Close the ZISRAW tag-coverage gap",
+            scope={"formats": ["ZISRAW"], "tags": [], "files": []},
+            claimed_by="some-host",
+        )
+        self.assertTrue(result.ok, result.reason)
+        self.assertIsNotNone(self.hub.sha(intent_ref("close-zisraw-gap")))
+        payload = self.hub.read(intent_ref("close-zisraw-gap"))
+        self.assertEqual(payload["status"], "open")
+        self.assertEqual(payload["scope"]["formats"], ["ZISRAW"])
+
+
+# --------------------------------------------------------------------- #
+# Real concurrency: exactly one racer wins a slug
+# --------------------------------------------------------------------- #
+
+
+def _race_worker(hub_path: str, workdir: str, repo_root: str, slug: str, claimed_by: str) -> bool:
+    """Runs in a forked child process (see `_MP_CONTEXT` above). Uses a
+    scope with no formats/tags -- files-only -- so this test isolates the
+    property under test (the hub ref's create-only CAS) from needing a
+    live oracle/binary in every worker, while still exercising the SAME
+    `register()` code path the acceptance test uses, including all three
+    real checks.
+    """
+    sys.path.insert(0, str(Path(repo_root) / "tools" / "fleet"))
+    from fleetlib import Hub as _Hub  # local import: see child-process sys.path note above
+    from intent import register as _register
+
+    hub = _Hub(url=hub_path, workdir=workdir)
+    result = _register(
+        hub,
+        Path(repo_root),
+        slug=slug,
+        title="race target",
+        scope={"formats": [], "tags": [], "files": [f"src/nonexistent/{claimed_by}/**"]},
+        claimed_by=claimed_by,
+    )
+    return result.ok
+
+
+class TestConcurrentRegistration(IntentTestCase):
+    def test_two_racers_same_slug_exactly_one_wins(self):
+        n = 6
+        with ProcessPoolExecutor(max_workers=n, mp_context=_MP_CONTEXT) as pool:
+            futures = [
+                pool.submit(_race_worker, self.hub_path, tempfile.mkdtemp(prefix=f"race-cache-{i}-"), str(REPO_ROOT), "race-slug", f"host-{i}")
+                for i in range(n)
+            ]
+            outcomes = [f.result(timeout=60) for f in as_completed(futures)]
+
+        self.assertEqual(sum(1 for ok in outcomes if ok), 1, f"expected exactly one winner, got {outcomes}")
+        self.assertIsNotNone(self.hub.sha(intent_ref("race-slug")))
+
+    def test_two_racers_different_slugs_both_win(self):
+        n = 4
+        with ProcessPoolExecutor(max_workers=n, mp_context=_MP_CONTEXT) as pool:
+            futures = [
+                pool.submit(
+                    _race_worker,
+                    self.hub_path,
+                    tempfile.mkdtemp(prefix=f"race-cache-distinct-{i}-"),
+                    str(REPO_ROOT),
+                    f"distinct-slug-{i}",
+                    f"host-{i}",
+                )
+                for i in range(n)
+            ]
+            outcomes = [f.result(timeout=60) for f in as_completed(futures)]
+        self.assertTrue(all(outcomes), outcomes)
+
+
+# --------------------------------------------------------------------- #
+# withdraw() / list_open_intents()
+# --------------------------------------------------------------------- #
+
+
+class TestWithdrawAndList(IntentTestCase):
+    def test_withdraw_marks_status_and_removes_from_open_list(self):
+        result = register(
+            self.hub,
+            REPO_ROOT,
+            slug="temp-intent",
+            title="t",
+            scope={"formats": [], "tags": [], "files": ["src/some/path/**"]},
+            claimed_by="host-a",
+        )
+        self.assertTrue(result.ok, result.reason)
+        self.assertIn("temp-intent", list_open_intents(self.hub))
+
+        self.assertTrue(withdraw(self.hub, "temp-intent"))
+        self.assertNotIn("temp-intent", list_open_intents(self.hub))
+        payload = self.hub.read(intent_ref("temp-intent"))
+        self.assertEqual(payload["status"], "withdrawn")
+
+    def test_withdraw_of_absent_slug_returns_false(self):
+        self.assertFalse(withdraw(self.hub, "never-registered"))
+
+
+if __name__ == "__main__":
+    unittest.main()
