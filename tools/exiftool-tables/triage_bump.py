@@ -16,21 +16,33 @@ of them, so this script and the generators cannot silently drift apart:
 
   AUTO  -- the machinery absorbs the change with zero source edits. Pure
            layout/metadata (Format, Count, Mask, ...), enum PrintConv/
-           ValueConv data, or a field inside an already-generated tier-2
+           ValueConv data, a field inside an already-generated tier-2
            sub-directory table (codegen_subdirs.py regenerates the whole
            file from the dump, so any field-level change inside one of its
-           already-listed tables is free).
+           already-listed tables is free), or (Step 23) a `_variants` array
+           where EVERY alternative's `Condition` compiles through
+           `conds.py`'s closed grammar -- mirrors codegen.py's
+           `compile_variant_group`, which applies that same all-or-nothing
+           rule per table before emitting a `VariantGroup`.
   EXPR  -- a PrintConv/ValueConv/RawConv carries a Perl expression or
            deparsed closure that `exprs.py` does not already translate or
            compile. Needs a hand-verified translation added to
            `exprs.TRANSLATIONS` (or, for the closure case, a decision about
            whether it is even expressible in the closed grammar).
-  COND  -- a `Condition` field, a conditional `_variants` array, or a
-           `Hook` (mid-table format/byte-order rewrite) is new or changed.
-           None of these are wired to dispatch yet (Step 23/26); every one
-           is refused today (codegen.py's `tag_variant_skipped`/
-           `omitted_condition`/`omitted_hook` counters), so every touch is
-           real work, not just unmodelled noise.
+  COND  -- three shapes, each still real work: (1) a standalone `Condition`
+           field on a non-variant tag -- `conds.py`/Step 23 only compiles
+           Conditions found *inside* a `_variants` array's alternatives, so
+           a lone `Condition` on a single-entry tag is omitted always, not
+           just "until Step 23 lands"; (2) a `_variants` array where at
+           least one alternative's `Condition` falls outside `conds.py`'s
+           closed grammar (a three-way `or` chain, an `lt`/`ge` string
+           compare, a `\\d`/`\\w`-shorthand regex class, ...) -- refused
+           exactly like `codegen.py`'s `compile_variant_group` refuses it,
+           all-or-nothing for the whole array, same as the AUTO case above
+           but failed; or (3) a `Hook` (mid-table format/byte-order
+           rewrite), which is still genuinely unwired -- Step 26, not Step
+           23. Step 23 landing narrowed this bucket to Hook plus
+           grammar-refused conditions; it did not empty it.
   HAND  -- anything else: a new module or a new non-ProcessBinaryData table
            (the generator only emits ProcessBinaryData -- see
            docs/TRANSCRIPTION.md "Honest limits"), a new SubDirectory edge
@@ -64,12 +76,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import codegen  # noqa: E402  -- reuse is_binary_table so classification cannot drift from the real generator
+import conds  # noqa: E402  -- Step 23's Condition compiler; reused so a _variants classification cannot drift from compile_variant_group
 import exprs  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -166,6 +180,84 @@ def conv_classification(old_conv, new_conv):
     return HAND, f"unclassified conversion kind={kind!r}"
 
 
+def _cond_failure_reason(condition):
+    """`conds.compile_cond` returns a bare `None` on refusal -- exactly what
+    the AUTO/COND decision needs (and this script takes that decision
+    verbatim from it, never re-derives it), but not enough to explain *why*
+    to a human reading the report. Re-run the same atom compiler conds.py
+    itself uses (`conds._compile_atom` / `conds._compile_setmember`) and let
+    the first construct that fails explain itself via its own
+    `CondCompileError` message.
+
+    This duplicates only conds.py's trivial `and`-splitting (the same rule
+    `compile_cond_atoms_conjunction`'s docstring already states), never the
+    grammar itself -- what a construct means always comes from calling into
+    conds.py's own compiler functions, so this cannot accept something
+    conds.py would refuse, or vice versa. In the rare case duplicating the
+    split logic itself goes stale, the worst outcome is a less precise
+    *reason string*; the AUTO/COND bucket is decided elsewhere, by
+    `conds.compile_cond` alone.
+    """
+    if not isinstance(condition, str) or not condition.strip():
+        return "unrecognised condition shape (not a non-empty string)"
+    text = re.sub(r"\s+", " ", condition.strip())
+    try:
+        if conds._compile_setmember(text) is not None:
+            return "SetMember idiom -- should have compiled; conds.py disagreement, report a bug"
+    except conds.CondCompileError as e:
+        return str(e)
+    atoms = [p.strip() for p in text.split(" and ")] if " and " in text else [text]
+    for atom in atoms:
+        try:
+            conds._compile_atom(atom)
+        except conds.CondCompileError as e:
+            return str(e)
+    return f"refused by conds.compile_cond for an unresolved reason: {condition!r}"
+
+
+def classify_variants(module, table, tag_name, variants, kind):
+    """Classify a `_variants` array exactly the way `codegen.py`'s
+    `compile_variant_group` decides whether to emit it (Step 23): attempt
+    `conds.compile_cond()` on every alternative's `Condition`, all-or-
+    nothing -- AUTO the moment every alternative compiles, COND the moment
+    one does not, naming the construct that defeated it.
+
+    Mirrors `compile_variant_group`'s Condition handling exactly (same
+    function, same closed grammar, same all-or-nothing rule, same refusal
+    for a non-dict or nested-`_variants` alternative). It does NOT replicate
+    `compile_variant_group`'s per-alternative `gen_field_literal` call
+    (Format/Mask/Unknown/Name checks on each alternative's field shape) --
+    this script already only approximates those checks for ordinary,
+    non-variant fields too (see `classify_tag_field`'s DATA_TAG_FIELDS
+    branch, which treats any layout field on a binary table as AUTO without
+    re-deriving codegen.py's SIZED_RE/SCALAR_FORMATS matching), so a variant
+    alternative gets the same level of scrutiny a plain field would get
+    here. Consequence: a `_variants` array whose Conditions all compile but
+    whose field shape `compile_variant_group` would separately refuse (an
+    unsupported Format, say) is classified AUTO here even though the real
+    generator would still drop it -- name that instrument
+    (`triage_bump.py`'s Condition-only check) if this distinction matters
+    for what you're deciding (AGENTS.md "name the instrument").
+    """
+    for i, alt in enumerate(variants):
+        if not isinstance(alt, dict) or "_variants" in alt:
+            shape = ("a nested _variants array" if isinstance(alt, dict)
+                      else f"a non-dict shape ({type(alt).__name__})")
+            return Delta(COND, module, table, tag_name, "_variants", kind,
+                         f"alternative {i} is {shape} -- compile_variant_group refuses "
+                         "this shape outright, before even looking at Condition")
+        condition = alt.get("Condition")
+        if conds.compile_cond(condition) is None:
+            reason = _cond_failure_reason(condition)
+            return Delta(COND, module, table, tag_name, "_variants", kind,
+                         f"alternative {i} ({alt.get('Name', '?')!r})'s Condition is "
+                         f"outside conds.py's closed grammar: {reason}")
+    return Delta(AUTO, module, table, tag_name, "_variants", kind,
+                 f"{len(variants)} conditional variants -- every alternative's Condition "
+                 "compiles via conds.compile_cond, same all-or-nothing rule "
+                 "compile_variant_group applies (Step 23)")
+
+
 def classify_tag_field(module, table, tag_name, field, old_tag, new_tag, table_is_binary, kind):
     old_v = (old_tag or {}).get(field)
     new_v = (new_tag or {}).get(field)
@@ -176,7 +268,10 @@ def classify_tag_field(module, table, tag_name, field, old_tag, new_tag, table_i
 
     if field == "Condition":
         return Delta(COND, module, table, tag_name, field, kind,
-                     "Condition is omitted (never evaluated) until Step 23 lands")
+                     "standalone Condition on a non-variant tag -- conds.py/Step 23 "
+                     "only compiles a Condition found inside a _variants array's "
+                     "alternatives, so a lone Condition here is omitted unconditionally, "
+                     "not just until some later step lands")
 
     if field == "Hook":
         return Delta(HAND, module, table, tag_name, field, kind,
@@ -204,11 +299,12 @@ def classify_tag_field(module, table, tag_name, field, old_tag, new_tag, table_i
 def diff_tag(module, table, tag_name, old_tag, new_tag, table_is_binary):
     """Yield Deltas for one tag entry present in at least one of old/new."""
     if old_tag is None:
-        # Whole tag is new. A variant array needs conditional dispatch no
-        # matter what its members look like.
+        # Whole tag is new. A variant array is classified by whether every
+        # alternative's Condition compiles (see classify_variants) -- not
+        # unconditionally COND regardless of its members, now that Step 23
+        # gives conds.py a grammar to try them against.
         if isinstance(new_tag, dict) and "_variants" in new_tag:
-            yield Delta(COND, module, table, tag_name, "_variants", "added",
-                        f"{len(new_tag['_variants'])} conditional variants -- needs dispatch (Step 23)")
+            yield classify_variants(module, table, tag_name, new_tag["_variants"], "added")
             return
         if not isinstance(new_tag, dict):
             yield Delta(HAND, module, table, tag_name, None, "added",
@@ -233,9 +329,18 @@ def diff_tag(module, table, tag_name, old_tag, new_tag, table_is_binary):
 
     old_variants = isinstance(old_tag, dict) and "_variants" in old_tag
     new_variants = isinstance(new_tag, dict) and "_variants" in new_tag
-    if old_variants or new_variants:
-        yield Delta(COND, module, table, tag_name, "_variants", "changed",
-                     "conditional-variant tag changed -- needs dispatch (Step 23)")
+    if new_variants:
+        yield classify_variants(module, table, tag_name, new_tag["_variants"], "changed")
+        return
+    if old_variants:
+        # The new shape dropped the model-dependent dispatch entirely (now a
+        # plain tag, or a different shape) -- there is no `_variants` array
+        # left for conds.py to accept or refuse, so this is not an AUTO/COND
+        # question at all; flag it for a human look rather than guessing.
+        yield Delta(HAND, module, table, tag_name, "_variants", "changed",
+                     "tag lost its conditional _variants array entirely (now a plain "
+                     "tag or a different shape) -- compile_variant_group has nothing "
+                     "left to accept or refuse; needs a human look at what replaced it")
         return
 
     if not isinstance(old_tag, dict) or not isinstance(new_tag, dict):
