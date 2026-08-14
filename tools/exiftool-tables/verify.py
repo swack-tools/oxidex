@@ -1244,6 +1244,7 @@ def main():
         if k in or_rawfmts and expected_fmt_literal(or_rawfmts[k]) is None
     ]
 
+
     # Step 27: does `codegen.py`'s SubdirEdge compiler (`subdirs.py`) agree
     # with an INDEPENDENT re-derivation (`expected_subdir_edge`, built from
     # the oracle's raw TAGTABLE/START/BASE/PROCESSPROC/BYTEORDER/VALIDATE

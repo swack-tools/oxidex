@@ -236,11 +236,20 @@ def _rust_pairs(pairs):
 
 
 def conv_for(tag, stats, input_domain, verified_exprs):
-    """Return `(rust_printconv_src, refused)` for one tag.
+    """`(rust_printconv_src, refused)` for one tag.
 
-    `refused` is true only when ExifTool declares a PrintConv that this
-    generator cannot reproduce.  The caller then records `Omitted.print_conv`,
-    so the field is withheld instead of being emitted with a raw value.
+    `refused` is True exactly when ExifTool declares a `PrintConv` here that
+    this generator would not reproduce, so the emitted `PrintConv::None` is a
+    REFUSAL rather than a statement that the tag has no conversion. The caller
+    (`gen_field_literal`) turns that into `Omitted { print_conv: true }`, which
+    is what makes `DecodedField::emit` withhold the field instead of reporting
+    the raw number under ExifTool's own tag name -- the failure `AGENTS.md`
+    rates worse than an absent tag, because nothing downstream can tell.
+
+    A tag with no `PrintConv` at all, and an `enum_*_partial` whose exact
+    matches are all still right, both return `refused=False`: the first has
+    nothing to refuse, and the second is covered separately (and is still Gate
+    A-disqualifying in its own right -- see `GATE_A_DISQUALIFYING`).
     """
     pc = tag.get("PrintConv")
     if not isinstance(pc, dict):
@@ -553,6 +562,19 @@ def omitted_for(tag, stats, condition_resolved=False, value_conv_modeled=False,
     emitted set carries one, including tables parsers already read for layout --
     so the omission is recorded instead. A caller that sees `value_conv` set
     knows the raw value is not the reported value, which is the whole point.
+
+    `print_conv_refused` is `conv_for`'s own answer, threaded through by
+    `gen_field_literal`: ExifTool declares a `PrintConv` here that this
+    generator would not reproduce (a Perl CODE ref outside `exprs.CODE_REFS`).
+    It is the newest of the six flags and the one with the sharpest failure
+    mode. The other five describe a field whose RAW VALUE is not the reported
+    value; this one describes a field that is emitted with
+    `PrintConv::None` -- so it renders a raw number under a real ExifTool tag
+    name where ExifTool prints a string, with nothing marking the difference.
+    Step 28's commit message calls that out as worse than either a withheld
+    field or a dropped one, and setting the flag is what demotes it to a
+    withheld field: `DecodedField::emit` refuses, `Omitted::any()` reports it,
+    and `codegen.py`'s `conv_dropped` counter says how many.
 
     `Hook` and `SubDirectory` are the same kind of breach and were, until now,
     not even read from the dump: a field carrying either was emitted as an
@@ -983,6 +1005,22 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format,
 #                         word at floor(index) regardless of Mask, so a maskless
 #                         fractional field is fully transcribed, not partial.
 #   omitted_*             the explicit refusal flags the design names.
+#   conv_dropped          WAS disqualifying, and stopped being so the moment
+#                         the drop became an `Omitted { print_conv: true }`
+#                         field rather than a silent one. That is the whole
+#                         of the change: `conv_for` still refuses exactly the
+#                         same Perl CODE refs and still counts every one under
+#                         the same name, but the field it refuses is now
+#                         WITHHELD by `DecodedField::emit` instead of emitted
+#                         carrying a raw number under ExifTool's tag name. It
+#                         therefore lands in the first bullet's "carries an
+#                         explicit refusal flag is FINE" case, alongside
+#                         `omitted_value_conv` and the rest, and disqualifying
+#                         it as well would be refusing a table twice for a
+#                         hazard that no longer exists. `expr_unsupported` and
+#                         `enum_*_partial` stay disqualifying: they are still
+#                         emitted with no flag, and closing them is a separate
+#                         piece of work.
 GATE_A_DISQUALIFYING = (
     # fields dropped outright -- nothing marks the offset
     "tag_fmt_unsupported",
