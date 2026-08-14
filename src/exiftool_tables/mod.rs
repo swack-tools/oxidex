@@ -329,7 +329,11 @@ mod tests {
         assert_eq!(ALL_BINARY_TABLES.len(), 613, "tables emitted");
         assert_eq!(eligible + enabled, 380, "tables passing gate A");
         assert_eq!(refused, 233, "tables gate A blocks");
-        assert_eq!(enabled, 5, "tables both gates enable");
+        // Raised 5 -> 7 when APE::NewHeader and H264::RecInfo were wired to live
+        // call sites. Each of those branches was green in isolation; the assertion
+        // only broke once both were on the same tree, which is precisely the
+        // cross-branch interaction a per-branch gate cannot see.
+        assert_eq!(enabled, 7, "tables both gates enable");
     }
 
     /// A refused table must say WHY, in the generator's own counter names.
