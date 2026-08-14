@@ -1,6 +1,8 @@
 //! ZIP archive format parser with forensic metadata extraction
 
-use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
+use crate::core::{
+    FileFormat, FileReader, FormatParser, Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue,
+};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::raw::{RawFormat, parse_raw_metadata};
 use crate::tag_db::lookup_tag_name;
@@ -9,13 +11,25 @@ use zip::ZipArchive;
 
 const ZIP_SIGNATURE: &[u8] = b"PK";
 const ZIP_LOCAL_FILE_HEADER_SIGNATURE: &[u8] = b"PK\x03\x04";
-const ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE: usize = 8;
-const ZIP_LOCAL_FILE_HEADER_SIZE: usize = 30;
-const ZIP_LOCAL_FILE_COMPRESSION_OFFSET: usize = 8;
-const ZIP_LOCAL_FILE_COMPRESSION_FIELD_END: usize = ZIP_LOCAL_FILE_COMPRESSION_OFFSET + 2;
-const ZIP_LOCAL_FILE_BIT_FLAG_OFFSET: usize = 6;
-const ZIP_LOCAL_FILE_CRC_OFFSET: usize = 14;
-const ZIP_LOCAL_FILE_CRC_FIELD_END: usize = ZIP_LOCAL_FILE_CRC_OFFSET + 4;
+/// Central-directory file header signature (APPNOTE 4.3.12).
+const ZIP_CENTRAL_DIR_SIGNATURE: &[u8] = b"PK\x01\x02";
+/// End-of-central-directory record signature (APPNOTE 4.3.16).
+const ZIP_EOCD_SIGNATURE: &[u8] = b"PK\x05\x06";
+/// ZIP64 end-of-central-directory locator signature (APPNOTE 4.3.15).
+const ZIP_EOCD64_LOCATOR_SIGNATURE: &[u8] = b"PK\x06\x07";
+/// ZIP64 end-of-central-directory record signature (APPNOTE 4.3.14).
+const ZIP_EOCD64_SIGNATURE: &[u8] = b"PK\x06\x06";
+/// Fixed part of the end-of-central-directory record, comment excluded.
+const ZIP_EOCD_SIZE: usize = 22;
+/// The ZIP64 locator is fixed-size and sits immediately before the EOCD.
+const ZIP_EOCD64_LOCATOR_SIZE: usize = 20;
+/// Fixed part of a central-directory file header, before name/extra/comment.
+const ZIP_CENTRAL_DIR_HEADER_SIZE: usize = 46;
+/// How far back from EOF the end-of-central-directory record can start.
+///
+/// The record's trailing archive comment is a 16-bit length, so the fixed
+/// part begins at most `ZIP_EOCD_SIZE + 65535` bytes from the end.
+const ZIP_EOCD_SEARCH_LIMIT: usize = ZIP_EOCD_SIZE + u16::MAX as usize;
 /// Ceiling for an embedded EIP raw member's uncompressed size.
 ///
 /// The declared size comes straight from the attacker-controlled central
@@ -23,6 +37,99 @@ const ZIP_LOCAL_FILE_CRC_FIELD_END: usize = ZIP_LOCAL_FILE_CRC_OFFSET + 4;
 /// members top out in the low hundreds of megabytes; 1 GiB leaves ample
 /// headroom while keeping a hostile declaration from forcing a huge read.
 const EIP_RAW_MEMBER_MAX_SIZE: u64 = 1 << 30;
+
+/// The eight stored central-directory fields ExifTool's `HandleMember` reads
+/// (`ZIP.pm:496-503`), before any conversion.
+struct CentralDirectoryEntry {
+    required_version: u16,
+    bit_flag: u16,
+    compression: u16,
+    modify_time: u16,
+    modify_date: u16,
+    crc32: u32,
+    compressed_size: u32,
+    uncompressed_size: u32,
+    file_name: String,
+}
+
+/// Little-endian `u16` at `offset`; `0` if the slice is short.
+///
+/// Every call site has already bounds-checked the enclosing fixed-size
+/// header, so a short read here is unreachable rather than tolerated.
+fn read_u16(data: &[u8], offset: usize) -> u16 {
+    data.get(offset..offset + 2)
+        .and_then(|slice| slice.try_into().ok())
+        .map(u16::from_le_bytes)
+        .unwrap_or(0)
+}
+
+/// Little-endian `u32` at `offset`; `0` if the slice is short.
+fn read_u32(data: &[u8], offset: usize) -> u32 {
+    data.get(offset..offset + 4)
+        .and_then(|slice| slice.try_into().ok())
+        .map(u32::from_le_bytes)
+        .unwrap_or(0)
+}
+
+/// Little-endian `u64` at `offset`; `0` if the slice is short.
+fn read_u64(data: &[u8], offset: usize) -> u64 {
+    data.get(offset..offset + 8)
+        .and_then(|slice| slice.try_into().ok())
+        .map(u64::from_le_bytes)
+        .unwrap_or(0)
+}
+
+/// ExifTool's `ZipCompression` PrintConv (`ZIP.pm:76-96`).
+///
+/// The map is transcribed whole. An unlisted method is *not* approximated to
+/// a nearby name: ExifTool renders a PrintConv hash miss as `Unknown ($val)`
+/// (`ExifTool.pm:3629-3634`, the non-`PrintHex` branch), so that exact string
+/// is what this returns. Notably ZIP.pm has no entry for method 93, so a
+/// Zstandard member reads `Unknown (93)` under ExifTool -- naming it
+/// "Zstandard" would be a plausible-but-wrong value under a real tag name.
+fn zip_compression_print_conv(method: u16) -> String {
+    let name = match method {
+        0 => "None",
+        1 => "Shrunk",
+        2 => "Reduced with compression factor 1",
+        3 => "Reduced with compression factor 2",
+        4 => "Reduced with compression factor 3",
+        5 => "Reduced with compression factor 4",
+        6 => "Imploded",
+        7 => "Tokenized",
+        8 => "Deflated",
+        9 => "Enhanced Deflate using Deflate64(tm)",
+        10 => "Imploded (old IBM TERSE)",
+        12 => "BZIP2",
+        14 => "LZMA (EFS)",
+        18 => "IBM TERSE (new)",
+        19 => "IBM LZ77 z Architecture (PFS)",
+        96 => "JPEG recompressed",
+        97 => "WavPack compressed",
+        98 => "PPMd version I, Rev 1",
+        other => return format!("Unknown ({})", other),
+    };
+    name.to_string()
+}
+
+/// ExifTool's `ZipModifyDate` ValueConv (`ZIP.pm:99-113`).
+///
+/// The stored value is one MS-DOS `int32u` whose high half is the date and
+/// low half the time; ExifTool shifts the packed word directly, so the field
+/// split here reproduces `($val >> 25) + 1980` and friends exactly. Seconds
+/// are stored in two-second units, hence the doubling.
+fn dos_datetime_to_exiftool(modify_date: u16, modify_time: u16) -> String {
+    let packed = (u32::from(modify_date) << 16) | u32::from(modify_time);
+    format!(
+        "{:04}:{:02}:{:02} {:02}:{:02}:{:02}",
+        (packed >> 25) + 1980,
+        (packed >> 21) & 0x0f,
+        (packed >> 16) & 0x1f,
+        (packed >> 11) & 0x1f,
+        (packed >> 5) & 0x3f,
+        (packed & 0x1f) * 2,
+    )
+}
 
 /// Parser for ZIP archive files
 ///
@@ -33,132 +140,207 @@ const EIP_RAW_MEMBER_MAX_SIZE: u64 = 1 << 30;
 pub struct ZipParser;
 
 impl ZipParser {
-    /// Reads the unnumbered ZIP tags from the first local file header.
+    /// One central-directory entry, in the raw stored form ExifTool reads.
     ///
-    /// ExifTool's ZIP table reports these header fields for the first archive
-    /// member, while this parser's existing `FileN` tags describe every member.
-    fn read_first_local_file_tags(
-        reader: &dyn FileReader,
-        metadata: &mut MetadataMap,
-    ) -> Result<()> {
-        if reader.size() < ZIP_LOCAL_FILE_HEADER_SIZE as u64 {
-            return Ok(());
+    /// ExifTool reaches these fields through Archive::Zip: `HandleMember`
+    /// (`ZIP.pm:492-506`) calls `versionNeededToExtract`, `bitFlag`,
+    /// `compressionMethod`, `lastModFileDateTime`, `crc32`, `compressedSize`,
+    /// `uncompressedSize` and `fileName`, every one of which Archive::Zip
+    /// reads out of the central directory rather than recomputing.
+    ///
+    /// The `zip` crate cannot stand in for that read. Its `version_needed()`
+    /// is *derived* from the compression method rather than reported from the
+    /// file (`zip-8.6.0/src/types.rs:351`), and it exposes no accessor at all
+    /// for the general-purpose bit flag, so two of the eight fields would have
+    /// to be invented. Walking the directory keeps every value a stored byte.
+    fn read_central_directory(data: &[u8]) -> Vec<CentralDirectoryEntry> {
+        let mut entries = Vec::new();
+        let Some(start) = Self::central_directory_start(data) else {
+            return entries;
+        };
+        let Ok(mut pos) = usize::try_from(start) else {
+            return entries;
+        };
+
+        while let Some(end) = pos.checked_add(ZIP_CENTRAL_DIR_HEADER_SIZE) {
+            let Some(header) = data.get(pos..end) else {
+                break;
+            };
+            if !header.starts_with(ZIP_CENTRAL_DIR_SIGNATURE) {
+                break;
+            }
+
+            let name_length = read_u16(header, 28) as usize;
+            let extra_length = read_u16(header, 30) as usize;
+            let comment_length = read_u16(header, 32) as usize;
+
+            let Some(name_end) = end.checked_add(name_length) else {
+                break;
+            };
+            let Some(name) = data.get(end..name_end) else {
+                break;
+            };
+
+            entries.push(CentralDirectoryEntry {
+                required_version: read_u16(header, 6),
+                bit_flag: read_u16(header, 8),
+                compression: read_u16(header, 10),
+                modify_time: read_u16(header, 12),
+                modify_date: read_u16(header, 14),
+                crc32: read_u32(header, 16),
+                compressed_size: read_u32(header, 20),
+                uncompressed_size: read_u32(header, 24),
+                file_name: String::from_utf8_lossy(name).into_owned(),
+            });
+
+            let Some(next) = name_end
+                .checked_add(extra_length)
+                .and_then(|p| p.checked_add(comment_length))
+            else {
+                break;
+            };
+            pos = next;
         }
 
-        let header = reader.read(0, ZIP_LOCAL_FILE_HEADER_SIZE)?;
-        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
-            return Ok(());
-        }
-
-        let required_version = u16::from_le_bytes([header[4], header[5]]);
-        let modify_time = u16::from_le_bytes([header[10], header[11]]);
-        let modify_date = u16::from_le_bytes([header[12], header[13]]);
-        let compressed_size = u32::from_le_bytes([header[18], header[19], header[20], header[21]]);
-        let uncompressed_size =
-            u32::from_le_bytes([header[22], header[23], header[24], header[25]]);
-        let file_name_length = u16::from_le_bytes([header[26], header[27]]) as usize;
-
-        metadata.insert(
-            "ZIP:ZipRequiredVersion".to_string(),
-            TagValue::new_integer(required_version as i64),
-        );
-        metadata.insert(
-            "ZIP:ZipCompressedSize".to_string(),
-            TagValue::new_integer(compressed_size as i64),
-        );
-        metadata.insert(
-            "ZIP:ZipUncompressedSize".to_string(),
-            TagValue::new_integer(uncompressed_size as i64),
-        );
-
-        let year = ((modify_date >> 9) & 0x7f) + 1980;
-        let month = (modify_date >> 5) & 0x0f;
-        let day = modify_date & 0x1f;
-        let hour = (modify_time >> 11) & 0x1f;
-        let minute = (modify_time >> 5) & 0x3f;
-        let second = (modify_time & 0x1f) * 2;
-        metadata.insert(
-            "ZIP:ZipModifyDate".to_string(),
-            TagValue::new_string(format!(
-                "{year:04}:{month:02}:{day:02} {hour:02}:{minute:02}:{second:02}"
-            )),
-        );
-
-        let file_name_end = ZIP_LOCAL_FILE_HEADER_SIZE
-            .checked_add(file_name_length)
-            .ok_or_else(|| ExifToolError::parse_error("ZIP filename length overflows"))?;
-        if reader.size() < file_name_end as u64 {
-            return Ok(());
-        }
-        let file_name = reader.read(ZIP_LOCAL_FILE_HEADER_SIZE as u64, file_name_length)?;
-        metadata.insert(
-            "ZIP:ZipFileName".to_string(),
-            TagValue::new_string(String::from_utf8_lossy(file_name).to_string()),
-        );
-
-        Ok(())
+        entries
     }
 
-    /// Reads the general-purpose bit flag from the first local file header.
+    /// Byte offset of the first central-directory file header.
     ///
-    /// The flag is a little-endian 16-bit value at offset 6 from the start of
-    /// a local file header.
-    fn read_first_local_file_bit_flag(reader: &dyn FileReader) -> Result<Option<u16>> {
-        if reader.size() < ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE as u64 {
-            return Ok(None);
+    /// Returns `None` for anything this cannot read exactly -- a truncated or
+    /// absent end-of-central-directory record, or a ZIP64 archive whose
+    /// locator does not resolve. Callers then emit no `ZIP:Zip*` tags at all,
+    /// which is AGENTS.md's omit-rather-than-approximate rule: a guessed
+    /// directory offset would yield confident, wrongly-decoded members.
+    fn central_directory_start(data: &[u8]) -> Option<u64> {
+        let eocd = Self::find_signature_from_end(data, ZIP_EOCD_SIGNATURE, ZIP_EOCD_SEARCH_LIMIT)?;
+        let record = data.get(eocd..eocd.checked_add(ZIP_EOCD_SIZE)?)?;
+        let offset = read_u32(record, 16);
+
+        // A saturated offset means the true one lives in the ZIP64 record,
+        // which the locator immediately preceding the EOCD points at.
+        if offset != u32::MAX {
+            return Some(u64::from(offset));
         }
 
-        let header = reader.read(0, ZIP_LOCAL_FILE_HEADER_PREFIX_SIZE)?;
-        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
-            return Ok(None);
+        let locator_start = eocd.checked_sub(ZIP_EOCD64_LOCATOR_SIZE)?;
+        let locator = data.get(locator_start..eocd)?;
+        if !locator.starts_with(ZIP_EOCD64_LOCATOR_SIGNATURE) {
+            return None;
         }
 
-        Ok(Some(u16::from_le_bytes([
-            header[ZIP_LOCAL_FILE_BIT_FLAG_OFFSET],
-            header[ZIP_LOCAL_FILE_BIT_FLAG_OFFSET + 1],
-        ])))
+        let eocd64 = usize::try_from(read_u64(locator, 8)).ok()?;
+        let record64 = data.get(eocd64..eocd64.checked_add(56)?)?;
+        if !record64.starts_with(ZIP_EOCD64_SIGNATURE) {
+            return None;
+        }
+        Some(read_u64(record64, 48))
     }
 
-    /// Reads the compression method from the first local file header.
-    ///
-    /// ZIP stores this value as a little-endian 16-bit integer at offset 8
-    /// from the start of a local file header.
-    fn read_first_local_file_compression(reader: &dyn FileReader) -> Result<Option<u16>> {
-        if reader.size() < ZIP_LOCAL_FILE_COMPRESSION_FIELD_END as u64 {
-            return Ok(None);
+    /// Last occurrence of `signature` within `limit` bytes of the end.
+    fn find_signature_from_end(data: &[u8], signature: &[u8], limit: usize) -> Option<usize> {
+        if data.len() < signature.len() {
+            return None;
         }
-
-        let header = reader.read(0, ZIP_LOCAL_FILE_COMPRESSION_FIELD_END)?;
-        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
-            return Ok(None);
-        }
-
-        Ok(Some(u16::from_le_bytes([
-            header[ZIP_LOCAL_FILE_COMPRESSION_OFFSET],
-            header[ZIP_LOCAL_FILE_COMPRESSION_OFFSET + 1],
-        ])))
+        let start = data.len().saturating_sub(limit);
+        data[start..]
+            .windows(signature.len())
+            .rposition(|window| window == signature)
+            .map(|pos| start + pos)
     }
 
-    /// Reads the CRC-32 value from the first local file header.
+    /// Records the eight per-member `ZIP:Zip*` tags for every archive entry.
     ///
-    /// ZIP stores this value as a little-endian 32-bit integer at offset 14
-    /// from the start of the local file header.
-    fn read_first_local_file_crc(reader: &dyn FileReader) -> Result<Option<u32>> {
-        if reader.size() < ZIP_LOCAL_FILE_CRC_FIELD_END as u64 {
-            return Ok(None);
-        }
+    /// ExifTool emits this whole group once per member, not once per archive:
+    /// `ProcessZIP` walks `$zip->members()` and stamps each with its own
+    /// sub-document number before extracting -- `foreach $member (@members) {
+    /// $$et{DOC_NUM} = ++$docNum; HandleMember(...) }` (`ZIP.pm:729-731`; the
+    /// no-Archive::Zip fallback does the same at `ZIP.pm:789`). Its own
+    /// `-a -G1 -s` output on `t/images/OOXML.docx` accordingly repeats
+    /// `[ZIP] ZipFileName`, `[ZIP] ZipCRC` and the rest eighteen times, once
+    /// per member -- 144 `[ZIP]` lines, 8 fields x 18 members.
+    ///
+    /// This parser previously read only the *first* local file header and
+    /// stored one copy of each field through `insert()`, on the stated
+    /// premise that "ExifTool's ZIP table reports these header fields for the
+    /// first archive member". That premise does not hold: the first member
+    /// wins the *default* (non-`-a`) view, but every later member is still
+    /// extracted and still reachable under `-a`. Collapsing them lost eight
+    /// keys per multi-member archive (Stage 4's duplicate-loss scan,
+    /// `tools/exiftool-tables/duplicate_loss_scan.py`, is what measures it).
+    ///
+    /// The `DOC_NUM` stamp is also exactly what makes the first member win by
+    /// default, so it is modelled here rather than approximated with
+    /// `Priority => 0`. Each member records under `Instance(doc_num)`, and
+    /// `TagSink::record`'s instance guard -- `ExifTool.pm:9564`'s
+    /// `(not $$self{DOC_NUM} or ...)` -- stops any later member displacing the
+    /// incumbent recorded under a different instance. Members 2..N are
+    /// therefore retained in file order without ever changing the bare key,
+    /// which is the same retention shape JUMBF and JPEG `COM` use, reached
+    /// through the sub-document arm of the rule instead of the priority-0 one.
+    pub(crate) fn record_member_tags(data: &[u8], metadata: &mut MetadataMap) {
+        for (index, entry) in Self::read_central_directory(data).iter().enumerate() {
+            // ExifTool numbers sub-documents from 1 (`++$docNum` on a
+            // zero-initialised counter, `ZIP.pm:533` and `:731`).
+            let instance = Instance(index as u32 + 1);
+            let mut emit = |name: &str, value: TagValue| {
+                metadata.insert_occurrence(
+                    format!("ZIP:{}", name),
+                    value,
+                    SHIM_DEFAULT_PRIORITY,
+                    "ZIP",
+                    instance,
+                );
+            };
 
-        let header = reader.read(0, ZIP_LOCAL_FILE_CRC_FIELD_END)?;
-        if !header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
-            return Ok(None);
-        }
+            // Emission order follows the tag IDs ExifTool hands to
+            // `HandleTag` in `HandleMember` (`ZIP.pm:496-503`): 2, 3, 4, 5,
+            // 7, 9, 11, 15.
+            emit(
+                "ZipRequiredVersion",
+                TagValue::new_integer(i64::from(entry.required_version)),
+            );
 
-        Ok(Some(u32::from_le_bytes([
-            header[ZIP_LOCAL_FILE_CRC_OFFSET],
-            header[ZIP_LOCAL_FILE_CRC_OFFSET + 1],
-            header[ZIP_LOCAL_FILE_CRC_OFFSET + 2],
-            header[ZIP_LOCAL_FILE_CRC_OFFSET + 3],
-        ])))
+            // ZIP.pm:72-75 -- PrintConv => '$val ? sprintf("0x%.4x",$val) : $val'.
+            // A set flag word prints as 4-digit hex; a zero one stays "0".
+            emit(
+                "ZipBitFlag",
+                if entry.bit_flag == 0 {
+                    TagValue::new_integer(0)
+                } else {
+                    TagValue::new_string(format!("0x{:04x}", entry.bit_flag))
+                },
+            );
+
+            emit(
+                "ZipCompression",
+                TagValue::new_string(zip_compression_print_conv(entry.compression)),
+            );
+
+            emit(
+                "ZipModifyDate",
+                TagValue::new_string(dos_datetime_to_exiftool(
+                    entry.modify_date,
+                    entry.modify_time,
+                )),
+            );
+
+            // ZIP.pm:115 -- PrintConv => 'sprintf("0x%.8x",$val)'.
+            emit(
+                "ZipCRC",
+                TagValue::new_string(format!("0x{:08x}", entry.crc32)),
+            );
+
+            emit(
+                "ZipCompressedSize",
+                TagValue::new_integer(i64::from(entry.compressed_size)),
+            );
+            emit(
+                "ZipUncompressedSize",
+                TagValue::new_integer(i64::from(entry.uncompressed_size)),
+            );
+            emit("ZipFileName", TagValue::new_string(entry.file_name.clone()));
+        }
     }
 
     /// Parse the Phase One raw member carried by an EIP archive.
@@ -278,44 +460,14 @@ impl FormatParser for ZipParser {
 
         let mut metadata = MetadataMap::new();
 
-        Self::read_first_local_file_tags(reader, &mut metadata)?;
-
-        if let Some(bit_flag) = Self::read_first_local_file_bit_flag(reader)? {
-            // ExifTool ZIP.pm: PrintConv => '$val ? sprintf("0x%.4x",$val) : $val'
-            // -- a set flag word prints as 4-digit hex, but a zero one stays a
-            // plain "0" rather than "0x0000".
-            let value = if bit_flag == 0 {
-                TagValue::new_integer(0)
-            } else {
-                TagValue::new_string(format!("0x{:04x}", bit_flag))
-            };
-            metadata.insert("ZIP:ZipBitFlag".to_string(), value);
-        }
-
-        if let Some(compression) = Self::read_first_local_file_compression(reader)? {
-            let compression = match compression {
-                0 => "None",
-                8 => "Deflated",
-                12 => "BZIP2",
-                93 => "Zstandard",
-                _ => "Unknown",
-            };
-            metadata.insert(
-                "ZIP:ZipCompression".to_string(),
-                TagValue::new_string(compression.to_string()),
-            );
-        }
-
-        if let Some(zip_crc) = Self::read_first_local_file_crc(reader)? {
-            metadata.insert(
-                "ZIP:ZipCRC".to_string(),
-                TagValue::new_string(format!("0x{:08x}", zip_crc)),
-            );
-        }
-
         // Read entire file into memory for zip crate
         let size = reader.size() as usize;
         let file_data = reader.read(0, size)?;
+
+        // Every archive member's ZIP:Zip* tags, first member winning the bare
+        // key -- see `record_member_tags` for the ExifTool citations.
+        Self::record_member_tags(file_data, &mut metadata);
+
         let cursor = Cursor::new(file_data);
         let mut archive = ZipArchive::new(cursor)
             .map_err(|e| ExifToolError::parse_error(format!("Failed to read ZIP: {}", e)))?;
@@ -673,12 +825,90 @@ pub fn parse_zip_metadata(
         .map_err(|e| format!("ZIP parse error: {}", e))
 }
 
+/// Records every ZIP member's `ZIP:Zip*` tags into `metadata`.
+///
+/// The shared entry point for the ZIP-container formats that are not the
+/// plain-archive parser -- OOXML and friends reach ExifTool's ZIP tags
+/// through the same `ProcessZIP` member walk (`ZIP.pm:729-731`), so they
+/// share this transcription rather than keeping a second one.
+pub(crate) fn record_zip_member_tags(data: &[u8], metadata: &mut MetadataMap) {
+    ZipParser::record_member_tags(data, metadata);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::io::BufferedReader;
     use std::io::Write;
     use zip::write::{SimpleFileOptions, ZipWriter};
+
+    /// Every member is retained as its own occurrence, and the first one
+    /// still wins the bare key.
+    ///
+    /// Pins both halves of `ZIP.pm:729-731`'s `foreach $member (@members) {
+    /// $$et{DOC_NUM} = ++$docNum; ... }`: N members produce N occurrences of
+    /// each `ZIP:Zip*` key (reachable under `-a`), while the default view
+    /// keeps member 1 -- the sub-document guard at `ExifTool.pm:9564` stops
+    /// members 2..N displacing it.
+    #[test]
+    fn every_zip_member_is_retained_with_the_first_winning() {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = ZipWriter::new(&mut buffer);
+            for name in ["alpha.txt", "beta.txt", "gamma.txt"] {
+                zip.start_file(name, SimpleFileOptions::default()).unwrap();
+                zip.write_all(name.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let data = buffer.into_inner();
+        let reader = BufferedReader::from_bytes(&data);
+        let metadata = ZipParser.parse(&reader).unwrap();
+
+        // One occurrence per member, for every field HandleMember extracts.
+        for key in [
+            "ZIP:ZipFileName",
+            "ZIP:ZipCRC",
+            "ZIP:ZipRequiredVersion",
+            "ZIP:ZipBitFlag",
+            "ZIP:ZipCompression",
+            "ZIP:ZipModifyDate",
+            "ZIP:ZipCompressedSize",
+            "ZIP:ZipUncompressedSize",
+        ] {
+            assert_eq!(
+                metadata.occurrences_for(key).len(),
+                3,
+                "{key} should carry one occurrence per member"
+            );
+        }
+
+        // File order is preserved across the retained occurrences...
+        let names: Vec<String> = metadata
+            .occurrences_for("ZIP:ZipFileName")
+            .iter()
+            .filter_map(|occurrence| occurrence.raw.as_string().map(str::to_owned))
+            .collect();
+        assert_eq!(names, ["alpha.txt", "beta.txt", "gamma.txt"]);
+
+        // ...and the bare key is still the first member's.
+        assert_eq!(
+            metadata.get("ZIP:ZipFileName"),
+            Some(&TagValue::new_string("alpha.txt".to_string()))
+        );
+    }
+
+    /// ZIP.pm:76-96 has no entry for compression method 93, so ExifTool falls
+    /// through to `Unknown ($val)` (`ExifTool.pm:3629-3634`). Naming it
+    /// "Zstandard" -- as this parser previously did -- is a plausible but
+    /// wrong value under a real ExifTool tag name.
+    #[test]
+    fn unlisted_compression_method_is_not_invented() {
+        assert_eq!(zip_compression_print_conv(0), "None");
+        assert_eq!(zip_compression_print_conv(8), "Deflated");
+        assert_eq!(zip_compression_print_conv(98), "PPMd version I, Rev 1");
+        assert_eq!(zip_compression_print_conv(93), "Unknown (93)");
+    }
 
     #[test]
     fn test_zip_signature() {
@@ -716,54 +946,6 @@ mod tests {
         let dt = zip::DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0).unwrap();
         let iso = ZipParser::datetime_to_iso8601(dt);
         assert_eq!(iso, "1980-01-01T00:00:00");
-    }
-
-    #[test]
-    fn test_zip_bit_flag_extraction() {
-        // Local file header with general-purpose bit flag 0x1234.
-        let data = b"PK\x03\x04\x0a\x00\x34\x12";
-        let reader = BufferedReader::from_bytes(data);
-
-        assert_eq!(
-            ZipParser::read_first_local_file_bit_flag(&reader).unwrap(),
-            Some(0x1234)
-        );
-    }
-
-    #[test]
-    fn test_zip_compression_extraction() {
-        // Local file header with the "stored" compression method.
-        let data = [
-            0x50, 0x4b, 0x03, 0x04, // Local file header signature
-            0x0a, 0x00, // Version needed
-            0x00, 0x00, // General-purpose bit flag
-            0x00, 0x00, // Compression method (stored)
-        ];
-        let reader = BufferedReader::from_bytes(&data);
-
-        assert_eq!(
-            ZipParser::read_first_local_file_compression(&reader).unwrap(),
-            Some(0)
-        );
-    }
-
-    #[test]
-    fn test_zip_crc_extraction() {
-        let data = [
-            0x50, 0x4b, 0x03, 0x04, // Local file header signature
-            0x0a, 0x00, // Version needed
-            0x00, 0x00, // General-purpose bit flag
-            0x00, 0x00, // Compression method
-            0xd7, 0x4e, // Modification time
-            0x1c, 0x39, // Modification date
-            0x1a, 0x46, 0x17, 0x6e, // CRC-32
-        ];
-        let reader = BufferedReader::from_bytes(&data);
-
-        assert_eq!(
-            ZipParser::read_first_local_file_crc(&reader).unwrap(),
-            Some(0x6e17461a)
-        );
     }
 
     #[test]
