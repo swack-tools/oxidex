@@ -1,0 +1,20 @@
+# systemd unit for fleetd (Linux hosts: i7 `server`, work2 pod).
+# Install (as the OWNING user -- on the ryzen's ubuntuwork side that is
+# swackhamer, not allen):
+#   mkdir -p ~/.config/systemd/user
+#   cp fleetd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now fleetd
+#   loginctl enable-linger $USER   # so it runs without a login session
+[Unit]
+Description=oxidex fleet reconciler (FLEET.md M2)
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=FLEET_HUB_URL=ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git
+ExecStart=/usr/bin/python3 %h/fleet-checkout/tools/fleet/fleetd.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

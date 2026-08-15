@@ -1,0 +1,7 @@
+# Cron backstop: starts fleetd if the supervisor itself has died. Both a
+# cron daemon and a launchd agent died silently on this fleet in one day
+# (2026-08-14); the supervisor cannot be the only thing keeping the
+# supervisor alive. The singleton claim (refs/fleet/claims/host/<host>)
+# makes double-starts harmless -- the second instance exits immediately.
+# Add via `crontab -e`:
+*/5 * * * * FLEET_HUB_URL=ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git /usr/bin/env python3 $HOME/fleet-checkout/tools/fleet/fleetd.py --once >/dev/null 2>&1

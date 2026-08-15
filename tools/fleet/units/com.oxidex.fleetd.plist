@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd agent for fleetd (macOS hosts: M4 oldair, m5).
+     Install: cp com.oxidex.fleetd.plist ~/Library/LaunchAgents/
+              launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.oxidex.fleetd.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.oxidex.fleetd</string>
+  <key>ProgramArguments</key><array>
+    <string>/opt/homebrew/bin/python3</string>
+    <string>/Users/allen/fleet-checkout/tools/fleet/fleetd.py</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>FLEET_HUB_URL</key>
+    <string>ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git</string>
+    <key>PATH</key>
+    <string>/Users/allen/.cargo/bin:/Users/allen/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/fleetd.log</string>
+  <key>StandardErrorPath</key><string>/tmp/fleetd.log</string>
+</dict></plist>
