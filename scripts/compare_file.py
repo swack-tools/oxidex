@@ -106,7 +106,9 @@ def parse_tags(text: str) -> tuple[dict[str, str], dict[str, list[str]]]:
 
 
 def run(argv: list[str]) -> str:
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=120)  # nosec B603
+    proc = subprocess.run(  # nosec B603
+        argv, capture_output=True, text=True, errors="replace", timeout=120
+    )
     return proc.stdout
 
 
