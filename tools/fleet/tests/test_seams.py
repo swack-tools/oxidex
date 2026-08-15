@@ -89,9 +89,11 @@ and `TestSeam7HubReadRaceUnderRenewal`. `expectedFailure` (not deletion,
 not a skip) is deliberate: unittest reports an UNEXPECTED SUCCESS the day
 someone fixes one, so the marker cannot outlive the defect.
 
-Run with:
+Run with (from the repo root):
     python3 -m unittest discover -s tools/fleet/tests -v
-    FLEET_SEAMS_SLOW=1 python3 -m unittest tools.fleet.tests.test_seams -v
+    python3 -m unittest discover -s tools/fleet/tests -p 'test_seams.py' -v
+    FLEET_SEAMS_SLOW=1 python3 -m unittest discover -s tools/fleet/tests \\
+        -p 'test_seams.py' -k thirteen_real_minutes -v
 """
 
 from __future__ import annotations
