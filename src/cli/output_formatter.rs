@@ -645,7 +645,20 @@ pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String
         // only, matching Perl's `\s+$` (trailing only, not leading).
         TagValue::String(s) => printable_text_value(s),
         TagValue::Integer(i) => i.to_string(),
-        TagValue::Float(f) => format!("{:.2}", f), // Limit decimal places
+        // Perl's default numeric stringification (`sprintf("%.15g", $val)`),
+        // not a fixed 2-decimal truncation: `-s` shortens tag *names*, never
+        // values (see this function's own doc comment above), and the
+        // previous `format!("{:.2}", f)` both lost precision ExifTool
+        // preserves (`CellWidth` on an MRC sample: oracle
+        // `15289.4248046875`, this renderer `15289.42`) and printed decimal
+        // notation where ExifTool switches to scientific
+        // (`PixelSizeX`: oracle `3.73276964893421e-10`, this renderer would
+        // have been `0.00`). `crate::exiftool_tables::exprs::perl_num` is
+        // the already-verified `%.15g` port (`verify_exprs.py`-checked
+        // against the pinned oracle); it backs every generated-table
+        // `ValueConv`/`PrintConv` that stringifies a float, so this makes
+        // the CLI's own float rendering agree with the generator's.
+        TagValue::Float(f) => crate::exiftool_tables::exprs::perl_num(*f),
         TagValue::Rational {
             numerator,
             denominator,
