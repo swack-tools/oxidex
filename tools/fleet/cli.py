@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import fleetd
 import workqueue
 from claim import is_expired
 from fleetlib import Hub, HubError
@@ -162,6 +163,32 @@ def _work_column(work_keys: list, limit: int = 2, max_len: int = 40) -> str:
     return text
 
 
+def _parked_rows(host: str, hb: dict) -> list:
+    """`(host, state, branch, sha, source)` for every branch this host's
+    last reconcile parked -- ARCH-FIX R4's shared-cache clause.
+
+    The AWAITING/NEEDS_AUTH columns are counts, and a count cannot tell an
+    operator whether a parked branch is still the branch that was judged.
+    A verdict is about the SHA it was measured at, so fleetd records that
+    sha alongside the name; this renders it. A `needs_author` row whose sha
+    no longer matches `git ls-remote` is a branch whose author has already
+    acted -- it should clear on the next loop, and if it does not, that is
+    the bug to chase. Heartbeats written by an older fleetd carry bare
+    names with no sha; those render "-" rather than being dropped.
+    """
+    out = []
+    for state, key in (("AWAITING", "awaiting_train"), ("NEEDS_AUTH", "needs_author")):
+        for entry in hb.get(key) or ():
+            if isinstance(entry, dict):
+                name, sha, source = entry.get("branch"), entry.get("sha"), entry.get("source")
+            else:
+                name, sha, source = str(entry), None, None
+            if not name:
+                continue
+            out.append((host, state, name, (sha or "-")[:12], source or "-"))
+    return out
+
+
 def cmd_status(args) -> int:
     hub = _hub(args)
     desired = hub.read(DESIRED_REF) or {}
@@ -169,6 +196,7 @@ def cmd_status(args) -> int:
     claims_by_host = _claims_by_host(hub)
 
     rows = []
+    parked = []
     for ref in sorted(hub.list(HOSTS_PREFIX)):
         host = ref[len(HOSTS_PREFIX):]
         hb = hub.read(ref) or {}
@@ -185,9 +213,10 @@ def cmd_status(args) -> int:
         # and T1's lost-lease kill count for that same loop -- both come
         # straight from the heartbeat fleetd already writes (fleetd.py's
         # reconcile_once), nothing re-derived here.
-        awaiting_train = len(hb.get("awaiting_train") or [])
-        needs_author = len(hb.get("needs_author") or [])
+        awaiting_train = len(fleetd.branch_names(hb.get("awaiting_train")))
+        needs_author = len(fleetd.branch_names(hb.get("needs_author")))
         killed = hb.get("killed_this_loop")
+        parked.extend(_parked_rows(host, hb))
         rows.append((
             host,
             state,
@@ -221,6 +250,16 @@ def cmd_status(args) -> int:
     claims = len(hub.list(CLAIMS_PREFIX))
     gen = desired.get("generation", "-")
     print(f"\nQUEUE {qn}   CLAIMS {claims}   DESIRED gen {gen}")
+
+    # Printed AFTER the QUEUE line on purpose: everything above it is the
+    # per-host table, and this is a per-BRANCH one. Keeping the two apart
+    # is also what lets a table parser stop at "QUEUE" and still be right.
+    if parked:
+        phdr = ("HOST", "STATE", "BRANCH", "DECIDED_AT", "SOURCE")
+        pwidths = [max(len(str(r[i])) for r in parked + [phdr]) for i in range(len(phdr))]
+        print("\nPARKED (verdict already known; not offered as gate work)")
+        for r in [phdr] + parked:
+            print("  " + "  ".join(str(c).ljust(w) for c, w in zip(r, pwidths)).rstrip())
     return 0
 
 
