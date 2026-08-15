@@ -311,6 +311,21 @@ def register(
     ]
 
     hit_checks = [c for c in checks if c.hit]
+
+    # A history hit is TEXT-MATCHING; the capability ledger is MEASUREMENT.
+    # When the ledger affirmatively measured the scope as NOT covered, a
+    # commit merely mentioning a scope token must not veto registration --
+    # in a mature repo every format name appears in some commit message
+    # (first false-refusal: "CRW" matched a Canon AFInfo commit while the
+    # ledger had just measured CRW at MISSING 150/159). History still
+    # refuses when the ledger could not measure (fail-closed stands).
+    ledger = next((c for c in checks if c.name == "capability-ledger"), None)
+    ledger_measured_open = (
+        ledger is not None and not ledger.hit and "not already covered" in (ledger.detail or "")
+    )
+    if ledger_measured_open:
+        hit_checks = [c for c in hit_checks if c.name != "history"]
+
     if hit_checks:
         primary = min(hit_checks, key=lambda c: _PRIORITY.get(c.name, 99))
         return RegisterResult(

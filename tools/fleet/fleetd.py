@@ -221,17 +221,20 @@ def start_agent(
     """Claim the branch for an agent and launch agentworker.py in its own
     process group. Same discipline as gates: claim-before-launch, pgid
     persisted via renew."""
-    c = Claim(hub, kind="agent", key=branch.replace("/", "-"), work_kind="agent", work_key=branch)
+    intent_slug = branch.removeprefix("intent:") if branch.startswith("intent:") else None
+    c = Claim(hub, kind="agent", key=branch.replace("/", "-").replace(":", "-"),
+              work_kind="agent", work_key=branch)
     try:
         c.acquire_or_reap()
     except claim_mod.ClaimHeldError:
         return None
     log_dir.mkdir(parents=True, exist_ok=True)
     log = open(log_dir / f"fleetd-agent-{tag}.log", "ab")
+    mode_args = (["--intent", intent_slug] if intent_slug else ["--branch", branch])
     try:
         popen = subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve().parent / "agentworker.py"),
-             "--branch", branch, "--hub", hub.url, "--host", host],
+             *mode_args, "--hub", hub.url, "--host", host],
             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
@@ -376,8 +379,23 @@ def reconcile_once(
             todo = [b for b in (q[s2].ref.removeprefix("refs/heads/") for s2 in q)
                     if b not in busy
                     and now - _agent_attempts.get(b, 0) > AGENT_RETRY_COOLDOWN_S]
+            # No stale branch to converge -> AUTHOR from the intent backlog:
+            # open intents with no staging branch yet, no live agent claim,
+            # and not in cooldown. Prefixed "intent:" so start_agent knows.
+            if not todo:
+                for iref, _sha in hub.list("refs/fleet/intents/").items():
+                    slug = iref.rsplit("/", 1)[-1]
+                    doc = hub.read(iref) or {}
+                    if doc.get("status") != "open":
+                        continue
+                    if hub.sha(f"refs/heads/staging/{slug}") is not None:
+                        continue  # branch exists; convergence path owns it
+                    key = f"intent:{slug}"
+                    if key in busy or now - _agent_attempts.get(key, 0) <= AGENT_RETRY_COOLDOWN_S:
+                        continue
+                    todo.append(key)
             for branch in todo[: want_agents - len(agent_workers)]:
-                tag = f"{host}-a-{branch.split('/')[-1]}-{int(time.time()) % 100000}"
+                tag = f"{host}-a-{branch.split('/')[-1].removeprefix('intent:')}-{int(time.time()) % 100000}"
                 try:
                     w = start_agent(hub, branch, tag, host, log_dir, repo_root)
                 except OSError as e:

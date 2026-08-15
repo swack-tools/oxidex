@@ -105,7 +105,35 @@ HARD RULES
 """
 
 
-def run(branch: str, hub_url: str, host: str) -> int:
+def build_authoring_prompt(slug: str, intent: dict, hub_url: str, tip_sha: str, host: str) -> str:
+    scope = intent.get("scope") or {}
+    fmts = ", ".join(scope.get("formats") or []) or "(see title)"
+    return f"""You are a fleet agent worker on host {host}. AUTHOR the work described by a registered intent for the oxidex repo (a Rust reimplementation of ExifTool). Work entirely inside the current directory, which is already a clone checked out at the integration tip.
+
+INTENT
+- slug: {slug}
+- title: {intent.get("title", "")}
+- formats in scope: {fmts}
+- The title quotes the measured baseline (the MISSING count under conformance.py). Your success metric is that number DROPPING, measured the same way.
+
+TASK
+1. Reproduce the baseline first: `cargo build --release --bin oxidex`, find the sample (`ls /tmp/oxidex-exiftool-cache/combined-samples/ | grep -i <format>`), then `python3 scripts/compare_file.py <sample>`. Quote the counts.
+2. Read ExifTool's own implementation in the pinned tree: /tmp/oxidex-exiftool-cache/exiftool/lib/Image/ExifTool/<Module>.pm -- the byte layout and conversions live there. Check `src/exiftool_tables` for an existing transcription BEFORE hand-writing any layout (AGENTS.md law: re-deriving a table ExifTool already declares is the expensive way).
+3. Implement in the obvious parser location (follow the existing per-format file pattern under src/parsers/). NEVER approximate a conversion: if a semantic is unresolved, omit it -- absence is correct output; a plausible-but-wrong value under a real tag name is worse.
+4. Iterate implement -> build -> compare_file until the MISSING count stops dropping for honest reasons. Do not chase WRONG values into guesswork.
+5. `cargo fmt --all`, then `cargo clippy --release --all-features --features jpeg-tag-matrix-binary -- -D warnings` (NOT --all-targets), then `cargo test --lib` for your module.
+6. Commit quoting the instrument ("MISSING {{before}} -> {{after}} under scripts/compare_file.py on <sample>") and push: `git push origin HEAD:refs/heads/staging/{slug}`.
+7. Final line on success: `AUTHORED staging/{slug} <sha>`. If genuinely blocked, `git reset --hard`, push nothing, final line `BLOCKED: <one-line reason>`.
+
+HARD RULES
+- Never push to `main` or `refactor/tag-machinery`; exactly the one branch named above.
+- Never invoke bare `exiftool` -- only /tmp/oxidex-exiftool-cache/exiftool-pinned.sh.
+- Never edit src/exiftool_tables/binary_tables.rs by hand (generated).
+- Do not weaken any existing test.
+"""
+
+
+def run(branch: str, hub_url: str, host: str, intent_slug: str = None) -> int:
     clis = available_clis()
     if not clis:
         print("agentworker: neither `claude` nor `codex` installed on this host; exiting")
@@ -114,11 +142,24 @@ def run(branch: str, hub_url: str, host: str) -> int:
 
     hub = Hub(hub_url, workdir=Path.home() / ".fleetd" / "agentcache")
     tip_sha = hub.sha(TIP_REF)
-    ref = f"refs/heads/{branch}"
-    before_sha = hub.sha(ref)
-    if tip_sha is None or before_sha is None:
-        print(f"agentworker: missing tip or {ref} on hub; exiting")
-        return 5
+    if intent_slug:
+        branch = f"staging/{intent_slug}"
+        intent = hub.read(f"refs/fleet/intents/{intent_slug}")
+        if tip_sha is None or intent is None:
+            print(f"agentworker: missing tip or intent {intent_slug} on hub; exiting")
+            return 5
+        ref = f"refs/heads/{branch}"
+        before_sha = hub.sha(ref)  # None expected: authoring CREATES it
+        if before_sha is not None:
+            print(f"agentworker: {ref} already exists; intent {intent_slug} looks in-progress; exiting")
+            return 0
+    else:
+        intent = None
+        ref = f"refs/heads/{branch}"
+        before_sha = hub.sha(ref)
+        if tip_sha is None or before_sha is None:
+            print(f"agentworker: missing tip or {ref} on hub; exiting")
+            return 5
 
     work = Path(tempfile.mkdtemp(prefix=f"agent-{branch.replace('/', '-')}-"))
     try:
@@ -127,12 +168,16 @@ def run(branch: str, hub_url: str, host: str) -> int:
         subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-B", branch.split("/", 1)[-1]
                         if False else branch, before_sha], check=False)
         # detached-safe: create the local branch at the branch head
-        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-B", "agent-work", before_sha],
+        base = tip_sha if intent_slug else before_sha
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-B", "agent-work", base],
                        check=True)
         subprocess.run(["git", "-C", str(repo), "fetch", "-q", "origin",
                         f"+{TIP_REF}:refs/tipref"], check=True)
 
-        prompt = build_prompt(branch, hub_url, tip_sha, host)
+        if intent_slug:
+            prompt = build_authoring_prompt(intent_slug, intent, hub_url, tip_sha, host)
+        else:
+            prompt = build_prompt(branch, hub_url, tip_sha, host)
         proc, name, tail = None, None, []
         for name, argv_of in clis:
             print(f"agentworker[{host}] {branch}: launching {name} (timeout {AGENT_TIMEOUT_S}s)")
@@ -162,6 +207,9 @@ def run(branch: str, hub_url: str, host: str) -> int:
 
         # The agent's word is not the instrument -- the hub ref is.
         after_sha = hub.sha(ref)
+        if intent_slug and after_sha:
+            print(f"agentworker[{host}] {branch}: AUTHORED at {after_sha[:8]} under {name}")
+            return 0
         if after_sha and after_sha != before_sha:
             base_ok = subprocess.run(
                 ["git", "-C", str(repo), "merge-base", "--is-ancestor", tip_sha, after_sha],
@@ -185,14 +233,18 @@ def _fetchable(repo: Path, sha: str) -> bool:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--branch", required=True, help="staging/<slug> to converge")
+    ap.add_argument("--branch", help="staging/<slug> to converge")
+    ap.add_argument("--intent", help="intent slug to AUTHOR (mutually exclusive with --branch)")
     ap.add_argument("--hub", default=os.environ.get("FLEET_HUB_URL"))
     ap.add_argument("--host", default=os.environ.get("FLEET_HOST", "unknown"))
     args = ap.parse_args(argv)
     if not args.hub:
         print("agentworker: no hub URL", file=sys.stderr)
         return 2
-    return run(args.branch, args.hub, args.host)
+    if bool(args.branch) == bool(args.intent):
+        print("agentworker: exactly one of --branch / --intent", file=sys.stderr)
+        return 2
+    return run(args.branch, args.hub, args.host, intent_slug=args.intent)
 
 
 if __name__ == "__main__":
