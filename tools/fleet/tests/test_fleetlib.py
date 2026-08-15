@@ -17,6 +17,7 @@ Run with:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -27,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fleetlib import Hub, HubUnreachableError  # noqa: E402
+from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
 
 
 def _run_git(args, cwd=None, input_bytes=None):
@@ -298,6 +299,153 @@ class TestRead(FleetlibTestCase):
         got = self.hub.read("refs/fleet/test/unicode")
         for key, value in payload.items():
             self.assertEqual(got[key], value)
+
+
+class TestReadIsCoherentUnderConcurrentWrites(FleetlibTestCase):
+    """`Hub.read`'s time-of-check/time-of-use race, and its fix.
+
+    THE DEFECT (found by `tools/fleet/tests/test_seams.py`, seam 7, during
+    an unrelated seam-2 run -- not by inspection):
+
+        found_sha = self._remote_sha(ref)              # ls-remote -> S1
+        self._run(["fetch", ..., f"+{ref}:{tmp_ref}"]) # brings S2
+        self._run(["cat-file", "-p", f"{found_sha}:payload.json"])
+
+    A ref that moved between the ls-remote and the fetch left the fetch
+    bringing S2 while the cat-file asked for S1. Payload commits are
+    orphans, so nothing else drags S1 into the local object store, and git
+    answers `fatal: path 'payload.json' does not exist in '<S1>'` -- which
+    `Hub.read` raised as `HubError`. `fleetd.reconcile_once` had no `try`
+    around the `hub.read` calls that raised it, so a claim renewing
+    underneath a queue computation could kill the daemon.
+
+    The window is not exotic: renewing leases rewrite every held claim ref
+    once per renewal interval, and the queue reads every claim payload on
+    every loop.
+
+    NAME THE INSTRUMENT. The move is FORCED, by patching `_remote_sha` on
+    the reader's own Hub instance, not raced -- a test that reproduces a
+    race one run in twenty is not a regression test. Every write is a real
+    `git push` to the real fixture bare repo (`FleetlibTestCase.setUp`,
+    asserted to be under the system temp dir); nothing here is mocked
+    except the moment the interleaving happens.
+    """
+
+    REF = "refs/fleet/test/racy"
+
+    def _move_ref_during_ls_remote(self, reader: Hub, new_payload: dict):
+        """Patch `reader._remote_sha` so the FIRST resolution of `self.REF`
+        also advances the ref on the hub -- exactly the production
+        interleaving, made deterministic. Returns the list the writer's
+        successes are recorded in.
+        """
+        writer = self.fresh_hub()
+        real = reader._remote_sha
+        moved = []
+
+        def sha_then_move(ref):
+            found = real(ref)
+            if ref == self.REF and not moved:
+                moved.append(writer.update(ref, new_payload, expect_sha=found))
+            return found
+
+        reader._remote_sha = sha_then_move
+        self.addCleanup(lambda: setattr(reader, "_remote_sha", real))
+        return moved
+
+    def test_read_survives_a_ref_that_moves_between_ls_remote_and_fetch(self):
+        self.assertTrue(self.hub.create(self.REF, {"v": 1, "holder": "a"}))
+        reader = self.fresh_hub()  # never read this ref before: empty object store
+        moved = self._move_ref_during_ls_remote(reader, {"v": 2, "holder": "a"})
+
+        payload = reader.read(self.REF)
+
+        self.assertTrue(moved and moved[0], "the forced concurrent write did not land")
+        self.assertIsNotNone(payload, "read raised or returned None for a ref that exists")
+        self.assertEqual(
+            payload["v"], 2,
+            "read must return the payload the fetch actually brought, not a stale one",
+        )
+
+    def test_read_with_sha_returns_a_sha_that_matches_its_payload(self):
+        self.assertTrue(self.hub.create(self.REF, {"v": 1, "holder": "a"}))
+        reader = self.fresh_hub()
+        moved = self._move_ref_during_ls_remote(reader, {"v": 2, "holder": "a"})
+
+        got_sha, payload = reader.read_with_sha(self.REF)
+
+        self.assertTrue(moved and moved[0], "the forced concurrent write did not land")
+        self.assertIsNotNone(got_sha)
+        self.assertEqual(payload["v"], 2)
+        # Coherence is the whole point: the sha handed back is the one whose
+        # payload was handed back. A `sha()` + `read()` pair cannot promise
+        # that, which is why this method exists.
+        self.assertEqual(
+            got_sha, self.hub.sha(self.REF),
+            "read_with_sha returned a sha that is not the one it read the payload from",
+        )
+
+    def test_a_ref_deleted_inside_the_window_reads_as_absent_not_an_error(self):
+        """The other direction: absence must stay absence. A ref that is
+        DELETED between the ls-remote and the fetch is a legitimate `None`,
+        never a raise -- callers distinguish "nobody claimed this" from
+        "the hub is down" by exactly that.
+        """
+        self.assertTrue(self.hub.create(self.REF, {"v": 1}))
+        reader = self.fresh_hub()
+        deleter = self.fresh_hub()
+        real = reader._remote_sha
+        deleted = []
+
+        def sha_then_delete(ref):
+            found = real(ref)
+            if ref == self.REF and not deleted:
+                deleted.append(deleter.delete(ref, expect_sha=found))
+            return found
+
+        reader._remote_sha = sha_then_delete
+        self.addCleanup(lambda: setattr(reader, "_remote_sha", real))
+
+        payload = reader.read(self.REF)
+
+        self.assertTrue(deleted and deleted[0], "the forced concurrent delete did not land")
+        self.assertIsNone(payload)
+
+    def test_absent_and_unreachable_stay_distinguishable(self):
+        """Regression guard on the module's central promise, restated for
+        `read_with_sha`: absent is `(None, None)`, unreachable RAISES.
+        """
+        self.assertEqual((None, None), self.hub.read_with_sha("refs/fleet/test/nope"))
+        bogus_workdir = tempfile.mkdtemp(prefix="fleetlib-bogus-coh-")
+        self.addCleanup(shutil.rmtree, bogus_workdir, ignore_errors=True)
+        bogus = Hub(url="/definitely/does/not/exist/on/this/machine.git", workdir=bogus_workdir)
+        with self.assertRaises(HubUnreachableError):
+            bogus.read_with_sha("refs/fleet/test/whatever")
+
+    def test_a_commit_with_no_payload_still_raises_and_is_not_retried_away(self):
+        """The fix must not turn a genuinely malformed ref into a silent
+        pass. A ref pointing at a commit whose tree has no `payload.json`
+        is a real error -- retrying cannot change it, and `read` must say
+        so with the wording the seam suite matches on.
+        """
+        git = ["git", "--git-dir", self.workdir]
+        env_commit = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                      "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        empty_tree = _run_git(git + ["hash-object", "-t", "tree", "-w", "--stdin"], input_bytes=b"")
+        self.assertEqual(empty_tree.returncode, 0, msg=empty_tree.stderr.decode())
+        tree_sha = empty_tree.stdout.decode().strip()
+        commit = subprocess.run(git + ["commit-tree", tree_sha, "-m", "no payload"],
+                                capture_output=True, env={**os.environ, **env_commit})
+        self.assertEqual(commit.returncode, 0, msg=commit.stderr.decode())
+        commit_sha = commit.stdout.decode().strip()
+        push = _run_git(git + ["push", self.hub_path, f"{commit_sha}:refs/fleet/test/empty"])
+        self.assertEqual(push.returncode, 0, msg=push.stderr.decode())
+
+        with self.assertRaises(HubError) as ctx:
+            self.fresh_hub().read("refs/fleet/test/empty")
+        self.assertIn("has no readable payload.json", str(ctx.exception))
+        self.assertIn(commit_sha, str(ctx.exception),
+                      "the error must name the sha actually read, not '<unresolved>'")
 
 
 class TestList(FleetlibTestCase):

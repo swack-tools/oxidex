@@ -15,6 +15,18 @@ mutate the same ref can never both win.
 A ref points at a commit whose tree holds exactly one blob, `payload.json`.
 Reading is `git cat-file`; nothing is ever checked out to a working tree.
 
+Reads are COHERENT: `read()` fetches the ref into a private local ref and
+then reads THAT, so the payload it returns and the sha it read it from are
+the same commit no matter what the hub does mid-read. This is not a
+refinement -- the older sequence resolved the sha, fetched, and then
+cat-filed the sha it had resolved *first*, and once leases began renewing
+themselves every held claim ref started moving on a timer. A read that
+landed in that window raised, and the one consumer that read every claim
+payload on every loop (`fleetd`) had no `try` around it. `read_with_sha()`
+exposes the coherent pair for callers that need both; `sha()` remains a
+single `ls-remote`, and is for existence and for CAS witnesses, never for
+"which sha should I read the payload at".
+
 Distinguishing "ref does not exist" from "could not reach the hub" is load
 bearing: a `read()` that quietly returns `None` on a network blip looks
 identical to "nobody has claimed this yet" and invites double-claiming. See
@@ -40,11 +52,12 @@ import json
 import os
 import socket
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
 
 class HubError(Exception):
@@ -98,6 +111,28 @@ _TRANSPORT_HINTS = (
     "host key verification failed",
 )
 
+# How many times `read()` re-runs the WHOLE ls-remote/fetch/cat-file
+# sequence when a fetch it was told succeeded leaves no resolvable commit
+# behind. The fetch-first rewrite below should make this unreachable -- the
+# sha being read is the one the fetch just brought, and a local ref cannot
+# move underneath a local `cat-file`. It is kept as a bounded backstop for
+# anything that can still race the object store (a concurrent
+# `git gc --prune=now` in the same cache dir, a ref write that loses to a
+# sibling process sharing the workdir), because the failure mode it guards
+# against used to take fleetd down rather than degrade a single read. A
+# fresh fetch is the only thing that repairs a missing object, which is why
+# the retry re-runs the sequence instead of patching up the last step.
+#
+# Bounded, never infinite: a genuinely broken hub must still surface as an
+# error. And deliberately NOT applied to the other way `cat-file` fails --
+# a commit that IS in the local store and simply has no `payload.json` in
+# its tree is a real error, unaffected by retrying, and gets git's same
+# `fatal: path 'payload.json' does not exist in '<sha>'` wording. Telling
+# the two apart by git's message would be guesswork; `rev-parse` on the
+# fetched ref answers it directly.
+_READ_ATTEMPTS = 3
+_READ_RETRY_SLEEP_S = 0.2
+
 
 @dataclass
 class _Result:
@@ -134,7 +169,18 @@ class Hub:
     # ---------------------------------------------------------------- #
 
     def sha(self, ref: str) -> Optional[str]:
-        """Current commit sha of `ref` on the hub, or None if it does not exist."""
+        """Current commit sha of `ref` on the hub, or None if it does not exist.
+
+        A single `ls-remote`, deliberately: this is the cheap existence
+        probe (`hub.sha(ref) is not None`) and the CAS witness callers pass
+        back as `expect_sha`, and both want the hub's answer right now
+        rather than a fetch.
+
+        It is NOT the way to get a sha to read a payload at. A `sha()`
+        followed by a `read()` is two independent observations of a ref that
+        renewing leases move on a timer -- use `read_with_sha()`, which
+        returns a sha and the payload that belongs to it.
+        """
         return self._remote_sha(ref)
 
     def read(self, ref: str) -> Optional[dict]:
@@ -143,32 +189,157 @@ class Hub:
         Raises HubUnreachableError on any transport failure -- never
         returns None for "could not reach the hub".
         """
-        found_sha = self._remote_sha(ref)
-        if found_sha is None:
-            return None
+        return self._read(ref, want_sha=False)[1]
 
-        tmp_ref = f"refs/fleet-cache/{uuid.uuid4().hex}"
-        fetch = self._run(["fetch", "--no-tags", "--quiet", self.url, f"+{ref}:{tmp_ref}"])
-        if fetch.returncode != 0:
-            low = fetch.stderr.lower()
-            if "couldn't find remote ref" in low or "not found" in low:
-                # Ref existed at sha() time and was deleted before fetch.
-                # That is a legitimate absence, not an error.
-                return None
-            raise HubUnreachableError(f"fetch of {ref} failed: {fetch.describe()}")
+    def read_with_sha(self, ref: str) -> Tuple[Optional[str], Optional[dict]]:
+        """`(sha, payload)` for `ref`, COHERENT with each other, or
+        `(None, None)` if the ref is absent.
 
-        cat = self._run(["cat-file", "-p", f"{found_sha}:payload.json"])
-        # Best-effort cleanup of the temporary local ref; failure here must
-        # never mask the read result.
-        self._run(["update-ref", "-d", tmp_ref])
+        Coherent means: the sha returned is the one whose payload is
+        returned. That was not true before, and the gap was a live
+        time-of-check/time-of-use race -- the reason this method exists and
+        the reason `read()` now delegates to it.
 
-        if cat.returncode != 0:
-            raise HubError(f"{ref}@{found_sha} has no readable payload.json: {cat.describe()}")
+        THE OLD SEQUENCE, and why it broke:
 
-        try:
-            return json.loads(cat.stdout)
-        except json.JSONDecodeError as exc:
-            raise HubError(f"{ref}@{found_sha} payload.json is not valid JSON: {exc}") from exc
+            found_sha = self._remote_sha(ref)              # ls-remote -> S1
+            self._run(["fetch", ..., f"+{ref}:{tmp_ref}"]) # brings S2
+            self._run(["cat-file", "-p", f"{found_sha}:payload.json"])
+
+        A ref that moved between the ls-remote and the fetch left the fetch
+        bringing S2 while the cat-file asked for S1. Payload commits are
+        orphans, so nothing else drags S1 into the local object store, and
+        git answered `fatal: path 'payload.json' does not exist in '<S1>'`
+        -- which this method turned into a raised `HubError`. Not a
+        hypothetical: `tools/fleet/tests/test_seams.py` hit it unprompted
+        during a seam-2 run, and `fleetd.reconcile_once` had no `try` around
+        the `hub.read` that raised it, so a claim renewing underneath a
+        queue computation could exit the daemon.
+
+        THE WINDOW EXISTS BY DESIGN NOW. Before leases self-renewed (R2) no
+        claim ref ever moved and this race was unreachable. R2 rewrites
+        every held claim once per renewal interval and R4 has
+        `workqueue.Queue.compute()` read every claim payload on every call,
+        so the two correctness fixes together made a latent bug reachable
+        on every loop.
+
+        THE SEQUENCE NOW:
+
+          1. `ls-remote` -- purely to tell ABSENT from UNREACHABLE. That
+             distinction is this module's central promise (see the module
+             docstring) and `git fetch`'s stderr does not carry it as
+             reliably as `ls-remote`'s exit code does. The sha it resolves
+             is deliberately DISCARDED; it is a fact about the past by the
+             time the next line runs.
+          2. `fetch` into a fresh uuid-named `tmp_ref`.
+          3. `rev-parse tmp_ref` and `cat-file tmp_ref:payload.json` -- both
+             against the LOCAL ref the fetch just wrote. A local ref no
+             remote can move is the whole fix: whatever the hub does in
+             between, the sha reported and the payload returned come from
+             the same fetched commit.
+
+        The ref moving between steps 1 and 2 is therefore no longer an
+        error at all: the read simply returns the newer payload, which is a
+        legitimate serialization of a concurrent write. The ref being
+        DELETED between steps 1 and 2 still returns None, as before.
+
+        COST. This method runs one `rev-parse` that `read()` does not --
+        measured at +7ms on a ~46ms read, i.e. +15% on the single hottest
+        primitive in the fleet, which every claim renewal, every queue
+        computation and every reap goes through. That is why the sha is
+        opt-in and `read()` still issues exactly the four git commands it
+        issued before this fix (`ls-remote`, `fetch`, `cat-file`,
+        `update-ref -d`): correctness here must not be bought with latency
+        on a path that runs against a 5s test TTL and a 600s real one.
+        """
+        return self._read(ref, want_sha=True)
+
+    def _read(self, ref: str, want_sha: bool) -> Tuple[Optional[str], Optional[dict]]:
+        """Shared body of `read`/`read_with_sha`; see `read_with_sha` for
+        the sequence and why it is that sequence. `want_sha` buys the extra
+        `rev-parse` round trip, which the sha-less `read()` must not pay.
+        """
+        last: Optional[_Result] = None
+        for attempt in range(1, _READ_ATTEMPTS + 1):
+            # (1) Absence probe only. `_remote_sha` raises
+            # HubUnreachableError on transport failure, so "the ref is not
+            # there" and "we could not ask" stay distinguishable -- the one
+            # thing a caller must never confuse (module docstring).
+            if self._remote_sha(ref) is None:
+                return None, None
+
+            # (2) Whatever the ref points at NOW lands here.
+            tmp_ref = f"refs/fleet-cache/{uuid.uuid4().hex}"
+            fetch = self._run(["fetch", "--no-tags", "--quiet", self.url, f"+{ref}:{tmp_ref}"])
+            if fetch.returncode != 0:
+                low = fetch.stderr.lower()
+                if "couldn't find remote ref" in low or "not found" in low:
+                    # Ref existed at the ls-remote and was deleted before
+                    # the fetch. A legitimate absence, not an error.
+                    return None, None
+                raise HubUnreachableError(f"fetch of {ref} failed: {fetch.describe()}")
+
+            # (3) Read the commit the FETCH brought, not the one the
+            # ls-remote resolved. `tmp_ref` is local and uuid-unique, so
+            # nothing can move it between these commands -- which is why
+            # naming the ref is as good as naming the sha, and why the
+            # `rev-parse` is optional rather than load-bearing.
+            def resolve():
+                r = self._run(["rev-parse", "--verify", "--quiet", f"{tmp_ref}^{{commit}}"])
+                return r.stdout.strip() if r.returncode == 0 else None
+
+            payload: Optional[dict] = None
+            try:
+                fetched_sha = resolve() if want_sha else None
+                cat = self._run(["cat-file", "-p", f"{tmp_ref}:payload.json"])
+                if cat.returncode != 0:
+                    # Cold path. The sha is wanted now even when the caller
+                    # did not ask for one: it tells an object-store failure
+                    # (retryable) from a commit that genuinely carries no
+                    # payload (not), and names the right sha in the error
+                    # either way. Both cold paths resolve while `tmp_ref`
+                    # still exists -- after the cleanup below there is no
+                    # way left to name the commit at all.
+                    fetched_sha = fetched_sha or resolve()
+                else:
+                    try:
+                        payload = json.loads(cat.stdout)
+                    except json.JSONDecodeError as exc:
+                        raise HubError(
+                            f"{ref}@{fetched_sha or resolve() or '<unresolved>'} payload.json "
+                            f"is not valid JSON: {exc}"
+                        ) from exc
+            finally:
+                # Best-effort cleanup of the temporary local ref; failure
+                # here must never mask the read result.
+                self._run(["update-ref", "-d", tmp_ref])
+
+            if cat.returncode == 0:
+                return fetched_sha, payload
+
+            last = cat
+            if fetched_sha is None and attempt < _READ_ATTEMPTS:
+                # The fetch claimed success and left nothing resolvable at
+                # `tmp_ref`: an object-store problem, not a payload problem.
+                # Re-run the whole sequence -- see `_READ_ATTEMPTS`.
+                time.sleep(_READ_RETRY_SLEEP_S)
+                continue
+
+            # Either the commit is present locally and genuinely has no
+            # `payload.json` (a real error, unaffected by retrying), or the
+            # object store stayed broken for every attempt. Both are
+            # HubError, with the wording preserved verbatim -- `test_seams.py`
+            # matches on it.
+            raise HubError(
+                f"{ref}@{fetched_sha or '<unresolved>'} has no readable payload.json: "
+                f"{cat.describe()}"
+            )
+
+        raise HubError(  # pragma: no cover -- only reachable if _READ_ATTEMPTS < 1
+            f"{ref}: read gave up without attempting anything "
+            f"(_READ_ATTEMPTS={_READ_ATTEMPTS}): "
+            f"{last.describe() if last is not None else '<no result>'}"
+        )
 
     def create(self, ref: str, payload: dict, push_options: Optional[Sequence[str]] = None) -> bool:
         """Atomically create `ref` if, and only if, it does not exist yet.
