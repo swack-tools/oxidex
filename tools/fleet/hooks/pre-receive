@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+#
+# Hub-side `pre-receive` hook -- R1's actual enforcement point for tip
+# protection (T3 / R1 in ARCH-FIX-SPEC.md).
+#
+# Denies every write to refs/heads/main and refs/heads/refactor/tag-machinery
+# UNLESS the push carries a push option `train-token=<secret>` matching the
+# content of `$GIT_DIR/train.token` (mode 0600 on the hub). Deletion of
+# either ref is denied unconditionally -- token or not. Every other ref
+# (staging/*, rescued/*, wip/*, refs/fleet/*, everything else) is untouched.
+#
+# WHY THIS IS `pre-receive` AND NOT `update`, DESPITE THE FILE THIS PROJECT
+# CALLS OUT BEING `tools/fleet/hooks/update`:
+#   Git only exports GIT_PUSH_OPTION_COUNT / GIT_PUSH_OPTION_<n> to the
+#   `pre-receive` and `post-receive` hooks -- NEVER to the per-ref `update`
+#   hook. This was verified empirically (not assumed) against git 2.54.0
+#   (Apple Git-157): a fixture bare repo with
+#   `receive.advertisePushOptions=true` and an `update` hook that dumps its
+#   own environment shows `GIT_PUSH_OPTION_COUNT` UNSET on every invocation,
+#   while the exact same push shows it set to `1` inside both `pre-receive`
+#   and `post-receive`. This matches the documented behaviour in
+#   `git help githooks` (push-option env export is documented under
+#   pre-receive/post-receive only, with no equivalent language under
+#   update). Since post-receive runs AFTER the ref is already written --
+#   too late to deny anything -- the token check can only live here, in
+#   pre-receive.
+#
+#   `tools/fleet/hooks/update` still exists (see that file) as a second,
+#   independent layer that denies deletion of the two protected refs
+#   unconditionally. That check needs only argv (no push options), so it
+#   works identically in either hook type, and duplicating it costs
+#   nothing. It is NOT where the token is checked, and must never become
+#   the place someone tries to add token checking -- GIT_PUSH_OPTION_* is
+#   simply not there to read.
+#
+# WHOLE-PUSH GRANULARITY, NOT PER-REF:
+#   pre-receive's exit code accepts or rejects the ENTIRE push, not a
+#   single ref within it -- there is no way to deny only a protected ref in
+#   a `git push origin a b c` that also touches unrelated refs in the same
+#   invocation. Every current caller of a protected-ref push in this
+#   codebase pushes exactly one ref per invocation (train.py's
+#   `_push_tip_and_retire` pushes `HEAD:refs/heads/refactor/tag-machinery`
+#   alone, never bundled with other refspecs), so in practice this is
+#   equivalent to a per-ref decision. If some future push ever bundles a
+#   protected ref together with an unrelated ref in one `git push`
+#   invocation, this hook fails CLOSED: the whole push, including the
+#   unrelated ref, is denied unless the token is present and correct. That
+#   is the safe direction to be wrong in.
+#
+# ALSO REQUIRED ON THE HUB FOR ANY OF THIS TO FIRE AT ALL:
+#   `receive.advertisePushOptions=true` on the bare repo. Without it, git
+#   refuses the push outright at the transport level ("fatal: the
+#   receiving end does not support push options") before this hook, or any
+#   hook, ever runs -- verified empirically alongside the finding above.
+#   tools/fleet/rollout/install_hook.sh sets this.
+#
+# Chainable: never clobbers a pre-existing pre-receive hook. See
+# tools/fleet/rollout/install_hook.sh, which preserves any prior hook as
+# `pre-receive.legacy` and runs it alongside this file (installed as
+# `pre-receive.fleet`), propagating either half's rejection -- unlike the
+# existing post-receive wrapper (which is deliberately best-effort and
+# never blocks a push that already landed), a pre-receive rejection MUST
+# propagate: this is the one hook type in this file that can still say no.
+#
+# Requires only bash + python3 (stdlib) on the hub -- no network calls of
+# its own, matching the "Python 3, standard library only" rule that
+# applies to all of tools/fleet/ (AGENTS.md).
+#
+# Install (run ON THE HUB, as the account that owns the bare repo):
+#   tools/fleet/rollout/install_hook.sh <bare-repo-path> --execute
+
+set -u
+
+PROTECTED_REFS=(
+    "refs/heads/main"
+    "refs/heads/refactor/tag-machinery"
+)
+
+resolved_git_dir="${GIT_DIR:-.}"
+resolved_git_dir="$(cd "$resolved_git_dir" && pwd)"
+TOKEN_FILE="$resolved_git_dir/train.token"
+
+is_protected() {
+    local ref="$1" p
+    for p in "${PROTECTED_REFS[@]}"; do
+        [[ "$ref" == "$p" ]] && return 0
+    done
+    return 1
+}
+
+is_zero_sha() {
+    [[ "$1" =~ ^0+$ ]]
+}
+
+# Extract the value of a `train-token=<secret>` push option, if the pusher
+# sent one. Push options are arbitrary strings; git exports them as
+# GIT_PUSH_OPTION_0 .. GIT_PUSH_OPTION_{COUNT-1}, in the order the client
+# sent them. `${opt#train-token=}` strips only the matching prefix, so a
+# secret that itself contains "=" is preserved verbatim.
+pushed_token=""
+option_count="${GIT_PUSH_OPTION_COUNT:-0}"
+for ((i = 0; i < option_count; i++)); do
+    varname="GIT_PUSH_OPTION_$i"
+    opt="${!varname:-}"
+    if [[ "$opt" == train-token=* ]]; then
+        pushed_token="${opt#train-token=}"
+        break
+    fi
+done
+
+# Compare via python3's hmac.compare_digest so a timing side channel can't
+# leak how many leading bytes of the token matched. Cheap: runs at most
+# once per push, and only when a protected ref is actually touched.
+tokens_match() {
+    python3 -c '
+import hmac, sys
+sys.exit(0 if hmac.compare_digest(sys.argv[1], sys.argv[2]) else 1)
+' "$1" "$2"
+}
+
+deny() {
+    local ref="$1" reason="$2" remedy="$3"
+    echo "tip-guard: DENY ref=$ref" >&2
+    echo "tip-guard: reason=$reason" >&2
+    echo "tip-guard: remedy=$remedy" >&2
+}
+
+violated=0
+while read -r oldrev newrev refname; do
+    [[ -z "${refname:-}" ]] && continue
+    is_protected "$refname" || continue
+
+    if is_zero_sha "$newrev"; then
+        deny "$refname" \
+            "deletion of a protected ref is never permitted" \
+            "do not delete this ref; if you meant to reset it, push a replacement commit instead"
+        violated=1
+        continue
+    fi
+
+    if [[ ! -f "$TOKEN_FILE" ]]; then
+        deny "$refname" \
+            "no train.token on the hub -- protected refs fail CLOSED until one exists" \
+            "create $TOKEN_FILE (mode 0600), e.g. by re-running install_hook.sh --execute, then retry"
+        violated=1
+        continue
+    fi
+
+    stored_token="$(cat "$TOKEN_FILE" 2>/dev/null)"
+    stored_token="${stored_token%$'\n'}"
+
+    if [[ -z "$pushed_token" ]] || ! tokens_match "$pushed_token" "$stored_token"; then
+        deny "$refname" \
+            "missing or incorrect train-token push option" \
+            "push with --push-option=train-token=<secret matching $TOKEN_FILE>"
+        violated=1
+        continue
+    fi
+done
+
+if [[ "$violated" -ne 0 ]]; then
+    exit 1
+fi
+exit 0
