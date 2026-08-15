@@ -20,7 +20,9 @@ this task. Authoring NEW work from intents is the next iteration.
 Guardrails, all encoded in the prompt and enforced by what the worker
 verifies afterwards:
 - never push to main or refactor/tag-machinery; exactly one branch
-- generated files are never hand-merged (tip's version; regen is i7-only)
+- generated files are never hand-merged (tip's version only when the tip
+  itself moved the file since the merge-base; a branch's own regen is
+  preserved -- regen is i7-only)
 - the worker VERIFIES the branch moved before reporting success -- an
   agent's claim of success is not evidence (name the instrument)
 - hard wall-clock timeout; the process group dies with it
@@ -90,9 +92,12 @@ FACTS
 - Your branch: `{branch}` -- already checked out.
 
 TASK
-1. Merge `refactor/tag-machinery` ({tip_sha}) INTO this branch (a merge, not a rebase).
+1. BEFORE merging, record two shas the generated-file rule below needs: `BASE=$(git merge-base HEAD {tip_sha})` and `BRANCH_BEFORE=$(git rev-parse HEAD)`. Then merge `refactor/tag-machinery` ({tip_sha}) INTO this branch (a merge, not a rebase).
 2. Resolve conflicts on their merits, with these hard rules:
-   - `src/exiftool_tables/binary_tables.rs` is GENERATED: never hand-edit it, never invent enum variants. Resolve it to the tip's version ONLY IF THE MERGE CONFLICTS ON IT. If the merge does not touch it, LEAVE IT ALONE -- a branch may legitimately carry freshly REGENERATED tables (its commits will say so), and overwriting those with the tip's copy silently destroys completed regen work (this exact corruption happened once: an agent following an unconditional take-tip rule reset a verified regen; the fix cost a force-push recovery). When you do take the tip's side of a conflict and the branch changed the GENERATOR (tools/exiftool-tables/*.py), note in the commit message that regen on the i7 is still required.
+   - `src/exiftool_tables/binary_tables.rs` is GENERATED: never hand-edit it, never invent enum variants. Which side wins is decided by CONTENT -- did the tip itself move the file since the merge base? Check: `git diff --quiet $BASE {tip_sha} -- src/exiftool_tables/binary_tables.rs`.
+     * Tip UNCHANGED since the base (diff empty): LEAVE THE FILE ALONE. The branch's copy is the only live edit -- a branch may legitimately carry freshly REGENERATED tables (its commits will say so), and overwriting those with the tip's copy silently destroys completed regen work (this exact corruption happened once: an agent following an unconditional take-tip rule reset a verified regen; the fix cost a force-push recovery). VERIFY after committing the merge: `git diff $BRANCH_BEFORE -- src/exiftool_tables/binary_tables.rs` must be empty. A non-empty `git diff {tip_sha} -- <that path>` is EXPECTED and CORRECT here -- never "fix" it to match the tip.
+     * Tip CHANGED since the base (diff non-empty): take the tip's version verbatim -- even if git auto-merged the file without conflicting, because a textual auto-merge of two regens is a chimera no generator ever produced. `--ours`/`--theirs` semantics depend on merge direction, so VERIFY by content: `git diff {tip_sha} -- src/exiftool_tables/binary_tables.rs` must be empty. If the branch had also changed the file since $BASE, note in the commit message that regen on the i7 is required before this branch can pass verify-tables.
+     * Either way: if the branch changed the GENERATOR (tools/exiftool-tables/*.py), note in the commit message that regen on the i7 is still required.
    - Census/count assertions and docs counts: take the tip's side (derived invariants replaced hardcoded counts deliberately).
    - If a conflict requires deciding which of two IMPLEMENTATIONS is semantically correct, STOP: commit nothing, run `git merge --abort`, and print exactly `BLOCKED: <one-line reason>` as your final output.
 3. Run: `cargo fmt --all` then `cargo clippy --release --all-features --features jpeg-tag-matrix-binary -- -D warnings` (NOT --all-targets) then `cargo check --features jpeg-tag-matrix-binary`. All must pass; fix what they flag if the fix is mechanical, otherwise BLOCKED as above.
@@ -165,9 +170,7 @@ def run(branch: str, hub_url: str, host: str, intent_slug: str = None) -> int:
     try:
         subprocess.run(["git", "clone", "-q", hub_url, str(work / "r")], check=True)
         repo = work / "r"
-        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-B", branch.split("/", 1)[-1]
-                        if False else branch, before_sha], check=False)
-        # detached-safe: create the local branch at the branch head
+        # detached-safe: create the local branch at the work base
         base = tip_sha if intent_slug else before_sha
         subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-B", "agent-work", base],
                        check=True)
