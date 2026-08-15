@@ -284,6 +284,158 @@ class TestAgentSlots(FleetdBase):
         os.environ.pop("FLEET_AGENT_CLI_OVERRIDE", None)
 
 
+class TestMainLoopSurvivesHubErrors(FleetdBase):
+    """`fleetd.main`'s loop guard: a hub failure costs an ITERATION, not
+    the daemon -- and only up to a point.
+
+    WHAT WAS WRONG. `reconcile_once` reads five or six hub refs and
+    `workqueue.Queue.compute()` reads every claim payload, and not one of
+    those calls had a `try` around it in `reconcile_once` OR in `main`. A
+    single `HubError` -- `fleetlib.Hub.read`'s ls-remote/fetch race, which
+    renewing leases made reachable on every loop -- did not degrade a
+    queue, it EXITED THE DAEMON, on a host with live gates running. That
+    race is fixed in `fleetlib` (see `test_fleetlib.py`), but the class of
+    failure it belonged to is not: a dropped ssh signature, a hub mid-`gc`,
+    a full disk under the object cache all raise the same exception.
+
+    WHAT MUST NOT BE TRUE INSTEAD. A daemon that swallows hub errors
+    forever looks alive, logs cheerfully, starts nothing and reports a
+    heartbeat only because that write lives inside the step that is
+    failing. Both directions are tested here; neither alone is the fix.
+
+    NAME THE INSTRUMENT. `fleetd.main` is driven IN-PROCESS against the
+    fixture bare hub, with only `reconcile_once` replaced -- the singleton
+    claim, `adopt_workers`, the signal handlers, the exit codes and the
+    `finally: singleton.release()` are all the real ones. `HOME` is
+    redirected into the test tempdir because `main` puts its object cache
+    under `Path.home()`. Against the unguarded `main`, the first two of
+    these tests do not fail, they ERROR with the raised `HubError` -- which
+    is precisely the production symptom.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import signal as _signal
+        self._old_term = _signal.getsignal(_signal.SIGTERM)
+        self._old_int = _signal.getsignal(_signal.SIGINT)
+        self.addCleanup(_signal.signal, _signal.SIGTERM, self._old_term)
+        self.addCleanup(_signal.signal, _signal.SIGINT, self._old_int)
+
+    def run_main(self, fake_reconcile, extra_argv=()):
+        import unittest.mock as mock
+        argv = [
+            "--hub", str(self.bare),
+            "--repo-root", str(Path(__file__).resolve().parents[3]),
+            "--log-dir", str(self.tmp / "logs"),
+            "--interval", "0",
+            *extra_argv,
+        ]
+        with mock.patch.dict(os.environ, {"HOME": str(self.tmp)}), \
+                mock.patch.object(fleetd, "reconcile_once", fake_reconcile):
+            return fleetd.main(argv)
+
+    def test_a_transient_hub_error_costs_one_iteration_not_the_daemon(self):
+        import signal as _signal
+        from fleetlib import HubError
+
+        calls = []
+
+        def flaky(*_a, **_kw):
+            calls.append(len(calls) + 1)
+            if len(calls) <= 2:
+                raise HubError(
+                    "refs/fleet/claims/gate/x@abc has no readable payload.json: simulated"
+                )
+            # Third step succeeds. Ask the daemon to stop the way a
+            # supervisor would, so the loop exits through its normal path
+            # rather than through an exception.
+            os.kill(os.getpid(), _signal.SIGTERM)
+            return fleetd.ReconcileResult()
+
+        rc = self.run_main(flaky)
+
+        self.assertEqual(len(calls), 3, "the daemon did not survive two failed reconcile steps")
+        self.assertEqual(rc, 0, "a recovered daemon must exit cleanly")
+
+    def test_a_persistently_unreachable_hub_still_surfaces(self):
+        from fleetlib import HubError
+
+        calls = []
+
+        def always_dead(*_a, **_kw):
+            calls.append(len(calls) + 1)
+            raise HubError("ls-remote refs/fleet/desired failed: exit 128: could not read from remote")
+
+        rc = self.run_main(always_dead)
+
+        self.assertEqual(
+            len(calls), fleetd.RECONCILE_HUB_FAILURE_LIMIT,
+            "the daemon must stop retrying after RECONCILE_HUB_FAILURE_LIMIT consecutive failures",
+        )
+        self.assertEqual(rc, 6, "a wedged daemon must exit NONZERO so its supervisor reacts")
+
+    def test_the_failure_counter_resets_on_a_good_step(self):
+        """Bounded means bounded CONSECUTIVELY. A hub that blips once an
+        hour must never accumulate its way to an exit over a day of
+        otherwise healthy reconciles.
+        """
+        import signal as _signal
+        from fleetlib import HubError
+
+        limit = fleetd.RECONCILE_HUB_FAILURE_LIMIT
+        calls = []
+        # fail (limit-1), succeed, fail (limit-1), succeed, then stop.
+        script = ([False] * (limit - 1)) + [True] + ([False] * (limit - 1)) + [True]
+
+        def scripted(*_a, **_kw):
+            idx = len(calls)
+            calls.append(idx)
+            if idx >= len(script):
+                os.kill(os.getpid(), _signal.SIGTERM)
+                return fleetd.ReconcileResult()
+            if not script[idx]:
+                raise HubError("simulated blip")
+            return fleetd.ReconcileResult()
+
+        rc = self.run_main(scripted)
+
+        self.assertEqual(
+            len(calls), len(script) + 1,
+            f"the daemon exited early: {2 * (limit - 1)} failures spread across two runs of "
+            f"{limit - 1} is never {limit} CONSECUTIVE failures",
+        )
+        self.assertEqual(rc, 0)
+
+    def test_once_mode_reports_a_failed_step_instead_of_exiting_zero(self):
+        """`--once` is the cron backstop. A single step that never ran must
+        not report success: exit 0 there tells the supervisor the host
+        reconciled when nothing happened at all.
+        """
+        from fleetlib import HubError
+
+        calls = []
+
+        def dead(*_a, **_kw):
+            calls.append(1)
+            raise HubError("simulated blip")
+
+        rc = self.run_main(dead, extra_argv=("--once",))
+
+        self.assertEqual(len(calls), 1, "--once must still be exactly one step")
+        self.assertEqual(rc, 6)
+
+    def test_a_non_hub_exception_is_never_swallowed(self):
+        """The guard catches `HubError` and nothing else. A bug in this
+        file, an OOM or a KeyboardInterrupt must take the process down
+        loudly rather than be retried every fifteen seconds forever.
+        """
+        def buggy(*_a, **_kw):
+            raise ValueError("a bug in reconcile_once, not a hub problem")
+
+        with self.assertRaises(ValueError):
+            self.run_main(buggy)
+
+
 class TestReapDeadSameHostSingleton(FleetdBase):
     """ARCH-FIX-SPEC.md FIX 2 (seam 4's red half), at the function level --
     `reap_dead_same_host_singleton` and `fleetd_marker_in_group` in
@@ -478,153 +630,3 @@ class TestFleetdMarkerInGroup(unittest.TestCase):
         found = fleetd.fleetd_marker_in_group(999_999_9)
         self.assertIsNone(found)
 
-class TestMainLoopSurvivesHubErrors(FleetdBase):
-    """`fleetd.main`'s loop guard: a hub failure costs an ITERATION, not
-    the daemon -- and only up to a point.
-
-    WHAT WAS WRONG. `reconcile_once` reads five or six hub refs and
-    `workqueue.Queue.compute()` reads every claim payload, and not one of
-    those calls had a `try` around it in `reconcile_once` OR in `main`. A
-    single `HubError` -- `fleetlib.Hub.read`'s ls-remote/fetch race, which
-    renewing leases made reachable on every loop -- did not degrade a
-    queue, it EXITED THE DAEMON, on a host with live gates running. That
-    race is fixed in `fleetlib` (see `test_fleetlib.py`), but the class of
-    failure it belonged to is not: a dropped ssh signature, a hub mid-`gc`,
-    a full disk under the object cache all raise the same exception.
-
-    WHAT MUST NOT BE TRUE INSTEAD. A daemon that swallows hub errors
-    forever looks alive, logs cheerfully, starts nothing and reports a
-    heartbeat only because that write lives inside the step that is
-    failing. Both directions are tested here; neither alone is the fix.
-
-    NAME THE INSTRUMENT. `fleetd.main` is driven IN-PROCESS against the
-    fixture bare hub, with only `reconcile_once` replaced -- the singleton
-    claim, `adopt_workers`, the signal handlers, the exit codes and the
-    `finally: singleton.release()` are all the real ones. `HOME` is
-    redirected into the test tempdir because `main` puts its object cache
-    under `Path.home()`. Against the unguarded `main`, the first two of
-    these tests do not fail, they ERROR with the raised `HubError` -- which
-    is precisely the production symptom.
-    """
-
-    def setUp(self):
-        super().setUp()
-        import signal as _signal
-        self._old_term = _signal.getsignal(_signal.SIGTERM)
-        self._old_int = _signal.getsignal(_signal.SIGINT)
-        self.addCleanup(_signal.signal, _signal.SIGTERM, self._old_term)
-        self.addCleanup(_signal.signal, _signal.SIGINT, self._old_int)
-
-    def run_main(self, fake_reconcile, extra_argv=()):
-        import unittest.mock as mock
-        argv = [
-            "--hub", str(self.bare),
-            "--repo-root", str(Path(__file__).resolve().parents[3]),
-            "--log-dir", str(self.tmp / "logs"),
-            "--interval", "0",
-            *extra_argv,
-        ]
-        with mock.patch.dict(os.environ, {"HOME": str(self.tmp)}), \
-                mock.patch.object(fleetd, "reconcile_once", fake_reconcile):
-            return fleetd.main(argv)
-
-    def test_a_transient_hub_error_costs_one_iteration_not_the_daemon(self):
-        import signal as _signal
-        from fleetlib import HubError
-
-        calls = []
-
-        def flaky(*_a, **_kw):
-            calls.append(len(calls) + 1)
-            if len(calls) <= 2:
-                raise HubError(
-                    "refs/fleet/claims/gate/x@abc has no readable payload.json: simulated"
-                )
-            # Third step succeeds. Ask the daemon to stop the way a
-            # supervisor would, so the loop exits through its normal path
-            # rather than through an exception.
-            os.kill(os.getpid(), _signal.SIGTERM)
-            return fleetd.ReconcileResult()
-
-        rc = self.run_main(flaky)
-
-        self.assertEqual(len(calls), 3, "the daemon did not survive two failed reconcile steps")
-        self.assertEqual(rc, 0, "a recovered daemon must exit cleanly")
-
-    def test_a_persistently_unreachable_hub_still_surfaces(self):
-        from fleetlib import HubError
-
-        calls = []
-
-        def always_dead(*_a, **_kw):
-            calls.append(len(calls) + 1)
-            raise HubError("ls-remote refs/fleet/desired failed: exit 128: could not read from remote")
-
-        rc = self.run_main(always_dead)
-
-        self.assertEqual(
-            len(calls), fleetd.RECONCILE_HUB_FAILURE_LIMIT,
-            "the daemon must stop retrying after RECONCILE_HUB_FAILURE_LIMIT consecutive failures",
-        )
-        self.assertEqual(rc, 6, "a wedged daemon must exit NONZERO so its supervisor reacts")
-
-    def test_the_failure_counter_resets_on_a_good_step(self):
-        """Bounded means bounded CONSECUTIVELY. A hub that blips once an
-        hour must never accumulate its way to an exit over a day of
-        otherwise healthy reconciles.
-        """
-        import signal as _signal
-        from fleetlib import HubError
-
-        limit = fleetd.RECONCILE_HUB_FAILURE_LIMIT
-        calls = []
-        # fail (limit-1), succeed, fail (limit-1), succeed, then stop.
-        script = ([False] * (limit - 1)) + [True] + ([False] * (limit - 1)) + [True]
-
-        def scripted(*_a, **_kw):
-            idx = len(calls)
-            calls.append(idx)
-            if idx >= len(script):
-                os.kill(os.getpid(), _signal.SIGTERM)
-                return fleetd.ReconcileResult()
-            if not script[idx]:
-                raise HubError("simulated blip")
-            return fleetd.ReconcileResult()
-
-        rc = self.run_main(scripted)
-
-        self.assertEqual(
-            len(calls), len(script) + 1,
-            f"the daemon exited early: {2 * (limit - 1)} failures spread across two runs of "
-            f"{limit - 1} is never {limit} CONSECUTIVE failures",
-        )
-        self.assertEqual(rc, 0)
-
-    def test_once_mode_reports_a_failed_step_instead_of_exiting_zero(self):
-        """`--once` is the cron backstop. A single step that never ran must
-        not report success: exit 0 there tells the supervisor the host
-        reconciled when nothing happened at all.
-        """
-        from fleetlib import HubError
-
-        calls = []
-
-        def dead(*_a, **_kw):
-            calls.append(1)
-            raise HubError("simulated blip")
-
-        rc = self.run_main(dead, extra_argv=("--once",))
-
-        self.assertEqual(len(calls), 1, "--once must still be exactly one step")
-        self.assertEqual(rc, 6)
-
-    def test_a_non_hub_exception_is_never_swallowed(self):
-        """The guard catches `HubError` and nothing else. A bug in this
-        file, an OOM or a KeyboardInterrupt must take the process down
-        loudly rather than be retried every fifteen seconds forever.
-        """
-        def buggy(*_a, **_kw):
-            raise ValueError("a bug in reconcile_once, not a hub problem")
-
-        with self.assertRaises(ValueError):
-            self.run_main(buggy)

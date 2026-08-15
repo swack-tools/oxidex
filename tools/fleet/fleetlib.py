@@ -273,9 +273,20 @@ class Hub:
             fetch = self._run(["fetch", "--no-tags", "--quiet", self.url, f"+{ref}:{tmp_ref}"])
             if fetch.returncode != 0:
                 low = fetch.stderr.lower()
-                if "couldn't find remote ref" in low or "not found" in low:
-                    # Ref existed at the ls-remote and was deleted before
-                    # the fetch. A legitimate absence, not an error.
+                # ONLY git's exact wording for "the ref you asked to fetch
+                # is not there" -- "couldn't find remote ref <ref>" --
+                # means a legitimate absence (the ref existed at the
+                # ls-remote and was deleted before the fetch). A bare
+                # substring check for "not found" is NOT safe here: git's
+                # own message for a transport failure is "repository
+                # '<url>' not found" (see `_TRANSPORT_HINTS` above), which
+                # also contains "not found" and was being misclassified as
+                # an absent ref instead of raised as unreachable -- proof:
+                # adv-review/proof_read_absence.py. A vanished repository
+                # must never be reported the same way as "nobody has
+                # claimed this yet" (module docstring, "Distinguishing
+                # ref does not exist from could not reach the hub").
+                if "couldn't find remote ref" in low:
                     return None, None
                 raise HubUnreachableError(f"fetch of {ref} failed: {fetch.describe()}")
 

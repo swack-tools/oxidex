@@ -831,6 +831,8 @@ class AdoptionResult:
     released: list = field(default_factory=list)  # (ref, reason)
     orphans_killed: list = field(default_factory=list)  # (pgid, outcome)
     skipped: list = field(default_factory=list)  # (ref, reason)
+    sweep_skipped: bool = False  # True: an unreadable claim made the orphan
+    # sweep unsafe this cycle, so it did not run at all (see adopt_workers).
 
     def summary(self) -> str:
         return (
@@ -838,6 +840,7 @@ class AdoptionResult:
             f"released={[r for r, _ in self.released]} "
             f"orphans_killed={[p for p, _ in self.orphans_killed]} "
             f"skipped={len(self.skipped)}"
+            f"{' sweep_skipped=True' if self.sweep_skipped else ''}"
         )
 
 
@@ -886,6 +889,16 @@ def adopt_workers(
 
     claimed_pgids: set = set()
     adopted_pgids: set = set()
+    # A claim we could not READ is a claim whose pgid we cannot add to
+    # `claimed_pgids` -- and the docstring's promise ("a claim we decline
+    # to adopt still protects its process from being swept") cannot be kept
+    # for a pgid we never learned. Rather than guess, the whole orphan
+    # sweep below is skipped for this cycle whenever this happens: a live,
+    # properly-claimed gate must never be killed because its claim payload
+    # merely failed to read (proof: adv-review/proof_adopt_kills.py). The
+    # next reconcile loop tries the read again; the sweep only needs to run
+    # once conditions allow every claim to be read.
+    unreadable_claims = False
 
     for kind in ("gate", "agent"):
         for ref, sha in sorted(claim_mod.list_claims(hub, kind=kind).items()):
@@ -893,6 +906,7 @@ def adopt_workers(
                 payload = hub.read(ref)
             except HubError as e:
                 res.skipped.append((ref, f"unreadable: {e}"))
+                unreadable_claims = True
                 continue
             if payload is None:
                 continue  # deleted between list and read
@@ -952,6 +966,17 @@ def adopt_workers(
             )
             adopted_pgids.add(pgid)
             res.adopted.append((kind, c.key, pgid))
+
+    if unreadable_claims:
+        res.sweep_skipped = True
+        print(
+            f"fleetd[{host}] ORPHAN SWEEP SKIPPED this cycle: at least one claim "
+            f"could not be read, so its pgid is unknown and cannot be excluded "
+            f"from the kill set -- see res.skipped for which ref(s)",
+            file=sys.stderr,
+            flush=True,
+        )
+        return res
 
     for pgid, command in sorted(worker_probe(markers).items()):
         if pgid in adopted_pgids or pgid in claimed_pgids:
@@ -1172,15 +1197,22 @@ def reconcile_once(
     reasons argued inline below."""
     res = ReconcileResult()
 
-    desired_doc = hub.read(DESIRED_REF) or {}
-    my_desired = (desired_doc.get("hosts") or {}).get(host) or {}
-    limits = desired_doc.get("limits") or {}
-    want_gates = int(my_desired.get("gates") or 0)
-    enabled = bool(my_desired.get("enabled", False))
-
-    tip_sig = hub.read(TIP_SIGNAL_REF) or {}
-    res.tip_generation = tip_sig.get("generation")
-
+    # Reap finished/dead workers and kill any worker whose lease was LOST,
+    # BEFORE either hub read below that this step also has to do. Both of
+    # those reads (DESIRED_REF, TIP_SIGNAL_REF) can raise HubError, and
+    # until they succeed this function returns nothing to its caller --
+    # but `w.claim.lost` is already-known LOCAL state (set by the claim's
+    # own background renewer thread, not by a read here), and `release()`
+    # / `kill_worker()` below need no live hub read of their own
+    # (`Claim.release` already catches `HubUnreachableError` internally).
+    # A lost lease is precisely the event that happens WHILE the hub is
+    # in trouble -- renewals fail for the same transport reason reads do
+    # -- so reading DESIRED_REF/TIP_SIGNAL_REF first would let a hub
+    # outage raise before this loop ever ran, leaving an unleased gate
+    # running for as long as the outage lasts (proof:
+    # adv-review/proof_lost_not_killed.py). R2's "a lost lease is
+    # stop-work" must hold on every call, hub-reachable or not.
+    #
     # Reap finished/dead workers. A worker whose process group is gone
     # releases its claim here; a crashed fleetd's claims expire on their
     # own (LEASE_TTL) and are reaped by any host via claim.reap_expired.
@@ -1243,6 +1275,15 @@ def reconcile_once(
                 file=sys.stderr,
                 flush=True,
             )
+
+    desired_doc = hub.read(DESIRED_REF) or {}
+    my_desired = (desired_doc.get("hosts") or {}).get(host) or {}
+    limits = desired_doc.get("limits") or {}
+    want_gates = int(my_desired.get("gates") or 0)
+    enabled = bool(my_desired.get("enabled", False))
+
+    tip_sig = hub.read(TIP_SIGNAL_REF) or {}
+    res.tip_generation = tip_sig.get("generation")
 
     running = len([w for w in workers if w.kind == "gate"])
 
