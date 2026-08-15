@@ -706,6 +706,48 @@ exit 0
         self.assertEqual(self.gate_pgids(), {},
                          "the finished gate's process group must be gone")
 
+    def test_b_does_not_wait_the_full_ttl_when_as_process_group_is_dead(self):
+        """ARCH-FIX FIX 2, at process level (seam 4 in test_seams.py is the
+        same property under the REAL supervisor, over the full handover).
+
+        `start_fleetd` runs fleetd.py directly with its own new session
+        (`start_new_session=True`), so it is its OWN process group's
+        leader -- unlike under `fleetd-wrapper.sh`, nothing else shares
+        that pgid, and a SIGKILL empties the group immediately. B must be
+        able to get past the singleton well under `TEST_TTL` seconds, not
+        wait it out the way `test_b_adopts_the_gate_a_left_running` above
+        deliberately still does (that test synchronizes on natural expiry
+        on purpose, per this module's docstring, to describe the bound
+        adoption alone provides; this test is the proof FIX 2 tightens
+        that bound for the same-host case instead of leaving it at a full
+        TTL).
+        """
+        a = self.start_fleetd("a")
+        self.wait_for(lambda: self.gate_claim_ref() is not None, 60,
+                      f"fleetd A to claim a gate\n{self.log_of('a')}")
+        self.wait_for(lambda: (self.tmp / "gate.pid").exists(), 30, "the stub gate to start")
+
+        a.send_signal(signal.SIGKILL)  # no cleanup, no release, no drain
+        a.wait(timeout=10)
+
+        started_b_at = time.time()
+        self.start_fleetd("b")
+        self.wait_for(lambda: "adoption:" in self.log_of("b"), 60,
+                      f"fleetd B to report adoption\n{self.log_of('b')}")
+        elapsed = time.time() - started_b_at
+
+        self.assertLess(
+            elapsed, float(TEST_TTL),
+            f"B took {elapsed:.1f}s to get past the host singleton -- that is at "
+            f"least the full LEASE_TTL ({TEST_TTL}s), i.e. FIX 2's reap-before-expiry "
+            f"path did not fire and B fell back to waiting out the lease:\n"
+            f"{self.log_of('b')}",
+        )
+        self.assertNotIn(
+            f"another instance holds refs/fleet/claims/host/{HOST}", self.log_of("b"),
+            f"B logged a startup refusal before it went on to adopt:\n{self.log_of('b')}",
+        )
+
     def test_b_releases_the_claim_when_the_worker_died_too(self):
         """A killed, its gate killed too: B must free the slot rather than
         leave the branch blocked for a full lease."""
