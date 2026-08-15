@@ -25,6 +25,28 @@ Safety properties, each traced to a real incident:
   evidence of a MISSING conflict domain: the train emits a proposed
   domains.toml addition rather than silently absorbing the signal.
 
+Three more, each a day-one defect an adversarial review found before this
+module had ever run in production (2026-08-15):
+
+- ONLY a tree whose exact member set a gate returned PASS for is ever
+  pushed. The bisect memo (`_Memo.passed`) is the sole authority on that,
+  and `run_train` re-checks it against the survivor set immediately before
+  the push. The prior guard was `len(survivors) != len(members)`, a
+  heuristic that skipped the re-gate precisely when every member survived
+  its half -- i.e. when the *union* is the poison -- and pushed the tree
+  that had just FAILed.
+- Every staging-ref retirement is a CAS: `Hub.delete(expect_sha=...)`,
+  never `git push --delete`. The gate window is 20-45 minutes; a raw delete
+  discards whatever the author pushed during it, with no trace.
+- The train is a singleton, so its claim key is the CONSTANT "singleton".
+  It was the caller's own epoch string, which gave every invocation its own
+  ref and made two trains provably unable to contend -- the one thing the
+  claim existed to do. The epoch identifies the run, in the payload.
+
+The tip push carries `--push-option=train-token=<secret>` when the
+hub-local token file exists, which is what the hub's `update` hook checks
+(docs/FLEET.md R1). No file = hook not installed yet = push without it.
+
 `--dry-run` prints the batch it would run and why, touching nothing.
 """
 
@@ -53,9 +75,64 @@ BATCH_MAX = 8
 PUSH_RETRIES = 3
 PUSH_BACKOFF_S = 4
 
+# One train, fleet-wide. A constant key is what makes the claim a mutual
+# exclusion rather than a decoration -- see the module docstring.
+TRAIN_CLAIM_KIND = "train"
+TRAIN_CLAIM_KEY = "singleton"
+
+# The hub-side `update` hook denies every write to the tip that does not
+# carry this push option. The secret lives in a hub-local file (mode 0600);
+# its ABSENCE means the hook is not installed yet, and the train must keep
+# working in that state, so the option is simply omitted.
+TRAIN_TOKEN_ENV = "FLEET_TRAIN_TOKEN_FILE"
+TRAIN_TOKEN_DEFAULT = "~/git/oxidex.git/train.token"
+_NO_PUSH_OPTIONS = "does not support push options"
+
 
 class TrainError(Exception):
     pass
+
+
+def _warn(msg: str) -> None:
+    print(f"train: WARNING {msg}", file=sys.stderr)
+
+
+# --------------------------------------------------------------------- #
+# Tip push token (R1)
+# --------------------------------------------------------------------- #
+
+
+def train_token_path() -> Path:
+    return Path(os.environ.get(TRAIN_TOKEN_ENV) or TRAIN_TOKEN_DEFAULT).expanduser()
+
+
+def tip_push_options() -> list:
+    """`["--push-option=train-token=<secret>"]`, or `[]` if the hub-local
+    token file is absent/unreadable/empty.
+
+    Absent is the pre-rollout state and must not be an error. Empty or
+    unreadable is reported loudly and treated as absent: sending
+    `train-token=` can only ever be rejected, and failing the same way as
+    "no token at all" is easier to diagnose than a mysterious hook denial.
+    """
+    p = train_token_path()
+    try:
+        token = p.read_text().strip()
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        _warn(f"cannot read train token {p}: {exc} -- pushing without it")
+        return []
+    if not token:
+        _warn(f"train token {p} is empty -- pushing without it")
+        return []
+    try:
+        mode = p.stat().st_mode & 0o777
+        if mode & 0o077:
+            _warn(f"train token {p} is group/world accessible (mode {mode:04o}); expected 0600")
+    except OSError:
+        pass
+    return [f"--push-option=train-token={token}"]
 
 
 # --------------------------------------------------------------------- #
@@ -147,12 +224,40 @@ def assemble_batch(
 
 @dataclass
 class RunResult:
-    outcome: str  # "advanced" | "empty" | "restarted" | "all-ejected"
+    # "advanced" | "empty" | "restarted" | "all-ejected" | "claim-held"
+    outcome: str
     landed: list = field(default_factory=list)
     ejected: list = field(default_factory=list)  # (branch, reason)
     gate_invocations: int = 0
     missing_domain_proposals: list = field(default_factory=list)
     new_tip: Optional[str] = None
+    # Branches that LANDED but whose staging ref could not be retired --
+    # the CAS refused because the ref moved while we gated. Loud, never
+    # silent: somebody's commit is sitting on a branch the train just
+    # partially consumed.
+    retire_failures: list = field(default_factory=list)  # (branch, why)
+
+
+@dataclass
+class _Memo:
+    """Gate verdicts by EXACT member set, the only authority on whether a
+    tree may be pushed.
+
+    `passed` keeps the bisect's 2*log2(N)+1 bound by never re-gating a set
+    already proven. `failed` is what makes the reassembly path terminate:
+    a survivor union that reassembles into a set which already failed
+    cannot be improved by gating it again, and gating it again is an
+    infinite loop (halves are memoized, so the bisect returns the same
+    union forever).
+    """
+
+    passed: set = field(default_factory=set)
+    failed: set = field(default_factory=set)
+    ejected: set = field(default_factory=set)
+
+
+def _memo_key(members: list) -> tuple:
+    return tuple(sorted(c.slug for c in members))
 
 
 def merge_members(clone: Path, tip_sha: str, members: list) -> tuple:
@@ -186,11 +291,50 @@ def run_train(
     batch_max: int = BATCH_MAX,
     dry_run: bool = False,
     _clone_src: Optional[str] = None,
+    hub_workdir: Optional[Path] = None,
 ) -> RunResult:
-    """One train run. `gate_fn(clone, label) -> "PASS"|"FAIL"|"ABORT"`
-    gates the CURRENT HEAD of `clone` (injected so tests mock it)."""
+    """One train run, under the fleet-wide singleton claim.
+
+    `gate_fn(clone, label) -> "PASS"|"FAIL"|"ABORT"` gates the CURRENT HEAD
+    of `clone` (injected so tests mock it). Returns
+    `RunResult(outcome="claim-held")` -- it does not raise -- if another
+    train already holds the singleton, so a caller can report "one train is
+    already running" without treating it as a failure.
+
+    The claim is skipped for `dry_run`, which writes nothing and must not
+    be able to block a real run.
+    """
+    hub = Hub(
+        hub_url,
+        workdir=Path(hub_workdir) if hub_workdir else Path.home() / ".fleetd" / "traincache",
+    )
+    if dry_run:
+        return _run_train_locked(hub, hub_url, gate_fn, batch_max, True, _clone_src)
+    try:
+        # Constant key, epoch in the payload: two trains contend here or
+        # nowhere. `Claim.__enter__` reaps an EXPIRED holder, so a train
+        # killed mid-run cannot wedge the fleet past its lease.
+        with Claim(
+            hub,
+            kind=TRAIN_CLAIM_KIND,
+            key=TRAIN_CLAIM_KEY,
+            work_kind="train",
+            work_key=epoch,
+        ):
+            return _run_train_locked(hub, hub_url, gate_fn, batch_max, False, _clone_src)
+    except ClaimHeldError:
+        return RunResult(outcome="claim-held")
+
+
+def _run_train_locked(
+    hub: Hub,
+    hub_url: str,
+    gate_fn: Callable[[Path, str], str],
+    batch_max: int,
+    dry_run: bool,
+    _clone_src: Optional[str],
+) -> RunResult:
     res = RunResult(outcome="empty")
-    hub = Hub(hub_url, workdir=Path.home() / ".fleetd" / "traincache")
 
     tmp = Path(tempfile.mkdtemp(prefix="train-"))
     try:
@@ -229,8 +373,22 @@ def run_train(
             res.ejected.extend((c.branch, why) for c, why in ejected)
             if not merged:
                 continue
-            survivors = _gate_and_bisect(clone, tip_sha, merged, gate_fn, res)
+            memo = _Memo()
+            survivors = _gate_and_bisect(clone, tip_sha, merged, gate_fn, res, memo)
             if survivors:
+                # The one invariant worth restating at the push site: a
+                # tree is pushable only if a gate said PASS for EXACTLY
+                # this member set. Not "for its halves", not "for a
+                # superset that failed". If this ever trips, the bisect
+                # returned an unproven tree and the correct move is to
+                # push nothing at all.
+                key = _memo_key(survivors)
+                if key not in memo.passed:
+                    raise TrainError(
+                        "refusing to advance the tip: survivor set "
+                        f"{list(key)} was never gated as exactly that set "
+                        f"(gated PASS sets: {sorted(memo.passed)})"
+                    )
                 # Tip may have moved while we gated.
                 now_tip = hub.sha(TIP_REF)
                 if now_tip != tip_sha:
@@ -249,17 +407,32 @@ def run_train(
 
 
 def _gate_and_bisect(
-    clone: Path, tip_sha: str, members: list, gate_fn, res: RunResult, _passed: Optional[set] = None
+    clone: Path, tip_sha: str, members: list, gate_fn, res: RunResult, memo: Optional[_Memo] = None
 ) -> list:
-    """Gate the merged HEAD; on FAIL bisect by re-merging halves. Returns
-    the members that belong in the tree (whose combined merge passed).
-    `_passed` memoizes member-sets that already gated PASS, so a bisect
-    never re-gates a set it just proved (keeps the 2*log2(N)+1 bound)."""
-    if _passed is None:
-        _passed = set()
-    key = tuple(sorted(c.slug for c in members))
-    if key in _passed:
+    """Gate the merged HEAD; on FAIL bisect by re-merging halves.
+
+    Returns the members that belong in the tree -- and it returns them ONLY
+    when a gate said PASS for exactly that set, which the caller re-checks
+    against `memo.passed` before pushing. On return, the clone's HEAD is
+    the tree containing exactly the returned members, on every path.
+
+    `memo` carries both verdicts keyed by exact member set: `passed` keeps
+    the 2*log2(N)+1 bound, `failed` stops the reassembly path from re-gating
+    (forever) a set already known bad.
+    """
+    if memo is None:
+        memo = _Memo()
+    if not members:
+        return []
+    key = _memo_key(members)
+    if key in memo.passed:
         return members
+    if key in memo.failed:
+        # Already gated as this exact set, and it did not pass. Gating it
+        # again cannot change the answer and does not terminate (the halves
+        # are memoized, so the bisect hands back this same union forever).
+        _eject_union(clone, tip_sha, members, res, memo)
+        return []
     label = "+".join(c.slug for c in members)
     verdict = gate_fn(clone, label)
     res.gate_invocations += 1
@@ -268,8 +441,9 @@ def _gate_and_bisect(
         verdict = gate_fn(clone, label + "+retry")
         res.gate_invocations += 1
     if verdict == "PASS":
-        _passed.add(key)
+        memo.passed.add(key)
         return members
+    memo.failed.add(key)
     if len(members) == 1:
         c = members[0]
         res.ejected.append((c.branch, f"gate {verdict}"))
@@ -277,33 +451,125 @@ def _gate_and_bisect(
         if not c.solo:
             res.missing_domain_proposals.extend(c.write_set[:5])
         # rebuild tree without it
-        _rebuild(clone, tip_sha, [])
+        _rebuild(clone, tip_sha, [], res)
         return []
     mid = len(members) // 2
-    halves = [members[:mid], members[mid:]]
     survivors: list = []
-    for half in halves:
-        merged, ejected = ( _rebuild(clone, tip_sha, half), [] )
-        keep = _gate_and_bisect(clone, tip_sha, merged, gate_fn, res, _passed)
-        survivors.extend(keep)
-    # Re-merge all survivors together for the final tree; their union
-    # passed only in halves, so gate the combination once more.
-    if survivors and len(survivors) != len(members):
-        merged = _rebuild(clone, tip_sha, survivors)
-        keep = _gate_and_bisect(clone, tip_sha, merged, gate_fn, res, _passed)
-        return keep
-    _rebuild(clone, tip_sha, survivors)
-    return survivors
+    for half in (members[:mid], members[mid:]):
+        # Use what actually re-merged: a member ejected here (conflict, or
+        # empty because a sibling already carried its change) is NOT in the
+        # tree and must never be reported as landed.
+        merged = _rebuild(clone, tip_sha, half, res)
+        survivors.extend(_gate_and_bisect(clone, tip_sha, merged, gate_fn, res, memo))
+    if not survivors:
+        _rebuild(clone, tip_sha, [], res)
+        return []
+    # Reassemble the survivors and gate THAT set. Their union has passed
+    # only in halves; whether this exact combination has ever been gated is
+    # a question only the memo can answer, and the memo is asked -- by the
+    # recursive call, whose first act is that lookup. The guard here used
+    # to be `len(survivors) != len(members)`, which skipped the re-gate in
+    # exactly the case where the union is the poison and shipped the tree
+    # that had just FAILed (2026-08-15 adversarial review).
+    merged = _rebuild(clone, tip_sha, survivors, res)
+    return _gate_and_bisect(clone, tip_sha, merged, gate_fn, res, memo)
 
 
-def _rebuild(clone: Path, tip_sha: str, members: list) -> list:
-    merged, _ej = merge_members(clone, tip_sha, members)
+def _eject_union(clone: Path, tip_sha: str, members: list, res: RunResult, memo: _Memo) -> None:
+    """Nothing lands from a set that fails only in combination.
+
+    Every member gated clean on its own, so there is no culprit to condemn
+    and no subset the train can prove good; the branches stay on the hub
+    (an `ejected` entry deletes nothing) and go back in the queue. A
+    file-disjoint set that fails only together is the same evidence a lone
+    bisect culprit is: a conflict domain nobody declared.
+    """
+    key = _memo_key(members)
+    if key not in memo.ejected:
+        memo.ejected.add(key)
+        for c in members:
+            res.ejected.append(
+                (c.branch, "union gate FAIL (no single culprit; every member passes apart)")
+            )
+            if not c.solo:
+                res.missing_domain_proposals.extend(c.write_set[:2])
+    _rebuild(clone, tip_sha, [], res)
+
+
+def _rebuild(clone: Path, tip_sha: str, members: list, res: Optional[RunResult] = None) -> list:
+    """Re-merge `members` onto the tip and return the ones that ACTUALLY
+    merged. The return value is load-bearing: the final reassembly used to
+    discard it, so a member ejected during that re-merge stayed in the
+    survivor list and was reported as landed while absent from the tree."""
+    merged, ejected = merge_members(clone, tip_sha, members)
+    if res is not None:
+        res.ejected.extend((c.branch, f"{why} (during bisect re-merge)") for c, why in ejected)
     return merged
 
 
-def _push_tip_and_retire(hub: Hub, clone: Path, members: list, new_tip: str, res: RunResult):
-    for attempt in range(PUSH_RETRIES):
+def _push_tip(clone: Path, options: list):
+    """The one write to the protected tip. Carries the train token when the
+    hub-local file exists (R1)."""
+    r = _git(["push", *options, "origin", f"HEAD:{TIP_REF}"], cwd=clone, check=False)
+    if r.returncode != 0 and options and _NO_PUSH_OPTIONS in (r.stderr or "").lower():
+        # The hub cannot receive push options at all (its
+        # receive.advertisePushOptions is unset), so no update hook can be
+        # reading one either. Retrying without the token keeps the train
+        # working through a half-finished rollout instead of wedging on
+        # every run -- loudly, because it means the hub is misconfigured.
+        _warn(
+            "hub does not advertise push options (receive.advertisePushOptions); "
+            "retrying the tip push WITHOUT the train token -- the update hook "
+            "cannot be enforcing one in this state"
+        )
         r = _git(["push", "origin", f"HEAD:{TIP_REF}"], cwd=clone, check=False)
+    return r
+
+
+def _delete_ref_cas(hub: Optional[Hub], clone: Path, ref: str, expect_sha: str) -> bool:
+    """Delete `ref` ONLY if it still points at `expect_sha`. Never a raw
+    `git push --delete`: the fallback (no Hub in hand) is the same
+    compare-and-swap spelled in git."""
+    if hub is not None:
+        try:
+            return hub.delete(ref, expect_sha=expect_sha)
+        except HubError as exc:
+            _warn(f"CAS delete of {ref} failed: {exc}")
+            return False
+    r = _git(
+        ["push", f"--force-with-lease={ref}:{expect_sha}", "origin", f":{ref}"],
+        cwd=clone,
+        check=False,
+    )
+    return r.returncode == 0
+
+
+def _retire_staging_ref(hub: Hub, clone: Path, c: Candidate, res: RunResult) -> None:
+    """Retire `staging/<slug>` -- but only the exact commit the train
+    gated. The gate window is 20-45 minutes; a raw delete here throws away
+    whatever the author pushed during it, and nothing downstream can tell
+    that it happened. A refused delete leaves the branch queued (its new
+    head is not an ancestor of the tip, so the next run picks it up)."""
+    ref = f"refs/heads/staging/{c.slug}"
+    if _delete_ref_cas(hub, clone, ref, c.sha):
+        return
+    try:
+        actual = hub.sha(ref)
+    except HubError:
+        actual = None
+    why = (
+        f"{ref} NOT retired: expected {c.sha[:12]}, hub has "
+        f"{(actual or 'absent')[:12]} -- the branch moved while the train gated. "
+        f"{c.branch} IS in the new tip; its staging ref is kept and requeued."
+    )
+    _warn(why)
+    res.retire_failures.append((c.branch, why))
+
+
+def _push_tip_and_retire(hub: Hub, clone: Path, members: list, new_tip: str, res: RunResult):
+    options = tip_push_options()
+    for attempt in range(PUSH_RETRIES):
+        r = _push_tip(clone, options)
         if r.returncode == 0:
             break
         time.sleep(PUSH_BACKOFF_S * (attempt + 1))
@@ -315,8 +581,8 @@ def _push_tip_and_retire(hub: Hub, clone: Path, members: list, new_tip: str, res
             _git(["push", "origin", f"{c.sha}:{rescued_ref}"], cwd=clone, check=False)
             got = _git(["ls-remote", "origin", rescued_ref], cwd=clone).stdout.split("\t")[0].strip()
             if got == c.sha:
-                _git(["push", "origin", "--delete", f"refs/heads/staging/{c.slug}"], cwd=clone, check=False)
                 res.landed.append(c.branch)
+                _retire_staging_ref(hub, clone, c, res)
                 break
             time.sleep(PUSH_BACKOFF_S * (attempt + 1))
         else:
@@ -330,12 +596,13 @@ def _push_tip_and_retire(hub: Hub, clone: Path, members: list, new_tip: str, res
 # --------------------------------------------------------------------- #
 
 
-def real_gate(clone: Path, label: str) -> str:
+def real_gate(clone: Path, label: str, hub: Optional[Hub] = None) -> str:
     """Run tools/fleet/gate.sh from the merged tree against its own HEAD
     by pushing HEAD to a temp staging ref first (gate.sh takes a branch)."""
     tag = f"train-{label.replace('/', '-')[:40]}-{int(time.time()) % 100000}"
     branch = f"staging/train-tmp-{tag}"
-    _git(["push", "origin", f"HEAD:refs/heads/{branch}"], cwd=clone)
+    head = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
+    _git(["push", "origin", f"{head}:refs/heads/{branch}"], cwd=clone)
     try:
         script = clone / "tools" / "fleet" / "gate.sh"
         subprocess.run(["bash", str(script), branch, tag], check=False)
@@ -347,7 +614,11 @@ def real_gate(clone: Path, label: str) -> str:
             return "ABORT"
         return "FAIL"
     finally:
-        _git(["push", "origin", "--delete", f"refs/heads/{branch}"], cwd=clone, check=False)
+        # CAS even here: the ref is ours and short-lived, but "delete a ref
+        # without checking what it points at" is the shape of the bug, not
+        # the identity of the ref.
+        if not _delete_ref_cas(hub, clone, f"refs/heads/{branch}", head):
+            _warn(f"temp gate ref refs/heads/{branch} not deleted (moved or unreachable)")
 
 
 def main(argv=None) -> int:
@@ -367,18 +638,19 @@ def main(argv=None) -> int:
                   batch_max=args.batch_max)
         return 0
 
+    # The singleton claim is taken inside run_train (constant key, epoch in
+    # the payload) so that every caller contends, not just this one.
     hub = Hub(args.hub, workdir=Path.home() / ".fleetd" / "traincache")
-    try:
-        with Claim(hub, kind="train", key=epoch, work_kind="train", work_key=epoch):
-            res = run_train(args.hub, repo_root, gate_fn=real_gate, epoch=epoch,
-                            batch_max=args.batch_max)
-    except ClaimHeldError:
-        print("train: another train run holds the claim; not starting a second")
+    res = run_train(args.hub, repo_root, epoch=epoch, batch_max=args.batch_max,
+                    gate_fn=lambda clone, label: real_gate(clone, label, hub=hub))
+    if res.outcome == "claim-held":
+        print("train: another train run holds the singleton claim; not starting a second")
         return 3
     print(json.dumps({
         "outcome": res.outcome, "landed": res.landed, "ejected": res.ejected,
         "gate_invocations": res.gate_invocations, "new_tip": res.new_tip,
         "missing_domain_proposals": res.missing_domain_proposals,
+        "retire_failures": res.retire_failures,
     }, indent=2))
     return 0
 
