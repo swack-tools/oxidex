@@ -26,6 +26,28 @@ day, and the orchestrating session itself crashed three times while this
 file was being written. Anything only a process remembered was lost each
 time; everything a ref remembered survived.
 
+That paragraph was a promise this file did not keep until ARCH-FIX R6.
+Everything needed to rebuild `workers` was indeed on the hub -- claims
+carry `holder_host` and `pgid` -- and nothing read it. A restarted fleetd
+started with `workers = []`, so a gate its predecessor launched became
+invisible: the daemon believed it had a free slot and started a SECOND
+gate on the same branch as soon as the first's claim expired, while the
+first ran on to completion unsupervised, unrenewed and unkillable. The
+state was rebuildable and simply never rebuilt. `adopt_workers()` is that
+rebuild, and it runs before the first reconcile:
+
+  * a claim held by THIS host whose recorded process group is still alive
+    is ADOPTED -- `Claim.adopt` continues the existing lease (same
+    ownership token, no delete-and-recreate) and resumes renewing it;
+  * a claim held by this host whose process group is gone is RELEASED,
+    freeing the branch immediately instead of after a full TTL;
+  * a process group that looks like a fleet worker but is named by no
+    claim at all is KILLED by group -- it is running unleased, which means
+    nothing anywhere is stopping another host from doing the same work.
+
+Claims held by OTHER hosts are read and then left entirely alone, in all
+three cases.
+
 `reconcile_once()` is a pure step function so tests can drive it against
 a fixture hub with a stub gate command; `main()` is just the loop.
 """
@@ -43,11 +65,12 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import claim as claim_mod
+import dispatch as dispatch_mod
 import verdict
 import workqueue
 from claim import Claim, compute_platform_id, compute_rustc_id
@@ -71,11 +94,13 @@ HOSTS_PREFIX = "refs/fleet/hosts/"
 PUSH_RETRIES = 3
 PUSH_BACKOFF_S = 4
 
-# An agent invocation is a PAID claude/codex run. A branch whose agent
-# made no progress must not be retried every loop: 30min cooldown,
-# in-memory (a fleetd restart forgetting it is acceptable).
-AGENT_RETRY_COOLDOWN_S = int(os.environ.get("FLEET_AGENT_COOLDOWN_S", "1800"))
-_agent_attempts: dict = {}
+# An agent invocation is a PAID claude/codex run, and the record of what
+# has already been bought is a HUB REF, not a dict in this process
+# (ARCH-FIX-SPEC.md R5). The `_agent_attempts` dict that used to live here
+# was reset by every restart -- and this daemon restarted roughly hourly --
+# so its 30-minute cooldown was, in practice, no cooldown at all. See
+# `dispatch.py` for the ledger, the cap and the cooldown, all derived from
+# `refs/fleet/attempts/<key>`.
 
 # Seconds between SIGTERM and SIGKILL when tearing down a worker whose
 # lease was lost. Short by design: the window we are closing is "two hosts
@@ -181,6 +206,76 @@ def default_gate_command(repo_root: Path) -> list:
     return [str(repo_root / "tools" / "fleet" / "gate.sh")]
 
 
+# Substrings that identify a process-group LEADER as a fleet worker, for the
+# orphan sweep in `adopt_workers`. Overridable via FLEET_WORKER_MARKERS
+# (comma-separated) so a host whose gate lives at a non-default path -- and
+# the fixture tests, whose "gate" is a stub script -- can say so without
+# this list growing guesses.
+WORKER_MARKERS = ("tools/fleet/gate.sh", "tools/fleet/agentworker.py")
+
+
+def worker_markers() -> tuple:
+    raw = os.environ.get("FLEET_WORKER_MARKERS")
+    if raw and raw.strip():
+        return tuple(m for m in (p.strip() for p in raw.split(",")) if m)
+    return WORKER_MARKERS
+
+
+def fleet_worker_pgids(markers: Optional[Sequence[str]] = None) -> dict:
+    """`{pgid: command}` for fleet-worker process groups on this host.
+
+    By LISTING (`ps -eo`), never `pgrep` -- the rule this daemon's docstring
+    already states, for the reason it states.
+
+    Three filters, each of which exists to stop this function reporting
+    something the orphan sweep would then kill:
+
+      * same uid only. `ps -e` shows every user's processes, and another
+        user's fleetd running its own gates on a shared box is not ours to
+        signal.
+      * group LEADER only (`pid == pgid`). Workers are spawned with
+        `start_new_session`, so the leader is the gate/agent itself; the
+        cargo and rustc children underneath it share the pgid and would
+        otherwise each report the same group again.
+      * an explicit command marker. A pgid is not evidence of anything on
+        its own, and the sweep SIGTERMs what this returns.
+
+    Consequence of the leader filter, stated rather than hidden: a group
+    whose leader has already exited while children linger is not reported,
+    so it is not swept. That is the safe direction -- the alternative is a
+    matcher that fires on `rustc` command lines.
+    """
+    markers = tuple(markers) if markers else worker_markers()
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pgid=,pid=,uid=,command="],
+            capture_output=True, text=True, errors="replace", timeout=10,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    try:
+        uid = os.getuid()
+    except AttributeError:
+        uid = None
+    found: dict = {}
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        spgid, spid, suid, command = parts
+        if not (spgid.isdigit() and spid.isdigit() and suid.isdigit()):
+            continue
+        pgid, pid, puid = int(spgid), int(spid), int(suid)
+        if uid is not None and puid != uid:
+            continue
+        if pid != pgid:
+            continue
+        if not any(m in command for m in markers):
+            continue
+        found[pgid] = command
+    return found
+
+
 def _pgid_alive(pgid: int) -> bool:
     """Does any process remain in group `pgid`? `killpg(pgid, 0)` is the
     cheap probe; `live_pgids()` (the `ps` listing) is the instrument used
@@ -272,19 +367,19 @@ def start_gate(
     (os.setsid via start_new_session -- portable to macOS, which has no
     setsid binary). Kill = kill the group; orphaned cargo/rustc children
     become impossible (M8). Returns None if someone else holds the claim."""
-    # holder_host=host, not Claim's own socket.gethostname() default: `host`
-    # is this daemon's FLEET identity (host_identity(), FLEET_HOST-
-    # overridable -- the work2 pod's real hostname is a k8s-generated
-    # `work2box-<hash>`) and is what every other hub write this daemon
-    # makes (the heartbeat ref, HOSTS_PREFIX + host) is keyed by. Leaving
-    # it to default would record a claim under the machine's raw hostname
-    # while everything else about this host is filed under `host` -- e.g.
-    # `fleet status`'s WORK column (ARCH-FIX R4), which joins claims to
-    # heartbeat rows on this exact field, would never find a match.
-    c = Claim(
-        hub, kind="gate", key=branch.replace("/", "-"), work_kind="gate", work_key=branch,
-        holder_host=host,
-    )
+    # holder_host=host, NOT Claim's `socket.gethostname()` default. These
+    # are different strings wherever `FLEET_HOST` is set -- which is the
+    # work2 pod, whose hostname is a k8s-generated `work2box-<hash>` while
+    # its fleet identity is `work2`. `start_gate` has always taken `host`
+    # and, until R6 needed it, never used it: nothing read `holder_host`,
+    # so the skew cost nothing and stayed invisible. It stops being free
+    # the moment adoption asks "is this claim mine?", and it would have
+    # answered "no" for every claim on the pod while reporting a perfectly
+    # healthy "nothing to adopt". R4's `fleet status` WORK column joins
+    # claims to heartbeat rows on this same field and would likewise have
+    # matched nothing.
+    c = Claim(hub, kind="gate", key=branch.replace("/", "-"), work_kind="gate",
+              work_key=branch, holder_host=host)
     try:
         # acquire_or_reap: an EXPIRED claim (crashed holder, TTL passed)
         # must not block the branch forever -- reap it CAS'd and proceed.
@@ -327,7 +422,7 @@ def start_agent(
     intent_slug = branch.removeprefix("intent:") if branch.startswith("intent:") else None
     # holder_host=host: see the identical comment in start_gate above.
     c = Claim(hub, kind="agent", key=branch.replace("/", "-").replace(":", "-"),
-              work_kind="agent", work_key=branch, holder_host=host)
+              work_kind="agent", work_key=branch, holder_host=host)  # see start_gate
     try:
         c.acquire_or_reap()
     except claim_mod.ClaimHeldError:
@@ -529,6 +624,335 @@ def write_heartbeat(hub: Hub, host: str, payload: dict) -> bool:
     return False
 
 
+@dataclass
+class AdoptionResult:
+    adopted: list = field(default_factory=list)  # (kind, key, pgid)
+    released: list = field(default_factory=list)  # (ref, reason)
+    orphans_killed: list = field(default_factory=list)  # (pgid, outcome)
+    skipped: list = field(default_factory=list)  # (ref, reason)
+
+    def summary(self) -> str:
+        return (
+            f"adopted={[f'{k}/{key}#{p}' for k, key, p in self.adopted]} "
+            f"released={[r for r, _ in self.released]} "
+            f"orphans_killed={[p for p, _ in self.orphans_killed]} "
+            f"skipped={len(self.skipped)}"
+        )
+
+
+def adopt_workers(
+    hub: Hub,
+    host: str,
+    workers: list,
+    pgid_probe: Callable[[], set] = live_pgids,
+    worker_probe: Callable[..., dict] = fleet_worker_pgids,
+    killer: Callable[..., str] = kill_process_group,
+    markers: Optional[Sequence[str]] = None,
+) -> AdoptionResult:
+    """Rebuild `workers` from this host's live claims + process groups
+    (ARCH-FIX-SPEC.md R6). Appends adopted workers to `workers` in place.
+
+    Call this ONCE, at daemon start, after the host singleton is held --
+    holding the singleton is what makes it safe, because it guarantees no
+    other fleetd on this host is adopting the same claims concurrently.
+
+    The three dispositions, and the evidence each requires:
+
+      ADOPT   claim.holder_host == us AND claim.pgid is in the `ps` listing.
+              `Claim.adopt` continues the lease rather than re-taking it
+              (see its docstring); the ref is never absent for an instant,
+              so no other host ever observes this branch as free.
+      RELEASE claim.holder_host == us AND the pgid is gone. The work died
+              with the daemon. Releasing now returns the branch to the
+              queue immediately instead of leaving it blocked for the rest
+              of the lease's TTL.
+      KILL    a fleet-worker process group named by NO live claim on the
+              hub. Unleased running work is the exact hazard leases exist
+              to prevent -- nothing is stopping another host from starting
+              the same branch beside it -- so it goes, by group, per M8.
+
+    Claims held by other hosts are counted in `skipped` and otherwise
+    untouched: not adopted, not released, and (because the kill set
+    excludes every claimed pgid, whoever holds the claim) their processes
+    are not swept either.
+    """
+    res = AdoptionResult()
+    live = pgid_probe()
+    try:
+        own_pgid = os.getpgrp()
+    except (AttributeError, OSError):
+        own_pgid = None
+
+    claimed_pgids: set = set()
+    adopted_pgids: set = set()
+
+    for kind in ("gate", "agent"):
+        for ref, sha in sorted(claim_mod.list_claims(hub, kind=kind).items()):
+            try:
+                payload = hub.read(ref)
+            except HubError as e:
+                res.skipped.append((ref, f"unreadable: {e}"))
+                continue
+            if payload is None:
+                continue  # deleted between list and read
+
+            pgid = payload.get("pgid")
+            pgid = pgid if isinstance(pgid, int) else None
+            if pgid is not None and pgid > 1:
+                # Recorded on EVERY claim we could read, including other
+                # hosts', before the holder check below -- this set is the
+                # orphan sweep's exclusion list, and a claim we decline to
+                # adopt still protects its process from being swept.
+                claimed_pgids.add(pgid)
+
+            if payload.get("holder_host") != host:
+                res.skipped.append((ref, f"held by {payload.get('holder_host')!r}"))
+                continue
+
+            if pgid is None or pgid <= 1 or (own_pgid is not None and pgid == own_pgid):
+                # No usable process group: either the claim was taken and
+                # the daemon died before `start_gate` could write the real
+                # pgid (so this is the dead daemon's own group), or the
+                # payload is malformed. Either way there is no work to
+                # adopt.
+                reason = f"no adoptable process group (pgid={payload.get('pgid')!r})"
+                res.released.append((ref, reason))
+                _release_claim_ref(hub, ref, sha, host, reason, res)
+                continue
+
+            if pgid not in live:
+                reason = f"process group {pgid} is gone"
+                res.released.append((ref, reason))
+                _release_claim_ref(hub, ref, sha, host, reason, res)
+                continue
+
+            c = claim_mod.Claim.adopt(hub, ref, expected_host=host)
+            if c is None:
+                # The lease is no longer ours (reaped and re-taken between
+                # our read and our renewal). Deliberately NOT released --
+                # it belongs to whoever holds it now. Its pgid is also
+                # deliberately NOT in `adopted_pgids`, so the sweep below
+                # kills that process: someone else may already be running
+                # this work, which is precisely T1's kill-on-lost rule
+                # arriving one moment earlier.
+                res.skipped.append((ref, "adopt refused: lease no longer ours"))
+                claimed_pgids.discard(pgid)
+                continue
+
+            workers.append(
+                Worker(
+                    branch=payload.get("work_key") or c.key,
+                    tag=f"adopted-{kind}-{c.key}",
+                    pgid=pgid,
+                    claim=c,
+                    popen=None,  # not our child: `alive()` falls back to pgids
+                    kind=payload.get("work_kind") or kind,
+                )
+            )
+            adopted_pgids.add(pgid)
+            res.adopted.append((kind, c.key, pgid))
+
+    for pgid, command in sorted(worker_probe(markers).items()):
+        if pgid in adopted_pgids or pgid in claimed_pgids:
+            continue
+        if own_pgid is not None and pgid == own_pgid:
+            continue
+        # Verify the kill by LISTING, not by `killpg(pgid, 0)`. An orphan's
+        # leader becomes a zombie the instant it dies and its reparenting
+        # has not happened yet; a signal probe reports that zombie's group
+        # as alive, so the sweep would burn the whole SIGTERM grace and then
+        # SIGKILL a corpse (EPERM). `live_pgids()` filters `Z` state, which
+        # is exactly why `kill_process_group`'s own docstring names the ps
+        # listing as the instrument for verifying a kill.
+        outcome = killer(pgid, alive_probe=lambda p: p in pgid_probe())
+        res.orphans_killed.append((pgid, outcome))
+        print(
+            f"fleetd[{host}] ORPHAN process group {pgid} ({command[:80]}) has no "
+            f"live claim -- killed: {outcome}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return res
+
+
+def _release_claim_ref(hub: Hub, ref: str, sha: str, host: str, reason: str,
+                       res: AdoptionResult) -> None:
+    """CAS-delete a claim of ours whose work is gone. A failed CAS means
+    somebody moved the ref under us, which makes it not ours to delete --
+    downgrade the record from `released` to `skipped` rather than retry."""
+    try:
+        ok = hub.delete(ref, expect_sha=sha)
+    except HubError as e:
+        ok = False
+        reason = f"{reason}; delete failed: {e}"
+    if not ok:
+        res.released = [entry for entry in res.released if entry[0] != ref]
+        res.skipped.append((ref, f"stale on release: {reason}"))
+        return
+    print(f"fleetd[{host}] RELEASED orphaned claim {ref}: {reason}",
+          file=sys.stderr, flush=True)
+
+
+def dispatch_agents(
+    hub: Hub,
+    host: str,
+    workers: list,
+    slots: int,
+    log_dir: Path,
+    repo_root: Path,
+    res: "ReconcileResult",
+) -> None:
+    """Fill up to `slots` agent slots, buying nothing that cannot pay off
+    (ARCH-FIX-SPEC.md R5). Appends started workers to `workers` in place.
+
+    Three gates stand between a candidate and a spawn, in increasing order
+    of cost to evaluate:
+
+      1. BUSY -- somebody (here or elsewhere) is already on this key.
+      2. BUDGET -- `dispatch.budget_refusal` over the DURABLE attempt
+         record: the hard cap on consecutive failures, and the cooldown
+         derived from `last_at`. Both survive a restart, which the dict
+         this replaced did not.
+      3. ECONOMICS -- `dispatch.economic_refusal`: is there drift to
+         converge, and has this (branch, tip) pair already PASSed? These
+         cost git fetches, so they run last and only on keys that got
+         through 1 and 2.
+
+    Then `dispatch.order_candidates` decides who actually gets the slots,
+    which is where the reserved authoring slot lives.
+
+    This is the layer where a refusal is CHEAPEST: nothing has been forked,
+    no repository has been cloned, no CLI token has been spent, and the
+    claim that a spawn would have taken is never taken -- so the branch
+    stays visible to the rest of the fleet instead of looking busy for the
+    lifetime of a doomed worker. `agentworker` re-checks the economics for
+    itself (see its module docstring); that second check exists to catch
+    the tip moving between here and there, not to make this one optional.
+    """
+    records = dispatch_mod.load_all(hub)
+    busy = {w.branch for w in workers}
+    tip_sha = hub.sha(workqueue.TIP_REF)
+    cooled: list = []
+
+    def _budget_ok(key: str) -> bool:
+        refusal = dispatch_mod.budget_refusal(dispatch_mod.get(records, key))
+        if refusal is None:
+            return True
+        code, detail = refusal
+        if code == "cooldown":
+            # Aggregated below: the common, boring, working-as-intended
+            # case, and one line per backlog branch every 15s drowns the
+            # log lines that matter.
+            cooled.append(key)
+        else:
+            res.refused.append((f"agent-{code}", f"{key}: {detail}"))
+        return False
+
+    # Gates 1 and 2 only -- both are pure over data already in hand, so the
+    # whole queue can be filtered for free. Gate 3 (economics) costs a git
+    # fetch per branch and is deferred to the dispatch loop below, which
+    # evaluates it lazily and stops as soon as the slots are full: on a
+    # 30-branch backlog with one free slot that is one fetch per reconcile
+    # instead of thirty, every fifteen seconds, against the real hub.
+    convergence: list = []
+    branch_shas: dict = {}
+    for slug, entry in workqueue.Queue(hub).compute().items():
+        branch = entry.ref.removeprefix("refs/heads/")
+        if branch in busy or not _budget_ok(branch):
+            continue
+        branch_shas[branch] = entry.sha
+        convergence.append(branch)
+
+    # AUTHORING candidates: open intents with no staging branch yet. Note
+    # this scan is no longer guarded by "only if the convergence queue is
+    # empty" -- that guard is exactly what starved the intent backlog, and
+    # `order_candidates` replaces it with an alternation that cannot.
+    authoring: list = []
+    for iref in hub.list("refs/fleet/intents/"):
+        slug = iref.rsplit("/", 1)[-1]
+        doc = hub.read(iref) or {}
+        if doc.get("status") != "open":
+            continue
+        if hub.sha(f"refs/heads/staging/{slug}") is not None:
+            continue  # branch exists; the convergence path owns it now
+        key = f"{dispatch_mod.INTENT_PREFIX}{slug}"
+        if key in busy or not _budget_ok(key):
+            continue
+        authoring.append(key)
+
+    if cooled:
+        res.refused.append(("agent-cooldown", f"{len(cooled)} key(s): {', '.join(sorted(cooled)[:5])}"))
+
+    # A local counter, NOT `len(res.started)`: `res.started` already holds
+    # this step's GATE tags from the block above, so counting it here would
+    # let one started gate silently consume every agent slot.
+    filled = 0
+    for branch in dispatch_mod.order_candidates(convergence, authoring, records):
+        if filled >= slots:
+            break
+        refusal = dispatch_mod.economic_refusal(
+            hub, branch, tip_sha, branch_sha=branch_shas.get(branch))
+        if refusal is not None:
+            code, detail = refusal
+            res.refused.append((f"agent-{code}", f"{branch}: {detail}"))
+            continue
+
+        tag = f"{host}-a-{branch.split('/')[-1].removeprefix(dispatch_mod.INTENT_PREFIX)}-{int(time.time()) % 100000}"
+        # Count the purchase BEFORE making it. A crash between here and the
+        # spawn costs this key one retry; the other order costs unbounded
+        # money (see dispatch.py's "counting direction").
+        try:
+            dispatch_mod.record_dispatch(hub, branch, host)
+        except HubError as e:
+            # An unwritable ledger means the NEXT loop cannot know this run
+            # happened. Refuse rather than spend unaccounted money.
+            res.refused.append(("agent-ledger-unwritable", f"{branch}: {e}"))
+            continue
+        w = None
+        spawn_failed = False
+        try:
+            w = start_agent(hub, branch, tag, host, log_dir, repo_root)
+        except OSError as e:
+            spawn_failed = True
+            res.refused.append(("agent-spawn-failed", f"{branch}: {e}"))
+        if w is None:
+            if not spawn_failed:
+                res.refused.append(("agent-claimed-elsewhere", branch))
+            # Nothing was bought: hand the counted attempt back.
+            _record_outcome(hub, branch, host, dispatch_mod.NOT_PAID)
+            continue
+        workers.append(w)
+        res.started.append(tag)
+        filled += 1
+
+
+def _record_outcome(hub: Hub, branch: str, host: str, outcome: str) -> None:
+    """Best-effort ledger update. A failure to record an OUTCOME is not
+    worth taking the daemon down or aborting a reconcile: the dispatch
+    itself is already counted, so the worst case is that a key looks more
+    expensive than it was -- the conservative direction."""
+    try:
+        dispatch_mod.record_outcome(hub, branch, host, outcome)
+    except HubError as e:
+        print(f"fleetd[{host}] attempt-ledger write failed for {branch} "
+              f"({outcome}): {e}", file=sys.stderr, flush=True)
+
+
+# Worker exit codes -> attempt-ledger outcomes. Only `0` resets the
+# consecutive-failure count; `agentworker.RC_PREFLIGHT_REFUSED` is the one
+# code that hands the attempt back, because it proves no CLI was invoked.
+_AGENT_RC_OUTCOMES = {
+    0: "converged",
+    4: "no-agent-cli",
+    5: "missing-refs",
+    6: "timeout",
+    7: "no-progress",
+    8: dispatch_mod.NOT_PAID,
+    9: "blocked",
+}
+
+
 def reconcile_once(
     hub: Hub,
     host: str,
@@ -565,6 +989,22 @@ def reconcile_once(
             w.claim.release()
             workers.remove(w)
             res.finished.append(w.tag)
+            if w.kind == "agent":
+                # Close the ledger entry this run opened. An ADOPTED worker
+                # has no Popen and therefore no exit status -- its outcome
+                # is honestly recorded as unknown rather than guessed at,
+                # which leaves the count where the dispatch put it (the
+                # conservative direction: an unknown run is not evidence of
+                # progress).
+                rc = w.popen.returncode if w.popen is not None else None
+                if rc is None:
+                    outcome = "unknown-adopted"
+                elif rc == 0:
+                    outcome = ("authored" if dispatch_mod.is_intent_key(w.branch)
+                               else "converged")
+                else:
+                    outcome = _AGENT_RC_OUTCOMES.get(rc, f"exit-{rc}")
+                _record_outcome(hub, w.branch, host, outcome)
             continue
 
         if w.claim.lost:
@@ -662,8 +1102,8 @@ def reconcile_once(
 
     want_agents = int(my_desired.get("agents") or 0)
     agent_workers = [w for w in workers if w.kind == "agent"]
-    gate_workers = [w for w in workers if w.kind == "gate"]
-    if enabled and want_agents > len(agent_workers):
+    slots = want_agents - len(agent_workers)
+    if enabled and slots > 0:
         try:
             import agentworker as _aw
             has_cli = bool(_aw.available_clis())
@@ -672,40 +1112,7 @@ def reconcile_once(
         if not has_cli:
             res.refused.append(("no-agent-cli", "neither claude nor codex on this host"))
         else:
-            q = workqueue.Queue(hub).compute()
-            busy = {w.branch for w in workers}
-            now = time.time()
-            todo = [b for b in (q[s2].ref.removeprefix("refs/heads/") for s2 in q)
-                    if b not in busy
-                    and now - _agent_attempts.get(b, 0) > AGENT_RETRY_COOLDOWN_S]
-            # No stale branch to converge -> AUTHOR from the intent backlog:
-            # open intents with no staging branch yet, no live agent claim,
-            # and not in cooldown. Prefixed "intent:" so start_agent knows.
-            if not todo:
-                for iref, _sha in hub.list("refs/fleet/intents/").items():
-                    slug = iref.rsplit("/", 1)[-1]
-                    doc = hub.read(iref) or {}
-                    if doc.get("status") != "open":
-                        continue
-                    if hub.sha(f"refs/heads/staging/{slug}") is not None:
-                        continue  # branch exists; convergence path owns it
-                    key = f"intent:{slug}"
-                    if key in busy or now - _agent_attempts.get(key, 0) <= AGENT_RETRY_COOLDOWN_S:
-                        continue
-                    todo.append(key)
-            for branch in todo[: want_agents - len(agent_workers)]:
-                tag = f"{host}-a-{branch.split('/')[-1].removeprefix('intent:')}-{int(time.time()) % 100000}"
-                try:
-                    w = start_agent(hub, branch, tag, host, log_dir, repo_root)
-                except OSError as e:
-                    res.refused.append(("agent-spawn-failed", f"{branch}: {e}"))
-                    continue
-                if w is None:
-                    res.refused.append(("agent-claimed-elsewhere", branch))
-                    continue
-                workers.append(w)
-                _agent_attempts[branch] = time.time()
-                res.started.append(tag)
+            dispatch_agents(hub, host, workers, slots, log_dir, repo_root, res)
 
     hb = {
         "gates_running": len([w for w in workers if w.kind == "gate"]),
@@ -797,10 +1204,8 @@ def main(argv: Optional[list] = None) -> int:
     # startup and never renewed, so it expired LEASE_TTL after every
     # daemon start and a second fleetd could reap it and run alongside
     # the first -- one host, two schedulers, both starting gates.
-    # holder_host=host: same reasoning as start_gate/start_agent above --
-    # `host` is the FLEET_HOST-overridable fleet identity, not necessarily
-    # this machine's raw socket.gethostname().
-    singleton = Claim(hub, kind="host", key=host, work_kind="fleetd", work_key=host, holder_host=host)
+    singleton = Claim(hub, kind="host", key=host, work_kind="fleetd", work_key=host,
+                      holder_host=host)  # fleet identity, not hostname -- see start_gate
     try:
         # acquire_or_reap: a hard-killed predecessor (launchctl kickstart -k,
         # OOM, crash) never runs its graceful release, and a plain acquire
@@ -811,6 +1216,22 @@ def main(argv: Optional[list] = None) -> int:
     except claim_mod.ClaimHeldError:
         print(f"fleetd: another instance holds refs/fleet/claims/host/{host}; exiting")
         return 3
+
+    # R6: rebuild `workers` from the hub BEFORE the first reconcile. It has
+    # to be after the singleton (only one fleetd per host may adopt) and
+    # before reconcile_once (which would otherwise see zero workers, think
+    # every slot free, and start a duplicate of everything still running).
+    try:
+        adoption = adopt_workers(hub, host, workers)
+        print(f"fleetd[{host}] adoption: {adoption.summary()}", flush=True)
+    except HubError as e:
+        # An unreachable hub at startup is not a reason to run with an
+        # empty worker list -- that is the state that starts duplicate
+        # gates. Refuse to start; the supervisor will retry.
+        print(f"fleetd[{host}]: cannot rebuild worker state from the hub ({e}); "
+              f"refusing to start rather than risk duplicate work", file=sys.stderr)
+        singleton.release()
+        return 5
 
     stop = {"flag": False}
 

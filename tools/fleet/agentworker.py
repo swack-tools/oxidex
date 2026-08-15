@@ -26,6 +26,25 @@ verifies afterwards:
 - the worker VERIFIES the branch moved before reporting success -- an
   agent's claim of success is not evidence (name the instrument)
 - hard wall-clock timeout; the process group dies with it
+
+## Preflight (ARCH-FIX-SPEC.md R5)
+
+`run()` re-asks `dispatch.economic_refusal` before it clones anything or
+launches a CLI. `fleetd` already asked the same question before spawning
+this process, and asking twice is the point rather than an oversight:
+
+  * the two asks are separated by a process spawn, a clone and whatever
+    queueing delay the host had, and the tip moves during that window
+    (that is the entire reason convergence work exists);
+  * `agentworker.py` has a `main()` and gets run by hand -- when it does,
+    fleetd's check never happened at all, and this is the only guard.
+
+The predicate itself lives in `dispatch.py` so there is exactly one
+implementation of "is this run structurally pointless" and two call sites,
+rather than two implementations that agree until they don't. Exit code 8 is
+reserved for a preflight refusal specifically so fleetd can tell "we bought
+nothing" apart from "we bought a run that failed" and hand the attempt back
+to the ledger.
 """
 
 from __future__ import annotations
@@ -42,10 +61,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import dispatch
 from fleetlib import Hub
 
 AGENT_TIMEOUT_S = int(os.environ.get("FLEET_AGENT_TIMEOUT_S", "3600"))
 TIP_REF = "refs/heads/refactor/tag-machinery"
+
+# Exit codes with meaning to fleetd's attempt ledger (see module docstring
+# and `dispatch.record_outcome`). 0 is progress; everything else is not.
+RC_PREFLIGHT_REFUSED = 8  # nothing was bought -- the attempt is handed back
+RC_BLOCKED = 9  # a real, paid run that correctly declined to guess
 
 # The PATH gate.sh uses, mirrored here: fleetd under systemd/launchd
 # inherits a minimal PATH that misses ~/.local/bin (claude) and the nvm
@@ -138,6 +163,20 @@ HARD RULES
 """
 
 
+def preflight(hub: Hub, branch: str, tip_sha: str, intent_slug: str = None) -> "tuple | None":
+    """`(code, detail)` for why this run would be structurally wasted, or
+    None to proceed.
+
+    Thin wrapper over `dispatch.economic_refusal` -- it exists so the
+    dispatch key this worker was launched under (`intent:<slug>` for an
+    authoring run, the branch name otherwise) is reconstructed in exactly
+    one place, and so a future worker-local check has an obvious home that
+    is not the middle of `run()`.
+    """
+    key = f"{dispatch.INTENT_PREFIX}{intent_slug}" if intent_slug else branch
+    return dispatch.economic_refusal(hub, key, tip_sha, tip_ref=TIP_REF)
+
+
 def run(branch: str, hub_url: str, host: str, intent_slug: str = None) -> int:
     clis = available_clis()
     if not clis:
@@ -165,6 +204,15 @@ def run(branch: str, hub_url: str, host: str, intent_slug: str = None) -> int:
         if tip_sha is None or before_sha is None:
             print(f"agentworker: missing tip or {ref} on hub; exiting")
             return 5
+
+    # PREFLIGHT -- before the clone, before any CLI, i.e. before a cent is
+    # spent. fleetd asked this too; the tip may have moved since, and a
+    # hand-run worker was never asked at all.
+    refusal = preflight(hub, branch, tip_sha, intent_slug=intent_slug)
+    if refusal is not None:
+        code, detail = refusal
+        print(f"agentworker[{host}] {branch}: PREFLIGHT REFUSED [{code}] {detail}")
+        return RC_PREFLIGHT_REFUSED
 
     work = Path(tempfile.mkdtemp(prefix=f"agent-{branch.replace('/', '-')}-"))
     try:
@@ -224,7 +272,13 @@ def run(branch: str, hub_url: str, host: str, intent_slug: str = None) -> int:
         blocked = any("BLOCKED" in l for l in tail)
         print(f"agentworker[{host}] {branch}: branch unchanged "
               f"({'agent reported BLOCKED' if blocked else 'no progress'}); {name} exit {proc.returncode}")
-        return 0 if blocked else 7
+        # BLOCKED gets its OWN code rather than sharing 0 with success. Both
+        # are legitimate terminal outcomes, but only one made progress, and
+        # fleetd's attempt ledger resets the consecutive-failure count on
+        # exit 0. Sharing the code meant a branch an agent correctly refused
+        # to guess at could be re-bought forever, its count reset by every
+        # refusal -- the cap would never bind on the one case it exists for.
+        return RC_BLOCKED if blocked else 7
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
