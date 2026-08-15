@@ -48,6 +48,14 @@ compositions:
                              RED. A suite that cannot fail is not evidence
                              of anything; this is how we know it would
                              have caught the original defect.
+  7. (added BY this suite)   `fleetlib.Hub.read` resolves a ref's sha,
+                             then fetches the ref, then cat-files the sha
+                             it resolved first -- and raises when the ref
+                             moved in between. Unreachable until R2 made
+                             claims renew and R4 made the queue read every
+                             claim payload; hit for real during a seam-2
+                             run. RED (`expectedFailure`), reproduced
+                             deterministically.
 
 NAME THE INSTRUMENT (AGENTS.md). Liveness is always observed from a
 SECOND `Hub` with its own object cache -- what another host would see --
@@ -74,9 +82,12 @@ stub or a Python function. Every hub is a `git init --bare` under the
 system temp dir and every `setUp` asserts that before a test body runs.
 Standard library and plain unittest only. Nothing here modifies
 production code -- where a seam test is red because production is wrong,
-it stays red with the reason written at the assertion (see
-`test_landed_branch_flips_its_intent_to_done`, which is an
-`expectedFailure` pinning a real gap, not a bent test).
+it stays red with the reason written at the assertion. Two such tests
+exist, both `expectedFailure`, both pinning real gaps rather than bent to
+pass: `TestSeam3TrainEndToEnd.test_landed_branch_flips_its_intent_to_done`
+and `TestSeam7HubReadRaceUnderRenewal`. `expectedFailure` (not deletion,
+not a skip) is deliberate: unittest reports an UNEXPECTED SUCCESS the day
+someone fixes one, so the marker cannot outlive the defect.
 
 Run with:
     python3 -m unittest discover -s tools/fleet/tests -v
@@ -115,7 +126,6 @@ VERDICT_PY = FLEET_DIR / "verdict.py"
 INSTALL_HOOK = FLEET_DIR / "rollout" / "install_hook.sh"
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
-ZERO_SHA = "0" * 40
 
 # --------------------------------------------------------------------- #
 # Timescale
@@ -244,11 +254,18 @@ def adoption_entry_point():
     whether the production code can rebuild Worker state from its host's
     live claims, not which branch happened to deliver it.
     """
+    import inspect
+
     for name in dir(fleetd):
         low = name.lower()
         if name.startswith("_"):
             continue
-        if any(hint in low for hint in _ADOPTION_HINTS) and callable(getattr(fleetd, name)):
+        obj = getattr(fleetd, name)
+        # A FUNCTION, not merely something callable: `AdoptionResult` is a
+        # dataclass and passes a bare `callable()` test, so a probe that
+        # accepts it would report "adoption is wired" for a branch that
+        # shipped only the result type.
+        if any(hint in low for hint in _ADOPTION_HINTS) and inspect.isfunction(obj):
             return name
     return None
 
@@ -612,6 +629,117 @@ class SubprocessFleetd:
             return ""
 
 
+class SupervisedFleetd:
+    """fleetd under its REAL supervisor: `tools/fleet/units/fleetd-wrapper.sh`
+    (R8), which runs `fleetd.py "$@"` in a loop and restarts it after
+    `FLEETD_WRAPPER_RETRY_S` on any non-zero exit.
+
+    Seam 4 needs this rather than a hand-started successor because
+    `fleetd.main` returns 3 -- not "keeps trying" -- while another
+    instance holds the host singleton, and after a SIGKILL the dead
+    daemon's singleton is still on the hub. Only the retry loop ever gets
+    a successor in, so only the retry loop can be said to test a restart.
+    """
+
+    kind = "supervised"
+
+    def __init__(self, fixture, host, gate: StubGate, ttl: float, renew: float, retry_s: int = 1):
+        self.fixture = fixture
+        self.host = host
+        self.gate = gate
+        self.ttl = ttl
+        self.renew = renew
+        self.retry_s = retry_s
+        self.popen = None
+        self.out_path = fixture.tmp / f"wrapper-{host}.out"
+        self.log_path = fixture.tmp / f"wrapper-{host}.log"
+        self.pidfile = fixture.tmp / f"wrapper-{host}.pid"
+
+    def start(self):
+        env = dict(os.environ)
+        env.update(
+            {
+                "HOME": str(self.fixture.home),
+                "FLEET_HOST": self.host,
+                "FLEET_TEST_TTL_S": str(self.ttl),
+                "FLEET_TEST_RENEW_S": str(self.renew),
+                "FLEET_KILL_GRACE_S": "2",
+                "FLEETD_WRAPPER_RETRY_S": str(self.retry_s),
+                "FLEETD_WRAPPER_PIDFILE": str(self.pidfile),
+                "FLEETD_WRAPPER_LOG": str(self.log_path),
+                "FLEETD_WRAPPER_PYTHON": sys.executable,
+                "PYTHONUNBUFFERED": "1",
+            }
+        )
+        out = open(self.out_path, "ab")
+        try:
+            self.popen = subprocess.Popen(
+                [
+                    "bash",
+                    str(FLEET_DIR / "units" / "fleetd-wrapper.sh"),
+                    "--hub", self.fixture.hub_path,
+                    "--repo-root", str(self.gate.repo_root),
+                    "--log-dir", str(self.fixture.tmp / "gatelogs"),
+                    "--interval", str(FLEETD_INTERVAL_S),
+                ],
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                env=env,
+                cwd=str(self.fixture.tmp),
+            )
+        finally:
+            out.close()
+        self.fixture.track_process(self.popen)
+        return self
+
+    def fleetd_pid(self):
+        """The wrapper's current fleetd child, by parent pid from the `ps`
+        listing -- never `pgrep -f fleetd`, which matches this test's own
+        command line too (the self-match class of bug that over-reported
+        gate counts on this fleet all day on 2026-08-14)."""
+        if self.popen is None:
+            return None
+        out = subprocess.run(
+            ["ps", "-eo", "pid=,ppid=,command="], capture_output=True, text=True, errors="replace"
+        ).stdout
+        for line in out.splitlines():
+            parts = line.split(None, 2)
+            if len(parts) < 3:
+                continue
+            pid, ppid, command = parts
+            if not pid.isdigit() or not ppid.isdigit():
+                continue
+            if int(ppid) == self.popen.pid and "fleetd.py" in command:
+                return int(pid)
+        return None
+
+    def alive(self) -> bool:
+        return self.popen is not None and self.popen.poll() is None
+
+    def stop(self, timeout=30):
+        if self.popen is None or self.popen.poll() is not None:
+            return
+        # SIGTERM the wrapper: it forwards to fleetd, fleetd drains and
+        # exits 0, the wrapper sees rc==0 and exits without restarting.
+        self.popen.terminate()
+        try:
+            self.popen.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.popen.kill()
+            self.popen.wait(timeout=10)
+
+    def log(self) -> str:
+        parts = []
+        for name, path in (("wrapper stdout", self.out_path), ("wrapper log", self.log_path)):
+            try:
+                parts.append(f"--- {name} ---\n{path.read_text(errors='replace')}")
+            except OSError:
+                parts.append(f"--- {name} ---\n(unreadable)")
+        return "\n".join(parts)
+
+
 class InProcessFleetd:
     """`fleetd.main()`'s loop body, in a thread in THIS interpreter.
 
@@ -634,6 +762,7 @@ class InProcessFleetd:
         self.gate = gate
         self.workers: list = []
         self.errors: list = []
+        self.events: list = []
         self._stop = threading.Event()
         self._thread = None
         self.singleton = None
@@ -652,10 +781,11 @@ class InProcessFleetd:
             self.errors.append(exc)
             return
         self.singleton = singleton
+        started = time.monotonic()
         try:
             while not self._stop.is_set():
                 try:
-                    fleetd.reconcile_once(
+                    res = fleetd.reconcile_once(
                         hub,
                         self.host,
                         self.workers,
@@ -663,9 +793,24 @@ class InProcessFleetd:
                         self.fixture.tmp / "gatelogs",
                         self.gate.repo_root,
                     )
+                    # The subprocess driver gets this for free from
+                    # fleetd's own stdout line; record the same fields
+                    # here or a failure has no way to say WHY the claim
+                    # went away (reaped as finished? killed for a lost
+                    # lease? two completely different bugs).
+                    if res.started or res.finished or res.killed or res.refused:
+                        self.events.append(
+                            f"+{time.monotonic() - started:6.2f}s started={res.started} "
+                            f"finished={res.finished} killed={res.killed} "
+                            f"refused={res.refused}"
+                        )
                 except Exception as exc:  # noqa: BLE001
                     self.errors.append(exc)
                 if singleton.lost:
+                    self.events.append(
+                        f"+{time.monotonic() - started:6.2f}s HOST LEASE LOST: "
+                        f"{singleton.lost_reason}"
+                    )
                     break
                 self._stop.wait(FLEETD_INTERVAL_S)
         finally:
@@ -688,7 +833,9 @@ class InProcessFleetd:
         self.workers.clear()
 
     def log(self) -> str:
-        return "\n".join(f"{type(e).__name__}: {e}" for e in self.errors)
+        return "\n".join(
+            list(self.events) + [f"{type(e).__name__}: {e}" for e in self.errors]
+        )
 
 
 # --------------------------------------------------------------------- #
@@ -906,6 +1053,49 @@ class FleetdSeamFixture(SeamFixture):
     def make_gate(self, name: str, branch: str, work_s: float) -> StubGate:
         return self.track_gate(StubGate(self.tmp, name, self.hub_path, work_s, branch))
 
+    def ref_forensics(self, ref: str) -> str:
+        """Ask three different instruments whether `ref` exists, right now.
+
+        `Hub.sha` is `git ls-remote` over the hub URL; `show-ref` reads the
+        bare repo's ref store directly. If they disagree, the absence the
+        seam just failed on is an artifact of the reader, not a deleted
+        claim -- and per AGENTS.md that has to be established before the
+        number is believed, not after.
+        """
+        lines = []
+        probe = self.observer("forensics")
+        for i in range(3):
+            try:
+                lines.append(f"  ls-remote #{i}: {probe.sha(ref)}")
+            except Exception as exc:  # noqa: BLE001
+                lines.append(f"  ls-remote #{i}: raised {type(exc).__name__}: {exc}")
+            time.sleep(0.2)
+        direct = git(["--git-dir", self.hub_path, "show-ref", ref], check=False)
+        lines.append(f"  show-ref: rc={direct.returncode} out={direct.stdout.strip()!r}")
+        allrefs = git(["--git-dir", self.hub_path, "for-each-ref", "refs/fleet/claims/"], check=False)
+        lines.append(f"  claims on hub: {allrefs.stdout.strip()!r}")
+        return "\n--- ref forensics ---\n" + "\n".join(lines)
+
+    @staticmethod
+    def diagnosis(driver, gate: StubGate) -> str:
+        """Everything needed to tell WHY a lease assertion broke, attached
+        to the assertion itself.
+
+        `fleetd` prints `finished=[...]` when it reaps a worker whose
+        process is gone and `killed=[(tag, reason)]` when it tears one down
+        for a lost lease -- two completely different bugs that look
+        identical from the hub (the claim ref is simply absent). An
+        assertion that cannot tell them apart sends the reader to guess,
+        and the fixture's tempdir is deleted before they can look.
+        """
+        return (
+            "\n--- fleetd log ---\n"
+            + (driver.log() or "(empty)")
+            + "\n--- stub gate runlog ---\n"
+            + (gate._log() or "(empty)")
+            + f"\n--- driver alive: {driver.alive()} ---"
+        )
+
     # ---------------- seam 1 ------------------------------------------- #
 
     def assert_lease_holds_through_work(self, driver, slug: str, ttl: float, work_s: float):
@@ -942,7 +1132,10 @@ class FleetdSeamFixture(SeamFixture):
 
         started = time.monotonic()
         poll = poll_interval(ttl)
-        deadline = started + work_s + 8 * ttl + 60
+        # Twice the hold plus a minute. Generous enough for a slow
+        # start under load, bounded enough that a wedged stub gate
+        # fails the run instead of holding a burn-in for an hour.
+        deadline = started + work_s * 2 + 60
         expiries: list = []
         reap_probe_done = False
         last_live_at = 0.0
@@ -958,13 +1151,16 @@ class FleetdSeamFixture(SeamFixture):
                 payload,
                 f"SEAM-1 LEASE LAPSED: {ref} vanished from the hub {elapsed:.1f}s into a "
                 f"{work_s:g}s hold (ttl={ttl:g}s). A claim that disappears mid-work is "
-                f"reapable by any host, which is two gates on one branch.",
+                f"reapable by any host, which is two gates on one branch."
+                + self.diagnosis(driver, gate)
+                + self.ref_forensics(ref),
             )
             self.assertFalse(
                 is_expired(payload),
                 f"SEAM-1 LEASE LAPSED: {ref} is EXPIRED {elapsed:.1f}s into a {work_s:g}s hold "
                 f"(ttl={ttl:g}s, expires_at={payload.get('expires_at')}). This is the original "
-                f"defect verbatim: the work outlived the lease and nothing renewed it.",
+                f"defect verbatim: the work outlived the lease and nothing renewed it."
+                + self.diagnosis(driver, gate),
             )
             last_live_at = elapsed
             expires_at = payload.get("expires_at")
@@ -1061,7 +1257,10 @@ class FleetdSeamFixture(SeamFixture):
 
         started = time.monotonic()
         poll = queue_poll_interval(ttl)
-        deadline = started + work_s + 8 * ttl + 60
+        # Twice the hold plus a minute. Generous enough for a slow
+        # start under load, bounded enough that a wedged stub gate
+        # fails the run instead of holding a burn-in for an hour.
+        deadline = started + work_s * 2 + 60
         checks_past_ttl = 0
 
         while time.monotonic() < deadline:
@@ -1344,77 +1543,188 @@ class TestSeam3TrainEndToEnd(SeamFixture):
 
 @unittest.skipUnless(ADOPTION_SUPPORTED, ADOPTION_SKIP_REASON)
 class TestSeam4RestartAdoption(FleetdSeamFixture):
-    """R6: 'kill a fixture fleetd mid-gate, start a new one, observe
-    adoption or clean reap -- no lost slot, no double gate.'
+    """R6 + R8, composed: 'kill a fixture fleetd mid-gate, start a new one,
+    observe adoption or clean reap -- no lost slot, no double gate.'
 
-    The brief for this suite asks for the stronger property: the claim
-    never lapses across the handover. Both are asserted, separately, so a
-    failure says which one broke.
+    The successor runs under the REAL supervisor
+    (`tools/fleet/units/fleetd-wrapper.sh`, R8), not as a single hand-run
+    process, because that is what decides whether a restart succeeds at
+    all: `fleetd.main` exits 3 when the host singleton is still held, and
+    only the wrapper's retry loop ever gets past that. A test that starts
+    one successor by hand measures a daemon that gave up half a second
+    after the kill, and calls the result "adoption failed".
+
+    Split into two tests on purpose:
+
+      * `test_successor_adopts_...` -- what R6 actually delivers, and it
+        does: the ref is never absent (adoption is a CAS `update`, not a
+        delete-and-recreate), the gate is never started twice, the claim
+        is released when the work ends.
+      * `test_claim_never_expires_...` -- the stronger property this
+        suite's brief asked for, RED, pinning a real composition defect.
+        See its docstring.
     """
 
-    def test_successor_adopts_the_running_gate_without_lapsing_the_claim(self):
-        ttl, renew, _work = timescale()
-        # The hold must outlast the whole handover, so it is longer here
-        # than in seam 1.
-        work = _work * 2
+    def run_restart_scenario(self):
+        """SIGKILL a supervised fleetd mid-gate; watch the claim across the
+        handover. Returns (gate, ref, observations, driver)."""
+        ttl, renew, base_work = timescale()
+        # The hold has to outlast the whole handover -- kill, singleton
+        # lockout, wrapper retry, adoption -- so it is longer here than in
+        # seam 1.
+        work = base_work * 3
         self.add_staging_branch("s4", {"s4.txt": "s4\n"})
         self.set_desired(self.HOST_A, gates=1, enabled=True)
         gate = self.make_gate("s4gate", "staging/s4", work)
         ref = claim_ref("gate", "staging-s4")
         observer = self.observer("s4-liveness")
 
-        first = SubprocessFleetd(self, self.HOST_A, gate, ttl, renew)
-        self.addCleanup(first.stop)
-        first.start()
-        self.wait_until(lambda: gate.starts() >= 1, timeout=60,
-                        what="SEAM-4 the first fleetd never started the gate")
-        self.wait_until(lambda: observer.sha(ref) is not None, timeout=60,
-                        what=f"SEAM-4 the first fleetd never claimed {ref}")
+        driver = SupervisedFleetd(self, self.HOST_A, gate, ttl, renew)
+        self.addCleanup(driver.stop)
+        driver.start()
+        self.wait_until(lambda: gate.starts() >= 1, timeout=90,
+                        what=f"SEAM-4 the first fleetd never started the gate:\n{driver.log()}")
+        self.wait_until(lambda: observer.sha(ref) is not None, timeout=90,
+                        what=f"SEAM-4 the first fleetd never claimed {ref}:\n{driver.log()}")
+        victim = self.wait_for_fleetd_pid(driver)
 
-        # Kill the DAEMON, not the gate: gates run in their own session, so
-        # the work survives its scheduler. That is the situation a restart
-        # has to cope with.
-        first.sigkill()
+        # Kill the DAEMON, not its process group: gates are spawned with
+        # `start_new_session=True`, so a group kill would take the gate
+        # with it and the restart seam would be testing nothing. The
+        # wrapper survives (it is the parent) and restarts fleetd, exactly
+        # as it would on the pod.
+        killed_at = time.monotonic()
+        os.kill(victim, signal.SIGKILL)
 
-        second = SubprocessFleetd(self, self.HOST_A, gate, ttl, renew)
-        self.addCleanup(second.stop)
-        second.start()
+        # Drain the host so that, once a successor is finally in, it
+        # adopts the running gate rather than also being free to start a
+        # new one -- the property under test is the handover, not the
+        # scheduler.
+        self.set_desired(self.HOST_A, gates=1, enabled=False)
 
-        # Poll continuously ACROSS the handover.
-        lapses: list = []
-        started = time.monotonic()
+        observations: list = []
         poll = poll_interval(ttl)
-        deadline = started + work + 8 * ttl + 60
+        deadline = killed_at + work * 2 + 120
         while time.monotonic() < deadline:
             if gate.finished():
                 break
             payload = tolerating_the_hub_read_race(
                 lambda: observer.read(ref), f"seam-4 handover read of {ref}"
             )
-            elapsed = time.monotonic() - started
+            elapsed = time.monotonic() - killed_at
             if payload is None:
-                lapses.append((elapsed, "absent"))
+                state = "absent"
             elif is_expired(payload):
-                lapses.append((elapsed, "expired"))
+                state = "expired"
+            else:
+                state = "live"
+            observations.append((round(elapsed, 2), state))
             time.sleep(poll)
 
-        self.assertTrue(gate.finished(), f"SEAM-4 the gate never finished; runlog:\n{gate._log()}")
+        self.assertTrue(
+            gate.finished(),
+            f"SEAM-4 the gate never finished; runlog:\n{gate._log()}\n{driver.log()}",
+        )
+        return gate, ref, observations, driver, observer
+
+    def wait_for_fleetd_pid(self, driver, timeout=60):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            pid = driver.fleetd_pid()
+            if pid is not None:
+                return pid
+            time.sleep(0.2)
+        self.fail(f"SEAM-4 no fleetd child under the wrapper to kill:\n{driver.log()}")
+
+    def test_successor_adopts_the_running_gate_with_no_double_gate(self):
+        gate, ref, observations, driver, observer = self.run_restart_scenario()
+
         self.assertEqual(
             gate.starts(), 1,
             f"SEAM-4 DOUBLE GATE: the stub gate was started {gate.starts()} times across the "
-            f"restart. One branch, two gates, is the exact event leases exist to prevent.",
+            f"restart. One branch, two gates, is the exact event leases exist to prevent.\n"
+            f"{driver.log()}",
         )
+        absent = [o for o in observations if o[1] == "absent"]
         self.assertEqual(
-            lapses, [],
-            f"SEAM-4 CLAIM LAPSED ACROSS THE HANDOVER: {ref} was not continuously live "
-            f"(observations: {lapses[:8]}{'...' if len(lapses) > 8 else ''}). Between the "
-            f"SIGKILL and the successor's adoption nothing renewed the lease, so any host "
-            f"could have reaped it and started the same branch.",
+            absent, [],
+            f"SEAM-4 CLAIM WENT ABSENT: {ref} disappeared from the hub during the handover at "
+            f"{absent[:8]}. R6's adoption is specified as a CAS `update` from the sha already "
+            f"on the hub precisely so the ref's EXISTENCE is continuous; a gap here means the "
+            f"successor re-acquired (delete + create) instead of adopting, and in that gap the "
+            f"branch reads as unclaimed to every other host.\n{driver.log()}",
+        )
+        self.assertTrue(
+            any(state == "live" for _t, state in observations),
+            f"SEAM-4 the claim was never observed live after the kill -- no successor ever "
+            f"adopted it:\n{driver.log()}",
         )
         self.wait_until(
             lambda: observer.sha(ref) is None,
-            timeout=30 + 8 * FLEETD_INTERVAL_S,
-            what=f"SEAM-4 the adopted claim {ref} was never released when the work finished",
+            timeout=60 + 8 * FLEETD_INTERVAL_S,
+            what=f"SEAM-4 the adopted claim {ref} was never released when the work finished:\n"
+                 f"{driver.log()}",
+        )
+
+    @unittest.expectedFailure
+    def test_claim_never_expires_across_the_handover(self):
+        """RED ON PURPOSE -- a composition defect, not a bent test.
+
+        A hard-killed fleetd leaves its OWN host-singleton claim
+        (`refs/fleet/claims/host/<host>`) sitting on the hub, unrenewed but
+        NOT YET EXPIRED. `fleetd.main` takes that claim with
+        `acquire_or_reap`, which reaps only an EXPIRED claim, so every
+        successor exits 3 ("another instance holds
+        refs/fleet/claims/host/<host>") until the dead daemon's lease runs
+        out -- one full `LEASE_TTL`: 600 seconds in production, 5 in CI
+        mode. Measured here: three refused restarts, then adoption.
+
+        Two consequences, and the second is the one that fails this test.
+
+        1. The host runs NO scheduler for a whole TTL after any crash. Not
+           a lease bug, but ten production minutes of a host that starts
+           nothing, finishes nothing, and writes no heartbeat -- while
+           `fleet status` shows its last heartbeat going stale and every
+           gate it was supervising runs unwatched.
+        2. The gate claims it was renewing expire at almost exactly the
+           same instant its singleton does, because the same dead daemon
+           renewed all of them from the same moment. So the successor
+           becomes able to adopt at precisely the moment the gate claim
+           becomes reapable, and whether the claim survives is a race
+           between this host's restart and any other host's
+           `reap_expired`. Losing it means another host claims a branch
+           this host is still gating -- two gates on one branch, the exact
+           event leases exist to prevent.
+
+        R6's adoption code is correct and does the right thing the moment
+        it can run: `Claim.adopt` continues the lease by CAS update, and
+        `test_successor_adopts_the_running_gate_with_no_double_gate` above
+        passes, adoption line and all. It simply cannot run until the
+        lockout ends, and by then the lease it is adopting has expired.
+
+        The evidence is in the wrapper log this test prints on failure --
+        `fleetd exited 137` (the SIGKILL), then one
+        `fleetd: another instance holds refs/fleet/claims/host/<host>;
+        exiting` per retry for a whole TTL, then
+        `adoption: adopted=['gate/staging-s4#<pgid>']`.
+
+        THE FIX IS NOT T8'S TO MAKE. The singleton payload already carries
+        `pgid`, and `adopt_workers` already uses exactly that evidence for
+        gate claims -- "claim.holder_host == us AND claim.pgid is in the
+        `ps` listing". Applying the same test to the host singleton (reap
+        a same-host singleton whose recorded pgid is gone, instead of
+        waiting out its TTL) would close it. Owner: whoever holds
+        `fleetd.main`'s startup path -- T6/T1.
+        """
+        gate, ref, observations, driver, _observer = self.run_restart_scenario()
+        expired = [o for o in observations if o[1] == "expired"]
+        window = (expired[-1][0] - expired[0][0]) if len(expired) > 1 else 0.0
+        self.assertEqual(
+            expired, [],
+            f"SEAM-4 CLAIM EXPIRED ACROSS THE HANDOVER: {ref} was expired for ~{window:.1f}s "
+            f"({len(expired)} observations, first at +{expired[0][0] if expired else 0}s after "
+            f"the SIGKILL) while its gate kept running. Any host's reaper could have collected "
+            f"it and started the same branch.\nobservations: {observations}\n{driver.log()}",
         )
 
 
