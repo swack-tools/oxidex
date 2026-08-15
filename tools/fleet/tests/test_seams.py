@@ -1999,11 +1999,13 @@ class TestSeam6NegativeControl(FleetdSeamFixture):
 
 
 class TestSeam7HubReadRaceUnderRenewal(SeamFixture):
-    """RED ON PURPOSE -- a production defect this suite found, not a bent
-    test.
+    """WAS RED ON PURPOSE; NOW GREEN -- a production defect this suite
+    found, reproduced deterministically, and now pins fixed.
 
-    `fleetlib.Hub.read` resolves the ref's sha, THEN fetches the ref, THEN
-    cat-files the sha it resolved first:
+    History, kept because the `expectedFailure` that used to sit on the
+    test below is gone and this is the only remaining record of why it was
+    there. `fleetlib.Hub.read` used to resolve the ref's sha, THEN fetch the
+    ref, THEN cat-file the sha it resolved first:
 
         found_sha = self._remote_sha(ref)              # ls-remote -> S1
         self._run(["fetch", ..., f"+{ref}:{tmp_ref}"]) # brings whatever
@@ -2039,13 +2041,23 @@ class TestSeam7HubReadRaceUnderRenewal(SeamFixture):
     invent it.
 
     The interleaving is forced here rather than raced, so this test is
-    deterministic and can be `expectedFailure` without flaking. T8 owns no
-    production code and will not patch `fleetlib.py`; the fix is to fetch
-    first and read from the fetched ref (`tmp_ref:payload.json`), or to
-    re-resolve after the fetch, or to fetch `+{found_sha}` explicitly.
+    deterministic -- which is what let it carry an `expectedFailure` without
+    flaking, and what makes it a real regression test now that it does not.
+
+    THE FIX (`fleetlib.Hub.read_with_sha`, which `read` now delegates to):
+    fetch into a uuid-named local `tmp_ref`, then `rev-parse` and `cat-file`
+    against THAT ref. The ls-remote stays, but only to tell ABSENT from
+    UNREACHABLE -- the sha it resolves is discarded, because it is a fact
+    about the past by the time the fetch runs. A local ref no remote can
+    move is the property that closes the window; `read_with_sha` exists so
+    callers that need a sha AND its payload get them from the same fetched
+    commit instead of two independent observations.
+
+    So this test asserts, in order: the forced renewal really landed (the
+    ref really did move inside the window -- otherwise the test proves
+    nothing), and the read still returned the payload rather than raising.
     """
 
-    @unittest.expectedFailure
     def test_reading_a_claim_that_renews_between_ls_remote_and_fetch(self):
         holder_hub = self.observer("race-holder")
         reader_hub = self.observer("race-reader")  # never read this ref before

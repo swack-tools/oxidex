@@ -69,7 +69,12 @@ itself and concludes, wrongly and permanently, that the predecessor is
 still alive.
 
 `reconcile_once()` is a pure step function so tests can drive it against
-a fixture hub with a stub gate command; `main()` is just the loop.
+a fixture hub with a stub gate command; `main()` is just the loop -- plus
+one guard it lacked: a `HubError` out of a reconcile step now costs that
+STEP, not the daemon, up to `RECONCILE_HUB_FAILURE_LIMIT` consecutive
+failures, after which the daemon exits nonzero so a genuinely unreachable
+hub still reaches a human instead of hiding behind a process that is up
+and doing nothing. See that constant for the argument in both directions.
 """
 
 from __future__ import annotations
@@ -126,6 +131,32 @@ PUSH_BACKOFF_S = 4
 # lease was lost. Short by design: the window we are closing is "two hosts
 # running the same gate", and every second of grace is a second of that.
 KILL_GRACE_S = float(os.environ.get("FLEET_KILL_GRACE_S", "10"))
+
+# How many CONSECUTIVE reconcile steps may die on a `HubError` before the
+# daemon stops and lets its supervisor deal with it.
+#
+# `reconcile_once` reads five or six hub refs and `workqueue.Queue.compute`
+# reads every claim payload, and until now not one of those calls had a
+# `try` around it, in `reconcile_once` or in `main`. One `HubError` --
+# `fleetlib.Hub.read`'s ls-remote/fetch race (fixed in fleetlib, but the
+# class of failure is not: a dropped ssh signature, a hub mid-`gc`, a full
+# disk in the object cache) -- did not degrade a queue, it EXITED THE
+# DAEMON, taking the scheduler for a host with live gates on it.
+#
+# So one bad step costs one step. But the opposite failure is just as real
+# and much quieter: a daemon that swallows every hub error forever looks
+# alive, logs cheerfully, starts nothing, renews nothing it did not already
+# hold, and reports a heartbeat only because that write is inside the step
+# that is failing. A host wedged that way is indistinguishable from an idle
+# one until someone reads the log. The cap is the difference: transient
+# failures are absorbed, a persistently unreachable hub still surfaces as a
+# nonzero exit for the supervisor (units/fleetd-wrapper.sh) to act on.
+#
+# Five at the 15s loop is ~75 seconds of hub trouble tolerated, which is an
+# order of magnitude longer than any blip observed on this fleet and well
+# inside a 600s lease TTL -- the daemon gives up long before the claims it
+# is failing to renew could be reaped out from under it.
+RECONCILE_HUB_FAILURE_LIMIT = int(os.environ.get("FLEET_RECONCILE_HUB_FAILURE_LIMIT", "5"))
 
 
 def host_identity() -> str:
@@ -1431,15 +1462,44 @@ def main(argv: Optional[list] = None) -> int:
     signal.signal(signal.SIGINT, _sigterm)
 
     rc = 0
+    hub_failures = 0
     try:
         while True:
-            res = reconcile_once(hub, host, workers, gate_command, Path(args.log_dir), repo_root)
-            line = (
-                f"fleetd[{host}] gates={len(workers)} started={res.started} "
-                f"finished={res.finished} killed={res.killed} refused={res.refused} "
-                f"hb={res.heartbeat_written}"
-            )
-            print(line, flush=True)
+            # A hub failure degrades THIS ITERATION, never the daemon --
+            # bounded by RECONCILE_HUB_FAILURE_LIMIT, see its comment. Only
+            # `HubError` is caught: a bug in this file, a KeyboardInterrupt
+            # or a MemoryError must still take the process down loudly
+            # rather than be retried fifteen seconds later forever.
+            degraded: Optional[HubError] = None
+            try:
+                res = reconcile_once(hub, host, workers, gate_command, Path(args.log_dir), repo_root)
+            except HubError as exc:
+                degraded = exc
+                hub_failures += 1
+            else:
+                hub_failures = 0
+                line = (
+                    f"fleetd[{host}] gates={len(workers)} started={res.started} "
+                    f"finished={res.finished} killed={res.killed} refused={res.refused} "
+                    f"hb={res.heartbeat_written}"
+                )
+                print(line, flush=True)
+
+            if degraded is not None:
+                # Loud, and counted. A skipped step means: nothing started,
+                # nothing reaped, no heartbeat written this cycle. Live
+                # workers are untouched -- each renews its own lease from
+                # its own thread, which is exactly why losing a scheduling
+                # step is survivable and losing the daemon is not.
+                print(
+                    f"fleetd[{host}] RECONCILE DEGRADED "
+                    f"({hub_failures}/{RECONCILE_HUB_FAILURE_LIMIT} consecutive): "
+                    f"{type(degraded).__name__}: {degraded} -- skipping this step, "
+                    f"{len(workers)} worker(s) left running and still renewing",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
             if singleton.lost:
                 # Our host lease is gone, so another fleetd may already be
                 # reconciling this host. Exit rather than run a second
@@ -1461,7 +1521,26 @@ def main(argv: Optional[list] = None) -> int:
                 )
                 rc = 4
                 break
+            if degraded is not None and hub_failures >= RECONCILE_HUB_FAILURE_LIMIT:
+                # Not a blip any more. Exit nonzero so the supervisor sees a
+                # failure instead of a daemon that is "up" and doing
+                # nothing; live workers are again left alone on the way out
+                # (drain, don't kill -- their leases are separately valid).
+                print(
+                    f"fleetd[{host}] HUB UNUSABLE: {hub_failures} consecutive reconcile "
+                    f"steps failed against {hub.url} (last: {degraded}) -- exiting for the "
+                    f"supervisor to restart, leaving {len(workers)} live worker(s) alone",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                rc = 6
+                break
             if args.once or stop["flag"]:
+                # `--once` is a single step, so a degraded step IS a failed
+                # run: report it rather than exiting 0 on a reconcile that
+                # never happened.
+                if degraded is not None:
+                    rc = 6
                 break
             time.sleep(args.interval)
     finally:
