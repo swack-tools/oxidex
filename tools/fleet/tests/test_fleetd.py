@@ -14,11 +14,13 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cli
+import claim as claim_mod
 import fleetd
 from fleetlib import Hub
 
@@ -432,3 +434,198 @@ class TestMainLoopSurvivesHubErrors(FleetdBase):
 
         with self.assertRaises(ValueError):
             self.run_main(buggy)
+
+
+class TestReapDeadSameHostSingleton(FleetdBase):
+    """ARCH-FIX-SPEC.md FIX 2 (seam 4's red half), at the function level --
+    `reap_dead_same_host_singleton` and `fleetd_marker_in_group` in
+    isolation, with the process-liveness question answered by an injected
+    `marker_probe` rather than a real `ps` listing. The heavy end of this
+    (a real SIGKILL, a real supervisor) is `test_seams.py`'s seam 4 and
+    `test_adoption.py`'s `TestRestartAdoption`; this file is the fast,
+    deterministic half."""
+
+    def singleton_ref(self) -> str:
+        return claim_mod.claim_ref("host", self.host)
+
+    def write_singleton(self, holder_host, pgid, expired=False) -> str:
+        now = datetime.now(timezone.utc)
+        expires = now - timedelta(seconds=5) if expired else now + timedelta(seconds=600)
+        payload = {
+            "holder_host": holder_host,
+            "pid": 424242,
+            "pgid": pgid,
+            "work_kind": "fleetd",
+            "work_key": holder_host,
+            "started_at": now.isoformat(),
+            "expires_at": expires.isoformat(),
+            "gate_version": "",
+            "rustc_id": "r",
+            "platform_id": "p",
+        }
+        self.assertTrue(self.hub.create(self.singleton_ref(), payload))
+        return self.singleton_ref()
+
+    def test_reaps_when_the_process_is_provably_dead(self):
+        ref = self.write_singleton(self.host, pgid=999999)
+        reaped = fleetd.reap_dead_same_host_singleton(
+            self.hub, self.host, ref, own_pid=os.getpid(),
+            marker_probe=lambda pgid, exclude_pid: None,
+        )
+        self.assertTrue(reaped)
+        self.assertIsNone(self.hub.sha(ref), "the stale claim must be gone")
+
+    def test_refuses_when_a_marker_is_still_alive(self):
+        ref = self.write_singleton(self.host, pgid=999999)
+        reaped = fleetd.reap_dead_same_host_singleton(
+            self.hub, self.host, ref, own_pid=os.getpid(),
+            marker_probe=lambda pgid, exclude_pid: "python3 fleetd.py --hub ...",
+        )
+        self.assertFalse(reaped)
+        self.assertIsNotNone(self.hub.sha(ref), "a live claim must not be touched")
+
+    def test_refuses_a_different_hosts_claim_even_if_dead(self):
+        """Not ours to reason about, same rule as `Claim.adopt`."""
+        ref = self.write_singleton("some-other-host", pgid=999999)
+        called = []
+
+        def probe(pgid, exclude_pid):
+            called.append(pgid)
+            return None
+        reaped = fleetd.reap_dead_same_host_singleton(
+            self.hub, self.host, ref, own_pid=os.getpid(), marker_probe=probe,
+        )
+        self.assertFalse(reaped)
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertEqual(called, [], "another host's claim must never even reach the ps probe")
+
+    def test_refuses_without_a_usable_pgid(self):
+        ref = self.write_singleton(self.host, pgid=None)
+        called = []
+
+        def probe(pgid, exclude_pid):
+            called.append(pgid)
+            return None
+        reaped = fleetd.reap_dead_same_host_singleton(
+            self.hub, self.host, ref, own_pid=os.getpid(), marker_probe=probe,
+        )
+        self.assertFalse(reaped, "no pgid is evidence of nothing -- refuse, don't guess")
+        self.assertEqual(called, [])
+
+    def test_refuses_when_the_ref_is_already_gone(self):
+        ref = self.singleton_ref()
+        self.assertIsNone(self.hub.sha(ref))
+        reaped = fleetd.reap_dead_same_host_singleton(
+            self.hub, self.host, ref, own_pid=os.getpid(),
+            marker_probe=lambda pgid, exclude_pid: None,
+        )
+        self.assertFalse(reaped)
+
+    def test_reap_is_cas_and_loses_to_a_concurrent_renewal(self):
+        """Even when the probe says 'dead', a stale-sha CAS must not clobber
+        a payload that changed underneath it (e.g. a renewal that landed
+        between the read and the delete)."""
+        ref = self.write_singleton(self.host, pgid=999999)
+        stale_sha = self.hub.sha(ref)
+        # Simulate a concurrent renewal: rewrite the payload, moving the sha.
+        now = datetime.now(timezone.utc)
+        renewed_payload = {
+            "holder_host": self.host, "pid": 424242, "pgid": 999999,
+            "work_kind": "fleetd", "work_key": self.host,
+            "started_at": now.isoformat(),
+            "expires_at": (now + timedelta(seconds=600)).isoformat(),
+            "gate_version": "", "rustc_id": "r", "platform_id": "p",
+        }
+        self.assertTrue(self.hub.update(ref, renewed_payload, stale_sha))
+
+        import unittest.mock as mock
+        with mock.patch.object(fleetd.Hub, "sha", return_value=stale_sha):
+            reaped = fleetd.reap_dead_same_host_singleton(
+                self.hub, self.host, ref, own_pid=os.getpid(),
+                marker_probe=lambda pgid, exclude_pid: None,
+            )
+        self.assertFalse(reaped, "a CAS against a stale sha must fail, not clobber the renewal")
+        self.assertIsNotNone(self.hub.sha(ref), "the renewed claim must survive")
+
+
+class TestFleetdMarkerInGroup(unittest.TestCase):
+    """`fleetd_marker_in_group` against REAL processes -- the whole point of
+    this function is that fleetd shares its wrapper's process group and so
+    is never that group's LEADER (see the function's docstring), so a fake
+    that only exercises the leader case would not test the fix at all."""
+
+    def setUp(self):
+        self.procs: list = []
+
+    def tearDown(self):
+        for p in self.procs:
+            try:
+                p.terminate()
+                p.wait(timeout=5)
+            except Exception:
+                pass
+
+    def spawn_group_with_nonleader_marker(self) -> tuple:
+        """A bash leader (never matching "fleetd.py") that backgrounds a
+        python child WITHOUT setsid -- exactly `fleetd-wrapper.sh`'s shape
+        -- so the child shares the leader's pgid but is not it.
+
+        The leader script is a FILE, invoked by path (`bash script.sh`),
+        not `bash -c "<script text>"`: `ps` reports a process's argv, and
+        `-c`'s script text IS argv for that process, so a marker string
+        embedded in an inline `-c` script would spuriously match the
+        LEADER too and this test would not be exercising the non-leader
+        case it exists to check. A script file's own contents are never
+        part of its invoker's command line, matching how
+        `fleetd-wrapper.sh` actually runs (`bash /path/to/wrapper.sh`).
+        """
+        script = self.pidfile.parent / "leader.sh"
+        script.write_text(
+            "#!/bin/bash\n"
+            f'{sys.executable} -c "import time; time.sleep(30)" fleetd.py-marker & '
+            f'echo $! > "{self.pidfile}"\n'
+            "wait\n"
+        )
+        script.chmod(0o755)
+        p = subprocess.Popen(["bash", str(script)], start_new_session=True)
+        self.procs.append(p)
+        deadline = time.time() + 10
+        while time.time() < deadline and not self.pidfile.exists():
+            time.sleep(0.1)
+        child_pid = int(self.pidfile.read_text().strip())
+        pgid = os.getpgid(p.pid)
+        self.assertEqual(pgid, p.pid, "sanity: bash must be the group leader here")
+        self.assertEqual(os.getpgid(child_pid), pgid,
+                         "sanity: the backgrounded child must share bash's pgid, unset-sid")
+        return pgid, child_pid
+
+    def test_finds_a_matching_process_that_is_not_the_group_leader(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.pidfile = Path(self.tmpdir.name) / "child.pid"
+        pgid, child_pid = self.spawn_group_with_nonleader_marker()
+        try:
+            found = fleetd.fleetd_marker_in_group(pgid)
+            self.assertIsNotNone(
+                found, "the marker lives on a non-leader member; a leader-only "
+                       "scan (fleet_worker_pgids's filter) would miss it entirely")
+            self.assertIn("fleetd.py", found)
+        finally:
+            self.tmpdir.cleanup()
+
+    def test_excluding_the_only_matching_pid_reports_no_match(self):
+        """The self-match guard: if the only 'fleetd.py'-looking member IS
+        the caller (`exclude_pid`), that is not evidence of a live
+        predecessor -- it is the successor looking at itself."""
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.pidfile = Path(self.tmpdir.name) / "child.pid"
+        pgid, child_pid = self.spawn_group_with_nonleader_marker()
+        try:
+            found = fleetd.fleetd_marker_in_group(pgid, exclude_pid=child_pid)
+            self.assertIsNone(found)
+        finally:
+            self.tmpdir.cleanup()
+
+    def test_a_pgid_with_no_members_at_all_is_reported_as_no_match(self):
+        # A pgid astronomically unlikely to be live on any real host.
+        found = fleetd.fleetd_marker_in_group(999_999_9)
+        self.assertIsNone(found)
