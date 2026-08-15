@@ -376,6 +376,39 @@ def withdraw(hub: Hub, slug: str, expect_sha: Optional[str] = None) -> bool:
     return hub.update(ref, payload, expect_sha=sha)
 
 
+def mark_done(hub: Hub, slug: str, landed_sha: str, expect_sha: Optional[str] = None) -> bool:
+    """Mark an intent done (status: "done") once the branch it was
+    registered against has landed on the tip -- `landed_sha` and
+    `landed_at` are recorded on the payload; the ref itself is kept, same
+    spirit as `withdraw` (and `refs/rescued/*` never being auto-deleted).
+
+    This is the write that used to not exist anywhere in tools/fleet: an
+    intent stayed "open" forever after its work merged, and `fleetd`'s
+    authoring path (`reconcile_once`) kept offering it as work to author
+    for as long as its ref existed (it was skipped only while the staging
+    branch existed too, and landing is exactly what deletes that branch).
+
+    Returns False -- never raises for the ordinary "nothing to do" cases
+    -- when no intent is registered at this slug, it is not currently
+    "open" (already "done"/"withdrawn", or a caller raced this one), or
+    the CAS update itself lost a race. A genuine hub failure still raises
+    (`HubUnreachableError`/`HubError`), same as `withdraw`; callers that
+    must treat this as best-effort (the train's retire path does) catch
+    that themselves rather than this function swallowing it.
+    """
+    ref = intent_ref(slug)
+    sha = expect_sha or hub.sha(ref)
+    if sha is None:
+        return False
+    payload = hub.read(ref)
+    if payload is None or payload.get("status") != "open":
+        return False
+    payload["status"] = "done"
+    payload["landed_sha"] = landed_sha
+    payload["landed_at"] = _utcnow_iso()
+    return hub.update(ref, payload, expect_sha=sha)
+
+
 # --------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------- #

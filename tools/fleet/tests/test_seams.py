@@ -1557,27 +1557,20 @@ class TestSeam3TrainEndToEnd(SeamFixture):
         self.assertEqual(self.hub.list("refs/heads/rescued/"), {}, "nothing may be rescued either")
         self.assertEqual(len(self.hub.list("refs/heads/staging/")), 2, "and nothing retired")
 
-    @unittest.expectedFailure
     def test_landed_branch_flips_its_intent_to_done(self):
-        """RED ON PURPOSE -- this pins a production gap, it is not a bent
-        test.
+        """A branch that lands on the tip completes the intent it was
+        registered against.
 
-        A branch that lands on the tip completes the intent it was
-        registered against, and nothing anywhere flips that intent's
-        status. `intent.py` only ever writes "open" (`register`) and
-        "withdrawn" (`withdraw`); grep the whole tree for `"done"` and the
-        only hits are an unrelated local variable in `test_fleetd.py`. So
-        `refs/fleet/intents/<slug>` stays "open" forever after its work has
-        merged, and `fleetd`'s authoring path (`reconcile_once`, the
-        `status != "open"` filter) will keep offering a completed intent as
-        work to author for as long as the ref exists -- it is skipped only
-        while `refs/heads/staging/<slug>` exists, and the train has just
-        DELETED that branch.
-
-        Marked `expectedFailure` rather than deleted so it is impossible to
-        forget: if someone implements the flip, unittest reports an
-        UNEXPECTED SUCCESS and this marker has to come off. T8 does not own
-        production code and will not add the write itself.
+        `train.py`'s retire path (`_retire_staging_ref` -> `_mark_intent_done`)
+        CAS-updates `refs/fleet/intents/<slug>` from "open" to "done" once
+        the branch's staging ref is verifiably retired, recording
+        `landed_sha` + `landed_at` via `intent.mark_done` (ARCH-FIX FIX-3a).
+        Before that write existed, `intent.py` only ever wrote "open"
+        (`register`) and "withdrawn" (`withdraw`), so a completed intent
+        stayed "open" forever and `fleetd`'s authoring path kept offering it
+        as work to author for as long as the ref existed -- it was skipped
+        only while `refs/heads/staging/<slug>` existed, and the train had
+        just deleted that branch.
         """
         self.add_staging_branch("ti", {"ti.txt": "ti\n"})
         intent_ref = "refs/fleet/intents/ti"

@@ -55,11 +55,21 @@ _PATTERN = re.compile(r'[\[(,]\s*["\'](push|update-ref)["\']')
 
 # (filename, distinctive substring of the offending line) -> justification.
 #
-# TODO(T2) entries: T2 (train-correct, staging/afx-train) owns train.py in
-# parallel and is fixing R3(b) -- the staging-ref delete must go through
-# `fleetlib.Hub.delete(expect_sha)`, never a raw `push --delete`. Remove the
-# entry (and re-run this test) once that lands; if it is still here and
-# still matching, R3(b) has not landed yet.
+# The T2 x T4 reconciliation (ARCH-FIX FIX-3b): this allowlist used to carry
+# four train.py entries excusing raw pushes -- the two TODO(T2) staging-ref
+# and temp-gate-ref `--delete`s (T2's R3(b) fix routed both through
+# `fleetlib.Hub.delete(expect_sha)`), plus two "Hub has no generic
+# branch-content push primitive" exemptions for the tip push and the temp
+# gate ref push. That reasoning no longer holds: `fleetlib.Hub.push_ref`
+# (built by T3 for exactly this) now carries push_options plumbing for a
+# plain branch-content push, so train.py's tip push and temp-gate-ref push
+# are routed through it too (fetching the commit into the hub's own local
+# cache first -- see `train._fetch_into_hub_cache` / `Hub.push_ref`'s
+# docstring) and neither raw `git push` line exists anymore. Only the
+# rescued/<slug> push below is still raw and still justified: `rescued/*`
+# is explicitly outside R1's tip protection, and `Hub.push_ref` would work
+# for it too, but nothing here has needed CAS or push_options for it -- if
+# that changes, route it through `push_ref` as well and drop this entry.
 _ALLOWLIST = {
     (
         "drift.py",
@@ -86,56 +96,15 @@ _ALLOWLIST = {
     ),
     (
         "train.py",
-        '_git(["push", "origin", "--delete", f"refs/heads/staging/{c.slug}"], cwd=clone, check=False)',
-    ): (
-        "TODO(T2): THE confirmed defect (ARCH-FIX-SPEC.md R3(b)) -- a "
-        "raw force-delete of the staging ref with zero CAS protection, "
-        "the exact 'day's proof of need' this guard test exists for. "
-        "Must be rerouted through fleetlib.Hub.delete(expect_sha). Still "
-        "raw as of tip 63d13641; T2 (train-correct, staging/afx-train) "
-        "owns train.py and is fixing this in parallel."
-    ),
-    (
-        "train.py",
-        '_git(["push", "origin", "--delete", f"refs/heads/{branch}"], cwd=clone, check=False)',
-    ): (
-        "TODO(T2): the same raw-delete pattern as R3(b) above, this time "
-        "cleaning up real_gate()'s temporary staging/train-tmp-* gate "
-        "branch. Same fix, same owner (T2, train-correct, "
-        "staging/afx-train), same TODO."
-    ),
-    (
-        "train.py",
-        'r = _git(["push", "origin", f"HEAD:{TIP_REF}"], cwd=clone, check=False)',
-    ): (
-        "Advances the tip branch itself. Per ARCH-FIX-SPEC.md R1/R3 this "
-        "push must carry the R1 push-option train-token (T2's job in "
-        "parallel) -- but fleetlib.Hub has no generic 'push arbitrary "
-        "branch content to an arbitrary ref' primitive (its CAS "
-        "create/update/delete are built for the fleet's own JSON-blob "
-        "refs), so advancing a real branch with real commit history "
-        "necessarily stays a raw push even after T2's fix. Not R3(b)'s "
-        "named defect; kept here as an explicit, justified exemption "
-        "rather than silently widening the allowlist's scope."
-    ),
-    (
-        "train.py",
         '_git(["push", "origin", f"{c.sha}:{rescued_ref}"], cwd=clone, check=False)',
     ): (
         "Pushes a rescue copy to refs/heads/rescued/<slug> -- a namespace "
         "R1 explicitly exempts from tip protection ('must NOT affect "
-        "staging/*, rescued/*, wip/*, refs/fleet/*'). Same 'no generic "
-        "branch-content push in Hub' reasoning as the tip-push entry "
-        "above."
-    ),
-    (
-        "train.py",
-        '_git(["push", "origin", f"HEAD:refs/heads/{branch}"], cwd=clone)',
-    ): (
-        "real_gate() pushes a temporary staging/train-tmp-* scratch "
-        "branch so gate.sh (which takes a branch name, not a tree) can "
-        "run against it. staging/* is outside tip protection and Hub has "
-        "no generic branch-content push primitive."
+        "staging/*, rescued/*, wip/*, refs/fleet/*'). Unlike the tip push "
+        "and the temp gate-ref push (both now routed through "
+        "fleetlib.Hub.push_ref), this one has no CAS or push_options need, "
+        "so it has not been moved off a plain `git push`; if that changes, "
+        "route it through `push_ref` too and drop this entry."
     ),
 }
 
