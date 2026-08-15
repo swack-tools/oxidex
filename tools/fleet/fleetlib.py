@@ -44,7 +44,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 
 class HubError(Exception):
@@ -170,35 +170,73 @@ class Hub:
         except json.JSONDecodeError as exc:
             raise HubError(f"{ref}@{found_sha} payload.json is not valid JSON: {exc}") from exc
 
-    def create(self, ref: str, payload: dict) -> bool:
+    def create(self, ref: str, payload: dict, push_options: Optional[Sequence[str]] = None) -> bool:
         """Atomically create `ref` if, and only if, it does not exist yet.
 
         This is the CAS primitive everything else composes from: a
         non-forced `git push` of a brand-new ref is rejected by the remote
         if the ref is already there, with no way for two racing pushes to
         both succeed.
+
+        `push_options`, if given, are passed through as `git push -o <opt>`
+        for each entry (see `_push_option_args` -- e.g. the train's
+        `train-token=<secret>` option required by the hub's R1 update-hook
+        guard on `refs/heads/main` / `refs/heads/refactor/tag-machinery`).
+        Omitted (the default) reproduces the exact pre-existing behavior of
+        this method for every caller that does not pass it.
         """
         commit_sha = self._write_commit(self._augment(payload))
-        result = self._run(["push", self.url, f"{commit_sha}:{ref}"])
+        result = self._run(["push", *self._push_option_args(push_options), self.url, f"{commit_sha}:{ref}"])
         return self._interpret_push(result)
 
-    def update(self, ref: str, payload: dict, expect_sha: str) -> bool:
+    def update(self, ref: str, payload: dict, expect_sha: str, push_options: Optional[Sequence[str]] = None) -> bool:
         """Atomically replace `ref`'s payload, but only if it still points
         at `expect_sha`. Uses `--force-with-lease` so two racing updaters
         (e.g. two reapers) cannot both win.
+
+        See `create` for `push_options` semantics.
         """
         commit_sha = self._write_commit(self._augment(payload))
         lease = f"--force-with-lease={ref}:{expect_sha}"
-        result = self._run(["push", lease, self.url, f"{commit_sha}:{ref}"])
+        result = self._run(["push", *self._push_option_args(push_options), lease, self.url, f"{commit_sha}:{ref}"])
         return self._interpret_push(result)
 
-    def delete(self, ref: str, expect_sha: str) -> bool:
+    def delete(self, ref: str, expect_sha: str, push_options: Optional[Sequence[str]] = None) -> bool:
         """Atomically delete `ref`, but only if it still points at
         `expect_sha`. Same `--force-with-lease` guard as `update`.
+
+        See `create` for `push_options` semantics.
         """
         lease = f"--force-with-lease={ref}:{expect_sha}"
-        result = self._run(["push", lease, self.url, f":{ref}"])
+        result = self._run(["push", *self._push_option_args(push_options), lease, self.url, f":{ref}"])
         return self._interpret_push(result)
+
+    def push_ref(
+        self,
+        refspec: str,
+        push_options: Optional[Sequence[str]] = None,
+        force: bool = False,
+    ) -> _Result:
+        """A raw `git push <refspec>` against the hub -- the non-CAS push
+        path (a plain branch advance, not a create/update/delete of a
+        payload-commit ref). Exists so callers that push branches directly
+        (e.g. the train advancing `refs/heads/refactor/tag-machinery`) can
+        still get `push_options` plumbing through `fleetlib` instead of
+        reimplementing `git push -o ...` themselves.
+
+        Returns the raw `_Result` (unlike create/update/delete, there is no
+        single-content-reason-vs-transport-failure distinction to collapse
+        here -- a plain branch push can be rejected for reasons, such as a
+        hub-side hook denial, that are neither "lost a CAS race" nor a
+        transport failure, so this method leaves interpretation to the
+        caller rather than raising or returning a bare bool).
+        """
+        args = ["push"]
+        if force:
+            args.append("--force")
+        args.extend(self._push_option_args(push_options))
+        args.extend([self.url, refspec])
+        return self._run(args)
 
     def list(self, prefix: str) -> dict:
         """{ref: sha} for every ref on the hub matching `prefix`."""
@@ -218,6 +256,25 @@ class Hub:
     # ---------------------------------------------------------------- #
     # Internals
     # ---------------------------------------------------------------- #
+
+    @staticmethod
+    def _push_option_args(push_options: Optional[Sequence[str]]) -> list:
+        """`["-o", opt1, "-o", opt2, ...]` for `push_options`, or `[]` if
+        None/empty -- the latter is load-bearing: every pre-existing call
+        site that does not pass `push_options` must see the exact same
+        `git push` invocation as before this parameter existed. The hub
+        must also have `receive.advertisePushOptions=true` set (see
+        tools/fleet/rollout/install_hook.sh) or git rejects any push
+        carrying `-o` at the transport level before this ever reaches a
+        hook -- that is a hub config requirement, not something this
+        method can paper over.
+        """
+        if not push_options:
+            return []
+        args: list = []
+        for opt in push_options:
+            args.extend(["-o", opt])
+        return args
 
     def _remote_sha(self, ref: str) -> Optional[str]:
         result = self._run(["ls-remote", self.url, ref])
