@@ -13,6 +13,12 @@ docs/FLEET.md addenda "Work identity is per-host"). Every ~15s it:
      never killing live work,
   4. writes its heartbeat to `refs/fleet/hosts/<host>`.
 
+There is exactly ONE exception to "never kill live work", and it is the
+reason this daemon can be trusted at all: a worker whose CLAIM IS LOST
+(`Claim.lost`, i.e. the hub no longer records us as the holder) is killed
+by process group immediately, because some other host may already be
+running that same branch. See the long comment in `reconcile_once`.
+
 The daemon holds NO state a restart cannot rebuild: claims, desired counts
 and heartbeats all live in hub refs. That is deliberate -- two schedulers
 (a cron daemon and a launchd agent) died silently on this fleet in one
@@ -69,6 +75,11 @@ PUSH_BACKOFF_S = 4
 # in-memory (a fleetd restart forgetting it is acceptable).
 AGENT_RETRY_COOLDOWN_S = int(os.environ.get("FLEET_AGENT_COOLDOWN_S", "1800"))
 _agent_attempts: dict = {}
+
+# Seconds between SIGTERM and SIGKILL when tearing down a worker whose
+# lease was lost. Short by design: the window we are closing is "two hosts
+# running the same gate", and every second of grace is a second of that.
+KILL_GRACE_S = float(os.environ.get("FLEET_KILL_GRACE_S", "10"))
 
 
 def host_identity() -> str:
@@ -169,6 +180,85 @@ def default_gate_command(repo_root: Path) -> list:
     return [str(repo_root / "tools" / "fleet" / "gate.sh")]
 
 
+def _pgid_alive(pgid: int) -> bool:
+    """Does any process remain in group `pgid`? `killpg(pgid, 0)` is the
+    cheap probe; `live_pgids()` (the `ps` listing) is the instrument used
+    to VERIFY a kill, because a signal probe cannot distinguish a group
+    that is gone from one we merely lost the right to signal."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, not ours -- treat as alive, never as gone
+    except OSError:
+        return False
+
+
+def kill_process_group(
+    pgid: int,
+    grace: Optional[float] = None,
+    alive_probe: Optional[Callable[[int], bool]] = None,
+    poll: float = 0.25,
+) -> str:
+    """SIGTERM the whole group, then SIGKILL whatever is left after
+    `grace`. Returns a short human description for the log line.
+
+    Signalling the GROUP, not the pid, is the point: gates spawn cargo,
+    which spawns rustc, and a pid-only kill leaves those orphaned (M8).
+    `start_gate` puts every worker in its own session precisely so this
+    call can never reach anything else -- and the own-pgid guard below is
+    the belt to that braces, because a fleetd that SIGKILLs its own
+    process group takes out every gate on the host.
+    """
+    grace = KILL_GRACE_S if grace is None else grace
+    alive = alive_probe or _pgid_alive
+    if pgid <= 1:
+        return f"refused: implausible pgid {pgid}"
+    try:
+        own = os.getpgrp()
+    except (AttributeError, OSError):
+        own = None
+    if own is not None and pgid == own:
+        return f"refused: pgid {pgid} is fleetd's own process group"
+
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return "already gone before SIGTERM"
+    except OSError as e:
+        return f"SIGTERM failed: {e}"
+
+    deadline = time.time() + grace
+    while time.time() < deadline:
+        if not alive(pgid):
+            return "exited on SIGTERM"
+        time.sleep(poll)
+
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        return "exited on SIGTERM (during grace)"
+    except OSError as e:
+        return f"SIGKILL failed: {e}"
+    return f"SIGKILLed after {grace:g}s grace"
+
+
+def kill_worker(w: "Worker", grace: Optional[float] = None) -> str:
+    """Tear a worker down by process group and drop its claim."""
+    outcome = kill_process_group(w.pgid, grace=grace, alive_probe=lambda _p: w.alive())
+    if w.popen is not None:
+        try:
+            w.popen.wait(timeout=5)  # reap, so it cannot linger as a zombie
+        except subprocess.TimeoutExpired:
+            outcome += " (child not reaped within 5s)"
+    # Safe either way: `release` is a CAS delete, so if the lease really
+    # is somebody else's now, this cannot touch their claim.
+    w.claim.release()
+    return outcome
+
+
 def start_gate(
     hub: Hub,
     branch: str,
@@ -260,6 +350,7 @@ class ReconcileResult:
     started: list = field(default_factory=list)
     finished: list = field(default_factory=list)
     refused: list = field(default_factory=list)  # (reason, detail)
+    killed: list = field(default_factory=list)  # (tag, reason) -- lost leases
     heartbeat_written: bool = False
     tip_generation: Optional[int] = None
 
@@ -305,8 +396,10 @@ def reconcile_once(
     pgid_probe: Callable[[], set] = live_pgids,
 ) -> ReconcileResult:
     """One reconcile step. Mutates `workers` in place (removing finished
-    ones) and returns what changed. Never kills a live worker: over-target
-    and disabled both DRAIN (stop starting), per FLEET.md M2."""
+    and killed ones) and returns what changed. Over-target and disabled
+    both DRAIN (stop starting) and never kill, per FLEET.md M2 -- the one
+    worker this step does kill is one whose lease was lost, for the
+    reasons argued inline below."""
     res = ReconcileResult()
 
     desired_doc = hub.read(DESIRED_REF) or {}
@@ -327,6 +420,43 @@ def reconcile_once(
             w.claim.release()
             workers.remove(w)
             res.finished.append(w.tag)
+            continue
+
+        if w.claim.lost:
+            # ---- KILL. Do not drain. ------------------------------- #
+            # Everywhere else in this daemon the rule is drain, never
+            # kill: over-target drains, disabled drains, shutdown drains,
+            # because a half-finished gate wastes an hour of CPU and a
+            # running gate hurts nobody. A LOST LEASE inverts that rule,
+            # and the inversion is deliberate.
+            #
+            # `lost` means the hub no longer records this host as the
+            # holder of this work. Some other host may already have
+            # reaped the claim and started the same branch -- that is
+            # precisely the event leases exist to prevent. Two gates on
+            # one branch corrupt the shared verdict cache (two verdicts
+            # for one (tree, gate_version, platform) pair), race for the
+            # same target directory, and can drive two merges of the same
+            # tree onto the tip.
+            #
+            # So compare the two directions of being wrong. Killing a
+            # worker that still legitimately held its lease costs one
+            # retryable gate run. Letting an unleased worker run to
+            # completion risks a duplicate merge race, which is not
+            # retryable and not detectable after the fact. The safe
+            # direction is the kill, and it is safe only because it is
+            # the group (M8): cargo and rustc children go with it.
+            reason = w.claim.lost_reason or "renewal failed (no reason recorded)"
+            outcome = kill_worker(w)
+            workers.remove(w)
+            res.killed.append((w.tag, reason))
+            print(
+                f"fleetd[{host}] LOST LEASE {w.claim.ref} kind={w.kind} "
+                f"branch={w.branch} tag={w.tag} pgid={w.pgid}: {reason} "
+                f"-- killed process group: {outcome}",
+                file=sys.stderr,
+                flush=True,
+            )
 
     running = len([w for w in workers if w.kind == "gate"])
 
@@ -482,6 +612,12 @@ def main(argv: Optional[list] = None) -> int:
 
     # Singleton guard: one fleetd per host. Held for the daemon's life;
     # expires on crash so a restarted daemon can reap it and proceed.
+    #
+    # `acquire_or_reap` also starts this claim's renewer (claim.py owns
+    # renewal). Before that, the host singleton was written once at
+    # startup and never renewed, so it expired LEASE_TTL after every
+    # daemon start and a second fleetd could reap it and run alongside
+    # the first -- one host, two schedulers, both starting gates.
     singleton = Claim(hub, kind="host", key=host, work_kind="fleetd", work_key=host)
     try:
         # acquire_or_reap: a hard-killed predecessor (launchctl kickstart -k,
@@ -502,22 +638,46 @@ def main(argv: Optional[list] = None) -> int:
     signal.signal(signal.SIGTERM, _sigterm)
     signal.signal(signal.SIGINT, _sigterm)
 
+    rc = 0
     try:
         while True:
             res = reconcile_once(hub, host, workers, gate_command, Path(args.log_dir), repo_root)
             line = (
                 f"fleetd[{host}] gates={len(workers)} started={res.started} "
-                f"finished={res.finished} refused={res.refused} hb={res.heartbeat_written}"
+                f"finished={res.finished} killed={res.killed} refused={res.refused} "
+                f"hb={res.heartbeat_written}"
             )
             print(line, flush=True)
+            if singleton.lost:
+                # Our host lease is gone, so another fleetd may already be
+                # reconciling this host. Exit rather than run a second
+                # scheduler against the same machine.
+                #
+                # Note the asymmetry with a worker's lost lease above: we
+                # do NOT kill the gates on the way out. Each gate holds
+                # its own, separately renewed lease; those are still valid
+                # and still exclude other hosts. Killing them here would
+                # destroy work that is correctly protected, to punish a
+                # different ref's expiry. Drain is right for the daemon,
+                # kill is right for a worker whose OWN lease lapsed.
+                print(
+                    f"fleetd[{host}] HOST LEASE LOST {singleton.ref}: "
+                    f"{singleton.lost_reason} -- another fleetd may now own this "
+                    f"host; exiting without killing {len(workers)} live worker(s)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                rc = 4
+                break
             if args.once or stop["flag"]:
                 break
             time.sleep(args.interval)
     finally:
         # Drain, don't kill: leave live gates running; their claims expire
         # and any host's reaper collects them if they die unowned.
+        # `release` also stops the singleton's renewer.
         singleton.release()
-    return 0
+    return rc
 
 
 if __name__ == "__main__":
