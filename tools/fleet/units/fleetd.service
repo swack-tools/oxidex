@@ -1,4 +1,12 @@
-# systemd unit for fleetd (Linux hosts: i7 `server`, work2 pod).
+# systemd unit for fleetd (Linux hosts WITH systemd --user: i7 `server`).
+#
+# The work2 pod does NOT have systemd (it is a k8s container with
+# neither systemd nor launchd -- see fleetd.py's `host_identity()`
+# comment on its generated `work2box-<hash>` hostname). This file does
+# not apply there; the pod uses tools/fleet/units/fleetd-wrapper.sh as
+# its supervisor instead, kept alive by tools/fleet/units/cron-backstop.txt
+# (T7, ARCH-FIX-SPEC.md R8).
+#
 # Install (as the OWNING user -- on the ryzen's ubuntuwork side that is
 # swackhamer, not allen):
 #   mkdir -p ~/.config/systemd/user

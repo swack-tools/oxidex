@@ -40,8 +40,29 @@
 #      (tools/fleet/verdict.py) is consulted before paying for a build and
 #      updated after one -- see classify_failure() and the cache
 #      lookup/store calls below.
+#
+# --- T7 additions (ARCH-FIX-SPEC.md R7, "the gate tests the fleet's own
+# code") --- GATE_VERSION bumped 4 -> 5: a new "fleet-tests" stage runs
+# between `cargo test --workspace` and `just verify-tables` (search this
+# file for "fleet-tests" below), consisting of (1) a `python3 -m
+# py_compile` sweep of tools/fleet/*.py and (2) `python3 -m unittest
+# discover -s tools/fleet/tests` with FLEET_TESTS_HERMETIC=1. The fleet's
+# own coordination code (claims, the train, hooks, ...) had unit tests
+# for every half of its safety contracts while their COMPOSITION never
+# ran anywhere -- see AGENTS.md/ARCH-FIX-SPEC.md's diagnosis. This stage
+# is what makes the gate the thing that runs them. A red fleet-tests
+# stage is always a FAIL, never an ABORT (classify_failure() special-cases
+# stage=="fleet-tests" below): a broken test in the tool that computes
+# verdicts must not be waved through as a flaky OOM signature match.
+# Hermetic mode is what the gate always runs here: the ledger/intent
+# behavioral tests that build a release binary and shell to the real
+# pinned oracle+corpus are skipped on purpose, because this exact gate
+# run already builds that release binary a few lines earlier (see each
+# skipped test's own skipUnless comment in
+# tools/fleet/tests/test_intent.py and test_ledger.py for the itemized
+# list of what hermetic mode skips and why).
 set -u
-GATE_VERSION="4"
+GATE_VERSION="5"
 BRANCH="$1"; TAG="$2"
 START_TS=$(date +%s)
 HOST=$(hostname)
@@ -145,6 +166,18 @@ classify_failure() {
   # grep for, it's a precondition check, not a killed process, so force it.
   if [ "$stage" = "oracle-precondition" ]; then
     echo "ABORT"
+    return
+  fi
+  # T7 (ARCH-FIX-SPEC.md R7): a red fleet-tests stage is ALWAYS a FAIL,
+  # never an ABORT, forced here for the same reason oracle-precondition is
+  # forced the other way above -- this is a verdict about the fleet's own
+  # test suite, and letting a stray OOM-shaped log line upgrade a genuine
+  # test failure into a non-damning retry would defeat the entire point of
+  # R7 (a broken coordination-code test must block the tip, not get waved
+  # through). py_compile syntax errors and unittest failures alike land
+  # here as plain FAIL.
+  if [ "$stage" = "fleet-tests" ]; then
+    echo "FAIL"
     return
   fi
   local tail
@@ -279,6 +312,30 @@ cargo build --release $FEAT --bin oxidex --bin jpeg-tag-matrix >> "$L" 2>&1 || f
 # test through the gate (conds12's grammar tests) -- a gate bug, found by
 # a producer agent that reproduced the failure both ways. GATE_VERSION 4.
 CARGO_PROFILE_RELEASE_PANIC=unwind cargo test --workspace --release $FEAT >> "$L" 2>&1 || fail tests
+
+# --- T7 (ARCH-FIX-SPEC.md R7): the gate tests the fleet's own code ---
+# Runs AFTER the workspace test suite and BEFORE the ratchet, on the same
+# merged tree everything above already tested. Two checks:
+#   1. A `py_compile` sweep of tools/fleet/*.py (direct children only,
+#      matching tools/fleet/tests/test_no_raw_hub_push.py's own scope
+#      convention -- not hooks/, rollout/, units/, or tests/) so a fleet
+#      tool with a plain syntax error fails loudly here instead of at the
+#      moment some host tries to run it during an actual gate or train.
+#   2. The fleet's own test suite, hermetic. FLEET_TESTS_HERMETIC=1 skips
+#      the ledger/intent tests that build a release oxidex binary and
+#      shell to the real pinned oracle + combined-samples corpus -- see
+#      tools/fleet/tests/test_intent.py / test_ledger.py's own
+#      "HERMETIC SKIP" comments for the itemized list of what that skips
+#      and why (in short: this exact run already built that release
+#      binary two lines above, and a gate must not depend on host-local
+#      paths like /tmp/oxidex-exiftool-cache/... that a CI runner may
+#      lack).
+# Both are a hard FAIL, never an ABORT: classify_failure() special-cases
+# stage=="fleet-tests" above so a stray log line that happens to match an
+# OOM signature can never wave through a genuine test failure here.
+python3 -m py_compile tools/fleet/*.py >> "$L" 2>&1 || fail fleet-tests
+FLEET_TESTS_HERMETIC=1 python3 -m unittest discover -s tools/fleet/tests >> "$L" 2>&1 || fail fleet-tests
+
 just verify-tables >> "$L" 2>&1 || fail verify-tables
 [ -x "$OXIDEX" ] || fail no-binary
 "$CARGO_TARGET_DIR/release/jpeg-tag-matrix" manifest --flag-noops >> "$L" 2>&1 \
