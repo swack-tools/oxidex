@@ -48,6 +48,26 @@ rebuild, and it runs before the first reconcile:
 Claims held by OTHER hosts are read and then left entirely alone, in all
 three cases.
 
+Adoption runs AFTER the host singleton is held -- deliberately, so that
+only one fleetd on a host is ever rebuilding state at once -- but the
+singleton itself had the identical bug one level up until ARCH-FIX FIX 2:
+`Claim.acquire_or_reap()` only reaps an EXPIRED claim, so a hard-killed
+predecessor's OWN `refs/fleet/claims/host/<host>` locked every successor
+out for a full LEASE_TTL regardless of whether the predecessor's process
+was actually gone -- ten production minutes of a host running no
+scheduler, no heartbeat, watching nothing. `main()`'s singleton block now
+applies the SAME evidence `adopt_workers` uses for gate/agent claims (a
+process group provably dead by `ps` listing, not by clock) to its own
+claim before falling back to waiting out the TTL; see
+`reap_dead_same_host_singleton` and `fleetd_marker_in_group` for the one
+complication that idiom picks up at this level: fleetd shares its
+supervisor's process group (R8's wrapper never gives it its own session),
+so the identity check has to look for a live "fleetd.py" among the WHOLE
+group, not just its leader, and has to exclude the successor's own pid --
+otherwise a fresh fleetd checking its dead predecessor's pgid finds
+itself and concludes, wrongly and permanently, that the predecessor is
+still alive.
+
 `reconcile_once()` is a pure step function so tests can drive it against
 a fixture hub with a stub gate command; `main()` is just the loop -- plus
 one guard it lacked: a `HubError` out of a reconcile step now costs that
@@ -305,6 +325,156 @@ def fleet_worker_pgids(markers: Optional[Sequence[str]] = None) -> dict:
             continue
         found[pgid] = command
     return found
+
+
+# --------------------------------------------------------------------- #
+# Host-singleton reap-before-expiry (ARCH-FIX-SPEC.md FIX 2)
+#
+# `Claim.acquire_or_reap()` (claim.py) only reaps an EXPIRED claim. A
+# hard-killed fleetd's own host singleton (`refs/fleet/claims/host/<host>`)
+# is unrenewed but sits on the hub, unexpired, for up to a full LEASE_TTL
+# (600s in production, compressed in tests) -- and every successor's
+# startup path refuses for that entire window, because the guard it hits
+# is correct by the letter of the lease (not yet expired) and wrong by the
+# fact of the matter (the holder is dead). See main()'s singleton block.
+#
+# The fix idiom already exists in this file for GATE and AGENT claims:
+# `adopt_workers` treats "claim.holder_host == us AND claim.pgid is gone
+# from the `ps` listing" as proof of death, never waiting for expiry.
+# `reap_dead_same_host_singleton` is exactly that evidence, applied to the
+# daemon's OWN claim instead of the work it supervises -- with one twist
+# `adopt_workers` does not need, documented on `fleetd_marker_in_group`.
+# --------------------------------------------------------------------- #
+
+FLEETD_MARKER = "fleetd.py"
+
+
+def fleetd_marker_in_group(pgid: int, exclude_pid: Optional[int] = None,
+                           marker: str = FLEETD_MARKER) -> Optional[str]:
+    """Command line of a live, same-uid process in group `pgid` whose
+    command contains `marker` -- or None if the CURRENT `ps` listing has
+    no such process, INCLUDING if the listing could not be taken at all
+    (a `ps` failure returns a non-None sentinel, not None, so the caller
+    fails closed onto "still there" rather than concluding death from a
+    missing instrument).
+
+    Every MEMBER of the group is checked here, not just its leader
+    (contrast `fleet_worker_pgids`'s `pid == pgid` filter). That filter is
+    right for gates and agents, which own their session
+    (`start_new_session=True`) and so are always their own leader. fleetd
+    itself is not: run under `fleetd-wrapper.sh` (R8), it is a plain
+    background job (`fleetd.py "$@" &`) of a non-interactive bash script,
+    which never calls `setpgid` for it -- so it SHARES the wrapper's
+    process group, and the group's actual leader is the wrapper, whose
+    command line is `bash .../fleetd-wrapper.sh ...` and never contains
+    "fleetd.py". A leader-only scan would see only the wrapper and report
+    "no fleetd here" even while a live fleetd genuinely is one member
+    over -- silently defeating this whole check under the one supervisor
+    the seam-4 restart test (and the work2 pod) actually run.
+
+    THE NASTY EDGE, and why `exclude_pid` exists: because fleetd shares
+    its wrapper's process group, a freshly started SUCCESSOR is ALREADY a
+    member of this exact group -- the same recorded pgid -- by the time
+    it runs this check, before it has acquired anything. Its own command
+    line trivially contains "fleetd.py". An unguarded scan matches that
+    row and concludes the dead predecessor is alive forever: a permanent
+    lockout disguised as safety. `exclude_pid` must be the CALLER's own
+    `os.getpid()` so its own row is skipped -- the same self-match hazard
+    `adopt_workers` guards against via `own_pgid`, applied here at pid
+    grain because pgid alone cannot distinguish "me" from "the wrapper";
+    both share it. (`SupervisedFleetd.fleetd_pid` in test_seams.py notes
+    the identical hazard for `pgrep -f fleetd` matching the TEST's own
+    command line -- same class of bug, different tool.)
+
+    A pgid that is present but recycled to some unrelated, non-fleetd
+    process reads exactly like "predecessor dead" here (no member matches
+    the marker) -- there is no richer identity than a command string in a
+    `ps` listing, so this is as far as "matching identity" can go. That
+    residual is why the caller treats the result as "safe to attempt a
+    reap", never "safe to assume", and the reap itself is a CAS delete
+    against the exact sha just read (see `reap_dead_same_host_singleton`):
+    if the recorded holder turns out to be alive and renewing after all,
+    the CAS loses to that renewal and nothing is removed.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pgid=,pid=,uid=,command="],
+            capture_output=True, text=True, errors="replace", timeout=10,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return "<ps listing unavailable -- refusing to declare pgid %d dead>" % pgid
+    try:
+        uid = os.getuid()
+    except AttributeError:
+        uid = None
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        spgid, spid, suid, command = parts
+        if not (spgid.isdigit() and spid.isdigit() and suid.isdigit()):
+            continue
+        rpgid, rpid, ruid = int(spgid), int(spid), int(suid)
+        if rpgid != pgid:
+            continue
+        if uid is not None and ruid != uid:
+            continue
+        if exclude_pid is not None and rpid == exclude_pid:
+            continue
+        if marker in command:
+            return command
+    return None
+
+
+def reap_dead_same_host_singleton(
+    hub: Hub,
+    host: str,
+    ref: str,
+    own_pid: Optional[int] = None,
+    marker_probe: Callable[..., Optional[str]] = fleetd_marker_in_group,
+) -> bool:
+    """Force a stale host-singleton claim off the hub when its holder is
+    THIS host and its process group is provably dead, even though the
+    claim has not yet expired. Returns True iff this call deleted it.
+
+    Every condition below fails CLOSED (returns False, changes nothing):
+    the ref is gone already (nothing to reap -- let the caller's plain
+    `acquire()` retry see that), held by a DIFFERENT host (never ours to
+    reason about -- `Claim.adopt`'s own rule, repeated here), carries no
+    usable pgid, or the pgid still has a live fleetd.py-looking member.
+    The only way this returns True is a same-host claim whose recorded
+    process group has no fleetd.py process in it at all.
+
+    Even then, the deletion itself is a CAS (`Hub.delete(expect_sha=...)`)
+    against the exact sha just read: if the claim is being renewed
+    concurrently by a holder that was merely slow to answer `ps` (or the
+    `ps` evidence above was simply wrong), the renewal already moved the
+    ref and this CAS fails harmlessly. Reaping a live lease requires BOTH
+    the process-liveness check and the hub's own CAS to be wrong in the
+    same instant; this only needs one of them to be right.
+
+    Nothing here sends a signal to any process. It only ever deletes THIS
+    host's own stale ref -- never another host's, never a worker's.
+    """
+    sha = hub.sha(ref)
+    if sha is None:
+        return False
+    payload = hub.read(ref)
+    if payload is None or payload.get("holder_host") != host:
+        return False
+
+    pgid = payload.get("pgid")
+    pgid = pgid if isinstance(pgid, int) else None
+    if pgid is None or pgid <= 1:
+        return False  # no usable evidence -- refuse rather than guess
+
+    if marker_probe(pgid, own_pid) is not None:
+        return False  # a live fleetd.py-looking process still holds the group
+
+    try:
+        return hub.delete(ref, expect_sha=sha)
+    except HubError:
+        return False
 
 
 def _pgid_alive(pgid: int) -> bool:
@@ -1245,8 +1415,27 @@ def main(argv: Optional[list] = None) -> int:
         # A LIVE predecessor still refuses (the singleton guard stands).
         singleton.acquire_or_reap()
     except claim_mod.ClaimHeldError:
-        print(f"fleetd: another instance holds refs/fleet/claims/host/{host}; exiting")
-        return 3
+        # ARCH-FIX-SPEC.md FIX 2 (seam 4's red half): `acquire_or_reap`
+        # above only reaps an EXPIRED claim, so a hard-killed predecessor
+        # whose lease has not yet timed out still locks every successor
+        # out for a full LEASE_TTL -- ten production minutes of a host
+        # running no scheduler at all. If the claim is OURS (this host)
+        # and its recorded process group is provably dead by `ps` listing
+        # (see `reap_dead_same_host_singleton`), reap it regardless of
+        # expiry and proceed. A live pgid or another host's claim still
+        # refuses below, exactly as before this fix.
+        if reap_dead_same_host_singleton(hub, host, singleton.ref, own_pid=os.getpid()):
+            try:
+                singleton.acquire()
+            except claim_mod.ClaimHeldError:
+                # Lost a race for the ref we just deleted (another reaper,
+                # or the "dead" predecessor renewing after all). Refuse,
+                # same as the plain case below.
+                print(f"fleetd: another instance holds refs/fleet/claims/host/{host}; exiting")
+                return 3
+        else:
+            print(f"fleetd: another instance holds refs/fleet/claims/host/{host}; exiting")
+            return 3
 
     # R6: rebuild `workers` from the hub BEFORE the first reconcile. It has
     # to be after the singleton (only one fleetd per host may adopt) and
