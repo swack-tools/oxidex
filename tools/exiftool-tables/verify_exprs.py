@@ -141,10 +141,19 @@ def capability_probe(perl_bin, et_lib, expect_version):
     """AGENTS.md: a matching -ver is not a working oracle. Confirm the
     interpreter runs, the pinned library loads (not some other ExifTool that
     happens to be findable), reports the exact pinned version, and can
-    actually execute a real conversion -- not just parse."""
+    actually execute a real conversion -- not just parse.
+
+    Also captures the Perl *interpreter's* own version (`$^V`, distinct from
+    `$Image::ExifTool::VERSION` above) and returns it, so the ledger this
+    run may go on to write can record which Perl produced its judgement.
+    codegen.py's `load_oracle_ledger` names this in its abort message when a
+    later host's `tables.json` digest does not match -- see docs/FLEET.md's
+    2026-08-14 addenda ("regen.sh has a hidden host dependency").
+    """
     script = (
         f'use lib "{et_lib}"; use Image::ExifTool; use Image::ExifTool::Exif;\n'
         'print "VERSION\\t$Image::ExifTool::VERSION\\n";\n'
+        'print "PERLVER\\t$^V\\n";\n'
         'print "PROBE\\t", Image::ExifTool::Exif::PrintExposureTime(0.125), "\\n";\n'
     )
     r = subprocess.run([perl_bin, "-e", script], capture_output=True, text=True, timeout=30)
@@ -158,7 +167,8 @@ def capability_probe(perl_bin, et_lib, expect_version):
     )
     print(
         f"capability probe: perl={perl_bin} lib={et_lib} "
-        f"version={lines.get('VERSION')!r} PrintExposureTime(0.125)={lines.get('PROBE')!r} "
+        f"version={lines.get('VERSION')!r} perl_version={lines.get('PERLVER')!r} "
+        f"PrintExposureTime(0.125)={lines.get('PROBE')!r} "
         f"rc={r.returncode} -> {'OK' if ok else 'FAILED'}"
     )
     if not ok:
@@ -167,6 +177,7 @@ def capability_probe(perl_bin, et_lib, expect_version):
             "oracle capability probe failed -- refusing to trust this Perl/ExifTool "
             "as ground truth (AGENTS.md: a matching -ver is not a working oracle)"
         )
+    return lines.get("PERLVER", "<unknown>")
 
 
 # --- probe sets --------------------------------------------------------
@@ -179,7 +190,47 @@ NUM_BASE = [
 _LIT_RE = re.compile(r"0[xX][0-9a-fA-F]+|\d+\.\d+(?:[eE][+-]?\d+)?|\d+(?:[eE][+-]?\d+)?")
 
 
+# `PrintAFPointsLeftRight($val, ncol)` / `PrintAFPointsUpDown($val, nrow)`
+# (Nikon.pm:13420-13442, pinned 13.59) read `$val` from a real
+# ProcessBinaryData field -- always a small non-negative column/row index,
+# never wider than the AF grid itself (ncol/nrow max out at 29 in the pinned
+# tree). NUM_BASE's generic battery includes 1e18 "to be safe", but for
+# *this* pair of functions probing there is actively wrong: it manufactures
+# a FAIL that has nothing to do with the translation.
+#
+# Confirmed by hand against the pinned Perl (13.59, /usr/bin/perl5.34) and
+# the shipped Rust (`print_af_points_left_right`, src/exiftool_tables/
+# exprs.rs):
+#   perl -e 'my $v=1e18; my $c=10.0; my $d=$v-$c;
+#            print $d == $v, " ", sprintf("%d", $d), "\n"'
+#     -> "1 999999999999999990"
+# `$d == $v` is true -- `1e18 - 10` rounds to the exact same IEEE754 double
+# as `1e18` itself (its ULP there is 128, well past 10) -- so Perl's own
+# `sprintf('%d', ...)` does NOT reproduce that double's true value once it
+# exceeds roughly 2^53 (~9.007e15): the same $d prints "1000000000000000000"
+# under `%.0f` but "999999999999999990" under `%d`. Rust's
+# `format!("{}", v as i64)` (perl_int) gives the mathematically correct
+# "1000000000000000000" for the identical double. Both sides are internally
+# consistent; only Perl's *own* `%d` formatter loses precision here, and it
+# is a fact about `sprintf('%d')` at that magnitude, not about this
+# translation or about any real AF-point value ExifTool ever reads. Per
+# AGENTS.md's "name the instrument" doctrine and the task's narrow-fix
+# preference: bound the probe magnitude for exactly these two functions
+# rather than loosen the oracle's comparison generally.
+_AF_POINT_PROBES = [float(v) for v in range(-4, 32)] + [40.0, 100.0, -50.0]
+NARROW_NUM_DOMAIN_PROBES = {
+    f"Image::ExifTool::Nikon::PrintAFPointsLeftRight($val, {n})": _AF_POINT_PROBES
+    for n in (19, 21, 29)
+}
+NARROW_NUM_DOMAIN_PROBES.update({
+    f"Image::ExifTool::Nikon::PrintAFPointsUpDown($val, {n})": _AF_POINT_PROBES
+    for n in (11, 13, 17)
+})
+
+
 def numeric_probes_for(expr):
+    if expr in NARROW_NUM_DOMAIN_PROBES:
+        return NARROW_NUM_DOMAIN_PROBES[expr]
     vals = set(NUM_BASE)
     for m in _LIT_RE.finditer(expr):
         t = m.group()
@@ -441,7 +492,7 @@ def main():
     )
 
     version, counter = census(args.tables_json)
-    capability_probe(args.perl, args.et_lib, version)
+    perl_version = capability_probe(args.perl, args.et_lib, version)
 
     # Every expression the shipped translator (TRANSLATIONS + compile())
     # claims to handle, across all three value domains -- this is the whole
@@ -566,11 +617,18 @@ def main():
         verified = sorted(exprs.normalize(e) for e, s in per_expr.items() if s[0] > 0 and s[1] == 0)
         verified_uses = sum(counter[e] for e, s in per_expr.items() if s[0] > 0 and s[1] == 0)
         artifact = {
-            "schema": 1,
+            # Schema 2 (was 1): added `perl_version`, the interpreter
+            # provenance codegen.py's load_oracle_ledger names in its abort
+            # message on a tables_sha256 mismatch. A schema-1 ledger has no
+            # such field and is refused outright -- see that function's
+            # docstring and docs/FLEET.md's 2026-08-14 addenda.
+            "schema": 2,
             "exiftool_version": version,
+            "perl_version": perl_version,
             "tables_sha256": hashlib.sha256(Path(args.tables_json).read_bytes()).hexdigest(),
             "instrument": {
                 "perl": args.perl,
+                "perl_version": perl_version,
                 "et_lib": str(args.et_lib),
                 "rust": "cargo run --quiet --bin expr_oracle_harness",
             },

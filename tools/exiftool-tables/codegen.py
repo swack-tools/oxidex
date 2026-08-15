@@ -124,8 +124,40 @@ VAR_KINDS = {
 SIZED_RE = re.compile(r"^(\w+)\[(\d+)\]$")
 
 
+LEDGER_SCHEMA = 2
+
+# Remedy text repeated in both loud-abort paths below -- kept as one constant
+# so the wording cannot drift between "malformed file" and "digest mismatch".
+LEDGER_REMEDY = (
+    "remedy: regenerate on a host whose Perl matches the ledger's provenance "
+    "-- currently the i7 (`ssh server`) -- via `tools/exiftool-tables/"
+    "regen.sh`, or refresh the ledger directly with `tools/exiftool-tables/"
+    "verify_exprs.py <tables.json> --ledger-out "
+    "tools/exiftool-tables/expr_oracle_ledger.json`."
+)
+
+
+def _local_perl_provenance():
+    """Best-effort `$^V` of whatever `perl` resolves to, for the abort
+    message only. Never allowed to raise: this runs inside an error path
+    that must still print the rest of its diagnostic even with no Perl on
+    PATH at all.
+    """
+    try:
+        import subprocess
+
+        r = subprocess.run(
+            ["perl", "-e", "print $^V"], capture_output=True, text=True, timeout=10
+        )
+        v = r.stdout.strip()
+        return v or "<perl ran but printed no version>"
+    except Exception as exc:  # noqa: BLE001 -- diagnostic-only, must not raise
+        return f"<could not determine: {exc}>"
+
+
 def load_oracle_ledger(path, tables_json, version):
-    """Return oracle-approved normalized expressions, or refuse all of them.
+    """Return oracle-approved normalized expressions, or `None` if the
+    caller opted out of oracle gating entirely (`path is None`).
 
     R2 deliberately makes the proof artifact a generation input.  A grammar
     match is only a shape claim; a ValueConv/PrintConv is enabled only after
@@ -134,22 +166,108 @@ def load_oracle_ledger(path, tables_json, version):
     ExifTool queues `ValueConv` before `PrintConv` at
     Image/ExifTool.pm:3524-3525 and evaluates conversion text at :3656-3664
     (pinned 13.59).
+
+    `path is None` (no `--expr-ledger` given at all) is the only case this
+    returns `None` for -- every caller below already treats that as "gate
+    everything", and it is a choice the invoker made on purpose.
+
+    A `path` that IS given but fails to validate is a different situation
+    entirely, and used to be indistinguishable from the above: `None` either
+    way, so `conv_for`/`value_conv_for` silently refused every oracle-gated
+    expression with no signal that anything was wrong. Observed impact
+    (docs/FLEET.md addenda, 2026-08-14): a ledger produced on the i7's Perl
+    5.38.2, read back on a host whose Perl produces a different `tables.json`
+    byte-for-byte (and therefore a different sha256 digest, e.g. Perl 5.34.1
+    on this Mac), collapsed `binary_tables.rs` from 248 `ExprId` variants to
+    7 -- discovered only because a hand-written `runtime.rs` test referenced
+    one of the 241 that silently stopped being emitted. Per AGENTS.md's
+    omit-and-count doctrine, a refusal must be loud and counted, never
+    silent -- so every failure mode below raises `SystemExit` naming both
+    digests, both Perl provenances (where knowable), and the remedy, instead
+    of returning `None`.
     """
     if path is None:
         return None
+
     try:
-        ledger = json.load(open(path, encoding="utf-8"))
-        digest = hashlib.sha256(open(tables_json, "rb").read()).hexdigest()
-        if (
-            ledger.get("schema") != 1
-            or ledger.get("exiftool_version") != version
-            or ledger.get("tables_sha256") != digest
-            or ledger.get("probe_counts", {}).get("fail") != 0
-        ):
-            return None
-        return set(ledger["verified_expressions"])
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
+        with open(path, encoding="utf-8") as fh:
+            raw_text = fh.read()
+    except OSError as exc:
+        raise SystemExit(
+            f"oracle ledger unreadable: --expr-ledger {path!r} was given but "
+            f"could not be opened ({exc}). A ledger was requested; codegen "
+            "refuses to silently proceed as if none had been.\n"
+            f"{LEDGER_REMEDY}"
+        ) from exc
+
+    try:
+        ledger = json.loads(raw_text)
+    except ValueError as exc:
+        raise SystemExit(
+            f"oracle ledger unreadable: {path!r} is not valid JSON ({exc}).\n"
+            f"{LEDGER_REMEDY}"
+        ) from exc
+
+    try:
+        with open(tables_json, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+    except OSError as exc:
+        # This one is a caller bug (tables_json is codegen's own positional
+        # argument, already opened successfully by main() before this
+        # function runs), but fail loudly rather than let a `None` obscure
+        # it either.
+        raise SystemExit(f"cannot re-read {tables_json!r} to digest it: {exc}") from exc
+
+    problems = []
+    schema = ledger.get("schema")
+    if schema != LEDGER_SCHEMA:
+        if schema == 1:
+            problems.append(
+                "schema 1 (pre-provenance) -- this ledger predates the "
+                "perl_version field; regenerate to schema "
+                f"{LEDGER_SCHEMA} before it can be trusted"
+            )
+        else:
+            problems.append(f"schema {schema!r}, expected {LEDGER_SCHEMA}")
+    if ledger.get("exiftool_version") != version:
+        problems.append(
+            f"exiftool_version mismatch: ledger={ledger.get('exiftool_version')!r} "
+            f"tables.json={version!r}"
+        )
+    ledger_digest = ledger.get("tables_sha256")
+    if ledger_digest != digest:
+        ledger_perl = ledger.get("perl_version", "<not recorded -- schema 1>")
+        local_perl = _local_perl_provenance()
+        problems.append(
+            "tables_sha256 mismatch (the two Perls transcribed ExifTool's "
+            "tables to different bytes):\n"
+            f"      ledger's digest:  {ledger_digest!r}"
+            f"  (produced by Perl {ledger_perl})\n"
+            f"      this tables.json: {digest!r}  (this host's `perl` is "
+            f"{local_perl})"
+        )
+    fail_count = ledger.get("probe_counts", {}).get("fail")
+    if fail_count != 0:
+        problems.append(
+            f"probe_counts.fail={fail_count!r} (expected 0) -- the "
+            "differential oracle recorded at least one Perl/Rust "
+            "disagreement; a ledger written from a failing verify_exprs.py "
+            "run must never approve any expression"
+        )
+
+    if problems:
+        detail = "\n  - ".join(problems)
+        raise SystemExit(
+            f"oracle ledger REFUSED: {path!r} does not validate against "
+            f"{tables_json!r}.\n"
+            "Every oracle-gated ValueConv/PrintConv would otherwise be "
+            "silently refused (AGENTS.md: a refusal must be loud and "
+            "counted, never silent). Aborting regen instead.\n"
+            f"  - {detail}\n"
+            f"{LEDGER_REMEDY}"
+        )
+
+    return set(ledger["verified_expressions"])
 
 
 def value_domain(format_name, count):
@@ -2115,6 +2233,16 @@ def main():
             "dump_tables.pl; an unstamped table set cannot be verified"
         )
     verified_exprs = load_oracle_ledger(args.expr_ledger, args.tables_json, version)
+    if args.expr_ledger is None:
+        # A validation failure now aborts loudly inside load_oracle_ledger
+        # itself (see its docstring). This is the one remaining `None`
+        # path, and it is an explicit caller choice rather than a failure --
+        # still worth a line in the log, since every oracle-gated
+        # ValueConv/PrintConv is about to be refused.
+        print(
+            "no --expr-ledger given: every oracle-gated ValueConv/PrintConv "
+            "will be refused"
+        )
 
     stats = Counter()
     stats["unsupported_exprs"] = Counter()
