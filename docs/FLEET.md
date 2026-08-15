@@ -123,15 +123,9 @@ fleet drain ubuntuwork          # finish current work, start nothing new
 
 This is the direct answer to "drift from head is a major issue."
 
-On every update to `refs/heads/refactor/tag-machinery`, the hub's `post-receive` hook bumps `refs/fleet/signals/tip` to `{sha, generation, ts}`.
+On every update to `refs/heads/refactor/tag-machinery`, the hub's `post-receive` hook bumps `refs/fleet/signals/tip` to `{sha, generation, ts}` (`tools/fleet/drift.py`'s `bump_tip_signal`); `fleetd` polls that ref every 15 s and surfaces the generation it observed in its heartbeat. That much is real and load-bearing.
 
-Every `fleetd` polls that ref every 15 s. On a generation bump it broadcasts to its local workers:
-
-- **Idle worker** → fetch, fast-forward.
-- **Worker mid-engineering** → fetch, then immediately `git rebase` its working branch onto the new tip, run `fastcheck` (fmt + clippy + `cargo check`, ~2 min), and continue. It does *not* wait for a natural pause.
-- **Rebase conflicts** → the worker stops and posts the conflict to `refs/fleet/intents/<slug>` as `status: blocked-on-rebase`. Surfacing it in minutes is the entire point; today those conflicts sat for hours and were discovered at merge time.
-
-**Drift budget, enforced at claim time.** A worker may not claim a gate if its branch base is more than `MAX_DRIFT_COMMITS` (default 5) behind the tip or older than `MAX_DRIFT_MINUTES` (default 30). It must rebase first. Today's queue was 6–24 commits behind — every one of those would have been refused and rebased automatically.
+The rest of this section as originally written — per-worker broadcast on a generation bump, an automatic `git rebase` onto the moved tip mid-engineering, a `MAX_DRIFT_COMMITS`/`MAX_DRIFT_MINUTES` budget enforced at claim time — was never implemented as more than prose: `drift.py` grew a `check()` and a `converge()` with no production caller (no `fleetd`/`workqueue` code path ever shelled out to either), and both were deleted 2026-08-15 (ARCH-FIX R9) rather than left advertising a protection that never ran. Convergence onto a moved tip is superseded by tree-keyed verdict caching (M6) plus LLM convergence agents doing the rebase work directly; the tip signal above is unaffected by the deletion and remains the cheap poll target it always was.
 
 ### M4 — Queue derived from refs, never copied
 
