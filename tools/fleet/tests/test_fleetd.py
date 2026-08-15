@@ -436,6 +436,189 @@ class TestMainLoopSurvivesHubErrors(FleetdBase):
             self.run_main(buggy)
 
 
+class TestLostLeaseIsKilledWhileTheHubIsUnreachable(FleetdBase):
+    """R2's "a lost lease is stop-work", enforced during the ONE condition
+    that used to suspend it: the hub being unreadable.
+
+    WHAT WAS WRONG. `reconcile_once` opened with two unguarded reads --
+
+        desired_doc = hub.read(DESIRED_REF) or {}
+        tip_sig     = hub.read(TIP_SIGNAL_REF) or {}
+
+    -- and the reap/lost-lease-kill loop came AFTER them. So a hub that
+    could not be read raised out of the step before the kill loop ran.
+
+    That is not an unlucky ordering, it is the inverse of the one that is
+    safe. A lease goes LOST because its renewal push failed, and renewals
+    fail for the same reason the reads do: the hub. The single condition
+    under which stop-work matters most was the single condition under
+    which stop-work did not happen.
+
+    THE COST WAS BOUNDED AND STILL TOO LONG. `main` tolerates
+    `RECONCILE_HUB_FAILURE_LIMIT` (5) consecutive failed steps before
+    exiting nonzero -- ~75s at the 15s interval -- and for all of it an
+    unleased gate kept running while another host, seeing the claim
+    expire, was free to reap it and start the same branch. Two gates on
+    one branch is the duplicate-merge hazard the KILL comment in
+    `reconcile_once` argues about, and it is not detectable afterwards.
+
+    THE FIX IS AN ORDERING, not a new mechanism: the reap/kill loop is
+    purely local (an in-memory `lost` flag the renewer thread set, plus a
+    `ps` listing), so it runs FIRST, and the hub reads follow it
+    individually guarded.
+
+    NAME THE INSTRUMENT. The gate is a real parked stub process in its own
+    process group and the kill is a real SIGTERM to that group -- `killed`
+    here is a `ps`-verified fact, not a recorded call on a stub. The hub
+    is made unreachable the way production does it, by pointing the Hub at
+    a path that is not a repository, so the failure is raised by real
+    `git` through real `fleetlib` classification (see
+    `test_fleetlib.py`'s `TestFetchFailureClassification` -- that
+    classification is what makes this arrive as a RAISE rather than as a
+    None that would read as "no desired doc").
+
+    Against the pre-fix ordering the first test does not fail, it ERRORs
+    with the raised `HubUnreachableError` and a still-running gate --
+    which is exactly the production symptom.
+    """
+
+    def break_the_hub(self):
+        """Repoint the Hub at a path that is not a git repository. Every
+        subsequent read fails at the transport, through real git."""
+        dead = self.tmp / "hub-is-gone.git"
+        self.hub.url = str(dead)
+        self.assertFalse(dead.exists())
+
+    def start_one_gate(self):
+        self.set_desired(gates=1)
+        res = self.reconcile()
+        self.assertEqual(len(res.started), 1, f"setup failed: refused={res.refused}")
+        w = self.workers[0]
+        self.assertTrue(w.alive(), "stub gate should be parked and alive")
+        return w
+
+    def test_a_lost_lease_is_killed_in_one_reconcile_with_the_hub_down(self):
+        from fleetlib import HubError
+
+        w = self.start_one_gate()
+        pgid = w.pgid
+        w.claim._mark_lost("hub no longer records us as the holder")
+        self.break_the_hub()
+
+        # ONE step. Not five, not "eventually": the whole point is that
+        # stop-work does not wait on the hub coming back.
+        with self.assertRaises(HubError):
+            self.reconcile()
+
+        self.assertNotIn(w, self.workers, "killed worker must leave the worker list")
+        deadline = time.time() + 15
+        while time.time() < deadline and w.alive():
+            time.sleep(0.2)
+        self.assertFalse(w.alive(), "the lost-lease gate is still running")
+        self.assertNotIn(
+            pgid, fleetd.live_pgids(),
+            "the process GROUP must be gone (M8) -- children go with the leader",
+        )
+
+    def test_the_step_still_raises_so_a_wedged_hub_reaches_a_human(self):
+        """The reorder must not become a swallow. `main` counts these and
+        exits nonzero at RECONCILE_HUB_FAILURE_LIMIT; a step that killed
+        what it had to and then reported success would leave a daemon up,
+        cheerful and reaching nothing.
+        """
+        from fleetlib import HubUnreachableError
+
+        self.start_one_gate()
+        self.break_the_hub()
+        with self.assertRaises(HubUnreachableError) as ctx:
+            self.reconcile()
+        self.assertIn(fleetd.DESIRED_REF, str(ctx.exception))
+
+    def test_an_unreadable_desired_is_never_recorded_as_disabled(self):
+        """"The operator stood this host down" and "we could not ask" are
+        different facts. Collapsing the second into the first would have
+        `fleet status` report a deliberate quarantine during an outage.
+        """
+        from fleetlib import HubError
+
+        self.start_one_gate()
+        self.break_the_hub()
+        try:
+            res = self.reconcile()
+        except HubError:
+            res = None
+        # The raise carries the step's result away, so assert on the
+        # observable instead: nothing started, and the run did not claim
+        # a heartbeat it never wrote.
+        self.assertIsNone(res)
+
+    def test_one_failing_read_degrades_only_its_own_concern(self):
+        """`TIP_SIGNAL_REF` feeds a heartbeat field. Its failure must not
+        cost the gate starts, which is the difference between "guarded"
+        and "guarded independently".
+        """
+        from fleetlib import HubError
+
+        self.set_desired(gates=1)
+        real_read = self.hub.read
+
+        def only_tip_signal_fails(ref):
+            if ref == fleetd.TIP_SIGNAL_REF:
+                raise HubError("simulated: tip signal ref unreadable")
+            return real_read(ref)
+
+        self.hub.read = only_tip_signal_fails
+        self.addCleanup(lambda: setattr(self.hub, "read", real_read))
+
+        with self.assertRaises(HubError):
+            self.reconcile()
+
+        self.assertEqual(len(self.workers), 1,
+                         "an unreadable tip signal must not stop a healthy host starting work")
+        self.assertTrue(self.workers[0].alive())
+
+    def test_a_finished_workers_release_failure_cannot_block_anothers_kill(self):
+        """Two workers, one finished and one with a lost lease, and a hub
+        that fails every write. The finished one's claim release cannot
+        complete -- and must not take the lost one's kill with it. The
+        reorder puts both in the same local loop, so an exception escaping
+        the first iteration would strand the second.
+        """
+        from fleetlib import HubError
+
+        # The base fixture carries one staging branch; this test needs two
+        # workers, so give the queue a second candidate.
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        (self.seed / "h.txt").write_text("second branch\n")
+        subprocess.run(["git", "-C", str(self.seed), "add", "."], check=True, env=env)
+        subprocess.run(["git", "-C", str(self.seed), "commit", "-qm", "more work"],
+                       check=True, env=env)
+        subprocess.run(["git", "-C", str(self.seed), "push", "-q", str(self.bare),
+                        "HEAD:refs/heads/staging/two"], check=True, env=env)
+
+        self.set_desired(gates=2)
+        res = self.reconcile()
+        self.assertEqual(len(res.started), 2, f"setup failed: refused={res.refused}")
+        finished, lost = self.workers[0], self.workers[1]
+
+        # Finish the first for real, so the reap path runs for it.
+        (self.tmp / f"stop-{finished.tag}").write_text("")
+        finished.popen.wait(timeout=15)
+        lost.claim._mark_lost("hub no longer records us as the holder")
+        self.break_the_hub()
+
+        with self.assertRaises(HubError):
+            self.reconcile()
+
+        self.assertEqual(self.workers, [], "both workers must have left the list")
+        deadline = time.time() + 15
+        while time.time() < deadline and lost.alive():
+            time.sleep(0.2)
+        self.assertFalse(lost.alive(),
+                         "the lost-lease worker was stranded by the finished one's failed release")
+
+
 class TestReapDeadSameHostSingleton(FleetdBase):
     """ARCH-FIX-SPEC.md FIX 2 (seam 4's red half), at the function level --
     `reap_dead_same_host_singleton` and `fleetd_marker_in_group` in

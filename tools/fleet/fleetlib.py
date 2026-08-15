@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -91,7 +92,8 @@ _PUSH_REJECTION_PATTERNS = (
 )
 
 # Substrings that identify an outright transport/access failure so read
-# paths (`git ls-remote`) can raise a clear error instead of a generic one.
+# paths (`git ls-remote`, `git fetch`) can raise a clear error instead of
+# degrading to an absence sentinel. See `_is_transport_failure`.
 _TRANSPORT_HINTS = (
     "could not resolve hostname",
     "could not read from remote repository",
@@ -110,6 +112,45 @@ _TRANSPORT_HINTS = (
     "the remote end hung up unexpectedly",
     "host key verification failed",
 )
+
+# git's "the whole repository is gone" wording interpolates the URL between
+# the two words -- `fatal: repository 'ssh://hub/oxidex.git' not found` --
+# so the bare "repository not found" hint above never matches the message
+# it was written for. It matters that this one is recognized POSITIVELY
+# rather than merely failing to match the absence phrase: this is the
+# single most likely way a hub disappears, and its message ends in the two
+# words "not found".
+_REPO_NOT_FOUND_RE = re.compile(r"repository\s+'[^']*'\s+not found")
+
+# The ONE phrase git uses when a fetch names a ref the remote does not
+# have: `fatal: couldn't find remote ref refs/fleet/claims/gate/x`. It is
+# the only fetch-failure signature that means ABSENT.
+#
+# It used to be `"couldn't find remote ref" in low or "not found" in low`,
+# and the second half of that disjunction is why this comment exists.
+# "not found" is a substring of, among others, `fatal: repository
+# '<url>' not found` -- the hub itself being gone, which is the most
+# consequential transport failure there is. `read()` answered None for it,
+# and None from `read()` means "nobody has claimed this yet", which is the
+# one confusion this module's docstring calls load bearing: it invites two
+# hosts onto one branch at exactly the moment the hub cannot arbitrate.
+# The absence signature is therefore matched EXACTLY, and every message
+# that is not it -- recognized transport hint or not -- raises.
+_ABSENT_REF_HINT = "couldn't find remote ref"
+
+
+def _is_transport_failure(stderr: str) -> bool:
+    """True if `stderr` carries a recognized transport/access failure.
+
+    Consulted BEFORE any absence signature, never after. A message can
+    contain both (`fatal: repository '<url>' not found` contains the words
+    "not found"), and when it does, transport wins -- the expensive
+    direction of being wrong here is calling an unreachable hub "empty",
+    not calling an empty hub "unreachable".
+    """
+    low = stderr.lower()
+    return any(h in low for h in _TRANSPORT_HINTS) or bool(_REPO_NOT_FOUND_RE.search(low))
+
 
 # How many times `read()` re-runs the WHOLE ls-remote/fetch/cat-file
 # sequence when a fetch it was told succeeded leaves no resolvable commit
@@ -272,11 +313,23 @@ class Hub:
             tmp_ref = f"refs/fleet-cache/{uuid.uuid4().hex}"
             fetch = self._run(["fetch", "--no-tags", "--quiet", self.url, f"+{ref}:{tmp_ref}"])
             if fetch.returncode != 0:
-                low = fetch.stderr.lower()
-                if "couldn't find remote ref" in low or "not found" in low:
+                # ORDER IS THE FIX, and the `and` below is the order:
+                # transport is consulted BEFORE the absence signature, so
+                # a message carrying both is transport. The `ls-remote`
+                # above answered the absence question for its own instant
+                # only -- the transport can die between it and here -- so
+                # this branch is the only place a fetch failure is ever
+                # classified. See `_is_transport_failure`/`_ABSENT_REF_HINT`.
+                if (not _is_transport_failure(fetch.stderr)
+                        and _ABSENT_REF_HINT in fetch.stderr.lower()):
                     # Ref existed at the ls-remote and was deleted before
                     # the fetch. A legitimate absence, not an error.
                     return None, None
+                # Everything else raises: a recognized transport failure,
+                # and equally a message nobody has classified yet. Fail
+                # CLOSED -- returning None is a positive claim about the
+                # hub's contents, and an unrecognized error is not
+                # evidence for one.
                 raise HubUnreachableError(f"fetch of {ref} failed: {fetch.describe()}")
 
             # (3) Read the commit the FETCH brought, not the one the
