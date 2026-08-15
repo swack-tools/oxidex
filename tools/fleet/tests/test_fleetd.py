@@ -629,3 +629,109 @@ class TestFleetdMarkerInGroup(unittest.TestCase):
         # A pgid astronomically unlikely to be live on any real host.
         found = fleetd.fleetd_marker_in_group(999_999_9)
         self.assertIsNone(found)
+
+
+class TestSingletonTTL(unittest.TestCase):
+    """`fleetd.singleton_ttl_s`: the integration reconciliation's one-line
+    fix -- the host-singleton lease gets its OWN, shorter TTL
+    (`FLEET_SINGLETON_TTL_S`, default 120s) instead of inheriting the
+    600s `LEASE_TTL` gate/agent claims use. Combined with FIX 2's
+    `reap_dead_same_host_singleton`, this bounds a hard-killed fleetd's
+    scheduler handover to seconds in the common case and at most 120s in
+    the pathological one, instead of the full 600s either way.
+    """
+
+    def setUp(self):
+        self._saved = {}
+        for name in ("FLEET_SINGLETON_TTL_S", claim_mod.TTL_ENV):
+            self._saved[name] = os.environ.pop(name, None)
+
+    def tearDown(self):
+        for name, value in self._saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def test_default_is_120_seconds(self):
+        self.assertEqual(fleetd.singleton_ttl_s(), 120.0)
+
+    def test_honors_its_own_env_override(self):
+        os.environ["FLEET_SINGLETON_TTL_S"] = "45"
+        self.assertEqual(fleetd.singleton_ttl_s(), 45.0)
+
+    def test_a_malformed_override_falls_back_to_120_not_a_crash(self):
+        # claim_mod._env_seconds never raises (see its own docstring) --
+        # a typo in the env must leave the daemon starting, not dead.
+        os.environ["FLEET_SINGLETON_TTL_S"] = "not-a-number"
+        self.assertEqual(fleetd.singleton_ttl_s(), 120.0)
+
+    def test_the_hermetic_test_ttl_wins_over_the_singleton_override(self):
+        """`FLEET_TEST_TTL_S` compresses EVERY claim's TTL uniformly for
+        fixture-hub tests (test_adoption.py, test_seams.py). Passing an
+        explicit `ttl=` to `Claim()` bypasses `Claim`'s own env lookup
+        (see `Claim.__init__`), so if `singleton_ttl_s` did not check
+        `TTL_ENV` itself FIRST, the singleton would silently stop
+        compressing in test mode while gate/agent claims kept
+        compressing -- reintroducing exactly the kind of
+        seam-whose-halves-each-have-green-tests this effort exists to
+        close.
+        """
+        os.environ[claim_mod.TTL_ENV] = "4"
+        os.environ["FLEET_SINGLETON_TTL_S"] = "999"
+        self.assertEqual(fleetd.singleton_ttl_s(), 4.0)
+
+    def test_no_env_at_all_still_returns_120(self):
+        self.assertNotIn("FLEET_SINGLETON_TTL_S", os.environ)
+        self.assertNotIn(claim_mod.TTL_ENV, os.environ)
+        self.assertEqual(fleetd.singleton_ttl_s(), 120.0)
+
+
+class TestSingletonTTLWiredIntoMain(FleetdBase):
+    """`singleton_ttl_s` computing the right number in isolation (above)
+    is not evidence `fleetd.main` actually threads it into the `Claim` it
+    constructs -- this drives the real `main()` against the fixture hub
+    and reads the live singleton claim's own payload back off the hub."""
+
+    def run_main(self, fake_reconcile):
+        import unittest.mock as mock
+        argv = [
+            "--hub", str(self.bare),
+            "--repo-root", str(Path(__file__).resolve().parents[3]),
+            "--log-dir", str(self.tmp / "logs"),
+            "--interval", "0",
+        ]
+        with mock.patch.dict(os.environ, {"HOME": str(self.tmp)}), \
+                mock.patch.object(fleetd, "reconcile_once", fake_reconcile):
+            return fleetd.main(argv)
+
+    def test_the_live_singleton_claim_carries_the_configured_ttl(self):
+        import signal as _signal
+
+        os.environ["FLEET_SINGLETON_TTL_S"] = "37"
+        # Production path, not test-compressed: TTL_ENV must be absent so
+        # `FLEET_SINGLETON_TTL_S` is the value actually exercised here.
+        self.assertNotIn(claim_mod.TTL_ENV, os.environ)
+        observed = {}
+
+        def peek_then_stop(hub, host, *_rest, **_kw):
+            ref = claim_mod.claim_ref("host", host)
+            sha = hub.sha(ref)
+            self.assertIsNotNone(sha, "main() must have acquired the singleton by now")
+            payload = hub.read(ref)
+            started = claim_mod._parse_iso(payload["started_at"])
+            expires = claim_mod._parse_iso(payload["expires_at"])
+            observed["ttl"] = (expires - started).total_seconds()
+            os.kill(os.getpid(), _signal.SIGTERM)
+            return fleetd.ReconcileResult()
+
+        try:
+            rc = self.run_main(peek_then_stop)
+        finally:
+            os.environ.pop("FLEET_SINGLETON_TTL_S", None)
+
+        self.assertEqual(rc, 0)
+        self.assertAlmostEqual(
+            observed["ttl"], 37.0, delta=0.5,
+            msg="main() did not construct the singleton Claim with singleton_ttl_s()",
+        )

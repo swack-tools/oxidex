@@ -132,6 +132,40 @@ PUSH_BACKOFF_S = 4
 # running the same gate", and every second of grace is a second of that.
 KILL_GRACE_S = float(os.environ.get("FLEET_KILL_GRACE_S", "10"))
 
+def singleton_ttl_s() -> float:
+    """The host-singleton lease's TTL. Shorter than the default gate/agent
+    LEASE_TTL (600s) on purpose: this is not a claim on paid work, it is
+    one fleetd asserting "I am the scheduler for this host" -- the longer
+    that lease outlives a hard-killed holder, the longer a host runs with
+    no scheduler, no heartbeat, watching nothing (ARCH-FIX-SPEC.md R6/T6).
+    `reap_dead_same_host_singleton` already collapses the *provably-dead,
+    same-host* case to a `ps`-listing round trip, but the TTL is still the
+    backstop for every case that guard cannot decide (payload lost, `ps`
+    unavailable, cross-host) -- 120s bounds that window instead of the
+    full 600s. `Claim.__init__`'s clamp (`renew_interval <= ttl / 2`)
+    turns this into a renew cadence of at most 60s, same as this file's
+    `RENEW` default.
+
+    `claim_mod.TTL_ENV` (`FLEET_TEST_TTL_S`) is checked FIRST and, if set,
+    wins outright: every fixture-hub test compresses ALL lease TTLs --
+    gate, agent, and singleton alike -- to one shared value so a held
+    claim's lifetime stays proportional across the suite (test_adoption.py,
+    test_seams.py). Passing an explicit `ttl=` to `Claim()` bypasses that
+    env lookup entirely (see `Claim.__init__`), so reading `TTL_ENV` here
+    ourselves is what keeps hermetic tests hermetic instead of quietly
+    switching the singleton to a real 120s while gate claims stay
+    compressed to single-digit seconds -- exactly the kind of seam this
+    effort exists to close. Only when `FLEET_TEST_TTL_S` is unset (real
+    daemon, and the seam suite's uncompressed slow run) does
+    `FLEET_SINGLETON_TTL_S` (default 120) apply. Both reads go through
+    `claim_mod._env_seconds`, which never raises: a malformed override
+    leaves the TTL at its default rather than taking the daemon down at
+    import.
+    """
+    if os.environ.get(claim_mod.TTL_ENV, "").strip():
+        return claim_mod._env_seconds(claim_mod.TTL_ENV, 120)
+    return claim_mod._env_seconds("FLEET_SINGLETON_TTL_S", 120)
+
 # How many CONSECUTIVE reconcile steps may die on a `HubError` before the
 # daemon stops and lets its supervisor deal with it.
 #
@@ -1406,7 +1440,8 @@ def main(argv: Optional[list] = None) -> int:
     # daemon start and a second fleetd could reap it and run alongside
     # the first -- one host, two schedulers, both starting gates.
     singleton = Claim(hub, kind="host", key=host, work_kind="fleetd", work_key=host,
-                      holder_host=host)  # fleet identity, not hostname -- see start_gate
+                      holder_host=host,  # fleet identity, not hostname -- see start_gate
+                      ttl=singleton_ttl_s())  # short TTL for the scheduler lease itself
     try:
         # acquire_or_reap: a hard-killed predecessor (launchctl kickstart -k,
         # OOM, crash) never runs its graceful release, and a plain acquire
