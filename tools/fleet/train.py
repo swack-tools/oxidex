@@ -66,6 +66,7 @@ from typing import Callable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import intent
 import workqueue
 from claim import Claim, ClaimHeldError
 from fleetlib import Hub, HubError
@@ -507,10 +508,32 @@ def _rebuild(clone: Path, tip_sha: str, members: list, res: Optional[RunResult] 
     return merged
 
 
-def _push_tip(clone: Path, options: list):
+def _fetch_into_hub_cache(hub: Hub, clone: Path, sha: str, check: bool = True):
+    """`fleetlib.Hub.push_ref` pushes FROM the hub's own local object cache
+    (`hub.workdir`), never from `clone` -- so a commit only known to
+    `clone`'s object store must be fetched into that cache first. Mirrors
+    `tests/test_update_hook.py`'s `_fetch_into_hub_cache` fixture helper,
+    which documents the identical `Hub.push_ref` contract ("this mirrors
+    real usage; it is not a workaround for a bug in push_ref"). `fetch` is
+    not a hub *write*, so it is outside test_no_raw_hub_push.py's scope."""
+    return _git(["--git-dir", str(hub.workdir), "fetch", "--quiet", str(clone), sha], check=check)
+
+
+def _push_tip(hub: Hub, clone: Path, options: list):
     """The one write to the protected tip. Carries the train token when the
-    hub-local file exists (R1)."""
-    r = _git(["push", *options, "origin", f"HEAD:{TIP_REF}"], cwd=clone, check=False)
+    hub-local file exists (R1). Routed through `fleetlib.Hub.push_ref`
+    rather than a raw `git push` (ARCH-FIX R9 -- no fleet tool writes the
+    hub outside `fleetlib.Hub`; see tools/fleet/tests/test_no_raw_hub_push.py).
+    `options` is `tip_push_options()`'s `--push-option=key=value` CLI-flag
+    spelling; `Hub.push_ref` (like `git push -o`) wants the bare
+    `key=value`, so the flag prefix is stripped before it crosses into
+    fleetlib."""
+    head = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
+    fetch = _fetch_into_hub_cache(hub, clone, head, check=False)
+    if fetch.returncode != 0:
+        return fetch
+    raw_options = [o.removeprefix("--push-option=") for o in options]
+    r = hub.push_ref(f"{head}:{TIP_REF}", push_options=raw_options)
     if r.returncode != 0 and options and _NO_PUSH_OPTIONS in (r.stderr or "").lower():
         # The hub cannot receive push options at all (its
         # receive.advertisePushOptions is unset), so no update hook can be
@@ -522,26 +545,48 @@ def _push_tip(clone: Path, options: list):
             "retrying the tip push WITHOUT the train token -- the update hook "
             "cannot be enforcing one in this state"
         )
-        r = _git(["push", "origin", f"HEAD:{TIP_REF}"], cwd=clone, check=False)
+        r = hub.push_ref(f"{head}:{TIP_REF}")
     return r
 
 
-def _delete_ref_cas(hub: Optional[Hub], clone: Path, ref: str, expect_sha: str) -> bool:
-    """Delete `ref` ONLY if it still points at `expect_sha`. Never a raw
-    `git push --delete`: the fallback (no Hub in hand) is the same
-    compare-and-swap spelled in git."""
-    if hub is not None:
-        try:
-            return hub.delete(ref, expect_sha=expect_sha)
-        except HubError as exc:
-            _warn(f"CAS delete of {ref} failed: {exc}")
-            return False
-    r = _git(
-        ["push", f"--force-with-lease={ref}:{expect_sha}", "origin", f":{ref}"],
-        cwd=clone,
-        check=False,
-    )
-    return r.returncode == 0
+def _delete_ref_cas(hub: Hub, ref: str, expect_sha: str) -> bool:
+    """Delete `ref` ONLY if it still points at `expect_sha`, via
+    `fleetlib.Hub.delete`'s own `--force-with-lease` CAS (ARCH-FIX R9).
+
+    This used to fall back to a hand-rolled `git push --force-with-lease`
+    when called with `hub=None` -- an exact duplicate of `Hub.delete`'s own
+    semantics, kept alive for a case no real caller (both call sites always
+    pass a real `Hub`) ever exercised. See
+    tools/fleet/tests/test_no_raw_hub_push.py."""
+    try:
+        return hub.delete(ref, expect_sha=expect_sha)
+    except HubError as exc:
+        _warn(f"CAS delete of {ref} failed: {exc}")
+        return False
+
+
+def _mark_intent_done(hub: Hub, slug: str, landed_sha: str) -> None:
+    """Best-effort: close the intent (if any) the now-landed branch `slug`
+    was registered against -- CAS `refs/fleet/intents/<slug>` from status
+    "open" to "done", recording `landed_sha` + `landed_at`.
+
+    Before this, nothing in tools/fleet ever wrote intent status "done"
+    (`intent.py` only ever wrote "open"/`register` and "withdrawn"/
+    `withdraw`), so a completed intent's ref stayed "open" forever and
+    `fleetd`'s authoring path kept offering it as work to author once its
+    staging branch was gone (docs/FLEET.md M5). A failed update here must
+    NOT fail the train run -- the branch has already landed -- so every
+    outcome (done, no-op, failure) is logged instead of raised."""
+    try:
+        if intent.mark_done(hub, slug, landed_sha):
+            print(f"train: intent {slug!r} marked done (landed {landed_sha[:12]})")
+        else:
+            print(
+                f"train: intent {slug!r} not marked done -- no open intent at "
+                f"{intent.intent_ref(slug)!r} (never registered, already closed, or a lost race)"
+            )
+    except HubError as exc:
+        _warn(f"best-effort intent-done update for {slug!r} failed (train run continues): {exc}")
 
 
 def _retire_staging_ref(hub: Hub, clone: Path, c: Candidate, res: RunResult) -> None:
@@ -551,7 +596,8 @@ def _retire_staging_ref(hub: Hub, clone: Path, c: Candidate, res: RunResult) -> 
     that it happened. A refused delete leaves the branch queued (its new
     head is not an ancestor of the tip, so the next run picks it up)."""
     ref = f"refs/heads/staging/{c.slug}"
-    if _delete_ref_cas(hub, clone, ref, c.sha):
+    if _delete_ref_cas(hub, ref, c.sha):
+        _mark_intent_done(hub, c.slug, c.sha)
         return
     try:
         actual = hub.sha(ref)
@@ -569,7 +615,7 @@ def _retire_staging_ref(hub: Hub, clone: Path, c: Candidate, res: RunResult) -> 
 def _push_tip_and_retire(hub: Hub, clone: Path, members: list, new_tip: str, res: RunResult):
     options = tip_push_options()
     for attempt in range(PUSH_RETRIES):
-        r = _push_tip(clone, options)
+        r = _push_tip(hub, clone, options)
         if r.returncode == 0:
             break
         time.sleep(PUSH_BACKOFF_S * (attempt + 1))
@@ -596,13 +642,19 @@ def _push_tip_and_retire(hub: Hub, clone: Path, members: list, new_tip: str, res
 # --------------------------------------------------------------------- #
 
 
-def real_gate(clone: Path, label: str, hub: Optional[Hub] = None) -> str:
+def real_gate(clone: Path, label: str, hub: Hub) -> str:
     """Run tools/fleet/gate.sh from the merged tree against its own HEAD
-    by pushing HEAD to a temp staging ref first (gate.sh takes a branch)."""
+    by pushing HEAD to a temp staging ref first (gate.sh takes a branch).
+    Routed through `fleetlib.Hub.push_ref` (ARCH-FIX R9); see `_push_tip`'s
+    docstring for why the commit must be fetched into the hub's own local
+    cache before `push_ref` can push it from there."""
     tag = f"train-{label.replace('/', '-')[:40]}-{int(time.time()) % 100000}"
     branch = f"staging/train-tmp-{tag}"
     head = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
-    _git(["push", "origin", f"{head}:refs/heads/{branch}"], cwd=clone)
+    _fetch_into_hub_cache(hub, clone, head)
+    r = hub.push_ref(f"{head}:refs/heads/{branch}")
+    if r.returncode != 0:
+        raise TrainError(f"could not push temp gate ref refs/heads/{branch}: {r.stderr}")
     try:
         script = clone / "tools" / "fleet" / "gate.sh"
         subprocess.run(["bash", str(script), branch, tag], check=False)
@@ -617,7 +669,7 @@ def real_gate(clone: Path, label: str, hub: Optional[Hub] = None) -> str:
         # CAS even here: the ref is ours and short-lived, but "delete a ref
         # without checking what it points at" is the shape of the bug, not
         # the identity of the ref.
-        if not _delete_ref_cas(hub, clone, f"refs/heads/{branch}", head):
+        if not _delete_ref_cas(hub, f"refs/heads/{branch}", head):
             _warn(f"temp gate ref refs/heads/{branch} not deleted (moved or unreachable)")
 
 
