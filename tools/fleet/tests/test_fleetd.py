@@ -211,3 +211,47 @@ class TestDesiredCAS(FleetdBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAgentSlots(FleetdBase):
+    def test_agent_spawns_with_stub_cli_and_reaps(self):
+        stub = self.tmp / "stub-cli.sh"
+        stub.write_text("#!/bin/bash\necho stub agent ran\nexit 0\n")
+        stub.chmod(0o755)
+        os.environ["FLEET_AGENT_CLI_OVERRIDE"] = str(stub)
+        try:
+            doc = {"generation": 1,
+                   "hosts": {self.host: {"gates": 0, "agents": 1, "enabled": True}},
+                   "limits": {}}
+            cur = self.hub.sha(fleetd.DESIRED_REF)
+            (self.hub.create(fleetd.DESIRED_REF, doc) if cur is None
+             else self.hub.update(fleetd.DESIRED_REF, doc, cur))
+            res = self.reconcile()
+            self.assertEqual(len(res.started), 1, f"agent should start: {res.refused}")
+            self.assertEqual(self.workers[0].kind, "agent")
+            self.assertEqual(len(self.hub.list("refs/fleet/claims/agent/")), 1)
+            # worker exits (stub pushes nothing -> exit 7); next reconcile reaps
+            self.workers[0].popen.wait(timeout=30)
+            res2 = self.reconcile()
+            self.assertEqual(len(res2.finished), 1)
+            # cooldown: the no-progress branch is NOT respawned this loop
+            # (each spawn is a paid CLI run), so its claim stays released
+            self.assertEqual(res2.started, [])
+            self.assertEqual(len(self.hub.list("refs/fleet/claims/agent/")), 0)
+        finally:
+            os.environ.pop("FLEET_AGENT_CLI_OVERRIDE", None)
+
+    def test_no_cli_refuses_without_spawning(self):
+        os.environ["FLEET_AGENT_CLI_OVERRIDE"] = ""  # falsy -> real which() on PATH
+        doc = {"generation": 1,
+               "hosts": {self.host: {"gates": 0, "agents": 1, "enabled": True}},
+               "limits": {}}
+        cur = self.hub.sha(fleetd.DESIRED_REF)
+        (self.hub.create(fleetd.DESIRED_REF, doc) if cur is None
+         else self.hub.update(fleetd.DESIRED_REF, doc, cur))
+        import unittest.mock as mock
+        with mock.patch("agentworker.available_clis", return_value=[]):
+            res = self.reconcile()
+        self.assertEqual(res.started, [])
+        self.assertIn("no-agent-cli", [r[0] for r in res.refused])
+        os.environ.pop("FLEET_AGENT_CLI_OVERRIDE", None)

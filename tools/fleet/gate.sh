@@ -41,7 +41,7 @@
 #      updated after one -- see classify_failure() and the cache
 #      lookup/store calls below.
 set -u
-GATE_VERSION="2"
+GATE_VERSION="3"
 BRANCH="$1"; TAG="$2"
 START_TS=$(date +%s)
 HOST=$(hostname)
@@ -170,7 +170,22 @@ if [ -n "$AVAIL" ] && [ "$AVAIL" -lt 14 ]; then echo "ABORT low-disk ${AVAIL}G" 
 # exactly that gap. Now the tip is checked out first and the branch is
 # merged into it; everything below runs against that merge commit.
 D="$HOME/git/gate-$TAG"; rm -rf "$D"
-git clone -q "$HOME/git/oxidex.git" "$D" || { echo "FAIL clone" > "$V"; write_json "FAIL" "clone"; exit 9; }
+# The local mirror is a cache, not truth: refresh it from the hub before
+# cloning, and fall back to cloning the hub directly if the mirror still
+# lacks the branch (an unfetched mirror cost a gate an instant
+# "couldn't find remote ref" on m5 -- fleet-managed gates start seconds
+# after a push, faster than any mirror cron).
+HUB_URL="${FLEET_HUB_URL:-ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git}"
+CLONE_SRC="$HOME/git/oxidex.git"
+if [ -d "$CLONE_SRC" ]; then
+  git -C "$CLONE_SRC" fetch -q "$HUB_URL" \
+      "+refs/heads/staging/*:refs/heads/staging/*" \
+      "+refs/heads/refactor/tag-machinery:refs/heads/refactor/tag-machinery" 2>/dev/null || true
+  git -C "$CLONE_SRC" rev-parse -q --verify "refs/heads/$BRANCH" >/dev/null 2>&1 || CLONE_SRC="$HUB_URL"
+else
+  CLONE_SRC="$HUB_URL"
+fi
+git clone -q "$CLONE_SRC" "$D" || { echo "FAIL clone" > "$V"; write_json "FAIL" "clone"; exit 9; }
 cd "$D" || exit 9
 
 git checkout -q origin/refactor/tag-machinery \
