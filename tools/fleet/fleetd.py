@@ -48,6 +48,7 @@ from typing import Callable, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import claim as claim_mod
+import verdict
 import workqueue
 from claim import Claim, compute_platform_id, compute_rustc_id
 from fleetlib import Hub, HubError
@@ -271,7 +272,19 @@ def start_gate(
     (os.setsid via start_new_session -- portable to macOS, which has no
     setsid binary). Kill = kill the group; orphaned cargo/rustc children
     become impossible (M8). Returns None if someone else holds the claim."""
-    c = Claim(hub, kind="gate", key=branch.replace("/", "-"), work_kind="gate", work_key=branch)
+    # holder_host=host, not Claim's own socket.gethostname() default: `host`
+    # is this daemon's FLEET identity (host_identity(), FLEET_HOST-
+    # overridable -- the work2 pod's real hostname is a k8s-generated
+    # `work2box-<hash>`) and is what every other hub write this daemon
+    # makes (the heartbeat ref, HOSTS_PREFIX + host) is keyed by. Leaving
+    # it to default would record a claim under the machine's raw hostname
+    # while everything else about this host is filed under `host` -- e.g.
+    # `fleet status`'s WORK column (ARCH-FIX R4), which joins claims to
+    # heartbeat rows on this exact field, would never find a match.
+    c = Claim(
+        hub, kind="gate", key=branch.replace("/", "-"), work_kind="gate", work_key=branch,
+        holder_host=host,
+    )
     try:
         # acquire_or_reap: an EXPIRED claim (crashed holder, TTL passed)
         # must not block the branch forever -- reap it CAS'd and proceed.
@@ -312,8 +325,9 @@ def start_agent(
     process group. Same discipline as gates: claim-before-launch, pgid
     persisted via renew."""
     intent_slug = branch.removeprefix("intent:") if branch.startswith("intent:") else None
+    # holder_host=host: see the identical comment in start_gate above.
     c = Claim(hub, kind="agent", key=branch.replace("/", "-").replace(":", "-"),
-              work_kind="agent", work_key=branch)
+              work_kind="agent", work_key=branch, holder_host=host)
     try:
         c.acquire_or_reap()
     except claim_mod.ClaimHeldError:
@@ -351,8 +365,139 @@ class ReconcileResult:
     finished: list = field(default_factory=list)
     refused: list = field(default_factory=list)  # (reason, detail)
     killed: list = field(default_factory=list)  # (tag, reason) -- lost leases
+    awaiting_train: list = field(default_factory=list)  # branches -- PASS memo, ARCH-FIX R4
+    needs_author: list = field(default_factory=list)  # branches -- FAIL memo, ARCH-FIX R4
     heartbeat_written: bool = False
     tip_generation: Optional[int] = None
+
+
+# --------------------------------------------------------------------- #
+# Verdict-aware selection (ARCH-FIX R4 point 2)
+# --------------------------------------------------------------------- #
+#
+# Before offering a branch as gate work: a branch whose merge-onto-tip
+# already gated PASS is waiting on the train, not on another gate run; one
+# that already gated FAIL needs its author, not a retry loop paying the
+# same gate cost for the same answer. The spec's ideal is a lookup against
+# the shared verdict cache (verdict.py) keyed on the TRUE branch-onto-tip
+# merge tree -- but computing that merge just to ask the question is
+# exactly the per-loop cost this exists to avoid. The compromise:
+#
+#   1. `_scan_gatelogs_memo` rebuilds an in-memory recall of THIS host's
+#      own recent gate.sh runs from `~/gatelogs/gate-*.json` -- files
+#      gate.sh already writes for every run (its `write_json`, unchanged
+#      here). Local disk only, no network. Rescanned every reconcile loop,
+#      so "recall after a restart" and "stay current within one run" are
+#      the same code path, not two.
+#   2. When a memo hit names a `tree_sha` (the merge gate.sh actually
+#      built and gated), `_confirm_via_shared_cache` spends one lookup
+#      against verdict.py's real hub-backed cache for that exact tree --
+#      the genuine cross-host answer, reusing a tree this host already
+#      paid to compute rather than recomputing one pre-claim. A hub hiccup
+#      here falls back to the local recall; it must never block dispatch.
+#
+# Keyed by (branch, base_tip), NOT (branch_sha, tip_sha): gate.sh's JSON
+# verdict records the branch's NAME and the tip it gated against, but never
+# the branch's own commit sha at gate time (see gate.sh's write_json), so a
+# sha-precise key cannot be reconstructed from what gate.sh writes today.
+# Consequence: if a branch is force-pushed to a new commit while the tip
+# has not moved, a stale verdict for its previous commit could shadow one
+# loop's worth of selection for the new one, until this host's next gate of
+# that branch overwrites the memo entry. This is a pre-claim FILTER only --
+# gate.sh's own verdict cache, keyed on the true merged TREE_SHA, remains
+# the real authority and is re-consulted (against a real merge) inside
+# every gate.sh run regardless, so the exposure is "one extra loop of not
+# re-offering it," never a wrong tree landing.
+
+GATELOGS_GLOB = "gate-*.json"
+AWAITING_TRAIN = "awaiting_train"
+NEEDS_AUTHOR = "needs_author"
+
+
+def _scan_gatelogs_memo(log_dir: Path) -> dict:
+    """{(branch, base_tip): {"result", "tree_sha", "gate_version",
+    "platform_id"}}, most-recent-file-wins per key (by file mtime), from
+    every `gate-*.json` gate.sh has written to `log_dir`. A result that
+    isn't PASS or FAIL (ABORT, or a file that fails to parse) leaves no
+    entry -- an aborted or unreadable run must never block a branch from
+    being offered again."""
+    memo: dict = {}
+    try:
+        paths = sorted(Path(log_dir).glob(GATELOGS_GLOB), key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return memo
+    for p in paths:
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        branch = payload.get("branch")
+        base_tip = payload.get("base_tip")
+        result = payload.get("result")
+        if not branch or not base_tip or result not in (verdict.RESULT_PASS, verdict.RESULT_FAIL):
+            continue
+        memo[(branch, base_tip)] = {
+            "result": result,
+            "tree_sha": payload.get("tree_sha"),
+            "gate_version": payload.get("gate_version"),
+            "platform_id": payload.get("platform_id"),
+        }
+    return memo
+
+
+def _confirm_via_shared_cache(hub: Hub, entry: dict) -> Optional[str]:
+    """Best-effort confirmation of a locally-recalled verdict against
+    verdict.py's shared hub cache, reusing the TREE_SHA the local JSON
+    already recorded rather than recomputing a merge. None if the hub
+    can't answer (unreachable, nothing cached for that exact tree, or the
+    entry is missing an identity field) -- the caller falls back to the
+    local result; a miss or hiccup here must never block gate dispatch."""
+    tree_sha = entry.get("tree_sha")
+    gate_version = entry.get("gate_version")
+    platform_id = entry.get("platform_id")
+    if not (tree_sha and gate_version and platform_id):
+        return None
+    try:
+        payload = verdict.lookup(hub, tree_sha, gate_version, platform_id)
+    except HubError:
+        return None
+    if payload is None:
+        return None
+    return payload.get("result")
+
+
+def classify_branch(
+    memo: dict,
+    hub: Hub,
+    branch: str,
+    tip_sha: str,
+    gate_version: Optional[str],
+    confirm_with_hub: bool = True,
+) -> Optional[str]:
+    """AWAITING_TRAIN | NEEDS_AUTHOR | None for `branch` gated onto
+    `tip_sha`, per the memo `_scan_gatelogs_memo` built. None means no
+    opinion -- offer it as ordinary gate work.
+
+    A memo entry recorded under a different `gate_version` than the one
+    this host currently runs is ignored, not honoured: GATE_VERSION only
+    bumps when gate BEHAVIOUR changes, so an old-version verdict is not
+    evidence about what the current gate would say.
+    """
+    entry = memo.get((branch, tip_sha))
+    if entry is None:
+        return None
+    if gate_version is not None and entry.get("gate_version") != gate_version:
+        return None
+    result = entry.get("result")
+    if confirm_with_hub:
+        confirmed = _confirm_via_shared_cache(hub, entry)
+        if confirmed is not None:
+            result = confirmed
+    if result == verdict.RESULT_PASS:
+        return AWAITING_TRAIN
+    if result == verdict.RESULT_FAIL:
+        return NEEDS_AUTHOR
+    return None
 
 
 def _limits_ok(limits: dict, disk_gb: float, mem_gb: float) -> Optional[str]:
@@ -476,7 +621,31 @@ def reconcile_once(
                 def _branch(entry):
                     return entry.ref.removeprefix("refs/heads/")
 
-                candidates = [s for s in q if all(w.branch != _branch(q[s]) for w in workers)]
+                # Verdict-aware selection (ARCH-FIX R4): don't offer a
+                # branch the local gatelogs recall (confirmed, best-effort,
+                # against the shared hub cache) already knows the answer
+                # for -- PASS is waiting on the train, FAIL needs its
+                # author. `tip_sha` gates the memo lookup on `hub.sha`
+                # rather than `res.tip_generation` because the memo's key
+                # is the tip's SHA (what gate.sh actually recorded as
+                # `base_tip`), not its generation counter.
+                tip_sha = hub.sha(workqueue.TIP_REF)
+                gate_version = _gate_version(repo_root)
+                memo = _scan_gatelogs_memo(log_dir) if tip_sha else {}
+
+                candidates = []
+                for s in q:
+                    b = _branch(q[s])
+                    if any(w.branch == b for w in workers):
+                        continue
+                    status = classify_branch(memo, hub, b, tip_sha, gate_version) if tip_sha else None
+                    if status == AWAITING_TRAIN:
+                        res.awaiting_train.append(b)
+                        continue
+                    if status == NEEDS_AUTHOR:
+                        res.needs_author.append(b)
+                        continue
+                    candidates.append(s)
                 for slug in candidates[:deficit]:
                     branch = _branch(q[slug])
                     tag = f"{host}-{slug}-{int(time.time()) % 100000}"
@@ -549,6 +718,16 @@ def reconcile_once(
         "oracle_ok": _oracle_ok(),
         "gate_version": _gate_version(repo_root),
         "tip_generation_seen": res.tip_generation,
+        # ARCH-FIX R4: branch states this loop's selection surfaced, so
+        # `fleet status` can render them without re-deriving anything.
+        "awaiting_train": res.awaiting_train,
+        "needs_author": res.needs_author,
+        # ARCH-FIX R4 point 3 / R2: this loop's lost-lease kills (T1's
+        # `res.killed`, module docstring). Per-loop, not a lifetime total --
+        # `reconcile_once` keeps no state across calls beyond `workers`, and
+        # a cumulative counter would need to survive a restart to mean
+        # anything, which nothing here currently persists.
+        "killed_this_loop": len(res.killed),
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     res.heartbeat_written = write_heartbeat(hub, host, hb)
@@ -618,7 +797,10 @@ def main(argv: Optional[list] = None) -> int:
     # startup and never renewed, so it expired LEASE_TTL after every
     # daemon start and a second fleetd could reap it and run alongside
     # the first -- one host, two schedulers, both starting gates.
-    singleton = Claim(hub, kind="host", key=host, work_kind="fleetd", work_key=host)
+    # holder_host=host: same reasoning as start_gate/start_agent above --
+    # `host` is the FLEET_HOST-overridable fleet identity, not necessarily
+    # this machine's raw socket.gethostname().
+    singleton = Claim(hub, kind="host", key=host, work_kind="fleetd", work_key=host, holder_host=host)
     try:
         # acquire_or_reap: a hard-killed predecessor (launchctl kickstart -k,
         # OOM, crash) never runs its graceful release, and a plain acquire

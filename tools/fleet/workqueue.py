@@ -137,7 +137,8 @@ class Queue:
             for slug, (ref, sha) in staging.items():
                 if self._is_ancestor(cache_ns, sha, tip_sha):
                     continue  # already merged -- nothing left to do
-                if slug in live_claim_keys or ref in live_claim_keys:
+                branch = ref.removeprefix("refs/heads/")
+                if slug in live_claim_keys or ref in live_claim_keys or branch in live_claim_keys:
                     continue  # somebody is already working this key
                 if slug in withdrawn_slugs:
                     continue  # intent was withdrawn -- ref is stale intent
@@ -168,6 +169,23 @@ class Queue:
         return out
 
     def _live_claim_work_keys(self, now: datetime) -> Set[str]:
+        """`work_key` of every live (unexpired) claim on the hub.
+
+        ARCH-FIX R4: `fleetd.start_gate`/`start_agent` set `work_key=branch`,
+        e.g. `"staging/foo"` -- the ref with `refs/heads/` stripped, never
+        the bare slug (`"foo"`) and never the full ref
+        (`"refs/heads/staging/foo"`). `compute()` below matches against all
+        three forms for exactly this reason: comparing only slug/ref left a
+        real fleetd-held gate claim invisible to this set, so a second host
+        computing the queue would offer the same branch as gate work while
+        another host was already gating it -- the double-gate leases exist
+        to prevent, reintroduced at the queue layer instead of the claim
+        layer. `is_expired` here relies on the holder actually renewing
+        (claim.py's `acquire`-owns-renewal contract, R2); before that fix
+        this filter silently dropped every gate past ten minutes, which is
+        every real gate, and was a second, independent path to the same
+        double-gate outcome.
+        """
         keys: Set[str] = set()
         for ref in self.hub.list(CLAIMS_PREFIX):
             payload = self.hub.read(ref)

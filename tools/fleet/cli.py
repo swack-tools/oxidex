@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import workqueue
+from claim import is_expired
 from fleetlib import Hub, HubError
 
 DESIRED_REF = "refs/fleet/desired"
@@ -124,10 +125,48 @@ def _age_seconds(ts: str) -> float:
         return float("inf")
 
 
+def _claims_by_host(hub: Hub) -> dict:
+    """{holder_host: [work_key, ...]} for every LIVE (unexpired) claim on
+    the hub -- ARCH-FIX R4's WORK column. Reads the same `holder_host` /
+    `work_key` fields claim.py writes and workqueue.py's exclusion check
+    matches against, so this renders exactly what a second host's queue
+    computation would see as "already spoken for", not an independent
+    guess at it."""
+    out: dict = {}
+    now = datetime.now(timezone.utc)
+    for ref in hub.list(CLAIMS_PREFIX):
+        payload = hub.read(ref)
+        if payload is None or is_expired(payload, now=now):
+            continue
+        holder = payload.get("holder_host")
+        work_key = payload.get("work_key")
+        if holder and work_key:
+            out.setdefault(holder, []).append(work_key)
+    return out
+
+
+def _work_column(work_keys: list, limit: int = 2, max_len: int = 40) -> str:
+    """Truncated summary of a host's live work_keys for the WORK column:
+    the first `limit` keys, a "+N" tail for the rest, then a hard
+    character cap so one very long branch name can't blow out the table.
+    """
+    if not work_keys:
+        return "-"
+    shown = list(work_keys[:limit])
+    text = ",".join(shown)
+    extra = len(work_keys) - len(shown)
+    if extra > 0:
+        text += f"+{extra}"
+    if len(text) > max_len:
+        text = text[: max_len - 1] + "…"
+    return text
+
+
 def cmd_status(args) -> int:
     hub = _hub(args)
     desired = hub.read(DESIRED_REF) or {}
     want = desired.get("hosts") or {}
+    claims_by_host = _claims_by_host(hub)
 
     rows = []
     for ref in sorted(hub.list(HOSTS_PREFIX)):
@@ -142,11 +181,22 @@ def cmd_status(args) -> int:
         else:
             state = "up"
         oracle = hb.get("oracle_ok")
+        # ARCH-FIX R4: branch states this host's last reconcile surfaced,
+        # and T1's lost-lease kill count for that same loop -- both come
+        # straight from the heartbeat fleetd already writes (fleetd.py's
+        # reconcile_once), nothing re-derived here.
+        awaiting_train = len(hb.get("awaiting_train") or [])
+        needs_author = len(hb.get("needs_author") or [])
+        killed = hb.get("killed_this_loop")
         rows.append((
             host,
             state,
             f"{hb.get('gates_running', '?')}/{w.get('gates', '?')}",
             f"{hb.get('agents_running', '?')}/{w.get('agents', '?')}",
+            _work_column(claims_by_host.get(host) or []),
+            str(awaiting_train),
+            str(needs_author),
+            str(killed) if killed is not None else "-",
             f"{hb.get('free_gb', '?')}G",
             "✓" if oracle else ("?" if oracle is None else "✗"),
             hb.get("owning_user", "?"),
@@ -154,7 +204,10 @@ def cmd_status(args) -> int:
             (w.get("reason") or "")[:40],
         ))
 
-    hdr = ("HOST", "STATE", "GATES", "AGENTS", "FREE", "ORACLE", "USER", "HEARTBEAT", "NOTE")
+    hdr = (
+        "HOST", "STATE", "GATES", "AGENTS", "WORK", "AWAITING", "NEEDS_AUTH", "KILLED",
+        "FREE", "ORACLE", "USER", "HEARTBEAT", "NOTE",
+    )
     widths = [max(len(str(r[i])) for r in rows + [hdr]) for i in range(len(hdr))]
     for r in [hdr] + rows:
         print("  ".join(str(c).ljust(w) for c, w in zip(r, widths)).rstrip())
