@@ -41,7 +41,7 @@
 #      updated after one -- see classify_failure() and the cache
 #      lookup/store calls below.
 set -u
-GATE_VERSION="3"
+GATE_VERSION="4"
 BRANCH="$1"; TAG="$2"
 START_TS=$(date +%s)
 HOST=$(hostname)
@@ -272,7 +272,13 @@ fi
 cargo fmt --all -- --check >> "$L" 2>&1 || fail fmt
 cargo clippy --release --all-features $FEAT -- -D warnings >> "$L" 2>&1 || fail clippy
 cargo build --release $FEAT --bin oxidex --bin jpeg-tag-matrix >> "$L" 2>&1 || fail release-build
-cargo test --workspace --release $FEAT >> "$L" 2>&1 || fail tests
+# CARGO_PROFILE_RELEASE_PANIC=unwind: the justfile's own `test` recipe
+# (its `unwind :=` variable, line ~38) has always carried this because
+# [profile.release] sets panic="abort", which breaks should_panic tests.
+# gate.sh lacked it and false-FAILed the first branch to carry such a
+# test through the gate (conds12's grammar tests) -- a gate bug, found by
+# a producer agent that reproduced the failure both ways. GATE_VERSION 4.
+CARGO_PROFILE_RELEASE_PANIC=unwind cargo test --workspace --release $FEAT >> "$L" 2>&1 || fail tests
 just verify-tables >> "$L" 2>&1 || fail verify-tables
 [ -x "$OXIDEX" ] || fail no-binary
 "$CARGO_TARGET_DIR/release/jpeg-tag-matrix" manifest --flag-noops >> "$L" 2>&1 \
