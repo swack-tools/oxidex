@@ -1,7 +1,45 @@
-# Cron backstop: starts fleetd if the supervisor itself has died. Both a
-# cron daemon and a launchd agent died silently on this fleet in one day
-# (2026-08-14); the supervisor cannot be the only thing keeping the
-# supervisor alive. The singleton claim (refs/fleet/claims/host/<host>)
-# makes double-starts harmless -- the second instance exits immediately.
+# Cron backstop: starts fleetd-wrapper.sh (the persistent supervisor,
+# tools/fleet/units/fleetd-wrapper.sh) if it is not already running,
+# checked via the wrapper's own pid-file (~/.fleetd/wrapper.pid) --
+# NOT `fleetd --once`.
+#
+# Why the change (T7, ARCH-FIX-SPEC.md R8). The OLD line below ran
+# `fleetd.py --once` unconditionally every 5 minutes:
+#
+#   */5 * * * * FLEET_HUB_URL=... python3 .../fleetd.py --once
+#
+# Stage 1 PROVED this was actively HARMFUL, not merely redundant. Before
+# R2's lease fix landed, the live daemon wrote its host-singleton claim
+# once at startup and never renewed it, so that claim always expired
+# `LEASE_TTL` after every daemon start. `--once` still runs the FULL
+# reconcile step, including the singleton's `acquire_or_reap()` -- so
+# roughly every third 5-minute tick landed inside the live daemon's own
+# expired window, reaped ITS singleton out from under it, and then ran a
+# full extra reconcile loop of its own: two schedulers starting and
+# counting gates on the same host, all day, on 2026-08-14. That is the
+# exact "two gates on one branch" failure mode leases exist to prevent,
+# caused by the backstop meant to prevent a DIFFERENT failure.
+#
+# R2 fixes the underlying bug (acquire_or_reap now starts a renewer, so a
+# live daemon's own singleton never expires out from under it), which
+# alone would make the old `--once` line merely redundant again rather
+# than actively dangerous. But R8 removes the need for that shape of
+# backstop entirely: a REAL supervisor (the wrapper) now keeps fleetd up
+# continuously, so this backstop's only remaining job is "start the
+# wrapper if it is not already running" -- checked locally via pid-file,
+# same host, no hub round-trip, before even fleetd's own singleton claim
+# would run.
+#
+# Both a cron daemon and a launchd agent died silently on this fleet in
+# one day (2026-08-14) -- the supervisor cannot be the only thing keeping
+# the supervisor alive, hence a backstop still exists at all. Use this
+# line on hosts with NO systemd/launchd to restart fleetd-wrapper.sh
+# itself -- concretely, the work2 pod (a k8s container with neither).
+# Hosts WITH systemd/launchd don't need this: fleetd.service's
+# `Restart=always` and com.oxidex.fleetd.plist's `KeepAlive` already keep
+# fleetd-wrapper.sh (see each unit's own ExecStart/ProgramArguments) up
+# without a cron poll, and this backstop line is redundant-but-harmless
+# there too (the pid-file check still short-circuits to nothing).
+#
 # Add via `crontab -e`:
-*/5 * * * * FLEET_HUB_URL=ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git /usr/bin/env python3 $HOME/fleet-checkout/tools/fleet/fleetd.py --once >/dev/null 2>&1
+*/5 * * * * pidfile="$HOME/.fleetd/wrapper.pid"; kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || (FLEET_HUB_URL=ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git nohup $HOME/fleet-checkout/tools/fleet/units/fleetd-wrapper.sh >> $HOME/gatelogs/fleetd-wrapper-cron.log 2>&1 &)
