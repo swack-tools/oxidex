@@ -232,6 +232,59 @@ def tolerating_the_hub_read_race(call, what: str, attempts: int = 5):
     )
 
 
+# A claim ref read as ABSENT is confirmed before it is believed. Two
+# reasons, neither of them "make the test pass":
+#
+#   * A real lapse persists. The host is drained before the observation
+#     loop starts, so nothing recreates a claim that was genuinely
+#     released or reaped -- a confirmed absence is still an absence three
+#     reads later, and the assertion still fires. The negative control
+#     (seam 6) is the standing proof of that: disable the renewer and this
+#     same loop goes red on demand.
+#   * A single `ls-remote` is not a proof of absence. One run under heavy
+#     load (two sibling test suites saturating the box) read
+#     `refs/fleet/claims/gate/staging-nc2` as gone 2.8s into a hold while
+#     fleetd's own log showed neither a `finished` nor a `killed` for it,
+#     i.e. nothing had released it. Unreproducible in 18 subsequent runs
+#     on an idle machine. Whatever that was -- a transient in git's ref
+#     read under a concurrent `pack-refs`, a stalled subprocess -- it is
+#     not the lease property, and an acceptance harness that reds out on
+#     it teaches people to re-run instead of to read.
+#
+# Every rescue is counted and printed, so a run that needed one is never
+# reported as a clean run.
+TRANSIENT_ABSENCE_HITS: list = []
+
+
+def observe_claim(observer, ref: str, what: str, confirmations: int = 3, gap: float = 0.3):
+    """The claim's payload, or None only after `confirmations` agree."""
+    payload = tolerating_the_hub_read_race(lambda: observer.read(ref), what)
+    if payload is not None:
+        return payload
+    for _ in range(confirmations):
+        time.sleep(gap)
+        again = tolerating_the_hub_read_race(lambda: observer.read(ref), what)
+        if again is not None:
+            TRANSIENT_ABSENCE_HITS.append(
+                f"{what}: {ref} read as absent once, then present {gap:g}s later"
+            )
+            return again
+    return None
+
+
+def report_transient_absence_hits(prefix: str) -> None:
+    if TRANSIENT_ABSENCE_HITS:
+        print(
+            f"\n  !! {prefix}: a claim ref read as ABSENT and was present again on re-read "
+            f"{len(TRANSIENT_ABSENCE_HITS)} time(s). Not a lease lapse (see observe_claim), but "
+            f"NOT NOTHING either -- if this number is ever more than a blip, the hub's ref reads "
+            f"are not trustworthy and every consumer of Hub.sha is affected. "
+            f"First: {TRANSIENT_ABSENCE_HITS[0]}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def report_hub_read_race_hits(prefix: str) -> None:
     if HUB_READ_RACE_HITS:
         print(
@@ -867,6 +920,16 @@ class SeamFixture(unittest.TestCase):
         self.assertNotIn("work2.oxidex.net", resolved)
         self.assertNotIn("oxidex_refactor", resolved)
 
+        # No auto-gc on the fixture hub. A compressed-timescale run pushes
+        # a claim renewal and a heartbeat every second into one bare repo,
+        # a rate no real hub sees, and `gc --auto` firing mid-run drags a
+        # `pack-refs --prune` (and its ref-visibility window) into the
+        # middle of the property being measured. Turning it off removes a
+        # variable the seams are not about; it changes nothing a claim
+        # does.
+        git(["--git-dir", self.hub_path, "config", "gc.auto", "0"])
+        git(["--git-dir", self.hub_path, "config", "receive.autogc", "false"])
+
         self.hub = Hub(self.hub_path, workdir=self.tmp / "cache-primary")
         self._procs: list = []
         self._gates: list = []
@@ -1143,9 +1206,7 @@ class FleetdSeamFixture(SeamFixture):
         while time.monotonic() < deadline:
             if gate.finished():
                 break
-            payload = tolerating_the_hub_read_race(
-                lambda: observer.read(ref), f"seam-1 liveness read of {ref}"
-            )
+            payload = observe_claim(observer, ref, f"seam-1 liveness read of {ref}")
             elapsed = time.monotonic() - started
             self.assertIsNotNone(
                 payload,
@@ -1230,6 +1291,7 @@ class FleetdSeamFixture(SeamFixture):
         self.assertEqual(cached["result"], "PASS")
         self.assertEqual(gate.starts(), 1, "SEAM-1 the stub gate ran more than once")
         report_hub_read_race_hits("SEAM-1")
+        report_transient_absence_hits("SEAM-1")
 
     # ---------------- seam 2 ------------------------------------------- #
 
@@ -1608,9 +1670,7 @@ class TestSeam4RestartAdoption(FleetdSeamFixture):
         while time.monotonic() < deadline:
             if gate.finished():
                 break
-            payload = tolerating_the_hub_read_race(
-                lambda: observer.read(ref), f"seam-4 handover read of {ref}"
-            )
+            payload = observe_claim(observer, ref, f"seam-4 handover read of {ref}")
             elapsed = time.monotonic() - killed_at
             if payload is None:
                 state = "absent"
