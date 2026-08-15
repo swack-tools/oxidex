@@ -1728,20 +1728,21 @@ class TestSeam4RestartAdoption(FleetdSeamFixture):
                  f"{driver.log()}",
         )
 
-    @unittest.expectedFailure
     def test_claim_never_expires_across_the_handover(self):
-        """RED ON PURPOSE -- a composition defect, not a bent test.
+        """WAS RED ON PURPOSE -- a composition defect, not a bent test.
+        Fixed by ARCH-FIX FIX 2; kept green here as the seam's acceptance.
 
         A hard-killed fleetd leaves its OWN host-singleton claim
         (`refs/fleet/claims/host/<host>`) sitting on the hub, unrenewed but
-        NOT YET EXPIRED. `fleetd.main` takes that claim with
+        NOT YET EXPIRED. `fleetd.main` used to take that claim with only
         `acquire_or_reap`, which reaps only an EXPIRED claim, so every
-        successor exits 3 ("another instance holds
-        refs/fleet/claims/host/<host>") until the dead daemon's lease runs
+        successor exited 3 ("another instance holds
+        refs/fleet/claims/host/<host>") until the dead daemon's lease ran
         out -- one full `LEASE_TTL`: 600 seconds in production, 5 in CI
-        mode. Measured here: three refused restarts, then adoption.
+        mode. Previously measured here: three refused restarts, then
+        adoption, with the claim observed EXPIRED for that whole window.
 
-        Two consequences, and the second is the one that fails this test.
+        Two consequences, and the second is the one this test pins.
 
         1. The host runs NO scheduler for a whole TTL after any crash. Not
            a lease bug, but ten production minutes of a host that starts
@@ -1758,25 +1759,25 @@ class TestSeam4RestartAdoption(FleetdSeamFixture):
            this host is still gating -- two gates on one branch, the exact
            event leases exist to prevent.
 
-        R6's adoption code is correct and does the right thing the moment
-        it can run: `Claim.adopt` continues the lease by CAS update, and
-        `test_successor_adopts_the_running_gate_with_no_double_gate` above
-        passes, adoption line and all. It simply cannot run until the
-        lockout ends, and by then the lease it is adopting has expired.
+        R6's adoption code was already correct and did the right thing the
+        moment it could run: `Claim.adopt` continues the lease by CAS
+        update, and `test_successor_adopts_the_running_gate_with_no_double_
+        gate` above passes, adoption line and all. It simply could not run
+        until the lockout ended, and by then the lease it was adopting had
+        expired.
 
-        The evidence is in the wrapper log this test prints on failure --
-        `fleetd exited 137` (the SIGKILL), then one
-        `fleetd: another instance holds refs/fleet/claims/host/<host>;
-        exiting` per retry for a whole TTL, then
-        `adoption: adopted=['gate/staging-s4#<pgid>']`.
-
-        THE FIX IS NOT T8'S TO MAKE. The singleton payload already carries
-        `pgid`, and `adopt_workers` already uses exactly that evidence for
-        gate claims -- "claim.holder_host == us AND claim.pgid is in the
-        `ps` listing". Applying the same test to the host singleton (reap
-        a same-host singleton whose recorded pgid is gone, instead of
-        waiting out its TTL) would close it. Owner: whoever holds
-        `fleetd.main`'s startup path -- T6/T1.
+        FIX 2 closes the lockout itself, not adoption: `fleetd.main`'s
+        singleton block now falls back to `reap_dead_same_host_singleton`
+        when `acquire_or_reap` refuses -- the same evidence `adopt_workers`
+        already used for gate/agent claims (`claim.holder_host == us AND
+        claim.pgid is provably dead by the `ps` listing`), applied to the
+        daemon's own claim instead of the work it supervises. See that
+        function's docstring for the one complication unique to this
+        level: fleetd shares its supervisor's process group under R8's
+        wrapper (no `setsid`), so identity is checked against every member
+        of the group, not just its leader, and the successor's own pid is
+        excluded -- otherwise a fresh fleetd matches ITSELF and concludes
+        the dead predecessor is alive forever.
         """
         gate, ref, observations, driver, _observer = self.run_restart_scenario()
         expired = [o for o in observations if o[1] == "expired"]
