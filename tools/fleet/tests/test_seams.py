@@ -54,8 +54,10 @@ compositions:
                              moved in between. Unreachable until R2 made
                              claims renew and R4 made the queue read every
                              claim payload; hit for real during a seam-2
-                             run. RED (`expectedFailure`), reproduced
-                             deterministically.
+                             run. Reproduced deterministically; WAS RED
+                             (`expectedFailure`), now fixed and green --
+                             see `TestSeam7HubReadRaceUnderRenewal`'s own
+                             docstring for the fix and how it was found.
 
 NAME THE INSTRUMENT (AGENTS.md). Liveness is always observed from a
 SECOND `Hub` with its own object cache -- what another host would see --
@@ -82,12 +84,19 @@ stub or a Python function. Every hub is a `git init --bare` under the
 system temp dir and every `setUp` asserts that before a test body runs.
 Standard library and plain unittest only. Nothing here modifies
 production code -- where a seam test is red because production is wrong,
-it stays red with the reason written at the assertion. Two such tests
-exist, both `expectedFailure`, both pinning real gaps rather than bent to
-pass: `TestSeam3TrainEndToEnd.test_landed_branch_flips_its_intent_to_done`
-and `TestSeam7HubReadRaceUnderRenewal`. `expectedFailure` (not deletion,
-not a skip) is deliberate: unittest reports an UNEXPECTED SUCCESS the day
-someone fixes one, so the marker cannot outlive the defect.
+it stays red with the reason written at the assertion, carried as
+`expectedFailure` (not deletion, not a skip) so unittest reports an
+UNEXPECTED SUCCESS the day someone fixes it, and the marker cannot
+outlive the defect.
+
+ZERO EXPECTED FAILURES TODAY. Two tests used to carry `expectedFailure`
+here -- `TestSeam3TrainEndToEnd.test_landed_branch_flips_its_intent_to_done`
+(fixed by `intent.mark_done`, ARCH-FIX FIX-3a) and
+`TestSeam7HubReadRaceUnderRenewal` (fixed by `fleetlib.Hub.read_with_sha`'s
+fetch-first rewrite) -- and both are green, unmarked regression tests now;
+see each one's own docstring for its fix. This paragraph is the reason a
+reader who remembers "two expectedFailures" from an earlier pass of this
+file does not go looking for decorators that are no longer here.
 
 Run with (from the repo root):
     python3 -m unittest discover -s tools/fleet/tests -v
@@ -1667,13 +1676,26 @@ class TestSeam4RestartAdoption(FleetdSeamFixture):
                 break
             payload = observe_claim(observer, ref, f"seam-4 handover read of {ref}")
             elapsed = time.monotonic() - killed_at
+            # BLOCKER 7 (seam-4 unmasking): `started_at` is carried alongside
+            # `state` on every observation, not just derived from it.
+            # `(holder_host, started_at)` IS the claim's ownership token
+            # (claim.py's `_owns`, see its module docstring) -- a successor
+            # that ADOPTS continues the token; one that REACQUIRES (delete +
+            # create) mints a fresh one. Never observing "absent" only shows
+            # the poll never SAMPLED a gap; it does not show there was no
+            # gap. A changed `started_at` between two "live"/"expired"
+            # observations is adopt-vs-reacquire made positive evidence
+            # instead of inferred from the absence of an observed absence.
             if payload is None:
                 state = "absent"
+                started_at = None
             elif is_expired(payload):
                 state = "expired"
+                started_at = payload.get("started_at")
             else:
                 state = "live"
-            observations.append((round(elapsed, 2), state))
+                started_at = payload.get("started_at")
+            observations.append((round(elapsed, 2), state, started_at))
             time.sleep(poll)
 
         self.assertTrue(
@@ -1710,9 +1732,33 @@ class TestSeam4RestartAdoption(FleetdSeamFixture):
             f"branch reads as unclaimed to every other host.\n{driver.log()}",
         )
         self.assertTrue(
-            any(state == "live" for _t, state in observations),
+            any(state == "live" for _t, state, _started_at in observations),
             f"SEAM-4 the claim was never observed live after the kill -- no successor ever "
             f"adopted it:\n{driver.log()}",
+        )
+        # BLOCKER 7 (seam-4 unmasking): the ownership token's `started_at`
+        # half must be the SAME value on every non-absent observation.
+        # "never observed absent" (above) only proves the poll never
+        # SAMPLED a gap -- it is silent on whether the successor adopted
+        # the running claim or reacquired it (delete then recreate) inside
+        # a gap the poll happened to miss. A changed `started_at` between
+        # two observations is exactly that reacquisition, made positive
+        # evidence: `claim.py`'s `(holder_host, started_at)` token only
+        # stays constant across a real `Claim.adopt` (continues the lease)
+        # and changes on any fresh `acquire`/`create`.
+        tokens = [(t, sa) for t, _state, sa in observations if sa is not None]
+        self.assertTrue(
+            tokens, f"SEAM-4 no non-absent observation carried a started_at at all -- "
+            f"the token itself was never captured:\n{driver.log()}",
+        )
+        distinct = sorted(set(sa for _t, sa in tokens))
+        self.assertEqual(
+            len(distinct), 1,
+            f"SEAM-4 OWNERSHIP TOKEN CHANGED: started_at took on {len(distinct)} distinct "
+            f"values across the handover ({distinct}) -- the successor REACQUIRED the claim "
+            f"(delete + create, a fresh started_at) instead of ADOPTING it (a CAS update that "
+            f"preserves started_at), even though the ref was never observed absent. Full "
+            f"trace: {[(t, sa) for t, sa in tokens]}\n{driver.log()}",
         )
         self.wait_until(
             lambda: observer.sha(ref) is None,
