@@ -19,7 +19,7 @@ point of this module's central rule:
 
     RENEWAL IS NOT OPTIONAL AND IS NOT THE CALLER'S JOB.
 
-`acquire()` and `acquire_or_reap()` start the background renewer
+`acquire()`, `acquire_or_reap()` and `adopt()` start the background renewer
 themselves; `release()` and `__exit__` stop it. There is no way to hold a
 lease without renewing it, because that is exactly what happened: from
 this system's first day until 2026-08-15, `fleetd` acquired every gate,
@@ -492,6 +492,135 @@ class Claim:
                 self.hub.delete(self.ref, expect_sha=existing_sha)
 
         return self.acquire()
+
+    @classmethod
+    def adopt(
+        cls,
+        hub: Hub,
+        ref: str,
+        *,
+        expected_host: Optional[str] = None,
+        ttl: Optional[float] = None,
+        renew_interval: Optional[float] = None,
+    ) -> Optional["Claim"]:
+        """Rebuild a live `Claim` around a claim ref THIS HOST already holds,
+        continuing the existing acquisition instead of starting a new one
+        (ARCH-FIX-SPEC.md R6). Returns None if the ref is not ours to adopt.
+
+        `fleetd` calls this on start for every claim whose `holder_host` is
+        this host and whose recorded process group is still alive: the
+        daemon died, the gate it launched did not, and the lease must go on
+        being renewed by whoever is now supervising that process.
+
+        ADOPTION IS NOT RE-ACQUISITION, and the difference is the whole
+        contract:
+
+          * `started_at` is read from the REF, never recomputed as `now`.
+            `(holder_host, started_at)` is this module's ownership token
+            (`_owns`), so minting a fresh `started_at` would make our very
+            first renewal look, to every other observer, exactly like
+            another process having stolen the claim -- including to a
+            predecessor that turned out to be alive after all, which would
+            then correctly declare its own lease lost and kill a healthy
+            gate.
+          * The ref is never deleted and re-created. `acquire()` would have
+            to (its CAS is `create`), and the gap between the delete and the
+            create is a window in which another host sees the branch as
+            unclaimed. Adoption is a plain CAS `update` from the sha
+            already on the hub, so the claim's existence is continuous
+            across the handover.
+          * Every payload field that describes the WORK -- `pid`, `pgid`,
+            `work_kind`, `work_key`, `workdir`, `gate_version`, the two
+            toolchain ids -- is restored from the ref, because `renew()`
+            rewrites the payload from this object's attributes. Rebuilding
+            with fresh defaults would overwrite the running gate's `pgid`
+            with the daemon's own on the first renewal, and `pgid` is how
+            anything ever finds that gate again.
+
+        The lease is renewed once, synchronously, before this returns: an
+        adopted lease is usually close to expiry (its renewer died with the
+        old daemon), and the renewal doubles as the proof that the claim is
+        still ours. If that renewal establishes the lease is gone, adoption
+        FAILS rather than half-succeeding -- the caller then treats the
+        process as an orphan, which is right, because whoever took the claim
+        may already be running the same work.
+        """
+        parsed = parse_claim_ref(ref)
+        if parsed is None:
+            return None
+        kind, key = parsed
+
+        payload = hub.read(ref)
+        if payload is None:
+            return None
+
+        host = expected_host if expected_host is not None else socket.gethostname()
+        if payload.get("holder_host") != host:
+            # Another host's lease. Not ours to renew, release or reason
+            # about -- the single most important thing this method does NOT
+            # do.
+            return None
+
+        raw_started = payload.get("started_at")
+        if not raw_started:
+            return None
+        try:
+            started = _parse_iso(raw_started)
+        except (ValueError, TypeError):
+            return None
+        if _iso(started) != raw_started:
+            # We could not reproduce the token's exact text, so `_owns`
+            # would reject our own renewals. Refuse loudly-by-None rather
+            # than adopt a claim we are structurally unable to hold.
+            return None
+
+        sha = hub.sha(ref)
+        if sha is None:
+            return None
+
+        c = cls(
+            hub,
+            kind,
+            key,
+            work_kind=payload.get("work_kind") or kind,
+            work_key=payload.get("work_key") if payload.get("work_key") is not None else key,
+            gate_version=payload.get("gate_version") or "",
+            rustc_id=payload.get("rustc_id"),
+            platform_id=payload.get("platform_id"),
+            workdir=payload.get("workdir"),
+            holder_host=host,
+            pid=payload.get("pid"),
+            pgid=payload.get("pgid"),
+            ttl=ttl,
+            renew_interval=renew_interval,
+        )
+        c._started_at = started
+        c._sha = sha
+        c._released = False
+        # Anchor the renewal deadline on the HUB's `expires_at`, not on now.
+        # `_note_renew_failure` computes "when does this lease die" as
+        # `_last_renew_ok + ttl`; anchoring at adoption time would claim a
+        # full fresh TTL of grace that the hub never agreed to, and would
+        # delay the `lost` declaration past the moment another host may
+        # legitimately reap us -- exactly the race the flag exists to beat.
+        anchor = started
+        raw_expires = payload.get("expires_at")
+        if raw_expires:
+            try:
+                anchor = _parse_iso(raw_expires) - timedelta(seconds=c.ttl)
+            except (ValueError, TypeError):
+                anchor = started
+        c._last_renew_ok = anchor
+        c._clear_lost()
+
+        # Renew now: refresh a lease whose renewer died, and prove ownership
+        # before reporting success. A transient failure that does NOT cost
+        # the lease is fine -- the background renewer will retry.
+        c.renew()
+        if c.lost:
+            return None
+        c.start_renewer()
+        return c
 
     def renew(self) -> bool:
         """Push a fresh `expires_at` one `ttl` out. Returns False and never

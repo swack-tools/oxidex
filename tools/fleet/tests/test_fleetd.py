@@ -66,7 +66,7 @@ class FleetdBase(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
-        self.bare, _ = make_fixture_hub(self.tmp)
+        self.bare, self.seed = make_fixture_hub(self.tmp)
         self.hub = Hub(str(self.bare), workdir=self.tmp / "hubcache")
         self.stub = make_stub_gate(self.tmp)
         self.workers = []
@@ -214,7 +214,32 @@ if __name__ == "__main__":
 
 
 class TestAgentSlots(FleetdBase):
+    def make_branch_stale(self):
+        """Advance the tip past `staging/one` so the branch has real DRIFT.
+
+        `make_fixture_hub` builds staging/one as a commit ON TOP of the tip,
+        so the branch already contains the tip -- correct for the gate tests
+        that share this fixture, but the exact condition ARCH-FIX R5's
+        dispatch preflight refuses to buy an agent for (`no-drift`: there is
+        nothing to converge). An agent test needs a branch the tip has moved
+        past, so this makes one.
+        """
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        base = subprocess.run(
+            ["git", "-C", str(self.seed), "rev-parse", "HEAD~1"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        subprocess.run(["git", "-C", str(self.seed), "checkout", "-q", "-B", "tipwork", base],
+                       check=True, env=env)
+        (self.seed / "tipmoved.txt").write_text("tip moved\n")
+        subprocess.run(["git", "-C", str(self.seed), "add", "."], check=True, env=env)
+        subprocess.run(["git", "-C", str(self.seed), "commit", "-qm", "tip moves on"],
+                       check=True, env=env)
+        subprocess.run(["git", "-C", str(self.seed), "push", "-qf", str(self.bare),
+                        f"HEAD:{HUB_TIP_REF}"], check=True, env=env)
+
     def test_agent_spawns_with_stub_cli_and_reaps(self):
+        self.make_branch_stale()
         stub = self.tmp / "stub-cli.sh"
         stub.write_text("#!/bin/bash\necho stub agent ran\nexit 0\n")
         stub.chmod(0o755)
