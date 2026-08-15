@@ -484,7 +484,12 @@ def main(argv: Optional[list] = None) -> int:
     # expires on crash so a restarted daemon can reap it and proceed.
     singleton = Claim(hub, kind="host", key=host, work_kind="fleetd", work_key=host)
     try:
-        singleton.acquire()
+        # acquire_or_reap: a hard-killed predecessor (launchctl kickstart -k,
+        # OOM, crash) never runs its graceful release, and a plain acquire
+        # then locks the host out until the claim is manually reaped -- m5
+        # spent 20 minutes in a KeepAlive spawn/refuse/exit loop this way.
+        # A LIVE predecessor still refuses (the singleton guard stands).
+        singleton.acquire_or_reap()
     except claim_mod.ClaimHeldError:
         print(f"fleetd: another instance holds refs/fleet/claims/host/{host}; exiting")
         return 3
