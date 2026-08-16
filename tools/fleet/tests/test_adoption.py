@@ -36,6 +36,7 @@ rather than smuggled in here.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -66,6 +67,58 @@ HOST = "adoptionhost"
 # enough that waiting out the singleton is seconds rather than minutes.
 TEST_TTL = "8"
 TEST_RENEW = "1"
+
+
+def group_is_gone(pgid: int) -> bool:
+    """Is process group `pgid` completely gone? Signal 0 is the existence
+    probe: it delivers nothing and only reports whether a target exists.
+    `PermissionError` counts as gone for this fixture's purposes -- it means
+    the pgid has been recycled by something we do not own, which cannot be
+    our own SIGKILLed group still holding files open under our tempdir.
+    """
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return False
+
+
+def killpg_and_wait(pgid: int, timeout: float = 10.0) -> bool:
+    """SIGKILL a process group and WAIT until it is actually gone.
+
+    `os.killpg` returns as soon as the signal is QUEUED, not when the
+    processes have died and released their files -- so a `shutil.rmtree`
+    on the very next statement races the group's last writes, and a child
+    that creates one more file inside a directory rmtree has already
+    emptied makes rmtree raise OSError(ENOTEMPTY, 'Directory not empty').
+
+    That is not a hypothesis. Instrument:
+    scratchpad/proof_enotempty.py, which reproduces this fixture's exact
+    shape (a process group writing into the tempdir, SIGKILLed, tempdir
+    torn down on the next statement) --
+
+        A  killpg -> rmtree           failures 3/120  (all ENOTEMPTY)
+        B  killpg -> wait -> rmtree   failures 0/120
+
+    `p.wait()` is NOT a substitute: it reaps the group LEADER only, while
+    the writers that actually lose the race are its children (here, the
+    stub gate's `verdict.py store` and the `git` processes under it).
+    Returns True if the group went away within `timeout`.
+    """
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (OSError, ValueError):
+        return True
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if group_is_gone(pgid):
+            return True
+        time.sleep(0.02)
+    return group_is_gone(pgid)
 
 
 def build_hub(tmp: Path) -> Path:
@@ -606,6 +659,108 @@ class TestAdoptWorkers(unittest.TestCase):
 
 
 # --------------------------------------------------------------------- #
+# The teardown race that made this MODULE flaky in the gate
+# --------------------------------------------------------------------- #
+
+
+class TestKillpgAndWaitBeforeCleanup(unittest.TestCase):
+    """`TestRestartAdoption`'s tearDown once went `os.killpg(...)` straight
+    into `TemporaryDirectory.cleanup()`, and that raised
+    OSError(ENOTEMPTY) -- one of the two shapes that made the gate's
+    fleet-tests stage false-FAIL ~25% of whole-stage runs on a clean tree.
+
+    This is that race, reduced: a process group that is CONTINUOUSLY
+    creating files under a tempdir, killed, and the tempdir torn down
+    immediately afterwards. `killpg_and_wait` is what makes it safe, and
+    the reason it works is a property, not a probability -- the group is
+    provably gone before the first rmtree syscall -- so the first test
+    below is deterministic. The second runs the full shape repeatedly,
+    because the ENOTEMPTY the fixed code must never produce is only
+    reachable by actually doing the teardown.
+    """
+
+    def _spawn_writer(self, tmp: Path):
+        """A process group of its own that keeps creating files under
+        `tmp` -- the stub gate plus the `verdict.py store` git children it
+        spawns, minus everything irrelevant."""
+        script = tmp / "writer.sh"
+        script.write_text(
+            "#!/bin/bash\n"
+            f"mkdir -p {tmp}/busy\n"
+            "i=0\n"
+            "while true; do\n"
+            f"  mkdir -p {tmp}/busy/d$i && echo x > {tmp}/busy/d$i/f\n"
+            "  i=$((i+1))\n"
+            "done\n"
+        )
+        script.chmod(0o755)
+        p = subprocess.Popen(
+            ["/bin/bash", str(script)], start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        self.addCleanup(self._force_kill, p)
+        # Let it actually start writing; killing an idle group proves
+        # nothing about the race.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not (tmp / "busy").exists():
+            time.sleep(0.02)
+        return p
+
+    @staticmethod
+    def _force_kill(p):
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            p.wait(timeout=5)
+        except Exception:  # noqa: BLE001 -- cleanup must not mask a failure
+            pass
+
+    def test_killpg_and_wait_returns_only_once_the_group_is_really_gone(self):
+        """The deterministic half. `os.killpg` returning says the signal
+        was queued; only this says the writers are dead."""
+        tmp = Path(tempfile.mkdtemp(prefix="killpg-wait-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        p = self._spawn_writer(tmp)
+        pgid = os.getpgid(p.pid)
+        self.assertFalse(group_is_gone(pgid), "instrument: the group must be alive first")
+
+        self.assertTrue(killpg_and_wait(pgid, timeout=10),
+                        "the group outlived the wait budget")
+        self.assertTrue(
+            group_is_gone(pgid),
+            "killpg_and_wait returned True while the group was still alive -- "
+            "the whole point is that it does not return until nothing in that "
+            "group can write into the fixture directory again",
+        )
+
+    def test_teardown_shape_never_raises_enotempty(self):
+        """The end-to-end half, run repeatedly: kill a busy writer group
+        and tear the directory down, exactly as TestRestartAdoption's
+        tearDown does. rmtree is called WITHOUT ignore_errors -- swallowing
+        the error would hide the very defect this pins.
+
+        Measured on the unfixed shape (killpg with no wait):
+        3/120 ENOTEMPTY, instrument scratchpad/proof_enotempty.py.
+        """
+        for trial in range(10):
+            tmp = Path(tempfile.mkdtemp(prefix="killpg-teardown-"))
+            p = self._spawn_writer(tmp)
+            pgid = os.getpgid(p.pid)
+            killpg_and_wait(pgid)
+            try:
+                shutil.rmtree(tmp)
+            except OSError as exc:
+                shutil.rmtree(tmp, ignore_errors=True)
+                self.fail(
+                    f"trial {trial}: tearing down the fixture dir raised {exc!r} -- "
+                    f"this is the ENOTEMPTY shape that false-FAILed the gate"
+                )
+            self.assertFalse(tmp.exists())
+
+
+# --------------------------------------------------------------------- #
 # The real thing: kill fleetd A, start fleetd B
 # --------------------------------------------------------------------- #
 
@@ -667,7 +822,24 @@ exit 0
 """
 
     def tearDown(self):
-        (self.tmp / "stop-gate").write_text("")
+        """ORDER AND WAITING BOTH MATTER; this used to have neither, and
+        that is one of the two measured flake shapes in the gate's
+        fleet-tests stage (an OSError(ENOTEMPTY) out of THIS method).
+
+        1. Daemons die FIRST. The old order wrote `stop-gate` first, so
+           during the window before the daemons were killed a fleetd could
+           observe the parked gate finish and start a REPLACEMENT gate for
+           the same branch -- a process nothing here knew the pid of, still
+           writing into `self.tmp` when `cleanup()` ran.
+        2. Every gate process group is then killed AND WAITED FOR, via
+           `killpg_and_wait` (see its docstring for the 3/120 -> 0/120
+           measurement). The old code called `os.killpg` and went straight
+           into `cleanup()`, which is exactly the ENOTEMPTY race.
+        3. The groups to kill come from the marker sweep the class already
+           uses as its instrument, UNIONED with the recorded pid -- a gate
+           that had started but not yet written `gate.pid` was invisible to
+           the old pid-file-only kill and survived into `cleanup()`.
+        """
         for p in self.daemons:
             try:
                 p.send_signal(signal.SIGKILL)
@@ -677,12 +849,21 @@ exit 0
                 p.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 pass
+
+        (self.tmp / "stop-gate").write_text("")
+
+        pgids = set(self.gate_pgids())
         gate_pid = self.tmp / "gate.pid"
         if gate_pid.exists():
             try:
-                os.killpg(int(gate_pid.read_text().strip()), signal.SIGKILL)
+                # fleetd starts workers with start_new_session, so the
+                # stub's own pid IS its pgid.
+                pgids.add(int(gate_pid.read_text().strip()))
             except (OSError, ValueError):
                 pass
+        for pgid in pgids:
+            killpg_and_wait(pgid)
+
         self.tmpdir.cleanup()
 
     def set_desired(self, gates: int):

@@ -89,13 +89,75 @@
 #      burn-in, where contention with sibling gates is not a factor --
 #      just not in the per-gate hot path. See `_fleet_test_modules()`
 #      below for the mechanics of the exclusion.
+#
+# --- BLOCKER A additions ("a false FAIL is worse than a slow gate") ---
+# GATE_VERSION bumped 6 -> 7: the fleet-tests stage gains a ONE-ROUND
+# isolation retry, which changes what counts as pass/fail and therefore
+# needs a bump.
+#
+# MEASUREMENT FIRST. On a clean tree (staging/afx-integration @ 9efc39b2)
+# the whole fleet-tests STAGE went red on 2 of 8 runs -- ~25% -- on two
+# DIFFERENT tests each time (test_lease_protocol.TestFleetdSingletonRenews
+# once; test_adoption.TestRestartAdoption's tearDown with
+# OSError(ENOTEMPTY) once), while both of those modules passed 10/10 in
+# ISOLATION on that same tree (instrument: scratchpad/flakeloop.sh, 10
+# iterations per tree, run exactly as gate.sh runs them -- from
+# tools/fleet/tests with FLEET_TESTS_HERMETIC=1). The two shapes are what
+# you would expect from tests that drive real subprocesses, real git
+# pushes and real lease timers all inside ONE python process: cross-module
+# interference, not a defect in the branch being gated.
+#
+# WHY THAT IS A BLOCKER RATHER THAN AN ANNOYANCE. This stage's verdict is
+# published to the SHARED verdict cache (see store_verdict below) and keyed
+# on the merged tree, so a false FAIL does not merely waste the 20-45min
+# gate that produced it: it condemns the branch fleet-wide (needs_author)
+# and every later host reads the cached answer instead of re-running. The
+# cost of a false FAIL is therefore unbounded, while the cost of the retry
+# below is bounded by the same FLEET_TESTS_TIMEOUT_S budget the stage
+# already had.
+#
+# THE POLICY (evidence-matched, deliberately narrow):
+#   1. Stage red -> parse the failing MODULE names out of the unittest
+#      output (`_fleet_tests_failed_modules`). If nothing parses -- a
+#      py_compile syntax error, an import-time loader error, a crash with
+#      no FAIL:/ERROR: header -- there is no module to retry and the stage
+#      FAILs exactly as before. Silence is never treated as a flake.
+#   2. Each failing module is re-run ALONE, in a fresh python process,
+#      same env, same cwd -- at most ONE round, never a loop.
+#   3. Every failing module passing alone == interference between modules,
+#      not a broken branch: the stage PASSES, and the verdict JSON gains
+#      `fleet_tests_flakes` (module name + the failure text) so burn-in
+#      MEASURES the real rate off the shared cache instead of us guessing
+#      at it. That field is the whole reason this is a recording policy
+#      and not a shrug.
+#   4. Any module that fails ALONE is a genuine failure: FAIL, as today.
+#      A module list that recovers only partially is a FAIL too, and
+#      records no flakes -- a run that is failing for a real reason must
+#      not also publish flake telemetry that would dilute the rate.
+#   5. Running out of the wall-clock budget mid-retry is
+#      "fleet-tests-timeout" -- FAIL, same as before. The retry may never
+#      buy itself more time than the stage originally had.
+# What this does NOT do: retry any other stage, retry an individual test
+# (the module is the isolation unit because the interference is between
+# modules), or run more than one round.
 set -u
-GATE_VERSION="6"
+GATE_VERSION="7"
 
 # BLOCKER 6 (i): wall-clock budget for the whole fleet-tests stage
 # (py_compile sweep + unittest run together), overridable for tests that
 # need to prove the timeout path itself without waiting 600s for it.
+# BLOCKER A: this is now the budget for the stage AND its isolation
+# retries together -- the retry round spends what the first run left over,
+# never a fresh allowance.
 FLEET_TESTS_TIMEOUT_S="${FLEET_TESTS_TIMEOUT_S:-600}"
+
+# BLOCKER A: JSON array ITEMS (no brackets) for the verdict's optional
+# `fleet_tests_flakes` field. Empty means the field is omitted entirely --
+# `write_json` is called long before the fleet-tests stage runs (low-disk,
+# clone, merge-conflict), and a clean run must not carry an empty array
+# that later readers would have to distinguish from "this gate version
+# didn't record flakes".
+FLEET_TESTS_FLAKES=""
 
 # run_with_wall_clock_timeout <timeout_s> <timed-out-flag-file> -- <cmd...>
 #
@@ -202,6 +264,14 @@ write_json() {
       if [ -z "$ws_items" ]; then ws_items="\"$esc\""; else ws_items="$ws_items,\"$esc\""; fi
     done <<< "$WRITE_SET"
   fi
+  # BLOCKER A: the optional flake record. Present ONLY when an isolation
+  # round actually proved a flake; absent (not `[]`) otherwise, so a
+  # reader can tell "no flakes seen" from "this run recorded nothing".
+  local flakes_field=""
+  if [ -n "$FLEET_TESTS_FLAKES" ]; then
+    flakes_field=",
+  \"fleet_tests_flakes\": [$FLEET_TESTS_FLAKES]"
+  fi
   cat > "$J" <<JSONEOF
 {
   "tree_sha": "$(json_escape "$TREE_SHA")",
@@ -214,7 +284,7 @@ write_json() {
   "platform_id": "$(json_escape "$PLATFORM_ID")",
   "host": "$(json_escape "$HOST")",
   "duration_s": $duration,
-  "write_set": [$ws_items]
+  "write_set": [$ws_items]$flakes_field
 }
 JSONEOF
 }
@@ -432,29 +502,132 @@ CARGO_PROFILE_RELEASE_PANIC=unwind cargo test --workspace --release $FEAT >> "$L
 # see the header comment above `GATE_VERSION`) -- everything else under
 # tools/fleet/tests/ still runs, `discover`'s own HERMETIC gating inside
 # each test is unaffected.
+
+# _fleet_tests_unittest_run <module...> -- the one place that knows HOW
+# this stage invokes unittest, so the isolation re-runs below are provably
+# the same invocation as the original with a shorter module list, not a
+# second dialect of it. Unlike `discover -s tools/fleet/tests`, plain
+# `python3 -m unittest <name>` resolves <name> against the CURRENT WORKING
+# DIRECTORY (no tools/fleet/tests/__init__.py makes this a namespace
+# import, not a package one), so the process must actually BE in that
+# directory when unittest loads the modules.
+_fleet_tests_unittest_run() {
+  ( cd tools/fleet/tests && FLEET_TESTS_HERMETIC=1 python3 -m unittest "$@" )
+}
+
 _run_fleet_tests_stage() {
   python3 -m py_compile tools/fleet/*.py || return 1
   # `_fleet_test_modules` is called from the REPO ROOT (its own glob is
-  # rooted there) before the `cd`, and its output captured first -- unlike
-  # `discover -s tools/fleet/tests`, plain `python3 -m unittest <name>`
-  # resolves <name> against the CURRENT WORKING DIRECTORY (no
-  # tools/fleet/tests/__init__.py makes this a namespace import, not a
-  # package one), so the module names only import if the process is
-  # actually IN that directory when unittest loads them.
+  # rooted there) before the `cd` inside `_fleet_tests_unittest_run`, and
+  # its output captured first.
   local mods
   mods="$(_fleet_test_modules)"
-  ( cd tools/fleet/tests && FLEET_TESTS_HERMETIC=1 python3 -m unittest $mods )
+  # Deliberately unquoted: `mods` is a newline-separated list that must
+  # word-split into separate arguments here.
+  # shellcheck disable=SC2086
+  _fleet_tests_unittest_run $mods
 }
+
+# _fleet_tests_failed_modules <output-file> -- the MODULE names unittest
+# reported as red, one per line, sorted and deduped.
+#
+# unittest's summary headers are `FAIL: <test> (<module>.<Class>[.<test>])`
+# (the trailing `.<test>` appeared in 3.11; both shapes are matched) and
+# the same for `ERROR:`, which is also what a tearDown explosion prints --
+# the exact shape of one of the two measured flakes. The module is the
+# first dotted component inside the parens.
+#
+# `sed -n ... p` prints ONLY lines that matched: anything else -- a
+# py_compile traceback, a segfault, an import-time loader error whose
+# "module" is `unittest.loader._FailedTest` -- yields no name at all, and
+# the caller treats an empty list as "nothing retryable, FAIL". That is
+# the safe direction: an unparseable red stage is never mistaken for a
+# flake.
+_fleet_tests_failed_modules() {
+  sed -n -E 's/^(FAIL|ERROR): [^(]*\(([A-Za-z0-9_]+)\.[^)]*\).*$/\2/p' "$1" | sort -u
+}
+
+# _fleet_tests_isolation_round <stage-output-file> -- the ONE retry round.
+# Return codes: 0 == every failing module passed alone (flake, stage
+# passes, FLEET_TESTS_FLAKES populated), 1 == genuine failure, 2 == the
+# wall-clock budget ran out mid-round.
+_fleet_tests_isolation_round() {
+  local out="$1"
+  local mods known m rc elapsed remaining flag rerun_out ftext acc=""
+  mods="$(_fleet_tests_failed_modules "$out")"
+  if [ -z "$mods" ]; then
+    echo "GATE: fleet-tests red but no failing module name parsed -- not retryable" >> "$L"
+    return 1
+  fi
+  # A parsed name that is not one of the modules this stage actually ran
+  # means the parse is wrong, not that a mystery module flaked. Refuse to
+  # retry rather than re-run something unrelated and call the result a
+  # flake.
+  known="$(_fleet_test_modules)"
+  for m in $mods; do
+    if ! printf '%s\n' "$known" | grep -qx -- "$m"; then
+      echo "GATE: fleet-tests reported module '$m', which is not in this stage's module list -- not retryable" >> "$L"
+      return 1
+    fi
+  done
+  echo "GATE: fleet-tests red; failing modules: $(printf '%s' "$mods" | tr '\n' ' ')" >> "$L"
+  echo "GATE: re-running each ALONE, one round, within the remaining ${FLEET_TESTS_TIMEOUT_S}s stage budget" >> "$L"
+  for m in $mods; do
+    elapsed=$(( $(date +%s) - FLEET_TESTS_START ))
+    remaining=$(( FLEET_TESTS_TIMEOUT_S - elapsed ))
+    if [ "$remaining" -le 0 ]; then
+      echo "GATE: fleet-tests isolation ran out of wall clock before '$m'" >> "$L"
+      return 2
+    fi
+    flag="$L.fleet-tests-retry-flag"
+    rerun_out="$L.fleet-tests-retry-out"
+    run_with_wall_clock_timeout "$remaining" "$flag" \
+      _fleet_tests_unittest_run "$m" > "$rerun_out" 2>&1
+    rc=$?
+    { echo "--- fleet-tests isolation re-run: $m (budget ${remaining}s) ---"; cat "$rerun_out"; } >> "$L"
+    if [ -f "$flag" ]; then
+      rm -f "$flag" "$rerun_out"
+      echo "GATE: fleet-tests isolation re-run of '$m' exceeded the remaining wall clock -- killed" >> "$L"
+      return 2
+    fi
+    rm -f "$rerun_out"
+    if [ "$rc" -ne 0 ]; then
+      echo "GATE: fleet-tests isolation: '$m' FAILED alone too -- genuine failure" >> "$L"
+      return 1
+    fi
+    echo "GATE: fleet-tests isolation: '$m' PASSED alone -- recorded as a flake" >> "$L"
+    # The failure text kept for the verdict is this module's own FAIL:/
+    # ERROR: header lines from the ORIGINAL red run -- enough for burn-in
+    # to tell the two measured shapes apart, bounded so a verdict payload
+    # can never grow without limit.
+    ftext=$(grep -E "^(FAIL|ERROR): [^(]*\($m\." "$out" | tr '\n\r\t' '   ' | cut -c1-400)
+    acc="$acc${acc:+,}{\"module\":\"$(json_escape "$m")\",\"failure\":\"$(json_escape "$ftext")\"}"
+  done
+  FLEET_TESTS_FLAKES="$acc"
+  return 0
+}
+
 FLEET_TESTS_TIMEOUT_FLAG="$L.fleet-tests-timeout-flag"
+FLEET_TESTS_OUT="$L.fleet-tests-out"
+FLEET_TESTS_START=$(date +%s)
 run_with_wall_clock_timeout "$FLEET_TESTS_TIMEOUT_S" "$FLEET_TESTS_TIMEOUT_FLAG" \
-  _run_fleet_tests_stage >> "$L" 2>&1
+  _run_fleet_tests_stage > "$FLEET_TESTS_OUT" 2>&1
 FLEET_TESTS_RC=$?
+cat "$FLEET_TESTS_OUT" >> "$L"
 if [ -f "$FLEET_TESTS_TIMEOUT_FLAG" ]; then
-  rm -f "$FLEET_TESTS_TIMEOUT_FLAG"
+  rm -f "$FLEET_TESTS_TIMEOUT_FLAG" "$FLEET_TESTS_OUT"
   echo "GATE: fleet-tests exceeded ${FLEET_TESTS_TIMEOUT_S}s wall clock -- killed" >> "$L"
   fail fleet-tests-timeout
 fi
-[ "$FLEET_TESTS_RC" -eq 0 ] || fail fleet-tests
+if [ "$FLEET_TESTS_RC" -ne 0 ]; then
+  _fleet_tests_isolation_round "$FLEET_TESTS_OUT"
+  case $? in
+    0) echo "GATE: fleet-tests PASSED after one isolation round (flakes recorded in the verdict)" >> "$L" ;;
+    2) rm -f "$FLEET_TESTS_OUT"; fail fleet-tests-timeout ;;
+    *) rm -f "$FLEET_TESTS_OUT"; fail fleet-tests ;;
+  esac
+fi
+rm -f "$FLEET_TESTS_OUT"
 
 just verify-tables >> "$L" 2>&1 || fail verify-tables
 [ -x "$OXIDEX" ] || fail no-binary

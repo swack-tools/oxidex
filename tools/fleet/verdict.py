@@ -74,6 +74,26 @@ _REQUIRED_VERDICT_FIELDS = (
     "write_set",
 )
 
+# OPTIONAL fields a gate may add. Listed here (not enforced) so the payload
+# contract is readable in one place; `validate_payload` tolerates any extra
+# key, which is what lets a newer gate.sh record more without every reader
+# being updated first.
+#
+#   fleet_tests_flakes -- [{"module": str, "failure": str}, ...]
+#       Written by gate.sh (GATE_VERSION >= 7) when the fleet-tests stage
+#       went red and EVERY failing module then passed in isolation: the
+#       stage passes, and this records what flaked so burn-in can measure
+#       the real rate off this cache instead of guessing. ABSENT, never
+#       `[]`, on runs with no flake -- including every run that failed
+#       before reaching the stage -- so "no flakes" and "this gate version
+#       does not record flakes" stay distinguishable. See gate.sh's
+#       BLOCKER A header comment for the measurement and the policy.
+#
+# Deliberately a comment and not a validated tuple: an optional field that
+# `store()` could REJECT would turn a malformed extra key into "a PASSing
+# gate's verdict never reached the cache", which is a worse failure than
+# the sloppy telemetry it would be guarding against.
+
 
 # --------------------------------------------------------------------- #
 # Toolchain identity
