@@ -99,7 +99,7 @@ import dispatch as dispatch_mod
 import verdict
 import workqueue
 from claim import Claim, compute_platform_id, compute_rustc_id
-from fleetlib import Hub, HubError
+from fleetlib import Hub, HubError, HubUnreachableError
 
 # --------------------------------------------------------------------- #
 # Constants (FLEET_PLAN.md "Shared contracts" is the authority)
@@ -577,7 +577,18 @@ def kill_process_group(
 
 
 def kill_worker(w: "Worker", grace: Optional[float] = None) -> str:
-    """Tear a worker down by process group and drop its claim."""
+    """Tear a worker down by process group and drop its claim.
+
+    THE KILL IS NOT HOSTAGE TO THE HUB. The signal work above is purely
+    local -- `killpg` and a `ps` listing -- and the claim delete below is
+    cleanup. The lost-lease kill in `reconcile_once` runs precisely when
+    the hub is misbehaving (that is what makes a lease go lost), so a
+    `HubError` out of `release` must not propagate: the process is already
+    dead by then, and letting the exception escape would strand a killed
+    worker in the caller's `workers` list and abort the rest of the step.
+    An undeleted claim is self-correcting -- it expires on its TTL and any
+    host reaps it (`claim.reap_expired`); a stranded worker entry is not.
+    """
     outcome = kill_process_group(w.pgid, grace=grace, alive_probe=lambda _p: w.alive())
     if w.popen is not None:
         try:
@@ -586,7 +597,10 @@ def kill_worker(w: "Worker", grace: Optional[float] = None) -> str:
             outcome += " (child not reaped within 5s)"
     # Safe either way: `release` is a CAS delete, so if the lease really
     # is somebody else's now, this cannot touch their claim.
-    w.claim.release()
+    try:
+        w.claim.release()
+    except HubError as e:
+        outcome += f" (claim release failed, expires on TTL: {e})"
     return outcome
 
 
@@ -865,6 +879,14 @@ class AdoptionResult:
     released: list = field(default_factory=list)  # (ref, reason)
     orphans_killed: list = field(default_factory=list)  # (pgid, outcome)
     skipped: list = field(default_factory=list)  # (ref, reason)
+    # Claims listed on the hub whose payload could not be READ this pass.
+    # Non-empty means the orphan sweep's exclusion list is INCOMPLETE and
+    # the sweep was therefore not run -- see `adopt_workers`. Recorded
+    # separately from `skipped` (which also holds other hosts' claims and
+    # refused adoptions) because this is the one entry that suppresses a
+    # kill, and a caller must be able to see that it did.
+    unreadable: list = field(default_factory=list)  # (ref, error)
+    sweep_skipped: Optional[str] = None  # why the orphan sweep did not run
 
     def summary(self) -> str:
         return (
@@ -872,6 +894,7 @@ class AdoptionResult:
             f"released={[r for r, _ in self.released]} "
             f"orphans_killed={[p for p, _ in self.orphans_killed]} "
             f"skipped={len(self.skipped)}"
+            + (f" SWEEP-SKIPPED({self.sweep_skipped})" if self.sweep_skipped else "")
         )
 
 
@@ -910,6 +933,41 @@ def adopt_workers(
     untouched: not adopted, not released, and (because the kill set
     excludes every claimed pgid, whoever holds the claim) their processes
     are not swept either.
+
+    UNREADABLE IS NOT UNOWNED. The KILL disposition rests entirely on the
+    claim listing being COMPLETE: a pgid is an orphan only because no
+    claim named it, and "no claim named it" is a conclusion drawn from
+    the payloads that were read. A claim whose payload fails to read is
+    not evidence of anything -- least of all that its process is
+    unleased -- and the pgid it would have contributed to the exclusion
+    list cannot be recovered by any other means, because the payload is
+    the only place a claim records its pgid.
+
+    So a failed read disarms the sweep for the whole pass, rather than
+    quietly shrinking the exclusion list underneath it. Compare the two
+    directions of being wrong, as the KILL rule itself does:
+
+      * Sweep anyway. A live, correctly-leased gate belonging to this
+        host is SIGKILLed by group because a transient ls-remote blip
+        made its claim unreadable. An hour of CPU, and the branch's
+        lease is still held by a claim whose worker no longer exists.
+      * Skip the sweep. Genuinely unleased work keeps running until the
+        next daemon start. That is the state the host was already in one
+        second earlier, and the lost-lease kill in `reconcile_once` plus
+        the next start's sweep both still reach it.
+
+    The second is recoverable and the first is not, so this fails closed.
+    `res.unreadable` and `res.sweep_skipped` record that it happened, and
+    it is logged at the same volume as a kill would have been -- a
+    suppressed sweep must never be silent.
+
+    (`payload is None` is a different answer and keeps its own path: that
+    is `fleetlib.Hub.read` reporting the ref genuinely ABSENT -- deleted
+    between the list and the read -- which is a real "no claim" and
+    carries no pgid to protect. It is trustworthy only because `read`
+    raises rather than returning None on transport failure; see
+    `fleetlib`'s `_ABSENT_REF_HINT` and `test_fleetlib.py`'s
+    `TestFetchFailureClassification`.)
     """
     res = AdoptionResult()
     live = pgid_probe()
@@ -926,10 +984,16 @@ def adopt_workers(
             try:
                 payload = hub.read(ref)
             except HubError as e:
+                # We do not know this claim's pgid and never will on this
+                # pass. Record it so the sweep below disarms itself --
+                # dropping through to the sweep with a short exclusion
+                # list is how a live claimed gate gets killed for a
+                # network blip. See the docstring.
                 res.skipped.append((ref, f"unreadable: {e}"))
+                res.unreadable.append((ref, str(e)))
                 continue
             if payload is None:
-                continue  # deleted between list and read
+                continue  # deleted between list and read (a real absence)
 
             pgid = payload.get("pgid")
             pgid = pgid if isinstance(pgid, int) else None
@@ -986,6 +1050,22 @@ def adopt_workers(
             )
             adopted_pgids.add(pgid)
             res.adopted.append((kind, c.key, pgid))
+
+    if res.unreadable:
+        # FAIL CLOSED. The exclusion list is knowably incomplete, so the
+        # sweep has no basis for calling anything an orphan. Loudly:
+        # a sweep that silently does not run looks exactly like a host
+        # with no orphans on it.
+        refs = ", ".join(ref for ref, _ in res.unreadable)
+        res.sweep_skipped = f"{len(res.unreadable)} claim(s) unreadable: {refs}"
+        print(
+            f"fleetd[{host}] ORPHAN SWEEP SKIPPED -- {res.sweep_skipped}. "
+            f"An unreadable claim is not an unowned one: its pgid cannot be "
+            f"excluded, so nothing is killed this pass.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return res
 
     for pgid, command in sorted(worker_probe(markers).items()):
         if pgid in adopted_pgids or pgid in claimed_pgids:
@@ -1203,25 +1283,60 @@ def reconcile_once(
     and killed ones) and returns what changed. Over-target and disabled
     both DRAIN (stop starting) and never kill, per FLEET.md M2 -- the one
     worker this step does kill is one whose lease was lost, for the
-    reasons argued inline below."""
+    reasons argued inline below.
+
+    ORDER OF WORK, and why it is this order:
+
+      1. REAP + LOST-LEASE KILL. Purely local -- an in-memory `lost` flag
+         set by the renewer thread, and a `ps` listing. No hub read stands
+         in front of it.
+      2. HUB READS, each guarded on its own.
+      3. STARTS, which need (2) to have succeeded to mean anything.
+
+    Steps 1 and 2 used to be the other way round, and the inversion was
+    the bug. `hub.read(DESIRED_REF)` and `hub.read(TIP_SIGNAL_REF)` sat
+    unguarded at the top of this function, so a hub that could not be read
+    raised out of the step before the kill loop was ever reached. That is
+    not an unlucky ordering, it is exactly backwards: a lease goes LOST
+    because its renewal push failed, and renewals fail for the same reason
+    the reads do. The one condition under which stop-work matters most was
+    the one condition under which stop-work did not run.
+
+    The cost was bounded but real. `main` tolerates
+    `RECONCILE_HUB_FAILURE_LIMIT` consecutive failed steps before exiting
+    nonzero, so an unleased gate kept running for ~5 loops -- over a
+    minute at the 15s interval -- while another host, seeing an expired
+    claim, was free to reap it and start the same branch. Two gates on one
+    branch is the duplicate-merge hazard argued at the KILL comment below,
+    and it is not retryable after the fact.
+
+    Nothing here swallows a hub failure. Each read degrades ITS OWN
+    concern (an unreadable `desired` means "start nothing", not "the host
+    is disabled"), the step still RAISES at the end, and `main`'s bounded
+    counter still trips -- a daemon that cannot reach its hub must
+    surface. What changed is only that the local safety work is complete
+    before that happens, and `workers` is mutated in place, so the kill
+    survives the raise.
+    """
     res = ReconcileResult()
 
-    desired_doc = hub.read(DESIRED_REF) or {}
-    my_desired = (desired_doc.get("hosts") or {}).get(host) or {}
-    limits = desired_doc.get("limits") or {}
-    want_gates = int(my_desired.get("gates") or 0)
-    enabled = bool(my_desired.get("enabled", False))
-
-    tip_sig = hub.read(TIP_SIGNAL_REF) or {}
-    res.tip_generation = tip_sig.get("generation")
-
-    # Reap finished/dead workers. A worker whose process group is gone
-    # releases its claim here; a crashed fleetd's claims expire on their
-    # own (LEASE_TTL) and are reaped by any host via claim.reap_expired.
+    # ---- (1) LOCAL FIRST. No hub call precedes this loop. ------------ #
+    # Reap finished/dead workers, and kill any worker whose lease is lost.
+    # A worker whose process group is gone releases its claim here; a
+    # crashed fleetd's claims expire on their own (LEASE_TTL) and are
+    # reaped by any host via claim.reap_expired.
     pgids = pgid_probe()
     for w in list(workers):
         if not w.alive(pgids):
-            w.claim.release()
+            # Best-effort: an undeleted claim expires on its TTL, but a
+            # worker left in `workers` because the release raised would
+            # hold a slot until restart -- and would take the rest of this
+            # loop, including other workers' lost-lease kills, with it.
+            try:
+                w.claim.release()
+            except HubError as e:
+                print(f"fleetd[{host}] claim release failed for finished worker "
+                      f"{w.tag} (expires on TTL): {e}", file=sys.stderr, flush=True)
             workers.remove(w)
             res.finished.append(w.tag)
             if w.kind == "agent":
@@ -1266,6 +1381,11 @@ def reconcile_once(
             # retryable and not detectable after the fact. The safe
             # direction is the kill, and it is safe only because it is
             # the group (M8): cargo and rustc children go with it.
+            #
+            # Every input to this decision is LOCAL: `w.claim.lost` is an
+            # in-memory flag the renewer thread set, and `pgids` came from
+            # `ps`. Nothing here needs the hub, which is the whole reason
+            # this loop now runs before the reads -- see the docstring.
             reason = w.claim.lost_reason or "renewal failed (no reason recorded)"
             outcome = kill_worker(w)
             workers.remove(w)
@@ -1278,9 +1398,52 @@ def reconcile_once(
                 flush=True,
             )
 
+    # ---- (2) HUB READS, each guarded on its own. --------------------- #
+    # Independently, so that one unreadable ref degrades one concern. The
+    # failures are collected and re-raised at the end of the step rather
+    # than swallowed: `main` counts consecutive `HubError`s and exits
+    # nonzero at RECONCILE_HUB_FAILURE_LIMIT, and a daemon that quietly
+    # reported success while reaching nothing would be the worse bug (see
+    # `test_fleetd.py`'s TestMainLoopSurvivesHubErrors, which argues both
+    # directions). `workers` is mutated in place, so everything step (1)
+    # decided survives that raise.
+    hub_failures: list = []
+    desired_readable = True
+
+    try:
+        desired_doc = hub.read(DESIRED_REF) or {}
+    except HubError as e:
+        # NOT the same as `enabled: false`. "The operator turned this host
+        # off" and "we could not ask" are different facts, and recording
+        # the second as the first would have `fleet status` report a
+        # deliberate stand-down during a network outage. Either way
+        # nothing starts -- an unread target is never a licence to spawn.
+        hub_failures.append((DESIRED_REF, e))
+        desired_readable = False
+        desired_doc = {}
+        res.refused.append(("hub-unreadable", f"{DESIRED_REF}: {e}"))
+    my_desired = (desired_doc.get("hosts") or {}).get(host) or {}
+    limits = desired_doc.get("limits") or {}
+    want_gates = int(my_desired.get("gates") or 0)
+    enabled = bool(my_desired.get("enabled", False))
+
+    try:
+        tip_sig = hub.read(TIP_SIGNAL_REF) or {}
+    except HubError as e:
+        # Degrades to "generation unknown" and nothing else. This ref
+        # feeds a heartbeat field, so its failure must not cost the
+        # starts below -- that is what "each read degrades its own
+        # concern" buys.
+        hub_failures.append((TIP_SIGNAL_REF, e))
+        tip_sig = {}
+        res.refused.append(("hub-unreadable", f"{TIP_SIGNAL_REF}: {e}"))
+    res.tip_generation = tip_sig.get("generation")
+
     running = len([w for w in workers if w.kind == "gate"])
 
-    if not enabled:
+    if not desired_readable:
+        pass  # already recorded as hub-unreadable; nothing to start
+    elif not enabled:
         if running == 0:
             pass  # fully drained
         res.refused.append(("disabled", my_desired.get("reason") or ""))
@@ -1372,7 +1535,34 @@ def reconcile_once(
         "killed_this_loop": len(res.killed),
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    res.heartbeat_written = write_heartbeat(hub, host, hb)
+    if any(isinstance(err, HubUnreachableError) for _, err in hub_failures):
+        # The transport is already known to be down. `write_heartbeat`'s
+        # ladder would spend PUSH_RETRIES * PUSH_BACKOFF_S (~24s) finding
+        # that out again -- on a loop whose most urgent job right now is
+        # to come back in 15s and kill any further lost leases. Before the
+        # reorder above this was moot: the step raised at the first read
+        # and never got here. Skipping keeps that latency, and
+        # `heartbeat_written` stays False, which is the truth.
+        res.heartbeat_written = False
+    else:
+        res.heartbeat_written = write_heartbeat(hub, host, hb)
+
+    if hub_failures:
+        # The step did every local thing it could -- reaped, killed lost
+        # leases, wrote what heartbeat it could -- and now says so. The
+        # raise is the point: `main` counts these, and five consecutive
+        # ones exit the daemon nonzero for a supervisor to notice. What
+        # the reorder changed is that stop-work no longer waits on it.
+        detail = "; ".join(f"{ref}: {err}" for ref, err in hub_failures)
+        # Keep the narrower type when every failure was one: `main` only
+        # needs `HubError`, but a caller (or a log reader) that can tell
+        # "the hub is unreachable" from "a payload is malformed" should
+        # not lose that because the two reads were bundled.
+        cls = (HubUnreachableError
+               if all(isinstance(err, HubUnreachableError) for _, err in hub_failures)
+               else HubError)
+        raise cls(f"reconcile step could not read {len(hub_failures)} hub ref(s): {detail}")
+
     return res
 
 

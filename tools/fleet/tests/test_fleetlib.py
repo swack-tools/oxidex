@@ -448,6 +448,138 @@ class TestReadIsCoherentUnderConcurrentWrites(FleetlibTestCase):
                       "the error must name the sha actually read, not '<unresolved>'")
 
 
+class TestFetchFailureClassification(FleetlibTestCase):
+    """The second half of the absent/unreachable promise: what `_read`
+    does when the `ls-remote` SUCCEEDS and the `fetch` then fails.
+
+    THE GAP THIS CLOSES. `TestReadIsCoherentUnderConcurrentWrites` covers
+    the ref MOVING and the ref being DELETED inside that window. Nothing
+    covered the third thing that can happen there -- the TRANSPORT dying
+    between the two commands -- and the code classified it like this:
+
+        if "couldn't find remote ref" in low or "not found" in low:
+            return None, None                      # absent
+        raise HubUnreachableError(...)
+
+    `fatal: repository 'ssh://hub/oxidex.git' not found` -- git's wording
+    for the hub itself being gone -- contains "not found". So the single
+    most consequential transport failure in the system returned None, and
+    None from `read()` reads as "nobody has claimed this yet". Every
+    claim on the hub appeared unheld at exactly the moment the hub could
+    no longer arbitrate; `claim.acquire` invites a second host onto work
+    that is already running, which is the double-claim leases exist to
+    prevent.
+
+    The ls-remote guarding step (1) does not save this: it answers the
+    absence question for its own instant only, and the transport can die
+    after it returns. This branch is the only place a fetch failure is
+    ever classified.
+
+    NAME THE INSTRUMENT. The hub is the real fixture bare repo and the
+    `ls-remote` really succeeds against it -- only `git fetch` is
+    intercepted, on the reader's own Hub instance, and it answers with
+    git's verbatim stderr for each failure mode. `read()` is exercised
+    (not just `read_with_sha`) because `read()` is the one whose None the
+    fleet reads as absence.
+    """
+
+    REF = "refs/fleet/test/classify"
+
+    def reader_whose_fetch_fails(self, returncode: int, stderr: str) -> Hub:
+        """A Hub whose `ls-remote` is real and whose `fetch` fails with
+        `stderr`. Returns the Hub; the ref exists on the hub, so step (1)
+        resolves it and the failure lands squarely on the fetch."""
+        from fleetlib import _Result
+
+        reader = self.fresh_hub()
+        real_run = reader._run
+
+        def only_fetch_fails(args, **kw):
+            if args and args[0] == "fetch":
+                return _Result(returncode, "", stderr, list(args))
+            return real_run(args, **kw)
+
+        reader._run = only_fetch_fails
+        return reader
+
+    def setUp(self):
+        super().setUp()
+        self.assertTrue(self.hub.create(self.REF, {"holder_host": "somebody", "pgid": 111}))
+
+    def test_a_transport_failure_at_the_fetch_raises_and_is_never_absence(self):
+        """THE REGRESSION TEST. ls-remote succeeds, fetch reports the hub
+        is gone. That is unreachable, and unreachable RAISES."""
+        reader = self.reader_whose_fetch_fails(
+            128, "fatal: repository 'ssh://hub.example/oxidex.git' not found\n"
+        )
+        with self.assertRaises(HubUnreachableError) as ctx:
+            reader.read(self.REF)
+        self.assertIn("fetch of", str(ctx.exception))
+
+    def test_every_transport_class_message_raises_rather_than_returning_none(self):
+        """One test per way the transport dies, because the defect was a
+        substring match and a substring match fails per-message. Each of
+        these is git's real stderr, and not one of them means the ref is
+        absent -- the ref demonstrably exists (setUp created it).
+        """
+        messages = (
+            "fatal: repository 'ssh://hub.example/oxidex.git' not found",
+            "ssh: Could not resolve hostname hub.example: nodename nor servname provided",
+            "fatal: Could not read from remote repository.",
+            "ssh: connect to host hub.example port 2244: Connection refused",
+            "fatal: '/gone/hub.git' does not appear to be a git repository",
+            "fatal: unable to access 'https://hub.example/oxidex.git/': Could not resolve host",
+            "fatal: the remote end hung up unexpectedly",
+            "Permission denied (publickey).",
+            "fatal: early EOF",
+        )
+        for msg in messages:
+            with self.subTest(stderr=msg):
+                reader = self.reader_whose_fetch_fails(128, msg + "\n")
+                with self.assertRaises(HubUnreachableError):
+                    reader.read(self.REF)
+
+    def test_an_unrecognized_fetch_failure_fails_closed(self):
+        """Not every future git message is in the hint list. A fetch
+        failure nobody has classified must RAISE, not invent an absence:
+        returning None is a positive claim about the hub's contents, and
+        an unrecognized error is not evidence for one.
+        """
+        reader = self.reader_whose_fetch_fails(1, "fatal: something nobody has seen before\n")
+        with self.assertRaises(HubUnreachableError):
+            reader.read(self.REF)
+
+    def test_the_one_real_absence_signature_still_reads_as_absent(self):
+        """The other direction, and the reason the fix is a NARROWING
+        rather than a deletion: a ref deleted between the ls-remote and
+        the fetch is a legitimate None. `couldn't find remote ref` is the
+        only fetch stderr that means that.
+        """
+        reader = self.reader_whose_fetch_fails(
+            128, f"fatal: couldn't find remote ref {self.REF}\n"
+        )
+        self.assertIsNone(reader.read(self.REF))
+        self.assertEqual((None, None), self.reader_whose_fetch_fails(
+            128, f"fatal: couldn't find remote ref {self.REF}\n"
+        ).read_with_sha(self.REF))
+
+    def test_a_message_carrying_both_signatures_is_classified_as_transport(self):
+        """ORDER, stated as a test. `fatal: repository '<url>' not found`
+        already proves the ordering matters for the two words "not found";
+        this pins the general rule for any message that carries a
+        transport hint AND the absence phrase. Transport wins: calling an
+        unreachable hub "empty" is the expensive direction of being wrong,
+        and only one of the two mistakes double-claims a branch.
+        """
+        reader = self.reader_whose_fetch_fails(
+            128,
+            "fatal: couldn't find remote ref refs/fleet/test/classify\n"
+            "fatal: Could not read from remote repository.\n",
+        )
+        with self.assertRaises(HubUnreachableError):
+            reader.read(self.REF)
+
+
 class TestList(FleetlibTestCase):
     def test_list_returns_matching_refs_only(self):
         self.hub.create("refs/fleet/claims/gate/aaa", {"k": 1})

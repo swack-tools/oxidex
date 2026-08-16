@@ -52,7 +52,7 @@ sys.path.insert(0, str(FLEET_DIR))
 import claim as claim_mod  # noqa: E402
 import fleetd  # noqa: E402
 from claim import Claim  # noqa: E402
-from fleetlib import Hub  # noqa: E402
+from fleetlib import Hub, HubError  # noqa: E402
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 GIT_ENV = {
@@ -512,6 +512,97 @@ class TestAdoptWorkers(unittest.TestCase):
         self.assertIsNotNone(self.hub.sha(ref), "the singleton must be untouched")
         self.assertEqual(self.workers, [])
         self.assertNotIn(ref, [r for r, _ in res.released])
+
+    # -- unreadable is not unowned ----------------------------------- #
+
+    def break_read_of(self, target_ref: str):
+        """Make exactly one claim ref fail to READ, the way a transient
+        ls-remote/fetch failure does. Everything else on the hub -- the
+        listing that finds the ref, every other claim -- keeps working, so
+        the sweep still runs with a listing it believes is complete."""
+        real_read = self.hub.read
+
+        def flaky(ref):
+            if ref == target_ref:
+                raise HubError(f"ls-remote {ref} failed: simulated transient failure")
+            return real_read(ref)
+
+        self.hub.read = flaky
+        self.addCleanup(lambda: setattr(self.hub, "read", real_read))
+
+    def test_a_live_claimed_worker_survives_its_claim_becoming_unreadable(self):
+        """THE REGRESSION TEST. The KILL disposition rests on the claim
+        listing being COMPLETE: a pgid is an orphan only because no claim
+        named it. A claim whose payload fails to read names nothing -- the
+        payload is the only place a claim records its pgid -- so the
+        exclusion list silently lost an entry and the sweep killed a live,
+        correctly-leased gate because of a network blip.
+
+        `adopt_workers`' own docstring promised the opposite: "a claim we
+        decline to adopt still protects its process from being swept".
+        That was only true on the path where the payload READ.
+        """
+        p = self.spawn_stub_worker()
+        ref = self.make_claim_on_hub("gate", "staging-one", host=HOST, pgid=p.pid)
+        self.break_read_of(ref)
+
+        res, killed = self.adopt()
+
+        self.assertEqual(killed, [], "a live, claimed gate was killed for an unreadable claim")
+        self.assertEqual(res.orphans_killed, [])
+        self.assertIsNone(p.poll(), "the claimed process must still be running")
+        self.assertIn(ref, [r for r, _ in res.unreadable])
+        self.assertIsNotNone(res.sweep_skipped,
+                             "a suppressed sweep must be recorded, not silent")
+
+    def test_the_whole_sweep_disarms_not_just_the_unreadable_claims_pgid(self):
+        """Fail CLOSED, and closed means the whole pass. An unreadable
+        claim's pgid cannot be recovered by any means -- so there is no
+        way to tell a genuine orphan from the process that claim was
+        protecting, and no basis for killing either. Skipping is
+        recoverable (the work runs on until the next start); killing is
+        not.
+        """
+        protected = self.spawn_stub_worker()
+        genuine_orphan = self.spawn_stub_worker()
+        ref = self.make_claim_on_hub("gate", "staging-one", host=HOST, pgid=protected.pid)
+        self.break_read_of(ref)
+
+        res, killed = self.adopt()
+
+        self.assertEqual(killed, [], f"nothing may be swept on an incomplete listing: {res}")
+        self.assertIsNone(genuine_orphan.poll())
+        self.assertIsNone(protected.poll())
+
+    def test_a_genuinely_absent_claim_still_leaves_the_sweep_armed(self):
+        """The other direction, and the reason this is not just "never
+        sweep". A ref DELETED between the listing and the read is a real
+        absence -- `hub.read` returning None -- not a failure, so it
+        withdraws no protection and the sweep proceeds.
+
+        That None is trustworthy only because `fleetlib.Hub.read` RAISES
+        rather than returning None on a transport failure; see
+        `test_fleetlib.py`'s `TestFetchFailureClassification`. The two
+        fixes hold this test up together.
+        """
+        orphan = self.spawn_stub_worker()
+        ref = self.make_claim_on_hub("gate", "staging-one", host=HOST, pgid=orphan.pid)
+        real_read = self.hub.read
+
+        def deleted_between_list_and_read(r):
+            if r == ref:
+                return None  # what read() reports for a ref that is gone
+            return real_read(r)
+
+        self.hub.read = deleted_between_list_and_read
+        self.addCleanup(lambda: setattr(self.hub, "read", real_read))
+
+        res, killed = self.adopt()
+
+        self.assertEqual(res.unreadable, [], "an absent ref is not an unreadable one")
+        self.assertIsNone(res.sweep_skipped, "a real absence must not disarm the sweep")
+        self.assertEqual(killed, [orphan.pid],
+                         f"an unleased worker must still be swept: {res}")
 
 
 # --------------------------------------------------------------------- #
