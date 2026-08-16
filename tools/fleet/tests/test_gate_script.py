@@ -33,6 +33,25 @@ POLICY comment above `GATE_VERSION` in gate.sh). This file gives R7 teeth:
      oracle-gated tests, and for the same reason: faking the oracle here
      would test nothing about whether R7's stage actually runs.
 
+BLOCKER A adds the isolation-retry half (see gate.sh's own header comment
+for the measurement that motivated it -- ~25% of whole-stage runs red on a
+clean tree, on modules that pass 10/10 alone):
+
+  4. `TestFleetTestsFailedModuleParsing` -- cheap, no subprocess:
+     `_fleet_tests_failed_modules()` extracted from the real script text
+     and fed literal unittest output, including the shapes that must NOT
+     parse (a py_compile traceback, an import-time loader error). Wrong in
+     the permissive direction, an unparseable red stage gets retried into
+     a "flake"; wrong in the strict direction, there is merely no retry.
+     This pins both directions.
+  5. `TestFleetTestsFlakeRetry` -- expensive, same REAL-gate.sh harness as
+     (3): fixture modules red together and green alone (one leaks an env
+     var at import -- the measured interference shape), proving the stage
+     passes and the verdict records the flake; a module red both times,
+     proving FAIL and never ABORT; a mixed pair, proving a partial
+     recovery is still FAIL and records NO flakes; and a clean run,
+     proving `fleet_tests_flakes` is absent rather than empty.
+
 Run with:
     python3 -m unittest discover -s tools/fleet/tests -v
 """
@@ -165,6 +184,107 @@ class TestFleetTestModulesExcludeSeams(unittest.TestCase):
         )
 
 
+class TestFleetTestsFailedModuleParsing(unittest.TestCase):
+    """BLOCKER A: `_fleet_tests_failed_modules()` decides whether a red
+    fleet-tests stage is even a candidate for the isolation retry, so it is
+    the hinge of the whole policy. Extracted verbatim from the real script
+    text and fed literal unittest output -- the two measured flake shapes
+    (a plain FAIL and a tearDown ERROR), both the pre-3.11 and 3.11+ header
+    spellings, and the shapes that MUST yield nothing.
+    """
+
+    def _parse(self, text: str) -> list:
+        source = GATE_SH.read_text(encoding="utf-8")
+        func_src = _extract_shell_function(source, "_fleet_tests_failed_modules")
+        tmp = Path(tempfile.mkdtemp(prefix="fleet-failed-mods-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        out = tmp / "out.txt"
+        out.write_text(text)
+        script = f'{func_src}\n_fleet_tests_failed_modules "$1"\n'
+        result = subprocess.run(
+            ["bash", "-c", script, "bash", str(out)],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        return [line for line in result.stdout.splitlines() if line]
+
+    def test_the_two_measured_flake_shapes_parse_to_their_modules(self):
+        # Left column verbatim from the observed runs: a plain assertion
+        # failure in one module, an OSError raised out of another module's
+        # tearDown (which unittest reports as ERROR, not FAIL).
+        text = (
+            "FAIL: test_host_singleton_stays_live_past_its_ttl_and_is_released_on_exit "
+            "(test_lease_protocol.TestFleetdSingletonRenews."
+            "test_host_singleton_stays_live_past_its_ttl_and_is_released_on_exit)\n"
+            "ERROR: test_restart_adopts (test_adoption.TestRestartAdoption.test_restart_adopts)\n"
+        )
+        self.assertEqual(
+            self._parse(text), ["test_adoption", "test_lease_protocol"],
+            "both shapes must resolve to their MODULE, sorted and deduped",
+        )
+
+    def test_pre_311_header_shape_still_parses(self):
+        """Python < 3.11 prints `(<module>.<Class>)` with no trailing test
+        name. Fleet hosts are not all on the same interpreter, and a parser
+        that only understood one spelling would silently stop retrying on
+        the other -- i.e. it would regress to today's false FAILs on
+        exactly the hosts nobody was looking at."""
+        self.assertEqual(
+            self._parse("FAIL: test_x (test_lease_protocol.TestFleetdSingletonRenews)\n"),
+            ["test_lease_protocol"],
+        )
+
+    def test_duplicate_failures_in_one_module_collapse_to_one_name(self):
+        text = (
+            "FAIL: test_a (test_adoption.TestOne.test_a)\n"
+            "FAIL: test_b (test_adoption.TestTwo.test_b)\n"
+        )
+        self.assertEqual(self._parse(text), ["test_adoption"])
+
+    def test_unparseable_red_output_yields_no_modules(self):
+        """The safety direction. A py_compile syntax error, a bare
+        traceback, or a crash with no FAIL:/ERROR: header at all must
+        produce an EMPTY list, which gate.sh treats as 'not retryable' and
+        fails on -- silence must never be read as a flake."""
+        text = (
+            'File "tools/fleet/claim.py", line 3\n'
+            "    def broken(\n"
+            "SyntaxError: unexpected EOF while parsing\n"
+            "Traceback (most recent call last):\n"
+            "Segmentation fault\n"
+        )
+        self.assertEqual(self._parse(text), [])
+
+    def test_import_time_loader_error_does_not_name_a_real_module(self):
+        """An import-time failure is reported against
+        `unittest.loader._FailedTest`, so the parse yields the literal
+        name `unittest` -- which is NOT in `_fleet_test_modules()`'s list,
+        and gate.sh's known-module guard refuses to retry it. Pinned here
+        because it is the one case where the parser produces a name that
+        looks plausible and must still not be retried."""
+        text = (
+            "ERROR: test_zz_fixture (unittest.loader._FailedTest.test_zz_fixture)\n"
+        )
+        self.assertEqual(self._parse(text), ["unittest"])
+        self.assertNotIn(
+            "unittest", _real_fleet_test_modules(),
+            "the known-module guard is what makes this safe; it only works "
+            "because 'unittest' can never be one of the stage's own modules",
+        )
+
+
+def _real_fleet_test_modules() -> list:
+    """`_fleet_test_modules()` from the real gate.sh, run against the real
+    repo root -- the list the known-module guard checks against."""
+    source = GATE_SH.read_text(encoding="utf-8")
+    func_src = _extract_shell_function(source, "_fleet_test_modules")
+    result = subprocess.run(
+        ["bash", "-c", f"{func_src}\n_fleet_test_modules\n"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
+    )
+    return [line for line in result.stdout.splitlines() if line]
+
+
 def _build_fixture_hub(tmp: Path, staging_files: dict, branch: str) -> Path:
     """A bare git hub under `tmp` (which must itself live under
     tempfile.gettempdir()) with:
@@ -227,13 +347,12 @@ def _build_fake_bin(tmp: Path) -> Path:
     return fakebin
 
 
-class TestFleetTestsStageHasTeeth(unittest.TestCase):
-    """Runs the real `tools/fleet/gate.sh` against fixture hubs, proving
-    BLOCKER 6 (ii) and (iii): the fleet-tests stage exists in the actual
-    script (not merely described in a comment), a red suite there yields
-    FAIL and never ABORT, and a hang there is bounded by
-    FLEET_TESTS_TIMEOUT_S and also yields FAIL (stage
-    "fleet-tests-timeout"), never a wedge.
+class _RealGateHarness:
+    """The shared machinery for running the REAL `tools/fleet/gate.sh` as a
+    subprocess against a fixture hub. A mixin rather than a base TestCase
+    on purpose: subclassing a TestCase would make every subclass re-run the
+    parent's own (expensive, real-gate) test methods a second time, and
+    each of those is a full git clone + merge + oracle probe.
     """
 
     @classmethod
@@ -283,6 +402,16 @@ class TestFleetTestsStageHasTeeth(unittest.TestCase):
             "json": json.loads(json_path.read_text()) if json_path.exists() else None,
             "log": log_path.read_text(errors="replace") if log_path.exists() else "",
         }
+
+
+class TestFleetTestsStageHasTeeth(_RealGateHarness, unittest.TestCase):
+    """Runs the real `tools/fleet/gate.sh` against fixture hubs, proving
+    BLOCKER 6 (ii) and (iii): the fleet-tests stage exists in the actual
+    script (not merely described in a comment), a red suite there yields
+    FAIL and never ABORT, and a hang there is bounded by
+    FLEET_TESTS_TIMEOUT_S and also yields FAIL (stage
+    "fleet-tests-timeout"), never a wedge.
+    """
 
     def test_a_red_fleet_tests_suite_yields_fail_not_abort(self):
         """BLOCKER 6 (ii): a fixture branch whose only fleet-test asserts
@@ -410,6 +539,188 @@ class TestFleetTestsStageHasTeeth(unittest.TestCase):
         # The real, expected reason this fixture run fails: cargo is
         # stubbed, so no oxidex binary was ever produced.
         self.assertEqual(res["json"]["stage"], "no-binary")
+
+
+# --------------------------------------------------------------------- #
+# BLOCKER A: the isolation retry
+# --------------------------------------------------------------------- #
+
+# The interference is real, not simulated with a random number: one fixture
+# module writes an env var AT IMPORT TIME and never cleans it up, and the
+# other asserts that var is absent. Run together in one python process the
+# second is red; run alone in a fresh process it is green -- which is
+# precisely the "env leakage between modules" shape the clean-tree
+# measurement turned up, reduced to two files. Nothing here is timing- or
+# load-dependent, so these tests are deterministic in both directions.
+_FIXTURE_LEAKER = (
+    "import os, unittest\n"
+    "os.environ['FLEET_GATE_FIXTURE_LEAK'] = '1'  # at IMPORT, never cleaned up\n"
+    "class TestFixtureLeaker(unittest.TestCase):\n"
+    "    def test_ok(self):\n"
+    "        self.assertTrue(True)\n"
+)
+
+_FIXTURE_FLAKY = (
+    "import os, unittest\n"
+    "class TestFixtureFlaky(unittest.TestCase):\n"
+    "    def test_needs_a_clean_env(self):\n"
+    "        if os.environ.get('FLEET_GATE_FIXTURE_LEAK'):\n"
+    "            self.fail('fixture: another module leaked FLEET_GATE_FIXTURE_LEAK')\n"
+)
+
+_FIXTURE_ALWAYS_RED = (
+    "import unittest\n"
+    "class TestFixtureAlwaysRed(unittest.TestCase):\n"
+    "    def test_always_fails(self):\n"
+    "        self.fail('fixture: fails alone too')\n"
+)
+
+_FIXTURE_ALWAYS_GREEN = (
+    "import unittest\n"
+    "class TestFixtureAlwaysGreen(unittest.TestCase):\n"
+    "    def test_ok(self):\n"
+    "        self.assertTrue(True)\n"
+)
+
+
+class TestFleetTestsFlakeRetry(_RealGateHarness, unittest.TestCase):
+    """BLOCKER A, end-to-end against the REAL gate.sh (shares the fixture
+    hub / stubbed-cargo harness above, including its oracle skip).
+
+    Measurement this exists to serve: on a clean tree the whole fleet-tests
+    stage went red on 2 of 8 runs, on two different modules, both of which
+    passed 10/10 alone (instrument: scratchpad/flakeloop.sh). That false
+    FAIL is published to the SHARED verdict cache and condemns the branch
+    fleet-wide, so the retry is a correctness fix, not a convenience.
+
+    Every case below reads the FINAL stage from the verdict JSON. Because
+    `cargo` is stubbed no oxidex binary is ever produced, so a run that
+    gets PAST fleet-tests necessarily dies later at "no-binary" -- that
+    stage name is the proof the fleet-tests stage passed, exactly as in
+    `test_seams_module_is_excluded_from_the_stage` above.
+    """
+
+    def test_module_red_in_the_stage_but_green_alone_passes_and_is_recorded(self):
+        """(i) The whole point: interference between modules must not
+        condemn a branch, and the flake must be RECORDED so burn-in can
+        measure the real rate off the shared verdict cache instead of us
+        guessing at it."""
+        branch = "staging/gate-fixture-flake"
+        hub = _build_fixture_hub(
+            self.tmp,
+            {
+                "tools/fleet/tests/test_zz_fixture_leaker.py": _FIXTURE_LEAKER,
+                "tools/fleet/tests/test_zz_fixture_flaky.py": _FIXTURE_FLAKY,
+            },
+            branch,
+        )
+
+        res = self._run_gate(branch, hub, "flake")
+
+        self.assertIsNotNone(res["json"], f"gate never wrote a verdict; log:\n{res['log'][-3000:]}")
+        # The stage really did go red first -- otherwise this test proves
+        # nothing about the retry, only that two green modules stay green.
+        self.assertIn(
+            "fixture: another module leaked FLEET_GATE_FIXTURE_LEAK", res["log"],
+            "the fixture flake never actually fired; the retry was never exercised",
+        )
+        self.assertNotEqual(
+            res["json"]["stage"], "fleet-tests",
+            f"a module that passes ALONE must not fail the stage. log tail:\n{res['log'][-3000:]}",
+        )
+        self.assertNotEqual(res["json"]["stage"], "fleet-tests-timeout")
+        self.assertEqual(res["json"]["stage"], "no-binary",
+                         "the run must proceed past fleet-tests and die at the stubbed build")
+
+        flakes = res["json"].get("fleet_tests_flakes")
+        self.assertIsNotNone(
+            flakes,
+            f"the verdict must record the flake; json was {res['json']}",
+        )
+        self.assertEqual([f["module"] for f in flakes], ["test_zz_fixture_flaky"])
+        self.assertIn("FAIL", flakes[0]["failure"])
+        self.assertIn("test_zz_fixture_flaky", flakes[0]["failure"])
+        # And the retry is visible in the log as one round, not a loop.
+        self.assertIn("PASSED alone -- recorded as a flake", res["log"])
+        self.assertEqual(
+            res["log"].count("--- fleet-tests isolation re-run: test_zz_fixture_flaky"), 1,
+            "exactly ONE isolation round is allowed",
+        )
+
+    def test_module_red_alone_too_is_a_genuine_fail_not_an_abort(self):
+        """(ii) The retry must not become a way to launder a real failure.
+        A module that fails in isolation as well is the same FAIL it was
+        before BLOCKER A -- and still never an ABORT, which would schedule
+        a non-damning retry for genuinely broken coordination code."""
+        branch = "staging/gate-fixture-hardred"
+        hub = _build_fixture_hub(
+            self.tmp,
+            {"tools/fleet/tests/test_zz_fixture_hard.py": _FIXTURE_ALWAYS_RED},
+            branch,
+        )
+
+        res = self._run_gate(branch, hub, "hardred")
+
+        self.assertEqual(res["rc"], 1)
+        self.assertEqual(res["verdict"], "FAIL fleet-tests\n", f"log tail:\n{res['log'][-3000:]}")
+        self.assertEqual(res["json"]["result"], "FAIL")
+        self.assertEqual(res["json"]["stage"], "fleet-tests")
+        self.assertNotEqual(res["json"]["result"], "ABORT")
+        self.assertNotIn("fleet_tests_flakes", res["json"],
+                         "a genuine failure must publish no flake telemetry")
+        # The retry was attempted and reported -- proving the FAIL came out
+        # of the new path, not out of a code path that skipped it.
+        self.assertIn("FAILED alone too -- genuine failure", res["log"])
+
+    def test_one_module_recovers_and_one_does_not_is_still_a_fail(self):
+        """(iii) Partial recovery is a FAIL. A run that is red for a real
+        reason must also publish NO flakes: mixing genuine failures into
+        the flake record would dilute exactly the rate this field exists to
+        measure."""
+        branch = "staging/gate-fixture-mixed"
+        hub = _build_fixture_hub(
+            self.tmp,
+            {
+                "tools/fleet/tests/test_zz_fixture_leaker.py": _FIXTURE_LEAKER,
+                "tools/fleet/tests/test_zz_fixture_flaky.py": _FIXTURE_FLAKY,
+                "tools/fleet/tests/test_zz_fixture_hard.py": _FIXTURE_ALWAYS_RED,
+            },
+            branch,
+        )
+
+        res = self._run_gate(branch, hub, "mixed")
+
+        self.assertEqual(res["verdict"], "FAIL fleet-tests\n", f"log tail:\n{res['log'][-3000:]}")
+        self.assertEqual(res["json"]["result"], "FAIL")
+        self.assertEqual(res["json"]["stage"], "fleet-tests")
+        self.assertNotIn("fleet_tests_flakes", res["json"])
+        # Both modules were named as candidates, the recovering one was
+        # re-run first (sorted), and the stubborn one still sank the stage.
+        self.assertIn("test_zz_fixture_flaky", res["log"])
+        self.assertIn("test_zz_fixture_hard", res["log"])
+        self.assertIn("FAILED alone too -- genuine failure", res["log"])
+
+    def test_clean_stage_records_no_flake_field_at_all(self):
+        """(iv) Absent, not empty. `write_json` runs on every path
+        (low-disk, clone, merge-conflict, ...) long before fleet-tests, so
+        an always-present `[]` would be indistinguishable from 'this gate
+        version does not record flakes' -- and burn-in's denominator would
+        quietly include runs that never reached the stage."""
+        branch = "staging/gate-fixture-clean"
+        hub = _build_fixture_hub(
+            self.tmp,
+            {"tools/fleet/tests/test_zz_fixture_green.py": _FIXTURE_ALWAYS_GREEN},
+            branch,
+        )
+
+        res = self._run_gate(branch, hub, "clean")
+
+        self.assertIsNotNone(res["json"], f"gate never wrote a verdict; log:\n{res['log'][-3000:]}")
+        self.assertEqual(res["json"]["stage"], "no-binary",
+                         f"fleet-tests must be clean here. log tail:\n{res['log'][-3000:]}")
+        self.assertNotIn("fleet_tests_flakes", res["json"])
+        self.assertNotIn("isolation re-run", res["log"],
+                         "no retry may run when nothing went red")
 
 
 if __name__ == "__main__":
