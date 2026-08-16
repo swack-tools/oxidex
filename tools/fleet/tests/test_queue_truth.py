@@ -29,6 +29,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -39,10 +40,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cli  # noqa: E402
+import dispatch  # noqa: E402
 import fleetd  # noqa: E402
 import verdict  # noqa: E402
-from claim import Claim  # noqa: E402
-from fleetlib import Hub  # noqa: E402
+from claim import Claim, compute_platform_id  # noqa: E402
+from fleetlib import Hub, HubUnreachableError  # noqa: E402
 from test_fleetd import FleetdBase, HUB_TIP_REF  # noqa: E402
 from test_queue import QueueTestCase  # noqa: E402
 from workqueue import Queue  # noqa: E402
@@ -212,7 +214,11 @@ def _write_gatelog(
     (log_dir / f"gate-{tag}.json").write_text(json.dumps(payload))
 
 
-class TestVerdictAwareSelection(FleetdBase):
+class VerdictSelectionBase(FleetdBase):
+    """Fixture plumbing shared by every verdict-aware-selection case: the
+    real merge tree `gate.sh` would key a verdict on, a force-push, and a
+    peer's verdict in the shared cache."""
+
     def setUp(self):
         super().setUp()
         self.repo_root = Path(__file__).resolve().parents[3]
@@ -222,7 +228,60 @@ class TestVerdictAwareSelection(FleetdBase):
         )
         self.tip_sha = self.hub.sha(HUB_TIP_REF)
         self.log_dir = self.tmp / "logs"
+        self.platform_id = compute_platform_id()
+        # Process-lifetime memo keyed on content-addressed shas: correct in
+        # production, but two fixtures built in the same second can mint the
+        # same commit sha, so clear it between tests rather than let one
+        # fixture's answer be served to another's.
+        fleetd._MERGE_TREE_MEMO.clear()
 
+    # ---- fixture helpers ------------------------------------------- #
+
+    def branch_sha(self, branch="staging/one"):
+        return self.hub.sha(f"refs/heads/{branch}")
+
+    def merge_tree(self, branch="staging/one"):
+        """The tree `gate.sh` would build and key its verdict on for this
+        branch onto the current tip. Tests that assert a verdict is or is
+        not honoured must use the REAL tree: a placeholder tree_sha is
+        exactly the stale-verdict shape the sha-keying rejects, so a test
+        written with one is testing the rejection, not the honouring."""
+        ref = f"refs/heads/{branch}"
+        self.assertTrue(dispatch._have_objects(self.hub, [HUB_TIP_REF, ref]))
+        tree = dispatch.merge_tree_sha(self.hub, self.tip_sha, self.branch_sha(branch))
+        self.assertIsNotNone(tree, "fixture must produce a clean merge tree")
+        return tree
+
+    def force_push(self, content, branch="staging/one"):
+        """Rewrite `branch` to a brand-new commit on the same tip -- what an
+        author does in response to NEEDS_AUTHOR. Returns the new sha."""
+        work = self.tmp / f"fp-{content}"
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "init", "-q", str(work)], check=True)
+        subprocess.run(["git", "-C", str(work), "fetch", "-q", str(self.bare), HUB_TIP_REF],
+                       check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "checkout", "-q", "-B", "fp", "FETCH_HEAD"],
+                       check=True, env=env)
+        (work / "g.txt").write_text(f"branch, {content}\n")
+        subprocess.run(["git", "-C", str(work), "add", "."], check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "commit", "-qm", content], check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "push", "-q", "--force", str(self.bare),
+                        f"HEAD:refs/heads/{branch}"], check=True, env=env)
+        return self.branch_sha(branch)
+
+    def store_verdict(self, result, tree_sha, *, host="other-host",
+                      gate_version=None, platform_id=None):
+        return verdict.store(self.hub, {
+            "tree_sha": tree_sha, "base_tip": self.tip_sha, "branch": "staging/one",
+            "result": result, "stage": "test",
+            "gate_version": gate_version or self.gate_version,
+            "rustc_id": "r", "platform_id": platform_id or self.platform_id,
+            "host": host, "duration_s": 1, "write_set": [],
+        })
+
+
+class TestVerdictAwareSelection(VerdictSelectionBase):
     def test_pass_memo_parks_branch_as_awaiting_train_not_offered(self):
         _write_gatelog(
             self.log_dir, "prior-pass", branch="staging/one", base_tip=self.tip_sha,
@@ -233,20 +292,24 @@ class TestVerdictAwareSelection(FleetdBase):
         self.assertEqual(
             res.started, [], f"a PASS-memoized branch must not be dispatched: {res.started}"
         )
-        self.assertIn("staging/one", res.awaiting_train)
+        self.assertIn("staging/one", fleetd.branch_names(res.awaiting_train))
         self.assertEqual(res.needs_author, [])
 
     def test_fail_memo_parks_branch_as_needs_author_not_offered(self):
+        """The local recall's FAIL is honoured -- but only against the tree
+        it actually gated, which for an unchanged branch is the tree the
+        current sha still merges to."""
         _write_gatelog(
             self.log_dir, "prior-fail", branch="staging/one", base_tip=self.tip_sha,
             result=verdict.RESULT_FAIL, gate_version=self.gate_version,
+            tree_sha=self.merge_tree(),
         )
         self.set_desired(gates=1)
         res = self.reconcile()
         self.assertEqual(
             res.started, [], f"a FAIL-memoized branch must not be dispatched: {res.started}"
         )
-        self.assertIn("staging/one", res.needs_author)
+        self.assertIn("staging/one", fleetd.branch_names(res.needs_author))
         self.assertEqual(res.awaiting_train, [])
 
     def test_abort_memo_still_offers_the_branch(self):
@@ -275,32 +338,25 @@ class TestVerdictAwareSelection(FleetdBase):
         self.assertEqual(res.awaiting_train, [])
 
     def test_shared_cache_confirms_and_overrides_a_stale_local_pass(self):
-        """A local gatelogs JSON says PASS for this exact tree, but the
-        SHARED verdict cache holds a FAIL for that identical
+        """A local gatelogs JSON says PASS for this branch's real merge
+        tree, but the SHARED verdict cache holds a FAIL at that identical
         (tree_sha, gate_version, platform_id) key -- e.g. another host's
-        more complete run. classify_branch must prefer the hub's answer
-        over the stale local recall."""
-        tree_sha = "a" * 40
-        platform_id = "plat-shared"
+        more complete run. The hub's answer must win over the local
+        recall."""
+        tree_sha = self.merge_tree()
         _write_gatelog(
             self.log_dir, "prior-pass-stale", branch="staging/one", base_tip=self.tip_sha,
             result=verdict.RESULT_PASS, gate_version=self.gate_version,
-            tree_sha=tree_sha, platform_id=platform_id,
+            tree_sha=tree_sha, platform_id=self.platform_id,
         )
-        stored = verdict.store(self.hub, {
-            "tree_sha": tree_sha, "base_tip": self.tip_sha, "branch": "staging/one",
-            "result": verdict.RESULT_FAIL, "stage": "test", "gate_version": self.gate_version,
-            "rustc_id": "r", "platform_id": platform_id, "host": "other-host",
-            "duration_s": 1, "write_set": [],
-        })
-        self.assertEqual(stored, "created")
+        self.assertEqual(self.store_verdict(verdict.RESULT_FAIL, tree_sha), "created")
 
         self.set_desired(gates=1)
         res = self.reconcile()
         self.assertEqual(
             res.started, [], f"the shared hub FAIL must win over the stale local PASS: {res.started}"
         )
-        self.assertIn("staging/one", res.needs_author)
+        self.assertIn("staging/one", fleetd.branch_names(res.needs_author))
         self.assertEqual(res.awaiting_train, [])
 
     def test_no_gatelogs_at_all_is_a_no_op(self):
@@ -313,6 +369,373 @@ class TestVerdictAwareSelection(FleetdBase):
         self.assertEqual(len(res.started), 1)
         self.assertEqual(res.awaiting_train, [])
         self.assertEqual(res.needs_author, [])
+
+
+# ----------------------------------------------------------------------- #
+# R4's shared-cache clause -- hub-first selection, sha-keyed FAIL
+# ----------------------------------------------------------------------- #
+
+
+class TestHubFirstSelection(VerdictSelectionBase):
+    """(a) Gate selection asks the SHARED verdict cache directly.
+
+    The defect these pin: the selection path used to reach the hub only
+    THROUGH a `~/gatelogs` hit, so a host that had never itself gated a
+    branch never consulted the hub at all and re-bought a gate a peer had
+    already paid for and published. `dispatch.merge_tree_sha` +
+    `verdict.lookup` -- the same composition R5 already uses for agent
+    dispatch -- is all it takes to ask honestly.
+    """
+
+    def test_peer_pass_parks_the_branch_with_no_local_gatelogs_at_all(self):
+        tree = self.merge_tree()
+        sha = self.branch_sha()
+        self.assertEqual(self.store_verdict(verdict.RESULT_PASS, tree), "created")
+        self.assertFalse(self.log_dir.exists(), "this host must have no gate history")
+
+        self.set_desired(gates=1)
+        res = self.reconcile()
+        self.assertEqual(
+            res.started, [],
+            f"a peer's PASS at this host's own gate.sh cache key must stop the "
+            f"dispatch; gate.sh would re-derive that key and exit a cache hit: {res.started}",
+        )
+        self.assertEqual(res.needs_author, [])
+        self.assertEqual(len(res.awaiting_train), 1, res.awaiting_train)
+        entry = res.awaiting_train[0]
+        self.assertEqual(entry["branch"], "staging/one")
+        self.assertEqual(entry["sha"], sha)
+        self.assertEqual(entry["source"], fleetd.SOURCE_HUB)
+
+    def test_peer_fail_parks_the_branch_with_no_local_gatelogs_at_all(self):
+        self.assertEqual(self.store_verdict(verdict.RESULT_FAIL, self.merge_tree()), "created")
+        self.set_desired(gates=1)
+        res = self.reconcile()
+        self.assertEqual(res.started, [], f"a peer's FAIL must stop the dispatch: {res.started}")
+        self.assertEqual(fleetd.branch_names(res.needs_author), ["staging/one"])
+        self.assertEqual(res.needs_author[0]["source"], fleetd.SOURCE_HUB)
+
+    def test_a_verdict_from_another_platform_does_not_park(self):
+        """The key is EXACT, and deliberately so. A verdict carrying a
+        different `platform_id` would NOT short-circuit this host's
+        `gate.sh`, so gating here still buys a real, missing verdict.
+        Honouring it would collapse the two toolchain identities
+        `verdict.py`'s docstring says cost a day."""
+        self.assertEqual(
+            self.store_verdict(verdict.RESULT_PASS, self.merge_tree(),
+                               platform_id="a-different-platform"),
+            "created",
+        )
+        self.set_desired(gates=1)
+        res = self.reconcile()
+        self.assertEqual(len(res.started), 1, f"refused={res.refused}")
+        self.assertEqual(res.awaiting_train, [])
+        self.assertEqual(res.needs_author, [])
+
+    def test_a_verdict_from_another_gate_version_does_not_park(self):
+        self.assertEqual(
+            self.store_verdict(verdict.RESULT_PASS, self.merge_tree(),
+                               gate_version=f"{self.gate_version}-stale"),
+            "created",
+        )
+        self.set_desired(gates=1)
+        res = self.reconcile()
+        self.assertEqual(len(res.started), 1, f"refused={res.refused}")
+        self.assertEqual(res.awaiting_train, [])
+
+    def test_a_cached_abort_does_not_park(self):
+        """`verdict.lookup` never serves an ABORT as a settled answer, and
+        selection must inherit that: an aborted tree schedules a retry."""
+        self.assertEqual(self.store_verdict(verdict.RESULT_ABORT, self.merge_tree()), "created")
+        self.set_desired(gates=1)
+        res = self.reconcile()
+        self.assertEqual(len(res.started), 1, f"refused={res.refused}")
+        self.assertEqual(res.awaiting_train, [])
+        self.assertEqual(res.needs_author, [])
+
+    def test_an_unreachable_hub_never_blocks_dispatch(self):
+        """Fail OPEN. Refusing to gate because a probe could not answer
+        would idle the fleet for infrastructure reasons -- the mistake
+        `dispatch.economic_refusal` and `_limits_ok` both name."""
+        self.assertEqual(self.store_verdict(verdict.RESULT_PASS, self.merge_tree()), "created")
+        real_lookup = verdict.lookup
+
+        def exploding(hub, *a, **kw):
+            raise HubUnreachableError("ls-remote failed: transient")
+
+        verdict.lookup = exploding
+        try:
+            self.set_desired(gates=1)
+            res = self.reconcile()
+        finally:
+            verdict.lookup = real_lookup
+        self.assertEqual(len(res.started), 1,
+                         f"a hub hiccup must fail open, not park: refused={res.refused}")
+
+    def test_merge_tree_is_computed_once_per_candidate_and_then_memoized(self):
+        """The bound R4's clause asks for: at most one `merge-tree` per
+        candidate per loop, memoized by (branch_sha, tip_sha) so a second
+        loop over an unchanged pair costs nothing."""
+        self.assertEqual(self.store_verdict(verdict.RESULT_PASS, self.merge_tree()), "created")
+        fleetd._MERGE_TREE_MEMO.clear()
+
+        calls = []
+        real = dispatch.merge_tree_sha
+
+        def counting(hub, tip_sha, branch_sha):
+            calls.append((tip_sha, branch_sha))
+            return real(hub, tip_sha, branch_sha)
+
+        fleetd.dispatch_mod.merge_tree_sha = counting
+        try:
+            self.set_desired(gates=1)
+            first = self.reconcile()
+            second = self.reconcile()
+        finally:
+            fleetd.dispatch_mod.merge_tree_sha = real
+
+        self.assertEqual(first.started, [], f"setup: branch should be parked, not started")
+        self.assertEqual(second.started, [])
+        self.assertEqual(
+            len(calls), 1,
+            f"one candidate over two loops must cost exactly one merge-tree; got {calls}",
+        )
+
+
+    def test_a_candidate_with_no_cached_verdict_costs_no_hub_read(self):
+        """`Hub.read` is a fetch -- one ssh round trip each -- so asking
+        the cache per candidate would put a handshake on every queued
+        branch every fifteen seconds. One `ls-remote` of the verdicts
+        namespace answers "is anything cached at this key" for the whole
+        loop, and only keys that exist are then read. The branch we are
+        about to gate is by definition one with nothing cached, so it must
+        cost no read at all."""
+        reads = []
+        real_read = self.hub.read
+
+        def counting(ref):
+            reads.append(ref)
+            return real_read(ref)
+
+        self.hub.read = counting
+        try:
+            self.set_desired(gates=1)
+            res = self.reconcile()
+        finally:
+            self.hub.read = real_read
+        self.assertEqual(len(res.started), 1, f"refused={res.refused}")
+        self.assertEqual(
+            [r for r in reads if r.startswith(dispatch.VERDICTS_PREFIX)], [],
+            "an uncached candidate must not cost a verdict read",
+        )
+
+    def test_a_cached_candidate_costs_exactly_one_verdict_read(self):
+        self.assertEqual(self.store_verdict(verdict.RESULT_PASS, self.merge_tree()), "created")
+        reads = []
+        real_read = self.hub.read
+
+        def counting(ref):
+            reads.append(ref)
+            return real_read(ref)
+
+        self.hub.read = counting
+        try:
+            self.set_desired(gates=1)
+            res = self.reconcile()
+        finally:
+            self.hub.read = real_read
+        self.assertEqual(res.started, [])
+        self.assertEqual(
+            len([r for r in reads if r.startswith(dispatch.VERDICTS_PREFIX)]), 1, reads
+        )
+
+
+class TestNeedsAuthorIsNotAPermanentLockout(VerdictSelectionBase):
+    """(b) A FAIL is keyed to the SHA it was measured at.
+
+    The defect these pin: the memo was keyed `(branch, base_tip)` -- the
+    branch's NAME and the tip -- and a force-push changes neither. So the
+    one action NEEDS_AUTHOR asks the author for made no difference, and the
+    only event that could have replaced the memo was a gate of the branch,
+    which the memo itself prevented. That is a deadlock, not a delay.
+    """
+
+    def test_a_force_pushed_branch_is_offered_again_local_recall(self):
+        _write_gatelog(
+            self.log_dir, "prior-fail", branch="staging/one", base_tip=self.tip_sha,
+            result=verdict.RESULT_FAIL, gate_version=self.gate_version,
+            tree_sha=self.merge_tree(), platform_id=self.platform_id,
+        )
+        self.set_desired(gates=1)
+        before = self.reconcile()
+        self.assertEqual(fleetd.branch_names(before.needs_author), ["staging/one"],
+                         "setup: the unmoved branch must be parked first")
+
+        new_sha = self.force_push("author-fixes-it")
+        after = self.reconcile()
+        self.assertEqual(
+            fleetd.branch_names(after.needs_author), [],
+            "a force-push is the author acting; the branch must stop being condemned",
+        )
+        self.assertEqual(len(after.started), 1, f"refused={after.refused}")
+        self.assertNotEqual(new_sha, before.needs_author[0]["sha"])
+
+    def test_a_force_pushed_branch_is_offered_again_hub_verdict(self):
+        self.assertEqual(self.store_verdict(verdict.RESULT_FAIL, self.merge_tree()), "created")
+        self.set_desired(gates=1)
+        before = self.reconcile()
+        self.assertEqual(fleetd.branch_names(before.needs_author), ["staging/one"])
+
+        self.force_push("author-fixes-it")
+        after = self.reconcile()
+        self.assertEqual(after.needs_author, [],
+                         "the hub's FAIL was measured at a tree the new sha no longer produces")
+        self.assertEqual(len(after.started), 1, f"refused={after.refused}")
+
+    def test_stale_fail_tree_sha_cannot_be_reconfirmed_onto_the_new_sha(self):
+        """The reconfirmation path (`_confirm_via_shared_cache`) looks the
+        RECALLED tree up on the hub. With a stale memo entry and a matching
+        FAIL sitting in the shared cache at that OLD tree, both halves
+        agree -- and both are about a sha that is no longer on the branch.
+        Neither may resurrect the verdict."""
+        old_tree = self.merge_tree()
+        _write_gatelog(
+            self.log_dir, "prior-fail", branch="staging/one", base_tip=self.tip_sha,
+            result=verdict.RESULT_FAIL, gate_version=self.gate_version,
+            tree_sha=old_tree, platform_id=self.platform_id,
+        )
+        self.assertEqual(self.store_verdict(verdict.RESULT_FAIL, old_tree), "created")
+
+        self.set_desired(gates=1)
+        self.assertEqual(fleetd.branch_names(self.reconcile().needs_author), ["staging/one"])
+
+        self.force_push("author-fixes-it")
+        after = self.reconcile()
+        self.assertEqual(
+            after.needs_author, [],
+            "a verdict at the old tree says nothing about the new sha, from either source",
+        )
+        self.assertEqual(len(after.started), 1, f"refused={after.refused}")
+
+    def test_a_hub_override_of_a_local_pass_is_also_sha_keyed(self):
+        """The override path (local recall PASS, shared cache FAIL at that
+        same recalled tree) produces a FAIL like any other, and must be
+        held to the same proof: after a force-push the recalled tree is not
+        the tree the new sha produces, so neither half may condemn it."""
+        old_tree = self.merge_tree()
+        _write_gatelog(
+            self.log_dir, "prior-pass", branch="staging/one", base_tip=self.tip_sha,
+            result=verdict.RESULT_PASS, gate_version=self.gate_version,
+            tree_sha=old_tree, platform_id=self.platform_id,
+        )
+        self.assertEqual(self.store_verdict(verdict.RESULT_FAIL, old_tree), "created")
+        self.set_desired(gates=1)
+        self.assertEqual(fleetd.branch_names(self.reconcile().needs_author), ["staging/one"],
+                         "setup: the hub FAIL must win over the local PASS while nothing moves")
+
+        self.force_push("author-fixes-it")
+        after = self.reconcile()
+        self.assertEqual(after.needs_author, [])
+        self.assertEqual(len(after.started), 1, f"refused={after.refused}")
+
+    def test_an_unmoved_branch_stays_parked_across_loops(self):
+        """The negative control: sha-keying must not have turned the FAIL
+        memo into a no-op. Nothing moves, so nothing is re-offered."""
+        _write_gatelog(
+            self.log_dir, "prior-fail", branch="staging/one", base_tip=self.tip_sha,
+            result=verdict.RESULT_FAIL, gate_version=self.gate_version,
+            tree_sha=self.merge_tree(), platform_id=self.platform_id,
+        )
+        self.set_desired(gates=1)
+        for loop in range(3):
+            res = self.reconcile()
+            self.assertEqual(res.started, [], f"loop {loop}: {res.started}")
+            self.assertEqual(fleetd.branch_names(res.needs_author), ["staging/one"])
+
+    def test_a_stale_local_pass_still_parks_without_a_confirmable_tree(self):
+        """Asymmetry, on purpose. A PASS needs no sha proof to be SAFE: an
+        unconfirmable PASS parks a branch for one more loop and the next
+        hub-first lookup decides it properly. A FAIL condemns until a human
+        acts, so only a FAIL has to prove it is about the current sha."""
+        _write_gatelog(
+            self.log_dir, "prior-pass", branch="staging/one", base_tip=self.tip_sha,
+            result=verdict.RESULT_PASS, gate_version=self.gate_version,
+            tree_sha="d" * 40, platform_id=self.platform_id,
+        )
+        self.set_desired(gates=1)
+        res = self.reconcile()
+        self.assertEqual(res.started, [])
+        self.assertEqual(fleetd.branch_names(res.awaiting_train), ["staging/one"])
+
+
+class TestParkedBranchesCarryTheirSha(VerdictSelectionBase):
+    """(c) The heartbeat, and `fleet status`, show WHEN a parked verdict
+    was decided -- a count cannot tell an operator whether the branch it
+    counts is still the branch that was judged."""
+
+    def test_heartbeat_entries_carry_branch_sha_and_source(self):
+        sha = self.branch_sha()
+        self.assertEqual(self.store_verdict(verdict.RESULT_PASS, self.merge_tree()), "created")
+        self.set_desired(gates=1)
+        res = self.reconcile()
+        self.assertTrue(res.heartbeat_written)
+
+        hb = self.hub.read(fleetd.HOSTS_PREFIX + self.host)
+        self.assertEqual(hb["awaiting_train"], [
+            {"branch": "staging/one", "sha": sha, "source": fleetd.SOURCE_HUB}
+        ])
+
+    def test_status_renders_a_parked_table_with_the_deciding_sha(self):
+        sha = self.branch_sha()
+        self.assertEqual(self.store_verdict(verdict.RESULT_FAIL, self.merge_tree()), "created")
+        self.set_desired(gates=1)
+        self.reconcile()
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["--hub", str(self.bare), "status"])
+        out = buf.getvalue()
+        self.assertIn("PARKED", out)
+        self.assertIn("DECIDED_AT", out)
+        self.assertIn(sha[:12], out, f"the deciding sha must be visible:\n{out}")
+        self.assertIn("NEEDS_AUTH", out)
+
+        # and the per-host table above it is unchanged in shape
+        header, rows = _parse_table(out)
+        self.assertIn("NEEDS_AUTH", header)
+        matching = [r for r in rows if r and r[0] == self.host]
+        self.assertEqual(len(matching), 1, f"rows: {rows}")
+
+    def test_status_tolerates_a_legacy_heartbeat_of_bare_names(self):
+        """A mixed-version fleet has both shapes on the hub at once. The
+        older one has no sha to show, and must render rather than crash or
+        vanish from the counts."""
+        hb = {
+            "gates_running": 0, "agents_running": 0, "free_gb": 10.0, "free_mem_gb": 10.0,
+            "rustc_id": "r", "platform_id": "p", "owning_user": "t", "oracle_ok": None,
+            "gate_version": "4", "tip_generation_seen": None,
+            "awaiting_train": ["staging/legacy-a"],
+            "needs_author": ["staging/legacy-b"],
+            "killed_this_loop": 0,
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        ref = fleetd.HOSTS_PREFIX + "oldhost"
+        self.assertTrue(self.hub.create(ref, hb))
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["--hub", str(self.bare), "status"])
+        out = buf.getvalue()
+        self.assertIn("staging/legacy-a", out)
+        self.assertIn("staging/legacy-b", out)
+
+    def test_branch_names_accepts_both_shapes(self):
+        self.assertEqual(
+            fleetd.branch_names([{"branch": "a", "sha": "x", "source": "hub"}, "b", None, {}]),
+            ["a", "b"],
+        )
+        self.assertEqual(fleetd.branch_names(None), [])
+
 
 
 class TestScanGatelogsMemoUnit(unittest.TestCase):

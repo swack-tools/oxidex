@@ -709,8 +709,12 @@ class ReconcileResult:
     finished: list = field(default_factory=list)
     refused: list = field(default_factory=list)  # (reason, detail)
     killed: list = field(default_factory=list)  # (tag, reason) -- lost leases
-    awaiting_train: list = field(default_factory=list)  # branches -- PASS memo, ARCH-FIX R4
-    needs_author: list = field(default_factory=list)  # branches -- FAIL memo, ARCH-FIX R4
+    # `_decision` records -- {"branch", "sha", "source"} -- not bare names:
+    # a verdict is about the sha it was measured at, so the sha travels with
+    # it (ARCH-FIX R4's shared-cache clause). `branch_names()` recovers just
+    # the names, and tolerates the bare-string shape older fleetds wrote.
+    awaiting_train: list = field(default_factory=list)  # PASS -- ARCH-FIX R4
+    needs_author: list = field(default_factory=list)  # FAIL -- ARCH-FIX R4
     heartbeat_written: bool = False
     tip_generation: Optional[int] = None
 
@@ -722,40 +726,142 @@ class ReconcileResult:
 # Before offering a branch as gate work: a branch whose merge-onto-tip
 # already gated PASS is waiting on the train, not on another gate run; one
 # that already gated FAIL needs its author, not a retry loop paying the
-# same gate cost for the same answer. The spec's ideal is a lookup against
-# the shared verdict cache (verdict.py) keyed on the TRUE branch-onto-tip
-# merge tree -- but computing that merge just to ask the question is
-# exactly the per-loop cost this exists to avoid. The compromise:
+# same gate cost for the same answer.
 #
-#   1. `_scan_gatelogs_memo` rebuilds an in-memory recall of THIS host's
-#      own recent gate.sh runs from `~/gatelogs/gate-*.json` -- files
-#      gate.sh already writes for every run (its `write_json`, unchanged
-#      here). Local disk only, no network. Rescanned every reconcile loop,
-#      so "recall after a restart" and "stay current within one run" are
-#      the same code path, not two.
-#   2. When a memo hit names a `tree_sha` (the merge gate.sh actually
-#      built and gated), `_confirm_via_shared_cache` spends one lookup
-#      against verdict.py's real hub-backed cache for that exact tree --
-#      the genuine cross-host answer, reusing a tree this host already
-#      paid to compute rather than recomputing one pre-claim. A hub hiccup
-#      here falls back to the local recall; it must never block dispatch.
+# HUB FIRST (R4's shared-cache clause). The authority is verdict.py's
+# hub-backed cache, keyed on the TRUE branch-onto-tip merge tree, and this
+# path asks it DIRECTLY -- it does not wait to be let in by a local recall.
+# An earlier draft only reached the hub through a `~/gatelogs` hit, which
+# meant a host that had never itself gated a branch had no memo entry, so
+# it never consulted the hub at all and re-bought a 20-45 minute gate whose
+# answer a peer had already paid for and published. The primitives to do
+# better already existed and were already composed for AGENT dispatch --
+# `dispatch.merge_tree_sha` + `verdict.lookup` is exactly R5's
+# `dispatch.cached_pass` -- gate selection simply never called them.
 #
-# Keyed by (branch, base_tip), NOT (branch_sha, tip_sha): gate.sh's JSON
-# verdict records the branch's NAME and the tip it gated against, but never
-# the branch's own commit sha at gate time (see gate.sh's write_json), so a
-# sha-precise key cannot be reconstructed from what gate.sh writes today.
-# Consequence: if a branch is force-pushed to a new commit while the tip
-# has not moved, a stale verdict for its previous commit could shadow one
-# loop's worth of selection for the new one, until this host's next gate of
-# that branch overwrites the memo entry. This is a pre-claim FILTER only --
-# gate.sh's own verdict cache, keyed on the true merged TREE_SHA, remains
-# the real authority and is re-consulted (against a real merge) inside
-# every gate.sh run regardless, so the exposure is "one extra loop of not
-# re-offering it," never a wrong tree landing.
+# The key is EXACT: `(tree, gate_version, platform_id)` with THIS host's
+# platform, which is bit-for-bit the key `gate.sh` itself derives after its
+# merge (see gate.sh's "T1.2: verdict cache" block). So a hit here means
+# the gate we were about to dispatch would exit as a pure cache hit and buy
+# nothing. A verdict from a DIFFERENT platform is deliberately not honoured
+# for selection, however useful it is elsewhere: it would not short-circuit
+# this host's gate.sh, so gating here still buys a real, missing verdict --
+# and collapsing the two identities is the exact cross-platform skew
+# verdict.py's module docstring says cost a day.
+#
+# THE COST, BOUNDED, on both axes.
+#
+#   * LOCAL. `_TreeResolver` computes at most one `merge-tree` per
+#     candidate per loop and memoizes by `(branch_sha, tip_sha)` for the
+#     life of the process -- both inputs are content-addressed, so the
+#     answer cannot go stale, and losing the memo on restart is free
+#     because the hub cache, not this dict, is the durable truth. At most
+#     one hub fetch per loop backs it up, and only if an object is actually
+#     missing (`workqueue.Queue`'s own ancestry fetch has normally just put
+#     them there).
+#   * NETWORK. `Hub.read` is a FETCH -- one ssh round trip per call -- so
+#     asking the cache per candidate would put a handshake on every queued
+#     branch every fifteen seconds. `_VerdictIndex` spends one `ls-remote`
+#     of the verdicts namespace per loop, lazily, and only reads the keys
+#     that the listing says exist. A branch with nothing cached -- which is
+#     exactly the branch we are about to gate -- costs no round trip at all.
+#
+# LOCAL RECALL, SECOND. `_scan_gatelogs_memo` rebuilds this host's own
+# recent `gate.sh` runs from `~/gatelogs/gate-*.json` -- local disk, no
+# network -- and answers when the hub could not. It is keyed by
+# `(branch, base_tip)`, because that is all gate.sh's JSON records; the
+# branch's own sha at gate time is not in the file.
+#
+# WHICH IS WHY A FAIL MUST PROVE ITSELF. Keying a FAIL by NAME condemns a
+# branch by name, and the one action the classification is asking the
+# author for -- fix it and force-push -- changes neither the name nor the
+# tip. Before this fix that was a permanent lockout, not a delay: the memo
+# refused to offer the branch, and a gate of the branch was the only event
+# that could have replaced the memo. So a local FAIL is honoured only when
+# the tree the CURRENT branch sha merges to still equals the `tree_sha` the
+# failing run recorded -- the tree is the sha's fingerprint, and it is what
+# gate.sh actually gated. A new sha yields a new tree, the recall stops
+# applying, and the branch is fresh work again. The same test is what stops
+# `_confirm_via_shared_cache` from resurrecting the old verdict for the new
+# sha: that lookup is against the OLD tree, so its answer is discarded with
+# the entry that named it. A PASS needs no such proof to be safe -- an
+# unconfirmable PASS only parks a branch for one more loop, and the next
+# hub-first lookup at the new sha decides it properly.
+#
+# Everything here is a pre-claim FILTER. `gate.sh`'s own cache, consulted
+# against a real merge inside every run, remains the authority on what
+# lands; the worst this layer can do is buy a gate it did not have to.
 
 GATELOGS_GLOB = "gate-*.json"
 AWAITING_TRAIN = "awaiting_train"
 NEEDS_AUTHOR = "needs_author"
+
+# Where a classification came from, carried into the heartbeat so an
+# operator can tell a cross-host answer from this host's own recall.
+SOURCE_HUB = "hub"
+SOURCE_LOCAL = "local"
+
+# (hub_url, branch_sha, tip_sha) -> merge tree sha. Process-lifetime,
+# because the sha inputs are content-addressed: the same pair always merges
+# to the same tree, so a cached answer cannot become wrong. Only successful
+# lookups are memoized -- a None may mean "objects not fetched yet", which a
+# later loop can fix, and caching that would make a transient miss
+# permanent.
+#
+# The hub URL is in the key even though the merge result does not depend on
+# it, because the OBJECT STORE does: the tree sha this yields is only
+# resolvable in that hub's own cache. Two fixture hubs built from identical
+# content mint identical commit shas, so without the url a tree computed
+# against one would be served for the other -- a cross-fixture bleed that
+# makes test outcomes depend on execution order.
+_MERGE_TREE_MEMO: dict = {}
+_MERGE_TREE_MEMO_MAX = 4096
+
+
+class _TreeResolver:
+    """The branch-onto-tip merge tree for a candidate, at most one
+    `merge-tree` per (branch_sha, tip_sha) for the life of the process and
+    at most one hub fetch per instance (i.e. per reconcile loop).
+
+    Construct one per loop with the refs of every candidate; the fetch, if
+    it is needed at all, brings them all in one round trip. `None` from
+    `tree()` means "cannot answer" -- a conflicting merge, a missing
+    object, a git that failed -- and every caller treats that as no
+    opinion, which offers the branch. Refusing work because a probe could
+    not answer would idle the fleet for infrastructure reasons, the same
+    fail-open `dispatch.economic_refusal` argues for.
+    """
+
+    def __init__(self, hub: Hub, tip_sha: Optional[str], candidate_refs: Sequence[str] = (),
+                 tip_ref: str = workqueue.TIP_REF):
+        self.hub = hub
+        self.tip_sha = tip_sha
+        self.tip_ref = tip_ref
+        self.candidate_refs = list(candidate_refs)
+        self.fetched = False
+        self.computed = 0
+
+    def tree(self, branch_sha: Optional[str]) -> Optional[str]:
+        if not (self.tip_sha and branch_sha):
+            return None
+        key = (self.hub.url, branch_sha, self.tip_sha)
+        hit = _MERGE_TREE_MEMO.get(key)
+        if hit is not None:
+            return hit
+        self.computed += 1
+        tree = dispatch_mod.merge_tree_sha(self.hub, self.tip_sha, branch_sha)
+        if tree is None and not self.fetched:
+            # One fetch per loop, and only once something was actually
+            # missing: `workqueue.Queue.compute()` has normally just pulled
+            # these very objects into the same cache for its ancestry test.
+            self.fetched = True
+            if dispatch_mod._have_objects(self.hub, [self.tip_ref, *self.candidate_refs]):
+                tree = dispatch_mod.merge_tree_sha(self.hub, self.tip_sha, branch_sha)
+        if tree is not None:
+            if len(_MERGE_TREE_MEMO) >= _MERGE_TREE_MEMO_MAX:
+                _MERGE_TREE_MEMO.clear()
+            _MERGE_TREE_MEMO[key] = tree
+        return tree
 
 
 def _scan_gatelogs_memo(log_dir: Path) -> dict:
@@ -789,16 +895,22 @@ def _scan_gatelogs_memo(log_dir: Path) -> dict:
     return memo
 
 
-def _confirm_via_shared_cache(hub: Hub, entry: dict) -> Optional[str]:
-    """Best-effort confirmation of a locally-recalled verdict against
-    verdict.py's shared hub cache, reusing the TREE_SHA the local JSON
-    already recorded rather than recomputing a merge. None if the hub
-    can't answer (unreachable, nothing cached for that exact tree, or the
-    entry is missing an identity field) -- the caller falls back to the
-    local result; a miss or hiccup here must never block gate dispatch."""
-    tree_sha = entry.get("tree_sha")
-    gate_version = entry.get("gate_version")
-    platform_id = entry.get("platform_id")
+def _shared_cache_result(
+    hub: Hub,
+    tree_sha: Optional[str],
+    gate_version: Optional[str],
+    platform_id: Optional[str],
+) -> Optional[str]:
+    """`"PASS"`/`"FAIL"` from verdict.py's shared hub cache for exactly
+    `(tree_sha, gate_version, platform_id)`, or None.
+
+    None covers every way of not getting an answer -- an identity field we
+    do not have, nothing cached at that key, an ABORT (which `lookup`
+    refuses to serve as a settled answer), or a hub that could not be
+    reached. All of them mean the caller falls through to whatever it knows
+    locally: a hub hiccup must never block gate dispatch, only fail to
+    prevent one.
+    """
     if not (tree_sha and gate_version and platform_id):
         return None
     try:
@@ -810,6 +922,95 @@ def _confirm_via_shared_cache(hub: Hub, entry: dict) -> Optional[str]:
     return payload.get("result")
 
 
+class _VerdictIndex:
+    """Which verdict refs exist on the hub, enumerated ONCE per reconcile
+    loop and lazily.
+
+    `Hub.read` is a fetch -- one ssh round trip per call -- so asking the
+    cache per candidate would put a handshake on every queued branch every
+    fifteen seconds. A single `ls-remote` of the verdicts namespace answers
+    "is there anything at this key at all" for every candidate at once, and
+    only the keys that actually exist are then read for their result. The
+    common case is a branch with no cached verdict -- which is exactly the
+    branch we are about to gate -- and it now costs no round trip at all.
+
+    A hub that cannot be enumerated yields an EMPTY index, not an
+    exception: no opinion, offer the work. This class never raises, so it
+    adds no new failure path to `reconcile_once`'s loop.
+    """
+
+    def __init__(self, hub: Hub, prefix: str = dispatch_mod.VERDICTS_PREFIX):
+        self.hub = hub
+        self.prefix = prefix
+        self._refs: Optional[set] = None
+        self.reads = 0
+
+    def _existing(self) -> set:
+        if self._refs is None:
+            try:
+                self._refs = set(self.hub.list(self.prefix))
+            except HubError:
+                self._refs = set()
+        return self._refs
+
+    def result(self, tree_sha, gate_version, platform_id) -> Optional[str]:
+        """The cached PASS/FAIL at exactly this key, or None."""
+        if not (tree_sha and gate_version and platform_id):
+            return None
+        try:
+            ref = verdict.verdict_ref(tree_sha, gate_version, platform_id)
+        except ValueError:
+            return None  # a malformed identity is not a cache key
+        if ref not in self._existing():
+            return None
+        self.reads += 1
+        return _shared_cache_result(self.hub, tree_sha, gate_version, platform_id)
+
+
+def _confirm_via_shared_cache(hub: Hub, entry: dict,
+                              index: Optional[_VerdictIndex] = None) -> Optional[str]:
+    """Best-effort confirmation of a locally-recalled verdict against the
+    shared hub cache, reusing the TREE_SHA the local JSON already recorded
+    rather than recomputing a merge.
+
+    NOTE the tree here is the one the RECALLED run gated, which is not
+    necessarily the tree the branch's current sha would produce -- see
+    `classify_branch`, which discards a FAIL whose recalled tree no longer
+    matches, precisely so this confirmation cannot re-condemn a
+    force-pushed branch on the strength of its predecessor's verdict."""
+    tree_sha, gv, plat = (
+        entry.get("tree_sha"), entry.get("gate_version"), entry.get("platform_id")
+    )
+    if index is not None:
+        return index.result(tree_sha, gv, plat)
+    return _shared_cache_result(hub, tree_sha, gv, plat)
+
+
+def _decision(branch: str, branch_sha: Optional[str], source: str) -> dict:
+    """The heartbeat record for one classified branch. `sha` is the branch
+    sha the verdict was DECIDED AT (None only when the caller could not
+    resolve one), which is what makes staleness visible in `fleet status`
+    instead of a bare name with no age; `source` distinguishes a cross-host
+    answer from this host's own recall."""
+    return {"branch": branch, "sha": branch_sha, "source": source}
+
+
+def branch_names(entries: Sequence) -> list:
+    """Branch names out of a heartbeat's `awaiting_train`/`needs_author`
+    list, tolerating both shapes: the `_decision` dicts written since R4's
+    shared-cache clause, and the bare strings older fleetd versions wrote
+    (a mixed-version fleet has both sitting on the hub at once)."""
+    out = []
+    for e in entries or ():
+        if isinstance(e, dict):
+            name = e.get("branch")
+            if name:
+                out.append(name)
+        elif e:
+            out.append(str(e))
+    return out
+
+
 def classify_branch(
     memo: dict,
     hub: Hub,
@@ -817,16 +1018,43 @@ def classify_branch(
     tip_sha: str,
     gate_version: Optional[str],
     confirm_with_hub: bool = True,
-) -> Optional[str]:
-    """AWAITING_TRAIN | NEEDS_AUTHOR | None for `branch` gated onto
-    `tip_sha`, per the memo `_scan_gatelogs_memo` built. None means no
-    opinion -- offer it as ordinary gate work.
+    branch_sha: Optional[str] = None,
+    platform_id: Optional[str] = None,
+    trees: Optional[_TreeResolver] = None,
+    index: Optional[_VerdictIndex] = None,
+) -> Optional[tuple]:
+    """`(status, entry)` -- status being AWAITING_TRAIN or NEEDS_AUTHOR --
+    for `branch` gated onto `tip_sha`, or None for "no opinion, offer it as
+    ordinary gate work". `entry` is `_decision`'s record, carrying the
+    branch sha the classification was decided at.
+
+    Two sources, in this order:
+
+      1. the shared verdict cache, keyed on the true `branch_sha`-onto-
+         `tip_sha` merge tree at this host's own `platform_id` -- the same
+         key `gate.sh` derives after its own merge, so a hit here proves
+         the gate we were about to dispatch would exit as a cache hit and
+         buy nothing;
+      2. this host's `~/gatelogs` recall, for when the hub had nothing to
+         say (or could not be reached at all).
 
     A memo entry recorded under a different `gate_version` than the one
     this host currently runs is ignored, not honoured: GATE_VERSION only
     bumps when gate BEHAVIOUR changes, so an old-version verdict is not
     evidence about what the current gate would say.
     """
+    tree = trees.tree(branch_sha) if (trees is not None and branch_sha) else None
+
+    # ---- 1. hub first ------------------------------------------------ #
+    if confirm_with_hub:
+        shared = (index.result(tree, gate_version, platform_id) if index is not None
+                  else _shared_cache_result(hub, tree, gate_version, platform_id))
+        if shared == verdict.RESULT_PASS:
+            return (AWAITING_TRAIN, _decision(branch, branch_sha, SOURCE_HUB))
+        if shared == verdict.RESULT_FAIL:
+            return (NEEDS_AUTHOR, _decision(branch, branch_sha, SOURCE_HUB))
+
+    # ---- 2. this host's own recall ------------------------------------ #
     entry = memo.get((branch, tip_sha))
     if entry is None:
         return None
@@ -834,13 +1062,22 @@ def classify_branch(
         return None
     result = entry.get("result")
     if confirm_with_hub:
-        confirmed = _confirm_via_shared_cache(hub, entry)
+        confirmed = _confirm_via_shared_cache(hub, entry, index)
         if confirmed is not None:
             result = confirmed
     if result == verdict.RESULT_PASS:
-        return AWAITING_TRAIN
+        return (AWAITING_TRAIN, _decision(branch, branch_sha, SOURCE_LOCAL))
     if result == verdict.RESULT_FAIL:
-        return NEEDS_AUTHOR
+        # A FAIL condemns a branch until its author acts, so it is honoured
+        # only where it can be shown to be about the branch AS IT IS NOW:
+        # the tree the current sha merges to must still be the tree the
+        # failing run gated. Anything else -- a force-push, or simply not
+        # being able to compute the tree -- is not evidence about this sha,
+        # and the fail-open direction costs one gate rather than locking a
+        # fixed branch out of the fleet forever.
+        if tree is None or entry.get("tree_sha") != tree:
+            return None
+        return (NEEDS_AUTHOR, _decision(branch, branch_sha, SOURCE_LOCAL))
     return None
 
 
@@ -1460,29 +1697,40 @@ def reconcile_once(
                     return entry.ref.removeprefix("refs/heads/")
 
                 # Verdict-aware selection (ARCH-FIX R4): don't offer a
-                # branch the local gatelogs recall (confirmed, best-effort,
-                # against the shared hub cache) already knows the answer
-                # for -- PASS is waiting on the train, FAIL needs its
-                # author. `tip_sha` gates the memo lookup on `hub.sha`
-                # rather than `res.tip_generation` because the memo's key
-                # is the tip's SHA (what gate.sh actually recorded as
-                # `base_tip`), not its generation counter.
+                # branch the SHARED verdict cache -- or, failing that, this
+                # host's own gatelogs recall -- already knows the answer
+                # for. PASS is waiting on the train, FAIL needs its author.
+                # `tip_sha` gates the lookup on `hub.sha` rather than
+                # `res.tip_generation` because both keys are the tip's SHA:
+                # the merge tree the hub cache is keyed on, and the
+                # `base_tip` gate.sh actually recorded in its JSON.
+                # `_TreeResolver` and `platform_id` are built ONCE for the
+                # whole loop -- see the module's "THE COST, BOUNDED" note.
                 tip_sha = hub.sha(workqueue.TIP_REF)
                 gate_version = _gate_version(repo_root)
                 memo = _scan_gatelogs_memo(log_dir) if tip_sha else {}
+                trees = _TreeResolver(hub, tip_sha, [q[s].ref for s in q])
+                index = _VerdictIndex(hub)
+                platform_id = compute_platform_id() if tip_sha else None
 
                 candidates = []
                 for s in q:
                     b = _branch(q[s])
                     if any(w.branch == b for w in workers):
                         continue
-                    status = classify_branch(memo, hub, b, tip_sha, gate_version) if tip_sha else None
-                    if status == AWAITING_TRAIN:
-                        res.awaiting_train.append(b)
-                        continue
-                    if status == NEEDS_AUTHOR:
-                        res.needs_author.append(b)
-                        continue
+                    decided = classify_branch(
+                        memo, hub, b, tip_sha, gate_version,
+                        branch_sha=q[s].sha, platform_id=platform_id, trees=trees,
+                        index=index,
+                    ) if tip_sha else None
+                    if decided is not None:
+                        status, entry = decided
+                        if status == AWAITING_TRAIN:
+                            res.awaiting_train.append(entry)
+                            continue
+                        if status == NEEDS_AUTHOR:
+                            res.needs_author.append(entry)
+                            continue
                     candidates.append(s)
                 for slug in candidates[:deficit]:
                     branch = _branch(q[slug])
@@ -1525,6 +1773,10 @@ def reconcile_once(
         "tip_generation_seen": res.tip_generation,
         # ARCH-FIX R4: branch states this loop's selection surfaced, so
         # `fleet status` can render them without re-deriving anything.
+        # Each entry carries the branch sha its verdict was decided at and
+        # where that verdict came from ("hub" or "local"), so an operator
+        # can see a parked branch that has since been force-pushed rather
+        # than a bare name with no age on it.
         "awaiting_train": res.awaiting_train,
         "needs_author": res.needs_author,
         # ARCH-FIX R4 point 3 / R2: this loop's lost-lease kills (T1's
