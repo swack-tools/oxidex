@@ -31,6 +31,20 @@
 # (refname oldrev newrev), no push options, so duplicating it here costs
 # nothing and narrows the blast radius of a single hook misconfiguration.
 #
+# It also denies a non-fast-forward UPDATE (as opposed to outright
+# deletion) of either protected ref, unconditionally -- a `--force` push
+# that carries a valid train-token still rewrites history instead of
+# fast-forwarding it, which is the same tip-integrity failure R1 exists to
+# prevent, just via a different newrev than 0000...0. This used to be
+# enforced repo-wide via `receive.denyNonFastForwards=true` in
+# install_hook.sh, but that setting applies to every ref on the hub, not
+# just the two protected ones -- it also denied legitimate force-pushes to
+# staging/* and rescued/* refs, which R1's non-interference clause
+# requires this mechanism NOT to affect (see proof_dnff_scope.sh and
+# proof_dnff_breaks_leases.py). Scoping the check to PROTECTED_REFS here,
+# with only argv and no repo-wide config, gets the same tip guarantee
+# without the collateral denial.
+#
 # argv: $1=refname $2=oldrev $3=newrev -- git's documented `update` hook
 # calling convention: one invocation per ref in the push, run after
 # pre-receive has already accepted the whole batch, before the ref itself
@@ -74,6 +88,19 @@ if [[ "$is_protected" -eq 1 ]] && [[ "$newrev" =~ ^0+$ ]]; then
     echo "tip-guard: reason=deletion of a protected ref is never permitted" >&2
     echo "tip-guard: remedy=do not delete this ref; if you meant to reset it, push a replacement commit instead" >&2
     exit 1
+fi
+
+# Non-fast-forward UPDATE of a protected ref (oldrev exists and newrev is
+# not a descendant of it) -- denied unconditionally, even with a valid
+# train-token: see the header comment above. Scoped to PROTECTED_REFS
+# only, so staging/* and rescued/* force-pushes are untouched.
+if [[ "$is_protected" -eq 1 ]] && [[ ! "$oldrev" =~ ^0+$ ]]; then
+    if ! git merge-base --is-ancestor "$oldrev" "$newrev" 2>/dev/null; then
+        echo "tip-guard: DENY ref=$refname" >&2
+        echo "tip-guard: reason=non-fast-forward update of a protected ref is never permitted, even with a valid train-token" >&2
+        echo "tip-guard: remedy=push a fast-forward (a new commit built on the current tip) instead of rewriting history" >&2
+        exit 1
+    fi
 fi
 
 exit 0

@@ -50,17 +50,23 @@
 #     a protected ref is durably observable after the fact, independent of
 #     this hook's own stderr output.
 #
-#   * `receive.denyNonFastForwards=true` -- closes R1's history-rewrite
-#     sub-clause. pre-receive's token check and update's deletion-deny stop
-#     an ATTACKER without the token from touching a protected ref, but say
-#     nothing about a force-push that carries a VALID token and simply
-#     rewrites history instead of deleting it outright -- a `--force` push
-#     from someone who legitimately has the token can silently discard
-#     commits the tip already advanced past, the same tip-integrity failure
-#     R1 exists to prevent, just via a non-fast-forward update instead of a
-#     delete. Denying non-fast-forwards at the git-transport level closes
-#     that gap unconditionally, for every ref on the hub, before either
-#     hook even runs.
+#   * Non-fast-forward denial for the two protected refs -- closes R1's
+#     history-rewrite sub-clause. pre-receive's token check and update's
+#     deletion-deny stop an ATTACKER without the token from touching a
+#     protected ref, but say nothing about a force-push that carries a
+#     VALID token and simply rewrites history instead of deleting it
+#     outright -- a `--force` push from someone who legitimately has the
+#     token can silently discard commits the tip already advanced past,
+#     the same tip-integrity failure R1 exists to prevent, just via a
+#     non-fast-forward update instead of a delete. This is enforced in
+#     `tools/fleet/hooks/update` (installed as `update.fleet`), scoped to
+#     PROTECTED_REFS only via `git merge-base --is-ancestor` -- NOT via
+#     repo-wide `receive.denyNonFastForwards`, which would deny
+#     force-pushes on every ref on the hub, including staging/* and
+#     rescued/*, violating R1's non-interference clause (see
+#     proof_dnff_scope.sh and proof_dnff_breaks_leases.py, which show the
+#     repo-wide setting also breaks every fleetlib payload write, since
+#     payload commits are orphans and therefore never fast-forwards).
 set -euo pipefail
 
 REPO="${1:?usage: install_hook.sh <bare-repo-path> [--execute]}"
@@ -247,9 +253,8 @@ fi
 
 act git -C "$REPO" config receive.advertisePushOptions true
 act git -C "$REPO" config core.logAllRefUpdates true
-act git -C "$REPO" config receive.denyNonFastForwards true
 
 say "done. Summary of what changed: post-receive (tip signal, unchanged)," \
-    "pre-receive (NEW -- R1 token enforcement), update (NEW -- R1 deletion-deny)," \
-    "train.token (created if absent), receive.advertisePushOptions=true, core.logAllRefUpdates=true," \
-    "receive.denyNonFastForwards=true (NEW -- R1 history-rewrite deny)."
+    "pre-receive (NEW -- R1 token enforcement), update (NEW -- R1 deletion-deny AND" \
+    "non-fast-forward-deny, both scoped to refs/heads/main and refs/heads/refactor/tag-machinery only)," \
+    "train.token (created if absent), receive.advertisePushOptions=true, core.logAllRefUpdates=true."

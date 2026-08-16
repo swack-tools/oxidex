@@ -205,16 +205,23 @@ class TestDenyMatrix(UpdateHookTestCase):
         self.assertEqual(self._remote_sha(TIP_REF), sha, "tip must still be present after the denied deletion")
 
     def test_forced_non_fast_forward_push_to_tip_with_valid_token_denied(self):
-        """R1's history-rewrite sub-clause, closed by install_hook.sh's
-        `receive.denyNonFastForwards=true`. A VALID token is enough to
-        land an ordinary fast-forward, but not enough to force-push a
-        REWRITE of history the tip already advanced past -- the same
-        tip-integrity failure `test_tip_deletion_with_valid_token_denied`
-        proves for outright deletion, here via a non-fast-forward update
-        instead. This is a git-transport-level guard, unconditional and
-        independent of the token check, so it must deny this push even
-        though its `-o train-token=...` is exactly what a legitimate train
-        push carries.
+        """R1's history-rewrite sub-clause, closed by
+        `tools/fleet/hooks/update`'s `git merge-base --is-ancestor` check,
+        scoped to PROTECTED_REFS only. A VALID token is enough to land an
+        ordinary fast-forward, but not enough to force-push a REWRITE of
+        history the tip already advanced past -- the same tip-integrity
+        failure `test_tip_deletion_with_valid_token_denied` proves for
+        outright deletion, here via a non-fast-forward update instead.
+        This is enforced independent of the token check (the update hook
+        cannot even see push options -- see TestPushOptionEnvVisibility),
+        so it must deny this push even though its `-o train-token=...` is
+        exactly what a legitimate train push carries. Unlike the old
+        repo-wide `receive.denyNonFastForwards=true`, this must NOT affect
+        force-pushes to unprotected refs -- see
+        test_forced_push_to_staging_is_allowed and
+        test_forced_push_to_rescued_is_allowed below, and
+        proof_dnff_scope.sh / proof_dnff_breaks_leases.py for the defect
+        this replaces.
         """
         self._install()
         token = self._token()
@@ -246,6 +253,68 @@ class TestDenyMatrix(UpdateHookTestCase):
             self._remote_sha(TIP_REF), landed_sha,
             "the tip must be UNCHANGED after the denied force-push, not silently rewritten",
         )
+
+    def test_fast_forward_push_to_tip_with_token_allowed(self):
+        """Positive control alongside the non-fast-forward denial above:
+        an ordinary fast-forward (a second commit stacked on top of the
+        first, not a rewrite) with a valid token must land normally --
+        the new check must not collaterally deny legitimate tip advances.
+        """
+        self._install()
+        token = self._token()
+        src = self._clone()
+        self._commit(src, message="first")
+        first = self._push(src, f"HEAD:{TIP_REF}", push_option=f"train-token={token}")
+        self.assertEqual(first.returncode, 0, msg=first.stderr.decode())
+
+        second_sha = self._commit(src, message="second")
+        second = self._push(src, f"HEAD:{TIP_REF}", push_option=f"train-token={token}")
+        self.assertEqual(second.returncode, 0, msg=second.stderr.decode())
+        self.assertEqual(self._remote_sha(TIP_REF), second_sha)
+
+    def test_forced_push_to_staging_is_allowed(self):
+        """R1's non-interference clause, as a negative test: the
+        non-fast-forward guard is scoped to PROTECTED_REFS only, so a
+        force-push (history rewrite) to an ordinary staging/* ref must
+        keep landing exactly as it did before this hook existed. This is
+        the missing negative test proof_dnff_scope.sh proved was absent
+        when the guard was `receive.denyNonFastForwards=true` repo-wide.
+        """
+        self._install()
+        src = self._clone()
+        first_sha = self._commit(src, message="first")
+        first = self._push(src, f"HEAD:refs/heads/staging/x")
+        self.assertEqual(first.returncode, 0, msg=first.stderr.decode())
+        self.assertEqual(self._remote_sha("refs/heads/staging/x"), first_sha)
+
+        amend = _run_git(["git", "commit", "--amend", "--allow-empty", "--quiet", "-m", "rewritten"], cwd=src)
+        self.assertEqual(amend.returncode, 0, msg=amend.stderr.decode())
+        rewritten_sha = _run_git(["git", "rev-parse", "HEAD"], cwd=src).stdout.decode().strip()
+        self.assertNotEqual(rewritten_sha, first_sha)
+
+        forced = self._push(src, "HEAD:refs/heads/staging/x", force=True)
+        self.assertEqual(forced.returncode, 0, msg=forced.stderr.decode())
+        self.assertEqual(self._remote_sha("refs/heads/staging/x"), rewritten_sha)
+
+    def test_forced_push_to_rescued_is_allowed(self):
+        """Same as test_forced_push_to_staging_is_allowed but for
+        rescued/* -- the other ref family R1 must not interfere with.
+        """
+        self._install()
+        src = self._clone()
+        first_sha = self._commit(src, message="first")
+        first = self._push(src, "HEAD:refs/heads/rescued/x")
+        self.assertEqual(first.returncode, 0, msg=first.stderr.decode())
+        self.assertEqual(self._remote_sha("refs/heads/rescued/x"), first_sha)
+
+        amend = _run_git(["git", "commit", "--amend", "--allow-empty", "--quiet", "-m", "rewritten"], cwd=src)
+        self.assertEqual(amend.returncode, 0, msg=amend.stderr.decode())
+        rewritten_sha = _run_git(["git", "rev-parse", "HEAD"], cwd=src).stdout.decode().strip()
+        self.assertNotEqual(rewritten_sha, first_sha)
+
+        forced = self._push(src, "HEAD:refs/heads/rescued/x", force=True)
+        self.assertEqual(forced.returncode, 0, msg=forced.stderr.decode())
+        self.assertEqual(self._remote_sha("refs/heads/rescued/x"), rewritten_sha)
 
     def test_main_ref_protected_the_same_as_tip(self):
         """`refs/heads/main` does not exist on the hub yet in this fleet
@@ -388,11 +457,68 @@ class TestUpdateHookDirect(unittest.TestCase):
 
     def test_allows_creation_of_protected_ref(self):
         """The update hook cannot see push options, so it must not attempt
-        to gate anything but deletion -- creation/update of a protected
-        ref is pre-receive's job entirely.
+        to gate anything but deletion (and, now, non-fast-forward) --
+        first-time creation of a protected ref is pre-receive's job
+        entirely.
         """
         result = subprocess.run(
             ["bash", str(UPDATE_SCRIPT), TIP_REF, ZERO_SHA, "b" * 40],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def _throwaway_repo_with_commits(self):
+        """A tiny non-bare repo under a fresh tempdir (never the checkout
+        this test file lives in), just to give `git merge-base
+        --is-ancestor` two genuine, related commits to compare -- and,
+        separately, a genuinely unrelated one. Fixture only; nothing here
+        is pushed anywhere.
+        """
+        tmp = tempfile.mkdtemp(prefix="update-hook-direct-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        resolved = str(Path(tmp).resolve())
+        self.assertTrue(resolved.startswith(str(Path(tempfile.gettempdir()).resolve())))
+        self.assertNotIn("work2.oxidex.net", resolved)
+        init = _run_git(["git", "init", "--quiet", tmp])
+        self.assertEqual(init.returncode, 0, msg=init.stderr.decode())
+        first = _run_git(["git", "commit", "--quiet", "--allow-empty", "-m", "first"], cwd=tmp)
+        self.assertEqual(first.returncode, 0, msg=first.stderr.decode())
+        oldrev = _run_git(["git", "rev-parse", "HEAD"], cwd=tmp).stdout.decode().strip()
+        second = _run_git(["git", "commit", "--quiet", "--allow-empty", "-m", "second"], cwd=tmp)
+        self.assertEqual(second.returncode, 0, msg=second.stderr.decode())
+        ff_newrev = _run_git(["git", "rev-parse", "HEAD"], cwd=tmp).stdout.decode().strip()
+        # An unrelated root commit (empty tree, no parent) -- guaranteed
+        # NOT a descendant of oldrev, i.e. a genuine non-fast-forward.
+        empty_tree = _run_git(["git", "hash-object", "-t", "tree", "/dev/null"], cwd=tmp).stdout.decode().strip()
+        rewritten_newrev = _run_git(
+            ["git", "commit-tree", empty_tree, "-m", "unrelated root"], cwd=tmp
+        ).stdout.decode().strip()
+        self.assertTrue(rewritten_newrev, "sanity: commit-tree must produce a sha")
+        return tmp, oldrev, ff_newrev, rewritten_newrev
+
+    def test_denies_non_fast_forward_update_of_protected_ref_via_argv_alone(self):
+        """Argv-only exercise of the new non-fast-forward check (no push,
+        no push options, no install) -- proves the guard needs nothing but
+        refname/oldrev/newrev, same as the deletion check above.
+        """
+        repo, oldrev, _ff_newrev, rewritten_newrev = self._throwaway_repo_with_commits()
+        result = subprocess.run(
+            ["bash", str(UPDATE_SCRIPT), TIP_REF, oldrev, rewritten_newrev],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tip-guard: DENY ref=refs/heads/refactor/tag-machinery", result.stderr)
+        self.assertIn("reason=non-fast-forward update of a protected ref", result.stderr)
+
+    def test_allows_fast_forward_update_of_protected_ref_via_argv_alone(self):
+        """Positive control: oldrev an ancestor of newrev must pass."""
+        repo, oldrev, ff_newrev, _rewritten_newrev = self._throwaway_repo_with_commits()
+        result = subprocess.run(
+            ["bash", str(UPDATE_SCRIPT), TIP_REF, oldrev, ff_newrev],
+            cwd=repo,
             capture_output=True,
             text=True,
         )

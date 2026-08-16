@@ -1224,7 +1224,6 @@ def adopt_workers(
     # merely failed to read (proof: adv-review/proof_adopt_kills.py). The
     # next reconcile loop tries the read again; the sweep only needs to run
     # once conditions allow every claim to be read.
-    unreadable_claims = False
 
     for kind in ("gate", "agent"):
         for ref, sha in sorted(claim_mod.list_claims(hub, kind=kind).items()):
