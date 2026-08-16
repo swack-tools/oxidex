@@ -61,8 +61,96 @@
 # skipped test's own skipUnless comment in
 # tools/fleet/tests/test_intent.py and test_ledger.py for the itemized
 # list of what hermetic mode skips and why).
+#
+# --- BLOCKER 6 additions ("R7 gets teeth") --- GATE_VERSION bumped 5 -> 6:
+# R7 landed the fleet-tests stage but nothing forced it to actually run
+# with teeth -- a hang in it would have blocked a host forever (no wall
+# clock), and it silently included seam tests never meant to run under
+# per-gate contention. Two behaviour changes:
+#   1. WALL-CLOCK TIMEOUT. The whole fleet-tests stage (py_compile sweep +
+#      unittest run) is now bounded by FLEET_TESTS_TIMEOUT_S (default
+#      600s, overridable for tests). A hang past that budget is killed by
+#      process group and recorded as stage "fleet-tests-timeout" -- a
+#      FAIL, not an ABORT, same reasoning as plain "fleet-tests" below:
+#      classify_failure() forces both, since a hang in the fleet's own
+#      test suite is exactly as damning as a red assertion in it, and must
+#      never be waved through as a flaky OOM signature match.
+#   2. test_seams.py IS EXCLUDED from this stage (POLICY, decided). Seam
+#      tests are the fleet's slowest and least deterministic suite by
+#      design -- they drive real subprocess fleetds, real SIGKILLs, real
+#      lease timers -- and several of that suite's OWN commit messages
+#      document contention flakes when several gates run it concurrently
+#      on a shared host. R7's goal is a gate that reliably blocks broken
+#      coordination code; a gate stage that is itself flaky under fleet
+#      load does not do that, it intermittently condemns branches that
+#      never touched the code the flake is in (R4: the queue must trust
+#      what it is told, and a flaky per-gate stage poisons that trust for
+#      every branch waiting behind it). Seams keep running in CI and in
+#      burn-in, where contention with sibling gates is not a factor --
+#      just not in the per-gate hot path. See `_fleet_test_modules()`
+#      below for the mechanics of the exclusion.
 set -u
-GATE_VERSION="5"
+GATE_VERSION="6"
+
+# BLOCKER 6 (i): wall-clock budget for the whole fleet-tests stage
+# (py_compile sweep + unittest run together), overridable for tests that
+# need to prove the timeout path itself without waiting 600s for it.
+FLEET_TESTS_TIMEOUT_S="${FLEET_TESTS_TIMEOUT_S:-600}"
+
+# run_with_wall_clock_timeout <timeout_s> <timed-out-flag-file> -- <cmd...>
+#
+# No `timeout(1)`/`gtimeout` dependency: neither is guaranteed present on
+# every fleet host (observed absent outright on at least one dev box), so
+# this is a plain bash watchdog. The command runs in the background under
+# its own process group (`set -m` job control gives it one); a sibling
+# watchdog subshell sleeps for the budget and, if the command is still
+# alive when it wakes, touches the flag file and SIGTERMs the whole group
+# (SIGKILL after a short grace) -- the same "kill the group, not just the
+# leader" reasoning `classify_failure`'s neighbours use elsewhere in this
+# file, so a hung `python3 -m unittest` cannot leave orphaned children
+# behind. The watchdog is torn down in either outcome so it can never fire
+# late against a future, unrelated stage.
+run_with_wall_clock_timeout() {
+  local timeout_s="$1" flag="$2"
+  shift 2
+  rm -f "$flag"
+  set -m
+  ( "$@" ) &
+  local cmd_pid=$!
+  set +m
+  (
+    sleep "$timeout_s"
+    if kill -0 "$cmd_pid" 2>/dev/null; then
+      : > "$flag"
+      kill -TERM "-$cmd_pid" 2>/dev/null || kill -TERM "$cmd_pid" 2>/dev/null
+      sleep 5
+      kill -KILL "-$cmd_pid" 2>/dev/null || kill -KILL "$cmd_pid" 2>/dev/null
+    fi
+  ) &
+  local watchdog_pid=$!
+  wait "$cmd_pid" 2>/dev/null
+  local rc=$?
+  kill "$watchdog_pid" 2>/dev/null
+  wait "$watchdog_pid" 2>/dev/null
+  return "$rc"
+}
+
+# BLOCKER 6 (iv): the module list the fleet-tests stage actually runs --
+# every tools/fleet/tests/test_*.py EXCEPT test_seams.py (POLICY, see the
+# header comment above `GATE_VERSION` for the rationale). `unittest`'s own
+# `discover` has no exclude-by-name option, so this enumerates explicitly
+# and runs `python3 -m unittest <module...>` instead -- same test bodies,
+# same HERMETIC gating inside them, just minus one filename. The list is
+# sorted for a deterministic run order and log.
+_fleet_test_modules() {
+  local f base
+  for f in tools/fleet/tests/test_*.py; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    [ "$base" = "test_seams.py" ] && continue
+    printf '%s\n' "${base%.py}"
+  done | sort
+}
 BRANCH="$1"; TAG="$2"
 START_TS=$(date +%s)
 HOST=$(hostname)
@@ -176,7 +264,11 @@ classify_failure() {
   # R7 (a broken coordination-code test must block the tip, not get waved
   # through). py_compile syntax errors and unittest failures alike land
   # here as plain FAIL.
-  if [ "$stage" = "fleet-tests" ]; then
+  # BLOCKER 6: "fleet-tests-timeout" (the wall-clock kill above) is the
+  # same verdict for the same reason -- a hung fleet-tests run is exactly
+  # as damning as a red assertion in it, not a candidate for a non-damning
+  # ABORT retry.
+  if [ "$stage" = "fleet-tests" ] || [ "$stage" = "fleet-tests-timeout" ]; then
     echo "FAIL"
     return
   fi
@@ -331,10 +423,38 @@ CARGO_PROFILE_RELEASE_PANIC=unwind cargo test --workspace --release $FEAT >> "$L
 #      paths like /tmp/oxidex-exiftool-cache/... that a CI runner may
 #      lack).
 # Both are a hard FAIL, never an ABORT: classify_failure() special-cases
-# stage=="fleet-tests" above so a stray log line that happens to match an
-# OOM signature can never wave through a genuine test failure here.
-python3 -m py_compile tools/fleet/*.py >> "$L" 2>&1 || fail fleet-tests
-FLEET_TESTS_HERMETIC=1 python3 -m unittest discover -s tools/fleet/tests >> "$L" 2>&1 || fail fleet-tests
+# stage=="fleet-tests" (and "fleet-tests-timeout", BLOCKER 6) above so a
+# stray log line that happens to match an OOM signature can never wave
+# through a genuine test failure here.
+#
+# BLOCKER 6: bounded by FLEET_TESTS_TIMEOUT_S, and test_seams.py is
+# excluded from the module list `_fleet_test_modules()` builds (POLICY,
+# see the header comment above `GATE_VERSION`) -- everything else under
+# tools/fleet/tests/ still runs, `discover`'s own HERMETIC gating inside
+# each test is unaffected.
+_run_fleet_tests_stage() {
+  python3 -m py_compile tools/fleet/*.py || return 1
+  # `_fleet_test_modules` is called from the REPO ROOT (its own glob is
+  # rooted there) before the `cd`, and its output captured first -- unlike
+  # `discover -s tools/fleet/tests`, plain `python3 -m unittest <name>`
+  # resolves <name> against the CURRENT WORKING DIRECTORY (no
+  # tools/fleet/tests/__init__.py makes this a namespace import, not a
+  # package one), so the module names only import if the process is
+  # actually IN that directory when unittest loads them.
+  local mods
+  mods="$(_fleet_test_modules)"
+  ( cd tools/fleet/tests && FLEET_TESTS_HERMETIC=1 python3 -m unittest $mods )
+}
+FLEET_TESTS_TIMEOUT_FLAG="$L.fleet-tests-timeout-flag"
+run_with_wall_clock_timeout "$FLEET_TESTS_TIMEOUT_S" "$FLEET_TESTS_TIMEOUT_FLAG" \
+  _run_fleet_tests_stage >> "$L" 2>&1
+FLEET_TESTS_RC=$?
+if [ -f "$FLEET_TESTS_TIMEOUT_FLAG" ]; then
+  rm -f "$FLEET_TESTS_TIMEOUT_FLAG"
+  echo "GATE: fleet-tests exceeded ${FLEET_TESTS_TIMEOUT_S}s wall clock -- killed" >> "$L"
+  fail fleet-tests-timeout
+fi
+[ "$FLEET_TESTS_RC" -eq 0 ] || fail fleet-tests
 
 just verify-tables >> "$L" 2>&1 || fail verify-tables
 [ -x "$OXIDEX" ] || fail no-binary

@@ -1215,6 +1215,16 @@ def adopt_workers(
 
     claimed_pgids: set = set()
     adopted_pgids: set = set()
+    # A claim we could not READ is a claim whose pgid we cannot add to
+    # `claimed_pgids` -- and the docstring's promise ("a claim we decline
+    # to adopt still protects its process from being swept") cannot be kept
+    # for a pgid we never learned. Rather than guess, the whole orphan
+    # sweep below is skipped for this cycle whenever this happens: a live,
+    # properly-claimed gate must never be killed because its claim payload
+    # merely failed to read (proof: adv-review/proof_adopt_kills.py). The
+    # next reconcile loop tries the read again; the sweep only needs to run
+    # once conditions allow every claim to be read.
+    unreadable_claims = False
 
     for kind in ("gate", "agent"):
         for ref, sha in sorted(claim_mod.list_claims(hub, kind=kind).items()):

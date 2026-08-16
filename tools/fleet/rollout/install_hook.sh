@@ -49,6 +49,18 @@
 #     the bare repo (bare repos default this off), so an allowed update to
 #     a protected ref is durably observable after the fact, independent of
 #     this hook's own stderr output.
+#
+#   * `receive.denyNonFastForwards=true` -- closes R1's history-rewrite
+#     sub-clause. pre-receive's token check and update's deletion-deny stop
+#     an ATTACKER without the token from touching a protected ref, but say
+#     nothing about a force-push that carries a VALID token and simply
+#     rewrites history instead of deleting it outright -- a `--force` push
+#     from someone who legitimately has the token can silently discard
+#     commits the tip already advanced past, the same tip-integrity failure
+#     R1 exists to prevent, just via a non-fast-forward update instead of a
+#     delete. Denying non-fast-forwards at the git-transport level closes
+#     that gap unconditionally, for every ref on the hub, before either
+#     hook even runs.
 set -euo pipefail
 
 REPO="${1:?usage: install_hook.sh <bare-repo-path> [--execute]}"
@@ -235,7 +247,9 @@ fi
 
 act git -C "$REPO" config receive.advertisePushOptions true
 act git -C "$REPO" config core.logAllRefUpdates true
+act git -C "$REPO" config receive.denyNonFastForwards true
 
 say "done. Summary of what changed: post-receive (tip signal, unchanged)," \
     "pre-receive (NEW -- R1 token enforcement), update (NEW -- R1 deletion-deny)," \
-    "train.token (created if absent), receive.advertisePushOptions=true, core.logAllRefUpdates=true."
+    "train.token (created if absent), receive.advertisePushOptions=true, core.logAllRefUpdates=true," \
+    "receive.denyNonFastForwards=true (NEW -- R1 history-rewrite deny)."

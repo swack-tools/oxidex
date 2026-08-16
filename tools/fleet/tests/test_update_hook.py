@@ -126,8 +126,10 @@ class UpdateHookTestCase(unittest.TestCase):
         _run_git(["git", "commit", "--quiet", "--allow-empty", "-m", message], cwd=src)
         return _run_git(["git", "rev-parse", "HEAD"], cwd=src).stdout.decode().strip()
 
-    def _push(self, src, refspec, push_option=None):
+    def _push(self, src, refspec, push_option=None, force=False):
         args = ["git", "push"]
+        if force:
+            args += ["--force"]
         if push_option:
             args += ["-o", push_option]
         args += ["origin", refspec]
@@ -201,6 +203,49 @@ class TestDenyMatrix(UpdateHookTestCase):
         self.assertIn("tip-guard: DENY ref=refs/heads/refactor/tag-machinery", stderr)
         self.assertIn("reason=deletion of a protected ref is never permitted", stderr)
         self.assertEqual(self._remote_sha(TIP_REF), sha, "tip must still be present after the denied deletion")
+
+    def test_forced_non_fast_forward_push_to_tip_with_valid_token_denied(self):
+        """R1's history-rewrite sub-clause, closed by install_hook.sh's
+        `receive.denyNonFastForwards=true`. A VALID token is enough to
+        land an ordinary fast-forward, but not enough to force-push a
+        REWRITE of history the tip already advanced past -- the same
+        tip-integrity failure `test_tip_deletion_with_valid_token_denied`
+        proves for outright deletion, here via a non-fast-forward update
+        instead. This is a git-transport-level guard, unconditional and
+        independent of the token check, so it must deny this push even
+        though its `-o train-token=...` is exactly what a legitimate train
+        push carries.
+        """
+        self._install()
+        token = self._token()
+        src = self._clone()
+        landed_sha = self._commit(src, message="first")
+        landed = self._push(src, f"HEAD:{TIP_REF}", push_option=f"train-token={token}")
+        self.assertEqual(landed.returncode, 0, msg=landed.stderr.decode())
+        self.assertEqual(self._remote_sha(TIP_REF), landed_sha)
+
+        # Rewrite history in place: amend the just-landed commit into a
+        # SIBLING, not a descendant, of what the hub already has -- a
+        # genuine non-fast-forward, not merely a second commit stacked on
+        # top (which a fast-forward push would land just fine and this
+        # test would then prove nothing).
+        amend = _run_git(
+            ["git", "commit", "--amend", "--allow-empty", "--quiet", "-m", "rewritten"], cwd=src,
+        )
+        self.assertEqual(amend.returncode, 0, msg=amend.stderr.decode())
+        rewritten_sha = _run_git(["git", "rev-parse", "HEAD"], cwd=src).stdout.decode().strip()
+        self.assertNotEqual(rewritten_sha, landed_sha, "sanity: amend must produce a different sha")
+
+        forced = self._push(src, f"HEAD:{TIP_REF}", push_option=f"train-token={token}", force=True)
+        self.assertNotEqual(
+            forced.returncode, 0,
+            "a force-push carrying a VALID token must still be denied -- "
+            "receive.denyNonFastForwards, not the token check, is what stops this",
+        )
+        self.assertEqual(
+            self._remote_sha(TIP_REF), landed_sha,
+            "the tip must be UNCHANGED after the denied force-push, not silently rewritten",
+        )
 
     def test_main_ref_protected_the_same_as_tip(self):
         """`refs/heads/main` does not exist on the hub yet in this fleet
