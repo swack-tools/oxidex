@@ -457,7 +457,41 @@ class TestFleetTestsStageHasTeeth(_RealGateHarness, unittest.TestCase):
         result FAIL -- and the whole gate.sh run must finish in well under
         the fixture test's own sleep duration, which is the only way to
         tell "the timeout fired" apart from "the test finished on its own
-        eventually and happened to fail"."""
+        eventually and happened to fail".
+
+        KNOWN FLAKY UNDER LOAD -- PRE-EXISTING, MECHANISM NOT FOUND.
+        Recorded here so the next person to see it red does not re-derive
+        what has already been ruled out.
+
+        Observed rate (instrument: this single test, `python3 -m unittest
+        <this id>` from tools/fleet/tests, on a machine simultaneously
+        running whole fleet-tests stages): roughly 1 in 5 to 1 in 10 while
+        loaded, 0/30 idle. It is NOT caused by BLOCKER A's retry: an A/B
+        alternating gate.sh between 9efc39b2's version (GATE_VERSION 6, no
+        retry) and the current one, 5 runs each interleaved, went red on a
+        v6 run and never on a v7 run.
+
+        The failing shape is always the same: verdict `FAIL fleet-tests`
+        instead of `FAIL fleet-tests-timeout`, the whole gate.sh run
+        finishing in ~1.3s, the stage's captured output EMPTY, and the
+        watchdog's timeout flag never written -- i.e. the stage returned
+        non-zero long before the 3s budget, without the fixture's
+        `time.sleep(30)` ever running and without printing anything.
+
+        Ruled out: `wait`'s status fidelity under gate.sh's
+        `set -m; ( cmd ) &; set +m` shape -- a probe replaying exactly that
+        shape reported a wrong status 0/200 times. Not ruled out: a fork or
+        exec failure inside the backgrounded subshell under load, which
+        would produce precisely this signature (fast, empty, non-zero) and
+        which the current code cannot distinguish from a genuine red stage.
+
+        Deliberately NOT "fixed" by widening the budget or retrying here:
+        the failure is not the budget being too tight (the run ends in
+        1.3s, nowhere near 3s), so a wider budget would only make the flake
+        rarer and the diagnosis harder. BLOCKER A's stage-level isolation
+        retry already absorbs it in the gate -- test_gate_script re-run
+        alone passes -- which is the argument for that policy being
+        systemic rather than a per-test patch."""
         branch = "staging/gate-fixture-slow"
         sleep_s = 30
         hub = _build_fixture_hub(
