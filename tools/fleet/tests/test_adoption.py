@@ -70,11 +70,19 @@ TEST_RENEW = "1"
 
 
 def group_is_gone(pgid: int) -> bool:
-    """Is process group `pgid` completely gone? Signal 0 is the existence
-    probe: it delivers nothing and only reports whether a target exists.
-    `PermissionError` counts as gone for this fixture's purposes -- it means
-    the pgid has been recycled by something we do not own, which cannot be
-    our own SIGKILLed group still holding files open under our tempdir.
+    """Is process group `pgid` completely gone -- for THIS fixture's
+    purpose, which is "nothing in it can write another file"? Signal 0 is
+    the fast existence probe (`PermissionError` counts as gone: the pgid
+    was recycled by something we do not own, which cannot be our group
+    still writing under our tempdir). But a SUCCEEDING probe is not
+    proof of life: on Linux, `killpg(pgid, 0)` keeps succeeding for a
+    fully-SIGKILLed group whose leader is an unreaped ZOMBIE -- parented
+    to this very test process until `p.wait()` in tearDown -- so a
+    signal-only probe burns the whole wait budget on a corpse
+    (deterministic red on the i7; macOS reports ESRCH for the same
+    state, which is why the m5 never saw it). A zombie holds no files,
+    so fall through to the Z-filtered `ps` listing -- the same
+    instrument, for the same reason, that `fleetd.live_pgids` names.
     """
     try:
         os.killpg(pgid, 0)
@@ -84,7 +92,7 @@ def group_is_gone(pgid: int) -> bool:
         return True
     except OSError:
         return True
-    return False
+    return pgid not in fleetd.live_pgids()
 
 
 def killpg_and_wait(pgid: int, timeout: float = 10.0) -> bool:

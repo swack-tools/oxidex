@@ -725,6 +725,20 @@ class TestFleetdStopsWorkOnLostLease(unittest.TestCase):
 
 
 class TestFleetdSingletonRenews(LeaseFixture):
+    # A REAL daemon's renewals are git pushes racing its own reconcile's
+    # git ops for the same fixture hub's ref locks, plus a startup
+    # adoption sweep (`ps` over the whole host) before the loop settles.
+    # The module-wide TTL_S=4/RENEW_S=1 leaves ~3s of ABSOLUTE margin,
+    # which a loaded gate host eats: this test failed "expired after
+    # 0.0s" twice on the i7 under the fleet-tests stage while passing
+    # every time in isolation (probe 2026-08-20: idle-i7 first-read
+    # margin was already down to ~3.8s). Ratios don't protect leases,
+    # absolute margins do -- so the daemon-backed tests get their own
+    # timescale: 10s of margin at the same <=ttl/2 renew clamp. In-process
+    # tests keep the fast module timescale.
+    DTTL_S = 12.0
+    DRENEW_S = 2.0
+
     def test_host_singleton_stays_live_past_its_ttl_and_is_released_on_exit(self):
         host = "singleton-test-host"
         home = self.tmp / "home"
@@ -733,8 +747,8 @@ class TestFleetdSingletonRenews(LeaseFixture):
             **os.environ,
             "HOME": str(home),  # keep the daemon's hub cache out of the real ~
             "FLEET_HOST": host,
-            claim_mod.TTL_ENV: str(TTL_S),
-            claim_mod.RENEW_ENV: str(RENEW_S),
+            claim_mod.TTL_ENV: str(self.DTTL_S),
+            claim_mod.RENEW_ENV: str(self.DRENEW_S),
         }
         # Log to a file, not a pipe nobody reads: a full pipe buffer would
         # block the daemon and the test would blame the lease for it.
@@ -756,17 +770,17 @@ class TestFleetdSingletonRenews(LeaseFixture):
 
         expiries = []
         start = time.monotonic()
-        while time.monotonic() - start < TTL_S * 2 + RENEW_S:
+        while time.monotonic() - start < self.DTTL_S * 2 + self.DRENEW_S:
             elapsed = time.monotonic() - start
             self.assertTrue(
                 is_claim_live(watcher, "host", host),
                 f"the fleetd host singleton expired after {elapsed:.1f}s "
-                f"(ttl={TTL_S}s) while the daemon was still running -- before "
+                f"(ttl={self.DTTL_S}s) while the daemon was still running -- before "
                 "this fix it expired 10 minutes after every daemon start",
             )
             self.assertIsNone(daemon.poll(), "the daemon must still be running")
             expiries.append(watcher.read(ref)["expires_at"])
-            time.sleep(RENEW_S)
+            time.sleep(self.DRENEW_S)
 
         self.assertGreater(
             max(expiries), min(expiries),
@@ -830,8 +844,12 @@ class TestFixtureDaemonCannotSweepUnscopedWorkers(LeaseFixture):
             **os.environ,
             "HOME": str(home),
             "FLEET_HOST": host,
-            claim_mod.TTL_ENV: str(TTL_S),
-            claim_mod.RENEW_ENV: str(RENEW_S),
+            # The daemon-backed timescale (see TestFleetdSingletonRenews):
+            # this test only needs the STARTUP sweep, but its daemon still
+            # renews its singleton, and a load-starved renewer is noise
+            # this test has no business being sensitive to.
+            claim_mod.TTL_ENV: str(TestFleetdSingletonRenews.DTTL_S),
+            claim_mod.RENEW_ENV: str(TestFleetdSingletonRenews.DRENEW_S),
         }
         # Production markers MUST be in force -- confinement by marker is
         # exactly what this test refuses to rely on.
