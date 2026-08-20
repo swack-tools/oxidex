@@ -584,6 +584,92 @@ class TestAdoptWorkers(unittest.TestCase):
                       "the unscoped group must be visibly reported, not silently spared")
         self.assertIsNone(foreign.poll(), "the unscoped process must survive the sweep")
 
+    def test_daemon_stamped_worker_roundtrips_ps_into_the_sweep(self):
+        """The STAMPING half of the scope fix, round-tripped through the
+        daemon's own spawn -- not a hand-stamped decoy. Adversarial review
+        of 68771947 (finding 5) proved by mutation that with the
+        fleet_scope_token stamp deleted from start_gate/start_agent, every
+        fleet test stayed green while the sweep silently became a
+        permanent no-op (nothing real ever carried a token). This test is
+        the mutation's tombstone: start_gate spawns, ps must show the
+        token, and after the claim is released the sweep must be ENTITLED
+        to the kill."""
+        stub = self.tmp / f"{self.marker}-gate.sh"
+        stub.write_text("#!/bin/bash\nsleep 120\n")
+        stub.chmod(0o755)
+        w = fleetd.start_gate(self.hub, "staging/rt", "rt-tag", [str(stub)],
+                              HOST, self.tmp / "logs")
+        self.assertIsNotNone(w, "start_gate must claim and spawn")
+        self.procs.append(w.popen)
+        deadline = time.time() + 10
+        while time.time() < deadline and w.pgid not in fleetd.live_pgids():
+            time.sleep(0.1)
+        found = fleetd.fleet_worker_pgids([self.marker])
+        self.assertIn(w.pgid, found, "the spawned worker must be sweep-visible")
+        self.assertIn(fleetd.fleet_scope_token(self.hub.url), found[w.pgid],
+                      "start_gate's own argv stamp must survive into ps")
+        w.claim.release()
+        res, killed = self.adopt()
+        self.assertEqual(killed, [w.pgid],
+                         f"a daemon-spawned, claim-released worker must sweep: {res}")
+
+    def test_a_claimed_workers_own_stage_subshell_is_kin_not_orphan(self):
+        """gate.sh's wall-clock-timeout stage runs `( ... ) &` under
+        `set -m`: its own pgid, its parent's argv -- marker AND token,
+        since fork keeps argv -- and NO claim naming it. The session id is
+        what proves it part of the claimed gate. Without the kin rule, a
+        restarted daemon's sweep kills its own adopted gate's fleet-tests
+        stage mid-run (adversarial review of 68771947, finding 8)."""
+        script = self.tmp / f"{self.marker}.sh"
+        # compound subshell body: prevents bash's tail-exec collapse from
+        # renaming the group leader to `sleep`, which would hide the very
+        # argv this test needs it to wear
+        script.write_text("#!/bin/bash\nset -m\n( sleep 120; true ) &\nsleep 120\n")
+        script.chmod(0o755)
+        tok = fleetd.fleet_scope_token(self.hub.url)
+        leader = subprocess.Popen([str(script), tok], start_new_session=True,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(leader)
+        sub_pgid = None
+        deadline = time.time() + 10
+        while time.time() < deadline and sub_pgid is None:
+            # the subshell is itself a marker-matched pg leader; find the
+            # one that is not the main script but shares its session
+            for pg in fleetd.fleet_worker_pgids([self.marker]):
+                if pg != leader.pid and fleetd.session_of(pg) == leader.pid:
+                    sub_pgid = pg
+            time.sleep(0.1)
+        self.assertIsNotNone(sub_pgid, "no set -m subshell group appeared")
+        self.make_claim_on_hub("gate", "staging-kin", host=HOST, pgid=leader.pid)
+        res, killed = self.adopt()
+        self.assertEqual(killed, [], f"a claimed worker's kin was killed: {res}")
+        self.assertIn((sub_pgid, leader.pid), res.kin,
+                      "the stage subshell must be recognized as kin, not spared by luck")
+
+    def test_adoption_refuses_a_pgid_recycled_to_a_non_worker(self):
+        """A claim whose recorded pgid now names a live, same-uid process
+        that is NOT a scoped fleet worker must be RELEASED -- the work
+        returns to the queue -- and the bystander neither adopted nor
+        killed. Before this check, adoption trusted the raw pgid and the
+        lost-lease kill inherited that trust blind (adversarial review of
+        68771947, finding 1)."""
+        bystander = subprocess.Popen(["bash", "-c", "sleep 120"],
+                                     start_new_session=True,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(bystander)
+        deadline = time.time() + 10
+        while time.time() < deadline and bystander.pid not in fleetd.live_pgids():
+            time.sleep(0.1)
+        ref = self.make_claim_on_hub("gate", "staging-recycled", host=HOST,
+                                     pgid=bystander.pid)
+        res, killed = self.adopt()
+        self.assertEqual(self.workers, [], "a bystander must not be adopted")
+        self.assertEqual(killed, [], f"a bystander was killed: {res}")
+        self.assertIsNone(bystander.poll(), "the bystander must still be running")
+        self.assertTrue(any("not a scoped fleet worker" in reason
+                            for _, reason in res.released),
+                        f"the claim must be released with the identity reason: {res}")
+
     def test_another_hubs_scope_token_does_not_entitle_this_sweep(self):
         """The token is per-hub, not a global fleet cookie: a worker
         stamped by a DIFFERENT hub's daemon (the production fleet, seen by

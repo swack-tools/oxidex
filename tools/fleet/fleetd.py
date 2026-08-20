@@ -339,6 +339,79 @@ def fleet_scope_token(hub_url: str) -> str:
     return FLEET_SCOPE_PREFIX + digest
 
 
+def _ps_env() -> dict:
+    """Env for `ps` calls whose COMMAND column must not be truncated. procps
+    documents that piped output width is 'undefined' and that an exported
+    COLUMNS 'may be used to exactly determine the width' -- i.e. a stray
+    COLUMNS from the invoking terminal can silently truncate command lines
+    even through a pipe. The scope token rides at the END of a worker's
+    argv, so truncation eats the kill entitlement first and the sweep
+    no-ops silently. `-ww` (unlimited width) plus a scrubbed COLUMNS closes
+    both ends; both are supported by procps and macOS ps."""
+    env = dict(os.environ)
+    env.pop("COLUMNS", None)
+    return env
+
+
+def session_of(pid: int) -> Optional[int]:
+    """Session id of `pid` via the getsid(2) SYSCALL, or None if the pid is
+    gone (or the platform refuses). NOT a `ps` column on purpose: macOS ps
+    prints `sess=` as 0 for everything (it is a kernel struct address
+    there, masked), so a listing-based session map silently no-ops on
+    darwin -- measured 2026-08-20, the same day this was written.
+
+    The orphan sweep uses this to recognize KIN: gate.sh's
+    wall-clock-timeout stage runs `( ... ) &` under `set -m`, which makes
+    the stage subshell a process-group LEADER of its own whose argv is the
+    gate's (marker and scope token included, since a forked bash keeps its
+    parent's argv) -- but no claim ever names that transient pgid. Its
+    SESSION id is the main gate's pid (start_new_session at spawn), which
+    IS the claimed pgid. POSIX: a process group never spans sessions, so
+    the leader's sid speaks for the whole group."""
+    try:
+        return os.getsid(pid)
+    except (OSError, AttributeError):
+        return None
+
+
+def _scoped_worker_in_group(pgid: int, markers: Optional[Sequence[str]],
+                            scope_token: Optional[str]) -> Optional[str]:
+    """Command line of a live, same-uid member of group `pgid` that carries
+    BOTH a worker marker and `scope_token` -- or None. This is adoption's
+    identity check: `fleetd_marker_in_group`'s refusal to trust a recycled
+    pgid, generalized to gate/agent claims (see the adoption block). Any
+    member counts, not only the leader -- the leader IS the worker here,
+    but a worker mid-exec can momentarily present oddly and its children
+    carry the same argv."""
+    if scope_token is None:
+        return None
+    markers = tuple(markers) if markers else worker_markers()
+    try:
+        out = subprocess.run(
+            ["ps", "-wweo", "pgid=,uid=,command="],
+            capture_output=True, text=True, errors="replace", timeout=10,
+            env=_ps_env(),
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    try:
+        uid = os.getuid()
+    except AttributeError:
+        uid = None
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3 or not (parts[0].isdigit() and parts[1].isdigit()):
+            continue
+        if int(parts[0]) != pgid:
+            continue
+        if uid is not None and int(parts[1]) != uid:
+            continue
+        command = parts[2]
+        if any(m in command for m in markers) and scope_token in command:
+            return command
+    return None
+
+
 def fleet_worker_pgids(markers: Optional[Sequence[str]] = None) -> dict:
     """`{pgid: command}` for fleet-worker process groups on this host.
 
@@ -366,8 +439,9 @@ def fleet_worker_pgids(markers: Optional[Sequence[str]] = None) -> dict:
     markers = tuple(markers) if markers else worker_markers()
     try:
         out = subprocess.run(
-            ["ps", "-eo", "pgid=,pid=,uid=,command="],
+            ["ps", "-wweo", "pgid=,pid=,uid=,command="],
             capture_output=True, text=True, errors="replace", timeout=10,
+            env=_ps_env(),
         ).stdout
     except (OSError, subprocess.TimeoutExpired):
         return {}
@@ -1160,6 +1234,11 @@ class AdoptionResult:
     # hand-launched gate. Reported, never killed -- absence of provenance
     # reads "not ours", not "orphan". See `fleet_scope_token`.
     unscoped: list = field(default_factory=list)  # (pgid, command)
+    # Marker-and-token-matched groups whose SESSION belongs to a claimed or
+    # adopted worker: gate.sh's own stage subshells (set -m gives them their
+    # own pgid, fork gives them the gate's argv, token included). Part of a
+    # live worker, not orphans. See `group_sessions`.
+    kin: list = field(default_factory=list)  # (pgid, sid)
     skipped: list = field(default_factory=list)  # (ref, reason)
     # Claims listed on the hub whose payload could not be READ this pass.
     # Non-empty means the orphan sweep's exclusion list is INCOMPLETE and
@@ -1177,6 +1256,7 @@ class AdoptionResult:
             f"orphans_killed={[p for p, _ in self.orphans_killed]} "
             f"skipped={len(self.skipped)}"
             + (f" unscoped={[p for p, _ in self.unscoped]}" if self.unscoped else "")
+            + (f" kin={[p for p, _ in self.kin]}" if self.kin else "")
             + (f" SWEEP-SKIPPED({self.sweep_skipped})" if self.sweep_skipped else "")
         )
 
@@ -1190,6 +1270,7 @@ def adopt_workers(
     killer: Callable[..., str] = kill_process_group,
     markers: Optional[Sequence[str]] = None,
     scope_token: Optional[str] = None,
+    session_probe: Callable[[int], Optional[int]] = session_of,
 ) -> AdoptionResult:
     """Rebuild `workers` from this host's live claims + process groups
     (ARCH-FIX-SPEC.md R6). Appends adopted workers to `workers` in place.
@@ -1329,6 +1410,28 @@ def adopt_workers(
                 _release_claim_ref(hub, ref, sha, host, reason, res)
                 continue
 
+            # IDENTITY, not just liveness. A pgid is a name that gets
+            # recycled; between this claim's write and this daemon's start
+            # (a reboot, a long outage) the number can come to mean an
+            # unrelated same-uid process. Adopting it would hand that
+            # process to the lost-lease kill with no further checks --
+            # `fleetd_marker_in_group` refuses exactly this trust for the
+            # singleton's pgid, and adoption gets the same rule: some live,
+            # same-uid member of the group must carry a worker marker AND
+            # this daemon's scope token. Anything else is released (the
+            # work goes back to the queue) and NEVER killed -- if it is a
+            # recycled bystander it was never ours; if it is a pre-scope
+            # worker across the upgrade boundary it finishes unsupervised,
+            # which the drained-fleet deployment makes moot.
+            member = _scoped_worker_in_group(pgid, markers, scope_token)
+            if member is None:
+                reason = (f"recorded pgid {pgid} is not a scoped fleet "
+                          f"worker (recycled, or pre-scope)")
+                res.released.append((ref, reason))
+                _release_claim_ref(hub, ref, sha, host, reason, res)
+                claimed_pgids.discard(pgid)
+                continue
+
             c = claim_mod.Claim.adopt(hub, ref, expected_host=host)
             if c is None:
                 # The lease is no longer ours (reaped and re-taken between
@@ -1375,6 +1478,18 @@ def adopt_workers(
         if pgid in adopted_pgids or pgid in claimed_pgids:
             continue
         if own_pgid is not None and pgid == own_pgid:
+            continue
+        # KIN: a group whose SESSION is a claimed/adopted worker's pgid is
+        # part of that worker -- gate.sh's `set -m` stage subshells are
+        # their own pg leaders wearing the gate's argv (marker AND token,
+        # since fork keeps argv), but no claim ever names their transient
+        # pgid. The main gate's pid is both the claimed pgid and, via
+        # start_new_session, the session id of everything under it. Killing
+        # these is how a restarted daemon would murder its own adopted
+        # gate's fleet-tests stage mid-run.
+        sid = session_probe(pgid)
+        if sid is not None and (sid in adopted_pgids or sid in claimed_pgids):
+            res.kin.append((pgid, sid))
             continue
         if scope_token not in command:
             # Gate-shaped, claim-less, but not provably OURS. Killing here

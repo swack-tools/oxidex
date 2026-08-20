@@ -39,6 +39,17 @@ restart_via_wrapper() {
   mkdir -p "$(dirname "$PIDFILE")" "$(dirname "$LOG")"
   if [ -f "$PIDFILE" ]; then
     OLD_PID=$(cat "$PIDFILE" 2>/dev/null || true)
+    # IDENTITY before signal: `kill -0` proves a same-uid process with
+    # this pid EXISTS, not that it is our wrapper -- a stale pidfile
+    # (crash, `kill -9`, pod restart resetting the pid namespace) can
+    # name a recycled pid. Verify the command line the same way
+    # fleetd_marker_in_group does before trusting any recorded id; a
+    # mismatch means stale, which is exactly the "does not exist" case.
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null \
+       && ! tr '\0' ' ' < "/proc/$OLD_PID/cmdline" 2>/dev/null | grep -q "fleetd-wrapper"; then
+      echo "restart-fleetd: pidfile names pid $OLD_PID but it is not a fleetd-wrapper (recycled pid; stale pidfile) -- not signaling it"
+      OLD_PID=""
+    fi
     if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
       echo "restart-fleetd: stopping wrapper pid $OLD_PID (SIGTERM) ..."
       kill -TERM "$OLD_PID" 2>/dev/null
