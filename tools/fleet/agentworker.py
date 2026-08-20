@@ -294,6 +294,11 @@ def main(argv=None) -> int:
     ap.add_argument("--intent", help="intent slug to AUTHOR (mutually exclusive with --branch)")
     ap.add_argument("--hub", default=os.environ.get("FLEET_HUB_URL"))
     ap.add_argument("--host", default=os.environ.get("FLEET_HOST", "unknown"))
+    # Inert provenance stamp fleetd appends at spawn (`fleet-scope=<hex>`).
+    # Its only consumer is `ps` via fleetd's orphan sweep; accepted here so
+    # argparse doesn't reject the spawn, and otherwise unused.
+    ap.add_argument("fleet_scope", nargs="?", default=None,
+                    metavar="fleet-scope=TOKEN")
     args = ap.parse_args(argv)
     if not args.hub:
         print("agentworker: no hub URL", file=sys.stderr)

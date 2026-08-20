@@ -217,7 +217,7 @@ The M4's own defect (root-owned files inside `~/.rustup` blocking `rustup update
 Every gate and agent runs inside its own process group — `systemd-run --scope --unit=fleet-<kind>-<key>` on Linux, a dedicated pgid on macOS — recorded in its claim.
 
 - Kill = kill the whole group. Orphaned `cargo`/`rustc` become impossible (incident 9).
-- **Leak detector**: any process group matching `fleet-*` with no live claim is orphaned; the reaper kills it and logs the leak.
+- **Leak detector**: a worker-shaped process group (marker match) with no live claim **and carrying this daemon's own scope token** is orphaned; the reaper kills it and logs the leak. The token (`fleet-scope=<12 hex of sha256(hub URL)>`, an inert extra argv stamped at spawn — see `fleetd.fleet_scope_token`) is what entitles a sweep to kill: marker match alone proves a process is gate-*shaped*, not that it is *ours*. Marker-matched groups without the sweeping daemon's token are reported (`unscoped` in the adoption summary) and left alone — a hand-launched gate is never sweepable, and a test's fixture daemon can never kill the real fleet. Incident 2026-08-20: `TestFleetdSingletonRenews`' fixture daemon, on an empty fixture hub with production markers, swept and killed a live manually-launched gate on the i7 mid-run — the gate's own fleet-tests stage was running the test that murdered it. Pinned end-to-end by `test_lease_protocol.TestFixtureDaemonCannotSweepUnscopedWorkers` (with a verified negative control) and in-process by `test_adoption`'s unscoped/foreign-token tests.
 - Disk/memory guards run *before* start, from `limits` in the desired state, and drain rather than evict when a host crosses a threshold.
 
 ### M9 — Observability

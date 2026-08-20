@@ -781,5 +781,90 @@ class TestFleetdSingletonRenews(LeaseFixture):
         )
 
 
+class TestFixtureDaemonCannotSweepUnscopedWorkers(LeaseFixture):
+    """END-TO-END PIN of the 2026-08-20 incident. This very class of
+    fixture -- a REAL `fleetd.py` on a throwaway hub with production
+    WORKER_MARKERS -- once ran its startup orphan sweep against the whole
+    host: every real gate was marker-matched, claim-less on the EMPTY
+    fixture hub, and therefore killed. A live, manually-launched gate died
+    mid-run on the i7; the fleet-tests stage that ran this suite was
+    itself the murder weapon.
+
+    The scope token is the fix: the daemon may only kill worker-shaped
+    groups stamped with ITS OWN hub's token. Here both kinds run side by
+    side while a real daemon starts, adopts, and sweeps -- the unscoped
+    decoy (argv carries the production marker but no token, exactly like a
+    hand-launched gate) must survive the daemon's whole life, and the
+    scoped decoy (stamped with THIS fixture hub's token, like a worker a
+    crashed predecessor left behind) must die, proving the sweep is armed
+    and selective rather than disarmed."""
+
+    def test_startup_sweep_spares_unscoped_and_kills_scoped(self):
+        import fleetd as fleetd_mod
+
+        # Both decoys are leaders of their own sessions and match the
+        # PRODUCTION marker via their script path -- the exact shape of a
+        # real gate in `ps -eo command=`.
+        marker_dir = self.tmp / "tools" / "fleet"
+        marker_dir.mkdir(parents=True)
+        script = marker_dir / "gate.sh"
+        script.write_text("#!/bin/bash\nsleep 120\n")
+        script.chmod(0o755)
+
+        unscoped = subprocess.Popen(
+            [str(script), "staging/decoy", "hand-launched"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._spawned.append(unscoped)
+        scoped = subprocess.Popen(
+            [str(script), "staging/decoy2", "crashed-predecessor",
+             fleetd_mod.fleet_scope_token(self.hub_path)],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._spawned.append(scoped)
+
+        host = "sweep-scope-test-host"
+        home = self.tmp / "home"
+        (home / ".fleetd").mkdir(parents=True)
+        env = {
+            **os.environ,
+            "HOME": str(home),
+            "FLEET_HOST": host,
+            claim_mod.TTL_ENV: str(TTL_S),
+            claim_mod.RENEW_ENV: str(RENEW_S),
+        }
+        # Production markers MUST be in force -- confinement by marker is
+        # exactly what this test refuses to rely on.
+        env.pop("FLEET_WORKER_MARKERS", None)
+        daemon_log = open(self.tmp / "fleetd-sweep.log", "wb")
+        self.addCleanup(daemon_log.close)
+        daemon = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve().parents[1] / "fleetd.py"),
+             "--hub", self.hub_path, "--interval", "1",
+             "--log-dir", str(self.tmp / "gatelogs")],
+            stdout=daemon_log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            env=env, start_new_session=True,
+        )
+        self._spawned.append(daemon)
+
+        # The startup sweep runs right after the singleton is held; the
+        # scoped decoy's death is the observable that it has happened.
+        self.wait_until(lambda: scoped.poll() is not None, timeout=60,
+                        what="the scoped, claim-less decoy being swept")
+        # Two more reconcile intervals of daemon life, then the assertion
+        # that matters: gate-shaped without our token means UNTOUCHABLE.
+        time.sleep(2)
+        self.assertIsNone(daemon.poll(), "the daemon must still be running")
+        self.assertIsNone(
+            unscoped.poll(),
+            "an unscoped worker-shaped process was killed by a fixture "
+            "daemon's sweep -- the 2026-08-20 incident has regressed",
+        )
+        daemon.send_signal(signal.SIGTERM)
+        daemon.wait(timeout=30)
+        self.assertIsNone(unscoped.poll(),
+                          "the unscoped decoy must outlive the daemon entirely")
+
+
 if __name__ == "__main__":
     unittest.main()

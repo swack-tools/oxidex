@@ -405,14 +405,26 @@ class TestAdoptWorkers(unittest.TestCase):
             p.wait(timeout=10)
         self.tmpdir.cleanup()
 
-    def spawn_stub_worker(self) -> subprocess.Popen:
+    def spawn_stub_worker(self, scoped: bool = True,
+                          scope_token: str = None) -> subprocess.Popen:
         """A parked process in its own session, whose command line carries
         `self.marker` so the orphan sweep can be pointed at it and nothing
-        else on the machine."""
+        else on the machine.
+
+        `scoped=True` (the default) also stamps the command line with this
+        hub's `fleet_scope_token`, the way `start_gate`/`start_agent` stamp
+        real workers -- a sweep is only ENTITLED to kill what carries the
+        sweeping daemon's own token, so every test that expects a kill needs
+        its decoy stamped. `scoped=False` builds the other kind of process:
+        gate-shaped but without provenance (a hand-launched gate, or the
+        real fleet as seen by a fixture daemon)."""
         script = self.tmp / f"{self.marker}.sh"
         script.write_text("#!/bin/bash\nsleep 120\n")
         script.chmod(0o755)
-        p = subprocess.Popen([str(script)], start_new_session=True,
+        argv = [str(script)]
+        if scoped:
+            argv.append(scope_token or fleetd.fleet_scope_token(self.hub.url))
+        p = subprocess.Popen(argv, start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.procs.append(p)
         deadline = time.time() + 10
@@ -532,15 +544,50 @@ class TestAdoptWorkers(unittest.TestCase):
         except (AttributeError, OSError):
             self.skipTest("no process groups on this platform")
         killed: list = []
+        tok = fleetd.fleet_scope_token(self.hub.url)
         res = fleetd.adopt_workers(
             self.hub, HOST, self.workers,
-            worker_probe=lambda _m: {own: "fleetd itself", 424242: "a real orphan"},
+            worker_probe=lambda _m: {own: f"fleetd itself {tok}",
+                                     424242: f"a real orphan {tok}"},
             killer=lambda pgid, **kw: killed.append(pgid) or "fake",
             markers=[self.marker],
         )
         self.assertNotIn(own, killed, "fleetd must never sweep its own group")
         self.assertEqual(res.orphans_killed, [(424242, "fake")],
                          "everything except our own group is still swept")
+
+    def test_unscoped_worker_shaped_group_is_reported_never_killed(self):
+        """THE 2026-08-20 INCIDENT, in miniature. A process can be
+        gate-shaped (marker match), claim-less (nothing on THIS hub names
+        it), and still not be ours: a hand-launched gate, or the entire
+        real fleet as seen by a test's fixture daemon running against an
+        empty fixture hub. Killing on shape alone is how that fixture
+        daemon SIGKILLed a live production gate mid-run. The sweep may only
+        kill what carries its own hub's scope token; everything else is
+        reported in `res.unscoped` and left alone -- while a scoped orphan
+        in the SAME pass still dies, proving the sweep stayed armed."""
+        foreign = self.spawn_stub_worker(scoped=False)
+        ours = self.spawn_stub_worker()
+        res, killed = self.adopt()
+
+        self.assertEqual(killed, [ours.pid],
+                         f"only the scoped orphan may die: {res}")
+        self.assertIn(foreign.pid, [pg for pg, _ in res.unscoped],
+                      "the unscoped group must be visibly reported, not silently spared")
+        self.assertIsNone(foreign.poll(), "the unscoped process must survive the sweep")
+
+    def test_another_hubs_scope_token_does_not_entitle_this_sweep(self):
+        """The token is per-hub, not a global fleet cookie: a worker
+        stamped by a DIFFERENT hub's daemon (the production fleet, seen by
+        a fixture daemon) is exactly as untouchable as one with no token
+        at all."""
+        foreign = self.spawn_stub_worker(
+            scope_token=fleetd.fleet_scope_token("ssh://somewhere/else/oxidex.git"))
+        res, killed = self.adopt()
+
+        self.assertEqual(killed, [], f"a foreign hub's worker was swept: {res}")
+        self.assertIn(foreign.pid, [pg for pg, _ in res.unscoped])
+        self.assertIsNone(foreign.poll())
 
     def test_claim_without_a_usable_pgid_is_released(self):
         ref = claim_mod.claim_ref("agent", "staging-one")

@@ -80,6 +80,7 @@ and doing nothing. See that constant for the argument in both directions.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -304,6 +305,38 @@ def worker_markers() -> tuple:
     if raw and raw.strip():
         return tuple(m for m in (p.strip() for p in raw.split(",")) if m)
     return WORKER_MARKERS
+
+
+# The scope token: an inert extra argv element stamped onto every worker this
+# daemon spawns, derived from the daemon's own hub URL. The orphan sweep may
+# only kill a marker-matched group that ALSO carries the sweeping daemon's
+# token -- a marker alone proves a process is gate-SHAPED, not that it is
+# OURS to signal.
+#
+# Why this exists (incident, 2026-08-20): `TestFleetdSingletonRenews` spawns
+# a real `fleetd.py` against a throwaway fixture hub with production
+# WORKER_MARKERS. That daemon's startup sweep read its (empty) fixture hub,
+# concluded every gate on the host was unleased, and SIGKILLed a live,
+# manually-launched gate mid-run -- no verdict, no journal trace, and the
+# gate's own fleet-tests stage was what ran the murdering test. Scoping the
+# kill to the daemon's own hub makes that impossible for ANY fixture daemon,
+# and as a stated consequence makes out-of-band workers (a human running
+# gate.sh by hand carries no token) unsweepable: absence of provenance now
+# reads "not ours", never "orphan".
+FLEET_SCOPE_PREFIX = "fleet-scope="
+
+
+def fleet_scope_token(hub_url: str) -> str:
+    """`fleet-scope=<first 12 hex of sha256(hub_url)>`. Same URL string
+    (modulo a trailing slash), same token -- which is exactly the guarantee
+    a supervisor restart needs, since the unit file respawns the daemon with
+    the identical --hub argument. Two spellings of one hub (ssh vs local
+    path) yield different tokens; that costs a sweep its kill, never a live
+    worker its life, so it is the acceptable direction."""
+    digest = hashlib.sha256(
+        str(hub_url).rstrip("/").encode("utf-8", "surrogateescape")
+    ).hexdigest()[:12]
+    return FLEET_SCOPE_PREFIX + digest
 
 
 def fleet_worker_pgids(markers: Optional[Sequence[str]] = None) -> dict:
@@ -639,8 +672,12 @@ def start_gate(
     log_dir.mkdir(parents=True, exist_ok=True)
     log = open(log_dir / f"fleetd-gate-{tag}.launch.log", "ab")
     try:
+        # The trailing scope token is inert to gate.sh (it reads $1/$2 only)
+        # but visible in `ps -eo command=`, which is what entitles this
+        # daemon's orphan sweep to kill the group later. See
+        # `fleet_scope_token`.
         popen = subprocess.Popen(
-            gate_command + [branch, tag],
+            gate_command + [branch, tag, fleet_scope_token(hub.url)],
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -682,7 +719,10 @@ def start_agent(
     try:
         popen = subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve().parent / "agentworker.py"),
-             *mode_args, "--hub", hub.url, "--host", host],
+             *mode_args, "--hub", hub.url, "--host", host,
+             # Inert positional (agentworker accepts and ignores it); its only
+             # consumer is `ps` via the orphan sweep. See `fleet_scope_token`.
+             fleet_scope_token(hub.url)],
             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
@@ -1115,6 +1155,11 @@ class AdoptionResult:
     adopted: list = field(default_factory=list)  # (kind, key, pgid)
     released: list = field(default_factory=list)  # (ref, reason)
     orphans_killed: list = field(default_factory=list)  # (pgid, outcome)
+    # Marker-matched, claim-less groups that do NOT carry this daemon's
+    # scope token: a fixture daemon's view of the real fleet, or a human's
+    # hand-launched gate. Reported, never killed -- absence of provenance
+    # reads "not ours", not "orphan". See `fleet_scope_token`.
+    unscoped: list = field(default_factory=list)  # (pgid, command)
     skipped: list = field(default_factory=list)  # (ref, reason)
     # Claims listed on the hub whose payload could not be READ this pass.
     # Non-empty means the orphan sweep's exclusion list is INCOMPLETE and
@@ -1131,6 +1176,7 @@ class AdoptionResult:
             f"released={[r for r, _ in self.released]} "
             f"orphans_killed={[p for p, _ in self.orphans_killed]} "
             f"skipped={len(self.skipped)}"
+            + (f" unscoped={[p for p, _ in self.unscoped]}" if self.unscoped else "")
             + (f" SWEEP-SKIPPED({self.sweep_skipped})" if self.sweep_skipped else "")
         )
 
@@ -1143,6 +1189,7 @@ def adopt_workers(
     worker_probe: Callable[..., dict] = fleet_worker_pgids,
     killer: Callable[..., str] = kill_process_group,
     markers: Optional[Sequence[str]] = None,
+    scope_token: Optional[str] = None,
 ) -> AdoptionResult:
     """Rebuild `workers` from this host's live claims + process groups
     (ARCH-FIX-SPEC.md R6). Appends adopted workers to `workers` in place.
@@ -1162,9 +1209,18 @@ def adopt_workers(
               queue immediately instead of leaving it blocked for the rest
               of the lease's TTL.
       KILL    a fleet-worker process group named by NO live claim on the
-              hub. Unleased running work is the exact hazard leases exist
-              to prevent -- nothing is stopping another host from starting
-              the same branch beside it -- so it goes, by group, per M8.
+              hub AND carrying this daemon's own scope token in its command
+              line (`fleet_scope_token(hub.url)`, stamped at spawn by
+              `start_gate`/`start_agent`). Unleased running work is the
+              exact hazard leases exist to prevent -- nothing is stopping
+              another host from starting the same branch beside it -- so it
+              goes, by group, per M8. But a marker match alone only proves
+              a process is gate-SHAPED; the token is what proves THIS
+              daemon's hub spawned it. A marker-matched group without our
+              token -- a human's hand-launched gate, or (the incident that
+              forced this) the entire real fleet as seen by a test's
+              fixture daemon on an empty fixture hub -- lands in
+              `res.unscoped`, logged and left alone.
 
     Claims held by other hosts are counted in `skipped` and otherwise
     untouched: not adopted, not released, and (because the kill set
@@ -1208,6 +1264,8 @@ def adopt_workers(
     """
     res = AdoptionResult()
     live = pgid_probe()
+    if scope_token is None:
+        scope_token = fleet_scope_token(hub.url)
     try:
         own_pgid = os.getpgrp()
     except (AttributeError, OSError):
@@ -1317,6 +1375,20 @@ def adopt_workers(
         if pgid in adopted_pgids or pgid in claimed_pgids:
             continue
         if own_pgid is not None and pgid == own_pgid:
+            continue
+        if scope_token not in command:
+            # Gate-shaped, claim-less, but not provably OURS. Killing here
+            # is how a fixture daemon murders the real fleet (or a
+            # hand-launched gate). Report it -- an operator can still see
+            # and judge it -- and leave it alone.
+            res.unscoped.append((pgid, command[:120]))
+            print(
+                f"fleetd[{host}] worker-shaped group {pgid} ({command[:80]}) has no "
+                f"live claim but does not carry this daemon's scope token -- "
+                f"not ours to signal, left alone",
+                file=sys.stderr,
+                flush=True,
+            )
             continue
         # Verify the kill by LISTING, not by `killpg(pgid, 0)`. An orphan's
         # leader becomes a zombie the instant it dies and its reparenting
