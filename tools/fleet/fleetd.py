@@ -2096,11 +2096,11 @@ def main(argv: Optional[list] = None) -> int:
 
     host = host_identity()
     repo_root = Path(args.repo_root)
-    hub = Hub(args.hub, workdir=Path.home() / ".fleetd" / "hubcache")
-    # `code_url` is fleetlib.Hub's own attribute (PLAN Stage 1 task 2,
-    # default `url`) for exactly this split; setting it here works whether
-    # or not that attribute already exists on this checkout's Hub class.
-    hub.code_url = args.code
+    # `code_url` is fleetlib.Hub's own constructor argument (PLAN Stage 1
+    # task 2, default `url`, resolved once at construction -- the single
+    # definition) for exactly this split: coordination refs on `--hub`,
+    # branch/tree history on `--code`.
+    hub = Hub(args.hub, workdir=Path.home() / ".fleetd" / "hubcache", code_url=args.code)
     workers: list = []
     gate_command = default_gate_command(repo_root)
 
