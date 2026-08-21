@@ -51,6 +51,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import time
@@ -111,6 +112,23 @@ _TRANSPORT_HINTS = (
     "early eof",
     "the remote end hung up unexpectedly",
     "host key verification failed",
+    # GitHub-specific, and the reason these three are HINTS rather than
+    # push-rejection patterns. When the spine is a GitHub repo instead of
+    # an ssh hub, the way it says "not now" is a rejection, not a dropped
+    # connection: a primary or secondary rate limit, or the abuse-detection
+    # mechanism, comes back as a refused git operation whose stderr carries
+    # `remote: You have exceeded a secondary rate limit`, `remote: You have
+    # triggered an abuse detection mechanism`, or an `API rate limit
+    # exceeded` line. Every one of those is TRANSIENT -- retry in a minute
+    # and it works -- so classifying one as a lost CAS race would be the
+    # expensive direction of being wrong twice over: `create` returning
+    # False means "somebody else already holds this" (so this host stands
+    # down from work nobody is doing), and `update` returning False means
+    # "my lease moved under me" (which `claim._mark_lost` turns into a
+    # killed healthy worker, `claim.py` L677-682). Transient must raise.
+    "rate limit",
+    "secondary rate",
+    "abuse detection",
 )
 
 # git's "the whole repository is gone" wording interpolates the URL between
@@ -137,6 +155,99 @@ _REPO_NOT_FOUND_RE = re.compile(r"repository\s+'[^']*'\s+not found")
 # The absence signature is therefore matched EXACTLY, and every message
 # that is not it -- recognized transport hint or not -- raises.
 _ABSENT_REF_HINT = "couldn't find remote ref"
+
+
+# HTTPS credentials for the GitHub spine, supplied by FILE and never by
+# argv, environment value, or an interactive prompt.
+#
+# `~/.keel/github.token` is a per-host fine-grained PAT (SPEC 8,
+# "Credentials"); `FLEET_GIT_TOKEN_FILE` names it. When that variable is
+# set, every git command this module runs is given a `credential.helper`
+# pointing at the shell script below, which reads the token out of the file
+# and hands it to git on its stdout. The token therefore never appears in a
+# process argument list (`ps -eo args` shows it to every user on the host),
+# never in an environment value (`_ps_env` reads those), and never in a
+# `_Result` -- git does not echo a password it received from a helper, and
+# the helper itself writes nothing but `username=`/`password=` on stdout.
+#
+# Two config entries, not one. The first is `credential.helper=` with an
+# EMPTY value, which is git's documented way to reset the helper list
+# (git-config(1), credential.helper: "an empty value resets the helper
+# list to empty"); without it a host-level helper configured in
+# ~/.gitconfig or /etc/gitconfig -- osxkeychain on the laptops, and the
+# 1Password agent this fleet has already been bitten by -- runs FIRST and
+# git uses whatever it answers. The second entry is ours. The pair makes
+# "the token comes from FLEET_GIT_TOKEN_FILE" a fact rather than a hope.
+#
+# The entries are APPENDED at `GIT_CONFIG_COUNT`, not written at index 0,
+# so a caller that has already staged its own GIT_CONFIG_* pairs keeps
+# them.
+_TOKEN_FILE_ENV = "FLEET_GIT_TOKEN_FILE"
+_CREDENTIAL_HELPER = Path(__file__).resolve().parent / "keel" / "git-credential-file"
+
+
+def credential_env(env: Optional[dict] = None) -> dict:
+    """`env` (default `os.environ`) copied, with the fleet credential
+    helper wired in when `FLEET_GIT_TOKEN_FILE` is set.
+
+    Returns a NEW dict; the input is never mutated. When the variable is
+    unset the copy is returned untouched -- so a fleet that has not opted
+    into HTTPS-token auth runs the exact git invocations it ran before this
+    function existed. That "unchanged when unset" property is what lets the
+    whole existing test suite and the `git init --bare` fixtures stay as
+    they are.
+
+    Raises `HubError` when the variable IS set but the helper script or the
+    token file is missing or unreadable. Failing loud is deliberate and is
+    the same lesson as `scripts/instrument.py`'s `resolve_binary()`: a
+    credential path that silently resolves to nothing does not stop
+    anything, it just makes every subsequent git command fail with an
+    authentication error that reads like a permissions problem on the
+    remote. The message names the PATH and never the contents.
+    """
+    out = dict(os.environ if env is None else env)
+    token_file = out.get(_TOKEN_FILE_ENV)
+    if not token_file:
+        return out
+
+    if not _CREDENTIAL_HELPER.is_file():
+        raise HubError(
+            f"{_TOKEN_FILE_ENV} is set but the credential helper "
+            f"{_CREDENTIAL_HELPER} does not exist"
+        )
+    if not os.access(_CREDENTIAL_HELPER, os.X_OK):
+        raise HubError(
+            f"{_TOKEN_FILE_ENV} is set but the credential helper "
+            f"{_CREDENTIAL_HELPER} is not executable"
+        )
+    token_path = Path(token_file)
+    if not token_path.is_file():
+        raise HubError(
+            f"{_TOKEN_FILE_ENV}={token_file} does not name an existing file"
+        )
+    if not os.access(token_path, os.R_OK):
+        raise HubError(f"{_TOKEN_FILE_ENV}={token_file} is not readable")
+
+    # `!` makes git treat the value as a command rather than a path or a
+    # `git credential-<name>` shorthand; shlex.quote survives a helper
+    # path containing spaces, which git would otherwise hand to `sh -c`
+    # word-split (run-command.c's `need_shell` lists space as a
+    # metacharacter, so a quoted path is not optional here).
+    entries = (
+        ("credential.helper", ""),
+        ("credential.helper", "!" + shlex.quote(str(_CREDENTIAL_HELPER))),
+    )
+    try:
+        base = int(out.get("GIT_CONFIG_COUNT", "0") or 0)
+    except ValueError:
+        base = 0
+    if base < 0:
+        base = 0
+    for offset, (key, value) in enumerate(entries):
+        out[f"GIT_CONFIG_KEY_{base + offset}"] = key
+        out[f"GIT_CONFIG_VALUE_{base + offset}"] = value
+    out["GIT_CONFIG_COUNT"] = str(base + len(entries))
+    return out
 
 
 def _is_transport_failure(stderr: str) -> bool:
@@ -194,10 +305,27 @@ class Hub:
     uses as a private, disposable object-store cache (a bare repo it will
     create if absent) -- it is never the hub itself and is never checked
     out to a working tree.
+
+    `code_url` is the remote that answers *code* questions -- "is this sha
+    an ancestor of the tip", "do I have these objects", "fetch this staging
+    branch" -- as opposed to the coordination refs under `refs/fleet/*`
+    that `url` answers. Historically they were the same repository, so it
+    DEFAULTS TO `url` and every existing caller, fixture and test sees no
+    change whatsoever. They diverge only once coordination state moves to a
+    private repo while the code stays public (SPEC 8, "Two repos, two
+    exposures"): the three borrowers named in SPEC 4.4
+    (`workqueue._fetch_for_ancestry`, `dispatch._have_objects`,
+    `train._fetch_into_hub_cache`) read `code_url` instead of `url`.
+
+    The default is resolved ONCE, at construction. Reassigning `hub.url`
+    afterwards does not move `code_url` -- there is no live aliasing to
+    reason about, which matters because `FallbackHub` (SPEC 4.3) presents
+    the GitHub half's `.url`/`.workdir`/`.code_url` as its own.
     """
 
-    def __init__(self, url: str, workdir: Path):
+    def __init__(self, url: str, workdir: Path, code_url: Optional[str] = None):
         self.url = str(url)
+        self.code_url = self.url if code_url is None else str(code_url)
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
         if not (self.workdir / "objects").is_dir():
@@ -477,6 +605,67 @@ class Hub:
             out[refname] = found_sha
         return out
 
+    def fetch_namespace(self, prefix: str) -> dict:
+        """`{ref: sha}` for the ref AT `prefix` and every ref UNDER it, in
+        exactly ONE `ls-remote` round trip.
+
+        This is the whole-namespace read: one network hop answers "what is
+        in `refs/fleet/claims/` right now", which is what an index build
+        (SPEC 3.2, the server's `CachedHub`) and a prefix query
+        (`GET /v1/refs?prefix=`) each need, and what a per-ref `sha()` loop
+        turns into N hops of roughly 0.6 s apiece against GitHub.
+
+        HOW IT DIFFERS FROM `list()`, which also returns `{ref: sha}` from
+        one `ls-remote` and is deliberately left exactly as it was:
+        `list()` normalises its argument to `<prefix>/*`, so a ref sitting
+        AT the prefix is invisible to it -- `list("refs/fleet/signals/tip")`
+        looks for `refs/fleet/signals/tip/*` and reports the tip signal, a
+        ref the train CAS-bumps on every advance, as ABSENT. That is
+        harmless for `list()`'s existing callers, every one of which passes
+        a directory-shaped prefix, and wrong for a namespace read that must
+        not silently drop a leaf.
+
+        So `fetch_namespace` hands the single `ls-remote` BOTH patterns --
+        `git ls-remote` accepts many and unions them
+        (`builtin/ls-remote.c`'s `tail_match`). Only one of the two can ever
+        match, and the caller is precisely who does not know which:
+        `refs/fleet/signals/tip` is a leaf and `refs/fleet/claims` is a
+        directory, and git's ref store refuses to let a prefix be both at
+        once (a second `create` under an existing leaf comes back False,
+        `cannot lock ref ...: '<prefix>' exists` -- measured, and pinned by
+        `test_fleetlib.TestFetchNamespace.
+        test_git_refuses_a_leaf_and_a_directory_of_the_same_name`). Asking
+        both questions in the one round trip is how the answer stops
+        depending on knowing the shape in advance.
+
+        Trailing `/` and a trailing `*` are accepted and normalised away,
+        so `refs/fleet/claims`, `refs/fleet/claims/` and
+        `refs/fleet/claims/*` all mean the same namespace.
+
+        Raises `HubUnreachableError` on transport failure, like every other
+        remote method here: an empty dict means the namespace is empty, and
+        that must never be what an unreachable spine looks like.
+        """
+        base = str(prefix).strip()
+        while base.endswith("*"):
+            base = base[:-1]
+        base = base.rstrip("/")
+        if not base:
+            raise ValueError("fetch_namespace requires a non-empty ref prefix")
+        result = self._run(["ls-remote", self.url, base, base + "/*"])
+        if result.returncode != 0:
+            raise HubUnreachableError(
+                f"ls-remote {base} failed: {result.describe()}"
+            )
+        out: dict = {}
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            found_sha, refname = line.split("\t", 1)
+            out[refname] = found_sha
+        return out
+
     # ---------------------------------------------------------------- #
     # Internals
     # ---------------------------------------------------------------- #
@@ -552,9 +741,40 @@ class Hub:
         return commit.stdout.strip()
 
     def _interpret_push(self, result: _Result) -> bool:
+        """`True` = the CAS won, `False` = it lost a race, raise = we do
+        not know.
+
+        ORDER IS THE RULE, and it is the same rule `_read` states at its
+        fetch-failure branch: TRANSPORT IS CONSULTED FIRST, so a message
+        carrying both a transport hint and a content-rejection pattern is
+        transport. It has to be, now that the spine is GitHub. A secondary
+        rate limit arrives as
+
+            remote: You have exceeded a secondary rate limit ...
+             ! [remote rejected] <sha> -> refs/fleet/claims/x (...)
+            error: failed to push some refs to '<url>'
+
+        -- a REJECTION carrying `[rejected]`, which is a
+        `_PUSH_REJECTION_PATTERNS` entry. Read content-first, that is
+        indistinguishable from losing a CAS race, and the two lies it tells
+        are both expensive: `create` -> False reads as "another host holds
+        this claim" and stands a healthy host down from work nobody is
+        doing, and `update` -> False reads as "my lease moved under me",
+        which `claim._mark_lost` (claim.py L677-682) turns into a killed
+        healthy gate. Both are silent. Raising instead is the behaviour a
+        blip already gets: `claim._note_renew_failure` tolerates it and the
+        next renewal re-reads and adopts our own landed write.
+
+        Nothing else changes: a rejection with no transport hint still
+        returns False (the overwhelmingly common case -- git's plain
+        `(stale info)` / `(non-fast-forward)` wording carries no hint), and
+        an unclassifiable failure still raises.
+        """
         if result.returncode == 0:
             return True
         low = result.stderr.lower()
+        if _is_transport_failure(low):
+            raise HubUnreachableError(f"push failed transiently: {result.describe()}")
         if any(pattern in low for pattern in _PUSH_REJECTION_PATTERNS):
             return False
         raise HubUnreachableError(f"push failed unexpectedly: {result.describe()}")
@@ -565,7 +785,11 @@ class Hub:
 
     @staticmethod
     def _raw_run(cmd: list, input: Optional[bytes] = None, timeout: int = 30) -> _Result:
-        env = dict(os.environ)
+        # `credential_env` returns a plain copy of os.environ when
+        # FLEET_GIT_TOKEN_FILE is unset, so this line is a no-op for every
+        # ssh-spine caller and the git invocation below is byte-identical
+        # to the one this method has always issued.
+        env = credential_env()
         env.update(
             {
                 "GIT_AUTHOR_NAME": "oxidex-fleet",
