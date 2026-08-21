@@ -153,8 +153,17 @@
 # unchanged.
 #   - FLEET_HUB_URL is now REQUIRED (verdict-cache hub): absent -> ABORT,
 #     stage "config", before anything is cloned or built.
-#   - FLEET_CODE_URL is now REQUIRED (the repo holding staging/* and
-#     refactor/tag-machinery): absent -> ABORT, stage "config".
+#   - FLEET_CODE_URL (the repo holding staging/* and refactor/tag-machinery)
+#     DEFAULTS TO FLEET_HUB_URL when unset. B4 (Stage 1 integration review):
+#     the two-repo split is the steady state, but a single-repo stand-in
+#     (one host serving both roles, e.g. the i7 workflow's
+#     FLEET_HUB_URL=<local repo> with no FLEET_CODE_URL at all) must keep
+#     working exactly as it did before the split introduced a second
+#     variable -- that is the whole point of a default, not a second
+#     required knob. ABORT, stage "config", fires only when NEITHER var is
+#     set (in practice unreachable here since the FLEET_HUB_URL check above
+#     already exits first, but the guard stays in case that ordering ever
+#     changes).
 #   - EXIFTOOL_CACHE_DIR overrides the pinned-oracle cache directory;
 #     unset keeps today's exact default. See
 #     tools/fleet/tests/test_no_hardcoded_hosts.py for the fence this
@@ -408,21 +417,32 @@ D="$HOME/git/gate-$TAG"; rm -rf "$D"
 #
 # PLAN Stage 1 task 4: this is the repo holding staging/* and
 # refactor/tag-machinery -- distinct from $HUB_URL (the verdict-cache
-# hub) now that the two live in separate repos. REQUIRED, no default:
-# previously both this and $HUB_URL defaulted (to the old
-# work2.oxidex.net ssh remote and to $HOME/git/oxidex.git respectively)
-# and, because they shared one variable name, the clone default silently
-# won and store_verdict/lookup below ran against it instead of the
-# verdict-cache hub whenever FLEET_HUB_URL was unset -- moot in practice
-# because every production host always set FLEET_HUB_URL, but a trap for
-# anyone who didn't. Separate required variables removes both the
-# hardcoded remote and that shadowing.
-if [ -z "${FLEET_CODE_URL:-}" ]; then
-  echo "ABORT config: FLEET_CODE_URL not set" > "$V"
+# hub) once the two live in separate repos. Previously both this and
+# $HUB_URL defaulted (to the old work2.oxidex.net ssh remote and to
+# $HOME/git/oxidex.git respectively) and, because they shared one
+# variable name, the clone default silently won and store_verdict/lookup
+# below ran against it instead of the verdict-cache hub whenever
+# FLEET_HUB_URL was unset -- moot in practice because every production
+# host always set FLEET_HUB_URL, but a trap for anyone who didn't.
+# Separate variables remove both the hardcoded remote and that shadowing.
+#
+# B4 (Stage 1 integration review): FLEET_CODE_URL DEFAULTS TO
+# FLEET_HUB_URL when unset, rather than being independently required. A
+# single-repo stand-in (one host, one repo playing both the state and
+# code role -- the i7 workflow's FLEET_HUB_URL=<local repo>, no
+# FLEET_CODE_URL) was 100% ABORT before this default existed: the repo
+# it needed was already named, just under the other variable. The loud
+# ABORT below fires only when NEITHER var is set -- $HUB_URL is already
+# guaranteed non-empty by the check earlier in this script, so in
+# practice this can only be reached with $CODE_URL resolved, but the
+# explicit check is kept rather than assumed across a possible future
+# reorder.
+CODE_URL="${FLEET_CODE_URL:-$HUB_URL}"
+if [ -z "$CODE_URL" ]; then
+  echo "ABORT config: neither FLEET_CODE_URL nor FLEET_HUB_URL set" > "$V"
   write_json "ABORT" "config"
   exit 7
 fi
-CODE_URL="$FLEET_CODE_URL"
 CLONE_SRC="$HOME/git/oxidex.git"
 if [ -d "$CLONE_SRC" ]; then
   git -C "$CLONE_SRC" fetch -q "$CODE_URL" \

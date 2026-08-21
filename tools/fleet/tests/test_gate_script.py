@@ -328,6 +328,100 @@ def _build_fixture_hub(tmp: Path, staging_files: dict, branch: str) -> Path:
     return bare
 
 
+class TestFleetCodeUrlDefaultsToHubUrl(unittest.TestCase):
+    """B4 (Stage 1 integration review): `FLEET_CODE_URL` must default to
+    `FLEET_HUB_URL` when unset, so a single-repo stand-in (one host, one
+    repo playing both the verdict-cache-hub and code-repo role -- the i7
+    workflow's `FLEET_HUB_URL=<local repo>` with no `FLEET_CODE_URL` at
+    all) keeps working exactly as it did before the two-repo split
+    introduced a second variable. Before this fix that stand-in was 100%
+    `ABORT config: FLEET_CODE_URL not set`, on every single loop.
+
+    Runs the REAL `tools/fleet/gate.sh` as a subprocess (same convention as
+    `_RealGateHarness`), but does NOT require the real pinned ExifTool
+    oracle: `EXIFTOOL_CACHE_DIR` is pointed at a fresh, guaranteed-empty
+    directory, so the oracle-precondition check fails deterministically
+    REGARDLESS of what is or isn't installed on the machine running this
+    test. That failure (`ABORT oracle-precondition`) is itself the proof
+    the fix works -- reaching it means gate.sh got all the way through
+    cloning the fixture hub under the defaulted `CODE_URL`, past both
+    config-abort checks, using nothing but `FLEET_HUB_URL`.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="gate-code-url-default-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _run(self, branch: str, hub: Path, tag: str, extra_env: dict) -> dict:
+        home = self.tmp / f"home-{tag}"
+        home.mkdir()
+        # A directory that cannot possibly hold a real exiftool-pinned.sh --
+        # guarantees the oracle-precondition check fails fast, on any host,
+        # without ever touching cargo/clippy/build.
+        no_oracle = self.tmp / f"no-oracle-{tag}"
+        env = {
+            "HOME": str(home),
+            "USER": os.environ.get("USER", "fleet-test"),
+            "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin",
+            "EXIFTOOL_CACHE_DIR": str(no_oracle),
+        }
+        env.update(extra_env)
+        result = subprocess.run(
+            ["bash", str(GATE_SH), branch, tag],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        verdict_path = home / "gatelogs" / f"gate-{tag}.verdict"
+        json_path = home / "gatelogs" / f"gate-{tag}.json"
+        return {
+            "rc": result.returncode,
+            "verdict": verdict_path.read_text() if verdict_path.exists() else None,
+            "json": json.loads(json_path.read_text()) if json_path.exists() else None,
+        }
+
+    def test_hub_url_alone_reaches_the_oracle_stage_not_a_config_abort(self):
+        branch = "staging/code-url-default-fixture"
+        hub = _build_fixture_hub(self.tmp, {}, branch)
+
+        res = self._run(branch, hub, "huburl-only", {"FLEET_HUB_URL": str(hub)})
+
+        self.assertIsNotNone(res["verdict"], "gate.sh must have written a verdict at all")
+        self.assertNotIn("ABORT config", res["verdict"],
+                          f"FLEET_CODE_URL must default to FLEET_HUB_URL, not abort: {res}")
+        self.assertNotIn("FLEET_CODE_URL not set", res["verdict"])
+        self.assertIsNotNone(res["json"])
+        self.assertEqual(res["json"]["result"], "ABORT")
+        self.assertEqual(
+            res["json"]["stage"], "oracle-precondition",
+            f"expected to clone under the defaulted CODE_URL and reach the oracle "
+            f"check, got stage={res['json']['stage']!r}: {res}",
+        )
+
+    def test_neither_url_set_is_still_a_loud_config_abort(self):
+        """The one case the loud ABORT must still cover: nothing at all
+        named a repo. `FLEET_HUB_URL`'s own check (independent of the
+        default added here) fires first."""
+        branch = "staging/code-url-default-fixture-neither"
+        _build_fixture_hub(self.tmp, {}, branch)  # unused; no URL is ever passed
+
+        res = self._run(branch, self.tmp / "unused.git", "neither-url", {})
+
+        self.assertEqual(res["verdict"], "ABORT config: FLEET_HUB_URL not set\n")
+        self.assertEqual(res["json"]["result"], "ABORT")
+        self.assertEqual(res["json"]["stage"], "config")
+
+    def test_code_url_alone_without_hub_url_still_aborts(self):
+        """The default is one-directional: FLEET_CODE_URL defaults to
+        FLEET_HUB_URL, never the reverse. FLEET_HUB_URL (the verdict-cache
+        hub) stays independently required."""
+        branch = "staging/code-url-default-fixture-codeonly"
+        hub = _build_fixture_hub(self.tmp, {}, branch)
+
+        res = self._run(branch, hub, "codeurl-only", {"FLEET_CODE_URL": str(hub)})
+
+        self.assertEqual(res["verdict"], "ABORT config: FLEET_HUB_URL not set\n")
+        self.assertEqual(res["json"]["stage"], "config")
+
+
 _STUB_TOOL = "#!/bin/sh\nexit 0\n"
 
 

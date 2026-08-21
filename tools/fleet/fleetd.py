@@ -711,6 +711,37 @@ def kill_worker(w: "Worker", grace: Optional[float] = None) -> str:
     return outcome
 
 
+def _spawn_env(hub: Hub) -> dict:
+    """The environment for a spawned gate/agent subprocess (B4, Stage 1
+    integration review).
+
+    `subprocess.Popen` with no `env=` fully inherits fleetd's own process
+    environment -- fine as long as fleetd's config always arrived via
+    FLEET_HUB_URL/FLEET_CODE_URL in that environment. It stopped being
+    fine the moment fleetd could also be started `--hub <state> --code
+    <code>` on argv alone (`main`'s `args.hub`/`args.code`): those land on
+    `hub.url`/`hub.code_url` but are never written back into
+    `os.environ`, so a spawned `gate.sh` -- which reads the two vars
+    directly, never argv -- saw neither and hit its "ABORT config: … not
+    set" path, every loop, with the daemon reporting nothing wrong.
+
+    So the child's hub config is made an explicit function of the `Hub`
+    object fleetd is actually running against, never of how fleetd itself
+    happened to be invoked. Everything else in fleetd's own environment is
+    inherited unchanged -- in particular FLEET_GIT_TOKEN_FILE (the
+    credential-helper token file `fleetlib._raw_run` reads),
+    EXIFTOOL_CACHE_DIR (the pinned-oracle cache dir `gate.sh` reads) and
+    FLEET_TRAIN_DEPLOY_KEY (the train's ssh deploy key path) pass straight
+    through when the operator set them on fleetd's own environment, so a
+    gate or train subprocess sees the identical value fleetd saw rather
+    than a default re-derived independently downstream.
+    """
+    env = dict(os.environ)
+    env["FLEET_HUB_URL"] = hub.url
+    env["FLEET_CODE_URL"] = hub.code_url
+    return env
+
+
 def start_gate(
     hub: Hub,
     branch: str,
@@ -756,6 +787,7 @@ def start_gate(
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             start_new_session=True,  # its own pgid == its pid
+            env=_spawn_env(hub),  # B4: explicit FLEET_HUB_URL/FLEET_CODE_URL
         )
     except OSError:
         c.release()
@@ -793,12 +825,17 @@ def start_agent(
     try:
         popen = subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve().parent / "agentworker.py"),
-             *mode_args, "--hub", hub.url, "--host", host,
+             *mode_args, "--hub", hub.url,
+             # S2 (Stage 1 integration review): the CODE repo is what the
+             # worker clones and probes `refs/heads/*` on; `--hub` is the
+             # STATE repo and answers `refs/fleet/intents/*` only.
+             "--code", hub.code_url, "--host", host,
              # Inert positional (agentworker accepts and ignores it); its only
              # consumer is `ps` via the orphan sweep. See `fleet_scope_token`.
              fleet_scope_token(hub.url)],
             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
             start_new_session=True,
+            env=_spawn_env(hub),  # B4: explicit FLEET_HUB_URL/FLEET_CODE_URL
         )
     except OSError:
         c.release()
@@ -1890,66 +1927,107 @@ def reconcile_once(
             if reason is not None:
                 res.refused.append(("limits", reason))
             else:
+                # B1 (Stage 1 integration review), both halves: the queue
+                # asks the CODE repo for the tip (`workqueue.compute` via
+                # `hub.code_sha`), and a missing tip comes back as a
+                # refusal REASON rather than a `QueueError` -- which is not
+                # a `HubError`, so before this it propagated straight out
+                # of `reconcile_once`, ahead of every hub-read guard above,
+                # and crashed the daemon before its first heartbeat (e.g. a
+                # fleetd pointed via `--hub <state-repo>` at a state repo
+                # that carries no `refs/heads/*` at all, only
+                # `refs/fleet/*`). Degraded exactly like the HUB READS
+                # block: nothing starts this loop, the reason is on the
+                # record (`queue-unavailable`), the daemon lives to retry
+                # next loop.
                 q, queue_refusal = workqueue.Queue(hub).compute_or_refusal()
                 if queue_refusal is not None:
                     res.refused.append(queue_refusal)
+                    q = None
 
-                def _branch(entry):
-                    return entry.ref.removeprefix("refs/heads/")
+                if q is not None:
+                    def _branch(entry):
+                        return entry.ref.removeprefix("refs/heads/")
 
-                # Verdict-aware selection (ARCH-FIX R4): don't offer a
-                # branch the SHARED verdict cache -- or, failing that, this
-                # host's own gatelogs recall -- already knows the answer
-                # for. PASS is waiting on the train, FAIL needs its author.
-                # `tip_sha` gates the lookup on `hub.sha` rather than
-                # `res.tip_generation` because both keys are the tip's SHA:
-                # the merge tree the hub cache is keyed on, and the
-                # `base_tip` gate.sh actually recorded in its JSON.
-                # `_TreeResolver` and `platform_id` are built ONCE for the
-                # whole loop -- see the module's "THE COST, BOUNDED" note.
-                tip_sha = hub.code_sha(workqueue.TIP_REF)  # CODE ref -- SPEC 4.4
-                gate_version = _gate_version(repo_root)
-                memo = _scan_gatelogs_memo(log_dir) if tip_sha else {}
-                trees = _TreeResolver(hub, tip_sha, [q[s].ref for s in q])
-                index = _VerdictIndex(hub)
-                platform_id = compute_platform_id() if tip_sha else None
+                    # Verdict-aware selection (ARCH-FIX R4): don't offer a
+                    # branch the SHARED verdict cache -- or, failing that, this
+                    # host's own gatelogs recall -- already knows the answer
+                    # for. PASS is waiting on the train, FAIL needs its author.
+                    # `tip_sha` gates the lookup on `hub.code_sha` rather than
+                    # `res.tip_generation` because both keys are the tip's SHA:
+                    # the merge tree the hub cache is keyed on, and the
+                    # `base_tip` gate.sh actually recorded in its JSON.
+                    # `_TreeResolver` and `platform_id` are built ONCE for the
+                    # whole loop -- see the module's "THE COST, BOUNDED" note.
+                    tip_sha = hub.code_sha(workqueue.TIP_REF)  # CODE ref -- SPEC 4.4
+                    gate_version = _gate_version(repo_root)
+                    memo = _scan_gatelogs_memo(log_dir) if tip_sha else {}
+                    trees = _TreeResolver(hub, tip_sha, [q[s].ref for s in q])
+                    index = _VerdictIndex(hub)
+                    platform_id = compute_platform_id() if tip_sha else None
 
-                candidates = []
-                for s in q:
-                    b = _branch(q[s])
-                    if any(w.branch == b for w in workers):
-                        continue
-                    decided = classify_branch(
-                        memo, hub, b, tip_sha, gate_version,
-                        branch_sha=q[s].sha, platform_id=platform_id, trees=trees,
-                        index=index,
-                    ) if tip_sha else None
-                    if decided is not None:
-                        status, entry = decided
-                        if status == AWAITING_TRAIN:
-                            res.awaiting_train.append(entry)
+                    candidates = []
+                    for s in q:
+                        b = _branch(q[s])
+                        if any(w.branch == b for w in workers):
                             continue
-                        if status == NEEDS_AUTHOR:
-                            res.needs_author.append(entry)
+                        decided = classify_branch(
+                            memo, hub, b, tip_sha, gate_version,
+                            branch_sha=q[s].sha, platform_id=platform_id, trees=trees,
+                            index=index,
+                        ) if tip_sha else None
+                        if decided is not None:
+                            status, entry = decided
+                            if status == AWAITING_TRAIN:
+                                res.awaiting_train.append(entry)
+                                continue
+                            if status == NEEDS_AUTHOR:
+                                res.needs_author.append(entry)
+                                continue
+                        candidates.append(s)
+
+                    if not candidates:
+                        # S1 (Stage 1 integration review): targets > 0 but
+                        # nothing in the queue is claimable right now --
+                        # every branch is either already running here,
+                        # awaiting the train, or waiting on its author.
+                        # Distinct from "limits" (host-side refusal) and
+                        # "queue-unavailable" (the queue itself couldn't compute)
+                        # so `fleet status --why` names which of the three
+                        # it is instead of leaving silence.
+                        detail = f"{len(q)} in queue"
+                        if res.awaiting_train:
+                            detail += f", {len(res.awaiting_train)} awaiting-train"
+                        if res.needs_author:
+                            detail += f", {len(res.needs_author)} needs-author"
+                        res.refused.append(("queue-empty", detail))
+
+                    for slug in candidates[:deficit]:
+                        branch = _branch(q[slug])
+                        tag = f"{host}-{slug}-{int(time.time()) % 100000}"
+                        try:
+                            w = start_gate(hub, branch, tag, gate_command, host, log_dir)
+                        except OSError as e:
+                            res.refused.append(("spawn-failed", f"{branch}: {e}"))
                             continue
-                    candidates.append(s)
-                for slug in candidates[:deficit]:
-                    branch = _branch(q[slug])
-                    tag = f"{host}-{slug}-{int(time.time()) % 100000}"
-                    try:
-                        w = start_gate(hub, branch, tag, gate_command, host, log_dir)
-                    except OSError as e:
-                        res.refused.append(("spawn-failed", f"{branch}: {e}"))
-                        continue
-                    if w is None:
-                        res.refused.append(("claimed-elsewhere", branch))
-                        continue
-                    workers.append(w)
-                    res.started.append(tag)
+                        if w is None:
+                            res.refused.append(("claimed-elsewhere", branch))
+                            continue
+                        workers.append(w)
+                        res.started.append(tag)
 
     want_agents = int(my_desired.get("agents") or 0)
     agent_workers = [w for w in workers if w.kind == "agent"]
     slots = want_agents - len(agent_workers)
+    if enabled and want_gates <= 0 and want_agents <= 0:
+        # S1 (Stage 1 integration review): the exact silent case flagged --
+        # an enabled host with both targets at zero fell through the gates
+        # block (deficit <= 0, nothing recorded) and the agents block below
+        # (slots <= 0, nothing recorded) without a single refused entry, so
+        # `fleet status --why` printed "(no refused reasons on file)" for a
+        # host that is idle entirely by desired-state design. `target-zero`
+        # names that design choice so it reads as intentional, not broken.
+        res.refused.append(("target-zero", f"gates {want_gates} / agents {want_agents}"))
     if enabled and slots > 0:
         try:
             import agentworker as _aw
