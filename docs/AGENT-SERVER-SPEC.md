@@ -450,6 +450,18 @@ server resume without re-reporting.
   keeps its existing ruleset. An identical pair on `refs/heads/keel-proof/*` is the live test
   target so the real tip is never exercised. Acceptance (PLAN Stage 1): keyless FF → `GH013`;
   deploy-key FF → 0; deploy-key `--force` → non-zero; deploy-key delete → non-zero.
+  *(Measured 2026-08-21, `gh api -X POST repos/swack-tools/oxidex/rulesets` on a throwaway
+  disabled ruleset: **a `DeployKey` bypass actor is not a particular key.** GitHub accepted the
+  deliberately-nonexistent `actor_id: 999999999` without a 422 and read it back as
+  `actor_id: null` — the bypass grants EVERY write-capable deploy key on the repo, with no
+  per-key granularity to request and no error when the id is wrong. So "bypass actor = deploy
+  key `keel-train`" is only true while `keel-train` is the **only** write deploy key on
+  `swack-tools/oxidex`; that is a standing precondition, not a one-time setup step, and
+  `tools/fleet/rollout/rulesets.py::_resolve_bypass_actors` refuses to create either
+  restrict-updates ruleset unless it holds. The guard half is unaffected — it has no bypass
+  actors at all.)*
+  Guard half landed 2026-08-21 (`tip-guard` 21158427, `rescued-guard` 21158428, `proof-guard`
+  21158429); the `*-update` half waits on the deploy key and is skipped by default.
 - **Credentials.** Per-host fine-grained PATs, never the owner's `gh` login on every host (Judge
   1/2 on Design 3): every runner gets `state: contents write` and `code: contents read`;
   agent-capable runners additionally `code: contents write` (staging pushes); the train deploy key
