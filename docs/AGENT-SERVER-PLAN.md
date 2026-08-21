@@ -96,11 +96,17 @@ the human a `fleet status` that says *why* nothing is starting.
 - One real gate on the i7 of a real `staging/*` branch: `~/gatelogs/gate-<tag>.verdict` = PASS and
   `git ls-remote <state> 'refs/fleet/verdicts/*'` lists `(tree,7,<i7 platform_id>)` (instrument:
   both commands' output).
-- `fleet status --why` from m5 shows i7 `up` with heartbeat age < 60 s and m5 `refused: disabled
-  (gates 0)` (instrument: the command output). A host that is ENABLED but computes nothing must
-  also produce a line rather than an empty `refused[]` — e.g. `queue-unavailable: tip ref
-  'refs/heads/refactor/tag-machinery' does not exist on the code repo …` when `--code` is
-  misconfigured, which is the failure this stage's split makes possible.
+- `fleet status --why` from m5 shows i7 `up` with heartbeat age < 60 s and m5 `refused:
+  target-zero (gates 0 / agents 0)` (instrument: the command output; `disabled (<reason>)` is the
+  line only for a host an operator took down with `fleet down`, and m5 is seeded ENABLED at 0/0).
+  A host that is ENABLED but computes nothing must also produce a line rather than an empty
+  `refused[]` — `target-zero` for the by-design idle case above, `queue-empty: N in queue, …`
+  when every queued branch is running/awaiting-train/needs-author, and `queue-unavailable: tip
+  ref 'refs/heads/refactor/tag-machinery' does not exist on the code repo …` when `--code` is
+  misconfigured, which is the failure this stage's split makes possible. The hermetic bring-up
+  simulation `tools/fleet/tests/test_bringup_split.py` pins the `target-zero` line end to end
+  (real `seed_desired.py`, real `fleetd.py --hub <state> --code <code>`, real `cli.py status
+  --why`, two local bare repos).
 - `rg -n "work2.oxidex.net|/home/allen/git/oxidex.git|/tmp/oxidex-exiftool-cache" tools/fleet
   units` returns only comments in the incident history (instrument: that ripgrep).
 - Full suite green under `gate.sh` fleet-tests stage (instrument: the gate verdict JSON).

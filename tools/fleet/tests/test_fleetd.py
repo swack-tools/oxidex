@@ -420,6 +420,7 @@ class TestSpawnEnv(FleetdBase):
         wrapper.write_text(
             "#!/bin/bash\n"
             f'env | grep -E "^FLEET_(HUB|CODE)_URL=" > "{self.tmp}/envdump-agent1.txt"\n'
+            f'printf "%s\\n" "$@" > "{self.tmp}/argvdump-agent1.txt"\n'
             "exit 0\n"
         )
         wrapper.chmod(0o755)
@@ -434,6 +435,18 @@ class TestSpawnEnv(FleetdBase):
         content = self._read_dump("agent1")
         self.assertIn(f"FLEET_HUB_URL={hub.url}\n", content)
         self.assertIn(f"FLEET_CODE_URL={distinct_code_url}\n", content)
+
+        # S2 (Stage 1 integration review): the worker is told the CODE
+        # repo on argv too, not left to infer it. `--hub` stays the STATE
+        # repo; `--code` is what it clones and probes `refs/heads/*` on.
+        deadline = time.time() + 10
+        argv_dump = self.tmp / "argvdump-agent1.txt"
+        while time.time() < deadline and not argv_dump.exists():
+            time.sleep(0.1)
+        argv = argv_dump.read_text().splitlines()
+        self.assertIn("--code", argv, argv)
+        self.assertEqual(argv[argv.index("--code") + 1], distinct_code_url, argv)
+        self.assertEqual(argv[argv.index("--hub") + 1], hub.url, argv)
 
 
 class TestDesiredCAS(FleetdBase):

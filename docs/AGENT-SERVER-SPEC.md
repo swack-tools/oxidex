@@ -283,12 +283,12 @@ every call site; a different method name makes the routing visible in the call a
 | train: tip re-check after gating | `train.py:538` | `hub.code_sha(TIP_REF)` |
 | train: staging sha after a refused retirement | `train.py:772` | `hub.code_sha(ref)` |
 | train: rescue verification | `train.py:810` | `hub.code_sha(rescued_ref)` |
-| agentworker: tip sha | `agentworker.py:202` | `hub.code_sha(TIP_REF)` |
-| agentworker: branch sha before/after | `agentworker.py:211,218,275` | `hub.code_sha(ref)` |
-| agentworker: the agent's clone | `agentworker.py:234` | `git clone <code_url>` |
-| fleetd: tip sha (agent path) | `fleetd.py:1583` | `hub.code_sha(TIP_REF)` |
-| fleetd: "does this intent already have a branch" | `fleetd.py:1628` | `hub.code_sha("refs/heads/staging/<slug>")` |
-| fleetd: tip sha (gate path) | `fleetd.py:1910` | `hub.code_sha(TIP_REF)` |
+| agentworker: tip sha | `agentworker.py:211` | `hub.code_sha(TIP_REF)` |
+| agentworker: branch sha before/after | `agentworker.py:220,227,284` | `hub.code_sha(ref)` |
+| agentworker: the agent's clone | `agentworker.py:243` | `git clone <code_url>` |
+| fleetd: tip sha (agent path) | `fleetd.py:1620` | `hub.code_sha(TIP_REF)` |
+| fleetd: "does this intent already have a branch" | `fleetd.py:1665` | `hub.code_sha("refs/heads/staging/<slug>")` |
+| fleetd: tip sha (gate path) | `fleetd.py:1962` | `hub.code_sha(TIP_REF)` |
 | gate.sh: fetch + clone of the branch under test | `gate.sh:428-435` | `$FLEET_CODE_URL` (already correct) |
 
 **(b) Code WRITES — `code_push_url`.** All four were pushing at `hub.url`, i.e. at the state repo.
@@ -335,7 +335,7 @@ clone except the clone itself, which is a read of the PUBLIC code repo and needs
 and `QueueError` is not a `HubError`, which `fleetd`'s reconcile loop catches on purpose. Routed at
 the state repo the tip is *always* absent, so the daemon died in a traceback before its first
 heartbeat. `Queue.compute_or_refusal()` (`workqueue.py:160`) returns `({}, ("queue-unavailable",
-detail))` instead, which `fleetd` records in `ReconcileResult.refused` (`fleetd.py:1608,1893`) and
+detail))` instead, which `fleetd` records in `ReconcileResult.refused` (`fleetd.py:1645,1943`) and
 `fleet status --why` prints. `HubUnreachableError` still propagates: a network outage is a degraded
 step, not a permanent configuration verdict.
 
