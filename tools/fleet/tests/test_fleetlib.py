@@ -40,6 +40,8 @@ Run with:
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -1340,6 +1342,150 @@ class TestCredentialHelper(unittest.TestCase):
         with mock.patch.dict(os.environ, {"FLEET_GIT_TOKEN_FILE": missing}):
             with self.assertRaises(HubError):
                 Hub(url=str(Path(self._tmp) / "hub.git"), workdir=str(Path(self._tmp) / "wd"))
+
+
+class TestDefaultTokenFile(unittest.TestCase):
+    """R2. `~/.keel/secrets/git-token` is the DEFAULT, not just what the
+    unit files happen to point `FLEET_GIT_TOKEN_FILE` at.
+
+    `rollout/install_secrets.sh` writes the PAT there (0600) and
+    `units/fleetd.service`, `com.oxidex.fleetd.plist` and
+    `cron-backstop.txt` each set the variable to exactly that path -- so
+    the credential worked under the daemon and was INERT for every
+    hand-run step in the runbook: `install_secrets.sh` itself,
+    `seed_desired.py`, `fleet up`, `fleet status --why`, a hand-started
+    `fleetd`, a hand-run `train.py`, `doctor.py`. Each of those talked to
+    a private GitHub repo with no credential at all, and failed with an
+    authentication error naming the remote and never the missing export.
+
+    Every case here supplies HOME through the env dict rather than
+    touching the process's own, so the test says nothing about the machine
+    it runs on -- including a provisioned fleet host that really does have
+    the file.
+    """
+
+    TOKEN = "ghp_TESTTOKEN_not_a_real_credential_0123456789"
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="fleetlib-default-token-")
+        self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
+        self.home = Path(self._tmp) / "home"
+        (self.home / ".keel" / "secrets").mkdir(parents=True)
+        self.default = self.home / ".keel" / "secrets" / "git-token"
+
+    def _install(self, mode=0o600):
+        self.default.write_text(self.TOKEN + "\n")
+        os.chmod(self.default, mode)
+
+    def _env(self, **extra):
+        return {"PATH": "/usr/bin", "HOME": str(self.home), **extra}
+
+    # -- resolution -----------------------------------------------------
+
+    def test_the_default_path_is_the_one_install_secrets_writes(self):
+        self.assertEqual(
+            fleetlib.default_git_token_file({"HOME": "/h"}),
+            Path("/h/.keel/secrets/git-token"),
+        )
+
+    def test_absent_default_resolves_to_nothing_and_changes_no_env(self):
+        """The property the whole existing suite rests on: with no
+        variable and no file, `credential_env` is the identity."""
+        self.assertIsNone(fleetlib.git_token_file(self._env()))
+        self.assertEqual(self._env(), fleetlib.credential_env(self._env()))
+
+    def test_a_present_default_is_adopted_without_any_variable(self):
+        self._install()
+        self.assertEqual(fleetlib.git_token_file(self._env()), str(self.default))
+        env = fleetlib.credential_env(self._env())
+        self.assertEqual(env["GIT_CONFIG_COUNT"], "2")
+        self.assertEqual(env["GIT_CONFIG_KEY_1"], "credential.helper")
+        self.assertIn("git-credential-file", env["GIT_CONFIG_VALUE_1"])
+
+    def test_the_resolved_path_is_exported_for_the_helper_subprocess(self):
+        """The helper is a separate process and reads the path from its
+        own environment (`keel/git-credential-file` L110). Resolving the
+        default and NOT exporting it would configure a helper that then
+        refuses with "FLEET_GIT_TOKEN_FILE is not set" -- a
+        configuration one step more broken than doing nothing."""
+        self._install()
+        env = fleetlib.credential_env(self._env())
+        self.assertEqual(env["FLEET_GIT_TOKEN_FILE"], str(self.default))
+
+    def test_the_token_contents_still_never_enter_the_environment(self):
+        self._install()
+        env = fleetlib.credential_env(self._env())
+        for key, value in env.items():
+            if key == "FLEET_GIT_TOKEN_FILE":
+                continue
+            self.assertNotIn(self.TOKEN, str(value), msg=f"token leaked into ${key}")
+
+    def test_an_explicit_variable_always_wins(self):
+        self._install()
+        other = Path(self._tmp) / "explicit.token"
+        other.write_text("ghp_OTHER\n")
+        os.chmod(other, 0o600)
+        env = self._env(FLEET_GIT_TOKEN_FILE=str(other))
+        self.assertEqual(fleetlib.git_token_file(env), str(other))
+        self.assertEqual(fleetlib.credential_env(env)["FLEET_GIT_TOKEN_FILE"], str(other))
+
+    def test_a_named_but_missing_path_still_fails_loud(self):
+        """Naming a path is a statement that it is there, so the
+        fail-loud contract is unchanged -- the default must not turn a
+        typo'd `FLEET_GIT_TOKEN_FILE` into a silent fallback."""
+        self._install()
+        env = self._env(FLEET_GIT_TOKEN_FILE=str(Path(self._tmp) / "typo.token"))
+        with self.assertRaises(HubError):
+            fleetlib.credential_env(env)
+
+    def test_a_directory_at_the_default_path_is_not_a_token(self):
+        shutil.rmtree(self.default, ignore_errors=True)
+        self.default.mkdir()
+        self.assertIsNone(fleetlib.git_token_file(self._env()))
+
+    def test_a_loose_mode_is_warned_about_but_still_used(self):
+        """Refusing would leave the host with NO credential, which is a
+        worse failure than a readable file it was already going to use.
+        The warning is emitted once per process, not per git command."""
+        if os.geteuid() == 0:
+            self.skipTest("running as root")
+        self._install(mode=0o644)
+        fleetlib._WARNED.clear()
+        self.addCleanup(fleetlib._WARNED.clear)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            first = fleetlib.git_token_file(self._env())
+            second = fleetlib.git_token_file(self._env())
+        self.assertEqual(first, str(self.default))
+        self.assertEqual(second, str(self.default))
+        self.assertEqual(err.getvalue().count("group/world accessible"), 1)
+
+    # -- end to end, through git itself ---------------------------------
+
+    def test_git_gets_the_token_from_the_default_path(self):
+        """The instrument is `git credential fill` -- git's own answer to
+        "what credential would you use here" -- with HOME redirected and
+        `FLEET_GIT_TOKEN_FILE` positively unset."""
+        self._install()
+        env = dict(os.environ)
+        env.pop("FLEET_GIT_TOKEN_FILE", None)
+        env["HOME"] = str(self.home)
+        with mock.patch.dict(os.environ, env, clear=True):
+            result = Hub._raw_run(
+                ["git", "credential", "fill"],
+                input=b"protocol=https\nhost=github.com\n\n",
+            )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn(f"password={self.TOKEN}", result.stdout)
+
+    def test_with_no_file_git_is_asked_nothing_extra(self):
+        env = dict(os.environ)
+        env.pop("FLEET_GIT_TOKEN_FILE", None)
+        env["HOME"] = str(self.home)
+        with mock.patch.dict(os.environ, env, clear=True):
+            built = fleetlib.credential_env()
+        self.assertNotIn("GIT_CONFIG_COUNT", built)
+        self.assertNotIn("FLEET_GIT_TOKEN_FILE", built)
 
 
 

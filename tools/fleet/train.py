@@ -111,6 +111,23 @@ def _warn(msg: str) -> None:
     print(f"train: WARNING {msg}", file=sys.stderr)
 
 
+def _is_ssh_url(url: Optional[str]) -> bool:
+    """True for the two spellings git accepts as ssh: `ssh://host/path`
+    and the scp-like `user@host:path`. Used only to warn (see `main`);
+    nothing routes on it, so a false negative costs a warning, not a
+    push.
+    """
+    if not url:
+        return False
+    u = str(url)
+    if u.startswith("ssh://"):
+        return True
+    if "://" in u:  # https://, file://, git://
+        return False
+    head = u.split("/", 1)[0]
+    return "@" in head and ":" in head
+
+
 # --------------------------------------------------------------------- #
 # Tip push token (R1)
 # --------------------------------------------------------------------- #
@@ -423,6 +440,7 @@ def run_train(
     hub_workdir: Optional[Path] = None,
     code_url: Optional[str] = None,
     code_push_url: Optional[str] = None,
+    tip_push_url: Optional[str] = None,
 ) -> RunResult:
     """One train run, under the fleet-wide singleton claim.
 
@@ -434,9 +452,12 @@ def run_train(
 
     `hub_url` is the STATE repo (`refs/fleet/*`: the singleton claim, the
     verdict cache, the tip signal, intents). `code_url` is where the tip
-    and `staging/*` are READ from and `code_push_url` where they are
-    WRITTEN; both default to `hub_url` through `fleetlib.Hub`, which is
-    the single-repo topology every existing fixture and caller uses.
+    and `staging/*` are READ from; `code_push_url` is where `rescued/*`,
+    the `staging/*` retirement and `staging/train-tmp-*` are WRITTEN (the
+    PAT, over HTTPS); `tip_push_url` is where the ONE ruleset-bypassing
+    tip advance is written (ssh, the deploy key). Each defaults to the one
+    before it through `fleetlib.Hub`, ending at `hub_url` -- the
+    single-repo topology every existing fixture and caller uses.
 
     The claim is skipped for `dry_run`, which writes nothing and must not
     be able to block a real run.
@@ -446,6 +467,7 @@ def run_train(
         workdir=Path(hub_workdir) if hub_workdir else Path.home() / ".fleetd" / "traincache",
         code_url=code_url,
         code_push_url=code_push_url,
+        tip_push_url=tip_push_url,
     )
     if dry_run:
         return _run_train_locked(hub, hub_url, gate_fn, batch_max, True, _clone_src)
@@ -653,9 +675,10 @@ def _rebuild(clone: Path, tip_sha: str, members: list, res: Optional[RunResult] 
 
 
 def _fetch_into_hub_cache(hub: Hub, clone: Path, sha: str, check: bool = True):
-    """`fleetlib.Hub.push_code_ref` pushes FROM the hub's own local object
-    cache (`hub.workdir`), never from `clone` -- so a commit only known to
-    `clone`'s object store must be fetched into that cache first. Mirrors
+    """`fleetlib.Hub.push_code_ref`/`push_tip_ref` push FROM the hub's own
+    local object cache (`hub.workdir`), never from `clone` -- so a commit
+    only known to `clone`'s object store must be fetched into that cache
+    first. Mirrors
     `tests/test_update_hook.py`'s `_fetch_into_hub_cache` fixture helper,
     which documents the identical `Hub.push_ref` contract ("this mirrors
     real usage; it is not a workaround for a bug in push_ref").
@@ -671,32 +694,40 @@ def _fetch_into_hub_cache(hub: Hub, clone: Path, sha: str, check: bool = True):
 def _push_tip(hub: Hub, clone: Path, options: list):
     """The one write to the protected tip. Carries the train token when the
     hub-local file exists (R1). Routed through
-    `fleetlib.Hub.push_code_ref` rather than a raw `git push` (ARCH-FIX R9
+    `fleetlib.Hub.push_tip_ref` rather than a raw `git push` (ARCH-FIX R9
     -- no fleet tool writes a remote outside `fleetlib.Hub`; see
     tools/fleet/tests/test_no_raw_hub_push.py). `options` is
     `tip_push_options()`'s `--push-option=key=value` CLI-flag spelling;
-    `push_code_ref` (like `git push -o`) wants the bare `key=value`, so
+    `push_tip_ref` (like `git push -o`) wants the bare `key=value`, so
     the flag prefix is stripped before it crosses into fleetlib.
 
-    TWO ROUTING FACTS, both of which were wrong before:
+    THREE ROUTING FACTS, all of which were wrong before:
 
-    1. `push_code_ref`, not `push_ref`. The tip is a CODE ref; `push_ref`
-       targets `hub.url`, which is the private STATE repo once the two are
-       split, and the ruleset protecting the tip lives on the code repo.
-    2. `ssh_command=` is a PARAMETER, not an `os.environ` mutation. The
+    1. NOT `push_ref`. The tip is a CODE ref; `push_ref` targets
+       `hub.url`, which is the private STATE repo once the two are split,
+       and the ruleset protecting the tip lives on the code repo.
+    2. `push_tip_ref`, not `push_code_ref`. The tip is the ONE write whose
+       credential is the deploy key, so it is the one write that goes to
+       `hub.tip_push_url` (ssh) rather than `hub.code_push_url` (HTTPS +
+       PAT). Sharing one URL with `rescued/*`, the `staging/*` retirement
+       and `staging/train-tmp-*` had no correct setting: ssh made those
+       three run with no pinned identity at all (whatever the ambient
+       agent offered), HTTPS made the deploy key inert and the tip push
+       fail the ruleset. SPEC §3.1 routes the other three through the PAT.
+    3. `ssh_command=` is a PARAMETER, not an `os.environ` mutation. The
        deploy key applies to this one `git push` subprocess. Setting it
        process-wide put the code repo's deploy key, with
        `IdentitiesOnly=yes`, on every concurrent claim-renewal push to the
        state repo -- and the train singleton's renewer thread pushes on a
        120 s timer for the whole 20-45 minute gate window, so the overlap
-       is the normal case, not a corner. See `fleetlib._raw_run`."""
+       is the normal case, not a corner. See `fleetlib.run_git`."""
     head = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
     fetch = _fetch_into_hub_cache(hub, clone, head, check=False)
     if fetch.returncode != 0:
         return fetch
     raw_options = [o.removeprefix("--push-option=") for o in options]
     deploy_ssh = _train_deploy_key_ssh_command()
-    r = hub.push_code_ref(
+    r = hub.push_tip_ref(
         f"{head}:{TIP_REF}", push_options=raw_options, ssh_command=deploy_ssh
     )
     if r.returncode != 0 and options and _NO_PUSH_OPTIONS in (r.stderr or "").lower():
@@ -710,7 +741,7 @@ def _push_tip(hub: Hub, clone: Path, options: list):
             "retrying the tip push WITHOUT the train token -- the update hook "
             "cannot be enforcing one in this state"
         )
-        r = hub.push_code_ref(f"{head}:{TIP_REF}", ssh_command=deploy_ssh)
+        r = hub.push_tip_ref(f"{head}:{TIP_REF}", ssh_command=deploy_ssh)
     return r
 
 
@@ -866,11 +897,19 @@ def main(argv=None) -> int:
                     help="CODE repo to READ the tip and staging/* from "
                          "(default: --hub, i.e. the single-repo topology)")
     ap.add_argument("--code-push", default=os.environ.get("FLEET_CODE_PUSH_URL"),
-                    help="CODE repo to PUSH the tip, rescued/* and staging "
-                         "retirements to (default: --code). Point this at the "
-                         "ssh URL on a host holding the train deploy key: a "
-                         "deploy key cannot authenticate an HTTPS push, so "
-                         "reads stay on HTTPS and only writes change transport")
+                    help="CODE repo to PUSH rescued/*, staging retirements "
+                         "and staging/train-tmp-* to (default: --code). These "
+                         "are PAT writes over HTTPS; leaving this alone is "
+                         "correct on a split spine. NOT the tip -- see "
+                         "--tip-push")
+    ap.add_argument("--tip-push", default=os.environ.get("FLEET_TIP_PUSH_URL"),
+                    help="CODE repo to PUSH THE TIP to (default: --code-push). "
+                         "Point this at the ssh URL on a host holding the "
+                         "train deploy key: the deploy key is the tip-update "
+                         "ruleset's bypass actor and is an ssh credential that "
+                         "cannot authenticate an HTTPS push, while the PAT is "
+                         "HTTPS and is not a bypass actor. One URL for both "
+                         "has no correct setting")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--batch-max", type=int, default=BATCH_MAX)
     args = ap.parse_args(argv)
@@ -879,24 +918,40 @@ def main(argv=None) -> int:
         return 2
     code_url = args.code or args.hub
     code_push_url = args.code_push or code_url
+    tip_push_url = args.tip_push or code_push_url
+    if _is_ssh_url(code_push_url) and tip_push_url != code_push_url:
+        # The shape R3 exists to prevent, caught at the one place that can
+        # still express it. `--code-push` at ssh sends rescued/* and the
+        # staging retirements over ssh with NO pinned identity -- whatever
+        # key the ambient agent offers -- on the very host that holds a
+        # scoped credential.
+        _warn(
+            f"--code-push is an ssh URL ({code_push_url}) while the tip pushes "
+            f"elsewhere ({tip_push_url}): rescued/* and the staging retirements "
+            "will run under an ambient ssh identity rather than the host PAT. "
+            "Point --code-push at the HTTPS code URL and use --tip-push for the "
+            "deploy key."
+        )
     epoch = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     repo_root = Path(__file__).resolve().parents[2]
 
     if args.dry_run:
         run_train(args.hub, repo_root, gate_fn=lambda c, l: "PASS", epoch=epoch, dry_run=True,
                   batch_max=args.batch_max, code_url=code_url,
-                  code_push_url=code_push_url)
+                  code_push_url=code_push_url, tip_push_url=tip_push_url)
         return 0
 
     # The singleton claim is taken inside run_train (constant key, epoch in
     # the payload) so that every caller contends, not just this one.
     # This second Hub is the one `real_gate` pushes the temp gate ref
-    # through, so it carries the SAME three URLs -- a `real_gate` hub
+    # through, so it carries the SAME four URLs -- a `real_gate` hub
     # without them would push `staging/train-tmp-*` at the state repo.
     hub = Hub(args.hub, workdir=Path.home() / ".fleetd" / "traincache",
-              code_url=code_url, code_push_url=code_push_url)
+              code_url=code_url, code_push_url=code_push_url,
+              tip_push_url=tip_push_url)
     res = run_train(args.hub, repo_root, epoch=epoch, batch_max=args.batch_max,
                     code_url=code_url, code_push_url=code_push_url,
+                    tip_push_url=tip_push_url,
                     gate_fn=lambda clone, label: real_gate(clone, label, hub=hub))
     if res.outcome == "claim-held":
         print("train: another train run holds the singleton claim; not starting a second")

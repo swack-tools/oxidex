@@ -118,14 +118,14 @@ server" is state, not configuration.
 | attempts | `refs/fleet/attempts/<key>` (unchanged) | server scheduler (`dispatch.record_dispatch` L254 **before** offer), runner (`record_outcome` L269, `not-paid` refund) | unchanged |
 | intent | `refs/fleet/intents/<slug>` (unchanged) | `intent.register/withdraw/mark_done` (L281/362/379) via server; ledger check runs as a probe job on a `has_oracle` runner | unchanged |
 | tip signal | `refs/fleet/signals/tip` (unchanged payload) | server tip watcher (replaces `hooks/post-receive` + `drift.bump_tip_signal` L133-186; same CAS/monotonic rule via `Hub.update`) | `sha, generation, ts, by∈{train,foreign}` |
-| host heartbeat (durable copy) | `refs/fleet/hosts/<host>` (unchanged payload + `refused[]`) | server every **5 min** per host (not 60 s: push volume, Judge 2); runner directly when in fallback ≥ 5 min | `fleetd.write_heartbeat` fields (`fleetd.py` L1959-1985) + `refused: [(reason, detail)]` from `ReconcileResult.refused` |
+| host heartbeat (durable copy) | `refs/fleet/hosts/<host>` (unchanged payload + `refused[]`) | server every **5 min** per host (not 60 s: push volume, Judge 2); runner directly when in fallback ≥ 5 min | the `hb` dict `reconcile_once` builds (`fleetd.py` L2042-2076) written by `fleetd.write_heartbeat` (L1247-1261), including `refused: [(reason, detail)]` from `ReconcileResult.refused` (L861) |
 | agent | `refs/fleet/agents/<id>` (new) | server on transitions (CAS); runner at result via fallback | `id, role, key, runner, model, budget{usd,tokens,seconds,turns}, spent{…}, status, result{outcome,branch,sha,summary,instrument}, token_issued_at, token_expires_at, created_at, ended_at, transcript_sha256, transcript_host` (≤ 2 KB; **no transcript content**) |
 | review | `refs/fleet/reviews/<slug>/<sha>` (new) | reviewer agent via server | `class∈{defect,drift,flake,infra}, evidence[], model, agent_id` |
 | events checkpoint | `refs/fleet/events/<boot_id>` (new; **lossy by design**) | server every 5 min | one blob, JSONL since last checkpoint, ≤ 10k lines |
 | operator journal | `refs/fleet/operator/journal` (new) | OPERATOR loop at end of each wake | `last_event_seq, last_wake_at, last_actions[], open_questions[]` |
 | human channel | GitHub issue "Keel operator log" on the **private** state repo | OPERATOR (`post_report`, `ask_human`), human | comments |
 | transcripts | runner disk `~/.keel/agents/<id>/transcript.jsonl` only | `agentrun.py` | stream-json; never pushed to any repo (§8) |
-| code | code repo `refs/heads/*` | authors/agents (`staging/*`), train (tip via deploy key; `rescued/*`, `staging/train-tmp-*` via PAT) | code |
+| code | code repo `refs/heads/*` | authors/agents (`staging/*`), train (tip via deploy key at `tip_push_url`; `rescued/*`, `staging/<slug>` retirement, `staging/train-tmp-*` via PAT at `code_push_url`) | code |
 
 `refs/fleet/train/<epoch>` from `FLEET.md` §3 remains unimplemented; the train uses
 `claims/train/singleton` as today (`train.py` L79-82).
@@ -251,90 +251,137 @@ stale `sha()` on our own claim is a killed healthy gate. Therefore:
 Seam tests pinning this: `TestSeam8ServerKilledMidGate` and `TestSeam9RouteFlipNeverMarksLost`
 (§11).
 
-### 4.4 The code/state routing table (three URLs, one rule)
-`Hub` carries three remotes. `url` is the PRIVATE state repo and answers `refs/fleet/*`.
-`code_url` is the PUBLIC code repo and answers `refs/heads/*` **reads** — the tip's sha, the
-`staging/*` listing, and the object fetches behind `merge-base`/`merge-tree`. `code_push_url` is
-where `refs/heads/*` **writes** go; it defaults to `code_url` and is split out only because the
-`tip-update` ruleset's bypass actor is a *deploy key*, which is an ssh credential and cannot
-authenticate an HTTPS push (§8) — so a host holding the key reads over HTTPS and pushes over
-`git@github.com:swack-tools/oxidex.git`. Both default to `url` (`fleetlib.py:422`), so every
-existing test, every `git init --bare` fixture and the single-repo topology are unchanged.
+### 4.4 The code/state routing table (four URLs, one rule)
+`Hub` carries four remotes (`fleetlib.py:618`). `url` is the PRIVATE state repo and answers
+`refs/fleet/*`. `code_url` is the PUBLIC code repo and answers `refs/heads/*` **reads** — the tip's
+sha, the `staging/*` listing, and the object fetches behind `merge-base`/`merge-tree`.
+`code_push_url` is where ORDINARY `refs/heads/*` **writes** go — `rescued/*`, the `staging/<slug>`
+retirement, `staging/train-tmp-*` — and defaults to `code_url`, which is the HTTPS remote the
+host PAT authenticates. `tip_push_url` is where the ONE ruleset-bypassing write goes, the tip
+advance, and defaults to `code_push_url`. Each defaults to the one before it, ending at `url`, so
+every existing test, every `git init --bare` fixture and the single-repo topology are unchanged.
+
+**Why the tip has its own URL: because it has its own credential.** The `tip-update` ruleset's
+bypass actor is a *deploy key* (§8), which is an ssh credential and cannot authenticate an HTTPS
+push at all; the per-host PAT is HTTPS and is not a bypass actor. With one `code_push_url` shared
+by all four writes there is no setting that is correct, and both wrong settings are silent:
+
+* pointed at `git@github.com:swack-tools/oxidex.git` so the deploy key can reach the tip, the
+  three non-tip pushes run with **no pinned identity at all** — `push_code_ref` passes no
+  `ssh_command`, so ssh offers whatever the ambient agent holds, i.e. the operator's personal key,
+  from the daemon of a host whose entire point is that it carries a *scoped* credential;
+* pointed at the HTTPS URL so the PAT authenticates those three, the deploy key becomes inert —
+  `GIT_SSH_COMMAND` is not consulted for an HTTPS remote — and the tip push fails the ruleset with
+  a permission error that names neither the key nor the transport.
+
+So the tip is `hub.push_tip_ref(refspec, ssh_command=<deploy key>)` at `tip_push_url`, and the
+other three are `push_code_ref`/`delete_code_ref` at `code_push_url`, **which take no
+`ssh_command` parameter at all**. Not "must not pass one" — cannot: a reviewer can check two call
+sites, but no reviewer can check that an argument was omitted at three call sites, one of them
+inside a retry loop. `train.py` exposes the split as `--tip-push` / `FLEET_TIP_PUSH_URL` alongside
+`--code-push` / `FLEET_CODE_PUSH_URL`, and warns when `--code-push` names an ssh URL while the tip
+pushes elsewhere — the pre-split rollout shape, which still works and no longer passes unremarked.
 
 The rule is mechanical: **`refs/fleet/*` → `url`; reading `refs/heads/*` → `code_url`; writing
-`refs/heads/*` → `code_push_url`.** The routing is expressed as *distinct method names*
-(`sha`/`code_sha`, `list`/`code_list`, `push_ref`/`push_code_ref`, `delete`/`delete_code_ref`)
-rather than a `url=` keyword, because every failure in this class is silent: a `refs/heads/*`
-`ls-remote` against a state repo does not error, it returns "absent", and the caller reads that as
-a fact about the code. A defaulted keyword leaves the wrong answer one forgotten argument away at
-every call site; a different method name makes the routing visible in the call and greppable.
+`refs/heads/*` → `code_push_url`; writing the tip → `tip_push_url`.** The routing is expressed as
+*distinct method names* (`sha`/`code_sha`, `list`/`code_list`,
+`push_ref`/`push_code_ref`/`push_tip_ref`, `delete`/`delete_code_ref`) rather than a `url=`
+keyword, because every failure in this class is silent: a `refs/heads/*` `ls-remote` against a
+state repo does not error, it returns "absent", and the caller reads that as a fact about the
+code. A defaulted keyword leaves the wrong answer one forgotten argument away at every call site;
+a different method name makes the routing visible in the call and greppable.
 
 **(a) Code READS — `code_url`.** Every site below moved off `hub.url`.
 
 | site | file:line | call |
 |---|---|---|
-| queue: tip sha | `workqueue.py:130` | `hub.code_sha(TIP_REF)` |
-| queue: `staging/*` listing | `workqueue.py:201` | `hub.code_list("refs/heads/staging")` |
-| queue: ancestry fetch | `workqueue.py:271` | `git fetch <code_url> +tip,+staging/*` into `hub.workdir` |
+| queue: tip sha | `workqueue.py:129` | `hub.code_sha(TIP_REF)` |
+| queue: `staging/*` listing | `workqueue.py:200` | `hub.code_list("refs/heads/staging")` |
+| queue: ancestry fetch | `workqueue.py:270` | `git fetch <code_url> +tip,+staging/*` into `hub.workdir`, through `fleetlib.run_git` |
 | dispatch: object fetch | `dispatch.py:461` | `git fetch <code_url> <refs>` into `hub.workdir` |
 | dispatch: branch sha | `dispatch.py:577` | `hub.code_sha("refs/heads/<branch>")` |
-| train: clone source | `train.py:486` | `git clone <code_url>` |
-| train: tip sha | `train.py:489` | `hub.code_sha(TIP_REF)` |
-| train: tip re-check after gating | `train.py:538` | `hub.code_sha(TIP_REF)` |
-| train: staging sha after a refused retirement | `train.py:772` | `hub.code_sha(ref)` |
-| train: rescue verification | `train.py:810` | `hub.code_sha(rescued_ref)` |
+| train: clone source | `train.py:508-509` | `git clone <code_url>` |
+| train: tip sha | `train.py:511` | `hub.code_sha(TIP_REF)` |
+| train: tip re-check after gating | `train.py:560` | `hub.code_sha(TIP_REF)` |
+| train: staging sha after a refused retirement | `train.py:803` | `hub.code_sha(ref)` |
+| train: rescue verification | `train.py:841` | `hub.code_sha(rescued_ref)` |
 | agentworker: tip sha | `agentworker.py:211` | `hub.code_sha(TIP_REF)` |
 | agentworker: branch sha before/after | `agentworker.py:220,227,284` | `hub.code_sha(ref)` |
 | agentworker: the agent's clone | `agentworker.py:243` | `git clone <code_url>` |
 | fleetd: tip sha (agent path) | `fleetd.py:1620` | `hub.code_sha(TIP_REF)` |
 | fleetd: "does this intent already have a branch" | `fleetd.py:1665` | `hub.code_sha("refs/heads/staging/<slug>")` |
 | fleetd: tip sha (gate path) | `fleetd.py:1962` | `hub.code_sha(TIP_REF)` |
-| gate.sh: fetch + clone of the branch under test | `gate.sh:428-435` | `$FLEET_CODE_URL` (already correct) |
+| gate.sh: fetch + clone of the branch under test | `gate.sh:440` (`CODE_URL="${FLEET_CODE_URL:-$HUB_URL}"`) | `$CODE_URL` |
 
-**(b) Code WRITES — `code_push_url`.** All four were pushing at `hub.url`, i.e. at the state repo.
+**(b) Code WRITES — `tip_push_url` for the tip, `code_push_url` for the other three.** All four
+were pushing at `hub.url`, i.e. at the state repo; all four then shared one URL, which is the
+defect §4.4's opening now describes.
 
-| site | file:line | call |
-|---|---|---|
-| tip advance (the one ruleset-bypass push) | `train.py:699,713` | `hub.push_code_ref(f"{head}:{TIP_REF}", ssh_command=<deploy key>)` |
-| `rescued/<slug>` | `train.py:808` | `hub.push_code_ref` (was a raw `git push origin` from the clone — no credential helper, aimed at the read URL) |
-| `staging/<slug>` retirement | `train.py:731` via `_delete_code_ref_cas` | `hub.delete_code_ref(ref, expect_sha)` |
-| `staging/train-tmp-*` push + CAS delete | `train.py:840`, `train.py:857` (via `_delete_code_ref_cas`) | `hub.push_code_ref` / `hub.delete_code_ref` |
+| site | file:line | remote | call |
+|---|---|---|---|
+| tip advance (the one ruleset-bypass push) | `train.py:730,744` | `tip_push_url` (ssh, deploy key) | `hub.push_tip_ref(f"{head}:{TIP_REF}", ssh_command=<deploy key>)` |
+| `rescued/<slug>` | `train.py:839` | `code_push_url` (HTTPS, PAT) | `hub.push_code_ref` (was a raw `git push origin` from the clone — no credential helper, aimed at the read URL) |
+| `staging/<slug>` retirement | `train.py:799` via `_delete_code_ref_cas` (L748) | `code_push_url` (HTTPS, PAT) | `hub.delete_code_ref(ref, expect_sha)` |
+| `staging/train-tmp-*` push + CAS delete | `train.py:871`, `train.py:888` (via `_delete_code_ref_cas`) | `code_push_url` (HTTPS, PAT) | `hub.push_code_ref` / `hub.delete_code_ref` |
 
-The deploy key is attached to the **tip push only** (SPEC §3.1: `rescued/*` and
-`staging/train-tmp-*` go via the PAT), and it is threaded as a per-subprocess `ssh_command=`
-parameter, never `os.environ` — see `fleetlib._raw_run` (`fleetlib.py:1002`) and
-`fleetlib.ssh_command` (`fleetlib.py:227`). Setting it process-wide put the code repo's deploy
+The deploy key is attached to the **tip push only** (§3.1: `rescued/*`, the `staging/<slug>`
+retirement and `staging/train-tmp-*` go via the PAT), and `push_code_ref`/`delete_code_ref` have
+no `ssh_command` parameter for it to be passed to. It is threaded as a per-subprocess
+`ssh_command=` parameter, never `os.environ` — see `fleetlib.run_git` (`fleetlib.py:476`, which
+`Hub._raw_run` at `fleetlib.py:1230` and `workqueue.Queue._git` both delegate to) and
+`fleetlib.ssh_command` (`fleetlib.py:313`). Setting it process-wide put the code repo's deploy
 key, with `IdentitiesOnly=yes`, on every concurrent
 claim-renewal push to the state repo; the train singleton's renewer thread pushes on a 120 s timer
 throughout a 20-45 minute gate, so that overlap is the normal case. `ssh_command(identity_file=…)`
 composes the identity **on top of** the pinned `BatchMode=yes -o ConnectTimeout=10 -o
 StrictHostKeyChecking=accept-new`, which the hand-rolled string dropped.
 
-`_raw_run` sets `GIT_SSH_COMMAND` unconditionally and no longer honours an ambient value: the
+`run_git` sets `GIT_SSH_COMMAND` unconditionally and no longer honours an ambient value: the
 `env.get("GIT_SSH_COMMAND", <default>)` shape let any value inherited from a shell, unit file or
 parent process replace all three pinned options for every fleet git operation, with failure modes
 (a daemon blocked on a passphrase prompt; a two-minute connect stall inside a 30 s timeout) that
 name none of them.
 
+**One git spawner.** `fleetlib.run_git` is the only sanctioned way fleet code starts a git
+process, and it carries four properties no caller supplies for itself: `credential_env()` (the
+HTTPS PAT helper plus the empty-valued `credential.helper` that stops a host helper answering
+first), the unconditional pinned `GIT_SSH_COMMAND`, `GIT_TERMINAL_PROMPT=0`, and a timeout that
+raises `HubUnreachableError` instead of hanging. `Hub._raw_run` delegates to it, and so does
+`workqueue.Queue._git` (`workqueue.py:294`) — which was a bare `subprocess.run(["git", ...])`
+until R5. Two of that helper's three call sites are local, but the third
+(`_fetch_for_ancestry`) fetches from `hub.code_url`, so the daemon's queue computation was running
+against a real remote with no credential helper, an ambient ssh command and a live terminal
+prompt. All three now route through `run_git`: "which of these talks to a remote" is exactly the
+judgement that was wrong the first time.
+
 **(c) Coordination — `url`.** Unchanged, and asserted to stay that way: `claim.py` (all of it),
-`verdict.py:178-221`, `intent.py:141-409`, `dispatch.py:177-300` (attempt ledger) and
-`dispatch.py:530` (verdict lookup), `cli.py:63-280`, `fleetd.py:600-616,1065,1217,1370,1533,1850,1867`,
-`train.py:231-244` (tip signal) and `train.py`'s intent close. `test_code_url_split.py` asserts
+`verdict.py:186-230`, `intent.py:141-409`, `dispatch.py:177-300` (attempt ledger) and
+`dispatch.py:530` (verdict lookup), `fleetd.py:600-616,1065,1217,1370,1533,1850,1867`,
+`train.py:208-279` (tip signal) and `train.py`'s intent close. `test_code_url_split.py` asserts
 `git ls-remote <state> 'refs/heads/*'` is empty and `git ls-remote <code> 'refs/fleet/*'` is empty
 after a full train run — the second matters because `refs/fleet/*` carries `user@host:pid`
 provenance and the code repo is public (§8).
 
-**Neither.** `train._fetch_into_hub_cache` (`train.py:655`) is a LOCAL fetch from the train's
+**`cli.py` is NOT coordination-only, and earlier drafts of this row said it was.** `cli.py:48-53`
+(`_hub`) builds its `Hub` from `--hub`/`FLEET_HUB_URL` alone, with no `code_url`, and
+`cli.cmd_status` (`cli.py:277`) then calls `workqueue.Queue(hub).compute()` — a CODE read. On a
+split spine that asks the state repo for the tip, gets `None`, and prints
+`QUEUE error: tip ref … does not exist on the code repo <state repo>` on every invocation, with
+no flag or variable able to fix it. The CLI therefore needs the same `--code` / `FLEET_CODE_URL`
+plumbing as `fleetd` and `train`; its *writes* remain coordination-only (`_edit_desired` and the
+claim/heartbeat reads all sit on `url`).
+
+**Neither.** `train._fetch_into_hub_cache` (`train.py:677`) is a LOCAL fetch from the train's
 working clone into `hub.workdir`; it names no remote. It is cited in earlier drafts of this section
 as a code-read site, which is wrong — the real code read in `train.py` is `_run_train_locked`'s
-`git clone <clone_src>`. `train._git` (`train.py:301`) is a raw `subprocess.run` with no
+`git clone <clone_src>`. `train._git` (`train.py:318`) is a raw `subprocess.run` with no
 `credential_env` and no pinned `GIT_SSH_COMMAND`; every one of its call sites operates on the local
 clone except the clone itself, which is a read of the PUBLIC code repo and needs no credential.
 
 **Failure containment.** `workqueue.Queue.compute()` raises `QueueError` when the tip is absent,
 and `QueueError` is not a `HubError`, which `fleetd`'s reconcile loop catches on purpose. Routed at
 the state repo the tip is *always* absent, so the daemon died in a traceback before its first
-heartbeat. `Queue.compute_or_refusal()` (`workqueue.py:160`) returns `({}, ("queue-unavailable",
+heartbeat. `Queue.compute_or_refusal()` (`workqueue.py:159`) returns `({}, ("queue-unavailable",
 detail))` instead, which `fleetd` records in `ReconcileResult.refused` (`fleetd.py:1645,1943`) and
 `fleet status --why` prints. `HubUnreachableError` still propagates: a network outage is a degraded
 step, not a permanent configuration verdict.
@@ -342,7 +389,15 @@ step, not a permanent configuration verdict.
 Tests: `test_queue`, `test_dispatch`, `test_train` run unchanged against a fixture whose
 `code_url == url`; `tests/test_code_url_split.py` runs the same code against two real bare repos
 (`state.git` with no `refs/heads/*` at all, `code.git` with a tip that has moved past a staging
-branch) and pins every row above.
+branch) and pins every row above, plus three properties the table alone does not state:
+`TestTipPushUrlIsSeparateFromTheOtherCodeWrites` (the tip lands on `tip_push_url` and `rescued/*`
+does not; `push_code_ref`/`delete_code_ref` raise `TypeError` on `ssh_command=`),
+`TestTrainDeployKeyIsScopedToOneSubprocess` (with `FLEET_TEST_RENEW_S=1` the singleton's OWN claim
+renewer pushes while the tip push is held open, and that push's `env=` carries the pinned default
+rather than the deploy key's `-i`), and `TestWorkqueueGitGoesThroughFleetlib` (the ancestry fetch's
+`env=` is the one `run_git` builds). Every one of them reads the `env=` dict handed to
+`subprocess.run`, because a spy on the `Hub` method passes whether or not the value reaches git —
+the instrument that was green while this feature was broken in three separate ways.
 
 ---
 
@@ -567,10 +622,32 @@ server resume without re-reporting.
 - **Credentials.** Per-host fine-grained PATs, never the owner's `gh` login on every host (Judge
   1/2 on Design 3): every runner gets `state: contents write` and `code: contents read`;
   agent-capable runners additionally `code: contents write` (staging pushes); the train deploy key
-  (`~/.keel/train_deploy_key`, 0600) exists only on server-eligible hosts. `fleetlib._raw_run`
-  gains `GIT_CONFIG_COUNT/KEY_0/VALUE_0 = credential.helper=!tools/fleet/keel/git-credential-file`
-  reading `FLEET_GIT_TOKEN_FILE` (HTTPS; the 1Password ssh agent is out of the path entirely);
-  the train pushes the tip with a `GIT_SSH_COMMAND` built by
+  (`~/.keel/train_deploy_key`, 0600, named by `FLEET_TRAIN_DEPLOY_KEY`) exists only on
+  server-eligible hosts. `fleetlib.run_git` appends
+  `credential.helper=` (empty, to reset any host helper) and
+  `credential.helper=!tools/fleet/keel/git-credential-file` at `GIT_CONFIG_COUNT`, reading the
+  token from the file named by `FLEET_GIT_TOKEN_FILE` (HTTPS; the 1Password ssh agent is out of
+  the path entirely).
+
+  **The PAT path has a default, and it is `~/.keel/secrets/git-token`** —
+  `fleetlib.git_token_file()` returns `FLEET_GIT_TOKEN_FILE` when set and otherwise that path when
+  the file exists and is readable, and `credential_env` exports the resolved value so the helper
+  subprocess (a separate process, which reads the path from its own environment) sees it. This is
+  where `rollout/install_secrets.sh` writes it (0600) and what all three unit templates
+  (`units/fleetd.service:36`, `com.oxidex.fleetd.plist:33-34`, `cron-backstop.txt:62`) set the
+  variable to. Before the default existed the token worked under the daemon and was INERT
+  everywhere else: `install_secrets.sh` itself, `seed_desired.py`, `fleet up`,
+  `fleet status --why`, a hand-started `fleetd` and a hand-run `train.py` all run from an operator
+  shell that exported nothing, so each talked to a private GitHub repo with no credential and
+  failed with an authentication error naming the remote and never the missing export. Earlier
+  drafts of this section named `~/.keel/github.token`, which no tool has ever read. An explicitly
+  set variable still wins and still fails LOUD when it names a missing or unreadable path — naming
+  a path is a statement that it is there — while an absent default file leaves the environment
+  untouched, which is what keeps every ssh-spine caller and `git init --bare` fixture unchanged.
+  A default file with group/world bits is used but warned about once per process; refusing it
+  would leave the host with no credential at all, which is the worse failure.
+
+  The train pushes the tip with a `GIT_SSH_COMMAND` built by
   `fleetlib.ssh_command(identity_file=~/.keel/train_deploy_key)`: `-o IdentitiesOnly=yes -o
   IdentityAgent=none` (the documented agent bypass) **composed on top of** the pinned `-o
   BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new` every fleet git command
@@ -580,8 +657,13 @@ server resume without re-reporting.
   `os.environ`: the train singleton's claim renewer runs on another thread of the same process
   and pushes `refs/fleet/*` to the STATE repo throughout the 20–45 minute gate, and a
   process-global override hands that thread the CODE repo's deploy key with
-  `IdentitiesOnly=yes`. A deploy key is ssh-only, so the tip push also requires `code_push_url`
-  to be the ssh URL (§4.4); the override is inert against an HTTPS remote.
+  `IdentitiesOnly=yes`. A deploy key is ssh-only, so the tip push also requires an **ssh
+  `tip_push_url`** (§4.4) — `train --tip-push` / `FLEET_TIP_PUSH_URL`; the override is inert
+  against an HTTPS remote. It is `tip_push_url` and not `code_push_url` because the other three
+  code writes (`rescued/*`, the `staging/<slug>` retirement, `staging/train-tmp-*`) authenticate
+  with the PAT over HTTPS: pointing one shared URL at ssh ran them with no pinned identity at all,
+  offering whatever key the ambient agent held from the daemon of the one host carrying a scoped
+  credential.
 - **Forged verdicts.** Every runner PAT can write `refs/fleet/verdicts/*` — the same trust model as
   today's ssh hub, now on a private repo. Mitigation: the train accepts a PASS only if its
   `written_by` host is a registered runner at that `platform_id`, and `verdict.stored` events with
@@ -590,11 +672,13 @@ server resume without re-reporting.
   agent_id || token_issued_at)` with `secret` from the secrets bundle, so a re-hosted server
   verifies a running author's MCP calls without state; validity = agent ref status non-terminal
   and `now < token_expires_at`. Revocation = terminal status (CAS).
-- **Secrets bundle** (server-eligible hosts; 0600; distributed once, rotated by hand; checksum list
-  in the runbook): `~/.keel/github.token` (state+code PAT), `~/.keel/train_deploy_key`,
-  `~/.keel/auth.json` (token hashes), `~/.keel/hmac.key`, optional `ANTHROPIC_API_KEY` only if the
-  host's `claude` login is not used. Runners: `~/.keel/runner.token`, `~/.keel/github.token`
-  (scoped as above). Nothing in refs or argv (`test_no_secrets_in_refs.py`, PLAN Stage 5).
+- **Secrets bundle** (server-eligible hosts; 0600 in a 0700 `~/.keel/secrets`; distributed once,
+  rotated by hand; checksum list in the runbook): `~/.keel/secrets/git-token` (state+code PAT —
+  the path `install_secrets.sh` writes, every unit template names, and `fleetlib.git_token_file()`
+  defaults to), `~/.keel/train_deploy_key`, `~/.keel/auth.json` (token hashes),
+  `~/.keel/hmac.key`, optional `ANTHROPIC_API_KEY` only if the host's `claude` login is not used.
+  Runners: `~/.keel/runner.token`, `~/.keel/secrets/git-token` (scoped as above). Nothing in refs
+  or argv (`test_no_secrets_in_refs.py`, PLAN Stage 5).
 - **Transport.** Tailnet only; bearer over plain HTTP is acceptable on WireGuard and nowhere else;
   the server refuses to bind a non-tailnet, non-loopback address unless `KEEL_ALLOW_PUBLIC_BIND=1`.
 - **Agent blast radius.** Sandbox clone; one-ref remote; settings hooks; scoped MCP token; the only

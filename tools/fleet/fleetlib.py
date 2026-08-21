@@ -54,6 +54,7 @@ import re
 import shlex
 import socket
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -182,8 +183,93 @@ _ABSENT_REF_HINT = "couldn't find remote ref"
 # The entries are APPENDED at `GIT_CONFIG_COUNT`, not written at index 0,
 # so a caller that has already staged its own GIT_CONFIG_* pairs keeps
 # them.
+#
+# THE VARIABLE IS NOT THE ONLY WAY THE FILE IS FOUND, and that is R2 rather
+# than a convenience. `rollout/install_secrets.sh` writes the PAT to
+# `~/.keel/secrets/git-token` (0600) and every unit template
+# (`units/fleetd.service`, `com.oxidex.fleetd.plist`, `cron-backstop.txt`)
+# sets `FLEET_GIT_TOKEN_FILE` to exactly that path -- so the token worked
+# under the daemon and was INERT everywhere else. Every hand-run step in the
+# rollout runbook (`install_secrets` itself, `seed_desired.py`, `fleet up`,
+# `fleet status --why`, a hand-started `fleetd`, a hand-run `train.py`,
+# `doctor.py`) runs from an operator shell where nothing exported the
+# variable, so each one talked to a private GitHub repo with no credential
+# at all and failed with an authentication error that names the remote and
+# never the missing export. Making the installed path the DEFAULT closes
+# that gap in ONE place -- here -- so every tool that reaches git through
+# this module inherits it without a line of its own.
+#
+# The default is adopted only when the file EXISTS and is readable; an
+# absent file leaves the environment untouched, which is what keeps
+# "unset changes nothing" true for every ssh-hub caller and every
+# `git init --bare` fixture in the test suite. An explicitly-set variable
+# always wins and keeps its fail-loud contract (a named path that is
+# missing/unreadable raises), because naming a path is a statement that it
+# is there.
 _TOKEN_FILE_ENV = "FLEET_GIT_TOKEN_FILE"
+# Relative to $HOME, resolved per call (never at import) so a test that
+# redirects HOME is actually hermetic. Matches
+# `rollout/install_secrets.sh`'s `token_file` default and the three unit
+# templates byte for byte.
+_TOKEN_FILE_DEFAULT_REL = ".keel/secrets/git-token"
 _CREDENTIAL_HELPER = Path(__file__).resolve().parent / "keel" / "git-credential-file"
+
+# One-shot stderr notices (mode warnings), keyed by message, so a daemon
+# that builds an env for every git command does not print the same line
+# thousands of times.
+_WARNED: set = set()
+
+
+def _warn_once(msg: str) -> None:
+    if msg in _WARNED:
+        return
+    _WARNED.add(msg)
+    print(f"fleetlib: WARNING {msg}", file=sys.stderr)
+
+
+def default_git_token_file(env: Optional[dict] = None) -> Path:
+    """`$HOME/.keel/secrets/git-token` -- where `install_secrets.sh` puts
+    the per-host PAT (SPEC §8, "Secrets bundle").
+
+    `HOME` is read from `env` (default `os.environ`) rather than through
+    `Path.home()` so that `credential_env(some_dict)` answers about the
+    environment it was HANDED, not about the process that called it.
+    """
+    src = os.environ if env is None else env
+    home = src.get("HOME") or os.path.expanduser("~")
+    return Path(home) / _TOKEN_FILE_DEFAULT_REL
+
+
+def git_token_file(env: Optional[dict] = None) -> Optional[str]:
+    """The token file this process should authenticate HTTPS git with, or
+    None if there is none: `FLEET_GIT_TOKEN_FILE` when set, otherwise
+    `default_git_token_file()` when that path exists and is readable.
+
+    The single resolver. `credential_env` uses it, and so should any tool
+    that needs to report on the credential (`doctor.py`'s check is "the
+    variable is set OR the default file is present", not "the variable is
+    set") or hand it to a child process.
+    """
+    src = os.environ if env is None else env
+    explicit = src.get(_TOKEN_FILE_ENV)
+    if explicit:
+        return explicit
+    candidate = default_git_token_file(src)
+    try:
+        if not candidate.is_file() or not os.access(candidate, os.R_OK):
+            return None
+    except OSError:
+        return None
+    try:
+        mode = candidate.stat().st_mode & 0o777
+        if mode & 0o077:
+            _warn_once(
+                f"{candidate} is group/world accessible (mode {mode:04o}); "
+                "expected 0600 -- the host PAT is readable by other users"
+            )
+    except OSError:
+        pass
+    return str(candidate)
 
 
 # ssh transport options every fleet git command runs under, without
@@ -265,14 +351,24 @@ DEFAULT_SSH_COMMAND = ssh_command()
 
 def credential_env(env: Optional[dict] = None) -> dict:
     """`env` (default `os.environ`) copied, with the fleet credential
-    helper wired in when `FLEET_GIT_TOKEN_FILE` is set.
+    helper wired in when a token file is resolvable -- `git_token_file()`:
+    `FLEET_GIT_TOKEN_FILE` when set, else `~/.keel/secrets/git-token` when
+    that file exists.
 
-    Returns a NEW dict; the input is never mutated. When the variable is
-    unset the copy is returned untouched -- so a fleet that has not opted
-    into HTTPS-token auth runs the exact git invocations it ran before this
-    function existed. That "unchanged when unset" property is what lets the
-    whole existing test suite and the `git init --bare` fixtures stay as
-    they are.
+    Returns a NEW dict; the input is never mutated. With no variable set
+    and no default file present the copy is returned untouched -- so a
+    fleet that has not opted into HTTPS-token auth runs the exact git
+    invocations it ran before this function existed. That "unchanged when
+    there is no token" property is what lets the whole existing test suite
+    and the `git init --bare` fixtures stay as they are.
+
+    When the DEFAULT path supplies the token, `FLEET_GIT_TOKEN_FILE` is
+    written into the returned env, because the helper script is a separate
+    process and reads the path from its own environment
+    (`keel/git-credential-file` L110): resolving the default here and not
+    exporting it would configure a helper that then refuses with
+    "FLEET_GIT_TOKEN_FILE is not set". Exporting the PATH is not a leak --
+    the token's *contents* still only ever cross the helper's stdout.
 
     Raises `HubError` when the variable IS set but the helper script or the
     token file is missing or unreadable. Failing loud is deliberate and is
@@ -283,9 +379,12 @@ def credential_env(env: Optional[dict] = None) -> dict:
     remote. The message names the PATH and never the contents.
     """
     out = dict(os.environ if env is None else env)
-    token_file = out.get(_TOKEN_FILE_ENV)
+    token_file = git_token_file(out)
     if not token_file:
         return out
+    # Make the resolved path visible to the helper subprocess. A no-op
+    # when the caller set it; the whole point when the default supplied it.
+    out[_TOKEN_FILE_ENV] = token_file
 
     if not _CREDENTIAL_HELPER.is_file():
         raise HubError(
@@ -374,6 +473,89 @@ class _Result:
         return f"git {' '.join(self.args)} -> exit {self.returncode}: {self.stderr.strip()}"
 
 
+def run_git(
+    cmd: list,
+    input: Optional[bytes] = None,
+    timeout: int = 30,
+    ssh_command: Optional[str] = None,
+) -> _Result:
+    """Run one git command the way the fleet runs every git command, and
+    return a `_Result` (decoded stdout/stderr, never bytes).
+
+    THE ONLY SANCTIONED WAY FOR FLEET CODE TO SPAWN GIT. Four properties
+    come with it and none of them are optional:
+
+      * `credential_env()` -- the HTTPS PAT helper (and the empty-valued
+        `credential.helper` that stops a host helper, osxkeychain or the
+        1Password agent, from answering first);
+      * `GIT_SSH_COMMAND` set UNCONDITIONALLY to the pinned
+        `BatchMode=yes`/`ConnectTimeout=10`/`StrictHostKeyChecking=
+        accept-new` baseline -- the ambient environment does not get a
+        vote (see `ssh_command`);
+      * `GIT_TERMINAL_PROMPT=0` -- a daemon must never block on a
+        username prompt;
+      * a `timeout` that raises `HubUnreachableError` rather than hanging.
+
+    A bare `subprocess.run(["git", ...])` in fleet code has NONE of these,
+    and the way it fails is the expensive part: against a private HTTPS
+    remote with no helper it is an auth error naming the remote and not the
+    missing credential, and against ssh it is a process parked on a
+    passphrase prompt with no timeout. `workqueue.Queue._git` was exactly
+    that shape for its fetch of the CODE remote (R5).
+
+    `ssh_command`, when given, is the `GIT_SSH_COMMAND` for THIS
+    subprocess and nothing else: it goes in the `env=` dict handed to
+    `subprocess.run`, never into `os.environ`. That distinction is the
+    whole point of the parameter. The previous deploy-key path set
+    `os.environ["GIT_SSH_COMMAND"]` around the tip push, which is
+    process-global: every claim renewer thread in the same process (the
+    train singleton renews on a 120 s timer while it gates for 20-45
+    minutes) inherits it and pushes coordination refs to the STATE repo
+    under the CODE repo's deploy key with `IdentitiesOnly=yes`, i.e.
+    offering exactly one key that repo has never heard of. Threads are not
+    a place where an environment variable can be scoped, so the scope moved
+    to where it can be: one subprocess invocation.
+    """
+    # `credential_env` returns a plain copy of os.environ when no token
+    # file is resolvable, so this line is a no-op for every ssh-spine
+    # caller and the git invocation below is byte-identical to the one this
+    # function has always issued.
+    env = credential_env()
+    env.update(
+        {
+            "GIT_AUTHOR_NAME": "oxidex-fleet",
+            "GIT_AUTHOR_EMAIL": "fleet@oxidex.local",
+            "GIT_COMMITTER_NAME": "oxidex-fleet",
+            "GIT_COMMITTER_EMAIL": "fleet@oxidex.local",
+            # UNCONDITIONAL, never `env.get(...)`: the ambient
+            # environment does not get a vote on the fleet's ssh
+            # transport options. See `ssh_command`'s comment for why
+            # the honour-what-is-set shape was a hole rather than a
+            # courtesy. A caller with a genuine need for a different
+            # identity passes `ssh_command=` to THIS call and gets the
+            # pinned options with it.
+            "GIT_SSH_COMMAND": ssh_command or DEFAULT_SSH_COMMAND,
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    try:
+        completed = subprocess.run(
+            cmd,
+            input=input,
+            capture_output=True,
+            timeout=timeout,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HubUnreachableError(f"{' '.join(cmd)} timed out after {timeout}s") from exc
+    return _Result(
+        returncode=completed.returncode,
+        stdout=completed.stdout.decode("utf-8", "replace"),
+        stderr=completed.stderr.decode("utf-8", "replace"),
+        args=cmd[1:],
+    )
+
+
 class Hub:
     """A CAS-over-git-refs client.
 
@@ -402,21 +584,35 @@ class Hub:
     reason about, which matters because `FallbackHub` (SPEC 4.3) presents
     the GitHub half's `.url`/`.workdir`/`.code_url` as its own.
 
-    `code_push_url` is where code WRITES go -- the tip advance, `rescued/*`,
+    `code_push_url` is where ORDINARY code WRITES go -- `rescued/*`, the
     `staging/*` retirement, the train's temp gate ref. It defaults to
-    `code_url`, so a fleet that reads and writes code over the same HTTPS
-    remote (with the `FLEET_GIT_TOKEN_FILE` PAT) needs no second URL at
-    all. It exists as a separate knob because the tip is protected by a
-    ruleset whose bypass actor is a DEPLOY KEY (SPEC §8), and a deploy key
-    is an ssh credential: it cannot authenticate an HTTPS push at all. So
-    the train can be pointed at `git@github.com:swack-tools/oxidex.git`
-    for pushes while every read stays on the cheap, token-authenticated
-    HTTPS `code_url`. Setting it is what a host holding the deploy key
-    does; leaving it alone is what every other host does.
+    `code_url`, which is the HTTPS remote the `FLEET_GIT_TOKEN_FILE` PAT
+    authenticates, and on a split spine that default is the ANSWER rather
+    than a placeholder: SPEC §3.1 routes all three of those writes through
+    the PAT. It stays a separate knob only for a topology that reads code
+    from one mirror and writes it to another.
 
-    Three URLs, one rule: `refs/fleet/*` is `url`, reading `refs/heads/*`
-    is `code_url`, writing `refs/heads/*` is `code_push_url`. The full
-    call-site table lives in SPEC §4.4.
+    `tip_push_url` is where the ONE ruleset-bypassing write goes -- the tip
+    advance, and nothing else. It defaults to `code_push_url` (hence, by
+    default, to `code_url`), so a single-repo fleet and every existing
+    fixture are unchanged.
+
+    THE TIP IS SPLIT OUT FROM THE OTHER THREE BECAUSE THE CREDENTIAL IS.
+    The `tip-update` ruleset's bypass actor is a DEPLOY KEY (SPEC §8),
+    which is an ssh credential and cannot authenticate an HTTPS push at
+    all; the PAT is HTTPS and is not a bypass actor. With one URL for all
+    four writes there is no setting that is right: point it at ssh and the
+    three non-tip pushes run with NO pinned identity -- they inherit
+    whatever ambient key the agent offers, i.e. the operator's personal
+    key, on a host whose whole point is that it holds a scoped credential
+    -- while pointing it at HTTPS makes the deploy key inert and the tip
+    push fail the ruleset. So the tip gets its own URL and its own
+    per-subprocess `ssh_command=`; the other three keep the PAT over HTTPS.
+
+    Four URLs, one rule: `refs/fleet/*` is `url`, reading `refs/heads/*` is
+    `code_url`, writing `refs/heads/*` is `code_push_url`, and the single
+    exception is the tip, which is `tip_push_url`. The full call-site table
+    lives in SPEC §4.4.
     """
 
     def __init__(
@@ -425,11 +621,15 @@ class Hub:
         workdir: Path,
         code_url: Optional[str] = None,
         code_push_url: Optional[str] = None,
+        tip_push_url: Optional[str] = None,
     ):
         self.url = str(url)
         self.code_url = self.url if code_url is None else str(code_url)
         self.code_push_url = (
             self.code_url if code_push_url is None else str(code_push_url)
+        )
+        self.tip_push_url = (
+            self.code_push_url if tip_push_url is None else str(tip_push_url)
         )
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -721,40 +921,67 @@ class Hub:
         refspec: str,
         push_options: Optional[Sequence[str]] = None,
         force: bool = False,
-        ssh_command: Optional[str] = None,
     ) -> _Result:
-        """`push_ref`, but against `code_push_url` -- the CODE repo.
+        """`push_ref`, but against `code_push_url` -- the CODE repo, for
+        every code write EXCEPT the tip (see `push_tip_ref`).
 
-        This is the write half of the split. Every branch the fleet
-        advances is a code ref: the tip (`train._push_tip`), `rescued/*`
-        and the retirement of `staging/*` (`train._push_tip_and_retire`),
-        the train's temp gate ref (`train.real_gate`). Before this method
-        existed they all went through `push_ref`, i.e. to `self.url`, and
-        with the state repo private and the code repo public that means
-        the train's tip advance was being pushed at the coordination repo
-        -- where it would either be rejected or, worse, quietly succeed
-        and create a `refs/heads/refactor/tag-machinery` on the state repo
-        that no ruleset protects and no reader ever looks at.
+        This is the write half of the split. `rescued/<slug>`, the
+        `staging/*` retirement and the train's temp gate ref are code refs;
+        before this method existed they went through `push_ref`, i.e. to
+        `self.url`, and with the state repo private and the code repo
+        public that pushed branches at the coordination repo -- where they
+        would either be rejected or, worse, quietly succeed and create a
+        `refs/heads/*` on the state repo that no ruleset protects and no
+        reader ever looks at.
 
-        `ssh_command`, when given, applies to THIS push only (see
-        `_raw_run`): it is how the train's deploy key reaches the one push
-        the `tip-update` ruleset's bypass actor exists for, without any
-        other git operation in the process -- including the claim
-        renewer's, on another thread -- inheriting it.
+        THERE IS NO `ssh_command=` PARAMETER HERE, deliberately. These
+        three writes authenticate with the host PAT over HTTPS (SPEC §3.1);
+        the deploy key is the tip's credential and the tip's only. When the
+        two shared a method and a URL, a train pointed at ssh for the tip's
+        sake ran these under whatever identity the ambient ssh agent
+        offered -- unpinned, unscoped, and invisible in every log. Removing
+        the parameter makes that unrepresentable rather than merely
+        discouraged.
         """
         args = ["push"]
         if force:
             args.append("--force")
         args.extend(self._push_option_args(push_options))
         args.extend([self.code_push_url, refspec])
+        return self._run(args)
+
+    def push_tip_ref(
+        self,
+        refspec: str,
+        push_options: Optional[Sequence[str]] = None,
+        force: bool = False,
+        ssh_command: Optional[str] = None,
+    ) -> _Result:
+        """The tip advance, and only the tip advance: a push at
+        `tip_push_url` with an optional per-subprocess `ssh_command`.
+
+        Its own method because its own credential. `tip_push_url` is the
+        ssh URL the `tip-update` ruleset's deploy-key bypass actor can
+        authenticate (a deploy key cannot do HTTPS at all), and
+        `ssh_command` pins that key with `-i` + `IdentitiesOnly=yes` for
+        THIS subprocess -- never `os.environ`, where the train singleton's
+        claim renewer (another thread of the same process, pushing
+        `refs/fleet/*` to the STATE repo on a 120 s timer through a 20-45
+        minute gate) would inherit it and offer the code repo's deploy key
+        to a repo that has never heard of it.
+
+        Both defaults collapse to today's behaviour: `tip_push_url`
+        defaults to `code_push_url`, and `ssh_command=None` means the
+        pinned `DEFAULT_SSH_COMMAND`.
+        """
+        args = ["push"]
+        if force:
+            args.append("--force")
+        args.extend(self._push_option_args(push_options))
+        args.extend([self.tip_push_url, refspec])
         return self._run(args, ssh_command=ssh_command)
 
-    def delete_code_ref(
-        self,
-        ref: str,
-        expect_sha: str,
-        ssh_command: Optional[str] = None,
-    ) -> bool:
+    def delete_code_ref(self, ref: str, expect_sha: str) -> bool:
         """CAS-delete a CODE ref on `code_push_url`. Same contract as
         `delete`: True = deleted, False = lost the race (the ref moved or
         is already gone), transport failure raises.
@@ -764,12 +991,13 @@ class Hub:
         window of 20-45 minutes, and an unconditional delete in that
         window throws away whatever the author pushed during it with
         nothing downstream able to tell (`train._retire_staging_ref`).
+
+        No `ssh_command=`, for the reason `push_code_ref` gives: the two
+        refs deleted here (`staging/<slug>`, `staging/train-tmp-*`) are PAT
+        writes, and the deploy key belongs to the tip alone.
         """
         lease = f"--force-with-lease={ref}:{expect_sha}"
-        result = self._run(
-            ["push", lease, self.code_push_url, f":{ref}"],
-            ssh_command=ssh_command,
-        )
+        result = self._run(["push", lease, self.code_push_url, f":{ref}"])
         return self._interpret_push(result)
 
     def list(self, prefix: str) -> dict:
@@ -1005,56 +1233,7 @@ class Hub:
         timeout: int = 30,
         ssh_command: Optional[str] = None,
     ) -> _Result:
-        """`ssh_command`, when given, is the `GIT_SSH_COMMAND` for THIS
-        subprocess and nothing else: it is placed in the `env=` dict handed
-        to `subprocess.run` and never in `os.environ`.
-
-        That distinction is the whole point of the parameter. The previous
-        deploy-key path set `os.environ["GIT_SSH_COMMAND"]` around the tip
-        push, which is process-global: every claim renewer thread in the
-        same process (the train singleton renews on a 120 s timer while it
-        gates for 20-45 minutes) inherits it and pushes coordination refs
-        to the STATE repo under the CODE repo's deploy key with
-        `IdentitiesOnly=yes`, i.e. offering exactly one key that repo has
-        never heard of. Threads are not a place where an environment
-        variable can be scoped, so the scope moved to where it can be: one
-        subprocess invocation.
-        """
-        # `credential_env` returns a plain copy of os.environ when
-        # FLEET_GIT_TOKEN_FILE is unset, so this line is a no-op for every
-        # ssh-spine caller and the git invocation below is byte-identical
-        # to the one this method has always issued.
-        env = credential_env()
-        env.update(
-            {
-                "GIT_AUTHOR_NAME": "oxidex-fleet",
-                "GIT_AUTHOR_EMAIL": "fleet@oxidex.local",
-                "GIT_COMMITTER_NAME": "oxidex-fleet",
-                "GIT_COMMITTER_EMAIL": "fleet@oxidex.local",
-                # UNCONDITIONAL, never `env.get(...)`: the ambient
-                # environment does not get a vote on the fleet's ssh
-                # transport options. See `ssh_command`'s comment for why
-                # the honour-what-is-set shape was a hole rather than a
-                # courtesy. A caller with a genuine need for a different
-                # identity passes `ssh_command=` to THIS call and gets the
-                # pinned options with it.
-                "GIT_SSH_COMMAND": ssh_command or DEFAULT_SSH_COMMAND,
-                "GIT_TERMINAL_PROMPT": "0",
-            }
-        )
-        try:
-            completed = subprocess.run(
-                cmd,
-                input=input,
-                capture_output=True,
-                timeout=timeout,
-                env=env,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise HubUnreachableError(f"{' '.join(cmd)} timed out after {timeout}s") from exc
-        return _Result(
-            returncode=completed.returncode,
-            stdout=completed.stdout.decode("utf-8", "replace"),
-            stderr=completed.stderr.decode("utf-8", "replace"),
-            args=cmd[1:],
-        )
+        """Kept as a method for its many in-tree callers (and its tests);
+        the implementation is the module-level `run_git`, which is what a
+        non-`Hub` caller such as `workqueue.Queue._git` imports."""
+        return run_git(cmd, input=input, timeout=timeout, ssh_command=ssh_command)
