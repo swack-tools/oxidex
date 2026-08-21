@@ -52,6 +52,21 @@ clean tree, on modules that pass 10/10 alone):
      recovery is still FAIL and records NO flakes; and a clean run,
      proving `fleet_tests_flakes` is absent rather than empty.
 
+R4 (review of staging/agent-server @ 99f06cb3) adds the loud half of
+`store_verdict()`'s hub-push failure:
+
+  6. `TestStoreVerdictLoudFailure` -- cheap, same extraction technique as
+     (2)/(4): `store_verdict()` pulled verbatim from the real script text
+     and run standalone against a stand-in `verdict.py` this test
+     controls, so success/failure is chosen directly rather than needing a
+     real hub outage. Pins that a failed store still exits the function
+     successfully (the gate's own PASS/FAIL is never at stake), while
+     leaving a `<tag>.verdict-store-failed` marker beside the verdict and
+     the line `GATE: VERDICT STORE FAILED` in the gate's log; a successful
+     store leaves neither, and clears a stale marker a PRIOR failed
+     attempt under the same TAG left behind; the `TREE_SHA`-empty skip
+     path touches neither the log nor the marker.
+
 Run with:
     python3 -m unittest discover -s tools/fleet/tests -v
 """
@@ -61,6 +76,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -855,6 +871,100 @@ class TestFleetTestsFlakeRetry(_RealGateHarness, unittest.TestCase):
         self.assertNotIn("fleet_tests_flakes", res["json"])
         self.assertNotIn("isolation re-run", res["log"],
                          "no retry may run when nothing went red")
+
+
+class TestStoreVerdictLoudFailure(unittest.TestCase):
+    """R4: `store_verdict()` extracted verbatim from gate.sh's own text
+    (same brace-matched technique as `TestFleetTestModulesExcludeSeams`/
+    `TestFleetTestsFailedModuleParsing` above), run standalone against a
+    tiny stand-in `$SELF_DIR/verdict.py` this test controls -- no real
+    hub, no real `tools/fleet/verdict.py`, so success/failure is chosen
+    directly instead of needing an actual hub outage. Proves gate.sh's own
+    TEXT has the loud-failure behaviour, not a description of it.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="fleet-store-verdict-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.self_dir = self.tmp / "self_dir"
+        self.self_dir.mkdir()
+        self.L = self.tmp / "gate-x.log"
+        self.J = self.tmp / "gate-x.json"
+        self.SV = self.tmp / "gate-x.verdict-store-failed"
+        self.J.write_text("{}")
+        self.L.write_text("")
+
+    def _stub_verdict_py(self, exit_code: int) -> None:
+        """Stands in for `python3 tools/fleet/verdict.py store ...` --
+        the real script's argv (`store --hub-url ... --workdir ...
+        --json-file ...`) is accepted and ignored; only the exit code
+        matters to `store_verdict()`."""
+        (self.self_dir / "verdict.py").write_text(
+            "import sys\n"
+            "sys.stderr.write('stub verdict.py store called\\n')\n"
+            f"sys.exit({exit_code})\n"
+        )
+
+    def _run_store_verdict(self, *, tree_sha: str) -> subprocess.CompletedProcess:
+        source = GATE_SH.read_text(encoding="utf-8")
+        func_src = _extract_shell_function(source, "store_verdict")
+        # Every free variable `store_verdict()` reads is set here to a
+        # fixture value, exactly the shape gate.sh itself sets them to
+        # before ever calling the function -- so this exercises the real
+        # function body against real files, not a rewritten stand-in.
+        script = (
+            f"TREE_SHA={shlex.quote(tree_sha)}\n"
+            f"SELF_DIR={shlex.quote(str(self.self_dir))}\n"
+            "HUB_URL='https://example.invalid/state.git'\n"
+            f"VERDICT_WORKDIR={shlex.quote(str(self.tmp / 'workdir'))}\n"
+            f"J={shlex.quote(str(self.J))}\n"
+            f"L={shlex.quote(str(self.L))}\n"
+            f"SV={shlex.quote(str(self.SV))}\n"
+            f"{func_src}\n"
+            "store_verdict\n"
+        )
+        return subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, timeout=15,
+        )
+
+    def test_successful_store_writes_no_marker_and_no_loud_line(self):
+        self._stub_verdict_py(0)
+        result = self._run_store_verdict(tree_sha="a" * 40)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.SV.exists(), "a successful store must not leave a marker")
+        self.assertNotIn("GATE: VERDICT STORE FAILED", self.L.read_text())
+
+    def test_failed_store_is_loud_but_never_fails_the_caller(self):
+        self._stub_verdict_py(1)
+        result = self._run_store_verdict(tree_sha="a" * 40)
+        # store_verdict()'s own exit status stays 0 on a hub-push failure
+        # -- that is the non-fatality R4 explicitly keeps -- while the
+        # failure becomes loud everywhere else: the marker, and the log.
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.SV.exists(), "a failed store must leave the sibling marker")
+        self.assertIn("GATE: VERDICT STORE FAILED", self.L.read_text())
+        # The underlying verdict.py failure is still visible in the log
+        # for a human debugging this gate, not just the marker's existence.
+        self.assertIn("stub verdict.py store called", self.L.read_text())
+
+    def test_empty_tree_sha_skips_entirely(self):
+        self._stub_verdict_py(1)  # would be loud if ever invoked
+        result = self._run_store_verdict(tree_sha="")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.SV.exists())
+        self.assertEqual(self.L.read_text(), "",
+                         "TREE_SHA never resolving must not touch the log at all")
+
+    def test_a_stale_marker_from_a_prior_failed_attempt_is_cleared_by_a_later_success(self):
+        self.SV.write_text("")  # a previous run under this same TAG failed
+        self._stub_verdict_py(0)
+        result = self._run_store_verdict(tree_sha="a" * 40)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(
+            self.SV.exists(),
+            "a later successful store must clear a stale failure marker, "
+            "not report a failure that has since resolved",
+        )
 
 
 if __name__ == "__main__":

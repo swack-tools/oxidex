@@ -260,6 +260,9 @@ export OXIDEX="$CARGO_TARGET_DIR/release/oxidex"
 export TAGMATRIX_WORK="$HOME/tgt/tagmap-$TAG"
 mkdir -p "$HOME/gatelogs" "$HOME/tgt"
 L="$HOME/gatelogs/gate-$TAG.log"; V="$HOME/gatelogs/gate-$TAG.verdict"; J="$HOME/gatelogs/gate-$TAG.json"
+# R4: a marker beside the verdict, written only when `store_verdict` below
+# could not push to the hub cache -- see that function for why this exists.
+SV="$HOME/gatelogs/gate-$TAG.verdict-store-failed"
 
 # rustc_id / platform_id (T1.2, replaces the single T0.3 TOOLCHAIN_ID).
 # Computed once, after PATH is set, so both reflect the same rustc the
@@ -339,11 +342,29 @@ fi
 # for a rebuild it didn't strictly need to, not that this run's own result
 # becomes wrong. Skipped entirely when TREE_SHA never resolved (the
 # low-disk abort below fires before any clone happens).
+#
+# R4: the old one-line "(non-fatal)" swallow was true about THIS gate's own
+# exit status (still is -- nothing below changes that) but false about the
+# operator's visibility: a hub outage here left no trace anywhere an
+# operator would think to look, so a run of tokenless-host failures read as
+# silence rather than as a repeated, diagnosable failure. Loud now means
+# three things, all local and none of them touching this function's return
+# value: (1) `GATE: VERDICT STORE FAILED` in this gate's own log, (2) a
+# `$SV` marker file beside `$V` that outlives this process, for
+# `fleetd.py`'s reap loop to notice and fold into the next heartbeat's
+# `refused[]` (see fleetd.py's reconcile_once), and (3) a clean rerun that
+# succeeds removes any marker a PRIOR failed attempt under this same TAG
+# left behind, so the heartbeat cannot report a failure that has since
+# resolved.
 store_verdict() {
   [ -n "$TREE_SHA" ] || return 0
-  python3 "$SELF_DIR/verdict.py" store \
+  rm -f "$SV"
+  if ! python3 "$SELF_DIR/verdict.py" store \
     --hub-url "$HUB_URL" --workdir "$VERDICT_WORKDIR" --json-file "$J" \
-    >> "$L" 2>&1 || echo "verdict cache store failed (non-fatal)" >> "$L"
+    >> "$L" 2>&1; then
+    echo "GATE: VERDICT STORE FAILED -- verdict.py could not push to $HUB_URL (non-fatal to this gate's own PASS/FAIL; see the output just above)" >> "$L"
+    : > "$SV"
+  fi
 }
 
 # classify_failure <stage> -- ABORT vs FAIL for a just-failed step, per the

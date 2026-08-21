@@ -17,7 +17,19 @@ than HEARTBEAT_STALE renders DOWN -- the ryzen's cron was dead for a full
 day with nothing noticing; this line is why that cannot recur silently.
 `--why` answers "why is nothing starting" from the same heartbeats' durable
 `refused` field (PLAN Stage 1 task 5) -- no ssh, no re-derivation.
-"""
+
+`--code`/`FLEET_CODE_URL` names the CODE repo (docs/AGENT-SERVER-SPEC.md
+§4.4). `status`'s QUEUE line asks `workqueue.Queue` for the live queue,
+and on a split spine that means a `hub.code_sha(TIP_REF)` against the CODE
+repo, not the state repo `--hub`/`FLEET_HUB_URL` names. Leaving `_hub()`
+with no way to learn that URL was not "coordination-only" (§4.4(c) listed
+cli.py that way) -- it made the QUEUE line a permanent
+`error: tip ref ... does not exist on the code repo '<state url>'` on every
+split-spine invocation, `--why` included, because `fleetlib.Hub`'s
+`code_url` defaults to `.url` when unset. `--code`/`FLEET_CODE_URL` mirror
+`fleetd.py`'s own `--hub`/`--code` pair exactly, including the same
+default (unset means "same repo as --hub", the single-repo topology this
+tool predates)."""
 
 from __future__ import annotations
 
@@ -50,7 +62,15 @@ def _hub(args) -> Hub:
     if not url:
         print("fleet: no hub URL (--hub or FLEET_HUB_URL)", file=sys.stderr)
         raise SystemExit(2)
-    return Hub(url, workdir=Path.home() / ".fleetd" / "clicache")
+    # R1: `code_url` is `fleetlib.Hub`'s own constructor argument (the same
+    # one `fleetd.py --code`/`FLEET_CODE_URL` resolves, PLAN Stage 1 task
+    # 4) -- left `None` here it defaults to `url`, which is exactly the
+    # single-repo topology this tool predates and every existing (non-split)
+    # invocation still gets unchanged. On a split spine, giving `status` a
+    # way to be told the code repo is what turns its QUEUE line from a
+    # permanent `queue-unavailable`-shaped error into the real count.
+    code = getattr(args, "code", None) or os.environ.get("FLEET_CODE_URL")
+    return Hub(url, workdir=Path.home() / ".fleetd" / "clicache", code_url=code)
 
 
 def _edit_desired(hub: Hub, mutate) -> dict:
@@ -319,6 +339,12 @@ def cmd_status(args) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="fleet", description=__doc__.splitlines()[0])
     ap.add_argument("--hub", default=None, help="hub git URL (or FLEET_HUB_URL)")
+    # R1: mirrors fleetd.py's own --code/FLEET_CODE_URL (PLAN Stage 1 task
+    # 4) -- unset means "same repo as --hub", so a single-repo fleet is
+    # unaffected. `status`'s QUEUE line is the one thing in this file that
+    # needs it (workqueue.Queue asks `hub.code_sha(TIP_REF)`).
+    ap.add_argument("--code", default=None,
+                    help="code repo git URL (or FLEET_CODE_URL; default: same as --hub)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("up", help="raise a host's worker targets")
