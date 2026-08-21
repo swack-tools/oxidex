@@ -58,9 +58,12 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+FLEET_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(FLEET_DIR))
 
 from scripts import instrument  # noqa: E402  (path must be set up first)
+import config  # noqa: E402  (sibling module; R6 -- the one EXIFTOOL_CACHE_DIR default)
 
 # ---------------------------------------------------------------------------
 # Canonical constants
@@ -91,7 +94,10 @@ CANONICAL_TOOLCHAIN_ID = (
 )
 CANONICAL_CHANNEL = "1.97.1"  # must track rust-toolchain.toml's `channel`
 
-CACHE_DIR = Path(os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
+# R6: the literal used to be spelled out here directly; it now lives in
+# exactly one place (config.DEFAULT_EXIFTOOL_CACHE_DIR / units/fleet-env.sh)
+# and every consumer, this file included, imports/sources that instead.
+CACHE_DIR = config.exiftool_cache_dir()
 ORACLE_SCRIPT = CACHE_DIR / "exiftool-pinned.sh"
 DOCX_SAMPLE = CACHE_DIR / "exiftool" / "t" / "images" / "OOXML.docx"
 CORPUS_DIR = CACHE_DIR / "combined-samples"
@@ -275,6 +281,19 @@ def check_git_token_file() -> Check:
     authenticate at all). This is the ONE health check answering "would
     fleetd even get past its first git command", not "did it".
 
+    R2 (review finding): `FLEET_GIT_TOKEN_FILE` being unset does not mean
+    no token is available -- `install_secrets.sh` (and every `units/*`
+    template) already default the SAME file to
+    `config.default_git_token_file()` (`~/.keel/secrets/git-token`), so a
+    hand-run step that forgot to `export FLEET_GIT_TOKEN_FILE` was failing
+    this check even when a perfectly good, correctly-permissioned token
+    file already sat at the default path. This check now falls back to
+    that default path when the env var is unset, exactly mirroring what a
+    caller who *does* wire the default in (R2's broader fix, out of scope
+    here) would end up reading -- it never invents a NEW acceptance path,
+    it just stops requiring the redundant `export` `install_secrets.sh`
+    itself doesn't require.
+
     Deliberately does not read the token (this script's own PATH/`-vV`
     checks above never touch a secret either): existence + mode are
     checkable without opening the file, and `stat` on a 0600 file the
@@ -291,22 +310,33 @@ def check_git_token_file() -> Check:
         )
         return c
 
-    token_file = os.environ.get("FLEET_GIT_TOKEN_FILE", "")
     hint = "run tools/fleet/rollout/install_secrets.sh to create and validate one"
+    token_file = os.environ.get("FLEET_GIT_TOKEN_FILE", "")
+    used_default = False
     if not token_file:
-        c.failed(f"FLEET_HUB_URL is https but FLEET_GIT_TOKEN_FILE is unset -- {hint}")
-        return c
+        default_path = config.default_git_token_file()
+        if default_path.is_file():
+            token_file = str(default_path)
+            used_default = True
+        else:
+            c.failed(
+                f"FLEET_HUB_URL is https but FLEET_GIT_TOKEN_FILE is unset and the "
+                f"default {default_path} does not exist -- {hint}"
+            )
+            return c
 
+    label = f"FLEET_GIT_TOKEN_FILE (default, env var unset)={token_file}" if used_default \
+        else f"FLEET_GIT_TOKEN_FILE={token_file}"
     path = Path(token_file)
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
     except OSError as exc:
-        c.failed(f"FLEET_GIT_TOKEN_FILE={token_file} does not exist or is unreadable ({exc}) -- {hint}")
+        c.failed(f"{label} does not exist or is unreadable ({exc}) -- {hint}")
         return c
     if mode != 0o600:
-        c.failed(f"FLEET_GIT_TOKEN_FILE={token_file} has mode {oct(mode)}, expected 0600 -- {hint}")
+        c.failed(f"{label} has mode {oct(mode)}, expected 0600 -- {hint}")
         return c
-    c.passed(f"FLEET_GIT_TOKEN_FILE={token_file} exists, mode 0600 (contents not read)")
+    c.passed(f"{label} exists, mode 0600 (contents not read)")
     return c
 
 

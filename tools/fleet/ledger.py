@@ -68,16 +68,23 @@ from typing import Optional
 REPO_ROOT_FOR_IMPORT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT_FOR_IMPORT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT_FOR_IMPORT))
+FLEET_DIR_FOR_IMPORT = Path(__file__).resolve().parent
+if str(FLEET_DIR_FOR_IMPORT) not in sys.path:
+    sys.path.insert(0, str(FLEET_DIR_FOR_IMPORT))
 
 from scripts import instrument  # noqa: E402  (path must be set up first)
+import config  # noqa: E402  (sibling module; R6 -- the one EXIFTOOL_CACHE_DIR default)
 
 # --------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------- #
 
 # Ground rule 7 (T1.4 task brief) / AGENTS.md: never invoke bare `exiftool`.
-# Same cache-dir convention as doctor.py (T0.1) and gate.sh (T0.3).
-CACHE_DIR = Path(os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"))
+# Same cache-dir convention as doctor.py (T0.1) and gate.sh (T0.3). R6:
+# the literal itself now lives in exactly one place
+# (config.DEFAULT_EXIFTOOL_CACHE_DIR / units/fleet-env.sh); this file
+# imports it rather than spelling it out a second time.
+CACHE_DIR = config.exiftool_cache_dir()
 ORACLE_SCRIPT = CACHE_DIR / "exiftool-pinned.sh"
 DOCX_SAMPLE = CACHE_DIR / "exiftool" / "t" / "images" / "OOXML.docx"
 CORPUS_DIR = CACHE_DIR / "combined-samples"

@@ -32,6 +32,19 @@ class TestCheckGitTokenFile(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.mkdtemp(prefix="doctor-token-")
         self.addCleanup(self._rmtree)
+        # R2/R7: check_git_token_file() now falls back to
+        # config.default_git_token_file(), which reads $HOME -- redirect
+        # it into this test's own tempdir so every test here is
+        # deterministic regardless of whether the REAL machine running
+        # the suite happens to have ~/.keel/secrets/git-token (same
+        # hermeticity concern R7 raises for HOME-dependent defaults
+        # elsewhere in this tree). Tests that want the default path to
+        # exist create it explicitly under self._home.
+        self._home = Path(self._tmp) / "home"
+        self._home.mkdir()
+        self._home_patch = mock.patch.dict(os.environ, {"HOME": str(self._home)})
+        self._home_patch.start()
+        self.addCleanup(self._home_patch.stop)
 
     def _rmtree(self):
         import shutil
@@ -43,6 +56,15 @@ class TestCheckGitTokenFile(unittest.TestCase):
         path.write_text(content)
         os.chmod(path, mode)
         return str(path)
+
+    def _default_token_file(self, mode=0o600, content="ghp_default\n"):
+        """A token file at the REDIRECTED default path
+        (`$HOME/.keel/secrets/git-token`), for the R2 fallback tests."""
+        path = self._home / ".keel" / "secrets" / "git-token"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        os.chmod(path, mode)
+        return path
 
     def test_non_https_hub_url_is_informational_not_a_failure(self):
         """A local `git init --bare` fixture or an ssh hub needs no token
@@ -61,6 +83,8 @@ class TestCheckGitTokenFile(unittest.TestCase):
         self.assertIsNone(c.ok)
 
     def test_https_hub_url_with_no_token_file_var_fails_loud(self):
+        """No env var AND no file at the (redirected) default path --
+        still a loud failure, not a silent skip."""
         with mock.patch.dict(
             os.environ,
             {"FLEET_HUB_URL": "https://github.com/swack-tools/oxidex-fleet-state.git"},
@@ -71,6 +95,60 @@ class TestCheckGitTokenFile(unittest.TestCase):
         self.assertFalse(c.ok)
         self.assertIn("FLEET_GIT_TOKEN_FILE is unset", c.detail)
         self.assertIn("install_secrets.sh", c.detail, "must name the fix, not just the symptom")
+
+    def test_default_token_file_accepted_when_env_var_unset(self):
+        """R2: a correctly-permissioned token file sitting at the default
+        path (`~/.keel/secrets/git-token`, same default
+        `install_secrets.sh` and every `units/*` template use) must PASS
+        even though `FLEET_GIT_TOKEN_FILE` was never exported -- that is
+        exactly the hand-run-step gap R2 names."""
+        default_path = self._default_token_file(mode=0o600)
+        with mock.patch.dict(
+            os.environ,
+            {"FLEET_HUB_URL": "https://github.com/swack-tools/oxidex-fleet-state.git"},
+            clear=False,
+        ):
+            os.environ.pop("FLEET_GIT_TOKEN_FILE", None)
+            c = doctor.check_git_token_file()
+        self.assertTrue(c.ok, msg=c.detail)
+        self.assertIn(str(default_path), c.detail)
+        self.assertIn("default", c.detail, "must say it fell back to the default, not pretend the var was set")
+
+    def test_default_token_file_with_wrong_mode_still_fails_loud(self):
+        """The R2 fallback does not relax the 0600 requirement -- a
+        loosely-permissioned file at the default path is still a FAIL,
+        not a silent PASS."""
+        default_path = self._default_token_file(mode=0o644)
+        with mock.patch.dict(
+            os.environ,
+            {"FLEET_HUB_URL": "https://github.com/swack-tools/oxidex-fleet-state.git"},
+            clear=False,
+        ):
+            os.environ.pop("FLEET_GIT_TOKEN_FILE", None)
+            c = doctor.check_git_token_file()
+        self.assertFalse(c.ok)
+        self.assertIn("0o644", c.detail)
+        self.assertIn("0600", c.detail)
+        self.assertIn(str(default_path), c.detail)
+
+    def test_explicit_env_var_wins_over_default_path(self):
+        """An explicitly-set `FLEET_GIT_TOKEN_FILE` is used as-is and the
+        default path is never even consulted -- the R2 fallback only
+        fires when the var is unset, never as a second candidate on top
+        of an explicit (and in this case deliberately wrong) one."""
+        self._default_token_file(mode=0o600)  # a valid default, ignored
+        explicit = self._token_file(mode=0o600)
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FLEET_HUB_URL": "https://github.com/swack-tools/oxidex-fleet-state.git",
+                "FLEET_GIT_TOKEN_FILE": explicit,
+            },
+        ):
+            c = doctor.check_git_token_file()
+        self.assertTrue(c.ok, msg=c.detail)
+        self.assertIn(explicit, c.detail)
+        self.assertNotIn("default", c.detail.lower())
 
     def test_https_hub_url_with_missing_file_fails_loud(self):
         missing = str(Path(self._tmp) / "does-not-exist")
