@@ -33,6 +33,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import fleetlib
 import train
 from claim import claim_ref
 from fleetlib import Hub
@@ -672,7 +673,11 @@ class TestRealGateRefLifecycle(TrainBase):
     def test_temp_ref_moved_by_someone_else_is_not_deleted(self):
         clone = self._clone()
         hub = Hub(str(self.bare), workdir=self.tmp / "rgcache")
-        real_delete = hub.delete
+        # `delete_code_ref`, not `delete`: the temp gate ref is
+        # `staging/train-tmp-*`, a CODE ref, so its CAS cleanup now goes to
+        # `code_push_url` (SPEC 4.4). The CAS itself is unchanged, which is
+        # what this test pins.
+        real_delete = hub.delete_code_ref
         moved = {}
 
         def steal_then_delete(ref, expect_sha):
@@ -687,7 +692,7 @@ class TestRealGateRefLifecycle(TrainBase):
             moved[ref] = sh(["rev-parse", "HEAD"], cwd=w).stdout.strip()
             return real_delete(ref, expect_sha=expect_sha)
 
-        with self._no_gate_script(), mock.patch.object(hub, "delete", steal_then_delete):
+        with self._no_gate_script(), mock.patch.object(hub, "delete_code_ref", steal_then_delete):
             train.real_gate(clone, "y", hub=hub)
         self.assertEqual(len(moved), 1)
         ref, sha = next(iter(moved.items()))
@@ -856,33 +861,72 @@ class TestTrainDeployKeySsh(TrainBase):
         os.environ[train.TRAIN_DEPLOY_KEY_ENV] = str(self.tmp / "no-such-key")
         self.assertIsNone(train._train_deploy_key_ssh_command())
 
-    def test_configured_key_is_set_only_around_the_tip_push_and_restored_after(self):
+    def test_the_key_reaches_the_push_subprocess_and_never_os_environ(self):
+        """NAME THE INSTRUMENT. The version of this test that shipped with
+        the bug spied `Hub.push_ref` and read `os.environ` from inside it,
+        so it asserted "the value was in the process environment while a
+        push method ran" -- true of a mechanism that never reaches git at
+        all, and true regardless of which repo the push targets or which
+        ssh options survive. It was green while the feature was broken
+        three ways at once.
+
+        What is observed here instead is the `env=` dict actually handed to
+        `subprocess.run`, which is the only thing git ever sees."""
         key = self.tmp / "deploy_key"
         key.write_text("fake key material\n")
         key.chmod(0o600)
         os.environ[train.TRAIN_DEPLOY_KEY_ENV] = str(key)
         expected_ssh_command = train._train_deploy_key_ssh_command()
         self.assertIsNotNone(expected_ssh_command)
-        self.assertIn(str(key), expected_ssh_command)
-        self.assertIn("IdentitiesOnly=yes", expected_ssh_command)
-        self.assertIn("IdentityAgent=none", expected_ssh_command)
+        self.assertIn(f"-i {key}", expected_ssh_command)
+        for option in ("-o IdentitiesOnly=yes", "-o IdentityAgent=none",
+                       "-o BatchMode=yes", "-o ConnectTimeout=10",
+                       "-o StrictHostKeyChecking=accept-new"):
+            self.assertIn(option, expected_ssh_command)
 
-        seen = {}
-        real_push_ref = Hub.push_ref
+        calls = []
+        real_run = fleetlib.subprocess.run
 
-        def spy_push_ref(hub_self, *a, **kw):
-            seen["GIT_SSH_COMMAND"] = os.environ.get("GIT_SSH_COMMAND")
-            return real_push_ref(hub_self, *a, **kw)
+        def spy(cmd, **kw):
+            calls.append({
+                "argv": list(cmd),
+                # Only commands `fleetlib` launched are in scope: it is
+                # the only caller that hands git an explicit `env=`.
+                # `train._git` (local merges, checkouts, the clone of the
+                # public code repo) inherits os.environ, and `claim.py`'s
+                # `rustc -vV` platform probe is given an env but is not a
+                # git command and has no ssh transport to pin.
+                "git": bool(cmd) and cmd[0] == "git" and kw.get("env") is not None,
+                "env_ssh": (kw.get("env") or {}).get("GIT_SSH_COMMAND"),
+                "os_environ_ssh": os.environ.get("GIT_SSH_COMMAND"),
+            })
+            return real_run(cmd, **kw)
 
         self.add_branch("key1", {"k.txt": "k\n"})
-        with mock.patch.object(Hub, "push_ref", spy_push_ref):
+        with mock.patch.object(fleetlib.subprocess, "run", spy):
             res, _ = self.run_train({})
 
         self.assertEqual(res.outcome, "advanced")
-        self.assertEqual(seen.get("GIT_SSH_COMMAND"), expected_ssh_command)
-        self.assertNotIn("GIT_SSH_COMMAND", os.environ,
-                          "must be restored (here: removed, since it was absent before) "
-                          "once the push returns")
+        git_calls = [c for c in calls if c["git"]]
+        self.assertTrue(git_calls)
+        tip_pushes = [c for c in git_calls
+                      if "push" in c["argv"]
+                      and any(a.endswith(":" + TIP) for a in c["argv"])]
+        self.assertEqual(len(tip_pushes), 1, msg=[c["argv"] for c in git_calls])
+        self.assertEqual(tip_pushes[0]["env_ssh"], expected_ssh_command)
+
+        # Every OTHER git command in the run -- claim create/renew, the
+        # verdict reads, the tip-signal CAS, the rescue push, the staging
+        # retirement -- ran under the pinned default.
+        for call in git_calls:
+            if call in tip_pushes:
+                continue
+            self.assertEqual(call["env_ssh"], fleetlib.DEFAULT_SSH_COMMAND,
+                             msg=f"deploy key leaked onto {call['argv']}")
+
+        # os.environ was never written, at any instant, by anyone.
+        self.assertTrue(all(c["os_environ_ssh"] is None for c in calls))
+        self.assertNotIn("GIT_SSH_COMMAND", os.environ)
 
 
 if __name__ == "__main__":

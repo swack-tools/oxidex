@@ -1580,7 +1580,7 @@ def dispatch_agents(
     """
     records = dispatch_mod.load_all(hub)
     busy = {w.branch for w in workers}
-    tip_sha = hub.sha(workqueue.TIP_REF)
+    tip_sha = hub.code_sha(workqueue.TIP_REF)  # CODE ref -- SPEC 4.4
     cooled: list = []
 
     def _budget_ok(key: str) -> bool:
@@ -1605,7 +1605,10 @@ def dispatch_agents(
     # instead of thirty, every fifteen seconds, against the real hub.
     convergence: list = []
     branch_shas: dict = {}
-    for slug, entry in workqueue.Queue(hub).compute().items():
+    queue, queue_refusal = workqueue.Queue(hub).compute_or_refusal()
+    if queue_refusal is not None:
+        res.refused.append(queue_refusal)
+    for slug, entry in queue.items():
         branch = entry.ref.removeprefix("refs/heads/")
         if branch in busy or not _budget_ok(branch):
             continue
@@ -1622,7 +1625,7 @@ def dispatch_agents(
         doc = hub.read(iref) or {}
         if doc.get("status") != "open":
             continue
-        if hub.sha(f"refs/heads/staging/{slug}") is not None:
+        if hub.code_sha(f"refs/heads/staging/{slug}") is not None:  # CODE ref
             continue  # branch exists; the convergence path owns it now
         key = f"{dispatch_mod.INTENT_PREFIX}{slug}"
         if key in busy or not _budget_ok(key):
@@ -1887,7 +1890,9 @@ def reconcile_once(
             if reason is not None:
                 res.refused.append(("limits", reason))
             else:
-                q = workqueue.Queue(hub).compute()
+                q, queue_refusal = workqueue.Queue(hub).compute_or_refusal()
+                if queue_refusal is not None:
+                    res.refused.append(queue_refusal)
 
                 def _branch(entry):
                     return entry.ref.removeprefix("refs/heads/")
@@ -1902,7 +1907,7 @@ def reconcile_once(
                 # `base_tip` gate.sh actually recorded in its JSON.
                 # `_TreeResolver` and `platform_id` are built ONCE for the
                 # whole loop -- see the module's "THE COST, BOUNDED" note.
-                tip_sha = hub.sha(workqueue.TIP_REF)
+                tip_sha = hub.code_sha(workqueue.TIP_REF)  # CODE ref -- SPEC 4.4
                 gate_version = _gate_version(repo_root)
                 memo = _scan_gatelogs_memo(log_dir) if tip_sha else {}
                 trees = _TreeResolver(hub, tip_sha, [q[s].ref for s in q])

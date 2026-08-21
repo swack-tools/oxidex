@@ -452,14 +452,13 @@ def _have_objects(hub: Hub, hub_refs: Sequence[str]) -> bool:
     `hub_refs` name CODE commits (staging branches, the tip), so this
     fetches from `hub.code_url` rather than `hub.url` -- the state hub,
     once code and state live in separate repos. `code_url` defaults to
-    `url` (`fleetlib.Hub`), so a hub without the attribute yet behaves
-    exactly as before.
+    `url` (`fleetlib.Hub`), so a combined-repo fixture behaves exactly as
+    before.
     """
     if not hub_refs:
         return True
     try:
-        code_url = getattr(hub, "code_url", hub.url)
-        result = _git(hub, ["fetch", "--no-tags", "--quiet", code_url, *hub_refs])
+        result = _git(hub, ["fetch", "--no-tags", "--quiet", hub.code_url, *hub_refs])
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
@@ -570,9 +569,14 @@ def economic_refusal(
 
     ref = f"refs/heads/{branch}"
     if branch_sha is None:
-        branch_sha = hub.sha(ref)
+        # `code_sha`: `refs/heads/*` is a CODE ref. Against a split spine
+        # `hub.sha` asks the state repo and answers None, and None here is
+        # the "no-such-branch" refusal below -- so every convergence
+        # dispatch would be refused for a branch that plainly exists, with
+        # a message naming the wrong repo.
+        branch_sha = hub.code_sha(ref)
     if branch_sha is None:
-        return ("no-such-branch", f"{ref} is not on the hub")
+        return ("no-such-branch", f"{ref} is not on the code repo {hub.code_url}")
 
     if not _have_objects(hub, [tip_ref, ref]):
         return None  # cannot answer -> do not block on it

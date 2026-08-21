@@ -32,14 +32,27 @@ the human a `fleet status` that says *why* nothing is starting.
 
 **Deliverables.**
 - Code repo rulesets: `tip-update` (restrict updates on `refs/heads/refactor/tag-machinery`,
-  bypass = deploy key `keel-train`), `tip-guard` (block deletion + force-push, no bypass),
+  bypass = the repo's write-capable deploy keys **as a class** — GitHub stores the actor as
+  `actor_id: null` and grants every one of them, so "only `keel-train`" is a standing invariant
+  the rollout re-checks, not a one-time setup step; SPEC §8), `tip-guard` (block deletion +
+  force-push, no bypass),
   `rescued-guard` (same on `refs/heads/rescued/*`), identical `proof-update`/`proof-guard` pair on
   `refs/heads/keel-proof/*`; `tests/live/test_tip_ruleset.py` (opt-in `FLEET_LIVE_GITHUB=1`).
-- `fleetlib.py`: `code_url` attribute (default `url`); credential-helper env in `_raw_run`
-  (L575) reading `FLEET_GIT_TOKEN_FILE`; `tools/fleet/keel/git-credential-file`; three rate-limit
-  strings in `_TRANSPORT_HINTS` (L97); `fetch_namespace(prefix)`.
-- `workqueue.py` L213-232, `dispatch.py` L434-498, `train.py` L511-519: fetch from `hub.code_url`
-  (seven lines); `tests/test_code_url_split.py` (two bare repos).
+- `fleetlib.py`: `code_url` + `code_push_url` constructor args (each defaulting to the one
+  before it, so a single-repo fleet is unchanged); `code_sha`/`code_list`/`push_code_ref`/
+  `delete_code_ref`; `ssh_command(identity_file=None)` composing an identity on top of the pinned
+  `BatchMode=yes`/`ConnectTimeout=10`/`StrictHostKeyChecking=accept-new`, and a per-subprocess
+  `ssh_command=` parameter on `_raw_run` which now sets `GIT_SSH_COMMAND` unconditionally rather
+  than honouring an ambient value; credential-helper env in `_raw_run` reading
+  `FLEET_GIT_TOKEN_FILE`; `tools/fleet/keel/git-credential-file`; three rate-limit strings in
+  `_TRANSPORT_HINTS`; `fetch_namespace(prefix)`.
+- Route every code call site per SPEC §4.4's table: `workqueue.py` (tip sha, `staging/*` listing,
+  ancestry fetch), `dispatch.py` (object fetch, branch sha), `train.py` (clone source, tip reads,
+  and all four code PUSHES — tip, `rescued/*`, `staging/*` retirement, `staging/train-tmp-*`),
+  `agentworker.py` (clone + branch/tip probes), `fleetd.py` (three `refs/heads/*` probes).
+  `workqueue.Queue.compute_or_refusal()` turns a missing tip into a `refused` reason instead of a
+  `QueueError` that the reconcile loop does not catch. `tests/test_code_url_split.py` (two bare
+  repos: `state.git` with no `refs/heads/*` at all).
 - De-hardcode: `gate.sh` L243 + L373 → `FLEET_CODE_URL` required; `gate.sh` L223/L441,
   `fleetd.py` L2021-2022 → `EXIFTOOL_CACHE_DIR`; `units/fleetd.service` L22, `com.oxidex.fleetd.plist`
   L14, `cron-backstop.txt` L45 → `FLEET_HUB_URL=<state repo https>`, `FLEET_CODE_URL=<code repo
@@ -48,8 +61,10 @@ the human a `fleet status` that says *why* nothing is starting.
   gains `--why` rendering it per host.
 - `train.py`: after a successful tip push, CAS-bump `refs/fleet/signals/tip` via `Hub.update`
   (replaces post-receive for the hubless interim); `tip_push_options` returns `[]` when
-  `FLEET_TRAIN_TOKEN_FILE` is absent (already the behaviour, L110-136); tip push uses
-  `GIT_SSH_COMMAND` with the deploy key.
+  `FLEET_TRAIN_TOKEN_FILE` is absent (already the behaviour); the tip push carries the deploy key
+  as a per-subprocess `ssh_command=` argument, never `os.environ` (the singleton's renewer thread
+  pushes state refs from the same process throughout the gate); `--code`/`--code-push` on the
+  CLI, the latter for the ssh URL a deploy key can actually authenticate.
 - `rollout/seed_desired.py` seeds the state repo with all hosts at 0/0 + `server_candidates`,
   `train_platforms`.
 - Import of the i7's `~/gatelogs/gate-*.json` into the cache via `verdict.py store`.
@@ -71,14 +86,21 @@ the human a `fleet status` that says *why* nothing is starting.
   tools.fleet.tests.test_fleetlib` → 0 failures including `TestConcurrentCreate` (8 racers, exactly
   one winner) and `TestReadIsCoherentUnderConcurrentWrites` (instrument: that unittest run's
   output, pasted in the PR); p50/p95 of `create`/`update` recorded with `hyperfine -N` in the commit.
-- `tests/live/test_tip_ruleset.py` on `keel-proof/x`: keyless FF → rc≠0 with `GH013` in stderr;
-  deploy-key FF → rc 0; deploy-key `--force` → rc≠0; deploy-key delete → rc≠0; PAT push to
-  `rescued/proof` then delete → rc≠0 (instrument: captured `git push` rc + stderr per case).
+- `tests/live/test_tip_ruleset.py` on `keel-proof/x`, **and the expected matrix depends on which
+  half is deployed** — the earlier "keyless FF → `GH013`" line was wrong for the state the repo is
+  actually in. Guard half only (today): keyless FF → rc 0 (a guard blocks deletion and force-push,
+  not updates); keyless `--force` → rc≠0; keyless delete → rc≠0; PAT push to `rescued/proof` then
+  delete → rc≠0. Both halves (once the deploy key exists and `proof-update` is created): keyless
+  FF → rc≠0 with `GH013` in stderr; deploy-key FF → rc 0; deploy-key `--force` → rc≠0;
+  deploy-key delete → rc≠0. (Instrument: captured `git push` rc + stderr per case.)
 - One real gate on the i7 of a real `staging/*` branch: `~/gatelogs/gate-<tag>.verdict` = PASS and
   `git ls-remote <state> 'refs/fleet/verdicts/*'` lists `(tree,7,<i7 platform_id>)` (instrument:
   both commands' output).
 - `fleet status --why` from m5 shows i7 `up` with heartbeat age < 60 s and m5 `refused: disabled
-  (gates 0)` (instrument: the command output).
+  (gates 0)` (instrument: the command output). A host that is ENABLED but computes nothing must
+  also produce a line rather than an empty `refused[]` — e.g. `queue-unavailable: tip ref
+  'refs/heads/refactor/tag-machinery' does not exist on the code repo …` when `--code` is
+  misconfigured, which is the failure this stage's split makes possible.
 - `rg -n "work2.oxidex.net|/home/allen/git/oxidex.git|/tmp/oxidex-exiftool-cache" tools/fleet
   units` returns only comments in the incident history (instrument: that ripgrep).
 - Full suite green under `gate.sh` fleet-tests stage (instrument: the gate verdict JSON).
