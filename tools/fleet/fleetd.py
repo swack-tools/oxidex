@@ -947,6 +947,15 @@ GATELOGS_GLOB = "gate-*.json"
 AWAITING_TRAIN = "awaiting_train"
 NEEDS_AUTHOR = "needs_author"
 
+
+def _verdict_store_failed_marker(log_dir: Path, tag: str) -> Path:
+    """The sibling marker `gate.sh`'s `store_verdict()` writes beside
+    `gate-<tag>.verdict` when it could not push that verdict to the hub
+    cache (R4). Named here, once, so the reap loop below and any test
+    reading for it agree on the exact path gate.sh writes."""
+    return Path(log_dir) / f"gate-{tag}.verdict-store-failed"
+
+
 # Where a classification came from, carried into the heartbeat so an
 # operator can tell a cross-host answer from this host's own recall.
 SOURCE_HUB = "hub"
@@ -1812,6 +1821,25 @@ def reconcile_once(
                       f"{w.tag} (expires on TTL): {e}", file=sys.stderr, flush=True)
             workers.remove(w)
             res.finished.append(w.tag)
+            if w.kind == "gate":
+                # R4: gate.sh's `store_verdict()` swallows a hub-push
+                # failure so its own PASS/FAIL is never wrong because the
+                # CACHE was unreachable -- but "non-fatal to this run" was
+                # being read as "invisible", and a tokenless-host failure
+                # would repeat silently forever. The marker it leaves
+                # beside the verdict is the loud half: surface it here, at
+                # reap, into THIS loop's `refused[]`, which the heartbeat
+                # below carries verbatim (fleet status --why reads it).
+                # One-shot by construction -- `w` leaves `workers` on this
+                # same pass, so the marker is reported exactly once per
+                # gate, not on every loop it happens to still exist.
+                marker = _verdict_store_failed_marker(log_dir, w.tag)
+                if marker.exists():
+                    res.refused.append((
+                        "verdict-store-failed",
+                        f"{w.tag}: gate.sh could not push its verdict to the hub cache "
+                        f"(see gate-{w.tag}.log); the gate's own PASS/FAIL is unaffected",
+                    ))
             if w.kind == "agent":
                 # Close the ledger entry this run opened. An ADOPTED worker
                 # has no Popen and therefore no exit status -- its outcome

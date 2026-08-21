@@ -300,6 +300,71 @@ class TestRefusedReasons(FleetdBase):
         self.assertIn("refused: target-zero (gates 0 / agents 0)", out, out)
 
 
+class TestGateVerdictStoreFailureSurfaced(FleetdBase):
+    """R4 (review of staging/agent-server @ 99f06cb3): gate.sh's own
+    `store_verdict()` (see test_gate_script.py's
+    `TestStoreVerdictLoudFailure` for that half) leaves a sibling
+    `gate-<tag>.verdict-store-failed` marker when it could not push this
+    gate's verdict to the hub cache. This is the fleetd half: the SAME
+    reap step that already turns a lost lease into a kill (`res.killed`)
+    and an exited worker into `res.finished` is where that marker gets
+    read, so a finished gate that left one behind becomes a `refused`
+    reason on that exact loop -- reusing `ReconcileResult.refused` and
+    `write_heartbeat`'s existing carry-through (PLAN Stage 1 task 5)
+    rather than inventing a second, parallel channel for the same fact.
+    """
+
+    def _finish_gate(self, tag: str) -> None:
+        (self.tmp / f"stop-{tag}").write_text("")
+        deadline = time.time() + 10
+        while time.time() < deadline and any(w.tag == tag and w.alive() for w in self.workers):
+            time.sleep(0.1)
+
+    def test_marker_left_by_gate_sh_becomes_a_refused_reason_on_reap(self):
+        self.set_desired(gates=1)
+        res1 = self.reconcile()
+        self.assertEqual(len(res1.started), 1, f"refused={res1.refused}")
+        tag = res1.started[0]
+
+        # What gate.sh's store_verdict() leaves behind on a hub-push
+        # failure -- written directly here since this test is about
+        # fleetd's reap-time reading of it, not gate.sh's own writing of
+        # it (that half is test_gate_script.py's job).
+        marker = self.tmp / "logs" / f"gate-{tag}.verdict-store-failed"
+        self.assertTrue(marker.parent.is_dir(), "start_gate must have created the log dir")
+        marker.write_text("")
+
+        self._finish_gate(tag)
+        res2 = self.reconcile()
+        self.assertIn(tag, res2.finished, f"gate never reaped: finished={res2.finished}")
+        self.assertIn("verdict-store-failed", [r[0] for r in res2.refused],
+                      f"refused={res2.refused}")
+        detail = dict(res2.refused)["verdict-store-failed"]
+        self.assertIn(tag, detail, detail)
+
+        # And it survives into the durable heartbeat `fleet status --why`
+        # reads -- not just this call's return value.
+        self.assertTrue(res2.heartbeat_written)
+        hb = self.hub.read(fleetd.HOSTS_PREFIX + self.host)
+        self.assertIn("verdict-store-failed", [r[0] for r in hb["refused"]], hb)
+
+    def test_no_marker_means_no_false_refusal_on_reap(self):
+        """The negative case: a gate that finishes cleanly, with no marker,
+        must not manufacture a `verdict-store-failed` reason -- proving
+        the check above is real (it truly reads the marker) rather than
+        firing on every reap regardless."""
+        self.set_desired(gates=1)
+        res1 = self.reconcile()
+        self.assertEqual(len(res1.started), 1, f"refused={res1.refused}")
+        tag = res1.started[0]
+
+        self._finish_gate(tag)
+        res2 = self.reconcile()
+        self.assertIn(tag, res2.finished, f"gate never reaped: finished={res2.finished}")
+        self.assertNotIn("verdict-store-failed", [r[0] for r in res2.refused],
+                         f"refused={res2.refused}")
+
+
 class TestSpawnEnvHelper(unittest.TestCase):
     """`fleetd._spawn_env` in isolation, no subprocess: it must set
     FLEET_HUB_URL/FLEET_CODE_URL from the `Hub` object (overriding any
