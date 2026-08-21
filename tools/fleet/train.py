@@ -53,14 +53,18 @@ hub-local token file exists, which is what the hub's `update` hook checks
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
+import random
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -69,12 +73,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import intent
 import workqueue
 from claim import Claim, ClaimHeldError
+from drift import TIP_SIGNAL_REF
 from fleetlib import Hub, HubError
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 BATCH_MAX = 8
 PUSH_RETRIES = 3
 PUSH_BACKOFF_S = 4
+TIP_SIGNAL_MAX_RETRIES = 200
 
 # One train, fleet-wide. A constant key is what makes the claim a mutual
 # exclusion rather than a decoration -- see the module docstring.
@@ -88,6 +94,15 @@ TRAIN_CLAIM_KEY = "singleton"
 TRAIN_TOKEN_ENV = "FLEET_TRAIN_TOKEN_FILE"
 TRAIN_TOKEN_DEFAULT = "~/git/oxidex.git/train.token"
 _NO_PUSH_OPTIONS = "does not support push options"
+
+# The train deploy key (SPEC §8, "Credentials"): a per-repo ssh key whose
+# ONLY grant is the `tip-update` ruleset's bypass actor (PLAN Stage 1).
+# Absence is the pre-rollout state -- "no key exists yet" (PLAN Stage 1
+# task 6) -- and must not be an error, same shape as `TRAIN_TOKEN_ENV`
+# above: the tip push simply keeps using whatever credential path is
+# already configured (HTTPS token via `FLEET_GIT_TOKEN_FILE`, or a host
+# ssh key) until a human distributes the secrets bundle.
+TRAIN_DEPLOY_KEY_ENV = "FLEET_TRAIN_DEPLOY_KEY"
 
 
 class TrainError(Exception):
@@ -134,6 +149,139 @@ def tip_push_options() -> list:
     except OSError:
         pass
     return [f"--push-option=train-token={token}"]
+
+
+def _train_deploy_key_ssh_command() -> Optional[str]:
+    """`GIT_SSH_COMMAND` for the tip push when `FLEET_TRAIN_DEPLOY_KEY`
+    names an existing private key file, or `None` when the variable is
+    absent/unreadable -- same "absence is normal, not an error" shape as
+    `tip_push_options()`.
+
+    Spelling matches `tests/live/test_tip_ruleset.py`'s
+    `TestDeployKeyMatrix.ssh_env` verbatim (SPEC §8's "documented
+    1Password-agent bypass"): `IdentitiesOnly=yes` so the key file is the
+    ONLY identity offered, `IdentityAgent=none` so a running ssh-agent (the
+    1Password agent this fleet has already been bitten by, per
+    `fleetlib.py`'s credential-helper docstring) cannot substitute a
+    different key. The path is `shlex.quote`d because `GIT_SSH_COMMAND` is
+    handed to `sh -c` by git/ssh, unlike an argv element.
+    """
+    key_path = os.environ.get(TRAIN_DEPLOY_KEY_ENV)
+    if not key_path:
+        return None
+    p = Path(key_path).expanduser()
+    if not p.is_file():
+        _warn(
+            f"{TRAIN_DEPLOY_KEY_ENV}={key_path} does not name an existing file "
+            "-- pushing the tip without the deploy key"
+        )
+        return None
+    return f"ssh -i {shlex.quote(str(p))} -o IdentitiesOnly=yes -o IdentityAgent=none"
+
+
+@contextlib.contextmanager
+def _env_override(key: str, value: Optional[str]):
+    """Set `os.environ[key] = value` for the duration of the `with` block,
+    restoring whatever was there before (or deleting the key if it was
+    absent) afterward -- even if the block raises.
+
+    A no-op when `value` is `None`, so every call site with nothing to
+    inject (the common case: no deploy key configured) runs exactly as if
+    this wrapper were not there at all.
+    """
+    if value is None:
+        yield
+        return
+    had_prev = key in os.environ
+    prev = os.environ.get(key)
+    os.environ[key] = value
+    try:
+        yield
+    finally:
+        if had_prev:
+            os.environ[key] = prev
+        else:
+            os.environ.pop(key, None)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def bump_tip_signal_via_hub(
+    hub: Hub,
+    new_sha: str,
+    by: str = "train",
+    ref: str = TIP_SIGNAL_REF,
+    max_retries: int = TIP_SIGNAL_MAX_RETRIES,
+) -> dict:
+    """Advance `ref` (default `refs/fleet/signals/tip`) to
+    `{sha: new_sha, generation: <prev + 1>, ts, by}` over `fleetlib.Hub`'s
+    network CAS -- `drift.bump_tip_signal`'s "hubless interim" replacement
+    (PLAN Stage 1 task 6; SPEC §3.1's tip-signal row: "server tip watcher
+    (replaces `hooks/post-receive` + `drift.bump_tip_signal` ...; same
+    CAS/monotonic rule via `Hub.update`)"). There is no server yet in
+    Stage 1, so the train calls this itself, right after its own tip push
+    lands.
+
+    SAME MONOTONIC RULE, over the network instead of a local hook:
+    `drift.bump_tip_signal` reads the ref's current generation and does a
+    plain `git update-ref <ref> <new> <old>` CAS loop against the hub's
+    OWN bare repo (no ssh, because a hook already is the hub). This
+    function reads the same way (`hub.read_with_sha`, which is COHERENT --
+    see its docstring -- so the generation read and the sha CAS'd against
+    are always the same observation) and writes with `hub.create` (ref
+    absent) or `hub.update(expect_sha=...)` (ref present), which is
+    exactly `fleetlib.Hub`'s own `--force-with-lease` CAS. A lost race
+    (`create`/`update` returning `False`) means somebody else's bump won:
+    this function re-reads the now-newer generation and retries, so a
+    generation is never lost, never handed out twice, and never goes
+    backwards -- the same guarantee `test_drift_hook.TestConcurrentBumps`
+    pins for the local version, pinned here for the hub version by
+    `TestTipSignalBump.test_generation_is_monotonic_under_real_concurrent_bumps`.
+
+    Raises `fleetlib.HubError` if `max_retries` attempts all lose the race
+    (mirrors `drift.DriftError` on the same condition), or if the hub is
+    unreachable (`HubUnreachableError`, a `HubError` subclass, propagates
+    unchanged from `hub.read_with_sha`/`create`/`update` -- never treated
+    as a lost race).
+    """
+    last_generation = None
+    for _ in range(max_retries):
+        cur_sha, cur_payload = hub.read_with_sha(ref)
+        cur_generation = 0
+        if cur_payload is not None:
+            try:
+                cur_generation = int(cur_payload.get("generation", 0))
+            except (TypeError, ValueError):
+                cur_generation = 0
+        payload = {
+            "sha": new_sha,
+            "generation": cur_generation + 1,
+            "ts": _now_iso(),
+            "by": by,
+        }
+        ok = hub.create(ref, payload) if cur_sha is None else hub.update(ref, payload, expect_sha=cur_sha)
+        if ok:
+            return payload
+        last_generation = cur_generation
+        time.sleep(random.uniform(0.0, 0.01))
+    raise HubError(
+        f"bump_tip_signal_via_hub: exceeded {max_retries} CAS retries on {ref} "
+        f"(last observed generation {last_generation})"
+    )
+
+
+def _bump_tip_signal_best_effort(hub: Hub, new_tip: str) -> None:
+    """CAS-bump the tip signal after a successful tip push, but never let a
+    failure here turn a landed tip advance into a failed train run -- the
+    signal is a poll-latency optimization for `fleetd` (docs: it can always
+    fall back to `hub.sha(TIP_REF)` directly), never the source of truth,
+    exactly the same best-effort shape as `_mark_intent_done` below."""
+    try:
+        bump_tip_signal_via_hub(hub, new_tip)
+    except HubError as exc:
+        _warn(f"tip signal bump to {new_tip[:12]} failed (train run continues): {exc}")
 
 
 # --------------------------------------------------------------------- #
@@ -533,25 +681,32 @@ def _push_tip(hub: Hub, clone: Path, options: list):
     `options` is `tip_push_options()`'s `--push-option=key=value` CLI-flag
     spelling; `Hub.push_ref` (like `git push -o`) wants the bare
     `key=value`, so the flag prefix is stripped before it crosses into
-    fleetlib."""
+    fleetlib.
+
+    The push itself runs under `_env_override("GIT_SSH_COMMAND", ...)`:
+    `fleetlib._raw_run` honours an already-set `GIT_SSH_COMMAND` (falling
+    back to its own default only when the caller left it unset), so this
+    is the one write that can carry the train deploy key (SPEC §8) while
+    every other `Hub` call in the process is unaffected."""
     head = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
     fetch = _fetch_into_hub_cache(hub, clone, head, check=False)
     if fetch.returncode != 0:
         return fetch
     raw_options = [o.removeprefix("--push-option=") for o in options]
-    r = hub.push_ref(f"{head}:{TIP_REF}", push_options=raw_options)
-    if r.returncode != 0 and options and _NO_PUSH_OPTIONS in (r.stderr or "").lower():
-        # The hub cannot receive push options at all (its
-        # receive.advertisePushOptions is unset), so no update hook can be
-        # reading one either. Retrying without the token keeps the train
-        # working through a half-finished rollout instead of wedging on
-        # every run -- loudly, because it means the hub is misconfigured.
-        _warn(
-            "hub does not advertise push options (receive.advertisePushOptions); "
-            "retrying the tip push WITHOUT the train token -- the update hook "
-            "cannot be enforcing one in this state"
-        )
-        r = hub.push_ref(f"{head}:{TIP_REF}")
+    with _env_override("GIT_SSH_COMMAND", _train_deploy_key_ssh_command()):
+        r = hub.push_ref(f"{head}:{TIP_REF}", push_options=raw_options)
+        if r.returncode != 0 and options and _NO_PUSH_OPTIONS in (r.stderr or "").lower():
+            # The hub cannot receive push options at all (its
+            # receive.advertisePushOptions is unset), so no update hook can be
+            # reading one either. Retrying without the token keeps the train
+            # working through a half-finished rollout instead of wedging on
+            # every run -- loudly, because it means the hub is misconfigured.
+            _warn(
+                "hub does not advertise push options (receive.advertisePushOptions); "
+                "retrying the tip push WITHOUT the train token -- the update hook "
+                "cannot be enforcing one in this state"
+            )
+            r = hub.push_ref(f"{head}:{TIP_REF}")
     return r
 
 
@@ -627,6 +782,11 @@ def _push_tip_and_retire(hub: Hub, clone: Path, members: list, new_tip: str, res
         time.sleep(PUSH_BACKOFF_S * (attempt + 1))
     else:
         raise TrainError(f"could not advance tip after {PUSH_RETRIES} attempts: {r.stderr[-200:]}")
+    # The tip has ACTUALLY moved at this point -- everything from here on
+    # (the signal bump, rescue pushes, staging retirement) is bookkeeping
+    # around a real, already-landed advance, so none of it may raise back
+    # into "the train run failed".
+    _bump_tip_signal_best_effort(hub, new_tip)
     for c in members:
         rescued_ref = f"refs/heads/rescued/{c.slug}"
         for attempt in range(PUSH_RETRIES):

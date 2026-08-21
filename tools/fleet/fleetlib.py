@@ -796,7 +796,18 @@ class Hub:
                 "GIT_AUTHOR_EMAIL": "fleet@oxidex.local",
                 "GIT_COMMITTER_NAME": "oxidex-fleet",
                 "GIT_COMMITTER_EMAIL": "fleet@oxidex.local",
-                "GIT_SSH_COMMAND": "ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
+                # `env.get` (not a bare overwrite): a caller that has
+                # already placed a `GIT_SSH_COMMAND` in the process
+                # environment -- e.g. `train._push_tip`'s deploy-key
+                # override (SPEC §8) -- is honoured instead of silently
+                # replaced. Mirrors `drift.py`'s `_git_env()`, which has
+                # used this exact `env.get(key, default)` shape from the
+                # start. No caller sets this today, so every existing
+                # invocation gets the identical default it always has.
+                "GIT_SSH_COMMAND": env.get(
+                    "GIT_SSH_COMMAND",
+                    "ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
+                ),
                 "GIT_TERMINAL_PROMPT": "0",
             }
         )
