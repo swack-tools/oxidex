@@ -108,11 +108,11 @@ def available_clis() -> list:
     return out
 
 
-def build_prompt(branch: str, hub_url: str, tip_sha: str, host: str) -> str:
+def build_prompt(branch: str, code_url: str, tip_sha: str, host: str) -> str:
     return f"""You are a fleet agent worker on host {host}. Re-converge the stale branch `{branch}` of the oxidex repo onto the current integration tip so its gate can pass. Work entirely inside the current directory, which is already a clone.
 
 FACTS
-- Hub remote (already configured as `origin`): {hub_url}
+- Code remote (already configured as `origin`): {code_url}
 - Integration tip: refs/heads/refactor/tag-machinery at {tip_sha} -- already fetched.
 - Your branch: `{branch}` -- already checked out.
 
@@ -135,7 +135,7 @@ HARD RULES
 """
 
 
-def build_authoring_prompt(slug: str, intent: dict, hub_url: str, tip_sha: str, host: str) -> str:
+def build_authoring_prompt(slug: str, intent: dict, code_url: str, tip_sha: str, host: str) -> str:
     scope = intent.get("scope") or {}
     fmts = ", ".join(scope.get("formats") or []) or "(see title)"
     return f"""You are a fleet agent worker on host {host}. AUTHOR the work described by a registered intent for the oxidex repo (a Rust reimplementation of ExifTool). Work entirely inside the current directory, which is already a clone checked out at the integration tip.
@@ -177,32 +177,47 @@ def preflight(hub: Hub, branch: str, tip_sha: str, intent_slug: str = None) -> "
     return dispatch.economic_refusal(hub, key, tip_sha, tip_ref=TIP_REF)
 
 
-def run(branch: str, hub_url: str, host: str, intent_slug: str = None) -> int:
+def run(branch: str, hub_url: str, host: str, intent_slug: str = None,
+        code_url: str = None) -> int:
+    """`hub_url` is the STATE repo -- it answers `refs/fleet/intents/*`
+    and nothing else here. `code_url` is the repo this worker CLONES and
+    whose `refs/heads/*` it probes; it defaults to `hub_url`, which is the
+    single-repo topology and also the safe answer when a caller (fleetd's
+    `start_agent`) has not been taught to pass `--code` yet.
+
+    The clone source was `hub_url` outright. On a split spine that clones
+    the PRIVATE state repo -- a bare tree of orphan `payload.json` commits
+    -- hands the agent a checkout with no source in it, and asks it to
+    push a staging branch to the repo where coordination state lives.
+    """
     clis = available_clis()
     if not clis:
         print("agentworker: neither `claude` nor `codex` installed on this host; exiting")
         return 4
     random.shuffle(clis)  # randomize among what the box has; order = fallback order
 
-    hub = Hub(hub_url, workdir=Path.home() / ".fleetd" / "agentcache")
-    tip_sha = hub.sha(TIP_REF)
+    hub = Hub(hub_url, workdir=Path.home() / ".fleetd" / "agentcache",
+              code_url=code_url)
+    code_url = hub.code_url
+    tip_sha = hub.code_sha(TIP_REF)
     if intent_slug:
         branch = f"staging/{intent_slug}"
         intent = hub.read(f"refs/fleet/intents/{intent_slug}")
         if tip_sha is None or intent is None:
-            print(f"agentworker: missing tip or intent {intent_slug} on hub; exiting")
+            print(f"agentworker: missing tip on {code_url} or intent {intent_slug} "
+                  f"on {hub_url}; exiting")
             return 5
         ref = f"refs/heads/{branch}"
-        before_sha = hub.sha(ref)  # None expected: authoring CREATES it
+        before_sha = hub.code_sha(ref)  # None expected: authoring CREATES it
         if before_sha is not None:
             print(f"agentworker: {ref} already exists; intent {intent_slug} looks in-progress; exiting")
             return 0
     else:
         intent = None
         ref = f"refs/heads/{branch}"
-        before_sha = hub.sha(ref)
+        before_sha = hub.code_sha(ref)
         if tip_sha is None or before_sha is None:
-            print(f"agentworker: missing tip or {ref} on hub; exiting")
+            print(f"agentworker: missing tip or {ref} on the code repo {code_url}; exiting")
             return 5
 
     # PREFLIGHT -- before the clone, before any CLI, i.e. before a cent is
@@ -216,7 +231,7 @@ def run(branch: str, hub_url: str, host: str, intent_slug: str = None) -> int:
 
     work = Path(tempfile.mkdtemp(prefix=f"agent-{branch.replace('/', '-')}-"))
     try:
-        subprocess.run(["git", "clone", "-q", hub_url, str(work / "r")], check=True)
+        subprocess.run(["git", "clone", "-q", code_url, str(work / "r")], check=True)
         repo = work / "r"
         # detached-safe: create the local branch at the work base
         base = tip_sha if intent_slug else before_sha
@@ -226,9 +241,9 @@ def run(branch: str, hub_url: str, host: str, intent_slug: str = None) -> int:
                         f"+{TIP_REF}:refs/tipref"], check=True)
 
         if intent_slug:
-            prompt = build_authoring_prompt(intent_slug, intent, hub_url, tip_sha, host)
+            prompt = build_authoring_prompt(intent_slug, intent, code_url, tip_sha, host)
         else:
-            prompt = build_prompt(branch, hub_url, tip_sha, host)
+            prompt = build_prompt(branch, code_url, tip_sha, host)
         proc, name, tail = None, None, []
         for name, argv_of in clis:
             print(f"agentworker[{host}] {branch}: launching {name} (timeout {AGENT_TIMEOUT_S}s)")
@@ -256,8 +271,8 @@ def run(branch: str, hub_url: str, host: str, intent_slug: str = None) -> int:
                   f"tail: {' | '.join(tail) if tail else '(no output)'}")
             break
 
-        # The agent's word is not the instrument -- the hub ref is.
-        after_sha = hub.sha(ref)
+        # The agent's word is not the instrument -- the code ref is.
+        after_sha = hub.code_sha(ref)
         if intent_slug and after_sha:
             print(f"agentworker[{host}] {branch}: AUTHORED at {after_sha[:8]} under {name}")
             return 0
@@ -292,7 +307,17 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--branch", help="staging/<slug> to converge")
     ap.add_argument("--intent", help="intent slug to AUTHOR (mutually exclusive with --branch)")
-    ap.add_argument("--hub", default=os.environ.get("FLEET_HUB_URL"))
+    ap.add_argument("--hub", default=os.environ.get("FLEET_HUB_URL"),
+                    help="STATE repo (refs/fleet/*)")
+    # DEFAULTS TO --hub, deliberately. `fleetd.start_agent` spawns this
+    # process with `--hub` only until that one argv line lands (it is
+    # owned by another task in this wave), and a worker that hard-failed
+    # on a missing --code would take the agent path down on every host in
+    # the interim. Defaulting keeps the pre-split topology working and
+    # makes the split opt-in from the spawner's side.
+    ap.add_argument("--code", default=os.environ.get("FLEET_CODE_URL"),
+                    help="CODE repo to clone and probe refs/heads/* on "
+                         "(default: --hub)")
     ap.add_argument("--host", default=os.environ.get("FLEET_HOST", "unknown"))
     # Inert provenance stamp fleetd appends at spawn (`fleet-scope=<hex>`).
     # Its only consumer is `ps` via fleetd's orphan sweep; accepted here so
@@ -306,7 +331,8 @@ def main(argv=None) -> int:
     if bool(args.branch) == bool(args.intent):
         print("agentworker: exactly one of --branch / --intent", file=sys.stderr)
         return 2
-    return run(args.branch, args.hub, args.host, intent_slug=args.intent)
+    return run(args.branch, args.hub, args.host, intent_slug=args.intent,
+               code_url=args.code or args.hub)
 
 
 if __name__ == "__main__":

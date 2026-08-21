@@ -120,9 +120,19 @@ class Queue:
         """
         now = now or _utcnow()
 
-        tip_sha = self.hub.sha(self.tip_ref)
+        # `code_sha`, not `sha`: the tip is a CODE ref. Against a split
+        # spine, `hub.sha(TIP_REF)` asks the STATE repo -- which carries
+        # only `refs/fleet/*` -- and gets a perfectly successful `None`.
+        # That `None` becomes the QueueError below on every single call,
+        # which is how `fleetd --hub <state> --code <code>` died in a
+        # traceback before it wrote its first heartbeat: the daemon's loop
+        # catches HubError, and QueueError is not one.
+        tip_sha = self.hub.code_sha(self.tip_ref)
         if tip_sha is None:
-            raise QueueError(f"tip ref {self.tip_ref!r} does not exist on the hub")
+            raise QueueError(
+                f"tip ref {self.tip_ref!r} does not exist on the code repo "
+                f"{self.hub.code_url!r}"
+            )
 
         staging = self._list_staging()
         if not staging:
@@ -147,6 +157,32 @@ class Queue:
         finally:
             self._cleanup_cache(cache_ns, staging)
 
+    def compute_or_refusal(self, now: Optional[datetime] = None) -> tuple:
+        """`(queue, None)` on success, or `({}, (reason, detail))` when the
+        queue cannot be computed for a reason that is ABOUT THE QUEUE
+        rather than about the hub.
+
+        This exists because `compute()` raises `QueueError`, which is not a
+        `HubError`, and `fleetd`'s reconcile loop catches exactly
+        `HubError` -- on purpose ("a bug in this file, a KeyboardInterrupt
+        or a MemoryError must still take the process down loudly"). A
+        missing tip is neither a bug nor a transport failure: it is a
+        configuration fact the operator needs stated, and the whole point
+        of `fleet status --why` is that a host which starts nothing says
+        why. So the scheduler asks through this method and gets a
+        `refused` reason it can put in the heartbeat, and the daemon keeps
+        running, keeps heartbeating, and keeps reaping.
+
+        `HubUnreachableError` deliberately still propagates: that IS a hub
+        failure, the loop's existing degrade-this-step path handles it,
+        and turning it into a refusal reason would report a network outage
+        as a permanent configuration verdict.
+        """
+        try:
+            return self.compute(now=now), None
+        except QueueError as exc:
+            return {}, ("queue-unavailable", str(exc))
+
     def slugs(self, now: Optional[datetime] = None) -> list:
         """Sorted list of queued slugs -- convenience for callers that only
         want names, e.g. `fleet status`.
@@ -158,7 +194,11 @@ class Queue:
     # ------------------------------------------------------------------ #
 
     def _list_staging(self) -> Dict[str, tuple]:
-        raw = self.hub.list(self.staging_prefix)  # {refname: sha}
+        # `code_list`, not `list`: `refs/heads/staging/*` lives on the CODE
+        # repo. Aimed at the state repo this returns `{}` -- no error, no
+        # log line -- and `compute()` reads that as "the queue is empty",
+        # which is a fleet that idles while reporting itself healthy.
+        raw = self.hub.code_list(self.staging_prefix)  # {refname: sha}
         prefix = self.staging_prefix + "/"
         out: Dict[str, tuple] = {}
         for ref, sha in raw.items():
@@ -219,8 +259,8 @@ class Queue:
         The tip and every staging branch are CODE refs, so this fetches
         from `hub.code_url` -- not `hub.url` (the state hub once code and
         state are split across two repos). `code_url` defaults to `url`
-        (`fleetlib.Hub`), so a hub without the attribute yet (or a fixture
-        with a single combined repo) behaves exactly as before.
+        (`fleetlib.Hub`), so a fixture with a single combined repo behaves
+        exactly as before.
         """
         cache_ns = f"{_QUEUE_CACHE_NS}/{uuid.uuid4().hex}"
         refspecs = [f"+{self.tip_ref}:{cache_ns}/tip"]
@@ -228,8 +268,7 @@ class Queue:
             safe = slug.replace("/", "__")
             refspecs.append(f"+{ref}:{cache_ns}/staging/{safe}")
 
-        code_url = getattr(self.hub, "code_url", self.hub.url)
-        result = self._git(["fetch", "--no-tags", "--quiet", code_url, *refspecs])
+        result = self._git(["fetch", "--no-tags", "--quiet", self.hub.code_url, *refspecs])
         if result.returncode != 0:
             raise HubUnreachableError(
                 f"fetch for ancestry check failed: {result.stderr.decode('utf-8', 'replace').strip()}"

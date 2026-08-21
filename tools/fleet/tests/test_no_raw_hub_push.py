@@ -70,6 +70,17 @@ _PATTERN = re.compile(r'[\[(,]\s*["\'](push|update-ref)["\']')
 # is explicitly outside R1's tip protection, and `Hub.push_ref` would work
 # for it too, but nothing here has needed CAS or push_options for it -- if
 # that changes, route it through `push_ref` as well and drop this entry.
+#
+# THAT ENTRY IS NOW GONE TOO, and its removal is the point of this comment
+# rather than a tidy-up. The rescue push was `_git(["push", "origin", ...],
+# cwd=clone)` -- a raw subprocess, so it never saw `fleetlib.credential_env`
+# and carried no credential at all on a `FLEET_GIT_TOKEN_FILE` host, and it
+# aimed at the CLONE's `origin`, which is the code READ url rather than
+# `code_push_url`. It is now `hub.push_code_ref(...)` (SPEC 4.4's routing
+# table), verified by re-reading the ref through `hub.code_sha` before the
+# staging ref is allowed to be deleted. The allowlist is therefore empty of
+# train.py entries: every branch write the train makes goes through
+# `fleetlib.Hub`.
 _ALLOWLIST = {
     (
         "drift.py",
@@ -93,18 +104,6 @@ _ALLOWLIST = {
         "namespace under refs/fleet-queue-cache/<uuid>/...). The ref was "
         "never pushed anywhere and is never visible on the actual hub; "
         "this is local scratch-state cleanup, not a hub write."
-    ),
-    (
-        "train.py",
-        '_git(["push", "origin", f"{c.sha}:{rescued_ref}"], cwd=clone, check=False)',
-    ): (
-        "Pushes a rescue copy to refs/heads/rescued/<slug> -- a namespace "
-        "R1 explicitly exempts from tip protection ('must NOT affect "
-        "staging/*, rescued/*, wip/*, refs/fleet/*'). Unlike the tip push "
-        "and the temp gate-ref push (both now routed through "
-        "fleetlib.Hub.push_ref), this one has no CAS or push_options need, "
-        "so it has not been moved off a plain `git push`; if that changes, "
-        "route it through `push_ref` too and drop this entry."
     ),
 }
 

@@ -53,11 +53,9 @@ hub-local token file exists, which is what the hub's `update` hook checks
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import os
 import random
-import shlex
 import shutil
 import subprocess
 import sys
@@ -74,7 +72,7 @@ import intent
 import workqueue
 from claim import Claim, ClaimHeldError
 from drift import TIP_SIGNAL_REF
-from fleetlib import Hub, HubError
+from fleetlib import Hub, HubError, ssh_command
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 BATCH_MAX = 8
@@ -152,19 +150,26 @@ def tip_push_options() -> list:
 
 
 def _train_deploy_key_ssh_command() -> Optional[str]:
-    """`GIT_SSH_COMMAND` for the tip push when `FLEET_TRAIN_DEPLOY_KEY`
+    """The `GIT_SSH_COMMAND` for the tip push when `FLEET_TRAIN_DEPLOY_KEY`
     names an existing private key file, or `None` when the variable is
     absent/unreadable -- same "absence is normal, not an error" shape as
     `tip_push_options()`.
 
-    Spelling matches `tests/live/test_tip_ruleset.py`'s
-    `TestDeployKeyMatrix.ssh_env` verbatim (SPEC §8's "documented
-    1Password-agent bypass"): `IdentitiesOnly=yes` so the key file is the
-    ONLY identity offered, `IdentityAgent=none` so a running ssh-agent (the
-    1Password agent this fleet has already been bitten by, per
-    `fleetlib.py`'s credential-helper docstring) cannot substitute a
-    different key. The path is `shlex.quote`d because `GIT_SSH_COMMAND` is
-    handed to `sh -c` by git/ssh, unlike an argv element.
+    BUILT BY `fleetlib.ssh_command`, not spelled out here, and that is the
+    fix rather than a tidy-up. The hand-written value this replaced was
+    `ssh -i <key> -o IdentitiesOnly=yes -o IdentityAgent=none` -- correct
+    about the identity and silently missing all three options every other
+    fleet git command runs under (`BatchMode=yes`, `ConnectTimeout=10`,
+    `StrictHostKeyChecking=accept-new`). It reached git by way of
+    `os.environ`, where it REPLACED the default outright; so the one push
+    that most needs to fail fast and never prompt was the only push in the
+    fleet running with an unbounded connect timeout, a passphrase prompt
+    available on a daemon's stdin, and a first-contact host-key prompt.
+    `fleetlib.ssh_command(identity_file=...)` returns the pinned options
+    PLUS the identity, which is the only combination that was ever wanted.
+
+    The returned value is passed per-subprocess (see `_push_tip`), never
+    exported.
     """
     key_path = os.environ.get(TRAIN_DEPLOY_KEY_ENV)
     if not key_path:
@@ -176,32 +181,7 @@ def _train_deploy_key_ssh_command() -> Optional[str]:
             "-- pushing the tip without the deploy key"
         )
         return None
-    return f"ssh -i {shlex.quote(str(p))} -o IdentitiesOnly=yes -o IdentityAgent=none"
-
-
-@contextlib.contextmanager
-def _env_override(key: str, value: Optional[str]):
-    """Set `os.environ[key] = value` for the duration of the `with` block,
-    restoring whatever was there before (or deleting the key if it was
-    absent) afterward -- even if the block raises.
-
-    A no-op when `value` is `None`, so every call site with nothing to
-    inject (the common case: no deploy key configured) runs exactly as if
-    this wrapper were not there at all.
-    """
-    if value is None:
-        yield
-        return
-    had_prev = key in os.environ
-    prev = os.environ.get(key)
-    os.environ[key] = value
-    try:
-        yield
-    finally:
-        if had_prev:
-            os.environ[key] = prev
-        else:
-            os.environ.pop(key, None)
+    return ssh_command(identity_file=str(p))
 
 
 def _now_iso() -> str:
@@ -441,6 +421,8 @@ def run_train(
     dry_run: bool = False,
     _clone_src: Optional[str] = None,
     hub_workdir: Optional[Path] = None,
+    code_url: Optional[str] = None,
+    code_push_url: Optional[str] = None,
 ) -> RunResult:
     """One train run, under the fleet-wide singleton claim.
 
@@ -450,12 +432,20 @@ def run_train(
     train already holds the singleton, so a caller can report "one train is
     already running" without treating it as a failure.
 
+    `hub_url` is the STATE repo (`refs/fleet/*`: the singleton claim, the
+    verdict cache, the tip signal, intents). `code_url` is where the tip
+    and `staging/*` are READ from and `code_push_url` where they are
+    WRITTEN; both default to `hub_url` through `fleetlib.Hub`, which is
+    the single-repo topology every existing fixture and caller uses.
+
     The claim is skipped for `dry_run`, which writes nothing and must not
     be able to block a real run.
     """
     hub = Hub(
         hub_url,
         workdir=Path(hub_workdir) if hub_workdir else Path.home() / ".fleetd" / "traincache",
+        code_url=code_url,
+        code_push_url=code_push_url,
     )
     if dry_run:
         return _run_train_locked(hub, hub_url, gate_fn, batch_max, True, _clone_src)
@@ -487,18 +477,18 @@ def _run_train_locked(
 
     tmp = Path(tempfile.mkdtemp(prefix="train-"))
     try:
-        # `hub_url` is whatever Hub(hub_url, ...) above was constructed
-        # with -- the STATE hub once code and state are split across two
-        # repos. This clone needs the CODE tree (tip, staging/*,
-        # domains.toml), so it prefers `hub.code_url`, which defaults to
-        # `url` (`fleetlib.Hub`) and therefore equals `hub_url` on any hub
-        # that doesn't carry the attribute yet.
-        clone_src = _clone_src or getattr(hub, "code_url", hub_url)
+        # `hub_url` is the STATE repo -- what `Hub(hub_url, ...)` above was
+        # constructed with. This clone needs the CODE tree (the tip,
+        # staging/*, fleet/domains.toml), so it uses `hub.code_url`, which
+        # defaults to `url` (`fleetlib.Hub`) and therefore still equals
+        # `hub_url` on a single-repo fleet. `_clone_src` remains the
+        # explicit test-injection override and outranks both.
+        clone_src = _clone_src or hub.code_url
         _git(["clone", "-q", clone_src, str(tmp / "w")])
         clone = tmp / "w"
-        tip_sha = hub.sha(TIP_REF)
+        tip_sha = hub.code_sha(TIP_REF)
         if tip_sha is None:
-            raise TrainError(f"no tip at {TIP_REF}")
+            raise TrainError(f"no tip at {TIP_REF} on the code repo {hub.code_url}")
         _git(["fetch", "-q", "origin", f"+refs/heads/staging/*:refs/remotes/origin/staging/*"], cwd=clone, check=False)
         # Check out the TIP explicitly before reading domains.toml: a bare
         # hub whose HEAD names a missing/old default branch gives a clone
@@ -545,7 +535,7 @@ def _run_train_locked(
                         f"(gated PASS sets: {sorted(memo.passed)})"
                     )
                 # Tip may have moved while we gated.
-                now_tip = hub.sha(TIP_REF)
+                now_tip = hub.code_sha(TIP_REF)
                 if now_tip != tip_sha:
                     res.outcome = "restarted"
                     return res
@@ -663,64 +653,82 @@ def _rebuild(clone: Path, tip_sha: str, members: list, res: Optional[RunResult] 
 
 
 def _fetch_into_hub_cache(hub: Hub, clone: Path, sha: str, check: bool = True):
-    """`fleetlib.Hub.push_ref` pushes FROM the hub's own local object cache
-    (`hub.workdir`), never from `clone` -- so a commit only known to
+    """`fleetlib.Hub.push_code_ref` pushes FROM the hub's own local object
+    cache (`hub.workdir`), never from `clone` -- so a commit only known to
     `clone`'s object store must be fetched into that cache first. Mirrors
     `tests/test_update_hook.py`'s `_fetch_into_hub_cache` fixture helper,
     which documents the identical `Hub.push_ref` contract ("this mirrors
-    real usage; it is not a workaround for a bug in push_ref"). `fetch` is
-    not a hub *write*, so it is outside test_no_raw_hub_push.py's scope."""
+    real usage; it is not a workaround for a bug in push_ref").
+
+    This is a LOCAL fetch (`clone` is a directory path, `hub.workdir` a
+    local bare repo): neither the state repo nor the code repo is touched,
+    which is why SPEC §4.4's routing table lists it as "neither". It is
+    also not a hub *write*, so it is outside test_no_raw_hub_push.py's
+    scope."""
     return _git(["--git-dir", str(hub.workdir), "fetch", "--quiet", str(clone), sha], check=check)
 
 
 def _push_tip(hub: Hub, clone: Path, options: list):
     """The one write to the protected tip. Carries the train token when the
-    hub-local file exists (R1). Routed through `fleetlib.Hub.push_ref`
-    rather than a raw `git push` (ARCH-FIX R9 -- no fleet tool writes the
-    hub outside `fleetlib.Hub`; see tools/fleet/tests/test_no_raw_hub_push.py).
-    `options` is `tip_push_options()`'s `--push-option=key=value` CLI-flag
-    spelling; `Hub.push_ref` (like `git push -o`) wants the bare
-    `key=value`, so the flag prefix is stripped before it crosses into
-    fleetlib.
+    hub-local file exists (R1). Routed through
+    `fleetlib.Hub.push_code_ref` rather than a raw `git push` (ARCH-FIX R9
+    -- no fleet tool writes a remote outside `fleetlib.Hub`; see
+    tools/fleet/tests/test_no_raw_hub_push.py). `options` is
+    `tip_push_options()`'s `--push-option=key=value` CLI-flag spelling;
+    `push_code_ref` (like `git push -o`) wants the bare `key=value`, so
+    the flag prefix is stripped before it crosses into fleetlib.
 
-    The push itself runs under `_env_override("GIT_SSH_COMMAND", ...)`:
-    `fleetlib._raw_run` honours an already-set `GIT_SSH_COMMAND` (falling
-    back to its own default only when the caller left it unset), so this
-    is the one write that can carry the train deploy key (SPEC §8) while
-    every other `Hub` call in the process is unaffected."""
+    TWO ROUTING FACTS, both of which were wrong before:
+
+    1. `push_code_ref`, not `push_ref`. The tip is a CODE ref; `push_ref`
+       targets `hub.url`, which is the private STATE repo once the two are
+       split, and the ruleset protecting the tip lives on the code repo.
+    2. `ssh_command=` is a PARAMETER, not an `os.environ` mutation. The
+       deploy key applies to this one `git push` subprocess. Setting it
+       process-wide put the code repo's deploy key, with
+       `IdentitiesOnly=yes`, on every concurrent claim-renewal push to the
+       state repo -- and the train singleton's renewer thread pushes on a
+       120 s timer for the whole 20-45 minute gate window, so the overlap
+       is the normal case, not a corner. See `fleetlib._raw_run`."""
     head = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
     fetch = _fetch_into_hub_cache(hub, clone, head, check=False)
     if fetch.returncode != 0:
         return fetch
     raw_options = [o.removeprefix("--push-option=") for o in options]
-    with _env_override("GIT_SSH_COMMAND", _train_deploy_key_ssh_command()):
-        r = hub.push_ref(f"{head}:{TIP_REF}", push_options=raw_options)
-        if r.returncode != 0 and options and _NO_PUSH_OPTIONS in (r.stderr or "").lower():
-            # The hub cannot receive push options at all (its
-            # receive.advertisePushOptions is unset), so no update hook can be
-            # reading one either. Retrying without the token keeps the train
-            # working through a half-finished rollout instead of wedging on
-            # every run -- loudly, because it means the hub is misconfigured.
-            _warn(
-                "hub does not advertise push options (receive.advertisePushOptions); "
-                "retrying the tip push WITHOUT the train token -- the update hook "
-                "cannot be enforcing one in this state"
-            )
-            r = hub.push_ref(f"{head}:{TIP_REF}")
+    deploy_ssh = _train_deploy_key_ssh_command()
+    r = hub.push_code_ref(
+        f"{head}:{TIP_REF}", push_options=raw_options, ssh_command=deploy_ssh
+    )
+    if r.returncode != 0 and options and _NO_PUSH_OPTIONS in (r.stderr or "").lower():
+        # The hub cannot receive push options at all (its
+        # receive.advertisePushOptions is unset), so no update hook can be
+        # reading one either. Retrying without the token keeps the train
+        # working through a half-finished rollout instead of wedging on
+        # every run -- loudly, because it means the hub is misconfigured.
+        _warn(
+            "hub does not advertise push options (receive.advertisePushOptions); "
+            "retrying the tip push WITHOUT the train token -- the update hook "
+            "cannot be enforcing one in this state"
+        )
+        r = hub.push_code_ref(f"{head}:{TIP_REF}", ssh_command=deploy_ssh)
     return r
 
 
-def _delete_ref_cas(hub: Hub, ref: str, expect_sha: str) -> bool:
-    """Delete `ref` ONLY if it still points at `expect_sha`, via
-    `fleetlib.Hub.delete`'s own `--force-with-lease` CAS (ARCH-FIX R9).
+def _delete_code_ref_cas(hub: Hub, ref: str, expect_sha: str) -> bool:
+    """Delete a CODE ref ONLY if it still points at `expect_sha`, via
+    `fleetlib.Hub.delete_code_ref`'s `--force-with-lease` CAS (ARCH-FIX
+    R9).
 
-    This used to fall back to a hand-rolled `git push --force-with-lease`
-    when called with `hub=None` -- an exact duplicate of `Hub.delete`'s own
-    semantics, kept alive for a case no real caller (both call sites always
-    pass a real `Hub`) ever exercised. See
-    tools/fleet/tests/test_no_raw_hub_push.py."""
+    Both call sites -- retiring `staging/<slug>` and cleaning up the
+    train's temp gate ref -- name `refs/heads/*`, so they go to
+    `code_push_url`. They previously called `Hub.delete`, which targets
+    `hub.url`: against a split spine that is a CAS against a ref the state
+    repo has never had, so `--force-with-lease` fails, the delete returns
+    False, and the train reports "the branch moved while we gated" about a
+    branch nobody touched -- a false accusation that also leaves every
+    landed branch queued forever."""
     try:
-        return hub.delete(ref, expect_sha=expect_sha)
+        return hub.delete_code_ref(ref, expect_sha=expect_sha)
     except HubError as exc:
         _warn(f"CAS delete of {ref} failed: {exc}")
         return False
@@ -757,11 +765,11 @@ def _retire_staging_ref(hub: Hub, clone: Path, c: Candidate, res: RunResult) -> 
     that it happened. A refused delete leaves the branch queued (its new
     head is not an ancestor of the tip, so the next run picks it up)."""
     ref = f"refs/heads/staging/{c.slug}"
-    if _delete_ref_cas(hub, ref, c.sha):
+    if _delete_code_ref_cas(hub, ref, c.sha):
         _mark_intent_done(hub, c.slug, c.sha)
         return
     try:
-        actual = hub.sha(ref)
+        actual = hub.code_sha(ref)
     except HubError:
         actual = None
     why = (
@@ -790,8 +798,18 @@ def _push_tip_and_retire(hub: Hub, clone: Path, members: list, new_tip: str, res
     for c in members:
         rescued_ref = f"refs/heads/rescued/{c.slug}"
         for attempt in range(PUSH_RETRIES):
-            _git(["push", "origin", f"{c.sha}:{rescued_ref}"], cwd=clone, check=False)
-            got = _git(["ls-remote", "origin", rescued_ref], cwd=clone).stdout.split("\t")[0].strip()
+            # `push_code_ref`, not `git push origin` from the clone: the
+            # clone's `origin` is `code_url` (the READ url), and a raw
+            # `_git` subprocess never sees `fleetlib.credential_env`, so on
+            # a `FLEET_GIT_TOKEN_FILE` host this push had no credential at
+            # all. Verified by re-reading the ref, as before -- a rescue
+            # that did not land must never let the staging ref be deleted.
+            _fetch_into_hub_cache(hub, clone, c.sha, check=False)
+            hub.push_code_ref(f"{c.sha}:{rescued_ref}")
+            try:
+                got = hub.code_sha(rescued_ref) or ""
+            except HubError:
+                got = ""
             if got == c.sha:
                 res.landed.append(c.branch)
                 _retire_staging_ref(hub, clone, c, res)
@@ -811,14 +829,15 @@ def _push_tip_and_retire(hub: Hub, clone: Path, members: list, new_tip: str, res
 def real_gate(clone: Path, label: str, hub: Hub) -> str:
     """Run tools/fleet/gate.sh from the merged tree against its own HEAD
     by pushing HEAD to a temp staging ref first (gate.sh takes a branch).
-    Routed through `fleetlib.Hub.push_ref` (ARCH-FIX R9); see `_push_tip`'s
-    docstring for why the commit must be fetched into the hub's own local
-    cache before `push_ref` can push it from there."""
+    Routed through `fleetlib.Hub.push_code_ref` (ARCH-FIX R9) -- the temp
+    ref is `staging/train-tmp-*`, a CODE ref; see `_push_tip`'s docstring
+    for why the commit must be fetched into the hub's own local cache
+    before it can be pushed from there."""
     tag = f"train-{label.replace('/', '-')[:40]}-{int(time.time()) % 100000}"
     branch = f"staging/train-tmp-{tag}"
     head = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
     _fetch_into_hub_cache(hub, clone, head)
-    r = hub.push_ref(f"{head}:refs/heads/{branch}")
+    r = hub.push_code_ref(f"{head}:refs/heads/{branch}")
     if r.returncode != 0:
         raise TrainError(f"could not push temp gate ref refs/heads/{branch}: {r.stderr}")
     try:
@@ -835,31 +854,49 @@ def real_gate(clone: Path, label: str, hub: Hub) -> str:
         # CAS even here: the ref is ours and short-lived, but "delete a ref
         # without checking what it points at" is the shape of the bug, not
         # the identity of the ref.
-        if not _delete_ref_cas(hub, f"refs/heads/{branch}", head):
+        if not _delete_code_ref_cas(hub, f"refs/heads/{branch}", head):
             _warn(f"temp gate ref refs/heads/{branch} not deleted (moved or unreachable)")
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--hub", default=os.environ.get("FLEET_HUB_URL"))
+    ap.add_argument("--hub", default=os.environ.get("FLEET_HUB_URL"),
+                    help="STATE repo (refs/fleet/*)")
+    ap.add_argument("--code", default=os.environ.get("FLEET_CODE_URL"),
+                    help="CODE repo to READ the tip and staging/* from "
+                         "(default: --hub, i.e. the single-repo topology)")
+    ap.add_argument("--code-push", default=os.environ.get("FLEET_CODE_PUSH_URL"),
+                    help="CODE repo to PUSH the tip, rescued/* and staging "
+                         "retirements to (default: --code). Point this at the "
+                         "ssh URL on a host holding the train deploy key: a "
+                         "deploy key cannot authenticate an HTTPS push, so "
+                         "reads stay on HTTPS and only writes change transport")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--batch-max", type=int, default=BATCH_MAX)
     args = ap.parse_args(argv)
     if not args.hub:
         print("train: no hub URL (--hub or FLEET_HUB_URL)", file=sys.stderr)
         return 2
+    code_url = args.code or args.hub
+    code_push_url = args.code_push or code_url
     epoch = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     repo_root = Path(__file__).resolve().parents[2]
 
     if args.dry_run:
         run_train(args.hub, repo_root, gate_fn=lambda c, l: "PASS", epoch=epoch, dry_run=True,
-                  batch_max=args.batch_max)
+                  batch_max=args.batch_max, code_url=code_url,
+                  code_push_url=code_push_url)
         return 0
 
     # The singleton claim is taken inside run_train (constant key, epoch in
     # the payload) so that every caller contends, not just this one.
-    hub = Hub(args.hub, workdir=Path.home() / ".fleetd" / "traincache")
+    # This second Hub is the one `real_gate` pushes the temp gate ref
+    # through, so it carries the SAME three URLs -- a `real_gate` hub
+    # without them would push `staging/train-tmp-*` at the state repo.
+    hub = Hub(args.hub, workdir=Path.home() / ".fleetd" / "traincache",
+              code_url=code_url, code_push_url=code_push_url)
     res = run_train(args.hub, repo_root, epoch=epoch, batch_max=args.batch_max,
+                    code_url=code_url, code_push_url=code_push_url,
                     gate_fn=lambda clone, label: real_gate(clone, label, hub=hub))
     if res.outcome == "claim-held":
         print("train: another train run holds the singleton claim; not starting a second")
