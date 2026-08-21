@@ -14,6 +14,43 @@ reconciler observes, heartbeats, and touches nothing.
 Host facts encoded below were measured 2026-08-14/15 (docs/FLEET.md
 addenda). Adjust with `fleet up/down` after go-live rather than editing
 this file.
+
+PLAN Stage 1 task 6 / SPEC §3.1 additions: `server_candidates` and
+`train_platforms`, the two `desired` fields Stage 3/4 need that did not
+exist before this task (`server_candidates` for the automatic re-host
+election, SPEC §3.4: "a `server_eligible` runner (`desired.
+server_candidates`, Linux only; laptops are never eligible)"; `train_platforms`
+for the Stage 4 `remote_gate` capability match). Both are seeded
+CONSERVATIVELY, the same "start from a safe, inert default" spirit as the
+all-zero host counts above:
+
+  * `server_candidates` lists every host FLEET.md documents as Linux and
+    non-laptop -- `server` (i7), `ubuntuwork` and `work2pod` (both on the
+    ryzen) -- ranked in the order PLAN Stage 1's "Starting state" measured
+    them coming back up (i7 first: "only regen/oracle host", currently the
+    only one up; the ryzen host, then its pod). `oldair` (M4) and `m5` are
+    macOS (`docs/FLEET.md` L120: "launchd ... on macOS (M4 `oldair`, m5)")
+    and excluded on that basis alone; `m5` is additionally the maintainer's
+    laptop, SPEC §3.4's separate "laptops are never eligible" exclusion.
+    `advertise_urls` is left `[]` for every candidate: a host's tailnet/LAN
+    IP is a runtime fact the elected server measures for itself at
+    election time (SPEC §3.4 step 1, `tailscale ip`/`hostname -I`), not
+    static config this script can know or should guess -- see
+    `docs/TRANSCRIPTION.md`'s and this project's `AGENTS.md`'s "never
+    approximate" rule, which applies here exactly as it does to a
+    generated tag table: an invented IP is worse than an empty list,
+    because nothing downstream can tell it apart from a measured one.
+  * `train_platforms` is seeded EMPTY. A `platform_id` is
+    `sha256(rustc -vV)` of one specific host's toolchain output
+    (`claim.compute_platform_id`) -- a fact that can only be measured BY
+    running `rustc -vV` ON that host, never inferred from docs or from
+    this laptop. No Linux gate host has had that command run against it as
+    part of this task, so there is nothing correct to write here; an empty
+    list is Stage 4's `remote_gate` capability match finding no eligible
+    platform (fails closed: it schedules nothing rather than a WRONG
+    platform), not a bug. Populate it by running
+    `python3 -c "from claim import compute_platform_id; print(compute_platform_id())"`
+    on each Linux gate host once Stage 4 exists, or via `fleet up`.
 """
 
 from __future__ import annotations
@@ -55,6 +92,14 @@ SEED = {
         "m5": {"gates": 0, "agents": 0, "enabled": True},
     },
     "limits": {"min_free_gb": 14, "min_free_mem_gb": 8},
+    # SPEC §3.1 / PLAN Stage 1 task 6 -- see the module docstring for why
+    # each is populated (or deliberately left empty) the way it is.
+    "server_candidates": [
+        {"host": "server", "rank": 1, "advertise_urls": []},
+        {"host": "ubuntuwork", "rank": 2, "advertise_urls": []},
+        {"host": "work2pod", "rank": 3, "advertise_urls": []},
+    ],
+    "train_platforms": [],
 }
 
 

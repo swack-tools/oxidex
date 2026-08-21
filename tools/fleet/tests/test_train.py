@@ -21,11 +21,13 @@ runs gate.sh, or touches a hub outside the per-test tempdir.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from unittest import mock
 
@@ -54,6 +56,28 @@ def sh(args, cwd=None):
                "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
     return subprocess.run(["git"] + args, cwd=cwd, check=True, env=ENV,
                           capture_output=True, text=True)
+
+
+def _attempt_tip_bump(hub_url: str, sha_suffix: str, idx: int):
+    """Top-level (picklable) worker for the multiprocessing tip-signal race
+    test. Each worker is its own OS process racing the same bare hub's
+    `refs/fleet/signals/tip` via `train.bump_tip_signal_via_hub` -- real
+    inter-process contention on the actual CAS primitive, mirroring
+    `test_drift_hook.TestConcurrentBumps` (the local-hook version of the
+    same monotonic rule) and `test_fleetlib.TestConcurrentCreate`'s
+    `_attempt_create` (one Hub, its own private workdir, per worker)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import train as _train  # re-import in the child process
+    from fleetlib import Hub as _Hub
+
+    workdir = tempfile.mkdtemp(prefix=f"tip-signal-race-{idx}-")
+    try:
+        hub = _Hub(url=hub_url, workdir=workdir)
+        sha = (sha_suffix * 40)[:40]
+        payload = _train.bump_tip_signal_via_hub(hub, sha)
+        return payload["generation"], sha
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 class TrainBase(unittest.TestCase):
@@ -668,6 +692,197 @@ class TestRealGateRefLifecycle(TrainBase):
         self.assertEqual(len(moved), 1)
         ref, sha = next(iter(moved.items()))
         self.assertEqual(self.hub.sha(ref), sha, "a ref we no longer own must survive")
+
+
+# ---------------------------------------------------------------------- #
+# PLAN Stage 1 task 6 -- CAS-bump refs/fleet/signals/tip via Hub.update,
+# replacing hooks/post-receive + drift.bump_tip_signal for the hubless
+# interim (SPEC §3.1).
+# ---------------------------------------------------------------------- #
+
+
+class TestTipSignalBump(TrainBase):
+    def test_direct_first_bump_creates_generation_one(self):
+        sha = "a" * 40
+        payload = train.bump_tip_signal_via_hub(self.hub, sha)
+        self.assertEqual(payload["generation"], 1)
+        self.assertEqual(payload["sha"], sha)
+        self.assertEqual(payload["by"], "train")
+
+        # `hub.read()` returns the fuller, `Hub._augment`-ed stored payload
+        # (it adds `schema_version`/`written_by`/`written_at` provenance);
+        # `bump_tip_signal_via_hub`'s return value is what it asked the hub
+        # to write, so it is a subset, not the identical dict.
+        stored = self.hub.read(train.TIP_SIGNAL_REF)
+        for key, value in payload.items():
+            self.assertEqual(stored[key], value)
+
+    def test_direct_sequential_bumps_increment_generation(self):
+        first = train.bump_tip_signal_via_hub(self.hub, "a" * 40)
+        second = train.bump_tip_signal_via_hub(self.hub, "b" * 40)
+        third = train.bump_tip_signal_via_hub(self.hub, "c" * 40)
+        self.assertEqual(
+            [first["generation"], second["generation"], third["generation"]], [1, 2, 3]
+        )
+        stored = self.hub.read(train.TIP_SIGNAL_REF)
+        self.assertEqual(stored["generation"], 3)
+        self.assertEqual(stored["sha"], "c" * 40)
+
+    def test_custom_by_field_is_carried(self):
+        payload = train.bump_tip_signal_via_hub(self.hub, "d" * 40, by="foreign")
+        self.assertEqual(payload["by"], "foreign")
+
+    def test_stale_expect_sha_is_refused_not_applied(self):
+        """The CAS primitive the retry loop depends on: an update guarded
+        by a sha that is no longer current is refused outright (`False`,
+        never an exception, never a partial write) -- the hub-CAS analogue
+        of `test_drift_hook.TestBumpTipSignalDirect.
+        test_stale_cas_write_cannot_land`, which pins the same refusal one
+        layer down (a raw `git update-ref <ref> <new> <stale-old>`)."""
+        train.bump_tip_signal_via_hub(self.hub, "a" * 40)
+        current_sha = self.hub.sha(train.TIP_SIGNAL_REF)
+
+        stale_payload = {"sha": "b" * 40, "generation": 99, "ts": "x", "by": "train"}
+        ok = self.hub.update(train.TIP_SIGNAL_REF, stale_payload, expect_sha="0" * 40)
+        self.assertFalse(ok, "an update against a stale expect_sha must be refused, not applied")
+
+        self.assertEqual(self.hub.sha(train.TIP_SIGNAL_REF), current_sha,
+                          "a refused CAS write must leave the ref untouched")
+        stored = self.hub.read(train.TIP_SIGNAL_REF)
+        self.assertEqual(stored["generation"], 1, "the refused write must not have landed")
+
+    def test_generation_is_monotonic_under_real_concurrent_bumps(self):
+        """N real OS processes hammer `bump_tip_signal_via_hub` against the
+        same bare hub concurrently. Requirement (same as
+        `drift.bump_tip_signal`'s docstring): a losing racer re-reads the
+        newer generation and retries, so nothing is ever lost or handed out
+        twice -- verified by checking the set of generations handed out is
+        exactly {1..N}: no duplicates and no gaps."""
+        n = 8
+        digits = "0123456789abcdef"
+        with ProcessPoolExecutor(max_workers=n) as pool:
+            futures = [pool.submit(_attempt_tip_bump, str(self.bare), digits[i], i)
+                       for i in range(n)]
+            results = [f.result() for f in as_completed(futures)]
+
+        generations = sorted(gen for gen, _sha in results)
+        self.assertEqual(
+            generations, list(range(1, n + 1)),
+            f"expected exactly the generations 1..{n} with no gaps or duplicates, got {generations}",
+        )
+
+        final = self.hub.read(train.TIP_SIGNAL_REF)
+        self.assertEqual(final["generation"], n)
+        winner_sha = next(sha for gen, sha in results if gen == n)
+        self.assertEqual(final["sha"], winner_sha)
+
+    def test_full_train_run_bumps_the_signal_to_the_new_tip(self):
+        self.add_branch("sig", {"sig.txt": "s\n"})
+        res, _ = self.run_train({})
+        self.assertEqual(res.outcome, "advanced")
+        signal = self.hub.read(train.TIP_SIGNAL_REF)
+        self.assertIsNotNone(signal, "a landed train run must bump refs/fleet/signals/tip")
+        self.assertEqual(signal["generation"], 1)
+        self.assertEqual(signal["sha"], res.new_tip)
+        self.assertEqual(signal["by"], "train")
+
+    def test_two_sequential_train_runs_advance_the_generation(self):
+        self.add_branch("sig1", {"a.txt": "a\n"})
+        res1, _ = self.run_train({}, epoch="e1")
+        # `add_branch` bases its new branch on the TIP sha it reads from
+        # the hub, but checks it out in `self.seed` -- a clone the train
+        # never pushes to, so it does not yet have the commit the first
+        # run just advanced the tip to. Fetch it in before basing off it.
+        sh(["fetch", "-q", str(self.bare), TIP], cwd=self.seed)
+        self.add_branch("sig2", {"b.txt": "b\n"})
+        res2, _ = self.run_train({}, epoch="e2")
+        self.assertEqual([res1.outcome, res2.outcome], ["advanced", "advanced"])
+        signal = self.hub.read(train.TIP_SIGNAL_REF)
+        self.assertEqual(signal["generation"], 2)
+        self.assertEqual(signal["sha"], res2.new_tip)
+
+    def test_signal_bump_failure_does_not_fail_the_train_run(self):
+        """Best-effort (SPEC 3.1: the signal is `fleetd`'s poll-latency
+        fast path, never the source of truth -- TIP_REF itself is): a hub
+        that can never win the CAS must not turn an already-landed tip
+        push into a failed train run, the same shape as
+        `_mark_intent_done`'s best-effort intent close."""
+        self.add_branch("be", {"be.txt": "b\n"})
+        with mock.patch.object(train, "bump_tip_signal_via_hub",
+                                side_effect=train.HubError("boom")):
+            res, _ = self.run_train({})
+        self.assertEqual(res.outcome, "advanced")
+        self.assertEqual(res.landed, ["staging/be"])
+        self.assertIsNone(self.hub.read(train.TIP_SIGNAL_REF),
+                           "no signal write landed, but the run must still succeed")
+
+
+# ---------------------------------------------------------------------- #
+# PLAN Stage 1 task 6 -- the tip push carries the train deploy key's
+# GIT_SSH_COMMAND (SPEC §8) when FLEET_TRAIN_DEPLOY_KEY names a real file.
+# ---------------------------------------------------------------------- #
+
+
+class TestTrainDeployKeySsh(TrainBase):
+    def setUp(self):
+        super().setUp()
+        # Never let the developer's own shell (or a prior test) leak a
+        # deploy key path or an ambient GIT_SSH_COMMAND into this fixture.
+        self._deploy_key_env = os.environ.get(train.TRAIN_DEPLOY_KEY_ENV)
+        os.environ.pop(train.TRAIN_DEPLOY_KEY_ENV, None)
+        self._ambient_ssh_cmd = os.environ.get("GIT_SSH_COMMAND")
+        os.environ.pop("GIT_SSH_COMMAND", None)
+
+    def tearDown(self):
+        if self._deploy_key_env is None:
+            os.environ.pop(train.TRAIN_DEPLOY_KEY_ENV, None)
+        else:
+            os.environ[train.TRAIN_DEPLOY_KEY_ENV] = self._deploy_key_env
+        if self._ambient_ssh_cmd is None:
+            os.environ.pop("GIT_SSH_COMMAND", None)
+        else:
+            os.environ["GIT_SSH_COMMAND"] = self._ambient_ssh_cmd
+        super().tearDown()
+
+    def test_no_key_configured_is_a_normal_state_not_an_error(self):
+        self.assertIsNone(train._train_deploy_key_ssh_command())
+        self.add_branch("nokey", {"n.txt": "n\n"})
+        res, _ = self.run_train({})
+        self.assertEqual(res.outcome, "advanced")
+        self.assertNotIn("GIT_SSH_COMMAND", os.environ,
+                          "no key configured must leave the ambient env untouched")
+
+    def test_missing_key_file_warns_and_falls_back_to_none(self):
+        os.environ[train.TRAIN_DEPLOY_KEY_ENV] = str(self.tmp / "no-such-key")
+        self.assertIsNone(train._train_deploy_key_ssh_command())
+
+    def test_configured_key_is_set_only_around_the_tip_push_and_restored_after(self):
+        key = self.tmp / "deploy_key"
+        key.write_text("fake key material\n")
+        key.chmod(0o600)
+        os.environ[train.TRAIN_DEPLOY_KEY_ENV] = str(key)
+        expected_ssh_command = train._train_deploy_key_ssh_command()
+        self.assertIsNotNone(expected_ssh_command)
+        self.assertIn(str(key), expected_ssh_command)
+        self.assertIn("IdentitiesOnly=yes", expected_ssh_command)
+        self.assertIn("IdentityAgent=none", expected_ssh_command)
+
+        seen = {}
+        real_push_ref = Hub.push_ref
+
+        def spy_push_ref(hub_self, *a, **kw):
+            seen["GIT_SSH_COMMAND"] = os.environ.get("GIT_SSH_COMMAND")
+            return real_push_ref(hub_self, *a, **kw)
+
+        self.add_branch("key1", {"k.txt": "k\n"})
+        with mock.patch.object(Hub, "push_ref", spy_push_ref):
+            res, _ = self.run_train({})
+
+        self.assertEqual(res.outcome, "advanced")
+        self.assertEqual(seen.get("GIT_SSH_COMMAND"), expected_ssh_command)
+        self.assertNotIn("GIT_SSH_COMMAND", os.environ,
+                          "must be restored (here: removed, since it was absent before) "
+                          "once the push returns")
 
 
 if __name__ == "__main__":
