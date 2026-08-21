@@ -376,7 +376,12 @@ class _RealGateHarness:
         subprocess. `HOME` is a fresh per-test tempdir (gate.sh writes
         gatelogs/, tgt/, and its verdict cache under `$HOME`, and its
         `$HOME/git/oxidex.git` mirror-probe must find nothing so it falls
-        straight through to `FLEET_HUB_URL`, the fixture)."""
+        straight through to `FLEET_CODE_URL`, the fixture). PLAN Stage 1
+        task 4 split the one hub gate.sh used to read into two required
+        variables -- FLEET_HUB_URL (verdict cache) and FLEET_CODE_URL
+        (the repo holding the branch to clone) -- so both point at the
+        same single fixture `hub`, exactly as the one fixture repo served
+        both roles before the split; `extra_env` may override either."""
         home = self.tmp / f"home-{tag}"
         home.mkdir()
         env = {
@@ -384,6 +389,7 @@ class _RealGateHarness:
             "USER": os.environ.get("USER", "fleet-test"),
             "PATH": f"{self.fakebin}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin",
             "FLEET_HUB_URL": str(hub),
+            "FLEET_CODE_URL": str(hub),
         }
         if extra_env:
             env.update(extra_env)

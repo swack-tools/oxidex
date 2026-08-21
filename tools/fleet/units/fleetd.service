@@ -19,7 +19,13 @@ After=network-online.target
 
 [Service]
 Type=simple
-Environment=FLEET_HUB_URL=ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git
+# PLAN Stage 1 task 4: the hub (verdict/state) and the code repo
+# (staging/* + refactor/tag-machinery) are now two distinct GitHub
+# remotes -- the private state repo and the public code repo -- rather
+# than one host-specific ssh URL. fleetd reads both from the
+# environment; FLEET_CODE_URL falls back to FLEET_HUB_URL when unset.
+Environment=FLEET_HUB_URL=https://github.com/swack-tools/oxidex-fleet-state.git
+Environment=FLEET_CODE_URL=https://github.com/swack-tools/oxidex.git
 ExecStart=/usr/bin/python3 %h/fleet-checkout/tools/fleet/fleetd.py
 Restart=always
 RestartSec=10

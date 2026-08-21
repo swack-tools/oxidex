@@ -41,5 +41,12 @@
 # without a cron poll, and this backstop line is redundant-but-harmless
 # there too (the pid-file check still short-circuits to nothing).
 #
+# PLAN Stage 1 task 4: the hub (verdict/state) and the code repo
+# (staging/* + refactor/tag-machinery) are now two distinct GitHub
+# remotes -- the private state repo and the public code repo -- rather
+# than one host-specific ssh URL. FLEET_CODE_URL falls back to
+# FLEET_HUB_URL when unset, so setting both here is belt-and-braces, not
+# strictly required.
+#
 # Add via `crontab -e`:
-*/5 * * * * pidfile="$HOME/.fleetd/wrapper.pid"; kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || (FLEET_HUB_URL=ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git nohup $HOME/fleet-checkout/tools/fleet/units/fleetd-wrapper.sh >> $HOME/gatelogs/fleetd-wrapper-cron.log 2>&1 &)
+*/5 * * * * pidfile="$HOME/.fleetd/wrapper.pid"; kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || (FLEET_HUB_URL=https://github.com/swack-tools/oxidex-fleet-state.git FLEET_CODE_URL=https://github.com/swack-tools/oxidex.git nohup $HOME/fleet-checkout/tools/fleet/units/fleetd-wrapper.sh >> $HOME/gatelogs/fleetd-wrapper-cron.log 2>&1 &)

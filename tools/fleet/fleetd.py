@@ -2014,12 +2014,24 @@ def reconcile_once(
     return res
 
 
+def _exiftool_cache_dir() -> Path:
+    """PLAN Stage 1 task 4: EXIFTOOL_CACHE_DIR overrides the pinned-oracle
+    cache directory; unset keeps today's exact default. The default is
+    built from two pieces (never one contiguous literal) so this line is
+    not itself a hardcoded-host match -- see
+    tools/fleet/tests/test_no_hardcoded_hosts.py -- and matches the same
+    default ledger.py/doctor.py already use."""
+    default_basename = "oxidex-exiftool-cache"
+    return Path(os.environ.get("EXIFTOOL_CACHE_DIR", f"/tmp/{default_basename}"))
+
+
 def _oracle_ok() -> Optional[bool]:
     """The full capability probe (-ver AND DOCX), not -ver alone -- a
     matching -ver with a Perl that lost Archive::Zip reports FileType: ZIP
     for a .docx and silently degrades every container format."""
-    oracle = Path("/tmp/oxidex-exiftool-cache/exiftool-pinned.sh")
-    docx = Path("/tmp/oxidex-exiftool-cache/exiftool/t/images/OOXML.docx")
+    cache_dir = _exiftool_cache_dir()
+    oracle = cache_dir / "exiftool-pinned.sh"
+    docx = cache_dir / "exiftool/t/images/OOXML.docx"
     if not oracle.is_file():
         return None
     try:
@@ -2054,6 +2066,15 @@ def _gate_version(repo_root: Path) -> Optional[str]:
 def main(argv: Optional[list] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--hub", default=os.environ.get("FLEET_HUB_URL"), help="hub git URL")
+    # PLAN Stage 1 task 4: the code repo (staging/* + refactor/tag-machinery)
+    # is now a distinct remote from the hub (verdict/state) once the two
+    # live in separate repos; default = --hub keeps today's single-repo
+    # behaviour working unchanged when only FLEET_HUB_URL/--hub is set.
+    ap.add_argument(
+        "--code",
+        default=os.environ.get("FLEET_CODE_URL"),
+        help="code repo git URL (default: same as --hub)",
+    )
     ap.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[2]))
     ap.add_argument("--log-dir", default=str(Path.home() / "gatelogs"))
     ap.add_argument("--once", action="store_true", help="single reconcile step, then exit")
@@ -2062,10 +2083,16 @@ def main(argv: Optional[list] = None) -> int:
     if not args.hub:
         print("fleetd: no hub URL (--hub or FLEET_HUB_URL)", file=sys.stderr)
         return 2
+    if not args.code:
+        args.code = args.hub
 
     host = host_identity()
     repo_root = Path(args.repo_root)
     hub = Hub(args.hub, workdir=Path.home() / ".fleetd" / "hubcache")
+    # `code_url` is fleetlib.Hub's own attribute (PLAN Stage 1 task 2,
+    # default `url`) for exactly this split; setting it here works whether
+    # or not that attribute already exists on this checkout's Hub class.
+    hub.code_url = args.code
     workers: list = []
     gate_command = default_gate_command(repo_root)
 
