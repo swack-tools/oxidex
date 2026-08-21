@@ -15,11 +15,23 @@
        than one host-specific ssh URL. fleetd reads both from the
        environment; FLEET_CODE_URL falls back to FLEET_HUB_URL when
        unset. -->
+  <!-- B5: both remotes above are private/public HTTPS GitHub repos, so
+       every git op fleetd makes needs a token --
+       tools/fleet/keel/git-credential-file reads it from this file.
+       Create it with tools/fleet/rollout/install_secrets.sh, which also
+       verifies it (0600, non-empty, a real `git ls-remote` against the
+       state repo) without ever printing it. launchd's EnvironmentVariables
+       values are literal strings, NOT shell-expanded (unlike the cron
+       line below, or systemd's `%h`) -- exactly like ProgramArguments'
+       /Users/allen/... path above, this is the maintainer's actual home
+       directory, substituted by hand at install time, not $HOME. -->
   <key>EnvironmentVariables</key><dict>
     <key>FLEET_HUB_URL</key>
     <string>https://github.com/swack-tools/oxidex-fleet-state.git</string>
     <key>FLEET_CODE_URL</key>
     <string>https://github.com/swack-tools/oxidex.git</string>
+    <key>FLEET_GIT_TOKEN_FILE</key>
+    <string>/Users/allen/.keel/secrets/git-token</string>
     <key>PATH</key>
     <string>/Users/allen/.cargo/bin:/Users/allen/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
   </dict>

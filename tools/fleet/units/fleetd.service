@@ -26,6 +26,14 @@ Type=simple
 # environment; FLEET_CODE_URL falls back to FLEET_HUB_URL when unset.
 Environment=FLEET_HUB_URL=https://github.com/swack-tools/oxidex-fleet-state.git
 Environment=FLEET_CODE_URL=https://github.com/swack-tools/oxidex.git
+# B5: both remotes above are private/public HTTPS GitHub repos, so every
+# git op fleetd makes needs a token -- `tools/fleet/keel/git-credential-file`
+# reads it from this file (never from argv or another env var fleetd._ps_env
+# could read off this process). Create it with
+# tools/fleet/rollout/install_secrets.sh, which also verifies it (0600,
+# non-empty, a real `git ls-remote` against the state repo) without ever
+# printing it. `%h` is systemd specifier syntax for this unit's HOME.
+Environment=FLEET_GIT_TOKEN_FILE=%h/.keel/secrets/git-token
 ExecStart=/usr/bin/python3 %h/fleet-checkout/tools/fleet/fleetd.py
 Restart=always
 RestartSec=10

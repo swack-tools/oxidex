@@ -52,6 +52,7 @@ import hashlib
 import os
 import platform
 import shutil
+import stat
 import subprocess  # nosec B404 -- list-argv only, no shell=True anywhere below
 import sys
 from pathlib import Path
@@ -264,6 +265,51 @@ def check_corpus() -> Check:
     return c
 
 
+def check_git_token_file() -> Check:
+    """B5 (review finding): `FLEET_HUB_URL` pointed at a private GitHub
+    repo over HTTPS needs a credential, or fleetd's very first git op --
+    the singleton claim, before any heartbeat -- raises an uncaught
+    `HubUnreachableError` (`keel/git-credential-file` answers `get` with
+    nothing when `FLEET_GIT_TOKEN_FILE` is unset, which is correct
+    per-request behaviour, but leaves the daemon with no way to
+    authenticate at all). This is the ONE health check answering "would
+    fleetd even get past its first git command", not "did it".
+
+    Deliberately does not read the token (this script's own PATH/`-vV`
+    checks above never touch a secret either): existence + mode are
+    checkable without opening the file, and `stat` on a 0600 file the
+    caller doesn't own to read still succeeds -- reading it is the one
+    thing that risks putting the token in this script's own stdout on a
+    future `print(...)`-while-debugging mistake, so it is never opened
+    here at all.
+    """
+    c = Check("git token file")
+    hub_url = os.environ.get("FLEET_HUB_URL", "")
+    if not hub_url.startswith("https://"):
+        c.info(
+            f"FLEET_HUB_URL={hub_url!r} is not an https:// remote -- no token file required"
+        )
+        return c
+
+    token_file = os.environ.get("FLEET_GIT_TOKEN_FILE", "")
+    hint = "run tools/fleet/rollout/install_secrets.sh to create and validate one"
+    if not token_file:
+        c.failed(f"FLEET_HUB_URL is https but FLEET_GIT_TOKEN_FILE is unset -- {hint}")
+        return c
+
+    path = Path(token_file)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError as exc:
+        c.failed(f"FLEET_GIT_TOKEN_FILE={token_file} does not exist or is unreadable ({exc}) -- {hint}")
+        return c
+    if mode != 0o600:
+        c.failed(f"FLEET_GIT_TOKEN_FILE={token_file} has mode {oct(mode)}, expected 0600 -- {hint}")
+        return c
+    c.passed(f"FLEET_GIT_TOKEN_FILE={token_file} exists, mode 0600 (contents not read)")
+    return c
+
+
 def check_disk() -> Check:
     c = Check("free disk")
     home = Path(os.environ.get("HOME", str(Path.home())))
@@ -314,6 +360,7 @@ def main() -> int:
         check_oracle(),
         check_corpus(),
         check_disk(),
+        check_git_token_file(),
     ]
     for c in checks:
         print(c.line())

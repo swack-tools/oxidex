@@ -48,5 +48,15 @@
 # FLEET_HUB_URL when unset, so setting both here is belt-and-braces, not
 # strictly required.
 #
+# B5: both remotes above are private/public HTTPS GitHub repos, so every
+# git op fleetd makes needs a token -- tools/fleet/keel/git-credential-file
+# reads it from this file. Create it with
+# tools/fleet/rollout/install_secrets.sh, which also verifies it (0600,
+# non-empty, a real `git ls-remote` against the state repo) without ever
+# printing it. Cron sets $HOME itself before handing this line to `sh -c`
+# (crontab(5)), the same way it already does for the pidfile/log paths
+# below, so the expansion here is real -- unlike the plist unit, where the
+# equivalent value must be a literal, hand-substituted path.
+#
 # Add via `crontab -e`:
-*/5 * * * * pidfile="$HOME/.fleetd/wrapper.pid"; kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || (FLEET_HUB_URL=https://github.com/swack-tools/oxidex-fleet-state.git FLEET_CODE_URL=https://github.com/swack-tools/oxidex.git nohup $HOME/fleet-checkout/tools/fleet/units/fleetd-wrapper.sh >> $HOME/gatelogs/fleetd-wrapper-cron.log 2>&1 &)
+*/5 * * * * pidfile="$HOME/.fleetd/wrapper.pid"; kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || (FLEET_HUB_URL=https://github.com/swack-tools/oxidex-fleet-state.git FLEET_CODE_URL=https://github.com/swack-tools/oxidex.git FLEET_GIT_TOKEN_FILE=$HOME/.keel/secrets/git-token nohup $HOME/fleet-checkout/tools/fleet/units/fleetd-wrapper.sh >> $HOME/gatelogs/fleetd-wrapper-cron.log 2>&1 &)

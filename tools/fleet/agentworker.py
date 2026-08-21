@@ -67,6 +67,15 @@ from fleetlib import Hub
 AGENT_TIMEOUT_S = int(os.environ.get("FLEET_AGENT_TIMEOUT_S", "3600"))
 TIP_REF = "refs/heads/refactor/tag-machinery"
 
+# Same cache-dir convention as doctor.py (T0.1) and ledger.py (T1.4) --
+# M2 (review finding): this used to be hardcoded four times below, in the
+# prompt text handed to a headless agent, which is a worse place for a
+# stale literal to hide than a script default (an agent that trusts the
+# prompt verbatim runs a shell command against a path that only happens to
+# be right on hosts using the fallback). `tests/test_no_hardcoded_hosts.py`
+# scans this file's non-idiom lines for the literal to keep it that way.
+CACHE_DIR = os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache")
+
 # Exit codes with meaning to fleetd's attempt ledger (see module docstring
 # and `dispatch.record_outcome`). 0 is progress; everything else is not.
 RC_PREFLIGHT_REFUSED = 8  # nothing was bought -- the attempt is handed back
@@ -130,7 +139,7 @@ TASK
 5. Final output line: `CONVERGED {branch} <new-sha>` on success.
 
 HARD RULES
-- Never push to `main` or to `refactor/tag-machinery`. Never create other branches. Never invoke bare `exiftool` (the pinned oracle is /tmp/oxidex-exiftool-cache/exiftool-pinned.sh if needed).
+- Never push to `main` or to `refactor/tag-machinery`. Never create other branches. Never invoke bare `exiftool` (the pinned oracle is {CACHE_DIR}/exiftool-pinned.sh if needed).
 - Do not weaken any test or gate to get green; a genuine failure is reported as BLOCKED, which is a valid outcome.
 """
 
@@ -147,8 +156,8 @@ INTENT
 - The title quotes the measured baseline (the MISSING count under conformance.py). Your success metric is that number DROPPING, measured the same way.
 
 TASK
-1. Reproduce the baseline first: `cargo build --release --bin oxidex`, find the sample (`ls /tmp/oxidex-exiftool-cache/combined-samples/ | grep -i <format>`), then `python3 scripts/compare_file.py <sample>`. Quote the counts.
-2. Read ExifTool's own implementation in the pinned tree: /tmp/oxidex-exiftool-cache/exiftool/lib/Image/ExifTool/<Module>.pm -- the byte layout and conversions live there. Check `src/exiftool_tables` for an existing transcription BEFORE hand-writing any layout (AGENTS.md law: re-deriving a table ExifTool already declares is the expensive way).
+1. Reproduce the baseline first: `cargo build --release --bin oxidex`, find the sample (`ls {CACHE_DIR}/combined-samples/ | grep -i <format>`), then `python3 scripts/compare_file.py <sample>`. Quote the counts.
+2. Read ExifTool's own implementation in the pinned tree: {CACHE_DIR}/exiftool/lib/Image/ExifTool/<Module>.pm -- the byte layout and conversions live there. Check `src/exiftool_tables` for an existing transcription BEFORE hand-writing any layout (AGENTS.md law: re-deriving a table ExifTool already declares is the expensive way).
 3. Implement in the obvious parser location (follow the existing per-format file pattern under src/parsers/). NEVER approximate a conversion: if a semantic is unresolved, omit it -- absence is correct output; a plausible-but-wrong value under a real tag name is worse.
 4. Iterate implement -> build -> compare_file until the MISSING count stops dropping for honest reasons. Do not chase WRONG values into guesswork.
 5. `cargo fmt --all`, then `cargo clippy --release --all-features --features jpeg-tag-matrix-binary -- -D warnings` (NOT --all-targets), then `cargo test --lib` for your module.
@@ -157,7 +166,7 @@ TASK
 
 HARD RULES
 - Never push to `main` or `refactor/tag-machinery`; exactly the one branch named above.
-- Never invoke bare `exiftool` -- only /tmp/oxidex-exiftool-cache/exiftool-pinned.sh.
+- Never invoke bare `exiftool` -- only {CACHE_DIR}/exiftool-pinned.sh.
 - Never edit src/exiftool_tables/binary_tables.rs by hand (generated).
 - Do not weaken any existing test.
 """
