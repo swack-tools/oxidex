@@ -38,18 +38,27 @@ the human a `fleet status` that says *why* nothing is starting.
   force-push, no bypass),
   `rescued-guard` (same on `refs/heads/rescued/*`), identical `proof-update`/`proof-guard` pair on
   `refs/heads/keel-proof/*`; `tests/live/test_tip_ruleset.py` (opt-in `FLEET_LIVE_GITHUB=1`).
-- `fleetlib.py`: `code_url` + `code_push_url` constructor args (each defaulting to the one
-  before it, so a single-repo fleet is unchanged); `code_sha`/`code_list`/`push_code_ref`/
-  `delete_code_ref`; `ssh_command(identity_file=None)` composing an identity on top of the pinned
+- `fleetlib.py`: `code_url` + `code_push_url` + `tip_push_url` constructor args (each defaulting
+  to the one before it, ending at `url`, so a single-repo fleet is unchanged);
+  `code_sha`/`code_list`/`push_code_ref`/`push_tip_ref`/`delete_code_ref` — and `push_code_ref`/
+  `delete_code_ref` take NO `ssh_command`, so only the tip can carry the deploy key;
+  `ssh_command(identity_file=None)` composing an identity on top of the pinned
   `BatchMode=yes`/`ConnectTimeout=10`/`StrictHostKeyChecking=accept-new`, and a per-subprocess
-  `ssh_command=` parameter on `_raw_run` which now sets `GIT_SSH_COMMAND` unconditionally rather
-  than honouring an ambient value; credential-helper env in `_raw_run` reading
-  `FLEET_GIT_TOKEN_FILE`; `tools/fleet/keel/git-credential-file`; three rate-limit strings in
-  `_TRANSPORT_HINTS`; `fetch_namespace(prefix)`.
+  `ssh_command=` parameter on the one git spawner, module-level `run_git` (which
+  `Hub._raw_run` and `workqueue.Queue._git` both delegate to), which sets `GIT_SSH_COMMAND`
+  unconditionally rather than honouring an ambient value; credential-helper env in `run_git`
+  reading `fleetlib.git_token_file()` — `FLEET_GIT_TOKEN_FILE`, else `~/.keel/secrets/git-token`
+  when it exists, so the hand-run steps of this stage inherit the PAT the units already had;
+  `tools/fleet/keel/git-credential-file`; three rate-limit strings in `_TRANSPORT_HINTS`;
+  `fetch_namespace(prefix)`.
 - Route every code call site per SPEC §4.4's table: `workqueue.py` (tip sha, `staging/*` listing,
-  ancestry fetch), `dispatch.py` (object fetch, branch sha), `train.py` (clone source, tip reads,
-  and all four code PUSHES — tip, `rescued/*`, `staging/*` retirement, `staging/train-tmp-*`),
-  `agentworker.py` (clone + branch/tip probes), `fleetd.py` (three `refs/heads/*` probes).
+  ancestry fetch — the last through `fleetlib.run_git`, not a bare `subprocess.run`),
+  `dispatch.py` (object fetch, branch sha), `train.py` (clone source, tip reads, and all four code
+  PUSHES — the tip at `tip_push_url` with the deploy key, `rescued/*`, `staging/*` retirement and
+  `staging/train-tmp-*` at `code_push_url` with the PAT), `agentworker.py` (clone + branch/tip
+  probes), `fleetd.py` (three `refs/heads/*` probes), `cli.py` (`_hub` needs `--code` /
+  `FLEET_CODE_URL`: `cmd_status` computes the queue, which is a CODE read, and without it the
+  QUEUE line is a permanent error no flag can fix).
   `workqueue.Queue.compute_or_refusal()` turns a missing tip into a `refused` reason instead of a
   `QueueError` that the reconcile loop does not catch. `tests/test_code_url_split.py` (two bare
   repos: `state.git` with no `refs/heads/*` at all).
@@ -57,18 +66,26 @@ the human a `fleet status` that says *why* nothing is starting.
   `fleetd.py` L2021-2022 → `EXIFTOOL_CACHE_DIR`; `units/fleetd.service` L22, `com.oxidex.fleetd.plist`
   L14, `cron-backstop.txt` L45 → `FLEET_HUB_URL=<state repo https>`, `FLEET_CODE_URL=<code repo
   https>`; `fleetd --hub <state> --code <code>`.
-- `fleetd.write_heartbeat` (L1959-1985) gains `refused: ReconcileResult.refused`; `cli.cmd_status`
+- The heartbeat payload `reconcile_once` builds (`fleetd.py` L2042-2076, written by
+  `fleetd.write_heartbeat` L1247-1261) gains `refused: ReconcileResult.refused`; `cli.cmd_status`
   gains `--why` rendering it per host.
 - `train.py`: after a successful tip push, CAS-bump `refs/fleet/signals/tip` via `Hub.update`
   (replaces post-receive for the hubless interim); `tip_push_options` returns `[]` when
-  `FLEET_TRAIN_TOKEN_FILE` is absent (already the behaviour); the tip push carries the deploy key
-  as a per-subprocess `ssh_command=` argument, never `os.environ` (the singleton's renewer thread
-  pushes state refs from the same process throughout the gate); `--code`/`--code-push` on the
-  CLI, the latter for the ssh URL a deploy key can actually authenticate.
+  `FLEET_TRAIN_TOKEN_FILE` is absent (already the behaviour); the tip push goes through
+  `hub.push_tip_ref` and carries the deploy key as a per-subprocess `ssh_command=` argument, never
+  `os.environ` (the singleton's renewer thread pushes state refs from the same process throughout
+  the gate); `--code` / `--code-push` / `--tip-push` on the CLI (`FLEET_CODE_URL`,
+  `FLEET_CODE_PUSH_URL`, `FLEET_TIP_PUSH_URL`), with `--tip-push` the ssh URL a deploy key can
+  actually authenticate and `--code-push` left on HTTPS so `rescued/*` and the retirements keep
+  the PAT. Pointing `--code-push` at ssh still works and now warns, because it is the shape that
+  ran three pushes under an ambient ssh identity.
 - `rollout/seed_desired.py` seeds the state repo with all hosts at 0/0 + `server_candidates`,
   `train_platforms`.
 - Import of the i7's `~/gatelogs/gate-*.json` into the cache via `verdict.py store`.
-- `fleetd --interval 30` on the i7 (targets 1/0); m5 at 0/0 (laptop; `gates: 0` by policy).
+- `fleetd` on the i7 (targets 1/0); m5 at 0/0 (laptop; `gates: 0` by policy). The merged
+  `units/fleetd.service` `ExecStart` passes no `--interval`, so the i7 runs at fleetd's default
+  `LOOP_SECONDS = 15` (`fleetd.py:109`); `--interval 30` is a hand-start knob, and putting it on
+  the unit is a one-line unit change, not something this deliverable already did.
 
 **Tasks.**
 | task | tier | ∥ | h |
@@ -86,6 +103,18 @@ the human a `fleet status` that says *why* nothing is starting.
   tools.fleet.tests.test_fleetlib` → 0 failures including `TestConcurrentCreate` (8 racers, exactly
   one winner) and `TestReadIsCoherentUnderConcurrentWrites` (instrument: that unittest run's
   output, pasted in the PR); p50/p95 of `create`/`update` recorded with `hyperfine -N` in the commit.
+- The push split and the token default, hermetically, in one run:
+  `cd tools/fleet/tests && FLEET_TESTS_HERMETIC=1 python3 -m unittest test_code_url_split
+  test_fleetlib test_train test_queue`. The three classes that make it a measurement rather than a
+  restatement of the code: `TestTipPushUrlIsSeparateFromTheOtherCodeWrites` (the tip lands on
+  `tip_push_url`, `rescued/*` does not, and `push_code_ref`/`delete_code_ref` raise `TypeError` on
+  `ssh_command=`), `TestTrainDeployKeyIsScopedToOneSubprocess` (with `FLEET_TEST_RENEW_S=1` the
+  train singleton's OWN claim renewer pushes while the tip push is held open, and that push's
+  `env=` carries the pinned default rather than `-i <deploy key>`), and `TestDefaultTokenFile`
+  (with HOME redirected and `FLEET_GIT_TOKEN_FILE` unset, `git credential fill` returns the token
+  from `~/.keel/secrets/git-token`). Every one reads the `env=` dict handed to `subprocess.run`,
+  not a spy on a `Hub` method — the instrument that was green while this feature was broken in
+  three ways. (Instrument: that unittest run's `Ran N tests / OK`, pasted in the commit.)
 - `tests/live/test_tip_ruleset.py` on `keel-proof/x`, **and the expected matrix depends on which
   half is deployed** — the earlier "keyless FF → `GH013`" line was wrong for the state the repo is
   actually in. Guard half only (today): keyless FF → rc 0 (a guard blocks deletion and force-push,

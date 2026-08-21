@@ -54,14 +54,13 @@ the module, not in the consumers. Please don't rename this back to
 
 from __future__ import annotations
 
-import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Optional, Set
 
 from claim import CLAIMS_PREFIX, is_expired
-from fleetlib import Hub, HubUnreachableError
+from fleetlib import Hub, HubUnreachableError, run_git
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 STAGING_PREFIX = "refs/heads/staging"
@@ -271,14 +270,14 @@ class Queue:
         result = self._git(["fetch", "--no-tags", "--quiet", self.hub.code_url, *refspecs])
         if result.returncode != 0:
             raise HubUnreachableError(
-                f"fetch for ancestry check failed: {result.stderr.decode('utf-8', 'replace').strip()}"
+                f"fetch for ancestry check failed: {result.stderr.strip()}"
             )
         return cache_ns
 
     def _is_ancestor(self, cache_ns: str, candidate_sha: str, tip_sha: str) -> bool:
         result = self._git(["merge-base", "--is-ancestor", candidate_sha, tip_sha])
         if result.returncode not in (0, 1):
-            stderr = result.stderr.decode("utf-8", "replace").strip()
+            stderr = result.stderr.strip()
             raise QueueError(f"merge-base --is-ancestor failed unexpectedly: {stderr}")
         return result.returncode == 0
 
@@ -293,8 +292,29 @@ class Queue:
             self._git(["update-ref", "-d", ref])
 
     def _git(self, args, timeout: int = 30):
-        cmd = ["git", "--git-dir", str(self.hub.workdir)] + args
-        try:
-            return subprocess.run(cmd, capture_output=True, timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            raise HubUnreachableError(f"{' '.join(cmd)} timed out after {timeout}s") from exc
+        """Every git command this module runs, through `fleetlib.run_git`
+        -- the same helper `fleetlib.Hub` itself spawns git with (R5).
+
+        This was a bare `subprocess.run(["git", ...])`, which is fine for
+        the two LOCAL commands here (`merge-base --is-ancestor`,
+        `update-ref -d` inside the hub's own disposable cache) and was
+        wrong for the third: `_fetch_for_ancestry` fetches from
+        `self.hub.code_url`, a real remote. That fetch therefore ran with
+        no credential helper (so against a private HTTPS code remote it
+        failed with an authentication error naming the remote, never the
+        missing token), with whatever `GIT_SSH_COMMAND` the ambient
+        environment happened to carry instead of the pinned
+        `BatchMode=yes`/`ConnectTimeout=10` baseline, and with
+        `GIT_TERMINAL_PROMPT` unset -- i.e. a daemon's queue computation
+        one credential prompt away from blocking forever.
+
+        Routing ALL THREE through one helper rather than only the remote
+        one is deliberate: "which of these talks to a remote" is exactly
+        the judgement that was wrong the first time, and the two local
+        commands lose nothing by running under the same pinned env.
+
+        Returns a `fleetlib._Result` (str stdout/stderr), not a
+        `CompletedProcess` (bytes) -- the call sites read `.stderr`
+        directly.
+        """
+        return run_git(["git", "--git-dir", str(self.hub.workdir)] + args, timeout=timeout)
