@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -195,12 +196,241 @@ class TestConvergence(FleetdBase):
         detail = dict(hb["refused"])["disabled"]
         self.assertEqual(detail, "quarantine test")
 
-    def test_heartbeat_refused_is_empty_when_nothing_was_refused(self):
-        self.set_desired(gates=0)
+    def test_heartbeat_refused_is_empty_when_a_gate_starts_cleanly(self):
+        """The genuine "nothing to report" case: a target the host can
+        actually meet, and it meets it. `set_desired(gates=0)` is NOT this
+        case any more -- see `TestRefusedReasons.test_target_zero_...`
+        below, which is the S1 fix for exactly that (previously silent)
+        state."""
+        self.set_desired(gates=1)
         res = self.reconcile()
-        self.assertEqual(res.refused, [])
+        self.assertEqual(len(res.started), 1, f"refused={res.refused}")
+        self.assertEqual(res.refused, [], f"a clean start must refuse nothing: {res.refused}")
         hb = self.hub.read(fleetd.HOSTS_PREFIX + self.host)
         self.assertEqual(hb.get("refused"), [])
+
+
+class TestRefusedReasons(FleetdBase):
+    """S1 (Stage 1 integration review): `reconcile_once` must record a
+    `refused` reason for every idle condition, not just `disabled` and
+    `limits`. Before this, an enabled host with both targets at zero, or
+    with targets it could not currently fill, recorded nothing -- `fleet
+    status --why` printed '(no refused reasons on file)' for a host idling
+    entirely by design, indistinguishable from one that was silently
+    broken."""
+
+    def test_target_zero_when_enabled_with_both_targets_at_zero(self):
+        """The exact silent case the review named: enabled, gates=0,
+        agents=0. Previously `res.refused == []` here -- see the now-
+        renamed `test_heartbeat_refused_is_empty_when_a_gate_starts_cleanly`
+        above, which used to assert this very state was silent."""
+        self.set_desired(gates=0)
+        res = self.reconcile()
+        self.assertEqual(res.started, [])
+        self.assertIn("target-zero", [r[0] for r in res.refused], f"refused={res.refused}")
+        detail = dict(res.refused)["target-zero"]
+        self.assertIn("gates 0", detail)
+        self.assertIn("agents 0", detail)
+
+    def test_no_target_zero_when_gates_alone_is_positive(self):
+        """Only-BOTH-zero is the trigger; a host with a live gate target
+        (even one it cannot fill this loop) is not idle by design and must
+        not be mislabeled `target-zero`."""
+        self.set_desired(gates=1, limits={"min_free_gb": 999, "min_free_mem_gb": 8})
+        res = self.reconcile()
+        self.assertNotIn("target-zero", [r[0] for r in res.refused], f"refused={res.refused}")
+        self.assertIn("limits", [r[0] for r in res.refused])
+
+    def test_queue_empty_when_targets_exceed_what_is_currently_claimable(self):
+        """`staging/one` is the fixture's only branch. Once it is already
+        running here, a second gate slot has nothing left to claim -- the
+        queue itself is not empty (the branch is still IN it), but nothing
+        in it is claimable, which is the distinction `queue-empty` names."""
+        self.set_desired(gates=1)
+        res1 = self.reconcile()
+        self.assertEqual(len(res1.started), 1, f"refused={res1.refused}")
+
+        self.set_desired(gates=2)
+        res2 = self.reconcile()
+        self.assertEqual(res2.started, [])
+        self.assertIn("queue-empty", [r[0] for r in res2.refused], f"refused={res2.refused}")
+
+    def test_queue_error_is_recorded_not_raised(self):
+        """B1's twin on the `reconcile_once` side: `workqueue.Queue.compute()`
+        raises `QueueError` (not `HubError`) when the tip ref itself is
+        unreadable on the hub -- unguarded, this propagated straight out of
+        `reconcile_once` and crashed the daemon before its first heartbeat.
+        Deleting the tip ref directly from the bare hub reproduces exactly
+        that precondition without needing a second, differently-broken
+        fixture repo."""
+        self.set_desired(gates=1)
+        subprocess.run(
+            ["git", "-C", str(self.bare), "update-ref", "-d", HUB_TIP_REF],
+            check=True,
+        )
+        res = self.reconcile()
+        self.assertEqual(res.started, [])
+        self.assertIn("queue-error", [r[0] for r in res.refused], f"refused={res.refused}")
+        self.assertTrue(dict(res.refused)["queue-error"], "must carry the underlying detail")
+        # And the daemon really did keep going: a second reconcile against
+        # the still-broken hub must fail the SAME way, not raise.
+        res2 = self.reconcile()
+        self.assertIn("queue-error", [r[0] for r in res2.refused])
+
+    def test_why_flag_renders_target_zero_end_to_end(self):
+        """`fleet status --why` (cli.py) reads `refused` straight off the
+        durable heartbeat -- this is the human-facing end of S1, not just
+        `reconcile_once`'s return value. `_refused_list`/the `--why`
+        renderer are already reason-agnostic (PLAN Stage 1 task 5), so one
+        end-to-end reason is enough to prove the wiring; the reason values
+        themselves are pinned above."""
+        self.set_desired(gates=0)
+        res = self.reconcile()
+        self.assertTrue(res.heartbeat_written)
+
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["--hub", str(self.bare), "status", "--why"])
+        out = buf.getvalue()
+        self.assertIn("refused: target-zero (gates 0 / agents 0)", out, out)
+
+
+class TestSpawnEnvHelper(unittest.TestCase):
+    """`fleetd._spawn_env` in isolation, no subprocess: it must set
+    FLEET_HUB_URL/FLEET_CODE_URL from the `Hub` object (overriding any
+    stale value already in os.environ) while leaving everything else --
+    including the three vars B4 names explicitly -- untouched."""
+
+    def test_hub_and_code_url_come_from_the_hub_object_not_the_environment(self):
+        import unittest.mock as mock
+        tmp = tempfile.mkdtemp(prefix="spawn-env-helper-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        hub = Hub("https://example.invalid/state.git", workdir=Path(tmp) / "hc",
+                  code_url="https://example.invalid/code.git")
+        with mock.patch.dict(os.environ, {
+            "FLEET_GIT_TOKEN_FILE": "/tmp/tok",
+            "EXIFTOOL_CACHE_DIR": "/tmp/oracle-cache",
+            "FLEET_TRAIN_DEPLOY_KEY": "/tmp/deploy-key",
+            "FLEET_HUB_URL": "stale-value-must-be-overwritten",
+            "FLEET_CODE_URL": "stale-value-must-be-overwritten-too",
+            "UNRELATED_VAR": "still-here",
+        }):
+            env = fleetd._spawn_env(hub)
+        self.assertEqual(env["FLEET_HUB_URL"], hub.url)
+        self.assertEqual(env["FLEET_CODE_URL"], hub.code_url)
+        self.assertEqual(env["FLEET_GIT_TOKEN_FILE"], "/tmp/tok")
+        self.assertEqual(env["EXIFTOOL_CACHE_DIR"], "/tmp/oracle-cache")
+        self.assertEqual(env["FLEET_TRAIN_DEPLOY_KEY"], "/tmp/deploy-key")
+        self.assertEqual(env["UNRELATED_VAR"], "still-here")
+
+    def test_hub_and_code_url_are_set_even_when_absent_from_the_environment(self):
+        """The argv-only case: neither var was ever in os.environ at all."""
+        import unittest.mock as mock
+        tmp = tempfile.mkdtemp(prefix="spawn-env-helper-absent-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        hub = Hub("https://example.invalid/state2.git", workdir=Path(tmp) / "hc")
+        env_without = {k: v for k, v in os.environ.items()
+                       if k not in ("FLEET_HUB_URL", "FLEET_CODE_URL")}
+        with mock.patch.dict(os.environ, env_without, clear=True):
+            env = fleetd._spawn_env(hub)
+        self.assertEqual(env["FLEET_HUB_URL"], hub.url)
+        self.assertEqual(env["FLEET_CODE_URL"], hub.code_url)  # defaults to hub.url
+
+
+class TestSpawnEnv(FleetdBase):
+    """B4 (Stage 1 integration review): fleetd must build the spawned
+    gate/agent's environment EXPLICITLY from the `Hub` it is actually
+    using, not rely on `subprocess.Popen`'s default full inheritance of
+    fleetd's own `os.environ` -- because a fleetd started `--hub X --code
+    Y` on argv alone never writes FLEET_HUB_URL/FLEET_CODE_URL into its
+    own environment in the first place, so plain inheritance hands the
+    child neither."""
+
+    def make_env_dump_gate(self):
+        """A stub 'gate' that records the two vars of interest to a file
+        before parking, so the test can read back exactly what the
+        subprocess saw -- not what this test process happens to have set."""
+        stub = self.tmp / "stub-env-gate.sh"
+        stub.write_text(
+            "#!/bin/bash\n"
+            f'env | grep -E "^FLEET_(HUB|CODE)_URL=" > "{self.tmp}/envdump-$2.txt"\n'
+            f'STOP="{self.tmp}/stop-$2"\n'
+            'while [ ! -f "$STOP" ]; do sleep 0.2; done\n'
+            "exit 0\n"
+        )
+        stub.chmod(0o755)
+        return stub
+
+    def _read_dump(self, tag: str) -> str:
+        dump = self.tmp / f"envdump-{tag}.txt"
+        deadline = time.time() + 10
+        while time.time() < deadline and not dump.exists():
+            time.sleep(0.1)
+        self.assertTrue(dump.exists(), f"spawned process never wrote {dump}")
+        return dump.read_text()
+
+    def test_start_gate_env_carries_hub_and_code_url_given_only_argv_config(self):
+        """Simulates `fleetd --hub <state> --code <code>`: a `Hub` with a
+        `code_url` distinct from `url` (exactly what `main` builds from
+        `args.hub`/`args.code`), and neither FLEET_HUB_URL nor
+        FLEET_CODE_URL present anywhere in this process's OWN environment
+        -- proving the child's config came from the `Hub` object, not from
+        ambient inheritance."""
+        distinct_code_url = str(self.tmp / "distinct-code.git")
+        hub = Hub(str(self.bare), workdir=self.tmp / "hubcache-spawnenv",
+                  code_url=distinct_code_url)
+        saved = {k: os.environ.pop(k, None) for k in ("FLEET_HUB_URL", "FLEET_CODE_URL")}
+        self.addCleanup(lambda: [os.environ.__setitem__(k, v) for k, v in saved.items()
+                                  if v is not None])
+        self.assertNotIn("FLEET_HUB_URL", os.environ)
+        self.assertNotIn("FLEET_CODE_URL", os.environ)
+
+        gate = self.make_env_dump_gate()
+        w = fleetd.start_gate(hub, "staging/one", "envtag1", [str(gate)],
+                               self.host, self.tmp / "logs")
+        self.assertIsNotNone(w, "claim must succeed against the fixture hub")
+        self.workers.append(w)
+
+        content = self._read_dump("envtag1")
+        self.assertIn(f"FLEET_HUB_URL={hub.url}\n", content)
+        self.assertIn(f"FLEET_CODE_URL={distinct_code_url}\n", content)
+
+    def test_start_agent_env_carries_hub_and_code_url_given_only_argv_config(self):
+        """`start_agent` builds its own argv (`sys.executable`,
+        `agentworker.py`, ...) internally, so this proves the Popen call's
+        environment the same way `test_start_gate_...` does -- by making
+        the subprocess itself dump the two vars -- rather than by actually
+        running agentworker.py (covered elsewhere, e.g. `TestAgentSlots`):
+        `sys.executable` is swapped for a wrapper that dumps env and exits,
+        never reaching the real interpreter or agentworker.py's own logic.
+        """
+        distinct_code_url = str(self.tmp / "distinct-code-agent.git")
+        hub = Hub(str(self.bare), workdir=self.tmp / "hubcache-spawnenv-agent",
+                  code_url=distinct_code_url)
+        saved = {k: os.environ.pop(k, None) for k in ("FLEET_HUB_URL", "FLEET_CODE_URL")}
+        self.addCleanup(lambda: [os.environ.__setitem__(k, v) for k, v in saved.items()
+                                  if v is not None])
+
+        wrapper = self.tmp / "sys-executable-env-dump.sh"
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            f'env | grep -E "^FLEET_(HUB|CODE)_URL=" > "{self.tmp}/envdump-agent1.txt"\n'
+            "exit 0\n"
+        )
+        wrapper.chmod(0o755)
+
+        import unittest.mock as mock
+        with mock.patch.object(fleetd.sys, "executable", str(wrapper)):
+            w = fleetd.start_agent(hub, "staging/one", "agent1", self.host,
+                                    self.tmp / "logs", Path(__file__).resolve().parents[3])
+        self.assertIsNotNone(w, "claim must succeed against the fixture hub")
+        self.workers.append(w)
+
+        content = self._read_dump("agent1")
+        self.assertIn(f"FLEET_HUB_URL={hub.url}\n", content)
+        self.assertIn(f"FLEET_CODE_URL={distinct_code_url}\n", content)
 
 
 class TestDesiredCAS(FleetdBase):
