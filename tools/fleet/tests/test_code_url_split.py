@@ -1147,6 +1147,17 @@ class TestAgentworkerClonesCode(_FixtureCase):
         self._saved_cli = os.environ.get("FLEET_AGENT_CLI_OVERRIDE")
         os.environ["FLEET_AGENT_CLI_OVERRIDE"] = "/usr/bin/true"
         self.addCleanup(self._restore_cli)
+        # R7 (review finding): agentworker.run() hardcodes
+        # `Path.home() / ".fleetd" / "agentcache"` as its Hub workdir, so
+        # every test in this class was writing into the REAL
+        # ~/.fleetd/agentcache on whatever machine ran the suite.
+        # Redirect HOME into this fixture's own tempdir instead, same
+        # convention test_bringup_split.py uses for its subprocess env.
+        self._agent_home = self.tmp / "agent-home"
+        self._agent_home.mkdir()
+        self._home_patch = mock.patch.dict(os.environ, {"HOME": str(self._agent_home)})
+        self._home_patch.start()
+        self.addCleanup(self._home_patch.stop)
 
     def _restore_cli(self):
         if self._saved_cli is None:

@@ -13,33 +13,61 @@ branches) and makes the oracle cache directory `EXIFTOOL_CACHE_DIR`-
 overridable; this test is the mechanical fence that keeps either literal
 from creeping back into the files this task fixed.
 
-SCOPE, DELIBERATELY NARROW. This scans exactly `gate.sh`, `fleetd.py`,
-`agentworker.py`, and every file under `units/` -- the runtime-config
-surface this task and the M2 follow-up actually touched -- not the whole
-`tools/fleet` tree. Three classes of pre-existing, *intentional* literal
-reference live elsewhere (or, for class 3, on one specific line here) and
-must not be flagged:
-  1. `ledger.py`/`doctor.py` already read `EXIFTOOL_CACHE_DIR` with the
-     same literal fallback (kept as-is per the reuse map; not part of
-     this task) -- neither file is in `_candidate_files()` at all.
-  2. Half the test suite (`test_fleetlib.py`, `test_claim.py`,
+R6 (review of `staging/agent-server` @ 99f06cb3) widened this fence twice
+over, after `doctor.py`/`ledger.py` and `fleetd.py`/`gate.sh` were each
+found holding their own copy of the oracle-cache default:
+  * `doctor.py`/`ledger.py` are now scanned like any other candidate file
+    (they used to be exempted outright -- class 1 below no longer
+    exists). Both now import `tools/fleet/config.py`'s
+    `exiftool_cache_dir()`/`DEFAULT_EXIFTOOL_CACHE_DIR` instead of
+    spelling the literal a second and third time, so they score zero
+    hits without any file-specific exemption.
+  * The forbidden cache-dir needle is now the BASENAME
+    (`oxidex-exiftool-cache`), not the full `/tmp/...` path, specifically
+    to catch a "two-piece assembly" idiom -- splitting the basename into
+    its own variable and reconstructing `f"/tmp/{basename}"` /
+    `"/tmp/$basename"` elsewhere -- that is functionally identical to the
+    literal but was written specifically to dodge a substring search for
+    the whole path (see `fleetd.py`'s own `_exiftool_cache_dir()`
+    docstring, which says as much: "Built from two pieces ... so this
+    line is not itself a hardcoded-host match"). A basename assignment is
+    exactly as much a hardcode as the full literal it reassembles into,
+    and this fence now treats it as one.
+  * `tools/fleet/config.py` (imported, not scanned) and
+    `units/fleet-env.sh` (sourced, not scanned) are the ONLY two places
+    the basename may be written out as a value -- `test_config_and_
+    fleet_env_agree_on_the_default` below pins them against each other so
+    they cannot silently drift apart into two different defaults.
+
+SCOPE. This scans `gate.sh`, `fleetd.py`, `agentworker.py`, `doctor.py`,
+`ledger.py`, and every file under `units/` EXCEPT `fleet-env.sh` -- the
+runtime-config surface this task, the M2 follow-up, and R6 actually
+touched -- not the whole `tools/fleet` tree, and not `config.py`/
+`fleet-env.sh` themselves (the one place each literal is allowed to live).
+Two classes of pre-existing, *intentional* literal reference live
+elsewhere (or, for class 2, on one specific line here) and must not be
+flagged:
+  1. Half the test suite (`test_fleetlib.py`, `test_claim.py`,
      `test_queue.py`, ...) asserts `assertNotIn("work2.oxidex.net",
      resolved)` as a fixture-isolation guard -- the string appears there
      as a *negative* to check against, never as a value anything
      connects to. Scanning `tests/` would flag the safety net, not a
      regression.
-  3. `agentworker.py` gained the identical `CACHE_DIR = os.environ.get(
+  2. `agentworker.py` gained the identical `CACHE_DIR = os.environ.get(
      "EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache")` idiom (M2) so its
      prompt strings could stop hardcoding the path four times over --
-     unlike class 1, this file IS scanned (that hardcoding was the M2
-     review finding), so `_scan` exempts only the one line carrying that
-     exact idiom, via `_CACHE_DIR_DEFAULT_IDIOM` below. Every other
-     occurrence in the file -- in particular every prompt string -- is
-     still forbidden outside a comment.
+     this file IS scanned (that hardcoding was the M2 review finding), so
+     `_scan` exempts only the one line carrying that exact idiom, via
+     `_CACHE_DIR_DEFAULT_IDIOM` below. Every other occurrence in the file
+     -- in particular every prompt string -- is still forbidden outside a
+     comment. (Migrating this file's idiom onto `config.py` the way
+     `doctor.py`/`ledger.py` were is a separate, not-yet-scoped cleanup;
+     the exemption keeps this fence from flagging a file nobody has
+     touched for this task.)
 A file-scope fence beats a tree-wide grep here: it catches the real
-regression (one of these three literals reappearing in the config surface
-that ships to a host) without producing noise on code that has a
-legitimate, different reason to hold the same substring.
+regression (one of these needles reappearing in the config surface that
+ships to a host) without producing noise on code that has a legitimate,
+different reason to hold the same substring.
 
 "Outside comment lines": a comment line (`#`-prefixed for the shell/
 Python/ini/crontab files here, `<!-- ... -->` for the one XML file) may
@@ -62,33 +90,61 @@ from pathlib import Path
 FLEET_DIR = Path(__file__).resolve().parents[1]  # tools/fleet
 REPO_ROOT = FLEET_DIR.parents[1]
 
-# The exact three strings named in PLAN Stage 1 task 4. Plain substrings,
-# not a regex -- these are literal hostnames/paths, and treating them as
-# regex would risk "." matching more than intended.
+# R6: the two canonical files the oracle-cache default is allowed to live
+# in -- imported/sourced by every consumer, never re-derived. Excluded
+# from `_candidate_files()` by name (not scanned at all), the same way
+# this module's own PLAN-era predecessor never scanned itself.
+_CANONICAL_CACHE_DIR_DEFAULT_FILES = ("config.py", "fleet-env.sh")
+
+# The exact strings named in PLAN Stage 1 task 4, widened by R6. Plain
+# substrings, not a regex -- these are literal hostnames/paths (or, for
+# the cache dir, the literal's invariant BASENAME -- see module
+# docstring), and treating them as regex would risk "." matching more
+# than intended. The basename form (not the full "/tmp/..." path) is
+# deliberate: it is the one substring common to both the straight literal
+# AND a "two-piece assembly" that splits the basename into its own
+# variable and reconstructs the path elsewhere specifically to dodge a
+# full-path substring search -- see `test_two_piece_basename_assembly_
+# is_still_caught` below for the shape this is aimed at.
 _FORBIDDEN = (
     "work2.oxidex.net",
     "/home/allen/git/oxidex.git",
-    "/tmp/oxidex-exiftool-cache",
+    "oxidex-exiftool-cache",
 )
 
-# Class 3's single exempted line (see module docstring): the same
-# `EXIFTOOL_CACHE_DIR`-with-fallback idiom `doctor.py`/`ledger.py` already
-# use, deliberately kept in `agentworker.py` as the one live definition its
-# prompt strings interpolate from. A line matching this exact idiom is not
-# a hardcode creeping back in -- it is the fix. Anything else containing a
-# `_FORBIDDEN` string, in this file or any other candidate, still fails.
+# Class 2's single exempted line (see module docstring): the same
+# `EXIFTOOL_CACHE_DIR`-with-fallback idiom, deliberately kept in
+# `agentworker.py` as the one live definition its prompt strings
+# interpolate from (not yet migrated onto `config.py`; out of scope for
+# this fence's owning task). A line matching this exact idiom is not a
+# hardcode creeping back in -- it is the fix M2 landed. Anything else
+# containing a `_FORBIDDEN` string, in this file or any other candidate,
+# still fails.
 _CACHE_DIR_DEFAULT_IDIOM = 'os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache")'
 
 
 def _candidate_files():
-    """gate.sh, fleetd.py, agentworker.py, and every file directly under
-    units/ -- the runtime-config surface PLAN Stage 1 task 4 and the M2
-    follow-up de-hardcoded. Sorted for a deterministic scan order and
-    failure message.
+    """gate.sh, fleetd.py, agentworker.py, doctor.py, ledger.py, and
+    every file directly under units/ except fleet-env.sh (the canonical
+    shell definition -- see `_CANONICAL_CACHE_DIR_DEFAULT_FILES`) -- the
+    runtime-config surface PLAN Stage 1 task 4, the M2 follow-up, and R6
+    de-hardcoded. Sorted for a deterministic scan order and failure
+    message.
     """
-    files = [FLEET_DIR / "gate.sh", FLEET_DIR / "fleetd.py", FLEET_DIR / "agentworker.py"]
+    files = [
+        FLEET_DIR / "gate.sh",
+        FLEET_DIR / "fleetd.py",
+        FLEET_DIR / "agentworker.py",
+        FLEET_DIR / "doctor.py",
+        FLEET_DIR / "ledger.py",
+    ]
     units_dir = FLEET_DIR / "units"
-    files.extend(sorted(p for p in units_dir.iterdir() if p.is_file()))
+    files.extend(
+        sorted(
+            p for p in units_dir.iterdir()
+            if p.is_file() and p.name not in _CANONICAL_CACHE_DIR_DEFAULT_FILES
+        )
+    )
     return files
 
 
@@ -133,7 +189,7 @@ def _strip_comments(path: Path, text: str):
 
 def _scan(path: Path):
     """(lineno, line_text, matched_string) for every forbidden literal
-    found on a non-comment line of `path`, excluding class 3's single
+    found on a non-comment line of `path`, excluding class 2's single
     exempted idiom line (module docstring).
     """
     hits = []
@@ -172,12 +228,21 @@ class TestNoHardcodedHosts(unittest.TestCase):
         """
         files = _candidate_files()
         self.assertGreaterEqual(
-            len(files), 3 + 3,
-            f"expected at least gate.sh + fleetd.py + agentworker.py + the 3 "
-            f"known units/ files, got {[str(p) for p in files]}",
+            len(files), 5 + 3,
+            f"expected at least gate.sh + fleetd.py + agentworker.py + "
+            f"doctor.py + ledger.py + the 3 known units/ files "
+            f"(fleet-env.sh deliberately excluded -- it is the canonical "
+            f"definition, not a consumer), got {[str(p) for p in files]}",
         )
         for path in files:
             self.assertTrue(path.is_file(), f"candidate file missing: {path}")
+        names = {p.name for p in files}
+        self.assertNotIn(
+            "fleet-env.sh", names,
+            "fleet-env.sh is the canonical shell definition of the cache-dir "
+            "default (R6) -- it must be excluded from the scan, not merely "
+            "pass it, or the fence would forbid its own only legal home",
+        )
 
     def test_detector_catches_a_known_shape_and_ignores_comments(self):
         """Sanity check on the detector itself, independent of the current
@@ -207,12 +272,12 @@ class TestNoHardcodedHosts(unittest.TestCase):
         self.assertEqual(len(hits), 1, "a live (non-comment) XML line must NOT be excluded")
 
     def test_cache_dir_default_idiom_is_the_only_exemption(self):
-        """Class 3 (module docstring): the exact `os.environ.get(
+        """Class 2 (module docstring): the exact `os.environ.get(
         "EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache")` line is
         exempted -- but ONLY that idiom, not merely proximity to
         `EXIFTOOL_CACHE_DIR` or the word `os.environ`. A near-miss (a
         prompt string that happens to mention the env var name while still
-        spelling out the raw path) must still be caught, or class 3 would
+        spelling out the raw path) must still be caught, or class 2 would
         silently swallow the very literal M2 exists to catch in
         `agentworker.py`'s prompt strings.
         """
@@ -249,6 +314,89 @@ class TestNoHardcodedHosts(unittest.TestCase):
             len(idiom_hits), 1,
             f"expected exactly one CACHE_DIR default-idiom line in agentworker.py, found {idiom_hits}",
         )
+
+    def test_two_piece_basename_assembly_is_still_caught(self):
+        """R6's whole point: splitting the basename into its own variable
+        and reconstructing the path elsewhere is not a way around this
+        fence. Both real shapes this was found in -- `fleetd.py`'s
+        Python f-string and `gate.sh`'s shell parameter expansion --
+        never spell `/tmp/oxidex-exiftool-cache` as one contiguous
+        literal, yet both must still be caught.
+        """
+        py_shape = (
+            '    default_basename = "oxidex-exiftool-cache"\n'
+            '    return Path(os.environ.get("EXIFTOOL_CACHE_DIR", f"/tmp/{default_basename}"))\n'
+        )
+        hits = list(_strip_comments(FLEET_DIR / "fleetd.py", py_shape))
+        needled = [(lineno, line, needle)
+                   for lineno, line in hits
+                   for needle in _FORBIDDEN if needle in line]
+        self.assertEqual(
+            len(needled), 1,
+            "the basename-assignment line of a two-piece Python assembly must "
+            "be flagged even though '/tmp/oxidex-exiftool-cache' never appears "
+            "as one contiguous substring anywhere in it",
+        )
+        self.assertIn("oxidex-exiftool-cache", needled[0][1])
+
+        sh_shape = (
+            ': "${_OXIDEX_CACHE_BASENAME:=oxidex-exiftool-cache}"\n'
+            'export EXIFTOOL_CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/tmp/$_OXIDEX_CACHE_BASENAME}"\n'
+        )
+        hits = list(_strip_comments(FLEET_DIR / "gate.sh", sh_shape))
+        needled = [(lineno, line, needle)
+                   for lineno, line in hits
+                   for needle in _FORBIDDEN if needle in line]
+        self.assertEqual(
+            len(needled), 1,
+            "the basename-assignment line of a two-piece shell assembly must "
+            "be flagged the same way",
+        )
+        self.assertIn("_OXIDEX_CACHE_BASENAME:=oxidex-exiftool-cache", needled[0][1])
+
+    def test_doctor_and_ledger_score_zero_hits(self):
+        """R6: both files used to spell the literal directly; both now
+        import `config.exiftool_cache_dir()` instead. A hit here means
+        one of them regressed back to a local literal (or a new one crept
+        in some other line) -- the whole reason R6 added them to
+        `_candidate_files()` in the first place.
+        """
+        for name in ("doctor.py", "ledger.py"):
+            path = FLEET_DIR / name
+            hits = _scan(path)
+            self.assertEqual(hits, [], f"{name} should have zero forbidden-literal hits: {hits}")
+            self.assertIn(
+                "config.exiftool_cache_dir()", path.read_text(),
+                f"{name} should source the cache dir from config.py, not a local literal",
+            )
+
+    def test_config_and_fleet_env_agree_on_the_default(self):
+        """The two canonical definitions (module docstring) must spell the
+        IDENTICAL default -- both are excluded from the substring fence
+        above precisely because they are allowed to hold the literal, so
+        this is the one place their agreement is actually checked. A
+        divergence here is invisible to every consumer (each reads its
+        own file and never compares) until two hosts disagree on which
+        cache directory is the default.
+        """
+        import re
+
+        config_src = (FLEET_DIR / "config.py").read_text()
+        m = re.search(r'^DEFAULT_EXIFTOOL_CACHE_DIR = "([^"]+)"', config_src, re.MULTILINE)
+        self.assertIsNotNone(m, "config.py must define DEFAULT_EXIFTOOL_CACHE_DIR as a plain string literal")
+        py_default = m.group(1)
+
+        sh_src = (FLEET_DIR / "units" / "fleet-env.sh").read_text()
+        m = re.search(r'EXIFTOOL_CACHE_DIR:=([^}]+)\}', sh_src)
+        self.assertIsNotNone(m, "units/fleet-env.sh must set an EXIFTOOL_CACHE_DIR default via ${VAR:=...}")
+        sh_default = m.group(1)
+
+        self.assertEqual(
+            py_default, sh_default,
+            f"config.py's DEFAULT_EXIFTOOL_CACHE_DIR ({py_default!r}) and "
+            f"units/fleet-env.sh's default ({sh_default!r}) have drifted apart",
+        )
+        self.assertEqual(py_default, "/tmp/oxidex-exiftool-cache")
 
 
 if __name__ == "__main__":
