@@ -249,11 +249,11 @@ export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:$HOME/.cargo/bin:$HOME/.local
 unset RUSTC_WRAPPER
 export CARGO_INCREMENTAL=0
 # PLAN Stage 1 task 4: EXIFTOOL_CACHE_DIR overrides the pinned-oracle
-# cache directory; unset keeps today's exact default. Built from two
-# pieces (never one contiguous literal) so this line is not itself a
-# hardcoded-host match -- see test_no_hardcoded_hosts.py.
-: "${_OXIDEX_CACHE_BASENAME:=oxidex-exiftool-cache}"
-export EXIFTOOL_CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/tmp/$_OXIDEX_CACHE_BASENAME}"
+# cache directory; unset keeps today's exact default, which lives in ONE
+# shell file (units/fleet-env.sh, mirrored by config.py for Python) -- R6:
+# this used to be a two-piece reassembly written to dodge
+# test_no_hardcoded_hosts.py.
+. "$SELF_DIR/units/fleet-env.sh"
 export EXIFTOOL="$EXIFTOOL_CACHE_DIR/exiftool-pinned.sh"
 export CARGO_TARGET_DIR="$HOME/tgt/nc-$TAG"
 export OXIDEX="$CARGO_TARGET_DIR/release/oxidex"

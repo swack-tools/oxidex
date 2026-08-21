@@ -70,15 +70,16 @@ class DriftHookTestCase(unittest.TestCase):
         self.assertNotIn("work2.oxidex.net", resolved)
 
     def _install_hook(self):
-        """Copy hooks/post-receive + drift.py + fleetlib.py into the
-        fixture hub's hooks/ dir, exactly as the T1.3 install
-        instructions describe -- but ONLY into this throwaway repo, never
-        the real hub.
+        """Copy hooks/post-receive + drift.py + fleetlib.py + config.py
+        (fleetlib's sibling import) into the fixture hub's hooks/ dir,
+        exactly as the T1.3 install instructions describe -- but ONLY
+        into this throwaway repo, never the real hub.
         """
         hooks_dir = Path(self.hub_path) / "hooks"
         shutil.copy2(HOOK_SCRIPT, hooks_dir / "post-receive")
         shutil.copy2(FLEET_DIR / "drift.py", hooks_dir / "drift.py")
         shutil.copy2(FLEET_DIR / "fleetlib.py", hooks_dir / "fleetlib.py")
+        shutil.copy2(FLEET_DIR / "config.py", hooks_dir / "config.py")
         target = hooks_dir / "post-receive"
         target.chmod(target.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 

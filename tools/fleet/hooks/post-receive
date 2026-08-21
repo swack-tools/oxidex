@@ -21,12 +21,14 @@
 #   cp tools/fleet/hooks/post-receive  <bare-repo>.git/hooks/post-receive
 #   cp tools/fleet/drift.py            <bare-repo>.git/hooks/drift.py
 #   cp tools/fleet/fleetlib.py         <bare-repo>.git/hooks/fleetlib.py
+#   cp tools/fleet/config.py           <bare-repo>.git/hooks/config.py
 #   chmod +x <bare-repo>.git/hooks/post-receive
 #
 # drift.py imports fleetlib.py by path (see drift.py's own
-# `sys.path.insert(0, ...)` at import time), so the two must sit side by
-# side in the hooks/ directory -- that's why both are copied, not just
-# the hook script.
+# `sys.path.insert(0, ...)` at import time), and fleetlib.py imports its
+# sibling config.py (the one place fleet-wide defaults are spelled), so
+# the three must sit side by side in the hooks/ directory -- that's why
+# all of them are copied, not just the hook script.
 #
 # `fleetlib.py` is only present here so `drift.py` can `import fleetlib`
 # without error; the hook only ever calls `bump_tip_signal`, which talks

@@ -61,6 +61,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import config
 import dispatch
 from fleetlib import Hub
 
@@ -73,8 +74,9 @@ TIP_REF = "refs/heads/refactor/tag-machinery"
 # stale literal to hide than a script default (an agent that trusts the
 # prompt verbatim runs a shell command against a path that only happens to
 # be right on hosts using the fallback). `tests/test_no_hardcoded_hosts.py`
-# scans this file's non-idiom lines for the literal to keep it that way.
-CACHE_DIR = os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache")
+# scans this file for the literal to keep it that way; the default itself
+# is spelled once, in `config.py` (R6).
+CACHE_DIR = str(config.exiftool_cache_dir())
 
 # Exit codes with meaning to fleetd's attempt ledger (see module docstring
 # and `dispatch.record_outcome`). 0 is progress; everything else is not.

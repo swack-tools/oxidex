@@ -102,6 +102,7 @@ fi
 act cp "$SRC_DIR/hooks/post-receive" "$FLEET_HALF"
 act cp "$SRC_DIR/drift.py" "$HOOKS/drift.py"
 act cp "$SRC_DIR/fleetlib.py" "$HOOKS/fleetlib.py"
+act cp "$SRC_DIR/config.py" "$HOOKS/config.py"   # fleetlib imports its sibling config.py
 
 if [[ "$EXECUTE" == "--execute" ]]; then
     cat > "$WRAPPER" <<'WRAP'

@@ -20,7 +20,8 @@ as easy to miss as a byte-for-byte duplicate.
 
 This module (Python) and `units/fleet-env.sh` (shell, sourced rather than
 imported) are the ONLY two places `DEFAULT_EXIFTOOL_CACHE_DIR`'s value is
-allowed to be written out. Every other file imports one or sources the
+allowed to be written out, and this module is the only place the default
+PAT path (`DEFAULT_GIT_TOKEN_FILE_REL`, R2) is spelled. Every other file imports one or sources the
 other instead of re-deriving it -- enforced by
 `tests/test_no_hardcoded_hosts.py`, which now also forbids the two-piece
 idiom, not just the single contiguous literal.
@@ -57,21 +58,31 @@ def exiftool_cache_dir() -> Path:
 # step (install_secrets.sh, seed_desired.py, `fleet up`, `fleet status
 # --why`, a hand-started fleetd) that forgets to export it silently loses
 # the credential. `tools/fleet/rollout/install_secrets.sh` already
-# defaults its own `--token-file` to this exact path; this constant lets
-# `doctor.py`'s health check (and, per R2, eventually
-# `fleetlib.credential_env` itself -- out of scope for this change) agree
-# with that default instead of re-spelling it.
+# defaults its own `--token-file` to this exact path; this constant is
+# the ONE place the path is spelled. `fleetlib.git_token_file()` (the
+# resolver every git spawner and `doctor.py` go through) and
+# `fleetlib.credential_env` read it from here, so a host that ran
+# `install_secrets.sh` and never exported the variable still
+# authenticates.
 # ---------------------------------------------------------------------
 
+# Relative to $HOME, resolved per call (never at import) so a test that
+# redirects HOME is actually hermetic. Matches
+# `rollout/install_secrets.sh`'s `token_file` default and the three unit
+# templates byte for byte.
+DEFAULT_GIT_TOKEN_FILE_REL = ".keel/secrets/git-token"
 
-def default_git_token_file() -> Path:
-    """``~/.keel/secrets/git-token`` -- the exact path
+
+def default_git_token_file(env: "dict | None" = None) -> Path:
+    """``$HOME/.keel/secrets/git-token`` -- the exact path
     `install_secrets.sh` defaults ``--token-file`` to and every
     `units/*` template sets ``FLEET_GIT_TOKEN_FILE`` to.
 
-    ``$HOME`` overrides for hermetic tests (same convention `doctor.py`'s
-    `check_disk()` already uses), falling back to `Path.home()` only when
-    unset.
+    ``HOME`` is read from `env` (default `os.environ`) rather than through
+    `Path.home()` so that `fleetlib.credential_env(some_dict)` answers
+    about the environment it was HANDED, not about the process that
+    called it; an unset ``HOME`` falls back to `os.path.expanduser`.
     """
-    home = Path(os.environ.get("HOME", str(Path.home())))
-    return home / ".keel" / "secrets" / "git-token"
+    src = os.environ if env is None else env
+    home = src.get("HOME") or os.path.expanduser("~")
+    return Path(home) / DEFAULT_GIT_TOKEN_FILE_REL

@@ -99,6 +99,7 @@ import claim as claim_mod
 import dispatch as dispatch_mod
 import verdict
 import workqueue
+import config
 from claim import Claim, compute_platform_id, compute_rustc_id
 from fleetlib import Hub, HubError, HubUnreachableError
 
@@ -2135,13 +2136,13 @@ def reconcile_once(
 
 def _exiftool_cache_dir() -> Path:
     """PLAN Stage 1 task 4: EXIFTOOL_CACHE_DIR overrides the pinned-oracle
-    cache directory; unset keeps today's exact default. The default is
-    built from two pieces (never one contiguous literal) so this line is
-    not itself a hardcoded-host match -- see
-    tools/fleet/tests/test_no_hardcoded_hosts.py -- and matches the same
-    default ledger.py/doctor.py already use."""
-    default_basename = "oxidex-exiftool-cache"
-    return Path(os.environ.get("EXIFTOOL_CACHE_DIR", f"/tmp/{default_basename}"))
+    cache directory; unset keeps today's exact default, which is spelled
+    in exactly one place (`config.DEFAULT_EXIFTOOL_CACHE_DIR`, mirrored
+    by `units/fleet-env.sh` for gate.sh) -- R6: this function used to
+    reassemble the literal from two pieces to dodge
+    tools/fleet/tests/test_no_hardcoded_hosts.py, which now forbids that
+    idiom too."""
+    return Path(os.environ.get("EXIFTOOL_CACHE_DIR", config.DEFAULT_EXIFTOOL_CACHE_DIR))
 
 
 def _oracle_ok() -> Optional[bool]:

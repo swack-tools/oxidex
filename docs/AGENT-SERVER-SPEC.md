@@ -362,14 +362,16 @@ judgement that was wrong the first time.
 after a full train run — the second matters because `refs/fleet/*` carries `user@host:pid`
 provenance and the code repo is public (§8).
 
-**`cli.py` is NOT coordination-only, and earlier drafts of this row said it was.** `cli.py:48-53`
-(`_hub`) builds its `Hub` from `--hub`/`FLEET_HUB_URL` alone, with no `code_url`, and
-`cli.cmd_status` (`cli.py:277`) then calls `workqueue.Queue(hub).compute()` — a CODE read. On a
-split spine that asks the state repo for the tip, gets `None`, and prints
+**`cli.py` is NOT coordination-only, and earlier drafts of this row said it was.** `cli._hub`
+(`cli.py:60`) used to build its `Hub` from `--hub`/`FLEET_HUB_URL` alone, with no `code_url`,
+while `cli.cmd_status` (`cli.py:239`) calls `workqueue.Queue(hub).compute()` — a CODE read. On a
+split spine that asked the state repo for the tip, got `None`, and printed
 `QUEUE error: tip ref … does not exist on the code repo <state repo>` on every invocation, with
-no flag or variable able to fix it. The CLI therefore needs the same `--code` / `FLEET_CODE_URL`
-plumbing as `fleetd` and `train`; its *writes* remain coordination-only (`_edit_desired` and the
-claim/heartbeat reads all sit on `url`).
+no flag or variable able to fix it (R1). `_hub` now passes `Hub(code_url=--code or
+FLEET_CODE_URL)` (`cli.py:72`; the global flag at `cli.py:346` mirrors `fleetd --code`), and
+`tests/test_cli.py::TestStatusCodeUrlPlumbing` pins flag, env fallback, flag-over-env precedence
+and the still-broken-if-unconfigured case against two real bare repos. The CLI's *writes* remain
+coordination-only (`_edit_desired` and the claim/heartbeat reads all sit on `url`).
 
 **Neither.** `train._fetch_into_hub_cache` (`train.py:677`) is a LOCAL fetch from the train's
 working clone into `hub.workdir`; it names no remote. It is cited in earlier drafts of this section
@@ -629,9 +631,12 @@ server resume without re-reporting.
   token from the file named by `FLEET_GIT_TOKEN_FILE` (HTTPS; the 1Password ssh agent is out of
   the path entirely).
 
-  **The PAT path has a default, and it is `~/.keel/secrets/git-token`** —
+  **The PAT path has a default, and it is `~/.keel/secrets/git-token`** — spelled once, as
+  `config.DEFAULT_GIT_TOKEN_FILE_REL` (`tools/fleet/config.py`, the same module that owns the
+  `EXIFTOOL_CACHE_DIR` default; `units/fleet-env.sh` is its shell mirror for `gate.sh`).
   `fleetlib.git_token_file()` returns `FLEET_GIT_TOKEN_FILE` when set and otherwise that path when
-  the file exists and is readable, and `credential_env` exports the resolved value so the helper
+  the file exists and is readable (`doctor.py`'s `check_git_token_file` asks the same resolver, so
+  the health check and the daemon cannot disagree), and `credential_env` exports the resolved value so the helper
   subprocess (a separate process, which reads the path from its own environment) sees it. This is
   where `rollout/install_secrets.sh` writes it (0600) and what all three unit templates
   (`units/fleetd.service:36`, `com.oxidex.fleetd.plist:33-34`, `cron-backstop.txt:62`) set the
@@ -691,7 +696,7 @@ server resume without re-reporting.
 
 | file | disposition | notes / reason |
 |---|---|---|
-| `fleetlib.py` (594) | **keep as-is** + `code_url` attr (default `url`), credential-helper env in `_raw_run` (L575), `fetch_namespace(prefix)` helper, `_TRANSPORT_HINTS` (L97) += `rate limit`, `secondary rate`, `abuse detection` so a 429 raises instead of reading as a lost race | it *is* the spine client; CAS proven at the git level (`test_fleetlib.TestCreate` raw-git proofs) |
+| `fleetlib.py` (1239) | **keep as-is** + `code_url`/`code_push_url`/`tip_push_url` attrs (each defaulting to the one before it), `push_tip_ref` (the one deploy-key push) beside `push_code_ref`/`delete_code_ref` (PAT over HTTPS), credential-helper env in the module-level `run_git` (L476; `Hub._raw_run` and `workqueue.Queue._git` delegate to it) reading `git_token_file()` (L243: `FLEET_GIT_TOKEN_FILE`, else `config.DEFAULT_GIT_TOKEN_FILE_REL` under `$HOME` when present), `fetch_namespace(prefix)` helper, `_TRANSPORT_HINTS` (L101) += `rate limit`, `secondary rate`, `abuse detection` so a 429 raises instead of reading as a lost race | it *is* the spine client; CAS proven at the git level (`test_fleetlib.TestCreate` raw-git proofs) |
 | `claim.py` (898) | **keep as-is**; `kind="server"` is just a string | renewer-owned-by-acquire, ownership token, `lost` semantics, `adopt`, reap — the core; seam-tested |
 | `verdict.py` (286) | **keep**; CLI gains `--server-url` (builds `FallbackHub`) | only thing `gate.sh` knows about the cache (L238-260) |
 | `workqueue.py` (254) | **keep**; `_fetch_for_ancestry` uses `hub.code_url` (1 line) | formula FREE; never a local queue file |

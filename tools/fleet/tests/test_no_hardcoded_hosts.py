@@ -44,26 +44,25 @@ SCOPE. This scans `gate.sh`, `fleetd.py`, `agentworker.py`, `doctor.py`,
 runtime-config surface this task, the M2 follow-up, and R6 actually
 touched -- not the whole `tools/fleet` tree, and not `config.py`/
 `fleet-env.sh` themselves (the one place each literal is allowed to live).
-Two classes of pre-existing, *intentional* literal reference live
-elsewhere (or, for class 2, on one specific line here) and must not be
-flagged:
+One class of pre-existing, *intentional* literal reference lives
+elsewhere and must not be flagged (a second class used to, and is
+recorded below because its retirement is what closed the last hole):
   1. Half the test suite (`test_fleetlib.py`, `test_claim.py`,
      `test_queue.py`, ...) asserts `assertNotIn("work2.oxidex.net",
      resolved)` as a fixture-isolation guard -- the string appears there
      as a *negative* to check against, never as a value anything
      connects to. Scanning `tests/` would flag the safety net, not a
      regression.
-  2. `agentworker.py` gained the identical `CACHE_DIR = os.environ.get(
-     "EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache")` idiom (M2) so its
-     prompt strings could stop hardcoding the path four times over --
-     this file IS scanned (that hardcoding was the M2 review finding), so
-     `_scan` exempts only the one line carrying that exact idiom, via
-     `_CACHE_DIR_DEFAULT_IDIOM` below. Every other occurrence in the file
-     -- in particular every prompt string -- is still forbidden outside a
-     comment. (Migrating this file's idiom onto `config.py` the way
-     `doctor.py`/`ledger.py` were is a separate, not-yet-scoped cleanup;
-     the exemption keeps this fence from flagging a file nobody has
-     touched for this task.)
+  2. (Retired.) `agentworker.py` used to carry the identical
+     `CACHE_DIR = os.environ.get("EXIFTOOL_CACHE_DIR",
+     "/tmp/oxidex-exiftool-cache")` idiom (M2) so its prompt strings
+     could stop hardcoding the path four times over, and `_scan`
+     exempted that one line. It now reads `config.exiftool_cache_dir()`
+     like `doctor.py`/`ledger.py`, so NO line in any scanned file is
+     exempted any more: `_CACHE_DIR_DEFAULT_IDIOM` below survives only as
+     the shape `test_cache_dir_default_idiom_is_no_longer_exempted` pins
+     as forbidden. Every occurrence in `agentworker.py` -- in particular
+     every prompt string -- is forbidden outside a comment.
 A file-scope fence beats a tree-wide grep here: it catches the real
 regression (one of these needles reappearing in the config surface that
 ships to a host) without producing noise on code that has a legitimate,
@@ -112,14 +111,11 @@ _FORBIDDEN = (
     "oxidex-exiftool-cache",
 )
 
-# Class 2's single exempted line (see module docstring): the same
-# `EXIFTOOL_CACHE_DIR`-with-fallback idiom, deliberately kept in
-# `agentworker.py` as the one live definition its prompt strings
-# interpolate from (not yet migrated onto `config.py`; out of scope for
-# this fence's owning task). A line matching this exact idiom is not a
-# hardcode creeping back in -- it is the fix M2 landed. Anything else
-# containing a `_FORBIDDEN` string, in this file or any other candidate,
-# still fails.
+# The former class-2 exemption (module docstring): the one-piece
+# `EXIFTOOL_CACHE_DIR`-with-fallback idiom `agentworker.py` carried until
+# it was moved onto `config.exiftool_cache_dir()` (R6). `_scan` no longer
+# exempts it -- it is kept only so a test can pin that this exact shape
+# is now caught like any other spelling of the default.
 _CACHE_DIR_DEFAULT_IDIOM = 'os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache")'
 
 
@@ -189,14 +185,13 @@ def _strip_comments(path: Path, text: str):
 
 def _scan(path: Path):
     """(lineno, line_text, matched_string) for every forbidden literal
-    found on a non-comment line of `path`, excluding class 2's single
-    exempted idiom line (module docstring).
+    found on a non-comment line of `path`. No per-line exemptions: the
+    only places a default may be spelled are `config.py` and
+    `units/fleet-env.sh`, and neither is a candidate file.
     """
     hits = []
     text = path.read_text(encoding="utf-8")
     for lineno, line in _strip_comments(path, text):
-        if _CACHE_DIR_DEFAULT_IDIOM in line:
-            continue
         for needle in _FORBIDDEN:
             if needle in line:
                 hits.append((lineno, line.strip(), needle))
@@ -271,49 +266,52 @@ class TestNoHardcodedHosts(unittest.TestCase):
         hits = list(_strip_comments(FLEET_DIR / "units" / "com.oxidex.fleetd.plist", sample_xml_live))
         self.assertEqual(len(hits), 1, "a live (non-comment) XML line must NOT be excluded")
 
-    def test_cache_dir_default_idiom_is_the_only_exemption(self):
-        """Class 2 (module docstring): the exact `os.environ.get(
-        "EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache")` line is
-        exempted -- but ONLY that idiom, not merely proximity to
-        `EXIFTOOL_CACHE_DIR` or the word `os.environ`. A near-miss (a
-        prompt string that happens to mention the env var name while still
-        spelling out the raw path) must still be caught, or class 2 would
-        silently swallow the very literal M2 exists to catch in
-        `agentworker.py`'s prompt strings.
+    def test_cache_dir_default_idiom_is_no_longer_exempted(self):
+        """Former class 2 (module docstring): the exact `os.environ.get(
+        "EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache")` line used to
+        be the one exempted shape. With every consumer on `config.py` it
+        is a hardcode like any other: `_scan` must flag it, and must flag
+        the near-miss (a prompt string that mentions the env var name while
+        still spelling out the raw path) exactly the same way.
         """
         idiom_line = 'CACHE_DIR = os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache")\n'
         self.assertIn(_CACHE_DIR_DEFAULT_IDIOM, idiom_line)
-
         near_miss = '- oracle default is EXIFTOOL_CACHE_DIR, usually /tmp/oxidex-exiftool-cache\n'
-        self.assertNotIn(_CACHE_DIR_DEFAULT_IDIOM, near_miss)
-        self.assertTrue(any(needle in near_miss for needle in _FORBIDDEN))
+        for sample in (idiom_line, near_miss):
+            hits = list(_strip_comments(FLEET_DIR / "agentworker.py", sample))
+            needled = [(lineno, line, needle) for lineno, line in hits
+                       for needle in _FORBIDDEN if needle in line]
+            self.assertEqual(len(needled), 1, f"must be caught: {sample!r}")
 
     def test_agentworker_prompt_strings_use_the_variable_not_the_literal(self):
         """The M2 fix itself: `build_prompt`/`build_authoring_prompt` used
         to hardcode `/tmp/oxidex-exiftool-cache` four times in the prompt
         text handed to a headless agent. Assert the rendered prompts carry
         the resolved `CACHE_DIR` value (so the agent still gets a real,
-        working path) while the SOURCE no longer spells the literal outside
-        the one exempted default-idiom line -- i.e. the fence in
-        `test_no_hardcoded_hosts_outside_comments` actually has teeth here,
-        not just headroom to pass vacuously.
+        working path) while the SOURCE no longer spells the literal at all
+        -- `CACHE_DIR` comes from `config.exiftool_cache_dir()` (R6), the
+        same single default `doctor.py`/`ledger.py`/`fleetd.py` import --
+        i.e. the fence in `test_no_hardcoded_hosts_outside_comments`
+        actually has teeth here, not just headroom to pass vacuously.
         """
         agentworker_path = FLEET_DIR / "agentworker.py"
         hits = _scan(agentworker_path)
         self.assertEqual(
             hits, [],
-            "agentworker.py should have zero forbidden-literal hits once the "
-            "idiom line is exempted -- a hit here means a prompt string is "
+            "agentworker.py should have zero forbidden-literal hits -- a hit "
+            "here means a prompt string (or the CACHE_DIR line) is "
             "hardcoding the path again",
         )
+        source = agentworker_path.read_text()
+        self.assertIn(
+            "CACHE_DIR = str(config.exiftool_cache_dir())", source,
+            "agentworker.py's CACHE_DIR must come from config.py, not a local default",
+        )
         idiom_hits = [
-            lineno for lineno, line in _strip_comments(agentworker_path, agentworker_path.read_text())
+            lineno for lineno, line in _strip_comments(agentworker_path, source)
             if _CACHE_DIR_DEFAULT_IDIOM in line
         ]
-        self.assertEqual(
-            len(idiom_hits), 1,
-            f"expected exactly one CACHE_DIR default-idiom line in agentworker.py, found {idiom_hits}",
-        )
+        self.assertEqual(idiom_hits, [], f"the one-piece default idiom is back: {idiom_hits}")
 
     def test_two_piece_basename_assembly_is_still_caught(self):
         """R6's whole point: splitting the basename into its own variable

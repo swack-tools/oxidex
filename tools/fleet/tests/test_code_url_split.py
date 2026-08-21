@@ -1150,14 +1150,10 @@ class TestAgentworkerClonesCode(_FixtureCase):
         # R7 (review finding): agentworker.run() hardcodes
         # `Path.home() / ".fleetd" / "agentcache"` as its Hub workdir, so
         # every test in this class was writing into the REAL
-        # ~/.fleetd/agentcache on whatever machine ran the suite.
-        # Redirect HOME into this fixture's own tempdir instead, same
-        # convention test_bringup_split.py uses for its subprocess env.
-        self._agent_home = self.tmp / "agent-home"
-        self._agent_home.mkdir()
-        self._home_patch = mock.patch.dict(os.environ, {"HOME": str(self._agent_home)})
-        self._home_patch.start()
-        self.addCleanup(self._home_patch.stop)
+        # ~/.fleetd/agentcache on whatever machine ran the suite. HOME is
+        # redirected into the fixture's tempdir by `_FixtureCase.setUp`
+        # (the same mechanism covers `train.run_train`'s traincache and
+        # the R2 default token path), so nothing more is needed here.
 
     def _restore_cli(self):
         if self._saved_cli is None:

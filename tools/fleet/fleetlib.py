@@ -62,6 +62,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
+import config  # sibling module: the one place fleet-wide defaults are spelled (R2/R6)
+
 
 class HubError(Exception):
     """Base class for all fleetlib errors."""
@@ -208,10 +210,9 @@ _ABSENT_REF_HINT = "couldn't find remote ref"
 # is there.
 _TOKEN_FILE_ENV = "FLEET_GIT_TOKEN_FILE"
 # Relative to $HOME, resolved per call (never at import) so a test that
-# redirects HOME is actually hermetic. Matches
-# `rollout/install_secrets.sh`'s `token_file` default and the three unit
-# templates byte for byte.
-_TOKEN_FILE_DEFAULT_REL = ".keel/secrets/git-token"
+# redirects HOME is actually hermetic. Spelled once, in `config.py`
+# (`doctor.py` and `install_secrets.sh` agree with the same constant).
+_TOKEN_FILE_DEFAULT_REL = config.DEFAULT_GIT_TOKEN_FILE_REL
 _CREDENTIAL_HELPER = Path(__file__).resolve().parent / "keel" / "git-credential-file"
 
 # One-shot stderr notices (mode warnings), keyed by message, so a daemon
@@ -231,13 +232,12 @@ def default_git_token_file(env: Optional[dict] = None) -> Path:
     """`$HOME/.keel/secrets/git-token` -- where `install_secrets.sh` puts
     the per-host PAT (SPEC §8, "Secrets bundle").
 
-    `HOME` is read from `env` (default `os.environ`) rather than through
-    `Path.home()` so that `credential_env(some_dict)` answers about the
-    environment it was HANDED, not about the process that called it.
+    Thin alias of `config.default_git_token_file`: `HOME` is read from
+    `env` (default `os.environ`) rather than through `Path.home()` so that
+    `credential_env(some_dict)` answers about the environment it was
+    HANDED, not about the process that called it.
     """
-    src = os.environ if env is None else env
-    home = src.get("HOME") or os.path.expanduser("~")
-    return Path(home) / _TOKEN_FILE_DEFAULT_REL
+    return config.default_git_token_file(env)
 
 
 def git_token_file(env: Optional[dict] = None) -> Optional[str]:

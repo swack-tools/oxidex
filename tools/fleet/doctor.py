@@ -64,6 +64,7 @@ sys.path.insert(0, str(FLEET_DIR))
 
 from scripts import instrument  # noqa: E402  (path must be set up first)
 import config  # noqa: E402  (sibling module; R6 -- the one EXIFTOOL_CACHE_DIR default)
+import fleetlib  # noqa: E402  (sibling module; R2 -- the one token-file resolver)
 
 # ---------------------------------------------------------------------------
 # Canonical constants
@@ -284,15 +285,15 @@ def check_git_token_file() -> Check:
     R2 (review finding): `FLEET_GIT_TOKEN_FILE` being unset does not mean
     no token is available -- `install_secrets.sh` (and every `units/*`
     template) already default the SAME file to
-    `config.default_git_token_file()` (`~/.keel/secrets/git-token`), so a
+    `config.default_git_token_file()` (`~/.keel/secrets/git-token`) -- the
+    path `fleetlib.git_token_file()` resolves for every git command -- so a
     hand-run step that forgot to `export FLEET_GIT_TOKEN_FILE` was failing
     this check even when a perfectly good, correctly-permissioned token
     file already sat at the default path. This check now falls back to
-    that default path when the env var is unset, exactly mirroring what a
-    caller who *does* wire the default in (R2's broader fix, out of scope
-    here) would end up reading -- it never invents a NEW acceptance path,
-    it just stops requiring the redundant `export` `install_secrets.sh`
-    itself doesn't require.
+    that default path when the env var is unset, through the very
+    resolver `fleetlib.credential_env` uses -- it never invents a NEW
+    acceptance path, it just stops requiring the redundant `export`
+    `install_secrets.sh` itself doesn't require.
 
     Deliberately does not read the token (this script's own PATH/`-vV`
     checks above never touch a secret either): existence + mode are
@@ -311,19 +312,20 @@ def check_git_token_file() -> Check:
         return c
 
     hint = "run tools/fleet/rollout/install_secrets.sh to create and validate one"
-    token_file = os.environ.get("FLEET_GIT_TOKEN_FILE", "")
-    used_default = False
+    # The SAME resolver every fleet git spawner uses (`fleetlib.credential_env`
+    # -> `fleetlib.git_token_file`): the variable when set, else the default
+    # path when it is a readable file. Re-implementing the rule here would
+    # let doctor and the daemon disagree about whether a token exists.
+    explicit = os.environ.get("FLEET_GIT_TOKEN_FILE", "")
+    token_file = fleetlib.git_token_file() or ""
+    used_default = bool(token_file) and not explicit
     if not token_file:
         default_path = config.default_git_token_file()
-        if default_path.is_file():
-            token_file = str(default_path)
-            used_default = True
-        else:
-            c.failed(
-                f"FLEET_HUB_URL is https but FLEET_GIT_TOKEN_FILE is unset and the "
-                f"default {default_path} does not exist -- {hint}"
-            )
-            return c
+        c.failed(
+            f"FLEET_HUB_URL is https but FLEET_GIT_TOKEN_FILE is unset and the "
+            f"default {default_path} does not exist (or is not a readable file) -- {hint}"
+        )
+        return c
 
     label = f"FLEET_GIT_TOKEN_FILE (default, env var unset)={token_file}" if used_default \
         else f"FLEET_GIT_TOKEN_FILE={token_file}"

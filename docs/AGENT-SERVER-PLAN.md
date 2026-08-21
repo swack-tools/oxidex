@@ -63,7 +63,11 @@ the human a `fleet status` that says *why* nothing is starting.
   `QueueError` that the reconcile loop does not catch. `tests/test_code_url_split.py` (two bare
   repos: `state.git` with no `refs/heads/*` at all).
 - De-hardcode: `gate.sh` L243 + L373 → `FLEET_CODE_URL` required; `gate.sh` L223/L441,
-  `fleetd.py` L2021-2022 → `EXIFTOOL_CACHE_DIR`; `units/fleetd.service` L22, `com.oxidex.fleetd.plist`
+  `fleetd.py` L2021-2022 → `EXIFTOOL_CACHE_DIR`, whose default is spelled in exactly two
+  mirrored places — `tools/fleet/config.py` (`DEFAULT_EXIFTOOL_CACHE_DIR`, imported by
+  `fleetd.py`/`doctor.py`/`ledger.py`) and `units/fleet-env.sh` (sourced by `gate.sh`) — with
+  `tests/test_no_hardcoded_hosts.py` forbidding both the contiguous literal and the two-piece
+  basename reassembly everywhere else (R6); `units/fleetd.service` L22, `com.oxidex.fleetd.plist`
   L14, `cron-backstop.txt` L45 → `FLEET_HUB_URL=<state repo https>`, `FLEET_CODE_URL=<code repo
   https>`; `fleetd --hub <state> --code <code>`.
 - The heartbeat payload `reconcile_once` builds (`fleetd.py` L2042-2076, written by
