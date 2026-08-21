@@ -955,6 +955,7 @@ def _verdict_store_failed_marker(log_dir: Path, tag: str) -> Path:
     reading for it agree on the exact path gate.sh writes."""
     return Path(log_dir) / f"gate-{tag}.verdict-store-failed"
 
+
 # Where a classification came from, carried into the heartbeat so an
 # operator can tell a cross-host answer from this host's own recall.
 SOURCE_HUB = "hub"
