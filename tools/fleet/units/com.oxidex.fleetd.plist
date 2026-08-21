@@ -9,9 +9,17 @@
     <string>/opt/homebrew/bin/python3</string>
     <string>/Users/allen/fleet-checkout/tools/fleet/fleetd.py</string>
   </array>
+  <!-- PLAN Stage 1 task 4: the hub (verdict/state) and the code repo
+       (staging/* + refactor/tag-machinery) are now two distinct GitHub
+       remotes: the private state repo and the public code repo, rather
+       than one host-specific ssh URL. fleetd reads both from the
+       environment; FLEET_CODE_URL falls back to FLEET_HUB_URL when
+       unset. -->
   <key>EnvironmentVariables</key><dict>
     <key>FLEET_HUB_URL</key>
-    <string>ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git</string>
+    <string>https://github.com/swack-tools/oxidex-fleet-state.git</string>
+    <key>FLEET_CODE_URL</key>
+    <string>https://github.com/swack-tools/oxidex.git</string>
     <key>PATH</key>
     <string>/Users/allen/.cargo/bin:/Users/allen/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
   </dict>

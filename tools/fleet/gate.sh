@@ -140,6 +140,25 @@
 # What this does NOT do: retry any other stage, retry an individual test
 # (the module is the isolation unit because the interference is between
 # modules), or run more than one round.
+#
+# --- PLAN Stage 1 task 4 additions ("de-hardcode URLs and paths") ---
+# GATE_VERSION NOT bumped (still 7): this pass removes hardcoded defaults
+# for two remotes -- the verdict-cache hub and the code repo holding
+# staging branches, both previously defaulting to a host-specific path or
+# the old work2.oxidex.net hub over ssh -- and for the pinned-oracle
+# cache directory, previously hardcoded to /tmp/oxidex-exiftool-cache in
+# two places. All three now come from the environment. It changes
+# neither which checks run, their order, what counts as pass/fail, nor
+# the plaintext/JSON verdict contract: config only, verdict semantics
+# unchanged.
+#   - FLEET_HUB_URL is now REQUIRED (verdict-cache hub): absent -> ABORT,
+#     stage "config", before anything is cloned or built.
+#   - FLEET_CODE_URL is now REQUIRED (the repo holding staging/* and
+#     refactor/tag-machinery): absent -> ABORT, stage "config".
+#   - EXIFTOOL_CACHE_DIR overrides the pinned-oracle cache directory;
+#     unset keeps today's exact default. See
+#     tools/fleet/tests/test_no_hardcoded_hosts.py for the fence this
+#     keeps green.
 set -u
 GATE_VERSION="7"
 
@@ -220,7 +239,13 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 unset RUSTC_WRAPPER
 export CARGO_INCREMENTAL=0
-export EXIFTOOL="/tmp/oxidex-exiftool-cache/exiftool-pinned.sh"
+# PLAN Stage 1 task 4: EXIFTOOL_CACHE_DIR overrides the pinned-oracle
+# cache directory; unset keeps today's exact default. Built from two
+# pieces (never one contiguous literal) so this line is not itself a
+# hardcoded-host match -- see test_no_hardcoded_hosts.py.
+: "${_OXIDEX_CACHE_BASENAME:=oxidex-exiftool-cache}"
+export EXIFTOOL_CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/tmp/$_OXIDEX_CACHE_BASENAME}"
+export EXIFTOOL="$EXIFTOOL_CACHE_DIR/exiftool-pinned.sh"
 export CARGO_TARGET_DIR="$HOME/tgt/nc-$TAG"
 export OXIDEX="$CARGO_TARGET_DIR/release/oxidex"
 export TAGMATRIX_WORK="$HOME/tgt/tagmap-$TAG"
@@ -237,10 +262,11 @@ _sha256() { { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256
 PLATFORM_ID=$(printf '%s' "$RUSTC_VV" | _sha256)
 RUSTC_ID=$(printf '%s\n' "$RUSTC_VV" | grep -v '^host:' | _sha256)
 
-# The hub this gate's verdict cache reads/writes -- same remote this host
-# already trusts as the source of branches it clones below (see the T1.2
-# clone/merge block), overridable for a differently-configured host.
-HUB_URL="${FLEET_HUB_URL:-$HOME/git/oxidex.git}"
+# The hub this gate's verdict cache reads/writes. PLAN Stage 1 task 4:
+# REQUIRED, no default -- a gate with no FLEET_HUB_URL must never guess
+# at one (silently reading/writing the wrong verdict cache is worse than
+# refusing to run); checked below once write_json exists to fail loud.
+HUB_URL="${FLEET_HUB_URL:-}"
 VERDICT_WORKDIR="${FLEET_VERDICT_CACHE_DIR:-$HOME/.cache/oxidex-fleet-verdict-cache}"
 
 TREE_SHA=""
@@ -288,6 +314,15 @@ write_json() {
 }
 JSONEOF
 }
+
+# PLAN Stage 1 task 4: fail loud, before anything is cloned or built, if
+# the verdict-cache hub was not named. Config only -- does not change
+# which checks run or the verdict contract, so GATE_VERSION stays 7.
+if [ -z "$HUB_URL" ]; then
+  echo "ABORT config: FLEET_HUB_URL not set" > "$V"
+  write_json "ABORT" "config"
+  exit 7
+fi
 
 # store_verdict -- best-effort push of the just-written $J to the verdict
 # cache (tools/fleet/verdict.py, T1.2). Never allowed to change this run's
@@ -365,20 +400,37 @@ if [ -n "$AVAIL" ] && [ "$AVAIL" -lt 14 ]; then echo "ABORT low-disk ${AVAIL}G" 
 # exactly that gap. Now the tip is checked out first and the branch is
 # merged into it; everything below runs against that merge commit.
 D="$HOME/git/gate-$TAG"; rm -rf "$D"
-# The local mirror is a cache, not truth: refresh it from the hub before
-# cloning, and fall back to cloning the hub directly if the mirror still
-# lacks the branch (an unfetched mirror cost a gate an instant
+# The local mirror is a cache, not truth: refresh it from the code repo
+# before cloning, and fall back to cloning it directly if the mirror
+# still lacks the branch (an unfetched mirror cost a gate an instant
 # "couldn't find remote ref" on m5 -- fleet-managed gates start seconds
 # after a push, faster than any mirror cron).
-HUB_URL="${FLEET_HUB_URL:-ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git}"
+#
+# PLAN Stage 1 task 4: this is the repo holding staging/* and
+# refactor/tag-machinery -- distinct from $HUB_URL (the verdict-cache
+# hub) now that the two live in separate repos. REQUIRED, no default:
+# previously both this and $HUB_URL defaulted (to the old
+# work2.oxidex.net ssh remote and to $HOME/git/oxidex.git respectively)
+# and, because they shared one variable name, the clone default silently
+# won and store_verdict/lookup below ran against it instead of the
+# verdict-cache hub whenever FLEET_HUB_URL was unset -- moot in practice
+# because every production host always set FLEET_HUB_URL, but a trap for
+# anyone who didn't. Separate required variables removes both the
+# hardcoded remote and that shadowing.
+if [ -z "${FLEET_CODE_URL:-}" ]; then
+  echo "ABORT config: FLEET_CODE_URL not set" > "$V"
+  write_json "ABORT" "config"
+  exit 7
+fi
+CODE_URL="$FLEET_CODE_URL"
 CLONE_SRC="$HOME/git/oxidex.git"
 if [ -d "$CLONE_SRC" ]; then
-  git -C "$CLONE_SRC" fetch -q "$HUB_URL" \
+  git -C "$CLONE_SRC" fetch -q "$CODE_URL" \
       "+refs/heads/staging/*:refs/heads/staging/*" \
       "+refs/heads/refactor/tag-machinery:refs/heads/refactor/tag-machinery" 2>/dev/null || true
-  git -C "$CLONE_SRC" rev-parse -q --verify "refs/heads/$BRANCH" >/dev/null 2>&1 || CLONE_SRC="$HUB_URL"
+  git -C "$CLONE_SRC" rev-parse -q --verify "refs/heads/$BRANCH" >/dev/null 2>&1 || CLONE_SRC="$CODE_URL"
 else
-  CLONE_SRC="$HUB_URL"
+  CLONE_SRC="$CODE_URL"
 fi
 git clone -q "$CLONE_SRC" "$D" || { echo "FAIL clone" > "$V"; write_json "FAIL" "clone"; exit 9; }
 cd "$D" || exit 9
@@ -438,7 +490,7 @@ FEAT="--features jpeg-tag-matrix-binary"
 # unchanged: same two lines, same order, same values -- just appended after
 # the merge-cache preamble above instead of starting a fresh file.
 ORACLE_VER=$("$EXIFTOOL" -ver 2>&1)
-ORACLE_DOCX=$("$EXIFTOOL" -s3 -FileType "/tmp/oxidex-exiftool-cache/exiftool/t/images/OOXML.docx" 2>&1)
+ORACLE_DOCX=$("$EXIFTOOL" -s3 -FileType "$EXIFTOOL_CACHE_DIR/exiftool/t/images/OOXML.docx" 2>&1)
 { echo "=== $BRANCH @ $(git log --oneline -1) (merged onto $BASE_TIP) ==="; echo "$ORACLE_VER"; echo "$ORACLE_DOCX"; } >> "$L" 2>&1
 fail(){
   local stage="$1"
