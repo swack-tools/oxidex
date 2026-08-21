@@ -339,7 +339,13 @@ def _run_train_locked(
 
     tmp = Path(tempfile.mkdtemp(prefix="train-"))
     try:
-        clone_src = _clone_src or hub_url
+        # `hub_url` is whatever Hub(hub_url, ...) above was constructed
+        # with -- the STATE hub once code and state are split across two
+        # repos. This clone needs the CODE tree (tip, staging/*,
+        # domains.toml), so it prefers `hub.code_url`, which defaults to
+        # `url` (`fleetlib.Hub`) and therefore equals `hub_url` on any hub
+        # that doesn't carry the attribute yet.
+        clone_src = _clone_src or getattr(hub, "code_url", hub_url)
         _git(["clone", "-q", clone_src, str(tmp / "w")])
         clone = tmp / "w"
         tip_sha = hub.sha(TIP_REF)

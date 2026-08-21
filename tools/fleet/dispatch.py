@@ -447,11 +447,19 @@ def _git(hub: Hub, args: list, timeout: int = 60) -> subprocess.CompletedProcess
 
 def _have_objects(hub: Hub, hub_refs: Sequence[str]) -> bool:
     """Fetch `hub_refs` into the cache's object store. No destination
-    refspec, so nothing but FETCH_HEAD is written."""
+    refspec, so nothing but FETCH_HEAD is written.
+
+    `hub_refs` name CODE commits (staging branches, the tip), so this
+    fetches from `hub.code_url` rather than `hub.url` -- the state hub,
+    once code and state live in separate repos. `code_url` defaults to
+    `url` (`fleetlib.Hub`), so a hub without the attribute yet behaves
+    exactly as before.
+    """
     if not hub_refs:
         return True
     try:
-        result = _git(hub, ["fetch", "--no-tags", "--quiet", hub.url, *hub_refs])
+        code_url = getattr(hub, "code_url", hub.url)
+        result = _git(hub, ["fetch", "--no-tags", "--quiet", code_url, *hub_refs])
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
