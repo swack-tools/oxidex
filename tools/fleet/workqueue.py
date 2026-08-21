@@ -215,6 +215,12 @@ class Queue:
         branch into the local cache, under a disposable ref namespace, so
         `merge-base --is-ancestor` can run against it. Returns the
         namespace used, for later cleanup.
+
+        The tip and every staging branch are CODE refs, so this fetches
+        from `hub.code_url` -- not `hub.url` (the state hub once code and
+        state are split across two repos). `code_url` defaults to `url`
+        (`fleetlib.Hub`), so a hub without the attribute yet (or a fixture
+        with a single combined repo) behaves exactly as before.
         """
         cache_ns = f"{_QUEUE_CACHE_NS}/{uuid.uuid4().hex}"
         refspecs = [f"+{self.tip_ref}:{cache_ns}/tip"]
@@ -222,7 +228,8 @@ class Queue:
             safe = slug.replace("/", "__")
             refspecs.append(f"+{ref}:{cache_ns}/staging/{safe}")
 
-        result = self._git(["fetch", "--no-tags", "--quiet", self.hub.url, *refspecs])
+        code_url = getattr(self.hub, "code_url", self.hub.url)
+        result = self._git(["fetch", "--no-tags", "--quiet", code_url, *refspecs])
         if result.returncode != 0:
             raise HubUnreachableError(
                 f"fetch for ancestry check failed: {result.stderr.decode('utf-8', 'replace').strip()}"
