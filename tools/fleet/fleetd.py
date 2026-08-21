@@ -1981,6 +1981,14 @@ def reconcile_once(
         # a cumulative counter would need to survive a restart to mean
         # anything, which nothing here currently persists.
         "killed_this_loop": len(res.killed),
+        # PLAN Stage 1 task 5 / SPEC L121, L278: this loop's
+        # `ReconcileResult.refused` -- (reason, detail) pairs -- carried
+        # into the durable heartbeat verbatim so `fleet status --why` (and
+        # later `/v1/why`) can answer "why is nothing starting" from a
+        # ref read alone, with no ssh fan-out. JSON round-trips each tuple
+        # as a 2-element array; `cmd_status`'s `--why` rendering treats
+        # both shapes as equivalent.
+        "refused": res.refused,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     if any(isinstance(err, HubUnreachableError) for _, err in hub_failures):

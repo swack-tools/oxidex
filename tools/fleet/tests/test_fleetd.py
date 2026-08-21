@@ -175,6 +175,33 @@ class TestConvergence(FleetdBase):
         out = buf.getvalue()
         self.assertIn("DOWN", out)
 
+    def test_heartbeat_carries_refused_from_the_reconcile_result(self):
+        """PLAN Stage 1 task 5 / SPEC L121: `write_heartbeat`'s payload
+        must carry this loop's `ReconcileResult.refused` verbatim -- a
+        (reason, detail) pair per refusal, JSON round-tripped as a
+        2-element array -- so `fleet status --why` (and later `/v1/why`)
+        can answer from the ref alone."""
+        self.set_desired(gates=3, enabled=False, reason="quarantine test")
+        res = self.reconcile()
+        self.assertIn("disabled", [r[0] for r in res.refused])
+        self.assertTrue(res.heartbeat_written)
+
+        hb = self.hub.read(fleetd.HOSTS_PREFIX + self.host)
+        self.assertIn("refused", hb)
+        # JSON has no tuples -- each pair round-trips as a 2-element list.
+        self.assertEqual(hb["refused"], [list(r) for r in res.refused])
+        reasons = [r[0] for r in hb["refused"]]
+        self.assertIn("disabled", reasons)
+        detail = dict(hb["refused"])["disabled"]
+        self.assertEqual(detail, "quarantine test")
+
+    def test_heartbeat_refused_is_empty_when_nothing_was_refused(self):
+        self.set_desired(gates=0)
+        res = self.reconcile()
+        self.assertEqual(res.refused, [])
+        hb = self.hub.read(fleetd.HOSTS_PREFIX + self.host)
+        self.assertEqual(hb.get("refused"), [])
+
 
 class TestDesiredCAS(FleetdBase):
     def test_concurrent_edits_compose(self):

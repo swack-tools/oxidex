@@ -4,6 +4,8 @@
     fleet down <host> --reason "..."           disable a host (drain, not kill)
     fleet drain <host>                         finish current work, start nothing
     fleet status                               the whole fleet from hub refs only
+    fleet status --why                         + per-host refused reasons, heartbeat
+                                                age, desired gates/agents
 
 Every subcommand talks ONLY to hub refs -- no ssh fan-out, no per-host
 config. `up/down/drain` are read-modify-CAS-write on `refs/fleet/desired`
@@ -13,6 +15,8 @@ re-read and reapply ours on top (both edits survive).
 `status` renders from `refs/fleet/hosts/*` heartbeats. A heartbeat older
 than HEARTBEAT_STALE renders DOWN -- the ryzen's cron was dead for a full
 day with nothing noticing; this line is why that cannot recur silently.
+`--why` answers "why is nothing starting" from the same heartbeats' durable
+`refused` field (PLAN Stage 1 task 5) -- no ssh, no re-derivation.
 """
 
 from __future__ import annotations
@@ -189,6 +193,29 @@ def _parked_rows(host: str, hb: dict) -> list:
     return out
 
 
+def _refused_list(hb: dict) -> list:
+    """[(reason, detail)] from a heartbeat's `refused` field (PLAN Stage 1
+    task 5 / SPEC L121, L278: `ReconcileResult.refused` carried verbatim
+    into `fleetd.write_heartbeat`'s payload).
+
+    `write_heartbeat` JSON-round-trips each `(reason, detail)` tuple as a
+    2-element array, so that is the shape read back here; a dict shape is
+    also accepted for forward compatibility, and a heartbeat written by an
+    older fleetd with no `refused` key at all yields `[]` rather than
+    raising -- absence means "not yet reported", not "nothing refused".
+    """
+    out = []
+    for entry in hb.get("refused") or ():
+        if isinstance(entry, dict):
+            reason, detail = entry.get("reason"), entry.get("detail")
+        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+            reason, detail = entry
+        else:
+            reason, detail = entry, None
+        out.append((str(reason), "" if detail in (None, "") else str(detail)))
+    return out
+
+
 def cmd_status(args) -> int:
     hub = _hub(args)
     desired = hub.read(DESIRED_REF) or {}
@@ -197,6 +224,7 @@ def cmd_status(args) -> int:
 
     rows = []
     parked = []
+    why_rows = []  # (host, state, age_s, want_gates, want_agents, [(reason, detail)])
     for ref in sorted(hub.list(HOSTS_PREFIX)):
         host = ref[len(HOSTS_PREFIX):]
         hb = hub.read(ref) or {}
@@ -217,6 +245,8 @@ def cmd_status(args) -> int:
         needs_author = len(fleetd.branch_names(hb.get("needs_author")))
         killed = hb.get("killed_this_loop")
         parked.extend(_parked_rows(host, hb))
+        why_rows.append((host, state, age, w.get("gates"), w.get("agents"),
+                          _refused_list(hb)))
         rows.append((
             host,
             state,
@@ -260,6 +290,29 @@ def cmd_status(args) -> int:
         print("\nPARKED (verdict already known; not offered as gate work)")
         for r in [phdr] + parked:
             print("  " + "  ".join(str(c).ljust(w) for c, w in zip(r, pwidths)).rstrip())
+
+    # PLAN Stage 1 task 5: "the human's question 'why is nothing starting'
+    # has an answer from the laptop" -- per host, the last reconcile's
+    # refused reasons plus the two numbers an operator checks first
+    # (heartbeat freshness, desired targets), all from the durable
+    # heartbeat + `desired` refs already read above. Behind a flag so the
+    # default table (and `_parse_table`'s "stop at QUEUE" convention)
+    # stay exactly as they were.
+    if getattr(args, "why", False):
+        print("\nWHY (last reconcile's refused[] from refs/fleet/hosts/*)")
+        for host, state, age, want_gates, want_agents, refused in why_rows:
+            age_s = f"{int(age)}s" if age != float("inf") else "never"
+            gates = want_gates if want_gates is not None else "-"
+            agents = want_agents if want_agents is not None else "-"
+            print(f"  {host}  {state}  heartbeat age {age_s}  "
+                  f"desired gates={gates} agents={agents}")
+            if refused:
+                for reason, detail in refused:
+                    print(f"      refused: {reason}" + (f" ({detail})" if detail else ""))
+            else:
+                print("      (no refused reasons on file)")
+        if not why_rows:
+            print("  (no host heartbeats yet -- has fleetd been installed anywhere?)")
     return 0
 
 
@@ -284,6 +337,9 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_drain)
 
     p = sub.add_parser("status", help="render the fleet from hub refs")
+    p.add_argument("--why", action="store_true",
+                    help="per host: last reconcile's refused reasons, "
+                         "heartbeat age, and desired gates/agents")
     p.set_defaults(fn=cmd_status)
 
     args = ap.parse_args(argv)

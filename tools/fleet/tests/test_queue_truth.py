@@ -847,6 +847,71 @@ class TestCliStatusRendering(FleetdBase):
         self.assertEqual(row[needs_idx], "1")
         self.assertEqual(row[killed_idx], "2")
 
+    def test_status_why_renders_refused_reasons_heartbeat_age_and_desired(self):
+        """PLAN Stage 1 task 5: `fleet status --why` must answer "why is
+        nothing starting" per host from the durable heartbeat's `refused`
+        field plus the desired targets -- no ssh, no re-derivation."""
+        self.set_desired(gates=3, enabled=False, reason="quarantine test")
+        hb = {
+            "gates_running": 0, "agents_running": 0, "free_gb": 10.0, "free_mem_gb": 10.0,
+            "rustc_id": "r", "platform_id": "p", "owning_user": "t", "oracle_ok": None,
+            "gate_version": "4", "tip_generation_seen": None,
+            "refused": [["disabled", "quarantine test"],
+                        ["limits", "low-disk 5G < floor 14G"]],
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        self.assertTrue(self.hub.create(fleetd.HOSTS_PREFIX + self.host, hb))
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cli.main(["--hub", str(self.bare), "status", "--why"])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+
+        self.assertIn("WHY", out)
+        why = out[out.index("WHY"):]
+        self.assertIn(self.host, why)
+        # heartbeat age: written seconds ago, must render as an elapsed
+        # count, never "never" (that is the DOWN/no-heartbeat case).
+        self.assertRegex(why, r"heartbeat age \d+s")
+        # desired targets from `refs/fleet/desired`, not from the heartbeat.
+        self.assertIn("desired gates=3 agents=0", why)
+        # both refused reasons, with their detail.
+        self.assertIn("refused: disabled (quarantine test)", why)
+        self.assertIn("refused: limits (low-disk 5G < floor 14G)", why)
+
+    def test_status_why_reports_no_refused_reasons_when_list_is_empty(self):
+        self.set_desired(gates=1)
+        hb = {
+            "gates_running": 0, "agents_running": 0, "free_gb": 10.0, "free_mem_gb": 10.0,
+            "rustc_id": "r", "platform_id": "p", "owning_user": "t", "oracle_ok": None,
+            "gate_version": "4", "tip_generation_seen": None, "refused": [],
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        self.assertTrue(self.hub.create(fleetd.HOSTS_PREFIX + self.host, hb))
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["--hub", str(self.bare), "status", "--why"])
+        why = buf.getvalue()
+        self.assertIn("(no refused reasons on file)", why)
+
+    def test_status_without_why_flag_omits_the_why_section(self):
+        self.set_desired(gates=1, enabled=False, reason="quarantine test")
+        hb = {
+            "gates_running": 0, "agents_running": 0, "free_gb": 10.0, "free_mem_gb": 10.0,
+            "rustc_id": "r", "platform_id": "p", "owning_user": "t", "oracle_ok": None,
+            "gate_version": "4", "tip_generation_seen": None,
+            "refused": [["disabled", "quarantine test"]],
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        self.assertTrue(self.hub.create(fleetd.HOSTS_PREFIX + self.host, hb))
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["--hub", str(self.bare), "status"])
+        self.assertNotIn("WHY", buf.getvalue())
+
     def test_status_work_column_is_dash_with_no_live_claims(self):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
