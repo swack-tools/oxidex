@@ -63,6 +63,7 @@ from intent import (  # noqa: E402
     register,
     withdraw,
 )
+from _env import HermeticCase  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -156,13 +157,14 @@ def _ensure_binary_built(timeout: int = 420):
     return candidate
 
 
-class IntentTestCase(unittest.TestCase):
+class IntentTestCase(HermeticCase):
     """Base fixture: a throwaway bare repo standing in for the hub, exactly
     like `test_fleetlib.py`'s fixture (this file does not redefine it --
     T1.4 must build on `fleetlib`, not reinvent its test discipline).
     """
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="intent-test-")
         self.hub_path = str(Path(self._tmp_root) / "hub.git")
         self.workdir = str(Path(self._tmp_root) / "cache")
@@ -260,7 +262,7 @@ class TestOpenIntentOverlap(IntentTestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestHistory(unittest.TestCase):
+class TestHistory(HermeticCase):
     def test_5cef5b3d_is_found_by_history_grep(self):
         # 5cef5b3d's commit body literally says "KyoceraRaw.raw" and
         # "SWF, PICT, PPM, RA" -- history is a cheap dedup signal and
@@ -286,9 +288,10 @@ class TestHistory(unittest.TestCase):
 @unittest.skipUnless(_not_hermetic(), f"{HERMETIC_ENV}=1: skips real-binary/real-oracle/real-corpus tests")
 @unittest.skipUnless(_oracle_available(), "pinned ExifTool oracle not usable in this environment")
 @unittest.skipUnless(_corpus_available(), "combined-samples corpus not present in this environment")
-class TestCapabilityLedgerCheck(unittest.TestCase):
+class TestCapabilityLedgerCheck(HermeticCase):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         _ensure_binary_built()
 
     def test_empty_scope_is_not_a_hit(self):
@@ -337,6 +340,7 @@ class TestCapabilityLedgerCheck(unittest.TestCase):
 class TestAcceptance(IntentTestCase):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         _ensure_binary_built()
 
     def test_solo_ryzen5_intent_is_refused_by_capability_ledger(self):

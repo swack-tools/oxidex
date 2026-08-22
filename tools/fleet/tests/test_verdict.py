@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fleetlib import Hub  # noqa: E402
 import verdict  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 
 
 # --------------------------------------------------------------------- #
@@ -39,7 +40,7 @@ import verdict  # noqa: E402
 # --------------------------------------------------------------------- #
 
 
-class TestComputeIds(unittest.TestCase):
+class TestComputeIds(HermeticCase):
     def test_stripped_and_unstripped_differ(self):
         text = "rustc 1.97.1 (abc123 2026-01-01)\nbinary: rustc\nhost: aarch64-apple-darwin\nrelease: 1.97.1\n"
         rustc_id, platform_id = verdict.compute_ids(text)
@@ -89,7 +90,7 @@ def _good_payload(**overrides) -> dict:
     return payload
 
 
-class TestValidatePayload(unittest.TestCase):
+class TestValidatePayload(HermeticCase):
     def test_good_payload_has_no_problems(self):
         self.assertEqual(verdict.validate_payload(_good_payload()), [])
 
@@ -108,7 +109,7 @@ class TestValidatePayload(unittest.TestCase):
         self.assertTrue(any("write_set" in p for p in problems))
 
 
-class TestVerdictRef(unittest.TestCase):
+class TestVerdictRef(HermeticCase):
     def test_builds_three_part_path(self):
         ref = verdict.verdict_ref("deadbeef", "2", "platformhash")
         self.assertEqual(ref, "refs/fleet/verdicts/deadbeef/2/platformhash")
@@ -127,7 +128,7 @@ class TestVerdictRef(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class VerdictCacheTestCase(unittest.TestCase):
+class VerdictCacheTestCase(HermeticCase):
     """Base fixture: a throwaway bare repo standing in for the hub.
 
     Mirrors `test_fleetlib.py.FleetlibTestCase` -- same guard, same
@@ -135,6 +136,7 @@ class VerdictCacheTestCase(unittest.TestCase):
     """
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="verdict-cache-test-")
         self.hub_path = str(Path(self._tmp_root) / "hub.git")
         self.workdir = str(Path(self._tmp_root) / "cache")

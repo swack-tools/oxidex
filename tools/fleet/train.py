@@ -475,7 +475,19 @@ def merge_members(clone: Path, tip_sha: str, members: list) -> tuple:
             _git(["merge", "--abort"], cwd=clone, check=False)
             _git(["reset", "-q", "--hard", "HEAD"], cwd=clone, check=False)
             _git(["clean", "-qfd"], cwd=clone, check=False)
-            ejected.append((c, "merge-conflict"))
+            # A conflict leaves unmerged index entries. A merge that failed
+            # WITHOUT any is something else -- "Committer identity unknown"
+            # on a host whose hostname has no domain, unrelated histories,
+            # a missing object -- and calling it a conflict sends whoever
+            # reads the ejection to the wrong repo (keel1 gate, i7: ten
+            # fixture trains "conflicted" on a one-file branch because
+            # git could not auto-detect an email). Name git's own reason.
+            if conflicted:
+                reason = "merge-conflict"
+            else:
+                tail = (r.stderr or r.stdout or "").strip().splitlines()
+                reason = "merge-failed: " + (tail[-1].strip() if tail else f"git merge rc={r.returncode}")
+            ejected.append((c, reason))
             continue
         staged = _git(["diff", "--cached", "--name-only"], cwd=clone).stdout.strip()
         if not staged:

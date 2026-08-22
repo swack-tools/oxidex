@@ -26,10 +26,12 @@ FLEET_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(FLEET_DIR))
 
 import doctor  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 
 
-class TestCheckGitTokenFile(unittest.TestCase):
+class TestCheckGitTokenFile(HermeticCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.mkdtemp(prefix="doctor-token-")
         self.addCleanup(self._rmtree)
         # R2/R7: check_git_token_file() now falls back to

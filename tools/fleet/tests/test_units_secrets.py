@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from _env import HermeticCase  # noqa: E402
 
 UNITS_DIR = Path(__file__).resolve().parents[1] / "units"
 
 
-class TestUnitsSetGitTokenFile(unittest.TestCase):
+class TestUnitsSetGitTokenFile(HermeticCase):
     def test_systemd_unit_sets_token_file_via_specifier(self):
         text = (UNITS_DIR / "fleetd.service").read_text()
         self.assertIn(

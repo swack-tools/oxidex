@@ -70,6 +70,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 FLEET_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(FLEET_DIR))
@@ -92,7 +93,7 @@ def _run(args, cwd=None, check=True):
     import os
     return subprocess.run(
         args, cwd=cwd, check=check, capture_output=True, text=True,
-        env={**os.environ, **GIT_ENV},
+        env=scrub_env(**GIT_ENV),
     )
 
 
@@ -190,8 +191,9 @@ class _RepoPair:
         }
 
 
-class _FixtureCase(unittest.TestCase):
+class _FixtureCase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self._tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmpdir.name)
         # HOME is redirected for every case in this file, the same way
@@ -1058,11 +1060,12 @@ class TestTipPushUrlIsSeparateFromTheOtherCodeWrites(_FixtureCase):
         self.assertEqual(seen["code_push"], str(self.repos.code))
 
 
-class TestTrainCliRoutesTheTwoPushUrls(unittest.TestCase):
+class TestTrainCliRoutesTheTwoPushUrls(HermeticCase):
     """`--tip-push` / `FLEET_TIP_PUSH_URL` (R3), and the warning for the
     configuration the split exists to retire."""
 
     def setUp(self):
+        super().setUp()
         for key in ("FLEET_HUB_URL", "FLEET_CODE_URL", "FLEET_CODE_PUSH_URL",
                     "FLEET_TIP_PUSH_URL"):
             self.addCleanup(_restore_env, key, os.environ.get(key))

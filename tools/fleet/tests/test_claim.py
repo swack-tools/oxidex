@@ -45,16 +45,18 @@ from claim import (  # noqa: E402
     reap_expired,
 )
 from fleetlib import Hub  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 
 
 def _run_git(args, cwd=None, input_bytes=None):
     return subprocess.run(args, cwd=cwd, input=input_bytes, capture_output=True)
 
 
-class ClaimTestCase(unittest.TestCase):
+class ClaimTestCase(HermeticCase):
     """Base fixture: a throwaway bare repo standing in for the hub."""
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="claim-test-")
         self.hub_path = str(Path(self._tmp_root) / "hub.git")
         self.workdir = str(Path(self._tmp_root) / "cache")
@@ -105,7 +107,7 @@ class TestFixtureGuard(ClaimTestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestRefNaming(unittest.TestCase):
+class TestRefNaming(HermeticCase):
     def test_claim_ref_shape(self):
         self.assertEqual(claim_ref("gate", "abc123"), "refs/fleet/claims/gate/abc123")
 
@@ -435,7 +437,7 @@ class TestWorkdirLiveness(ClaimTestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestToolchainIdentity(unittest.TestCase):
+class TestToolchainIdentity(HermeticCase):
     MAC_VV = (
         "rustc 1.97.1 (abc123 2026-01-01)\n"
         "binary: rustc\n"

@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 import cli
 import claim as claim_mod
@@ -35,8 +36,7 @@ def make_fixture_hub(tmp: Path) -> tuple:
     subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
     work = tmp / "seed"
     subprocess.run(["git", "init", "-q", str(work)], check=True)
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    env = scrub_env()
     (work / "f.txt").write_text("tip\n")
     subprocess.run(["git", "-C", str(work), "add", "."], check=True, env=env)
     subprocess.run(["git", "-C", str(work), "commit", "-qm", "tip"], check=True, env=env)
@@ -65,8 +65,9 @@ def make_stub_gate(tmp: Path) -> Path:
     return stub
 
 
-class FleetdBase(unittest.TestCase):
+class FleetdBase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         self.bare, self.seed = make_fixture_hub(self.tmp)
@@ -531,7 +532,7 @@ class TestVerdictStoreFailureIsDurableAndOwnerless(FleetdBase):
                       "exactly the 15-second visibility window T3 exists to close")
 
 
-class TestHostWarningsScanOnAMissingLogDir(unittest.TestCase):
+class TestHostWarningsScanOnAMissingLogDir(HermeticCase):
     """`HostWarnings.scan` promises that "we could not look" never reads
     as "the condition cleared". `Path.glob` on a directory that does not
     exist yields nothing and raises nothing, so the OSError branch alone
@@ -540,6 +541,7 @@ class TestHostWarningsScanOnAMissingLogDir(unittest.TestCase):
     loop. The guard is `is_dir()`; this pins it without a reconcile."""
 
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
@@ -577,7 +579,7 @@ class TestHostWarningsScanOnAMissingLogDir(unittest.TestCase):
         self.assertEqual(len(hw.scan(logs)), 1)
 
 
-class TestSpawnEnvHelper(unittest.TestCase):
+class TestSpawnEnvHelper(HermeticCase):
     """`fleetd._spawn_env` in isolation, no subprocess: it must set
     FLEET_HUB_URL/FLEET_CODE_URL from the `Hub` object (overriding any
     stale value already in os.environ) while leaving everything else --
@@ -776,8 +778,7 @@ class TestAgentSlots(FleetdBase):
         nothing to converge). An agent test needs a branch the tip has moved
         past, so this makes one.
         """
-        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        env = scrub_env()
         base = subprocess.run(
             ["git", "-C", str(self.seed), "rev-parse", "HEAD~1"],
             capture_output=True, text=True, check=True).stdout.strip()
@@ -1138,8 +1139,7 @@ class TestLostLeaseIsKilledWhileTheHubIsUnreachable(FleetdBase):
 
         # The base fixture carries one staging branch; this test needs two
         # workers, so give the queue a second candidate.
-        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        env = scrub_env()
         (self.seed / "h.txt").write_text("second branch\n")
         subprocess.run(["git", "-C", str(self.seed), "add", "."], check=True, env=env)
         subprocess.run(["git", "-C", str(self.seed), "commit", "-qm", "more work"],
@@ -1281,13 +1281,14 @@ class TestReapDeadSameHostSingleton(FleetdBase):
         self.assertIsNotNone(self.hub.sha(ref), "the renewed claim must survive")
 
 
-class TestFleetdMarkerInGroup(unittest.TestCase):
+class TestFleetdMarkerInGroup(HermeticCase):
     """`fleetd_marker_in_group` against REAL processes -- the whole point of
     this function is that fleetd shares its wrapper's process group and so
     is never that group's LEADER (see the function's docstring), so a fake
     that only exercises the leader case would not test the fix at all."""
 
     def setUp(self):
+        super().setUp()
         self.procs: list = []
 
     def tearDown(self):
@@ -1364,7 +1365,7 @@ class TestFleetdMarkerInGroup(unittest.TestCase):
         self.assertIsNone(found)
 
 
-class TestSingletonTTL(unittest.TestCase):
+class TestSingletonTTL(HermeticCase):
     """`fleetd.singleton_ttl_s`: the integration reconciliation's one-line
     fix -- the host-singleton lease gets its OWN, shorter TTL
     (`FLEET_SINGLETON_TTL_S`, default 120s) instead of inheriting the
@@ -1375,6 +1376,7 @@ class TestSingletonTTL(unittest.TestCase):
     """
 
     def setUp(self):
+        super().setUp()
         self._saved = {}
         for name in ("FLEET_SINGLETON_TTL_S", claim_mod.TTL_ENV):
             self._saved[name] = os.environ.pop(name, None)

@@ -55,6 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import claim as claim_mod  # noqa: E402
 import fleetd  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 from claim import (  # noqa: E402
     Claim,
     claim_ref,
@@ -78,10 +79,11 @@ HUB_TIP_REF = "refs/heads/refactor/tag-machinery"
 # --------------------------------------------------------------------- #
 
 
-class LeaseFixture(unittest.TestCase):
+class LeaseFixture(HermeticCase):
     """A throwaway bare hub, plus the guard that it is never the real one."""
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="lease-proto-")
         self.tmp = Path(self._tmp_root)
         self.hub_path = str(self.tmp / "hub.git")
@@ -550,8 +552,7 @@ def make_fixture_hub(tmp: Path) -> Path:
     subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
     work = tmp / "seed"
     subprocess.run(["git", "init", "-q", str(work)], check=True)
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    env = scrub_env()
     (work / "f.txt").write_text("tip\n")
     subprocess.run(["git", "-C", str(work), "add", "."], check=True, env=env)
     subprocess.run(["git", "-C", str(work), "commit", "-qm", "tip"], check=True, env=env)
@@ -565,11 +566,12 @@ def make_fixture_hub(tmp: Path) -> Path:
     return bare
 
 
-class TestFleetdStopsWorkOnLostLease(unittest.TestCase):
+class TestFleetdStopsWorkOnLostLease(HermeticCase):
     """The consumer half of the contract. `claim.lost` is inert unless
     somebody acts on it, and prose in a docstring is not somebody."""
 
     def setUp(self):
+        super().setUp()
         self._tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmpdir.name)
         self.bare = make_fixture_hub(self.tmp)
@@ -744,7 +746,7 @@ class TestFleetdSingletonRenews(LeaseFixture):
         home = self.tmp / "home"
         (home / ".fleetd").mkdir(parents=True)
         env = {
-            **os.environ,
+            **scrub_env(),
             "HOME": str(home),  # keep the daemon's hub cache out of the real ~
             "FLEET_HOST": host,
             claim_mod.TTL_ENV: str(self.DTTL_S),

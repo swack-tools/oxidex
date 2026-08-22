@@ -24,14 +24,16 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from _env import HermeticCase  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / "rollout" / "install_secrets.sh"
 UNRESOLVABLE_URL = "https://state-repo.example.invalid/oxidex-fleet-state.git"
 CANARY_TOKEN = "ghp_CANARY_MUST_NEVER_APPEAR_IN_OUTPUT_0000000000"
 
 
-class InstallSecretsTestCase(unittest.TestCase):
+class InstallSecretsTestCase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.mkdtemp(prefix="install-secrets-")
         self.addCleanup(self._rmtree)
         self.home = Path(self._tmp) / "home"
@@ -44,7 +46,11 @@ class InstallSecretsTestCase(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _run(self, args, env_extra=None, home=None):
-        env = {**os.environ, "HOME": str(home or self.home)}
+        # Hermetic: the script defaults --state-url from FLEET_HUB_URL and
+        # --token-file from FLEET_GIT_TOKEN_FILE, so an invoker that exports
+        # either (gate.sh exports FLEET_HUB_URL) would pre-answer the very
+        # question these tests ask. `hermetic_env` strips both.
+        env = self.hermetic_env(HOME=str(home or self.home))
         if env_extra:
             env.update(env_extra)
         return subprocess.run(

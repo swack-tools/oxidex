@@ -66,6 +66,7 @@ import agentworker  # noqa: E402
 import fleetd  # noqa: E402
 import fleetlib  # noqa: E402
 from fleetlib import Hub  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 GIT_ENV = {
@@ -112,7 +113,7 @@ echo "BLOCKED: the second implementation needs a human"
 def _run(args, cwd=None, check=True):
     return subprocess.run(
         args, cwd=cwd, check=check, capture_output=True, text=True,
-        env={**os.environ, **GIT_ENV},
+        env=scrub_env(**GIT_ENV),
     )
 
 
@@ -163,8 +164,9 @@ class _Repos:
         return out.split("\t")[0] if out else None
 
 
-class _WorkerCase(unittest.TestCase):
+class _WorkerCase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)

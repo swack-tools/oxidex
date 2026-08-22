@@ -35,6 +35,7 @@ import dispatch  # noqa: E402
 import fleetd  # noqa: E402
 import verdict  # noqa: E402
 from fleetlib import Hub  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 GIT_ENV = {
@@ -57,7 +58,7 @@ class Fixture:
         self.tmp = tmp
         self.bare = tmp / "hub.git"
         self.work = tmp / "seed"
-        self.env = {**os.environ, **GIT_ENV}
+        self.env = scrub_env(**GIT_ENV)
         subprocess.run(["git", "init", "-q", "--bare", str(self.bare)], check=True)
         subprocess.run(["git", "init", "-q", str(self.work)], check=True)
         self.base = self._commit("base", "f.txt", "base\n")
@@ -116,8 +117,9 @@ class Fixture:
         return Hub(str(self.bare), workdir=self.tmp / name)
 
 
-class DispatchBase(unittest.TestCase):
+class DispatchBase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         self.fx = Fixture(self.tmp)
@@ -217,14 +219,13 @@ class TestDurableAttempts(DispatchBase):
         probe = "import sys; sys.path.insert(0, %r); import dispatch; print(dispatch.MAX_ATTEMPTS, dispatch.COOLDOWN_S)" % str(FLEET_DIR)
         r = subprocess.run(
             [sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
-            env={**os.environ, "FLEET_AGENT_MAX_ATTEMPTS": "7", "FLEET_AGENT_COOLDOWN_S": "12"},
+            env=scrub_env(FLEET_AGENT_MAX_ATTEMPTS="7", FLEET_AGENT_COOLDOWN_S="12"),
         )
         self.assertEqual(r.stdout.strip(), "7 12.0", r.stderr)
 
         r_default = subprocess.run(
             [sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,
-            env={k: v for k, v in os.environ.items()
-                 if k not in ("FLEET_AGENT_MAX_ATTEMPTS", "FLEET_AGENT_COOLDOWN_S")},
+            env=scrub_env(),  # drops those two, and every other FLEET_* the invoker set
         )
         self.assertEqual(r_default.stdout.strip(), "3 1800.0", r_default.stderr)
 
@@ -407,7 +408,7 @@ class TestEconomics(DispatchBase):
 # --------------------------------------------------------------------- #
 
 
-class TestReservedAuthoringSlot(unittest.TestCase):
+class TestReservedAuthoringSlot(HermeticCase):
     """Unit-level: the ordering policy itself, independent of any hub."""
 
     @staticmethod
@@ -684,7 +685,7 @@ class TestAgentworkerPreflight(DispatchBase):
             [sys.executable, str(FLEET_DIR / "agentworker.py"),
              "--branch", "staging/nodrift", "--hub", str(self.fx.bare), "--host", self.host],
             capture_output=True, text=True, timeout=180,
-            env={**os.environ, "FLEET_AGENT_CLI_OVERRIDE": str(stub)},
+            env=scrub_env(FLEET_AGENT_CLI_OVERRIDE=str(stub)),
         )
         self.assertEqual(r.returncode, 8, f"stdout={r.stdout}\nstderr={r.stderr}")
         self.assertIn("PREFLIGHT REFUSED", r.stdout)

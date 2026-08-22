@@ -85,6 +85,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from _env import HermeticCase  # noqa: E402
 
 FLEET_DIR = Path(__file__).resolve().parents[1]  # tools/fleet
 REPO_ROOT = FLEET_DIR.parents[1]
@@ -198,7 +199,7 @@ def _scan(path: Path):
     return hits
 
 
-class TestNoHardcodedHosts(unittest.TestCase):
+class TestNoHardcodedHosts(HermeticCase):
     def test_no_hardcoded_hosts_outside_comments(self):
         offenders = []
         for path in _candidate_files():

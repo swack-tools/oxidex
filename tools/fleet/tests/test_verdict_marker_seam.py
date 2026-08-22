@@ -63,6 +63,7 @@ sys.path.insert(0, str(FLEET_DIR))
 
 import config  # noqa: E402
 import fleetd  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 GATE_SH = FLEET_DIR / "gate.sh"
 FLEET_ENV_SH = FLEET_DIR / "units" / "fleet-env.sh"
@@ -83,7 +84,12 @@ def _expand_sv(home: str, tag: str, env_file: Path) -> str:
     sourced first exactly the way gate.sh sources `units/fleet-env.sh`.
 
     `HOME` is set in the script rather than in the process environment so
-    the expansion is reproducible regardless of who runs the suite.
+    the expansion is reproducible regardless of who runs the suite. The
+    process environment is `scrub_env()`: `gate.sh` sources
+    `units/fleet-env.sh` (which EXPORTS `FLEET_VERDICT_STORE_FAILED_SUFFIX`)
+    before it runs this suite, and an inherited value makes the
+    `${VAR:=default}` in every env file below a no-op -- the "unset
+    variable" controls cannot unset what the invoker exported.
     """
     script = (
         f"HOME={home!r}\n"
@@ -92,13 +98,15 @@ def _expand_sv(home: str, tag: str, env_file: Path) -> str:
         f"{_sv_assignment()}\n"
         'printf "%s" "$SV"\n'
     ).replace("'", '"')  # repr() quotes with ', bash is happier with "
-    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=15)
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                            timeout=15, env=scrub_env())
     assert result.returncode == 0, result.stderr
     return result.stdout
 
 
-class TestGateShAndFleetdAgreeOnTheMarkerPath(unittest.TestCase):
+class TestGateShAndFleetdAgreeOnTheMarkerPath(HermeticCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
@@ -173,7 +181,7 @@ class TestGateShAndFleetdAgreeOnTheMarkerPath(unittest.TestCase):
         )
 
 
-class TestTheSuffixIsSpelledInExactlyTwoPlaces(unittest.TestCase):
+class TestTheSuffixIsSpelledInExactlyTwoPlaces(HermeticCase):
     def test_config_py_and_fleet_env_sh_agree(self):
         """The two canonical definitions. Each file is read by a different
         language and neither ever compares itself to the other, so a
@@ -214,7 +222,7 @@ class TestTheSuffixIsSpelledInExactlyTwoPlaces(unittest.TestCase):
             )
 
 
-class TestMarkerHelpersRoundTrip(unittest.TestCase):
+class TestMarkerHelpersRoundTrip(HermeticCase):
     """`verdict_store_failed_marker` / `_tag` / `_glob` are one another's
     inverses, because `HostWarnings.scan` composes all three: it globs the
     directory, then recovers the tag from each filename to name the gate in
