@@ -74,6 +74,12 @@ class FleetdBase(unittest.TestCase):
         self.stub = make_stub_gate(self.tmp)
         self.workers = []
         self.host = "testhost"
+        # T3: the durable warning store `main` owns for the daemon's whole
+        # lifetime. Held on the fixture (rather than created per call
+        # inside `reconcile`) so that a test making several reconciles sees
+        # the same persistence a running fleetd does -- which is the entire
+        # property `warnings` exists for.
+        self.host_warnings = fleetd.HostWarnings()
         os.environ["FLEET_HOST"] = self.host
 
     def tearDown(self):
@@ -97,6 +103,7 @@ class FleetdBase(unittest.TestCase):
             repo_root=Path(__file__).resolve().parents[3],
             disk_probe=lambda: disk,
             mem_probe=lambda: mem,
+            warnings=self.host_warnings,
         )
 
     def set_desired(self, gates, enabled=True, reason=None, limits=None):
@@ -363,6 +370,211 @@ class TestGateVerdictStoreFailureSurfaced(FleetdBase):
         self.assertIn(tag, res2.finished, f"gate never reaped: finished={res2.finished}")
         self.assertNotIn("verdict-store-failed", [r[0] for r in res2.refused],
                          f"refused={res2.refused}")
+
+
+class TestVerdictStoreFailureIsDurableAndOwnerless(FleetdBase):
+    """T3 (review of `staging/agent-server` @ 6bf59f2b). Two gaps in the R4
+    plumbing that `TestGateVerdictStoreFailureSurfaced` above pins the
+    working half of.
+
+    1. IT LASTED ONE LOOP. `ReconcileResult.refused` is this loop's
+       scheduling answer; the reap step appends `verdict-store-failed`
+       exactly once, on the pass that reaps the gate, and the very next
+       reconcile -- 15 seconds later -- overwrites the heartbeat with a
+       `refused[]` that no longer mentions it. An operator who ran
+       `fleet status --why` sixteen seconds after the failure saw a healthy
+       host. The condition, meanwhile, had not changed at all: the marker
+       file was still sitting there.
+
+    2. IT ONLY SAW ITS OWN GATES. The reap-time check runs inside the loop
+       over `workers`, so it can only fire for a gate `fleetd` spawned and
+       is holding. A marker written by `train.real_gate` (a subprocess of
+       the train's own process, no worker, no claim) or by a human running
+       `gate.sh` by hand was read by nothing, on any host, ever -- and the
+       hosts that run trains are exactly the hosts whose verdict pushes
+       matter most.
+
+    `HostWarnings` fixes both by sweeping the LOG DIRECTORY rather than the
+    worker list: provenance stops mattering, and an entry lives exactly as
+    long as its file does.
+    """
+
+    def _marker(self, tag: str):
+        logs = self.tmp / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        m = fleetd._verdict_store_failed_marker(logs, tag)
+        m.write_text("")
+        return m
+
+    def _reasons(self, entries):
+        return [r[0] for r in entries]
+
+    def test_a_marker_from_a_gate_fleetd_never_spawned_becomes_a_warning(self):
+        """No worker, no claim, no reap -- the shape `train.real_gate` and
+        a hand-run `gate.sh` leave behind, and the shape the reap-time
+        check is structurally unable to see."""
+        self.set_desired(gates=0)
+        self._marker("train-staging-alpha-991")
+
+        res = self.reconcile()
+        self.assertEqual(res.started, [])
+        self.assertEqual(res.finished, [], "there was no worker to reap")
+        self.assertIn("verdict-store-failed", self._reasons(res.warnings),
+                      f"warnings={res.warnings}")
+        detail = dict(res.warnings)["verdict-store-failed"]
+        self.assertIn("train-staging-alpha-991", detail)
+        # ...and it is NOT a refusal: nothing was refused, the host is
+        # simply at its desired target of zero.
+        self.assertNotIn("verdict-store-failed", self._reasons(res.refused))
+
+    def test_the_warning_is_in_every_heartbeat_not_just_the_first(self):
+        """The durability property, measured the way an operator would: by
+        re-reading the durable heartbeat ref after each loop."""
+        self.set_desired(gates=0)
+        self._marker("m5-hand-run-1")
+
+        for loop in range(3):
+            res = self.reconcile()
+            self.assertIn("verdict-store-failed", self._reasons(res.warnings),
+                          f"loop {loop}: warnings={res.warnings}")
+            self.assertTrue(res.heartbeat_written)
+            hb = self.hub.read(fleetd.HOSTS_PREFIX + self.host)
+            self.assertIn("verdict-store-failed",
+                          [w[0] for w in (hb.get("warnings") or [])], hb)
+
+    def test_removing_the_marker_clears_the_warning(self):
+        """The other half of durability, and the reason nothing here
+        expires on a timer: the entry tracks the FILE, and
+        `store_verdict()`'s own `rm -f "$SV"` on a later successful store
+        is what removes it. A warning that outlived its cause would train
+        operators to ignore the field."""
+        self.set_desired(gates=0)
+        marker = self._marker("m5-clears")
+        self.assertIn("verdict-store-failed", self._reasons(self.reconcile().warnings))
+
+        marker.unlink()
+        res = self.reconcile()
+        self.assertEqual(res.warnings, [], f"warnings={res.warnings}")
+        hb = self.hub.read(fleetd.HOSTS_PREFIX + self.host)
+        self.assertEqual(hb.get("warnings"), [])
+
+    def test_a_clean_host_reports_no_warnings_at_all(self):
+        """The negative control. Without it, a `scan` that appended
+        unconditionally would satisfy every test above."""
+        self.set_desired(gates=0)
+        res = self.reconcile()
+        self.assertEqual(res.warnings, [])
+
+    def test_two_markers_are_two_warnings_and_neither_is_duplicated(self):
+        """Keyed by PATH, so re-sweeping the same directory on every loop
+        cannot accumulate copies of the same fact -- which is what an
+        append-only `refused`-style list would have done here, given that
+        this sweep runs every 15 seconds forever."""
+        self.set_desired(gates=0)
+        self._marker("tag-a")
+        self._marker("tag-b")
+        self.reconcile()
+        res = self.reconcile()
+        self.assertEqual(len(res.warnings), 2, res.warnings)
+        details = " ".join(d for _, d in res.warnings)
+        self.assertIn("tag-a", details)
+        self.assertIn("tag-b", details)
+
+    def test_fleet_status_why_renders_the_warning(self):
+        """`fleet status --why` is the command the human runs when nothing
+        is happening; a durable field it does not print is a durable field
+        nobody reads."""
+        import contextlib
+        import io
+
+        self.set_desired(gates=0)
+        self._marker("m5-why-render")
+        self.assertTrue(self.reconcile().heartbeat_written)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["--hub", str(self.bare), "status", "--why"])
+        out = buf.getvalue()
+        self.assertIn("warning: verdict-store-failed", out, out)
+        self.assertIn("m5-why-render", out, out)
+
+    def test_the_reaped_gate_refusal_is_still_one_shot_and_the_warning_is_not(self):
+        """The two channels side by side, which is the finding in one test.
+
+        A gate fleetd DID spawn produces both: a `refused` entry on the
+        single loop that reaps it (unchanged -- `fleet status --why`'s
+        existing rendering and `TestGateVerdictStoreFailureSurfaced` both
+        depend on it) and a warning that is still there on the next loop,
+        and the one after that.
+        """
+        self.set_desired(gates=1)
+        res1 = self.reconcile()
+        self.assertEqual(len(res1.started), 1, f"refused={res1.refused}")
+        tag = res1.started[0]
+        self._marker(tag)
+
+        (self.tmp / f"stop-{tag}").write_text("")
+        deadline = time.time() + 10
+        while time.time() < deadline and any(w.tag == tag and w.alive() for w in self.workers):
+            time.sleep(0.1)
+
+        reaped = self.reconcile()
+        self.assertIn(tag, reaped.finished)
+        self.assertIn("verdict-store-failed", self._reasons(reaped.refused))
+        self.assertIn("verdict-store-failed", self._reasons(reaped.warnings))
+
+        after = self.reconcile()
+        self.assertNotIn("verdict-store-failed", self._reasons(after.refused),
+                         "the per-loop refusal is (still) one-shot by design")
+        self.assertIn("verdict-store-failed", self._reasons(after.warnings),
+                      "the durable warning vanished with the refusal -- this is "
+                      "exactly the 15-second visibility window T3 exists to close")
+
+
+class TestHostWarningsScanOnAMissingLogDir(unittest.TestCase):
+    """`HostWarnings.scan` promises that "we could not look" never reads
+    as "the condition cleared". `Path.glob` on a directory that does not
+    exist yields nothing and raises nothing, so the OSError branch alone
+    did not keep that promise: an absent `~/gatelogs` (a fresh host, a
+    moved `--log-dir`, a purge) silently emptied every warning on the next
+    loop. The guard is `is_dir()`; this pins it without a reconcile."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    @staticmethod
+    def _reasons(entries):
+        return [r for r, _ in entries]
+
+    def test_an_absent_log_dir_keeps_what_was_seen(self):
+        logs = self.tmp / "gatelogs"
+        logs.mkdir()
+        fleetd._verdict_store_failed_marker(logs, "m5-missing-dir").write_text("")
+        hw = fleetd.HostWarnings()
+        self.assertEqual(self._reasons(hw.scan(logs)), ["verdict-store-failed"])
+
+        shutil.rmtree(logs)
+        self.assertEqual(self._reasons(hw.scan(logs)), ["verdict-store-failed"],
+                         "an absent directory cleared the warning -- 'could not "
+                         "look' read as 'looked and found nothing'")
+        self.assertEqual(self._reasons(hw.scan(self.tmp / "never-existed")),
+                         ["verdict-store-failed"])
+
+        # The real all-clear is a directory that IS there and holds no marker.
+        logs.mkdir()
+        self.assertEqual(hw.scan(logs), [])
+
+    def test_a_file_where_the_directory_should_be_is_not_an_all_clear_either(self):
+        logs = self.tmp / "gatelogs"
+        logs.mkdir()
+        fleetd._verdict_store_failed_marker(logs, "m5-not-a-dir").write_text("")
+        hw = fleetd.HostWarnings()
+        self.assertEqual(len(hw.scan(logs)), 1)
+        shutil.rmtree(logs)
+        logs.write_text("")  # a FILE at the log-dir path
+        self.assertEqual(len(hw.scan(logs)), 1)
 
 
 class TestSpawnEnvHelper(unittest.TestCase):

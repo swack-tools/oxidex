@@ -163,9 +163,11 @@ _ABSENT_REF_HINT = "couldn't find remote ref"
 # HTTPS credentials for the GitHub spine, supplied by FILE and never by
 # argv, environment value, or an interactive prompt.
 #
-# `~/.keel/github.token` is a per-host fine-grained PAT (SPEC 8,
-# "Credentials"); `FLEET_GIT_TOKEN_FILE` names it. When that variable is
-# set, every git command this module runs is given a `credential.helper`
+# `~/.keel/secrets/git-token` (`config.DEFAULT_GIT_TOKEN_FILE_REL`, the
+# path `rollout/install_secrets.sh` writes) holds a per-host fine-grained
+# PAT (SPEC 8, "Credentials"); `FLEET_GIT_TOKEN_FILE` overrides the path,
+# and `git_token_file()` below is the one resolver. When a token file
+# resolves, every git command this module runs is given a `credential.helper`
 # pointing at the shell script below, which reads the token out of the file
 # and hands it to git on its stdout. The token therefore never appears in a
 # process argument list (`ps -eo args` shows it to every user on the host),
@@ -921,9 +923,23 @@ class Hub:
         refspec: str,
         push_options: Optional[Sequence[str]] = None,
         force: bool = False,
+        force_with_lease: Optional[str] = None,
+        timeout: int = 30,
     ) -> _Result:
         """`push_ref`, but against `code_push_url` -- the CODE repo, for
         every code write EXCEPT the tip (see `push_tip_ref`).
+
+        `force_with_lease=<sha>` (Stage 1d, T5) emits
+        `--force-with-lease=<dst>:<sha>`, where `<dst>` is `refspec`'s
+        destination ref: the push lands only if the remote still points at
+        `<sha>`. It is the lease `agentworker._deliver` takes on the branch
+        head it read BEFORE the agent started -- anything else there is
+        somebody's commit pushed during the run, which the delivery must
+        refuse rather than overwrite (the rule `delete_code_ref` states for
+        the retirement). Mutually exclusive with `force=True`, which is the
+        bare `--force` this lease exists to avoid. `timeout` defaults to the
+        same 30 s every other `_run` uses; the agent delivery passes its own,
+        because it may be pushing a regenerated `binary_tables.rs`.
 
         This is the write half of the split. `rescued/<slug>`, the
         `staging/*` retirement and the train's temp gate ref are code refs;
@@ -943,12 +959,19 @@ class Hub:
         the parameter makes that unrepresentable rather than merely
         discouraged.
         """
+        if force and force_with_lease is not None:
+            raise ValueError("push_code_ref: force=True and force_with_lease= are mutually exclusive")
         args = ["push"]
         if force:
             args.append("--force")
+        if force_with_lease is not None:
+            dst = refspec.rsplit(":", 1)[-1]
+            if not dst:
+                raise ValueError(f"push_code_ref: no destination ref in refspec {refspec!r} to lease")
+            args.append(f"--force-with-lease={dst}:{force_with_lease}")
         args.extend(self._push_option_args(push_options))
         args.extend([self.code_push_url, refspec])
-        return self._run(args)
+        return self._run(args, timeout=timeout)
 
     def push_tip_ref(
         self,

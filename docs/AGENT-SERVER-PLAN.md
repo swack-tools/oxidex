@@ -63,16 +63,18 @@ the human a `fleet status` that says *why* nothing is starting.
   `QueueError` that the reconcile loop does not catch. `tests/test_code_url_split.py` (two bare
   repos: `state.git` with no `refs/heads/*` at all).
 - De-hardcode: `gate.sh` L243 + L373 → `FLEET_CODE_URL` required; `gate.sh` L223/L441,
-  `fleetd.py` L2021-2022 → `EXIFTOOL_CACHE_DIR`, whose default is spelled in exactly two
+  `fleetd._exiftool_cache_dir` → `EXIFTOOL_CACHE_DIR`, whose default is spelled in exactly two
   mirrored places — `tools/fleet/config.py` (`DEFAULT_EXIFTOOL_CACHE_DIR`, imported by
   `fleetd.py`/`doctor.py`/`ledger.py`) and `units/fleet-env.sh` (sourced by `gate.sh`) — with
   `tests/test_no_hardcoded_hosts.py` forbidding both the contiguous literal and the two-piece
   basename reassembly everywhere else (R6); `units/fleetd.service` L22, `com.oxidex.fleetd.plist`
   L14, `cron-backstop.txt` L45 → `FLEET_HUB_URL=<state repo https>`, `FLEET_CODE_URL=<code repo
   https>`; `fleetd --hub <state> --code <code>`.
-- The heartbeat payload `reconcile_once` builds (`fleetd.py` L2042-2076, written by
-  `fleetd.write_heartbeat` L1247-1261) gains `refused: ReconcileResult.refused`; `cli.cmd_status`
-  gains `--why` rendering it per host.
+- The heartbeat payload `fleetd.reconcile_once` builds (the `hb` dict, written by
+  `fleetd.write_heartbeat`) gains `refused: ReconcileResult.refused`; `cli.cmd_status`
+  gains `--why` rendering it per host. Stage 1d (T3) adds `warnings: ReconcileResult.warnings`
+  beside it — durable conditions swept from the `~/gatelogs` marker files by
+  `fleetd.HostWarnings.scan` every reconcile, rendered by `--why` as `warning:` lines (SPEC §3.1).
 - `train.py`: after a successful tip push, CAS-bump `refs/fleet/signals/tip` via `Hub.update`
   (replaces post-receive for the hubless interim); `tip_push_options` returns `[]` when
   `FLEET_TRAIN_TOKEN_FILE` is absent (already the behaviour); the tip push goes through
@@ -88,7 +90,7 @@ the human a `fleet status` that says *why* nothing is starting.
 - Import of the i7's `~/gatelogs/gate-*.json` into the cache via `verdict.py store`.
 - `fleetd` on the i7 (targets 1/0); m5 at 0/0 (laptop; `gates: 0` by policy). The merged
   `units/fleetd.service` `ExecStart` passes no `--interval`, so the i7 runs at fleetd's default
-  `LOOP_SECONDS = 15` (`fleetd.py:109`); `--interval 30` is a hand-start knob, and putting it on
+  `fleetd.LOOP_SECONDS` (15); `--interval 30` is a hand-start knob, and putting it on
   the unit is a one-line unit change, not something this deliverable already did.
 
 **Tasks.**

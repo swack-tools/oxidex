@@ -27,7 +27,7 @@ a side file and is run from hyperfine's `--prepare` hook (untimed); the timed
 Usage (the acceptance invocation, from the repo root):
 
     export FLEET_BENCH_HUB_URL=https://github.com/<owner>/<scratch>.git
-    export FLEET_GIT_TOKEN_FILE=~/.keel/github.token      # if HTTPS
+    export FLEET_GIT_TOKEN_FILE=<path>   # HTTPS only, and only if the PAT is not at ~/.keel/secrets/git-token
     export FLEET_BENCH_DIR=/tmp/fleet-bench
     python3 tools/fleet/keel/bench_hub.py setup
     hyperfine -N --warmup 2 --runs 20 --export-json create.json \\

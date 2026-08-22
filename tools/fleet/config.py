@@ -86,3 +86,55 @@ def default_git_token_file(env: "dict | None" = None) -> Path:
     src = os.environ if env is None else env
     home = src.get("HOME") or os.path.expanduser("~")
     return Path(home) / DEFAULT_GIT_TOKEN_FILE_REL
+
+
+# ---------------------------------------------------------------------
+# T2 (review of `staging/agent-server` @ 6bf59f2b): the verdict-store
+# failure marker's FILENAME SUFFIX.
+#
+# `gate.sh`'s `store_verdict()` writes `$HOME/gatelogs/gate-<tag><suffix>`
+# when it could not push this gate's verdict to the hub cache (R4), and
+# `fleetd`'s reap loop reads that exact path back. Before this constant
+# the two spellings were hand-kept in two files -- a shell string in
+# `gate.sh` and an f-string in `fleetd._verdict_store_failed_marker` --
+# with NOTHING comparing them. Renaming either one leaves every test in
+# the suite green (gate.sh's own tests set `SV=` themselves; fleetd's
+# tests write the marker with fleetd's own helper) while fleetd silently
+# stops seeing a marker gate.sh is still writing: the failure it exists
+# to surface goes back to being invisible, and no instrument says so.
+#
+# So the suffix is spelled HERE, once, on the Python side, and once in
+# `units/fleet-env.sh` on the shell side (which `gate.sh` already
+# sources). `tests/test_verdict_marker_seam.py::
+# TestTheSuffixIsSpelledInExactlyTwoPlaces` pins the two literals against
+# each other (`DEFAULT_EXIFTOOL_CACHE_DIR` above gets the same treatment
+# from `tests/test_no_hardcoded_hosts.py`), and that file's
+# `TestGateShAndFleetdAgreeOnTheMarkerPath` goes further: it evaluates
+# `gate.sh`'s OWN `SV=` line in a shell and compares the resulting path,
+# byte for byte, against `verdict_store_failed_marker()`.
+# ---------------------------------------------------------------------
+
+VERDICT_STORE_FAILED_SUFFIX = ".verdict-store-failed"
+
+
+def verdict_store_failed_marker(log_dir, tag: str) -> Path:
+    """`<log_dir>/gate-<tag><VERDICT_STORE_FAILED_SUFFIX>` -- the one
+    place the marker's full filename is composed on the Python side."""
+    return Path(log_dir) / f"gate-{tag}{VERDICT_STORE_FAILED_SUFFIX}"
+
+
+def verdict_store_failed_glob() -> str:
+    """Glob matching every gate's marker in a log directory, for the
+    durable warning sweep (`fleetd.HostWarnings.scan`). A `gate-*` prefix
+    rather than a bare `*`: the directory also holds `fleetd-gate-*` and
+    `fleetd-agent-*` launch logs."""
+    return f"gate-*{VERDICT_STORE_FAILED_SUFFIX}"
+
+
+def verdict_store_failed_tag(name: str) -> "str | None":
+    """The `<tag>` back out of a marker FILENAME, or None if `name` is
+    not one. Inverse of `verdict_store_failed_marker`, so the sweep can
+    name the gate a stray marker belongs to."""
+    if not (name.startswith("gate-") and name.endswith(VERDICT_STORE_FAILED_SUFFIX)):
+        return None
+    return name[len("gate-"):-len(VERDICT_STORE_FAILED_SUFFIX)] or None

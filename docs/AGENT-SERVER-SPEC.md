@@ -118,7 +118,7 @@ server" is state, not configuration.
 | attempts | `refs/fleet/attempts/<key>` (unchanged) | server scheduler (`dispatch.record_dispatch` L254 **before** offer), runner (`record_outcome` L269, `not-paid` refund) | unchanged |
 | intent | `refs/fleet/intents/<slug>` (unchanged) | `intent.register/withdraw/mark_done` (L281/362/379) via server; ledger check runs as a probe job on a `has_oracle` runner | unchanged |
 | tip signal | `refs/fleet/signals/tip` (unchanged payload) | server tip watcher (replaces `hooks/post-receive` + `drift.bump_tip_signal` L133-186; same CAS/monotonic rule via `Hub.update`) | `sha, generation, ts, by∈{train,foreign}` |
-| host heartbeat (durable copy) | `refs/fleet/hosts/<host>` (unchanged payload + `refused[]`) | server every **5 min** per host (not 60 s: push volume, Judge 2); runner directly when in fallback ≥ 5 min | the `hb` dict `reconcile_once` builds (`fleetd.py` L2042-2076) written by `fleetd.write_heartbeat` (L1247-1261), including `refused: [(reason, detail)]` from `ReconcileResult.refused` (L861) |
+| host heartbeat (durable copy) | `refs/fleet/hosts/<host>` (unchanged payload + `refused[]` + `warnings[]`) | server every **5 min** per host (not 60 s: push volume, Judge 2); runner directly when in fallback ≥ 5 min | the `hb` dict `fleetd.reconcile_once` builds, written by `fleetd.write_heartbeat`, including `refused: [(reason, detail)]` from `ReconcileResult.refused` (this loop's scheduling answer, rewritten every reconcile) and `warnings: [(reason, detail)]` from `ReconcileResult.warnings` (Stage 1d, T3: DURABLE host conditions, re-derived every reconcile by `fleetd.HostWarnings.scan` from the marker files in `~/gatelogs` — today exactly one reason, `verdict-store-failed`, for any `gate-<tag>` marker `gate.sh store_verdict` left there, whoever ran that gate — and present in every heartbeat for as long as the marker exists; an absent or unreadable log directory leaves the list unchanged rather than clearing it; `fleet status --why` prints each as `warning: <reason> (<detail>)` under the host's `refused:` lines) |
 | agent | `refs/fleet/agents/<id>` (new) | server on transitions (CAS); runner at result via fallback | `id, role, key, runner, model, budget{usd,tokens,seconds,turns}, spent{…}, status, result{outcome,branch,sha,summary,instrument}, token_issued_at, token_expires_at, created_at, ended_at, transcript_sha256, transcript_host` (≤ 2 KB; **no transcript content**) |
 | review | `refs/fleet/reviews/<slug>/<sha>` (new) | reviewer agent via server | `class∈{defect,drift,flake,infra}, evidence[], model, agent_id` |
 | events checkpoint | `refs/fleet/events/<boot_id>` (new; **lossy by design**) | server every 5 min | one blob, JSONL since last checkpoint, ≤ 10k lines |
@@ -252,7 +252,7 @@ Seam tests pinning this: `TestSeam8ServerKilledMidGate` and `TestSeam9RouteFlipN
 (§11).
 
 ### 4.4 The code/state routing table (four URLs, one rule)
-`Hub` carries four remotes (`fleetlib.py:618`). `url` is the PRIVATE state repo and answers
+`Hub` carries four remotes (`fleetlib.Hub.__init__`). `url` is the PRIVATE state repo and answers
 `refs/fleet/*`. `code_url` is the PUBLIC code repo and answers `refs/heads/*` **reads** — the tip's
 sha, the `staging/*` listing, and the object fetches behind `merge-base`/`merge-tree`.
 `code_push_url` is where ORDINARY `refs/heads/*` **writes** go — `rescued/*`, the `staging/<slug>`
@@ -319,7 +319,7 @@ defect §4.4's opening now describes.
 
 | site | file:line | remote | call |
 |---|---|---|---|
-| tip advance (the one ruleset-bypass push) | `train.py:730,744` | `tip_push_url` (ssh, deploy key) | `hub.push_tip_ref(f"{head}:{TIP_REF}", ssh_command=<deploy key>)` |
+| tip advance (the one ruleset-bypass push) | `train._push_tip` | `tip_push_url` (ssh, deploy key) | `hub.push_tip_ref(f"{head}:{TIP_REF}", ssh_command=<deploy key>)` |
 | `rescued/<slug>` | `train.py:839` | `code_push_url` (HTTPS, PAT) | `hub.push_code_ref` (was a raw `git push origin` from the clone — no credential helper, aimed at the read URL) |
 | `staging/<slug>` retirement | `train.py:799` via `_delete_code_ref_cas` (L748) | `code_push_url` (HTTPS, PAT) | `hub.delete_code_ref(ref, expect_sha)` |
 | `staging/train-tmp-*` push + CAS delete | `train.py:871`, `train.py:888` (via `_delete_code_ref_cas`) | `code_push_url` (HTTPS, PAT) | `hub.push_code_ref` / `hub.delete_code_ref` |
@@ -327,9 +327,9 @@ defect §4.4's opening now describes.
 The deploy key is attached to the **tip push only** (§3.1: `rescued/*`, the `staging/<slug>`
 retirement and `staging/train-tmp-*` go via the PAT), and `push_code_ref`/`delete_code_ref` have
 no `ssh_command` parameter for it to be passed to. It is threaded as a per-subprocess
-`ssh_command=` parameter, never `os.environ` — see `fleetlib.run_git` (`fleetlib.py:476`, which
-`Hub._raw_run` at `fleetlib.py:1230` and `workqueue.Queue._git` both delegate to) and
-`fleetlib.ssh_command` (`fleetlib.py:313`). Setting it process-wide put the code repo's deploy
+`ssh_command=` parameter, never `os.environ` — see `fleetlib.run_git` (which
+`Hub._raw_run` and `workqueue.Queue._git` both delegate to) and
+`fleetlib.ssh_command`. Setting it process-wide put the code repo's deploy
 key, with `IdentitiesOnly=yes`, on every concurrent
 claim-renewal push to the state repo; the train singleton's renewer thread pushes on a 120 s timer
 throughout a 20-45 minute gate, so that overlap is the normal case. `ssh_command(identity_file=…)`
@@ -363,12 +363,12 @@ after a full train run — the second matters because `refs/fleet/*` carries `us
 provenance and the code repo is public (§8).
 
 **`cli.py` is NOT coordination-only, and earlier drafts of this row said it was.** `cli._hub`
-(`cli.py:60`) used to build its `Hub` from `--hub`/`FLEET_HUB_URL` alone, with no `code_url`,
-while `cli.cmd_status` (`cli.py:239`) calls `workqueue.Queue(hub).compute()` — a CODE read. On a
+used to build its `Hub` from `--hub`/`FLEET_HUB_URL` alone, with no `code_url`,
+while `cli.cmd_status` calls `workqueue.Queue(hub).compute()` — a CODE read. On a
 split spine that asked the state repo for the tip, got `None`, and printed
 `QUEUE error: tip ref … does not exist on the code repo <state repo>` on every invocation, with
 no flag or variable able to fix it (R1). `_hub` now passes `Hub(code_url=--code or
-FLEET_CODE_URL)` (`cli.py:72`; the global flag at `cli.py:346` mirrors `fleetd --code`), and
+FLEET_CODE_URL)` (the global `--code` flag `cli.main` declares mirrors `fleetd --code`), and
 `tests/test_cli.py::TestStatusCodeUrlPlumbing` pins flag, env fallback, flag-over-env precedence
 and the still-broken-if-unconfigured case against two real bare repos. The CLI's *writes* remain
 coordination-only (`_edit_desired` and the claim/heartbeat reads all sit on `url`).
@@ -415,7 +415,7 @@ human), **agent** (per agent, derivable — §8). Server stores only sha256 hash
 - `GET /v1/health` → `{boot_id, lease_expires_at, index_observed_at, github_ok, settle_until, degraded}`.
 - **KV-CAS façade** — §4.2. `?fresh=1` forces a live read for any ref.
 - `GET /v1/status` (hosts, runners, queue, claims, train, agents, alerts, server lease, staleness); `GET /v1/queue`; `GET /v1/verdicts/{tree}[/{gv}/{platform}]` (ABORT never served — `verdict.py` L58-61, L168-183).
-- `GET /v1/why` → per runner: last tick's `ReconcileResult.refused` (`fleetd.py` L821-833 — `disabled`, `limits: free 9.1G < 14G`, `no free slots`, `queue empty`, `agent-cooldown`, `economics: cached-pass`, `parked: NEEDS_AUTHOR at <sha>`), `degraded_since`, `spine_unreachable_since`, `settle_until`. `keel why` renders it. This is the literal answer to the week's question.
+- `GET /v1/why` → per runner: last tick's `ReconcileResult.refused` (`disabled`, `limits: free 9.1G < 14G`, `no free slots`, `queue empty`, `agent-cooldown`, `economics: cached-pass`, `parked: NEEDS_AUTHOR at <sha>`), the durable `ReconcileResult.warnings` (§3.1), `degraded_since`, `spine_unreachable_since`, `settle_until`. `keel why` renders it. This is the literal answer to the week's question.
 - `GET|PUT /v1/desired` (`If-Match`; generation++ server-side; `cli._edit_desired` retry semantics).
 - Runners: `POST /v1/runners/{id}/register {capabilities, live_workers[]}` → `{boot_id, settle_until, lease_expires_at}`; `POST …/heartbeat` → 204 (+ commands); `GET …/assignments?wait=30` long-poll → `{offers[], commands[]}` | 204; `POST …/commands {cmd}` (operator → queued); `GET /v1/runners`.
 - Jobs (view over claims): `GET /v1/jobs[/{id}]`; `POST /v1/jobs/{id}/logs` (`X-Log-Offset`, ≤ 16 KB, ≤ 1/s, 64 KB ring); `GET /v1/jobs/{id}/logs?follow=1` (SSE; `?full=1` relays a one-shot read of `~/gatelogs` through the runner's next long-poll — no inbound port); `POST /v1/jobs/{id}/result {rc,outcome,verdict_json?,duration_s}` (idempotent by `job_id`).
@@ -482,9 +482,9 @@ with its one hazard removed: the fleet is never less capable than today's hubles
 `dispatch.py` L29-43) → offered to a runner advertising the CLI → runner claims
 `claims/agent/<key>` (`attempt_key`, `dispatch.py` L135-145) and spawns `agentrun.py` in its own
 session → `running` → terminal `done` (verified by the ref moving/appearing on the **code repo**,
-never by the agent's word — `agentworker.py` L259-271), `blocked` (rc 9), `no-progress` (7),
+never by the agent's word — `agentworker.run`), `blocked` (rc 9; Stage 1d F1: the BLOCKED verdict is read BEFORE any delivery and pushes nothing, whatever the agent committed locally), `no-progress` (7), `push-auth-failed` (rc 10, T5: the work is committed locally and the worker's own delivery push through `Hub.push_code_ref` failed to authenticate — a host credential condition, not a branch verdict),
 `not-paid` (8, refund), `timeout` (6, killed by group), `over_budget`, `killed` (lost lease),
-`infra` (rc 4/5). rc → outcome map unchanged (`fleetd.py` L1693-1701); adopted-across-restart
+`infra` (rc 4/5). rc → outcome map (`fleetd._AGENT_RC_OUTCOMES`) unchanged but for rc 10; adopted-across-restart
 agents record `unknown-adopted` as today but the log ring + journal make the case diagnosable.
 
 ### 6.2 Invocation
@@ -696,7 +696,7 @@ server resume without re-reporting.
 
 | file | disposition | notes / reason |
 |---|---|---|
-| `fleetlib.py` (1239) | **keep as-is** + `code_url`/`code_push_url`/`tip_push_url` attrs (each defaulting to the one before it), `push_tip_ref` (the one deploy-key push) beside `push_code_ref`/`delete_code_ref` (PAT over HTTPS), credential-helper env in the module-level `run_git` (L476; `Hub._raw_run` and `workqueue.Queue._git` delegate to it) reading `git_token_file()` (L243: `FLEET_GIT_TOKEN_FILE`, else `config.DEFAULT_GIT_TOKEN_FILE_REL` under `$HOME` when present), `fetch_namespace(prefix)` helper, `_TRANSPORT_HINTS` (L101) += `rate limit`, `secondary rate`, `abuse detection` so a 429 raises instead of reading as a lost race | it *is* the spine client; CAS proven at the git level (`test_fleetlib.TestCreate` raw-git proofs) |
+| `fleetlib.py` (1239) | **keep as-is** + `code_url`/`code_push_url`/`tip_push_url` attrs (each defaulting to the one before it), `push_tip_ref` (the one deploy-key push) beside `push_code_ref`/`delete_code_ref` (PAT over HTTPS), credential-helper env (`credential_env`) in the module-level `run_git` (`Hub._raw_run` and `workqueue.Queue._git` delegate to it) reading `git_token_file()` (`FLEET_GIT_TOKEN_FILE`, else `config.DEFAULT_GIT_TOKEN_FILE_REL` under `$HOME` when present), `fetch_namespace(prefix)` helper, `_TRANSPORT_HINTS` += `rate limit`, `secondary rate`, `abuse detection` so a 429 raises instead of reading as a lost race | it *is* the spine client; CAS proven at the git level (`test_fleetlib.TestCreate` raw-git proofs) |
 | `claim.py` (898) | **keep as-is**; `kind="server"` is just a string | renewer-owned-by-acquire, ownership token, `lost` semantics, `adopt`, reap — the core; seam-tested |
 | `verdict.py` (286) | **keep**; CLI gains `--server-url` (builds `FallbackHub`) | only thing `gate.sh` knows about the cache (L238-260) |
 | `workqueue.py` (254) | **keep**; `_fetch_for_ancestry` uses `hub.code_url` (1 line) | formula FREE; never a local queue file |
@@ -706,9 +706,9 @@ server resume without re-reporting.
 | `doctor.py` (331) | **keep** + NTP-offset check + `--json` | its checks *are* the registration payload |
 | `drift.py` (219) | **delete**; `bump_tip_signal`'s CAS loop (L133-186) becomes ~20 lines in the server tip watcher via `Hub.update`; `test_tip_watcher.py` pins monotonicity under N processes | it is a hook; GitHub has none |
 | `train.py` (711) | **re-home into the server thread**: keep `load_domains, assemble_batch, merge_members, _gate_and_bisect, _Memo, _eject_union, _push_tip_and_retire, _retire_staging_ref, _mark_intent_done, run_train`; **rewrite** `real_gate` (L645-673, reads `~/gatelogs` on the same host) → `remote_gate` (cache-first at `(tree,7,train_platform)`, push `staging/train-tmp-<tag>` to the code repo, create a `train-gate` offer pinned to `train_platforms`, wait on `verdict.stored` for the exact tree, 90-min ABORT, CAS-delete the temp ref); **delete** `tip_push_options`/push-option retry (L110-136, L522-549 — GitHub has no push options) and the cron entry; `_push_tip` uses the deploy key | batching/bisect/exact-set push are the crown jewels; only the gate adapter and the remote change |
-| `fleetd.py` (2228) | **split**: → `keel/runner.py` verbatim: `Worker, live_pgids, fleet_worker_pgids, session_of, _ps_env, kill_process_group, kill_worker, start_gate, start_agent, adopt_workers` (+ journal evidence), `reap_dead_same_host_singleton, fleetd_marker_in_group, free_disk_gb, free_mem_gb, _limits_ok, _oracle_ok, host_identity`, reconcile ORDER (local reap + lost-lease kill before any remote call, L1721-1752), singleton, bounded-failure main loop; → `keel/scheduler.py`: `classify_branch` (L1128-1195, incl. "a FAIL must be about the current sha"), `_TreeResolver` (memo), `dispatch_agents` (L1545-1675), `_AGENT_RC_OUTCOMES`, heartbeat aggregation, `ReconcileResult.refused` → `/v1/why`; `reconcile_once` gate-selection kept in the runner **only** behind `autonomous_when_serverless`; **delete** `_VerdictIndex`/one-fetch budget (moot), push-retry ladders (L115-121), `/tmp` oracle paths (L2021-2022 → `EXIFTOOL_CACHE_DIR`); `fleet_scope_token` keyed on the state-repo URL; `fleetd.py` itself becomes a shim that exits 2 "use keel-runner" at the last stage | process ownership is a runner concern; selection is a server concern; the split is the boundary `reconcile_once` already draws |
+| `fleetd.py` (2228) | **split**: → `keel/runner.py` verbatim: `Worker, live_pgids, fleet_worker_pgids, session_of, _ps_env, kill_process_group, kill_worker, start_gate, start_agent, adopt_workers` (+ journal evidence), `reap_dead_same_host_singleton, fleetd_marker_in_group, free_disk_gb, free_mem_gb, _limits_ok, _oracle_ok, host_identity`, reconcile ORDER (local reap + lost-lease kill before any remote call, L1721-1752), singleton, bounded-failure main loop; → `keel/scheduler.py`: `classify_branch` (L1128-1195, incl. "a FAIL must be about the current sha"), `_TreeResolver` (memo), `dispatch_agents` (L1545-1675), `_AGENT_RC_OUTCOMES`, heartbeat aggregation, `ReconcileResult.refused` + `.warnings` (`HostWarnings`, §3.1) → `/v1/why`; `reconcile_once` gate-selection kept in the runner **only** behind `autonomous_when_serverless`; **delete** `_VerdictIndex`/one-fetch budget (moot), push-retry ladders (L115-121), `/tmp` oracle paths (`fleetd._exiftool_cache_dir` → `EXIFTOOL_CACHE_DIR`); `fleet_scope_token` keyed on the state-repo URL; `fleetd.py` itself becomes a shim that exits 2 "use keel-runner" at the last stage | process ownership is a runner concern; selection is a server concern; the split is the boundary `reconcile_once` already draws |
 | `agentworker.py` (313) | **rewrite as `keel/agentrun.py`** keeping `build_prompt`, `build_authoring_prompt`, `preflight`, verify-by-ref, rc map, auth fallback; adding sandbox remote, settings hooks, MCP config, stream-json capture, budget kill, structured result | the blind spawn is what "agents first-class" replaces; the doctrine text is the asset |
-| `cli.py` (294) | **keep** renderings (`cmd_status` L192-263) and `_edit_desired`; transport → FallbackHub; `--direct` = today's ref path; new `why, jobs, logs, events, agents, train, alerts, report, inbox, answer, server {status,rehost,move}` | |
+| `cli.py` | **keep** `_hub` (builds the `Hub` with `code_url` from `--code`/`FLEET_CODE_URL`, R1), the `cmd_status` renderings (incl. `--why`'s `refused:`/`warning:` lines) and `_edit_desired`; transport → FallbackHub; `--direct` = today's ref path; new `why, jobs, logs, events, agents, train, alerts, report, inbox, answer, server {status,rehost,move}` | |
 | `gate.sh` (641) | **keep**, GATE_VERSION 7: L243 and L373 hard-coded `HUB_URL` defaults → `FLEET_CODE_URL` (required, fail loud); `verdict.py … --server-url "$KEEL_SERVER_URL"`; `EXIFTOOL`/DOCX paths (L223, L441) from `EXIFTOOL_CACHE_DIR` with the `/tmp` default kept on Linux and `~/oxidex-cache` on macOS; nothing in stage order, `classify_failure` (L321-352), `write_json` (L254-290), flake handling or exit codes changes — `test_gate_script.TestGateVersionMatchesFile` enforces | proven gate executable |
 | `gate_version.txt` | keep | |
 | `hooks/{pre-receive,update,post-receive}` | **delete**; policies → rulesets (§8) + tip watcher | GitHub runs no hooks |
@@ -783,7 +783,7 @@ CI mode at the production 5:1 TTL:renew ratio and `FLEET_SEAMS_SLOW=1`.)
 | Transcripts/events/agent records on a PUBLIC repo (J1, J2, J3) | **Fixed**: private state repo for all `refs/fleet/*`; transcripts never leave runner disk; issue on the private repo |
 | Single ruleset with bypass lets the deploy key force-push/delete the tip (J1, J2, J3) | **Fixed**: two rulesets (`tip-update` with bypass, `tip-guard` without) + `rescued-guard`; acceptance asserts deploy-key `--force` and delete are rejected |
 | Plain HTTP + bearer on a public port (J1) | **Fixed**: tailnet precondition; server refuses non-tailnet bind |
-| Stage-0 interim is chatty/slow against GitHub (J1, J2, J3) | **Mitigated**: targets ≤ 1 and `--interval 30` until the runner lands; `fetch_namespace` bulk read in the server; measured p95 in Stage 1 |
+| Stage-0 interim is chatty/slow against GitHub (J1, J2, J3) | **Mitigated**: targets ≤ 1 until the runner lands (the units pass no `--interval`, so fleetd reconciles at its `LOOP_SECONDS` default of 15 s; `--interval 30` is a hand-start knob only); `fetch_namespace` bulk read in the server; measured p95 in Stage 1 |
 | Per-host PATs can delete `rescued/*` (J1) | **Fixed**: `rescued-guard` ruleset |
 | Unreachable elected server holds a healthy lease (J3) | **Fixed**: `advertise_urls` + unreachable-demotion (§3.4 step 7); laptops never eligible; i7 autonomous gates |
 | No mode starts work without a server (J3) | **Fixed**: `autonomous_when_serverless`, gates only |

@@ -95,6 +95,7 @@ from typing import Callable, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import agentworker as agentworker_mod
 import claim as claim_mod
 import dispatch as dispatch_mod
 import verdict
@@ -869,6 +870,12 @@ class ReconcileResult:
     needs_author: list = field(default_factory=list)  # FAIL -- ARCH-FIX R4
     heartbeat_written: bool = False
     tip_generation: Optional[int] = None
+    # T3: DURABLE host conditions, unlike `refused` above which is this
+    # loop's scheduling answer. Re-derived every reconcile by
+    # `HostWarnings.scan` from the marker files themselves, so an entry
+    # survives every loop until the file is gone. Carried into the
+    # heartbeat as `warnings` and rendered by `fleet status --why`.
+    warnings: list = field(default_factory=list)  # (reason, detail)
 
 
 # --------------------------------------------------------------------- #
@@ -952,9 +959,98 @@ NEEDS_AUTHOR = "needs_author"
 def _verdict_store_failed_marker(log_dir: Path, tag: str) -> Path:
     """The sibling marker `gate.sh`'s `store_verdict()` writes beside
     `gate-<tag>.verdict` when it could not push that verdict to the hub
-    cache (R4). Named here, once, so the reap loop below and any test
-    reading for it agree on the exact path gate.sh writes."""
-    return Path(log_dir) / f"gate-{tag}.verdict-store-failed"
+    cache (R4).
+
+    T2: the filename is COMPOSED IN `config.py` now, not spelled here.
+    This function and `gate.sh`'s `SV=` line were two hand-kept spellings
+    of one filename with nothing comparing them, so renaming either left
+    the whole suite green while fleetd stopped seeing a marker gate.sh was
+    still writing. `config.VERDICT_STORE_FAILED_SUFFIX` and
+    `units/fleet-env.sh`'s `FLEET_VERDICT_STORE_FAILED_SUFFIX` are the two
+    canonical spellings, pinned against each other by
+    `tests/test_verdict_marker_seam.py::TestTheSuffixIsSpelledInExactlyTwoPlaces`
+    and against gate.sh's own evaluated `SV=` line by that file's
+    `TestGateShAndFleetdAgreeOnTheMarkerPath`."""
+    return config.verdict_store_failed_marker(log_dir, tag)
+
+
+class HostWarnings:
+    """Durable, cross-reconcile host conditions -- T3.
+
+    `ReconcileResult.refused` is a PER-LOOP field: the reap step reports
+    `verdict-store-failed` on the one pass that reaps the gate, the
+    heartbeat carries it for that one 15-second window, and the next
+    reconcile overwrites the heartbeat with a `refused[]` that no longer
+    mentions it. An operator who ran `fleet status --why` sixteen seconds
+    later saw nothing. Worse, only gates *fleetd itself spawned and
+    reaped* were ever checked: a marker left by `train.real_gate` or by a
+    hand-run `gate.sh` was never read by anything, on any host, ever.
+
+    This closes both. The sweep is over the LOG DIRECTORY, not over
+    `workers`, so provenance stops mattering -- any `gate-*<suffix>`
+    marker in `~/gatelogs` becomes a warning. Warnings persist across
+    reconciles for exactly as long as their marker file exists: a gate
+    that re-runs and stores successfully deletes its own marker
+    (`store_verdict`'s `rm -f "$SV"`), and the next sweep drops the entry.
+    Nothing here expires on a timer, because the condition it reports does
+    not.
+
+    Deliberately NOT merged into `refused[]`: "refused" answers "why did
+    this loop start nothing", and a verdict-store failure does not stop
+    anything from starting. Answering the wrong question loudly is how the
+    two facts would end up being read as one.
+    """
+
+    def __init__(self):
+        # marker path (str) -> (reason, detail). Keyed by PATH so the same
+        # gate's marker cannot accumulate duplicate entries across loops,
+        # and so removal is a pure set difference against what the sweep
+        # sees.
+        self.entries: dict = {}
+
+    def scan(self, log_dir) -> list:
+        """Re-derive the warning list from `log_dir` and return it as a
+        sorted `[(reason, detail)]`.
+
+        Both directions in one pass: a marker that has appeared becomes an
+        entry, a marker that has been removed loses its entry. An
+        unreadable/absent log directory yields the entries unchanged --
+        "we could not look" must not read as "the condition cleared".
+        """
+        log_dir = Path(log_dir)
+        # `Path.glob` on a directory that does not exist yields NOTHING and
+        # raises NOTHING, so without this guard an absent `~/gatelogs`
+        # (a fresh host, a moved `--log-dir`) read as "every marker is
+        # gone" and cleared every warning on the next loop. Same rule as
+        # the OSError branch: not being able to look is not the same as
+        # having looked and found nothing.
+        if not log_dir.is_dir():
+            return self.current()
+        try:
+            names = sorted(p.name for p in log_dir.glob(config.verdict_store_failed_glob()))
+        except OSError:
+            return self.current()
+        seen = {}
+        for name in names:
+            tag = config.verdict_store_failed_tag(name) or name
+            seen[str(log_dir / name)] = (
+                "verdict-store-failed",
+                f"{tag}: gate.sh could not push its verdict to the hub cache "
+                f"(see gate-{tag}.log); this gate's own PASS/FAIL is unaffected. "
+                f"Clears when {name} is removed or a later gate on this tag stores "
+                f"successfully",
+            )
+        # Only THIS reason is owned by the sweep; anything else another
+        # caller noted stays put.
+        self.entries = {
+            path: entry for path, entry in self.entries.items()
+            if entry[0] != "verdict-store-failed"
+        }
+        self.entries.update(seen)
+        return self.current()
+
+    def current(self) -> list:
+        return [self.entries[k] for k in sorted(self.entries)]
 
 
 # Where a classification came from, carried into the heartbeat so an
@@ -1748,6 +1844,12 @@ _AGENT_RC_OUTCOMES = {
     7: "no-progress",
     8: dispatch_mod.NOT_PAID,
     9: "blocked",
+    # T5: the agent DID the work and the push of it failed to
+    # authenticate. Its own outcome rather than "no-progress" (7), because
+    # it is a host credential condition with a named fix and no amount of
+    # re-buying the branch can clear it -- the ledger reads the two very
+    # differently.
+    agentworker_mod.RC_PUSH_AUTH_FAILED: "push-auth-failed",
 }
 
 
@@ -1761,6 +1863,7 @@ def reconcile_once(
     disk_probe: Callable[[], float] = free_disk_gb,
     mem_probe: Callable[[], float] = free_mem_gb,
     pgid_probe: Callable[[], set] = live_pgids,
+    warnings: Optional["HostWarnings"] = None,
 ) -> ReconcileResult:
     """One reconcile step. Mutates `workers` in place (removing finished
     and killed ones) and returns what changed. Over-target and disabled
@@ -2068,6 +2171,14 @@ def reconcile_once(
         else:
             dispatch_agents(hub, host, workers, slots, log_dir, repo_root, res)
 
+    # T3: durable warnings, swept from the log directory rather than from
+    # `workers` -- see `HostWarnings`. A caller that passes no store gets a
+    # fresh one, which still produces a correct list for THIS call (the
+    # sweep is stateless with respect to what is on disk); `main` owns one
+    # across the whole daemon lifetime so a future non-file-backed warning
+    # can persist too.
+    res.warnings = (warnings or HostWarnings()).scan(log_dir)
+
     hb = {
         "gates_running": len([w for w in workers if w.kind == "gate"]),
         "agents_running": len([w for w in workers if w.kind == "agent"]),
@@ -2101,6 +2212,15 @@ def reconcile_once(
         # as a 2-element array; `cmd_status`'s `--why` rendering treats
         # both shapes as equivalent.
         "refused": res.refused,
+        # T3: DURABLE conditions, re-derived from marker files every loop
+        # and therefore present in EVERY heartbeat for as long as the
+        # condition lasts -- as opposed to `refused` above, which is this
+        # loop's scheduling answer and stops mentioning a reaped gate's
+        # verdict-store failure on the very next pass (15 s later). The
+        # sweep is over the log directory, so markers left by gates fleetd
+        # never spawned (`train.real_gate`, a hand-run `gate.sh`) surface
+        # here too -- they surfaced NOWHERE before.
+        "warnings": res.warnings,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     if any(isinstance(err, HubUnreachableError) for _, err in hub_failures):
@@ -2283,6 +2403,11 @@ def main(argv: Optional[list] = None) -> int:
 
     rc = 0
     hub_failures = 0
+    # T3: one store for the daemon's whole lifetime, so a warning survives
+    # every reconcile until its marker file is gone. Owned here rather than
+    # module-global so two fleetds in one process (the test suite) cannot
+    # bleed into each other.
+    host_warnings = HostWarnings()
     try:
         while True:
             # A hub failure degrades THIS ITERATION, never the daemon --
@@ -2292,7 +2417,8 @@ def main(argv: Optional[list] = None) -> int:
             # rather than be retried fifteen seconds later forever.
             degraded: Optional[HubError] = None
             try:
-                res = reconcile_once(hub, host, workers, gate_command, Path(args.log_dir), repo_root)
+                res = reconcile_once(hub, host, workers, gate_command, Path(args.log_dir),
+                                     repo_root, warnings=host_warnings)
             except HubError as exc:
                 degraded = exc
                 hub_failures += 1
@@ -2301,7 +2427,8 @@ def main(argv: Optional[list] = None) -> int:
                 line = (
                     f"fleetd[{host}] gates={len(workers)} started={res.started} "
                     f"finished={res.finished} killed={res.killed} refused={res.refused} "
-                    f"hb={res.heartbeat_written}"
+                    + (f"warnings={res.warnings} " if res.warnings else "")
+                    + f"hb={res.heartbeat_written}"
                 )
                 print(line, flush=True)
 

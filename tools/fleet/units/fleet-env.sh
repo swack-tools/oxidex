@@ -30,3 +30,20 @@
 # two against each other.
 : "${EXIFTOOL_CACHE_DIR:=/tmp/oxidex-exiftool-cache}"
 export EXIFTOOL_CACHE_DIR
+
+# T2 (review of staging/agent-server @ 6bf59f2b): the FILENAME SUFFIX of
+# the verdict-store-failure marker gate.sh's store_verdict() writes and
+# fleetd's reap loop + durable-warning sweep read back.
+#
+# WHY THIS IS HERE and not just in gate.sh: the two spellings used to be
+# hand-kept in two files with nothing comparing them, so renaming either
+# left every test green while fleetd stopped seeing a marker gate.sh was
+# still writing -- the failure the marker exists to surface goes back to
+# being invisible, silently. Must byte-for-byte match
+# tools/fleet/config.py's VERDICT_STORE_FAILED_SUFFIX;
+# tests/test_verdict_marker_seam.py::TestTheSuffixIsSpelledInExactlyTwoPlaces
+# pins the two against each other, and that file's
+# TestGateShAndFleetdAgreeOnTheMarkerPath evaluates gate.sh's own SV= line
+# against config.verdict_store_failed_marker().
+: "${FLEET_VERDICT_STORE_FAILED_SUFFIX:=.verdict-store-failed}"
+export FLEET_VERDICT_STORE_FAILED_SUFFIX
