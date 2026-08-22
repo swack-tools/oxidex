@@ -71,6 +71,7 @@ from typing import Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import fleetlib  # noqa: E402
 from fleetlib import Hub, HubError  # noqa: E402
 
 ATTEMPTS_PREFIX = "refs/fleet/attempts"
@@ -431,8 +432,9 @@ def order_candidates(
 # --------------------------------------------------------------------- #
 
 
-def _git(hub: Hub, args: list, timeout: int = 60) -> subprocess.CompletedProcess:
-    """Run git plumbing against `Hub`'s own disposable object cache.
+def _git(hub: Hub, args: list, timeout: int = 60):
+    """Run git plumbing against `Hub`'s own disposable object cache,
+    through `fleetlib.run_git`.
 
     Same borrow `workqueue._fetch_for_ancestry` makes and for the same
     reason: the cache already holds (or can cheaply fetch) the real commit
@@ -440,9 +442,27 @@ def _git(hub: Hub, args: list, timeout: int = 60) -> subprocess.CompletedProcess
     Hub's orphan payload commits is harmless. Nothing here writes a ref --
     the fetches below land in FETCH_HEAD only, so there is no scratch
     namespace to leak and no cleanup to forget.
+
+    ROUTED THROUGH `fleetlib.run_git` (T5, extending R5's fix for
+    `workqueue.Queue._git` -- found by
+    `tests/test_agent_delivery.py`'s "every git the worker spawns"
+    fence, which reaches here through `economic_refusal`). This was a bare
+    `subprocess.run(["git", ...])`, and one of its three call sites --
+    `_have_objects` -- fetches from `hub.code_url`, a real remote: on a
+    private HTTPS spine it ran with no credential helper, with whatever
+    `GIT_SSH_COMMAND` the ambient environment carried instead of the pinned
+    `BatchMode=yes`/`ConnectTimeout=10`, and with `GIT_TERMINAL_PROMPT`
+    unset. Its failure was silent by construction -- `_have_objects`
+    returns False on any non-zero exit, `economic_refusal` reads that as
+    "objects not available yet" and simply declines to answer -- so an
+    unauthenticated fetch here looks exactly like a cold cache, forever.
+
+    `run_git` raises `HubUnreachableError` on timeout where
+    `subprocess.run` raised `TimeoutExpired`; both call sites below catch
+    `HubError` alongside `OSError` for that reason.
     """
     cmd = ["git", "--git-dir", str(hub.workdir)] + args
-    return subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout)
+    return fleetlib.run_git(cmd, timeout=timeout)
 
 
 def _have_objects(hub: Hub, hub_refs: Sequence[str]) -> bool:
@@ -459,7 +479,7 @@ def _have_objects(hub: Hub, hub_refs: Sequence[str]) -> bool:
         return True
     try:
         result = _git(hub, ["fetch", "--no-tags", "--quiet", hub.code_url, *hub_refs])
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, HubError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
 
@@ -468,7 +488,7 @@ def _is_ancestor(hub: Hub, maybe_ancestor: str, descendant: str) -> Optional[boo
     """True/False, or None if git could not answer (missing object, etc.)."""
     try:
         result = _git(hub, ["merge-base", "--is-ancestor", maybe_ancestor, descendant])
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, HubError, subprocess.TimeoutExpired):
         return None
     if result.returncode == 0:
         return True
@@ -492,7 +512,7 @@ def merge_tree_sha(hub: Hub, tip_sha: str, branch_sha: str) -> Optional[str]:
     """
     try:
         result = _git(hub, ["merge-tree", "--write-tree", tip_sha, branch_sha])
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, HubError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None

@@ -68,6 +68,7 @@ from typing import Callable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import config
 import intent
 import workqueue
 from claim import Claim, ClaimHeldError
@@ -199,6 +200,56 @@ def _train_deploy_key_ssh_command() -> Optional[str]:
         )
         return None
     return ssh_command(identity_file=str(p))
+
+
+def check_tip_push_credential(tip_push_url: Optional[str]) -> None:
+    """T4. REFUSE an ssh `tip_push_url` with no train deploy key, and warn
+    about a deploy key that an https `tip_push_url` renders inert.
+
+    The refusal, not a warning, and the asymmetry is the point.
+
+    An ssh tip URL with `FLEET_TRAIN_DEPLOY_KEY` unset does not fail. It
+    SUCCEEDS, under whatever key the ambient ssh agent happens to offer --
+    on the laptops that is the operator's personal key, and this fleet has
+    already lost a debugging session to the 1Password agent supplying a key
+    nobody asked for (SPEC 8). The tip is the one ruleset-bypassing write
+    in the whole system; "the protected branch advanced, under an identity
+    nobody chose, and every log line reads normal" is not a state a warning
+    can be trusted to prevent, because the run it appears in still exits 0
+    and still lands. `fleetd` never hits this -- it does not run trains --
+    so the only caller is a human at a shell, which is exactly the caller
+    who scrolls past warnings.
+
+    The https direction is genuinely only a warning: `GIT_SSH_COMMAND` is
+    not consulted for an https remote at all, so the key is inert rather
+    than wrong. The push either authenticates with the PAT or fails loudly
+    on its own. Saying so is worth a line because "I set the deploy key"
+    is otherwise indistinguishable from "the deploy key is in use".
+
+    A non-ssh, non-https URL (a local path -- every fixture in the test
+    suite, and the single-repo bare-hub topology) is neither case and is
+    left alone: nothing about it can silently borrow an identity.
+    """
+    if _is_ssh_url(tip_push_url):
+        if _train_deploy_key_ssh_command() is None:
+            raise TrainError(
+                f"refusing to run: the tip pushes over ssh ({tip_push_url}) but "
+                f"{TRAIN_DEPLOY_KEY_ENV} names no readable private key, so the "
+                "tip -- the one write that bypasses the tip-update ruleset -- "
+                "would go out under whatever identity the ambient ssh agent "
+                f"offers. Export {TRAIN_DEPLOY_KEY_ENV}=<path to the train deploy "
+                "key>, or point --tip-push/FLEET_TIP_PUSH_URL at the https code "
+                "URL (where the host PAT authenticates it)."
+            )
+        return
+    if os.environ.get(TRAIN_DEPLOY_KEY_ENV) and tip_push_url and "://" in str(tip_push_url):
+        _warn(
+            f"{TRAIN_DEPLOY_KEY_ENV} is set but the tip pushes to a non-ssh URL "
+            f"({tip_push_url}): GIT_SSH_COMMAND is not consulted for it, so the "
+            "deploy key is INERT and this push authenticates as whatever the "
+            "credential helper supplies. Point --tip-push at the ssh URL if the "
+            "deploy key is meant to be the bypass actor."
+        )
 
 
 def _now_iso() -> str:
@@ -382,6 +433,12 @@ class RunResult:
     # silent: somebody's commit is sitting on a branch the train just
     # partially consumed.
     retire_failures: list = field(default_factory=list)  # (branch, why)
+    # T3: durable conditions this run's own gates left behind -- today
+    # exactly one, `real_gate` finding gate.sh's verdict-store-failure
+    # marker. `fleetd`'s reap loop only ever looked at gates IT spawned, so
+    # a train gate's marker was read by nothing anywhere; the train now
+    # carries it on its own result and prints it in the run's JSON.
+    gate_warnings: list = field(default_factory=list)  # (label, detail)
 
 
 @dataclass
@@ -470,7 +527,15 @@ def run_train(
         tip_push_url=tip_push_url,
     )
     if dry_run:
+        # A dry run writes nothing, so there is no tip push to hold a
+        # credential wrong -- and refusing here would make `--dry-run`
+        # useless as the "what would this configuration do" probe it is.
         return _run_train_locked(hub, hub_url, gate_fn, batch_max, True, _clone_src)
+    # T4: BEFORE the singleton claim and before 20-45 minutes of gating,
+    # not at the push site -- the whole value of the check is that it costs
+    # nothing to discover. `_push_tip` re-asks anyway (a caller can reach it
+    # without coming through here).
+    check_tip_push_credential(hub.tip_push_url)
     try:
         # Constant key, epoch in the payload: two trains contend here or
         # nowhere. `Claim.__enter__` reaps an EXPIRED holder, so a train
@@ -721,6 +786,10 @@ def _push_tip(hub: Hub, clone: Path, options: list):
        state repo -- and the train singleton's renewer thread pushes on a
        120 s timer for the whole 20-45 minute gate window, so the overlap
        is the normal case, not a corner. See `fleetlib.run_git`."""
+    # T4, second of two call sites. `run_train` asks this before it claims
+    # the singleton so the answer costs nothing; this one is the guard on
+    # the actual write, for any caller that reached the push another way.
+    check_tip_push_credential(hub.tip_push_url)
     head = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
     fetch = _fetch_into_hub_cache(hub, clone, head, check=False)
     if fetch.returncode != 0:
@@ -857,13 +926,34 @@ def _push_tip_and_retire(hub: Hub, clone: Path, members: list, new_tip: str, res
 # --------------------------------------------------------------------- #
 
 
-def real_gate(clone: Path, label: str, hub: Hub) -> str:
+def gatelogs_dir() -> Path:
+    """Where `gate.sh` writes `gate-<tag>.{log,verdict,json}` and its
+    verdict-store-failure marker: `$HOME/gatelogs`, the same directory
+    `gate.sh` itself `mkdir -p`s and `fleetd`'s `--log-dir` defaults to.
+    Resolved per call (never at import) so a test that redirects `HOME` is
+    actually hermetic."""
+    return Path.home() / "gatelogs"
+
+
+def real_gate(clone: Path, label: str, hub: Hub, warnings: Optional[list] = None) -> str:
     """Run tools/fleet/gate.sh from the merged tree against its own HEAD
     by pushing HEAD to a temp staging ref first (gate.sh takes a branch).
     Routed through `fleetlib.Hub.push_code_ref` (ARCH-FIX R9) -- the temp
     ref is `staging/train-tmp-*`, a CODE ref; see `_push_tip`'s docstring
     for why the commit must be fetched into the hub's own local cache
-    before it can be pushed from there."""
+    before it can be pushed from there.
+
+    T3: after the gate, the verdict-store-failure marker
+    (`config.verdict_store_failed_marker`) is READ, warned about, and
+    appended to `warnings` when one is given. `fleetd`'s reap loop reads
+    that marker only for gates fleetd itself spawned, and a train gate is
+    not one of those -- the train runs `gate.sh` as a plain subprocess of
+    its own process, so its marker was read by nothing, on any host, ever.
+    The marker is deliberately NOT deleted here: the next gate on the same
+    tag clears it (`store_verdict`'s `rm -f "$SV"`), and `fleetd`'s durable
+    sweep of the same directory (`HostWarnings.scan`) is meant to see it
+    too. Never changes the verdict -- a hub-cache outage says nothing about
+    whether this tree passed."""
     tag = f"train-{label.replace('/', '-')[:40]}-{int(time.time()) % 100000}"
     branch = f"staging/train-tmp-{tag}"
     head = _git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
@@ -874,7 +964,19 @@ def real_gate(clone: Path, label: str, hub: Hub) -> str:
     try:
         script = clone / "tools" / "fleet" / "gate.sh"
         subprocess.run(["bash", str(script), branch, tag], check=False)
-        v = Path.home() / "gatelogs" / f"gate-{tag}.verdict"
+        logs = gatelogs_dir()
+        marker = config.verdict_store_failed_marker(logs, tag)
+        if marker.is_file():
+            detail = (
+                f"{tag}: gate.sh could not push its verdict to the hub cache "
+                f"(see {logs / f'gate-{tag}.log'}); this gate's own PASS/FAIL is "
+                f"unaffected, but the next train run on this tree will pay for the "
+                f"gate again"
+            )
+            _warn(f"verdict-store-failed {detail}")
+            if warnings is not None:
+                warnings.append((label, detail))
+        v = logs / f"gate-{tag}.verdict"
         text = v.read_text().strip() if v.is_file() else "ABORT missing-verdict"
         if text.startswith("PASS"):
             return "PASS"
@@ -949,18 +1051,33 @@ def main(argv=None) -> int:
     hub = Hub(args.hub, workdir=Path.home() / ".fleetd" / "traincache",
               code_url=code_url, code_push_url=code_push_url,
               tip_push_url=tip_push_url)
-    res = run_train(args.hub, repo_root, epoch=epoch, batch_max=args.batch_max,
-                    code_url=code_url, code_push_url=code_push_url,
-                    tip_push_url=tip_push_url,
-                    gate_fn=lambda clone, label: real_gate(clone, label, hub=hub))
+    # T3: `real_gate` appends every verdict-store failure it sees here, and
+    # the list is copied onto the result below so the run's own JSON reports
+    # it. Nothing else on this host would: fleetd's reap loop reads that
+    # marker only for gates fleetd spawned, and these are not those.
+    gate_warnings: list = []
+    try:
+        res = run_train(args.hub, repo_root, epoch=epoch, batch_max=args.batch_max,
+                        code_url=code_url, code_push_url=code_push_url,
+                        tip_push_url=tip_push_url,
+                        gate_fn=lambda clone, label: real_gate(
+                            clone, label, hub=hub, warnings=gate_warnings))
+    except TrainError as exc:
+        # T4's refusal arrives this way. A configuration refusal is not a
+        # crash: it exits with its own code and a message that names the
+        # variable to set, rather than a traceback.
+        print(f"train: {exc}", file=sys.stderr)
+        return 4
     if res.outcome == "claim-held":
         print("train: another train run holds the singleton claim; not starting a second")
         return 3
+    res.gate_warnings = gate_warnings
     print(json.dumps({
         "outcome": res.outcome, "landed": res.landed, "ejected": res.ejected,
         "gate_invocations": res.gate_invocations, "new_tip": res.new_tip,
         "missing_domain_proposals": res.missing_domain_proposals,
         "retire_failures": res.retire_failures,
+        "gate_warnings": res.gate_warnings,
     }, indent=2))
     return 0
 

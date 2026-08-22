@@ -262,7 +262,12 @@ mkdir -p "$HOME/gatelogs" "$HOME/tgt"
 L="$HOME/gatelogs/gate-$TAG.log"; V="$HOME/gatelogs/gate-$TAG.verdict"; J="$HOME/gatelogs/gate-$TAG.json"
 # R4: a marker beside the verdict, written only when `store_verdict` below
 # could not push to the hub cache -- see that function for why this exists.
-SV="$HOME/gatelogs/gate-$TAG.verdict-store-failed"
+# T2: the SUFFIX comes from units/fleet-env.sh (sourced above), which is
+# the shell mirror of config.py's VERDICT_STORE_FAILED_SUFFIX. It used to
+# be spelled out here AND in fleetd._verdict_store_failed_marker with
+# nothing comparing the two, so renaming one left the suite green while
+# fleetd stopped seeing a marker this script was still writing.
+SV="$HOME/gatelogs/gate-$TAG$FLEET_VERDICT_STORE_FAILED_SUFFIX"
 
 # rustc_id / platform_id (T1.2, replaces the single T0.3 TOOLCHAIN_ID).
 # Computed once, after PATH is set, so both reflect the same rustc the

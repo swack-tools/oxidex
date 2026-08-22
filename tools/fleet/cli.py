@@ -16,7 +16,10 @@ re-read and reapply ours on top (both edits survive).
 than HEARTBEAT_STALE renders DOWN -- the ryzen's cron was dead for a full
 day with nothing noticing; this line is why that cannot recur silently.
 `--why` answers "why is nothing starting" from the same heartbeats' durable
-`refused` field (PLAN Stage 1 task 5) -- no ssh, no re-derivation.
+`refused` field (PLAN Stage 1 task 5) -- no ssh, no re-derivation -- and, since
+T3, the durable `warnings` field beside it: conditions that persist across
+reconciles (a gate whose verdict never reached the hub cache) rather than this
+loop's scheduling answer.
 
 `--code`/`FLEET_CODE_URL` names the CODE repo (docs/AGENT-SERVER-SPEC.md
 §4.4). `status`'s QUEUE line asks `workqueue.Queue` for the live queue,
@@ -236,6 +239,33 @@ def _refused_list(hb: dict) -> list:
     return out
 
 
+def _warnings_list(hb: dict) -> list:
+    """[(reason, detail)] from a heartbeat's `warnings` field (T3).
+
+    Same wire shape as `refused` -- JSON round-trips each `(reason,
+    detail)` tuple as a 2-element array -- and the same tolerance: a
+    heartbeat written by an older fleetd with no `warnings` key yields
+    `[]` rather than raising.
+
+    A SEPARATE field from `refused` on purpose. `refused` answers "why did
+    this loop start nothing" and is per-loop; `warnings` answers "what is
+    wrong with this host right now" and persists for as long as the
+    condition does. Folding the two together would make a durable fault
+    look like a scheduling decision, which is how a verdict-store failure
+    stayed invisible for a 15-second window and then vanished.
+    """
+    out = []
+    for entry in hb.get("warnings") or ():
+        if isinstance(entry, dict):
+            reason, detail = entry.get("reason"), entry.get("detail")
+        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+            reason, detail = entry
+        else:
+            reason, detail = entry, None
+        out.append((str(reason), "" if detail in (None, "") else str(detail)))
+    return out
+
+
 def cmd_status(args) -> int:
     hub = _hub(args)
     desired = hub.read(DESIRED_REF) or {}
@@ -244,7 +274,7 @@ def cmd_status(args) -> int:
 
     rows = []
     parked = []
-    why_rows = []  # (host, state, age_s, want_gates, want_agents, [(reason, detail)])
+    why_rows = []  # (host, state, age_s, want_gates, want_agents, refused[], warnings[])
     for ref in sorted(hub.list(HOSTS_PREFIX)):
         host = ref[len(HOSTS_PREFIX):]
         hb = hub.read(ref) or {}
@@ -266,7 +296,7 @@ def cmd_status(args) -> int:
         killed = hb.get("killed_this_loop")
         parked.extend(_parked_rows(host, hb))
         why_rows.append((host, state, age, w.get("gates"), w.get("agents"),
-                          _refused_list(hb)))
+                          _refused_list(hb), _warnings_list(hb)))
         rows.append((
             host,
             state,
@@ -320,7 +350,7 @@ def cmd_status(args) -> int:
     # stay exactly as they were.
     if getattr(args, "why", False):
         print("\nWHY (last reconcile's refused[] from refs/fleet/hosts/*)")
-        for host, state, age, want_gates, want_agents, refused in why_rows:
+        for host, state, age, want_gates, want_agents, refused, warnings in why_rows:
             age_s = f"{int(age)}s" if age != float("inf") else "never"
             gates = want_gates if want_gates is not None else "-"
             agents = want_agents if want_agents is not None else "-"
@@ -331,6 +361,15 @@ def cmd_status(args) -> int:
                     print(f"      refused: {reason}" + (f" ({detail})" if detail else ""))
             else:
                 print("      (no refused reasons on file)")
+            # T3: printed AFTER the refused lines and under its own label,
+            # because it answers a different question and lasts a different
+            # length of time -- see `_warnings_list`. Silent when there are
+            # none: an absent line reads as "nothing wrong", which is true,
+            # whereas a "(no warnings)" line on every host in the fleet is
+            # noise on the one command an operator runs when something IS
+            # wrong.
+            for reason, detail in warnings:
+                print(f"      warning: {reason}" + (f" ({detail})" if detail else ""))
         if not why_rows:
             print("  (no host heartbeats yet -- has fleetd been installed anywhere?)")
     return 0
