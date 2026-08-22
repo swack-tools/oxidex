@@ -1,0 +1,1005 @@
+#!/usr/bin/env python3
+"""`keel-server`'s transport layer: stdlib `ThreadingHTTPServer` with HTTP/1.1
+keep-alive, chunked SSE for `/v1/events`, `/v1/wait` long-poll plumbing,
+bearer auth, a connection cap, and a listener watchdog.
+
+SCOPE (docs/AGENT-SERVER-SPEC.md SS2 C6, SS5, SS8; PLAN Stage 2 task 4). This
+file owns TRANSPORT ONLY:
+
+  * the HTTP request-routing skeleton (`Router`/`Route`, `KeelRequestHandler`),
+  * bearer auth over sha256-hashed tokens (`TokenStore`) with a 401-vs-403
+    distinction and a hard rule that no code path here ever logs a raw
+    token or `Authorization` header,
+  * chunked Server-Sent Events for `/v1/events`, replaying an sqlite ring
+    (`EventLog`) from `?since=<seq>`/`Last-Event-ID`, with a `: keepalive`
+    comment on an idle stream,
+  * `/v1/wait?ref=&since=` generic long-poll plumbing (poll a `Store`'s
+    cheap `sha()` probe until it changes or a deadline passes),
+  * the connection cap (503 past N concurrent connections) and the
+    listener watchdog thread (self-probes the bound address; rebinds if
+    nothing has answered in `watchdog_timeout` seconds),
+  * the bind-address restriction (loopback or Tailscale CGNAT only, unless
+    overridden), and
+  * `/v1/health`.
+
+It does NOT own ref CAS semantics, index freshness, the write-through to
+the state repo, or the "fresh claims" rule -- that is `keel/cachedhub.py`'s
+`CachedHub`, built to satisfy the `Store` protocol in `keel/store_api.py`.
+`server.py` imports nothing from `cachedhub.py`; every route that touches a
+ref calls `self.server.store.<method>()` and maps the result per
+`store_api`'s contract (`False`/`None`/raise), never inspecting what is on
+the other side of that call. See `store_api.py`'s module docstring for the
+full contract and for `InMemoryStore`, the reference double this module's
+own tests and its standalone `main()` use in place of a real `CachedHub`.
+
+Standard library only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import hmac
+import ipaddress
+import json
+import logging
+import os
+import re
+import socket
+import sqlite3
+import sys
+import threading
+import time
+import urllib.parse
+import uuid
+from dataclasses import dataclass
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
+
+_KEEL_DIR = Path(__file__).resolve().parent
+_FLEET_DIR = _KEEL_DIR.parent
+for _p in (_KEEL_DIR, _FLEET_DIR):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import store_api  # noqa: E402
+from store_api import Payload, StoreUnreachableError  # noqa: E402
+
+# --------------------------------------------------------------------- #
+# Defaults
+# --------------------------------------------------------------------- #
+
+DEFAULT_PORT = 8470
+DEFAULT_MAX_CONNECTIONS = 64
+DEFAULT_LONG_POLL_TIMEOUT_S = 25.0
+DEFAULT_LONG_POLL_INTERVAL_S = 0.2
+DEFAULT_SSE_KEEPALIVE_INTERVAL_S = 15.0
+DEFAULT_WATCHDOG_TIMEOUT_S = 30.0
+DEFAULT_WATCHDOG_CHECK_INTERVAL_S = 5.0
+DEFAULT_EVENT_RING_CAPACITY = 50_000
+
+# SPEC SS8: "the server refuses to bind a non-tailnet, non-loopback address
+# unless KEEL_ALLOW_PUBLIC_BIND=1". Tailscale's CGNAT range.
+_TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _keel_home() -> Path:
+    override = os.environ.get("KEEL_HOME")
+    if override:
+        return Path(override)
+    return Path.home() / ".keel"
+
+
+def default_tokens_file_path() -> Path:
+    return _keel_home() / "auth.json"
+
+
+def default_events_db_path() -> Path:
+    return _keel_home() / "events.db"
+
+
+def validate_bind_host(host: str, allow_any_bind: bool) -> None:
+    """Raise `ValueError` unless `host` is loopback or in Tailscale's CGNAT
+    range `100.64.0.0/10` -- unless `allow_any_bind` or
+    `KEEL_ALLOW_PUBLIC_BIND=1` says to skip the check entirely (SPEC SS8).
+    """
+    if allow_any_bind or os.environ.get("KEEL_ALLOW_PUBLIC_BIND") == "1":
+        return
+    if host == "localhost":
+        return
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ValueError(
+            f"refusing to bind {host!r}: not a literal loopback/Tailscale IP "
+            "and --allow-any-bind was not given (SPEC SS8)"
+        ) from exc
+    if addr.is_loopback:
+        return
+    if addr in _TAILSCALE_CGNAT:
+        return
+    raise ValueError(
+        f"refusing to bind {host}: neither loopback nor a Tailscale address "
+        f"in {_TAILSCALE_CGNAT} -- pass --allow-any-bind or set "
+        "KEEL_ALLOW_PUBLIC_BIND=1 to override (SPEC SS8)"
+    )
+
+
+# --------------------------------------------------------------------- #
+# Auth
+# --------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class Principal:
+    id: str
+    role: str
+
+
+class AuthError(Exception):
+    """Carries the HTTP status the dispatcher should answer with: 401 for
+    "not authenticated at all" (no header, malformed header, unrecognized
+    token), 403 for "authenticated, but this role may not call this
+    route". Never constructed with the raw token in `code` or anywhere
+    else that could reach a log line.
+    """
+
+    def __init__(self, status: int, code: str):
+        super().__init__(code)
+        self.status = status
+        self.code = code
+
+
+class TokenStore:
+    """sha256(token) -> `Principal`. Holds no raw tokens after construction
+    (SPEC SS5/SS8: "Server stores only sha256 hashes ... compares with
+    hmac.compare_digest"). `authenticate()` takes a raw token only long
+    enough to hash it -- it is never written to a log, an exception
+    message, or a repr anywhere in this module.
+    """
+
+    def __init__(self, entries: Sequence[Dict[str, str]]):
+        by_hash: Dict[str, Principal] = {}
+        for entry in entries:
+            digest = entry["sha256"].strip().lower()
+            by_hash[digest] = Principal(id=entry["id"], role=entry["role"])
+        self._by_hash = by_hash
+
+    @classmethod
+    def from_file(cls, path: "os.PathLike[str] | str") -> "TokenStore":
+        data = json.loads(Path(path).read_text())
+        entries = data["tokens"] if isinstance(data, dict) else data
+        return cls(entries)
+
+    @classmethod
+    def empty(cls) -> "TokenStore":
+        return cls([])
+
+    def authenticate(self, token: str) -> Optional[Principal]:
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        for known_digest, principal in self._by_hash.items():
+            if hmac.compare_digest(digest, known_digest):
+                return principal
+        return None
+
+
+# --------------------------------------------------------------------- #
+# Event ring (SPEC SS3.2, SS5.1 GET /v1/events)
+# --------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class Event:
+    seq: int
+    ts: float
+    kind: str
+    payload: Payload
+
+
+class EventLog:
+    """An sqlite-backed, capacity-bounded, append-only ring: the source
+    the SSE handler replays from `since=<seq>` and blocks on for new rows.
+
+    Deliberately NOT a source of truth (SS3.2: "lossy by design") -- it
+    lets a reconnecting dashboard/CLI/runner catch up on recent history
+    without re-deriving it from claims/verdicts/attempts; it is not where
+    a decision gets reconstructed from once the ring has rotated past it.
+
+    One `sqlite3` connection, `check_same_thread=False`, all access
+    serialized through `self._cond`'s lock -- simpler and plenty fast for
+    an in-process event stream; correctness does not depend on SQLite's
+    own cross-connection locking here; it is used purely for durability
+    across a restart.
+    """
+
+    def __init__(self, db_path: "os.PathLike[str] | str", ring_capacity: int = DEFAULT_EVENT_RING_CAPACITY):
+        self._db_path = Path(db_path)
+        if str(self._db_path) != ":memory:":
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._ring_capacity = ring_capacity
+        self._cond = threading.Condition()
+        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS events ("
+            "seq INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "ts REAL NOT NULL, "
+            "kind TEXT NOT NULL, "
+            "payload TEXT NOT NULL)"
+        )
+        self._conn.commit()
+
+    def append(self, kind: str, payload: Payload) -> int:
+        with self._cond:
+            cur = self._conn.execute(
+                "INSERT INTO events (ts, kind, payload) VALUES (?, ?, ?)",
+                (time.time(), kind, json.dumps(payload, sort_keys=True)),
+            )
+            seq = cur.lastrowid
+            # Ring: drop everything more than `ring_capacity` rows behind
+            # the current max. A no-op until the table actually exceeds
+            # capacity (SPEC SS3.2: 50k rows).
+            self._conn.execute(
+                "DELETE FROM events WHERE seq <= (SELECT COALESCE(MAX(seq), 0) FROM events) - ?",
+                (self._ring_capacity,),
+            )
+            self._conn.commit()
+            self._cond.notify_all()
+            return int(seq)
+
+    def since(self, seq: int) -> List[Event]:
+        with self._cond:
+            rows = self._conn.execute(
+                "SELECT seq, ts, kind, payload FROM events WHERE seq > ? ORDER BY seq ASC",
+                (seq,),
+            ).fetchall()
+        return [Event(seq=r[0], ts=r[1], kind=r[2], payload=json.loads(r[3])) for r in rows]
+
+    def latest_seq(self) -> int:
+        with self._cond:
+            return self._latest_seq_locked()
+
+    def _latest_seq_locked(self) -> int:
+        row = self._conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()
+        return int(row[0]) if row else 0
+
+    def wait_for_new(self, after_seq: int, timeout: float) -> bool:
+        """Block until `latest_seq() > after_seq` or `timeout` elapses.
+        Returns whether new events became available."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._cond:
+            while self._latest_seq_locked() <= after_seq:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._cond.wait(remaining)
+            return True
+
+    def close(self) -> None:
+        with self._cond:
+            self._conn.close()
+
+
+def _format_sse(seq: int, kind: str, payload: Payload) -> bytes:
+    lines = [f"id: {seq}", f"event: {kind}", f"data: {json.dumps(payload, sort_keys=True)}", "", ""]
+    return "\n".join(lines).encode("utf-8")
+
+
+_SSE_KEEPALIVE_LINE = b": keepalive\n\n"
+
+
+# --------------------------------------------------------------------- #
+# Routing skeleton
+# --------------------------------------------------------------------- #
+
+HandlerFn = Callable[["KeelRequestHandler", Dict[str, str], Dict[str, List[str]], Optional[Principal]], None]
+
+_PARAM_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)(:path)?\}")
+
+
+def compile_path(template: str) -> "re.Pattern[str]":
+    """`"/v1/refs/{ref:path}"` -> a compiled regex with a named group per
+    `{name}` (matches one path segment) or `{name:path}` (matches the
+    rest of the path, slashes included -- refs are slash-shaped)."""
+    parts = []
+    last = 0
+    for m in _PARAM_RE.finditer(template):
+        parts.append(re.escape(template[last : m.start()]))
+        name = m.group(1)
+        is_path = m.group(2) == ":path"
+        parts.append(f"(?P<{name}>.+)" if is_path else f"(?P<{name}>[^/]+)")
+        last = m.end()
+    parts.append(re.escape(template[last:]))
+    return re.compile("^" + "".join(parts) + "$")
+
+
+@dataclass(frozen=True)
+class Route:
+    method: str
+    path_pattern: "re.Pattern[str]"
+    handler: HandlerFn
+    # None = no auth at all (/v1/health); frozenset() = any authenticated
+    # principal regardless of role; a non-empty frozenset = only those
+    # roles (everyone else authenticates fine and gets 403).
+    auth: Optional[FrozenSet[str]]
+    name: str
+
+
+class Router:
+    """A tiny, generic HTTP route table. Deliberately not tied to any one
+    stage's route list: later stages (scheduler, agents, OPERATOR) add
+    routes by calling `.add()`, never by editing the dispatch mechanism
+    itself."""
+
+    def __init__(self) -> None:
+        self._routes: List[Route] = []
+
+    def add(
+        self,
+        method: str,
+        template: str,
+        handler: HandlerFn,
+        auth: Optional[FrozenSet[str]],
+        name: Optional[str] = None,
+    ) -> None:
+        self._routes.append(
+            Route(
+                method=method.upper(),
+                path_pattern=compile_path(template),
+                handler=handler,
+                auth=auth,
+                name=name or template,
+            )
+        )
+
+    def match(self, method: str, path: str) -> Tuple[Optional[Route], Dict[str, str], bool]:
+        """Returns `(route, params, path_exists)`. `path_exists` is True
+        when some route's path matched but not this method -- lets the
+        dispatcher answer 405 instead of a misleading 404."""
+        method = method.upper()
+        path_exists = False
+        for route in self._routes:
+            m = route.path_pattern.match(path)
+            if not m:
+                continue
+            path_exists = True
+            if route.method == method:
+                return route, m.groupdict(), True
+        return None, {}, path_exists
+
+
+# --------------------------------------------------------------------- #
+# Route handlers
+# --------------------------------------------------------------------- #
+
+
+def _decode_ref(raw: str) -> str:
+    return urllib.parse.unquote(raw)
+
+
+def handle_health(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    server = handler.server
+    body: Dict[str, object] = {
+        "boot_id": server.boot_id,
+        "uptime_s": round(time.monotonic() - server.boot_monotonic, 3),
+        "connections": {"active": server.active_connection_count(), "max": server.config.max_connections},
+        "watchdog": {
+            "restart_count": server.restart_count,
+            "last_healthy_probe_age_s": round(time.monotonic() - server.last_healthy_probe_at, 3),
+        },
+    }
+    try:
+        extra = server.health_provider() or {}
+    except Exception:
+        logging.exception("keel-server: health_provider raised")
+        extra = {"health_provider_error": True}
+    body.update(extra)
+    handler._send_json(200, body)
+
+
+def handle_refs_list(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    prefix = query.get("prefix", [None])[0]
+    if not prefix:
+        handler._send_json(400, {"error": "missing-prefix"})
+        return
+    entries = handler.server.store.list(prefix)
+    body = {ref: {"sha": e.sha, "observed_at": e.observed_at} for ref, e in entries.items()}
+    handler._send_json(200, body)
+
+
+def handle_refs_get(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    ref = _decode_ref(params["ref"])
+    fresh = query.get("fresh", ["0"])[0] == "1"
+    sha, payload = handler.server.store.read_with_sha(ref, fresh=fresh)
+    if sha is None:
+        handler._send_json(404, {"error": "not-found"})
+        return
+    handler._send_json(200, {"sha": sha, "payload": payload})
+
+
+def _read_json_body(handler: "KeelRequestHandler") -> Optional[Payload]:
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    raw = handler.rfile.read(length) if length else b""
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
+def handle_refs_put(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    ref = _decode_ref(params["ref"])
+    payload = _read_json_body(handler)
+    if payload is None:
+        handler._send_json(400, {"error": "invalid-json"})
+        return
+    if_none_match = handler.headers.get("If-None-Match")
+    if_match = handler.headers.get("If-Match")
+    if if_none_match == "*":
+        result = handler.server.store.create(ref, payload)
+        if result is False:
+            handler._send_json(409, {"error": "conflict"})
+        else:
+            handler._send_json(201, {"sha": result})
+        return
+    if if_match:
+        result = handler.server.store.update(ref, payload, expect_sha=if_match)
+        if result is False:
+            handler._send_json(409, {"error": "conflict"})
+        else:
+            handler._send_json(200, {"sha": result})
+        return
+    handler._send_json(400, {"error": "missing-precondition-header"})
+
+
+def handle_refs_delete(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    ref = _decode_ref(params["ref"])
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    if length:
+        handler.rfile.read(length)  # drain -- DELETE bodies are unexpected but must not corrupt keep-alive framing
+    if_match = handler.headers.get("If-Match")
+    if not if_match:
+        handler._send_json(400, {"error": "missing-precondition-header"})
+        return
+    ok = handler.server.store.delete(ref, expect_sha=if_match)
+    if not ok:
+        handler._send_json(409, {"error": "conflict"})
+        return
+    handler._send_status_only(204)
+
+
+def _parse_since_events(query: Dict[str, List[str]], headers) -> int:
+    if query.get("since") and query["since"][0] != "":
+        try:
+            return max(0, int(query["since"][0]))
+        except ValueError:
+            return 0
+    last_event_id = headers.get("Last-Event-ID")
+    if last_event_id:
+        try:
+            return max(0, int(last_event_id))
+        except ValueError:
+            return 0
+    return 0
+
+
+def handle_events(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    server = handler.server
+    last_seq = _parse_since_events(query, handler.headers)
+    handler._begin_sse()
+    last_keepalive = time.monotonic()
+    keepalive_interval = server.config.sse_keepalive_interval
+    # Registered for the duration of the stream so `server.stop()` can wait
+    # for this thread to actually exit instead of racing it against
+    # whatever the caller closes right after `stop()` returns (see
+    # `register_stream_thread`'s docstring).
+    current_thread = threading.current_thread()
+    server.register_stream_thread(current_thread)
+    try:
+        while not server._stop_event.is_set():
+            events = server.events.since(last_seq)
+            for ev in events:
+                handler._write_chunk(_format_sse(ev.seq, ev.kind, ev.payload))
+                last_seq = ev.seq
+            if events:
+                continue
+            due_in = keepalive_interval - (time.monotonic() - last_keepalive)
+            if due_in <= 0:
+                handler._write_chunk(_SSE_KEEPALIVE_LINE)
+                last_keepalive = time.monotonic()
+                continue
+            server.events.wait_for_new(last_seq, timeout=min(due_in, 1.0))
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass
+    finally:
+        handler.close_connection = True
+        server.unregister_stream_thread(current_thread)
+
+
+def handle_wait(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    server = handler.server
+    ref = query.get("ref", [None])[0]
+    if not ref:
+        handler._send_json(400, {"error": "missing-ref"})
+        return
+    since_values = query.get("since")
+    since_val = since_values[0] if since_values and since_values[0] != "" else None
+    deadline = time.monotonic() + server.config.long_poll_timeout
+    poll_interval = server.config.long_poll_interval
+    while True:
+        # Always fresh: a long-poll answered from a stale index could
+        # never observe the change it exists to detect (store_api.py).
+        current = server.store.sha(ref, fresh=True)
+        if current != since_val:
+            handler._send_json(200, {"ref": ref, "sha": current})
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            handler._send_status_only(204)
+            return
+        time.sleep(min(poll_interval, remaining))
+
+
+def build_router() -> Router:
+    router = Router()
+    router.add("GET", "/v1/health", handle_health, auth=None)
+    router.add("GET", "/v1/refs", handle_refs_list, auth=frozenset())
+    router.add("GET", "/v1/refs/{ref:path}", handle_refs_get, auth=frozenset())
+    router.add("PUT", "/v1/refs/{ref:path}", handle_refs_put, auth=frozenset({"runner", "operator"}))
+    router.add("DELETE", "/v1/refs/{ref:path}", handle_refs_delete, auth=frozenset({"runner", "operator"}))
+    router.add("GET", "/v1/events", handle_events, auth=frozenset())
+    router.add("GET", "/v1/wait", handle_wait, auth=frozenset())
+    return router
+
+
+# --------------------------------------------------------------------- #
+# Server config
+# --------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class ServerConfig:
+    bind_host: str = "127.0.0.1"
+    port: int = DEFAULT_PORT
+    allow_any_bind: bool = False
+    max_connections: int = DEFAULT_MAX_CONNECTIONS
+    long_poll_timeout: float = DEFAULT_LONG_POLL_TIMEOUT_S
+    long_poll_interval: float = DEFAULT_LONG_POLL_INTERVAL_S
+    sse_keepalive_interval: float = DEFAULT_SSE_KEEPALIVE_INTERVAL_S
+    watchdog_timeout: float = DEFAULT_WATCHDOG_TIMEOUT_S
+    watchdog_check_interval: float = DEFAULT_WATCHDOG_CHECK_INTERVAL_S
+
+
+# --------------------------------------------------------------------- #
+# The server
+# --------------------------------------------------------------------- #
+
+
+class KeelHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(
+        self,
+        server_address: Tuple[str, int],
+        config: ServerConfig,
+        store: "store_api.Store",
+        tokens: TokenStore,
+        events: EventLog,
+        health_provider: Optional[Callable[[], Dict[str, object]]] = None,
+        router: Optional[Router] = None,
+    ):
+        validate_bind_host(server_address[0], config.allow_any_bind)
+        self.config = config
+        self.store = store
+        self.tokens = tokens
+        self.events = events
+        self.health_provider = health_provider or (lambda: {})
+        self.router = router or build_router()
+        self.boot_id = uuid.uuid4().hex
+        self.boot_monotonic = time.monotonic()
+        self.restart_count = 0
+        self.last_healthy_probe_at = time.monotonic()
+        self._conn_lock = threading.Lock()
+        self._conn_count = 0
+        self.total_connections_accepted = 0
+        self._restart_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._serve_thread: Optional[threading.Thread] = None
+        self._watchdog_thread: Optional[threading.Thread] = None
+        self._stream_lock = threading.Lock()
+        self._stream_threads: set = set()
+        super().__init__(server_address, KeelRequestHandler)
+
+    # -- connection cap (SPEC SS2 C6: "caps the server at 64 connections") --
+
+    def try_acquire_connection(self) -> bool:
+        with self._conn_lock:
+            if self._conn_count >= self.config.max_connections:
+                return False
+            self._conn_count += 1
+            self.total_connections_accepted += 1
+            return True
+
+    def release_connection(self) -> None:
+        with self._conn_lock:
+            self._conn_count = max(0, self._conn_count - 1)
+
+    def active_connection_count(self) -> int:
+        with self._conn_lock:
+            return self._conn_count
+
+    # -- long-lived streaming handlers (SSE) --
+    #
+    # A `/v1/events` handler runs for as long as its client stays
+    # connected, on its own per-connection thread -- entirely separate
+    # from the accept-loop thread `shutdown()`/`server_close()` stop.
+    # `stop()` sets `_stop_event`, which the SSE loop polls, but it can
+    # still be blocked inside `EventLog.wait_for_new()` for up to a second
+    # when that happens. Registering here lets `stop()` actually WAIT for
+    # every such thread to notice and exit before returning, instead of
+    # returning immediately and racing whatever the caller closes next
+    # (e.g. the `EventLog` itself, as `test_server_transport.py` caught
+    # with `ResourceWarning`s promoted to errors: a thread that woke up
+    # after `EventLog.close()` had already run raised
+    # `sqlite3.ProgrammingError: Cannot operate on a closed database`).
+
+    def register_stream_thread(self, thread: threading.Thread) -> None:
+        with self._stream_lock:
+            self._stream_threads.add(thread)
+
+    def unregister_stream_thread(self, thread: threading.Thread) -> None:
+        with self._stream_lock:
+            self._stream_threads.discard(thread)
+
+    def handle_error(self, request, client_address) -> None:
+        # A keep-alive client going away between requests (closing its
+        # connection, or timing out an idle probe) makes the accept
+        # thread's next `readline()` raise -- an expected, constant
+        # occurrence for any long-lived HTTP/1.1 server, not a bug.
+        # `socketserver`'s default `handle_error` prints a full traceback
+        # to stderr for every one of these, which drowns out a real
+        # handler defect in the noise. Anything else still gets the
+        # default (loud) treatment.
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, TimeoutError)):
+            logging.debug("keel-server: benign connection error from %s: %r", client_address, exc)
+            return
+        super().handle_error(request, client_address)
+
+    # -- lifecycle --
+
+    def start(self) -> None:
+        self._serve_thread = threading.Thread(target=self.serve_forever, name="keel-accept-loop", daemon=True)
+        self._serve_thread.start()
+        self._watchdog_thread = threading.Thread(target=self._watchdog_loop, name="keel-watchdog", daemon=True)
+        self._watchdog_thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        try:
+            self.shutdown()
+        except Exception:
+            pass
+        if self._serve_thread is not None:
+            self._serve_thread.join(timeout=5)
+        if self._watchdog_thread is not None:
+            self._watchdog_thread.join(timeout=5)
+        with self._stream_lock:
+            stream_threads = list(self._stream_threads)
+        for thread in stream_threads:
+            thread.join(timeout=3)
+            if thread.is_alive():
+                logging.warning("keel-server: streaming handler thread %s did not exit within 3s of stop()", thread.name)
+        try:
+            self.server_close()
+        except Exception:
+            pass
+
+    # -- listener watchdog (SPEC SS2 C6: "restarts the accept loop if it
+    # stops accepting for 30 s") --
+
+    def _probe_alive(self, timeout: float) -> bool:
+        host, port = self.server_address[0], self.server_address[1]
+        probe_host = host if host not in ("", "0.0.0.0") else "127.0.0.1"
+        try:
+            with socket.create_connection((probe_host, port), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    def _watchdog_loop(self) -> None:
+        self.last_healthy_probe_at = time.monotonic()
+        interval = self.config.watchdog_check_interval
+        probe_timeout = min(2.0, interval)
+        while not self._stop_event.wait(interval):
+            self._watchdog_tick(self._probe_alive(timeout=probe_timeout))
+
+    def _watchdog_tick(self, alive: bool) -> None:
+        """One watchdog decision, given whether the self-probe just
+        succeeded. Split out from `_watchdog_loop` so the decision (probe
+        failed for longer than `watchdog_timeout` -> restart) can be
+        exercised directly, with a fake clock/probe/restart, instead of
+        racing a real background thread against wall-clock sleeps."""
+        now = time.monotonic()
+        if alive:
+            self.last_healthy_probe_at = now
+            return
+        if now - self.last_healthy_probe_at > self.config.watchdog_timeout:
+            logging.warning(
+                "keel-server watchdog: no successful accept probe in %.1fs; restarting accept loop",
+                now - self.last_healthy_probe_at,
+            )
+            self.restart_accept_loop()
+            self.last_healthy_probe_at = time.monotonic()
+
+    def restart_accept_loop(self) -> None:
+        """Stop the current `serve_forever()` loop, close and rebind the
+        listening socket at the same address, and start a fresh loop.
+        Safe to call whether or not the old accept-loop thread is still
+        alive: `BaseServer.serve_forever()` sets its `_is_shut_down` event
+        in a `finally`, so `shutdown()` returns promptly either way."""
+        with self._restart_lock:
+            old_thread, self._serve_thread = self._serve_thread, None
+            try:
+                self.shutdown()
+            except Exception:
+                logging.exception("keel-server: shutdown() during restart raised")
+            if old_thread is not None:
+                old_thread.join(timeout=5)
+            try:
+                self.server_close()
+            except Exception:
+                logging.exception("keel-server: server_close() during restart raised")
+            self.socket = socket.socket(self.address_family, self.socket_type)
+            self.server_bind()
+            self.server_activate()
+            self._serve_thread = threading.Thread(target=self.serve_forever, name="keel-accept-loop", daemon=True)
+            self._serve_thread.start()
+            self.restart_count += 1
+
+
+class KeelRequestHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "keel-server/0.1"
+    server: KeelHTTPServer  # narrows the inherited Any-typed attribute
+
+    # -- connection admission (cap) --
+
+    def setup(self) -> None:
+        super().setup()
+        self._connection_admitted = self.server.try_acquire_connection()
+
+    def finish(self) -> None:
+        try:
+            super().finish()
+        finally:
+            if getattr(self, "_connection_admitted", False):
+                self.server.release_connection()
+
+    def handle(self) -> None:
+        if not getattr(self, "_connection_admitted", False):
+            self._reject_over_capacity()
+            return
+        super().handle()
+
+    def _reject_over_capacity(self) -> None:
+        # Read exactly one request off the wire before responding so the
+        # client's own bytes are drained and the connection can be closed
+        # cleanly (no RST race against unread input).
+        self.close_connection = True
+        try:
+            self.raw_requestline = self.rfile.readline(65537)
+            if self.raw_requestline and self.parse_request():
+                self.send_response(HTTPStatus.SERVICE_UNAVAILABLE, "not-ready")
+                self.send_header("Retry-After", "1")
+                self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
+                self.end_headers()
+        except Exception:
+            pass
+
+    def log_message(self, fmt: str, *args) -> None:
+        # Overridden only to route through `logging`. `fmt`/`args` here are
+        # exactly what BaseHTTPRequestHandler already builds for its access
+        # log -- the request line, status, and byte count -- never headers,
+        # so an Authorization bearer token can never reach this line. Grep
+        # this file for other `logging.*` calls to confirm none of them are
+        # handed a token or a raw Authorization header either.
+        logging.info("%s - %s", self.address_string(), fmt % args)
+
+    # -- HTTP verbs --
+
+    def do_GET(self) -> None:
+        self._dispatch("GET")
+
+    def do_PUT(self) -> None:
+        self._dispatch("PUT")
+
+    def do_DELETE(self) -> None:
+        self._dispatch("DELETE")
+
+    def do_POST(self) -> None:
+        self._dispatch("POST")
+
+    def _dispatch(self, method: str) -> None:
+        parsed = urllib.parse.urlsplit(self.path)
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        route, params, path_exists = self.server.router.match(method, parsed.path)
+        if route is None:
+            status = 405 if path_exists else 404
+            self._send_json(status, {"error": "method-not-allowed" if path_exists else "not-found"})
+            return
+        try:
+            principal = self._authenticate(route.auth)
+            route.handler(self, params, query, principal)
+        except AuthError as exc:
+            self._send_auth_error(exc)
+        except StoreUnreachableError:
+            self._send_json(503, {"error": "store-unreachable"})
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+        except Exception:
+            logging.exception("keel-server: unhandled error handling %s %s", method, parsed.path)
+            try:
+                self._send_json(500, {"error": "internal-error"})
+            except Exception:
+                pass
+
+    def _authenticate(self, required_roles: Optional[FrozenSet[str]]) -> Optional[Principal]:
+        if required_roles is None:
+            return None
+        header = self.headers.get("Authorization", "")
+        if not header:
+            raise AuthError(401, "missing-authorization")
+        scheme, _, token = header.partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            raise AuthError(401, "malformed-authorization")
+        principal = self.server.tokens.authenticate(token)
+        if principal is None:
+            raise AuthError(401, "invalid-token")
+        if required_roles and principal.role not in required_roles:
+            raise AuthError(403, "forbidden-role")
+        return principal
+
+    def _send_auth_error(self, exc: AuthError) -> None:
+        extra = {"WWW-Authenticate": "Bearer"} if exc.status == 401 else None
+        self._send_json(exc.status, {"error": exc.code}, extra_headers=extra)
+
+    # -- response helpers --
+
+    def _send_json(self, status: int, body: Dict[str, object], extra_headers: Optional[Dict[str, str]] = None) -> None:
+        data = json.dumps(body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        if extra_headers:
+            for key, value in extra_headers.items():
+                self.send_header(key, value)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    def _send_status_only(self, status: int) -> None:
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _begin_sse(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+    def _write_chunk(self, data: bytes) -> None:
+        self.wfile.write(f"{len(data):X}\r\n".encode("ascii"))
+        self.wfile.write(data)
+        self.wfile.write(b"\r\n")
+        self.wfile.flush()
+
+
+def build_server(
+    config: ServerConfig,
+    store: "store_api.Store",
+    tokens: Optional[TokenStore] = None,
+    events: Optional[EventLog] = None,
+    health_provider: Optional[Callable[[], Dict[str, object]]] = None,
+) -> KeelHTTPServer:
+    # Validate the bind address BEFORE constructing anything with a real
+    # side effect. `KeelHTTPServer.__init__` re-checks this too (so
+    # constructing one directly is never unsafe), but by then a default
+    # `events=None` here would already have opened a real sqlite file at
+    # `default_events_db_path()` (typically `~/.keel/events.db`) for a
+    # server that was never going to bind at all -- exactly the kind of
+    # untracked disk write a test (or a caller) touching a real home
+    # directory should never see as a side effect of a rejected config.
+    validate_bind_host(config.bind_host, config.allow_any_bind)
+    tokens = tokens if tokens is not None else TokenStore.empty()
+    events = events if events is not None else EventLog(default_events_db_path())
+    return KeelHTTPServer(
+        (config.bind_host, config.port),
+        config,
+        store,
+        tokens,
+        events,
+        health_provider=health_provider,
+    )
+
+
+# --------------------------------------------------------------------- #
+# Standalone entrypoint -- smoke-testing / manual use only. Production
+# wiring (once cachedhub.py/election.py exist) injects a real Store and
+# health_provider instead of the InMemoryStore default here.
+# --------------------------------------------------------------------- #
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(prog="keel-server", description="Keel server transport (SPEC SS2 C6).")
+    parser.add_argument("--bind-host", default=os.environ.get("KEEL_BIND", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("KEEL_PORT", str(DEFAULT_PORT))))
+    parser.add_argument(
+        "--allow-any-bind",
+        action="store_true",
+        default=False,
+        help="skip the loopback/Tailscale bind restriction (SPEC SS8); KEEL_ALLOW_PUBLIC_BIND=1 does the same",
+    )
+    parser.add_argument("--max-connections", type=int, default=DEFAULT_MAX_CONNECTIONS)
+    parser.add_argument("--tokens-file", default=str(default_tokens_file_path()))
+    parser.add_argument("--events-db", default=str(default_events_db_path()))
+    parser.add_argument("--long-poll-timeout", type=float, default=DEFAULT_LONG_POLL_TIMEOUT_S)
+    parser.add_argument("--sse-keepalive-interval", type=float, default=DEFAULT_SSE_KEEPALIVE_INTERVAL_S)
+    parser.add_argument("--watchdog-timeout", type=float, default=DEFAULT_WATCHDOG_TIMEOUT_S)
+    parser.add_argument("--log-level", default="INFO")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
+
+    config = ServerConfig(
+        bind_host=args.bind_host,
+        port=args.port,
+        allow_any_bind=args.allow_any_bind,
+        max_connections=args.max_connections,
+        long_poll_timeout=args.long_poll_timeout,
+        sse_keepalive_interval=args.sse_keepalive_interval,
+        watchdog_timeout=args.watchdog_timeout,
+    )
+
+    tokens_path = Path(args.tokens_file)
+    if tokens_path.exists():
+        tokens = TokenStore.from_file(tokens_path)
+    else:
+        tokens = TokenStore.empty()
+        logging.warning("keel-server: no tokens file at %s -- every authenticated route will 401", tokens_path)
+
+    events = EventLog(Path(args.events_db))
+    store: "store_api.Store" = store_api.InMemoryStore()
+    logging.warning(
+        "keel-server: running with InMemoryStore -- no real spine is wired in. "
+        "This is the standalone/smoke-test path; production wiring calls "
+        "build_server(store=<CachedHub instance>)."
+    )
+
+    try:
+        server = build_server(config, store=store, tokens=tokens, events=events)
+    except ValueError as exc:
+        logging.error("keel-server: %s", exc)
+        return 2
+
+    server.start()
+    logging.info("keel-server listening on %s:%s (boot_id=%s)", config.bind_host, config.port, server.boot_id)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.stop()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
