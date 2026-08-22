@@ -54,6 +54,7 @@ import claim as claim_mod  # noqa: E402
 import fleetd  # noqa: E402
 from claim import Claim  # noqa: E402
 from fleetlib import Hub, HubError  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 GIT_ENV = {
@@ -133,7 +134,7 @@ def build_hub(tmp: Path) -> Path:
     assert str(tmp).startswith(tempfile.gettempdir()), "fixture must live under tempdir"
     bare = tmp / "hub.git"
     work = tmp / "seed"
-    env = {**os.environ, **GIT_ENV}
+    env = scrub_env(**GIT_ENV)
     subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
     subprocess.run(["git", "init", "-q", str(work)], check=True)
     (work / "f.txt").write_text("tip\n")
@@ -202,8 +203,9 @@ class ClaimWatcher:
 # --------------------------------------------------------------------- #
 
 
-class TestClaimAdopt(unittest.TestCase):
+class TestClaimAdopt(HermeticCase):
     def setUp(self):
+        super().setUp()
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         self.bare = build_hub(self.tmp)
@@ -384,8 +386,9 @@ class TestClaimAdopt(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestAdoptWorkers(unittest.TestCase):
+class TestAdoptWorkers(HermeticCase):
     def setUp(self):
+        super().setUp()
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         self.bare = build_hub(self.tmp)
@@ -804,7 +807,7 @@ class TestAdoptWorkers(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestKillpgAndWaitBeforeCleanup(unittest.TestCase):
+class TestKillpgAndWaitBeforeCleanup(HermeticCase):
     """`TestRestartAdoption`'s tearDown once went `os.killpg(...)` straight
     into `TemporaryDirectory.cleanup()`, and that raised
     OSError(ENOTEMPTY) -- one of the two shapes that made the gate's
@@ -906,10 +909,11 @@ class TestKillpgAndWaitBeforeCleanup(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestRestartAdoption(unittest.TestCase):
+class TestRestartAdoption(HermeticCase):
     """Fixture fleetd processes, SIGKILLed without cleanup, per R6's test."""
 
     def setUp(self):
+        super().setUp()
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         self.bare = build_hub(self.tmp)
@@ -1024,12 +1028,12 @@ exit 0
              "--log-dir", str(self.tmp / "logs"), "--interval", "1"],
             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
             start_new_session=True,
-            env={**os.environ,
-                 "FLEET_HOST": HOST,
-                 "FLEET_TEST_TTL_S": TEST_TTL,
-                 "FLEET_TEST_RENEW_S": TEST_RENEW,
-                 "FLEET_WORKER_MARKERS": self.gate_marker,
-                 "FLEET_KILL_GRACE_S": "2"},
+            env=scrub_env(
+                 FLEET_HOST=HOST,
+                 FLEET_TEST_TTL_S=TEST_TTL,
+                 FLEET_TEST_RENEW_S=TEST_RENEW,
+                 FLEET_WORKER_MARKERS=self.gate_marker,
+                 FLEET_KILL_GRACE_S="2"),
         )
         self.daemons.append(p)
         return p

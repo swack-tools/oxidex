@@ -26,13 +26,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import drift  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 FLEET_DIR = Path(__file__).resolve().parents[1]
 HOOK_SCRIPT = FLEET_DIR / "hooks" / "post-receive"
 
 
 def _run_git(args, cwd=None, input_bytes=None, env=None):
-    full_env = dict(os.environ)
+    full_env = scrub_env()
     full_env.update(
         {
             "GIT_AUTHOR_NAME": "t",
@@ -47,10 +48,11 @@ def _run_git(args, cwd=None, input_bytes=None, env=None):
     return subprocess.run(args, cwd=cwd, input=input_bytes, capture_output=True, env=full_env)
 
 
-class DriftHookTestCase(unittest.TestCase):
+class DriftHookTestCase(HermeticCase):
     """Base fixture: a throwaway bare repo standing in for the hub."""
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="drift-hook-test-")
         self.addCleanup(shutil.rmtree, self._tmp_root, ignore_errors=True)
         self.hub_path = str(Path(self._tmp_root) / "hub.git")

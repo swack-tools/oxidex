@@ -36,6 +36,7 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from _env import HermeticCase  # noqa: E402
 
 FLEET_DIR = Path(__file__).resolve().parents[1]  # tools/fleet
 
@@ -131,7 +132,7 @@ def _scan(path: Path):
     return hits
 
 
-class TestNoRawHubPush(unittest.TestCase):
+class TestNoRawHubPush(HermeticCase):
     def test_no_unallowlisted_raw_hub_writes(self):
         offenders = []
         matched_allowlist_keys = set()

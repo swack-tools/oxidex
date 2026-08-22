@@ -26,13 +26,15 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 HELPER = Path(__file__).resolve().parents[1] / "keel" / "git-credential-file"
 TOKEN = "ghp_TESTTOKEN_not_a_real_credential_0123456789"
 
 
-class TestGitCredentialFileHost(unittest.TestCase):
+class TestGitCredentialFileHost(HermeticCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.mkdtemp(prefix="cred-host-")
         self.addCleanup(self._rmtree)
         self.token_file = str(Path(self._tmp) / "token")
@@ -45,7 +47,7 @@ class TestGitCredentialFileHost(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _run(self, request: str, extra_env: dict | None = None):
-        env = {**os.environ, "FLEET_GIT_TOKEN_FILE": self.token_file, **(extra_env or {})}
+        env = scrub_env(**{"FLEET_GIT_TOKEN_FILE": self.token_file, **(extra_env or {})})
         return subprocess.run(
             [str(HELPER), "get"],
             input=request.encode(),

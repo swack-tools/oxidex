@@ -69,6 +69,7 @@ import config  # noqa: E402
 import fleetlib  # noqa: E402
 import train  # noqa: E402
 from fleetlib import Hub  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 GIT_ENV = {
@@ -98,7 +99,7 @@ fi
 def _run(args, cwd=None, check=True):
     return subprocess.run(
         args, cwd=cwd, check=check, capture_output=True, text=True,
-        env={**os.environ, **GIT_ENV},
+        env=scrub_env(**GIT_ENV),
     )
 
 
@@ -177,8 +178,9 @@ class _ThreeRepos:
         return got
 
 
-class _ThreeRepoCase(unittest.TestCase):
+class _ThreeRepoCase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self._tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmpdir.name)
         # HOME is redirected for the same three reasons test_code_url_split

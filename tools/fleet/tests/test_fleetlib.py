@@ -57,6 +57,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import fleetlib  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 from fleetlib import (  # noqa: E402
     Hub,
     HubError,
@@ -152,7 +153,7 @@ def tearDownModule():
         )
 
 
-class FleetlibTestCase(unittest.TestCase):
+class FleetlibTestCase(HermeticCase):
     """Base fixture: a throwaway bare repo standing in for the hub, or the
     remote named by `FLEET_TEST_HUB_URL`.
 
@@ -163,6 +164,7 @@ class FleetlibTestCase(unittest.TestCase):
     """
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="fleetlib-test-")
         self.workdir = str(Path(self._tmp_root) / "cache")
         self.live = bool(LIVE_HUB_URL)
@@ -648,7 +650,7 @@ class TestReadIsCoherentUnderConcurrentWrites(FleetlibTestCase):
         self.assertEqual(empty_tree.returncode, 0, msg=empty_tree.stderr.decode())
         tree_sha = empty_tree.stdout.decode().strip()
         commit = subprocess.run(git + ["commit-tree", tree_sha, "-m", "no payload"],
-                                capture_output=True, env={**os.environ, **env_commit})
+                                capture_output=True, env=scrub_env(**env_commit))
         self.assertEqual(commit.returncode, 0, msg=commit.stderr.decode())
         commit_sha = commit.stdout.decode().strip()
         push = _run_git(git + ["push", self.hub_url, f"{commit_sha}:{self.ref('empty')}"])
@@ -1139,7 +1141,7 @@ class TestGitHubRateLimitsAreTransient(FleetlibTestCase):
             reader.read(self.ref("rl"))
 
 
-class TestCredentialHelper(unittest.TestCase):
+class TestCredentialHelper(HermeticCase):
     """`FLEET_GIT_TOKEN_FILE` -> `tools/fleet/keel/git-credential-file`.
 
     No hub is needed for any of this: the instrument is `git credential
@@ -1151,6 +1153,7 @@ class TestCredentialHelper(unittest.TestCase):
     TOKEN = "ghp_TESTTOKEN_not_a_real_credential_0123456789"
 
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.mkdtemp(prefix="fleetlib-cred-")
         self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
         self.token_file = str(Path(self._tmp) / "github.token")
@@ -1267,7 +1270,7 @@ class TestCredentialHelper(unittest.TestCase):
             [str(helper), op],
             input=request.encode(),
             capture_output=True,
-            env={**os.environ, "FLEET_GIT_TOKEN_FILE": self.token_file, **(extra_env or {})},
+            env=scrub_env(**{"FLEET_GIT_TOKEN_FILE": self.token_file, **(extra_env or {})}),
         )
 
     def test_store_and_erase_are_silent_no_ops(self):
@@ -1344,7 +1347,7 @@ class TestCredentialHelper(unittest.TestCase):
                 Hub(url=str(Path(self._tmp) / "hub.git"), workdir=str(Path(self._tmp) / "wd"))
 
 
-class TestDefaultTokenFile(unittest.TestCase):
+class TestDefaultTokenFile(HermeticCase):
     """R2. `~/.keel/secrets/git-token` is the DEFAULT, not just what the
     unit files happen to point `FLEET_GIT_TOKEN_FILE` at.
 
@@ -1367,6 +1370,7 @@ class TestDefaultTokenFile(unittest.TestCase):
     TOKEN = "ghp_TESTTOKEN_not_a_real_credential_0123456789"
 
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.mkdtemp(prefix="fleetlib-default-token-")
         self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
         self.home = Path(self._tmp) / "home"
@@ -1467,9 +1471,7 @@ class TestDefaultTokenFile(unittest.TestCase):
         "what credential would you use here" -- with HOME redirected and
         `FLEET_GIT_TOKEN_FILE` positively unset."""
         self._install()
-        env = dict(os.environ)
-        env.pop("FLEET_GIT_TOKEN_FILE", None)
-        env["HOME"] = str(self.home)
+        env = scrub_env(HOME=str(self.home))  # FLEET_GIT_TOKEN_FILE is scrubbed with the rest
         with mock.patch.dict(os.environ, env, clear=True):
             result = Hub._raw_run(
                 ["git", "credential", "fill"],
@@ -1479,9 +1481,7 @@ class TestDefaultTokenFile(unittest.TestCase):
         self.assertIn(f"password={self.TOKEN}", result.stdout)
 
     def test_with_no_file_git_is_asked_nothing_extra(self):
-        env = dict(os.environ)
-        env.pop("FLEET_GIT_TOKEN_FILE", None)
-        env["HOME"] = str(self.home)
+        env = scrub_env(HOME=str(self.home))  # FLEET_GIT_TOKEN_FILE is scrubbed with the rest
         with mock.patch.dict(os.environ, env, clear=True):
             built = fleetlib.credential_env()
         self.assertNotIn("GIT_CONFIG_COUNT", built)

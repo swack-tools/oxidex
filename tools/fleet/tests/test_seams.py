@@ -130,6 +130,7 @@ import verdict as verdict_mod  # noqa: E402
 import workqueue  # noqa: E402
 from claim import Claim, claim_ref, is_expired, reap_expired  # noqa: E402
 from fleetlib import Hub  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 FLEET_DIR = Path(__file__).resolve().parents[1]
 FLEETD_PY = FLEET_DIR / "fleetd.py"
@@ -468,7 +469,7 @@ def git(args, cwd=None, check=True, env_extra=None):
     global _GIT_ENV
     if _GIT_ENV is None:
         _GIT_ENV = {
-            **os.environ,
+            **scrub_env(),
             "GIT_AUTHOR_NAME": "seam",
             "GIT_AUTHOR_EMAIL": "seam@t",
             "GIT_COMMITTER_NAME": "seam",
@@ -628,7 +629,7 @@ class SubprocessFleetd:
         self.log_path = fixture.tmp / f"fleetd-{host}.log"
 
     def start(self):
-        env = dict(os.environ)
+        env = scrub_env()
         env.update(
             {
                 "HOME": str(self.fixture.home),
@@ -720,7 +721,7 @@ class SupervisedFleetd:
         self.pidfile = fixture.tmp / f"wrapper-{host}.pid"
 
     def start(self):
-        env = dict(os.environ)
+        env = scrub_env()
         env.update(
             {
                 "HOME": str(self.fixture.home),
@@ -907,13 +908,14 @@ class InProcessFleetd:
 # --------------------------------------------------------------------- #
 
 
-class SeamFixture(unittest.TestCase):
+class SeamFixture(HermeticCase):
     """A throwaway bare hub with a seeded tip, plus the guard -- asserted
     before any test body runs -- that it is never the production hub."""
 
     maxDiff = None
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="seam-")
         self.addCleanup(shutil.rmtree, self._tmp_root, ignore_errors=True)
         self.tmp = Path(self._tmp_root)
