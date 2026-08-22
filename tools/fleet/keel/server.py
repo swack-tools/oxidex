@@ -954,6 +954,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--sse-keepalive-interval", type=float, default=DEFAULT_SSE_KEEPALIVE_INTERVAL_S)
     parser.add_argument("--watchdog-timeout", type=float, default=DEFAULT_WATCHDOG_TIMEOUT_S)
     parser.add_argument("--log-level", default="INFO")
+    # The spine. With --state-url the Store is a CachedHub over fleetlib.Hub
+    # (keel/hubstore.py, the one adapter between the two surfaces); without
+    # it the server runs on InMemoryStore and is a smoke test of the
+    # transport only. Same env names fleetd/cli resolve (FLEET_HUB_URL is the
+    # state repo, FLEET_CODE_URL the code repo); KEEL_STATE_URL wins.
+    parser.add_argument(
+        "--state-url",
+        default=os.environ.get("KEEL_STATE_URL") or os.environ.get("FLEET_HUB_URL"),
+        help="state repo remote answering refs/fleet/* (or KEEL_STATE_URL / FLEET_HUB_URL); "
+        "absent = InMemoryStore, smoke-test only",
+    )
+    parser.add_argument(
+        "--state-workdir",
+        default=os.environ.get("KEEL_STATE_WORKDIR"),
+        help="disposable local object cache for the state repo (default: $KEEL_HOME/state.git)",
+    )
+    parser.add_argument(
+        "--code-url",
+        default=os.environ.get("FLEET_CODE_URL"),
+        help="code repo remote (or FLEET_CODE_URL; default: same as --state-url)",
+    )
+    parser.add_argument(
+        "--sweep-interval",
+        type=float,
+        default=float(os.environ.get("KEEL_SWEEP_INTERVAL", "30")),
+        help="seconds between whole-namespace index sweeps (0 = never; boot still sweeps once)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
@@ -975,18 +1002,52 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         tokens = TokenStore.empty()
         logging.warning("keel-server: no tokens file at %s -- every authenticated route will 401", tokens_path)
 
-    events = EventLog(Path(args.events_db))
-    store: "store_api.Store" = store_api.InMemoryStore()
-    logging.warning(
-        "keel-server: running with InMemoryStore -- no real spine is wired in. "
-        "This is the standalone/smoke-test path; production wiring calls "
-        "build_server(store=<CachedHub instance>)."
-    )
-
+    # Validate the bind BEFORE anything with a side effect: building the
+    # index creates the state workdir on disk and costs a round trip to the
+    # spine, and a rejected bind should leave no trace of either.
     try:
-        server = build_server(config, store=store, tokens=tokens, events=events)
+        validate_bind_host(config.bind_host, config.allow_any_bind)
     except ValueError as exc:
         logging.error("keel-server: %s", exc)
+        return 2
+
+    store: "store_api.Store"
+    health_provider: Optional[Callable[[], Dict[str, object]]] = None
+    close_store: Callable[[], None] = lambda: None
+    if args.state_url:
+        # Imported here, not at module top: server.py's import graph stays
+        # free of cachedhub/fleetlib so the transport tests need neither
+        # (store_api.py's docstring); only the production wiring pays for it.
+        import hubstore  # noqa: E402
+
+        workdir = Path(args.state_workdir) if args.state_workdir else _keel_home() / "state.git"
+        try:
+            hub_store = hubstore.build_store(
+                args.state_url, workdir, code_url=args.code_url, sweep_interval=args.sweep_interval
+            )
+        except hubstore.HubError as exc:
+            logging.error("keel-server: cannot build the index from %s: %s", args.state_url, exc)
+            return 3
+        store = hub_store
+        health_provider = hub_store.health
+        close_store = hub_store.close
+        logging.info(
+            "keel-server: CachedHub over %s (workdir %s, %d refs indexed, sweep every %ss)",
+            args.state_url, workdir, hub_store.health()["index_refs"], args.sweep_interval,
+        )
+    else:
+        store = store_api.InMemoryStore()
+        logging.warning(
+            "keel-server: running with InMemoryStore -- no real spine is wired in "
+            "(no --state-url / KEEL_STATE_URL / FLEET_HUB_URL). Smoke-test path only."
+        )
+
+    events = EventLog(Path(args.events_db))
+    try:
+        server = build_server(config, store=store, tokens=tokens, events=events, health_provider=health_provider)
+    except ValueError as exc:
+        logging.error("keel-server: %s", exc)
+        close_store()
         return 2
 
     server.start()
@@ -998,6 +1059,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         pass
     finally:
         server.stop()
+        close_store()
     return 0
 
 
