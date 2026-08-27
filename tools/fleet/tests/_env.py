@@ -82,7 +82,7 @@ SCRUB_EXACT = frozenset({
 # survive the scrub so that `FLEET_TESTS_HERMETIC=1` keeps gating the
 # network-touching tests and the live opt-ins keep opting in.
 KEEP_PREFIXES = ("FLEET_TESTS_", "FLEET_LIVE_")
-KEEP_EXACT = frozenset({"FLEET_SEAMS_SLOW", "FLEET_TEST_HUB_URL"})
+KEEP_EXACT = frozenset({"FLEET_SEAMS_SLOW", "FLEET_TEST_HUB_URL", "FLEET_TEST_HUB"})
 
 # The identity every fixture's own git calls already used; pinned here for
 # the CODE UNDER TEST as well, whose merges and commits otherwise depend

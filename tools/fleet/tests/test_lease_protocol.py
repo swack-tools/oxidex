@@ -56,6 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import claim as claim_mod  # noqa: E402
 import fleetd  # noqa: E402
 from _env import HermeticCase, scrub_env  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
 from claim import (  # noqa: E402
     Claim,
     claim_ref,
@@ -100,7 +101,7 @@ class LeaseFixture(HermeticCase):
         )
         self.assertNotIn("work2.oxidex.net", resolved)
 
-        self.hub = Hub(url=self.hub_path, workdir=str(self.tmp / "cache"))
+        self.hub = make_hub(self, self.hub_path, workdir=str(self.tmp / "cache"))
         self._spawned: list = []
         self._claims: list = []
 
@@ -576,7 +577,7 @@ class TestFleetdStopsWorkOnLostLease(HermeticCase):
         self.tmp = Path(self._tmpdir.name)
         self.bare = make_fixture_hub(self.tmp)
         self.assertTrue(str(self.bare).startswith(tempfile.gettempdir()))
-        self.hub = Hub(str(self.bare), workdir=self.tmp / "hubcache")
+        self.hub = make_hub(self, str(self.bare), workdir=self.tmp / "hubcache")
         self.host = "leasehost"
         self.workers: list = []
 

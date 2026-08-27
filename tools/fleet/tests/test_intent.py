@@ -64,6 +64,7 @@ from intent import (  # noqa: E402
     withdraw,
 )
 from _env import HermeticCase  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -180,7 +181,7 @@ class IntentTestCase(HermeticCase):
         )
         self.assertNotIn("work2.oxidex.net", resolved)
 
-        self.hub = Hub(url=self.hub_path, workdir=self.workdir)
+        self.hub = make_hub(self, self.hub_path, workdir=self.workdir)
 
     def tearDown(self):
         shutil.rmtree(self._tmp_root, ignore_errors=True)

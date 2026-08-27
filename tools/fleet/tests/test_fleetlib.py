@@ -58,6 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import fleetlib  # noqa: E402
 from _env import HermeticCase, scrub_env  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
 from fleetlib import (  # noqa: E402
     Hub,
     HubError,
@@ -198,7 +199,7 @@ class FleetlibTestCase(HermeticCase):
             self._assert_hub_url_is_not_production(resolved)
             self.hub_url = self.hub_path
 
-        self.hub = Hub(url=self.hub_url, workdir=self.workdir)
+        self.hub = make_hub(self, self.hub_url, workdir=self.workdir)
 
     def tearDown(self):
         # Order matters: the sweep needs `self.hub`, whose object-store
