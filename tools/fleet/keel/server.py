@@ -378,6 +378,18 @@ def _decode_ref(raw: str) -> str:
     return urllib.parse.unquote(raw)
 
 
+# SPEC SS4.3 rule 1 (r1, "fresh claims"): any read under
+# `refs/fleet/claims/` is served LIVE from the store, never from an
+# index -- a stale sha on a runner's own claim makes `claim.renew()`
+# adopt it, the CAS rejects the renewal, and `_mark_lost` kills a
+# healthy gate. `CachedHub` applies the same policy internally (it is
+# the one place that knows what an index is), but the refs handlers
+# force `fresh` here as well so the property holds against ANY store a
+# server is wired to, and for any client that forgot its `?fresh=1`.
+# Trailing slash so `refs/fleet/claimsX` can never match by accident.
+_CLAIMS_LIVE_PREFIX = "refs/fleet/claims/"
+
+
 def handle_health(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
     server = handler.server
     body: Dict[str, object] = {
@@ -410,7 +422,7 @@ def handle_refs_list(handler: "KeelRequestHandler", params: Dict[str, str], quer
 
 def handle_refs_get(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
     ref = _decode_ref(params["ref"])
-    fresh = query.get("fresh", ["0"])[0] == "1"
+    fresh = query.get("fresh", ["0"])[0] == "1" or ref.startswith(_CLAIMS_LIVE_PREFIX)
     sha, payload = handler.server.store.read_with_sha(ref, fresh=fresh)
     if sha is None:
         handler._send_json(404, {"error": "not-found"})
@@ -429,6 +441,27 @@ def _read_json_body(handler: "KeelRequestHandler") -> Optional[Payload]:
         return None
 
 
+def _answer_create(handler: "KeelRequestHandler", ref: str, payload: Payload) -> None:
+    """The one create path both spellings share: `POST /v1/refs/{ref}`
+    (the ServerHub client's spelling, PLAN Stage 2 task 3) and
+    `PUT /v1/refs/{ref}` + `If-None-Match: *` (SPEC SS4.2's). 201 with
+    the sha the store produced, or 409 on a lost race."""
+    result = handler.server.store.create(ref, payload)
+    if result is False:
+        handler._send_json(409, {"error": "conflict"})
+    else:
+        handler._send_json(201, {"sha": result})
+
+
+def handle_refs_post(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    ref = _decode_ref(params["ref"])
+    payload = _read_json_body(handler)
+    if payload is None:
+        handler._send_json(400, {"error": "invalid-json"})
+        return
+    _answer_create(handler, ref, payload)
+
+
 def handle_refs_put(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
     ref = _decode_ref(params["ref"])
     payload = _read_json_body(handler)
@@ -438,11 +471,7 @@ def handle_refs_put(handler: "KeelRequestHandler", params: Dict[str, str], query
     if_none_match = handler.headers.get("If-None-Match")
     if_match = handler.headers.get("If-Match")
     if if_none_match == "*":
-        result = handler.server.store.create(ref, payload)
-        if result is False:
-            handler._send_json(409, {"error": "conflict"})
-        else:
-            handler._send_json(201, {"sha": result})
+        _answer_create(handler, ref, payload)
         return
     if if_match:
         result = handler.server.store.update(ref, payload, expect_sha=if_match)
@@ -547,6 +576,7 @@ def build_router() -> Router:
     router.add("GET", "/v1/health", handle_health, auth=None)
     router.add("GET", "/v1/refs", handle_refs_list, auth=frozenset())
     router.add("GET", "/v1/refs/{ref:path}", handle_refs_get, auth=frozenset())
+    router.add("POST", "/v1/refs/{ref:path}", handle_refs_post, auth=frozenset({"runner", "operator"}))
     router.add("PUT", "/v1/refs/{ref:path}", handle_refs_put, auth=frozenset({"runner", "operator"}))
     router.add("DELETE", "/v1/refs/{ref:path}", handle_refs_delete, auth=frozenset({"runner", "operator"}))
     router.add("GET", "/v1/events", handle_events, auth=frozenset())
