@@ -530,6 +530,20 @@ fn extract_canon_bytes_with_base<'a>(
     data.get(relative_offset..relative_offset.checked_add(byte_count)?)
 }
 
+/// Returns an `int16u`-count-1 entry's inline value.
+///
+/// TIFF stores a value of four bytes or fewer left-justified in the entry's
+/// 4-byte offset slot, and [`IfdEntry::value_offset`] is that slot read as a
+/// `u32` in the file's byte order. For a 2-byte value that means the low half
+/// in little-endian files and the *high* half in big-endian ones; taking the
+/// low half unconditionally reports 0 for every big-endian MakerNote.
+fn canon_inline_u16(entry: &IfdEntry, byte_order: ByteOrder) -> u16 {
+    match byte_order {
+        ByteOrder::LittleEndian => (entry.value_offset & 0xffff) as u16,
+        ByteOrder::BigEndian => (entry.value_offset >> 16) as u16,
+    }
+}
+
 /// Returns a Canon BinaryData record as the 16-bit-word view used by
 /// [`binary_tables`].
 ///
@@ -807,6 +821,18 @@ const CANON_VRD_OFFSET: u16 = 0x00D0;
 const CANON_SENSOR_INFO: u16 = 0x00E0;
 /// ExifTool Canon.pm:1607 — `0x13 => { Name => 'ThumbnailImageValidArea', ... }`
 const CANON_THUMBNAIL_IMAGE_VALID_AREA: u16 = 0x0013;
+/// ExifTool Canon.pm:1626 — `0x1a => { Name => 'SuperMacro', Writable => 'int16u', ... }`
+const CANON_SUPER_MACRO: u16 = 0x001A;
+/// ExifTool Canon.pm:1635 — `0x1c => { Name => 'DateStampMode', Writable => 'int16u', ... }`
+const CANON_DATE_STAMP_MODE: u16 = 0x001C;
+/// ExifTool Canon.pm:1652 — `0x1e => { Name => 'FirmwareRevision', Writable => 'int32u', ... }`
+const CANON_FIRMWARE_REVISION: u16 = 0x001E;
+/// ExifTool Canon.pm:1674 — `0x23 => { Name => 'Categories', Format => 'int32u',
+/// Count => '2', Condition => '$$valPt =~ /^\x08\0\0\0/', ... }`
+const CANON_CATEGORIES: u16 = 0x0023;
+/// ExifTool Canon.pm:1848 — `0x97 => { Name => 'DustRemovalData', Writable => 'undef',
+/// Flags => [ 'Binary', 'Protected' ] }`
+const CANON_DUST_REMOVAL_DATA: u16 = 0x0097;
 /// ExifTool Canon.pm:1785 — `0x83 => { Name => 'OriginalDecisionDataOffset', ... }`
 const CANON_ORIGINAL_DECISION_DATA_OFFSET: u16 = 0x0083;
 /// ExifTool Canon.pm:1972 — `0x4001 => [ ... ColorData1..ColorData12 ... ]`
@@ -1893,6 +1919,25 @@ const_decoder!(
     pub SERIAL_NUMBER_FORMAT,
     i64,
     [(0x9000_0000, "Format 1"), (0xa000_0000, "Format 2"),]
+);
+
+// Canon SuperMacro decoder
+// ExifTool Canon.pm:1626 — `0x1a => { Name => 'SuperMacro', Writable => 'int16u',
+// PrintConv => { 0 => 'Off', 1 => 'On (1)', 2 => 'On (2)' } }`
+const_decoder!(
+    pub SUPER_MACRO,
+    i64,
+    [(0, "Off"), (1, "On (1)"), (2, "On (2)"),]
+);
+
+// Canon DateStampMode decoder
+// ExifTool Canon.pm:1635 — `0x1c => { Name => 'DateStampMode', Writable => 'int16u',
+// Notes => 'used only in postcard mode',
+// PrintConv => { 0 => 'Off', 1 => 'Date', 2 => 'Date & Time' } }`
+const_decoder!(
+    pub DATE_STAMP_MODE,
+    i64,
+    [(0, "Off"), (1, "Date"), (2, "Date & Time"),]
 );
 
 // ----------------------------------------------------------------------------
@@ -3337,6 +3382,119 @@ fn format_canon_file_number(value: u32) -> String {
     } else {
         digits
     }
+}
+
+/// Renders MakerNote tag 0x1e, `FirmwareRevision`.
+///
+/// ExifTool Canon.pm:1652:
+///
+/// ```text
+///     0x1e => { #PH
+///         Name => 'FirmwareRevision',
+///         Writable => 'int32u',
+///         # as a hex number: 0xAVVVRR00, where (a bit of guessing here...)
+///         #  A = 'a' for alpha, 'b' for beta?
+///         #  V = version? (100,101 for normal releases, 100,110,120,130,170 for alpha/beta)
+///         #  R = revision? (01-07, except 00 for alpha/beta releases)
+///         PrintConv => q{
+///             my $rev = sprintf("%.8x", $val);
+///             my ($rel, $v1, $v2, $r1, $r2) = ($rev =~ /^(.)(.)(..)0?(.+)(..)$/);
+///             my %r = ( a => 'Alpha ', b => 'Beta ', '0' => '' );
+///             $rel = defined $r{$rel} ? $r{$rel} : "Unknown($rel) ";
+///             return "$rel$v1.$v2 rev $r1.$r2",
+///         },
+/// ```
+///
+/// `sprintf("%.8x")` on an `int32u` is always exactly eight hex digits, so the
+/// regex splits deterministically: `rel` = digit 0, `v1` = digit 1, `v2` =
+/// digits 2..4, and the trailing four digits become `r1`/`r2`. The optional
+/// `0?` eats a leading zero of that trailing group when there is one -- with
+/// four digits left, `0?(.+)(..)$` takes `r1` as one digit after a leading `0`
+/// and as two digits otherwise. Verified byte-for-byte against the pinned
+/// oracle: `0xa1200000` -> `Alpha 1.20 rev 0.00`, `0xb1020000` ->
+/// `Beta 1.02 rev 0.00`, `0x01000200` -> `1.00 rev 2.00`.
+fn format_canon_firmware_revision(value: u32) -> String {
+    let rev = format!("{:08x}", value);
+    let digits: Vec<char> = rev.chars().collect();
+    // `sprintf("%.8x", $val)` on an int32u cannot be shorter than 8 digits, and
+    // `{:08x}` on a u32 cannot be longer, so this is total -- but the slice
+    // arithmetic below is only sound for exactly 8.
+    if digits.len() != 8 {
+        return rev;
+    }
+    let release = match digits[0] {
+        'a' => "Alpha ".to_string(),
+        'b' => "Beta ".to_string(),
+        '0' => String::new(),
+        other => format!("Unknown({}) ", other),
+    };
+    let (r1, r2) = if digits[4] == '0' {
+        (&rev[5..6], &rev[6..8])
+    } else {
+        (&rev[4..6], &rev[6..8])
+    };
+    format!("{}{}.{} rev {}.{}", release, digits[1], &rev[2..4], r1, r2)
+}
+
+/// Decodes MakerNote tag 0x23, `Categories`.
+///
+/// ExifTool Canon.pm:1674:
+///
+/// ```text
+///     0x23 => { #31
+///         Name => 'Categories',
+///         Writable => 'int32u',
+///         Format => 'int32u', # (necessary to perform conversion for Condition)
+///         Notes => '2 values: 1. always 8, 2. Categories',
+///         Count => '2',
+///         Condition => '$$valPt =~ /^\x08\0\0\0/',
+///         ValueConv => '$val =~ s/^8 //; $val',
+///         PrintConvColumns => 2,
+///         PrintConv => {
+///             0 => '(none)',
+///             BITMASK => {
+///                 0 => 'People',   1 => 'Scenery', 2 => 'Events',
+///                 3 => 'User 1',   4 => 'User 2',  5 => 'User 3',
+///                 6 => 'To Do',
+///             },
+///         },
+///     },
+/// ```
+///
+/// The `Condition` is a raw-byte test, not a value test: it matches only when
+/// the first `int32u` is little-endian `8`. A big-endian MakerNote therefore
+/// fails it, and since 0x23 has no alternative definition ExifTool emits no
+/// tag at all -- which is why the byte comparison here is deliberately not
+/// byte-order aware. The second `int32u` is the bitmask; `ValueConv` drops the
+/// leading `8`.
+///
+/// `PrintConv` is a plain hash with a `BITMASK` sub-hash. ExifTool.pm:3645
+/// (`if ($$conv{BITMASK} and not defined $$conv{$val})`) prefers an exact hash
+/// hit, so 0 renders as `(none)` before `DecodeBits` is reached;
+/// `DecodeBits` (ExifTool.pm:6385) would return `(none)` for 0 anyway, joins
+/// set bits with `", "` in ascending bit order, and renders a bit with no name
+/// as `[N]`.
+fn decode_canon_categories(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    let head = bytes.get(..4)?;
+    if head != [0x08, 0x00, 0x00, 0x00] {
+        return None;
+    }
+    let reader = EndianReader::new(bytes.get(4..8)?, byte_order.to_io_byte_order());
+    let mask = reader.u32_at(0)?;
+    if mask == 0 {
+        return Some("(none)".to_string());
+    }
+    const CATEGORY_BITS: [&str; 7] = [
+        "People", "Scenery", "Events", "User 1", "User 2", "User 3", "To Do",
+    ];
+    let names: Vec<String> = (0..32)
+        .filter(|bit| mask & (1u32 << bit) != 0)
+        .map(|bit| match CATEGORY_BITS.get(bit as usize) {
+            Some(name) => (*name).to_string(),
+            None => format!("[{}]", bit),
+        })
+        .collect();
+    Some(names.join(", "))
 }
 
 /// Decodes `%Canon::CameraSettings` key 16, `CameraISO`.
@@ -4805,6 +4963,11 @@ pub fn canon_tag_to_name(tag_id: u16) -> String {
         CANON_MODEL_ID => "CanonModelID",
         CANON_AF_INFO => "AFInfo",
         CANON_SERIAL_NUMBER_FORMAT => "SerialNumberFormat",
+        CANON_SUPER_MACRO => "SuperMacro",
+        CANON_DATE_STAMP_MODE => "DateStampMode",
+        CANON_FIRMWARE_REVISION => "FirmwareRevision",
+        CANON_CATEGORIES => "Categories",
+        CANON_DUST_REMOVAL_DATA => "DustRemovalData",
         CANON_AF_INFO2 => "AFInfo2",
         CANON_AF_INFO3 => "AFInfo3",
         CANON_FILE_INFO => "FileInfo",
@@ -5209,6 +5372,66 @@ fn parse_canon_makernote_impl_located_with_values(
                     "Canon:SerialNumberFormat".to_string(),
                     SERIAL_NUMBER_FORMAT.decode(entry.value_offset as i64),
                 );
+            }
+
+            // SuperMacro (tag 0x001A) and DateStampMode (tag 0x001C) are both
+            // `int16u` count 1, so the value lives inline in the entry's
+            // 4-byte offset slot -- read through `canon_inline_u16` because a
+            // big-endian MakerNote puts those two bytes in the *high* half of
+            // that u32.
+            CANON_SUPER_MACRO => {
+                tags.insert(
+                    "Canon:SuperMacro".to_string(),
+                    SUPER_MACRO.decode(canon_inline_u16(entry, byte_order) as i64),
+                );
+            }
+            CANON_DATE_STAMP_MODE => {
+                tags.insert(
+                    "Canon:DateStampMode".to_string(),
+                    DATE_STAMP_MODE.decode(canon_inline_u16(entry, byte_order) as i64),
+                );
+            }
+
+            // FirmwareRevision (tag 0x001E) - int32u count 1, also inline.
+            CANON_FIRMWARE_REVISION => {
+                tags.insert(
+                    "Canon:FirmwareRevision".to_string(),
+                    format_canon_firmware_revision(entry.value_offset),
+                );
+            }
+
+            // Categories (tag 0x0023) - int32u[2], 8 bytes, so out of line.
+            // `decode_canon_categories` also enforces ExifTool's raw-byte
+            // `Condition`, and returns None (no tag emitted) when it fails --
+            // matching ExifTool, which has no fallback definition for 0x23.
+            CANON_CATEGORIES => {
+                if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base)
+                    && let Some(rendered) = decode_canon_categories(bytes, byte_order)
+                {
+                    tags.insert("Canon:Categories".to_string(), rendered);
+                }
+            }
+
+            // DustRemovalData (tag 0x0097) - `Writable => 'undef'` with
+            // `Flags => [ 'Binary', 'Protected' ]` (Canon.pm:1848). ExifTool
+            // never decodes it without `-b`; it prints the standard binary
+            // placeholder sized by the value it actually read. The record's
+            // internal layout is documented only as a commented-out field list
+            // in the Perl (no `SubDirectory`, no `TagTable`), so there is
+            // nothing here to decode and nothing is guessed -- the byte count
+            // is taken from the resolved slice rather than from the entry
+            // header so a MakerNote whose value offset does not resolve emits
+            // no tag at all instead of a confident wrong length.
+            CANON_DUST_REMOVAL_DATA => {
+                if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base) {
+                    tags.insert(
+                        "Canon:DustRemovalData".to_string(),
+                        format!(
+                            "(Binary data {} bytes, use -b option to extract)",
+                            bytes.len()
+                        ),
+                    );
+                }
             }
 
             // ThumbnailImageValidArea (tag 0x0013) - int16u[4] crop box
@@ -8434,6 +8657,136 @@ mod tests {
         assert_eq!(canon_tag_to_name(0x00AA), "Canon:MeasuredColor");
         assert_eq!(canon_tag_to_name(0x00B4), "Canon:ColorSpace");
         assert_eq!(canon_tag_to_name(0x00D0), "Canon:VRDOffset");
+    }
+
+    #[test]
+    fn test_canon_main_ifd_tag_names() {
+        assert_eq!(canon_tag_to_name(0x001A), "Canon:SuperMacro");
+        assert_eq!(canon_tag_to_name(0x001C), "Canon:DateStampMode");
+        assert_eq!(canon_tag_to_name(0x001E), "Canon:FirmwareRevision");
+        assert_eq!(canon_tag_to_name(0x0023), "Canon:Categories");
+        assert_eq!(canon_tag_to_name(0x0097), "Canon:DustRemovalData");
+    }
+
+    /// Pins `Canon::Main` 0x1c and 0x1a against the pinned ExifTool 13.59
+    /// `PrintConv` hashes (Canon.pm:1635 and :1626).
+    #[test]
+    fn test_canon_date_stamp_mode_and_super_macro_print_conv() {
+        assert_eq!(DATE_STAMP_MODE.decode(0), "Off");
+        assert_eq!(DATE_STAMP_MODE.decode(1), "Date");
+        assert_eq!(DATE_STAMP_MODE.decode(2), "Date & Time");
+        assert_eq!(DATE_STAMP_MODE.decode(3), "Unknown (3)");
+        assert_eq!(SUPER_MACRO.decode(0), "Off");
+        assert_eq!(SUPER_MACRO.decode(1), "On (1)");
+        assert_eq!(SUPER_MACRO.decode(2), "On (2)");
+    }
+
+    /// Pins `Canon::Main` 0x1e (Canon.pm:1652) against values read straight out
+    /// of the corpus with the pinned oracle. Each raw number below is what
+    /// `exiftool -n -FirmwareRevision` prints for the named sample and each
+    /// expectation is what plain `exiftool -FirmwareRevision` prints for it:
+    ///
+    /// ```text
+    /// CanonPowerShotSX1IS.jpg   2703228928 -> Alpha 1.20 rev 0.00
+    /// CanonPowerShotD10.jpg     2708471808 -> Alpha 1.70 rev 0.00
+    /// CanonPowerShotSX50HS.jpg  2969698304 -> Beta 1.02 rev 0.00
+    /// CanonPowerShotSX200IS.jpg 2970615808 -> Beta 1.10 rev 0.00
+    /// CanonPowerShotG9.jpg      2971664384 -> Beta 1.20 rev 0.00
+    /// CanonIXUS1000HS.jpg         16777728 -> 1.00 rev 2.00
+    /// CanonPowerShotSD40.jpg      16779008 -> 1.00 rev 7.00
+    /// ```
+    #[test]
+    fn test_canon_firmware_revision_print_conv() {
+        assert_eq!(
+            format_canon_firmware_revision(2_703_228_928),
+            "Alpha 1.20 rev 0.00"
+        );
+        assert_eq!(
+            format_canon_firmware_revision(2_708_471_808),
+            "Alpha 1.70 rev 0.00"
+        );
+        assert_eq!(
+            format_canon_firmware_revision(2_969_698_304),
+            "Beta 1.02 rev 0.00"
+        );
+        assert_eq!(
+            format_canon_firmware_revision(2_970_615_808),
+            "Beta 1.10 rev 0.00"
+        );
+        assert_eq!(
+            format_canon_firmware_revision(2_971_664_384),
+            "Beta 1.20 rev 0.00"
+        );
+        assert_eq!(format_canon_firmware_revision(16_777_728), "1.00 rev 2.00");
+        assert_eq!(format_canon_firmware_revision(16_779_008), "1.00 rev 7.00");
+        // Trailing group whose first digit is non-zero takes the two-digit
+        // `r1` branch of `0?(.+)(..)$`.
+        assert_eq!(
+            format_canon_firmware_revision(0x0101_1234),
+            "1.01 rev 12.34"
+        );
+        // Unrecognised release letter: ExifTool's `"Unknown($rel) "`.
+        assert_eq!(
+            format_canon_firmware_revision(0xc101_0100),
+            "Unknown(c) 1.01 rev 1.00"
+        );
+    }
+
+    /// Pins `Canon::Main` 0x23 (Canon.pm:1674). The 8-byte payload below is the
+    /// verbatim `exiftool -v3` hex dump for
+    /// `combined-samples/Canon/CanonPowerShotSX1IS.jpg`
+    /// (`Tag 0x0023 (8 bytes, int32u[2]): 08 00 00 00 01 00 00 00`), for which
+    /// the oracle prints `Categories : People`.
+    #[test]
+    fn test_canon_categories_decode() {
+        let people = [0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        assert_eq!(
+            decode_canon_categories(&people, ByteOrder::LittleEndian).as_deref(),
+            Some("People")
+        );
+        let none = [0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(
+            decode_canon_categories(&none, ByteOrder::LittleEndian).as_deref(),
+            Some("(none)")
+        );
+        // DecodeBits joins with ", " in ascending bit order.
+        let several = [0x08, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x00, 0x00];
+        assert_eq!(
+            decode_canon_categories(&several, ByteOrder::LittleEndian).as_deref(),
+            Some("Scenery, User 1, To Do")
+        );
+        // Bits past the BITMASK hash render as `[N]` (ExifTool.pm:6400).
+        let unnamed = [0x08, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00];
+        assert_eq!(
+            decode_canon_categories(&unnamed, ByteOrder::LittleEndian).as_deref(),
+            Some("[7]")
+        );
+        // `Condition => '$$valPt =~ /^\x08\0\0\0/'` is a raw-byte test: a
+        // leading big-endian 8 does not match, and ExifTool emits no tag.
+        let big_endian_eight = [0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01];
+        assert!(decode_canon_categories(&big_endian_eight, ByteOrder::BigEndian).is_none());
+        // Short payload: no tag rather than a guess.
+        assert!(
+            decode_canon_categories(&[0x08, 0x00, 0x00, 0x00], ByteOrder::LittleEndian).is_none()
+        );
+    }
+
+    #[test]
+    fn test_canon_inline_u16_byte_order() {
+        let entry = IfdEntry {
+            tag_id: CANON_DATE_STAMP_MODE,
+            field_type: 3,
+            value_count: 1,
+            value_offset: 0x0002_0000,
+        };
+        // Big-endian files left-justify the 2-byte value in the 4-byte slot.
+        assert_eq!(canon_inline_u16(&entry, ByteOrder::BigEndian), 2);
+        assert_eq!(canon_inline_u16(&entry, ByteOrder::LittleEndian), 0);
+        let le = IfdEntry {
+            value_offset: 0x0000_0002,
+            ..entry
+        };
+        assert_eq!(canon_inline_u16(&le, ByteOrder::LittleEndian), 2);
     }
 
     #[test]
