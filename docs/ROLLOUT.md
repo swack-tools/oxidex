@@ -1,5 +1,10 @@
 # Fleet Wave 3 — Go-Live Runbook
 
+> **HISTORICAL (2026-08-22):** the ryzen — `ubuntuwork`, the work2 pod, and the
+> `work2.oxidex.net:2244` hub this runbook installs against — was removed from the fleet by
+> operator decision, and the topology moved to the GitHub spine (`docs/AGENT-SERVER-SPEC.md`).
+> The work2/ubuntuwork steps below are kept as history only; do not execute them.
+
 Executes the rollout of `tools/fleet/` onto the live fleet. Everything
 here is additive and reversible; the legacy path (`~/gate-nocache.sh` +
 cron topup) keeps working until the final step deliberately retires it.

@@ -86,7 +86,9 @@ POISON = {
     "KEEL_POISON": "1",
 }
 
-PER_MODULE_TIMEOUT_S = float(os.environ.get("FLEET_TESTS_TIMEOUT_S", "600"))
+# Default mirrors gate.sh's FLEET_TESTS_TIMEOUT_S default (1800 since
+# GATE_VERSION 8); a single module gets the whole-stage budget at worst.
+PER_MODULE_TIMEOUT_S = float(os.environ.get("FLEET_TESTS_TIMEOUT_S", "1800"))
 
 
 def _poisoned_env(**extra: str) -> dict:

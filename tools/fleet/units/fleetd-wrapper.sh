@@ -1,11 +1,14 @@
 #!/bin/bash
 # fleetd-wrapper.sh -- persistent supervisor for fleetd (ARCH-FIX-SPEC.md
-# R8), for hosts with NO systemd/launchd to restart it -- concretely, the
-# work2 pod: a k8s container whose hostname is a generated
-# `work2box-<hash>` (see fleetd.py's `host_identity()` comment) and which
-# has neither `systemctl --user` nor `launchctl`. Linux hosts WITH
-# systemd (i7 `server`) use fleetd.service instead (`Restart=always`);
-# macOS hosts use com.oxidex.fleetd.plist (`KeepAlive`).
+# R8), for hosts with NO systemd/launchd to restart it. (Historically the
+# work2 pod: a k8s container with neither `systemctl --user` nor
+# `launchctl` and a generated `work2box-<hash>` hostname -- see
+# fleetd.py's `host_identity()` comment; removed from the fleet
+# 2026-08-22 with the rest of the ryzen. No current host needs this
+# path, but the supervisor semantics are seam-tested and kept.) Linux
+# hosts WITH systemd (i7 `server`) use fleetd.service instead
+# (`Restart=always`); macOS hosts use com.oxidex.fleetd.plist
+# (`KeepAlive`).
 #
 # This replaces the bare `nohup ... fleetd.py &` the pod was launched
 # with before: that gave fleetd no restart-on-crash at all (a dead

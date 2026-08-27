@@ -7,8 +7,9 @@
 #     fleetd.service)              -> `systemctl --user restart fleetd`
 #   - launchd agent installed (macOS: M4 `oldair`, m5 -- see
 #     com.oxidex.fleetd.plist)     -> `launchctl kickstart -k`
-#   - neither (T7, ARCH-FIX-SPEC.md R8): the work2 pod, a k8s container
-#     with no systemd/launchd      -> stop+relaunch fleetd-wrapper.sh
+#   - neither (T7, ARCH-FIX-SPEC.md R8; historically the work2 pod, a
+#     k8s container with no systemd/launchd -- removed 2026-08-22; no
+#     current host is in this class) -> stop+relaunch fleetd-wrapper.sh
 #
 # The third case replaces the old bare `nohup ... fleetd.py &` restart
 # (kill whatever process matched, hand-relaunch, hope nothing else was

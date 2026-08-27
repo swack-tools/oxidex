@@ -40,7 +40,8 @@ check, and every check line states what was measured and how.
 
 Exit code is the number of failed checks (0 == healthy). Never silently
 degrades a check into a warning: a check this script cannot perform (e.g. the
-oracle script is simply absent, as it was found to be on ``ubuntuwork`` during
+oracle script is simply absent, as it was found to be on ``ubuntuwork``
+(removed 2026-08-22) during
 T0.1) is a FAIL, not a skip, because a host silently missing its own
 capability probe is the exact failure mode this script exists to catch.
 """
@@ -82,7 +83,8 @@ import fleetlib  # noqa: E402  (sibling module; R2 -- the one token-file resolve
 # PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"; rustc -vV'` -- i.e. under the
 # exact PATH gate-nocache.sh exports, not a bare login-shell rustc -- on
 # `server` (x86_64-unknown-linux-gnu) and cross-checked identical on
-# `ubuntuwork` (x86_64-unknown-linux-gnu), `oldair` (aarch64-apple-darwin,
+# `ubuntuwork` (x86_64-unknown-linux-gnu; removed from the fleet
+# 2026-08-22), `oldair` (aarch64-apple-darwin,
 # after `rustup update stable` picked up rust-toolchain.toml's 1.97.1 pin) and
 # `localhost`/m5 (aarch64-apple-darwin, same). All four produced:
 #     rustc 1.97.1 (8bab26f4f 2026-07-14), commit-date 2026-07-14,
@@ -365,7 +367,7 @@ def main() -> int:
     )
     parser.add_argument(
         "host",
-        help="Label for this host in the report (e.g. server, ubuntuwork, oldair, "
+        help="Label for this host in the report (e.g. server, oldair, "
         "localhost). Not verified against the OS hostname -- ssh aliases and actual "
         "hostnames routinely disagree; recorded for the record, not asserted.",
     )

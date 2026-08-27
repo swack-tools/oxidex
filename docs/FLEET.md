@@ -1,6 +1,11 @@
 # Fleet Coordination — Implementation Spec
 
-**Status:** draft for review · **Scope:** 4 hosts (i7 `server`, ryzen `ubuntuwork`, M4 `oldair`, m5 localhost) · **Substrate:** the existing hub at `work2.oxidex.net:2244`
+**Status:** HISTORICAL — superseded by `docs/AGENT-SERVER-SPEC.md` (§3–§4 topology) and by the
+ryzen's removal from the fleet (operator decision, 2026-08-22): the ryzen (`ubuntuwork`, the
+work2 pod) and its `work2.oxidex.net:2244` hub below are history, not current hosts. Kept for the
+incident table and mechanism rationale. · **Scope (as written):** 4 hosts (i7 `server`, ryzen
+`ubuntuwork` (removed 2026-08-22), M4 `oldair`, m5 localhost) · **Substrate (as written):** the
+old hub at `work2.oxidex.net:2244` (retired)
 
 ---
 

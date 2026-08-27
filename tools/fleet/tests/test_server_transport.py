@@ -45,6 +45,7 @@ for _p in (FLEET_DIR, KEEL_DIR):
 
 import server as keel_server  # noqa: E402
 import store_api  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 
 
 # --------------------------------------------------------------------- #
@@ -121,7 +122,7 @@ class _RawHTTPClient:
             self.sock.close()
 
 
-class ServerTestCase(unittest.TestCase):
+class ServerTestCase(HermeticCase):
     """Base class: a fresh `KeelHTTPServer` per test, small/fast timeouts
     throughout so the whole suite stays well inside a gate's per-module
     budget, torn down in `tearDown` regardless of how the test ended."""
@@ -134,6 +135,7 @@ class ServerTestCase(unittest.TestCase):
     sse_keepalive_interval = 15.0
 
     def setUp(self) -> None:
+        super().setUp()
         self.store = store_api.InMemoryStore()
         self.tokens = _default_token_store()
         self.events = keel_server.EventLog(":memory:")
@@ -193,7 +195,7 @@ class ServerTestCase(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestBindValidation(unittest.TestCase):
+class TestBindValidation(HermeticCase):
     def test_loopback_allowed(self) -> None:
         keel_server.validate_bind_host("127.0.0.1", allow_any_bind=False)
         keel_server.validate_bind_host("localhost", allow_any_bind=False)
@@ -271,7 +273,7 @@ class TestBindValidation(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestTokenStore(unittest.TestCase):
+class TestTokenStore(HermeticCase):
     def test_known_token_authenticates(self) -> None:
         store = _default_token_store()
         principal = store.authenticate(RUNNER_TOKEN)
@@ -303,7 +305,7 @@ class TestTokenStore(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestRouter(unittest.TestCase):
+class TestRouter(HermeticCase):
     def test_path_param_matches_single_segment(self) -> None:
         pattern = keel_server.compile_path("/v1/jobs/{id}")
         m = pattern.match("/v1/jobs/abc123")
@@ -336,7 +338,7 @@ class TestRouter(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestEventLog(unittest.TestCase):
+class TestEventLog(HermeticCase):
     def test_since_returns_in_order_after_seq(self) -> None:
         log = keel_server.EventLog(":memory:")
         self.addCleanup(log.close)

@@ -61,6 +61,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/fleet
 
+from _env import HermeticCase  # noqa: E402
 from claim import Claim  # noqa: E402
 from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
 from keel import fallbackhub  # noqa: E402
@@ -332,8 +333,9 @@ class NoBulkReadPrimary(FakePrimary):
 # --------------------------------------------------------------------- #
 
 
-class FallbackHubTestCase(unittest.TestCase):
+class FallbackHubTestCase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self.tmp = Path(tempfile.mkdtemp(prefix="fallbackhub-"))
         self.assertTrue(
             str(self.tmp).startswith(str(Path(tempfile.gettempdir()).resolve()))
@@ -367,7 +369,7 @@ class FallbackHubTestCase(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestClassification(unittest.TestCase):
+class TestClassification(HermeticCase):
     def test_connection_refused_is_before_send(self):
         self.assertEqual(classify_primary_failure(_refused()), BEFORE_SEND)
         self.assertEqual(classify_primary_failure(ConnectionRefusedError(61, "refused")), BEFORE_SEND)

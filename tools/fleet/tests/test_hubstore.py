@@ -59,6 +59,7 @@ for _p in (FLEET_DIR, KEEL_DIR):
 import hubstore  # noqa: E402
 import server as keel_server  # noqa: E402
 import store_api  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 from fleetlib import Hub, HubUnreachableError  # noqa: E402
 from keel.cachedhub import SOURCE_SWEEP, CachedHub, RefEntry  # noqa: E402
 
@@ -76,8 +77,9 @@ def _bare_repo(root: Path) -> str:
     return str(path)
 
 
-class HubStoreTestCase(unittest.TestCase):
+class HubStoreTestCase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self._root = Path(tempfile.mkdtemp(prefix="hubstore-test-"))
         self.hub_url = _bare_repo(self._root)
         self.store = Hub(url=self.hub_url, workdir=self._root / "store-cache")
@@ -422,7 +424,7 @@ class TestThroughServer(HubStoreTestCase):
         self.assertIn("index_observed_at", body)
 
 
-class TestBuildStore(unittest.TestCase):
+class TestBuildStore(HermeticCase):
     def test_build_store_sweeps_and_close_stops_the_sweeper(self):
         root = Path(tempfile.mkdtemp(prefix="hubstore-build-"))
         try:

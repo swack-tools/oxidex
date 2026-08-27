@@ -24,13 +24,13 @@ for the Stage 4 `remote_gate` capability match). Both are seeded
 CONSERVATIVELY, the same "start from a safe, inert default" spirit as the
 all-zero host counts above:
 
-  * `server_candidates` lists every host FLEET.md documents as Linux and
-    non-laptop -- `server` (i7), `ubuntuwork` and `work2pod` (both on the
-    ryzen) -- ranked in the order PLAN Stage 1's "Starting state" measured
-    them coming back up (i7 first: "only regen/oracle host", currently the
-    only one up; the ryzen host, then its pod). `oldair` (M4) and `m5` are
-    macOS (`docs/FLEET.md` L120: "launchd ... on macOS (M4 `oldair`, m5)")
-    and excluded on that basis alone; `m5` is additionally the maintainer's
+  * `server_candidates` lists every host that is Linux and non-laptop --
+    since the ryzen was removed from the fleet by operator decision
+    (2026-08-22, taking `ubuntuwork` and `work2pod` with it) that is the
+    i7 `server` ALONE: it is the only server candidate. `oldair` (M4) and
+    `m5` are macOS (`docs/FLEET.md` L120: "launchd ... on macOS (M4
+    `oldair`, m5)") and excluded on that basis alone -- macOS laptops are
+    never candidates; `m5` is additionally the maintainer's
     laptop, SPEC §3.4's separate "laptops are never eligible" exclusion.
     `advertise_urls` is left `[]` for every candidate: a host's tailnet/LAN
     IP is a runtime fact the elected server measures for itself at
@@ -73,13 +73,9 @@ SEED = {
         # i7: primary gate runner, the ONLY regen-capable host (oracle
         # ledger digest matches its Perl 5.38.2 alone).
         "server": {"gates": 0, "agents": 0, "enabled": True},
-        # ryzen host-side: fleet work there is owned by user `swackhamer`;
-        # fleetd must be installed AS that user or this entry stays idle.
-        "ubuntuwork": {"gates": 0, "agents": 0, "enabled": True},
-        # work2 pod (on the ryzen; hostname work2box-*): 24 cores, hub is
-        # local disk. FLEET_HOST=work2pod must be set in its fleetd env
-        # since its k8s hostname is unstable across pod restarts.
-        "work2pod": {"gates": 0, "agents": 0, "enabled": True},
+        # The ryzen's two identities (`ubuntuwork` host-side, `work2pod`
+        # the k8s pod) were removed from the fleet by operator decision
+        # 2026-08-22 and are deliberately NOT seeded.
         # M4: gate-capable since the strip fix + python3 symlink; ~19-21G
         # free is tight against the 14G floor. Not regen-capable.
         "oldair": {"gates": 0, "agents": 0, "enabled": True},
@@ -95,9 +91,9 @@ SEED = {
     # SPEC §3.1 / PLAN Stage 1 task 6 -- see the module docstring for why
     # each is populated (or deliberately left empty) the way it is.
     "server_candidates": [
+        # The i7 is the ONLY server candidate (ryzen removed 2026-08-22;
+        # macOS laptops are never candidates).
         {"host": "server", "rank": 1, "advertise_urls": []},
-        {"host": "ubuntuwork", "rank": 2, "advertise_urls": []},
-        {"host": "work2pod", "rank": 3, "advertise_urls": []},
     ],
     "train_platforms": [],
 }

@@ -35,6 +35,7 @@ FLEET_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(FLEET_DIR))
 
 import claim as claim_mod  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 from fleetlib import Hub, HubUnreachableError  # noqa: E402
 from keel.cachedhub import (  # noqa: E402
     FRESH_PREFIXES,
@@ -58,8 +59,9 @@ def _bare_repo(root: Path) -> str:
     return str(path)
 
 
-class CachedHubTestCase(unittest.TestCase):
+class CachedHubTestCase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self._root = Path(tempfile.mkdtemp(prefix="cachedhub-test-"))
         self.hub_url = _bare_repo(self._root)
         self.store = Hub(url=self.hub_url, workdir=self._root / "store-cache")
@@ -493,10 +495,11 @@ class TestSweepMonotonic(CachedHubTestCase):
         self.assertFalse(self.cached.sweeper_running())
 
 
-class TestRefIndexRule(unittest.TestCase):
+class TestRefIndexRule(HermeticCase):
     """The ordering rule in isolation, with explicit ticks."""
 
     def setUp(self):
+        super().setUp()
         self.t = 100.0
         self.index = RefIndex(clock=lambda: self.t)
 

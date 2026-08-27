@@ -34,7 +34,8 @@
 # one day (2026-08-14) -- the supervisor cannot be the only thing keeping
 # the supervisor alive, hence a backstop still exists at all. Use this
 # line on hosts with NO systemd/launchd to restart fleetd-wrapper.sh
-# itself -- concretely, the work2 pod (a k8s container with neither).
+# itself (historically the work2 pod, a k8s container with neither --
+# removed from the fleet 2026-08-22; no current host is in that class).
 # Hosts WITH systemd/launchd don't need this: fleetd.service's
 # `Restart=always` and com.oxidex.fleetd.plist's `KeepAlive` already keep
 # fleetd-wrapper.sh (see each unit's own ExecStart/ProgramArguments) up
