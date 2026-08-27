@@ -407,6 +407,10 @@ def handle_health(handler: "KeelRequestHandler", params: Dict[str, str], query: 
         logging.exception("keel-server: health_provider raised")
         extra = {"health_provider_error": True}
     body.update(extra)
+    # Election hook (SPEC SS5.1: health carries `lease_expires_at` and
+    # `settle_until`): duck-typed so this module never imports election.py.
+    if server.election is not None:
+        body.update(server.election.health_fields())
     handler._send_json(200, body)
 
 
@@ -547,6 +551,61 @@ def handle_events(handler: "KeelRequestHandler", params: Dict[str, str], query: 
         server.unregister_stream_thread(current_thread)
 
 
+# -- election hooks (SPEC SS3.3 rule 8, SS3.4; PLAN Stage 2 task 5) ------ #
+#
+# These two handlers and the `election` attribute they read are the
+# server-lease/settle/demotion surface `keel/election.py` plugs into.
+# `server.election` is duck-typed (an `ElectionManager`, attached by
+# `attach_election`) so the transport keeps importing nothing but
+# `store_api` and its tests keep needing neither git nor a lease.
+
+
+def handle_status(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    """`GET /v1/status`: the fleet as this server sees it, plus a `server`
+    block. EVERYTHING about this server process -- its lease included --
+    lives under the `server` key, and the server's own claim is excluded
+    from the `claims` map, so the SS3.4 acceptance instrument (`status
+    --json` diff with `del(.ts, .server)` across a kill + re-host) is
+    empty exactly when two servers agree about the fleet."""
+    server = handler.server
+    desired = server.store.read("refs/fleet/desired")
+    claims = {
+        ref: entry.sha
+        for ref, entry in sorted(server.store.list("refs/fleet/claims").items())
+        if not ref.startswith("refs/fleet/claims/server/")
+    }
+    server_block: Dict[str, object] = {"boot_id": server.boot_id, "settling": False, "lease": None}
+    if server.election is not None:
+        server_block = {"boot_id": server.boot_id}
+        server_block.update(server.election.status_fields())
+    handler._send_json(
+        200,
+        {"ts": time.time(), "server": server_block, "desired": desired, "claims": claims},
+    )
+
+
+def handle_runner_register(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    """`POST /v1/runners/{id}/register` -- the Stage-2 skeleton of SS5.3
+    step 1. What exists of it here is exactly what the unreachable-leader
+    demotion timer needs: the registration is COUNTED (a runner reached
+    our advertised address, so we are not unreachable) and answered with
+    `{boot_id, settle_until, lease_expires_at}`. The capabilities and
+    `live_workers[]` in the body are accepted and ignored until the
+    Stage-3 runner protocol lands."""
+    body = _read_json_body(handler)
+    if body is None:
+        handler._send_json(400, {"error": "invalid-json"})
+        return
+    server = handler.server
+    reply: Dict[str, object] = {"boot_id": server.boot_id, "settle_until": None, "lease_expires_at": None}
+    if server.election is not None:
+        server.election.note_registration(params["id"])
+        health = server.election.health_fields()
+        reply["settle_until"] = health.get("settle_until")
+        reply["lease_expires_at"] = health.get("lease_expires_at")
+    handler._send_json(200, reply)
+
+
 def handle_wait(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
     server = handler.server
     ref = query.get("ref", [None])[0]
@@ -581,6 +640,9 @@ def build_router() -> Router:
     router.add("DELETE", "/v1/refs/{ref:path}", handle_refs_delete, auth=frozenset({"runner", "operator"}))
     router.add("GET", "/v1/events", handle_events, auth=frozenset())
     router.add("GET", "/v1/wait", handle_wait, auth=frozenset())
+    # Election hooks (see the comment block above `handle_status`).
+    router.add("GET", "/v1/status", handle_status, auth=frozenset())
+    router.add("POST", "/v1/runners/{id}/register", handle_runner_register, auth=frozenset({"runner", "operator"}))
     return router
 
 
@@ -641,7 +703,20 @@ class KeelHTTPServer(ThreadingHTTPServer):
         self._watchdog_thread: Optional[threading.Thread] = None
         self._stream_lock = threading.Lock()
         self._stream_threads: set = set()
+        # Election hook: an `ElectionManager` (keel/election.py), attached
+        # by `attach_election` after construction. Duck-typed on purpose --
+        # the transport never imports election.py (and vice-versa there is
+        # no cycle); None means "no lease is wired in" (transport tests,
+        # standalone smoke runs) and every reader must tolerate it.
+        self.election = None
         super().__init__(server_address, KeelRequestHandler)
+
+    def attach_election(self, manager) -> None:
+        """Wire an `ElectionManager` in (keel/election.py). `/v1/health`
+        gains its `lease_expires_at`/`settle_until` rows, `/v1/status` its
+        `server` block, and `POST /v1/runners/{id}/register` starts
+        feeding the unreachable-demotion timer."""
+        self.election = manager
 
     # -- connection cap (SPEC SS2 C6: "caps the server at 64 connections") --
 
