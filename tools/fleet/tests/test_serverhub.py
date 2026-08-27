@@ -281,19 +281,20 @@ class StubGitHubHalf:
 # --------------------------------------------------------------------- #
 
 
-class _RaceReadyServer(keel_server.KeelHTTPServer):
-    """`KeelHTTPServer` with a listen backlog that matches its connection
-    cap. `socketserver`'s default `request_queue_size` is 5, and the
-    eight-process racer test's simultaneous SYNs overflow it on loopback:
-    the kernel RSTs the excess, which the client sees as a connect
-    `EINVAL`/`ECONNRESET` or a broken pipe on send -- 7 red runs in 8
-    before this override, 0 in 20 after (macOS 27, Python 3.14). Worth
-    knowing for production wiring too: the cap is 64 concurrent
-    connections (SPEC §2 C6) but the BACKLOG stays 5 unless the server
-    class raises it (noted for the transport task; only this fixture
-    subclass is this test's to change)."""
-
-    request_queue_size = 64
+# WAS `_RaceReadyServer`, a `KeelHTTPServer` subclass this file kept only
+# to raise `socketserver`'s default `request_queue_size` of 5 to 64: the
+# eight-process racer test's simultaneous SYNs overflowed the listen
+# backlog on loopback and the kernel RST'd the excess (connect `EINVAL`/
+# `ECONNRESET`, or a broken pipe on send -- 7 red runs in 8 before the
+# override, 0 in 20 after; macOS 27, Python 3.14). That override was
+# evidence about PRODUCTION, not about this test: the same burst arrives
+# at a real server every time a settle ends or a wave of renewals comes
+# due, and `ServerHub` opens a fresh connection per call. `KeelHTTPServer`
+# now carries the backlog itself (`request_queue_size = 64`, raised
+# further by `server_activate` when `max_connections` is), so the fixture
+# uses the real class and `tests/test_desired_route.py::TestListenBacklog`
+# pins the property where it now lives.
+_RaceReadyServer = keel_server.KeelHTTPServer
 
 
 class ServerHubTestCase(HermeticCase):

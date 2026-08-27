@@ -299,13 +299,22 @@ class ServerHub:
         that read a stale/absent sha) used to reach `http.client` as an
         `If-Match: None` header value, whose `TypeError` surfaced as an
         AMBIGUOUS write (`request_sent=True`) even though nothing was ever
-        sent. Refuse it here, before any connection exists, with the real
-        diagnosis."""
-        if not isinstance(expect_sha, str) or not expect_sha:
+        sent -- and an ambiguous write is a blip `claim._note_renew_failure`
+        tolerates, so the caller's bug was laundered into "the network
+        might have eaten it". Refuse it here, before any connection object
+        exists, with the real diagnosis. Pinned (with a negative control
+        showing the masquerade) by
+        `tests/test_desired_route.py::TestRequireExpectSha`.
+
+        Whitespace is refused for the same class of reason a step earlier:
+        a witness with a space in it is not a sha, and a witness with a
+        CR/LF in it is a header-injection attempt, not a CAS.
+        """
+        if not isinstance(expect_sha, str) or not expect_sha or any(c.isspace() for c in expect_sha):
             raise ValueError(
-                f"{op} {ref}: expect_sha must be a non-empty sha string, got "
-                f"{expect_sha!r} -- the caller read a stale or absent sha; "
-                "no request was sent"
+                f"{op} {ref}: expect_sha must be a non-empty whitespace-free sha "
+                f"string, got {expect_sha!r} -- the caller read a stale or absent "
+                "sha; no request was sent"
             )
 
     @staticmethod
@@ -318,13 +327,67 @@ class ServerHub:
             )
 
     # ---------------------------------------------------------------- #
-    # Extras beyond the eight-method contract: health, events. The keel
-    # CLI (`keel/cli.py`) consumes both; they were ported from the CLI
-    # task's parallel ServerHub draft onto this module's plumbing when
-    # the two implementations were merged. Both are READS -- FallbackHub
-    # falls back on any raise -- but the r2 phase vocabulary is kept
-    # consistent anyway.
+    # Extras beyond the eight-method contract: health, events, desired.
+    # The keel CLI (`keel/cli.py`) consumes all three; `health`/`events`
+    # were ported from the CLI task's parallel ServerHub draft onto this
+    # module's plumbing when the two implementations were merged. Both of
+    # those are READS -- FallbackHub falls back on any raise -- but the r2
+    # phase vocabulary is kept consistent anyway. `put_desired` is a
+    # WRITE, and states its phase for exactly the same reason every other
+    # write here does.
     # ---------------------------------------------------------------- #
+
+    def read_desired(self) -> Tuple[Optional[str], Optional[dict]]:
+        """`GET /v1/desired` -> `(sha, payload)`, or `(None, None)` when
+        `refs/fleet/desired` does not exist yet.
+
+        The plain `read_with_sha("refs/fleet/desired")` would answer the
+        same question; this spelling exists so that the sha a caller then
+        hands to `put_desired` came from the SAME route that will
+        arbitrate the CAS, and so that a `desired` read is always served
+        fresh by the server (`server.py`'s handler forces it) rather than
+        depending on the caller remembering `?fresh=1`."""
+        status, body = self._request("GET", "/v1/desired")
+        if status == 404:
+            return (None, None)
+        if status == 200:
+            sha = self._field(body, "sha", "GET", "/v1/desired", status)
+            payload = self._field(body, "payload", "GET", "/v1/desired", status)
+            return (sha, payload)
+        self._unexpected("GET", "/v1/desired", status, body)
+
+    def put_desired(self, doc: dict, expect_sha: Optional[str]) -> Optional[dict]:
+        """`PUT /v1/desired` -- read-modify-CAS with the generation bumped
+        SERVER-SIDE (SPEC SS5.1).
+
+        `expect_sha=None` means "create it, it does not exist yet"
+        (`If-None-Match: *`, mirroring `cli._edit_desired`'s
+        `hub.create(...) if cur_sha is None else hub.update(...)`);
+        anything else is the witness for `If-Match`. Returns the STORED
+        document -- the one the server wrote, generation included, which
+        is not the one passed in -- or `None` on a lost CAS (HTTP 409),
+        the same "False = lost the race, never an exception" rule the
+        eight-method contract uses. `doc["generation"]`, if present, is
+        ignored by the server; passing one is not an error, it simply has
+        no effect.
+
+        A missing/malformed witness is refused by the server with 412/400
+        and surfaces here as a `PrimaryFailure`, not as a lost race: it is
+        a caller bug, not a concurrent edit."""
+        if expect_sha is None:
+            status, body = self._request("PUT", "/v1/desired", body=doc, headers={"If-None-Match": "*"})
+            if status == 201:
+                return self._field(body, "payload", "PUT", "/v1/desired", status)
+            if status == 409:
+                return None
+            self._unexpected("PUT", "/v1/desired", status, body)
+        self._require_expect_sha("put_desired", "/v1/desired", expect_sha)
+        status, body = self._request("PUT", "/v1/desired", body=doc, headers={"If-Match": expect_sha})
+        if status == 200:
+            return self._field(body, "payload", "PUT", "/v1/desired", status)
+        if status == 409:
+            return None
+        self._unexpected("PUT", "/v1/desired", status, body)
 
     def health(self) -> dict:
         """`GET /v1/health` (SPEC §5.1; unauthenticated on the server)."""

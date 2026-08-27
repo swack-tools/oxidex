@@ -15,12 +15,18 @@ file owns TRANSPORT ONLY:
     comment on an idle stream,
   * `/v1/wait?ref=&since=` generic long-poll plumbing (poll a `Store`'s
     cheap `sha()` probe until it changes or a deadline passes),
-  * the connection cap (503 past N concurrent connections) and the
-    listener watchdog thread (self-probes the bound address; rebinds if
-    nothing has answered in `watchdog_timeout` seconds),
+  * the connection cap (503 past N concurrent connections), the LISTEN
+    BACKLOG that has to be at least as deep as that cap, and the listener
+    watchdog thread (self-probes the bound address; rebinds if nothing has
+    answered in `watchdog_timeout` seconds),
   * the bind-address restriction (loopback or Tailscale CGNAT only, unless
-    overridden), and
-  * `/v1/health`.
+    overridden),
+  * `/v1/health`, and
+  * `GET|PUT /v1/desired` (SPEC SS5.1), the one route in this file whose
+    body it does more than forward: the generation counter is bumped
+    SERVER-SIDE, which is the whole reason the route exists rather than
+    letting every operator PUT `refs/fleet/desired` through the CAS
+    facade with its own idea of what the next generation is.
 
 It does NOT own ref CAS semantics, index freshness, the write-through to
 the state repo, or the "fresh claims" rule -- that is `keel/cachedhub.py`'s
@@ -503,6 +509,182 @@ def handle_refs_delete(handler: "KeelRequestHandler", params: Dict[str, str], qu
     handler._send_status_only(204)
 
 
+# -- GET|PUT /v1/desired (SPEC SS3.1, SS5.1) ---------------------------- #
+#
+# SPEC SS5.1: "`GET|PUT /v1/desired` (`If-Match`; generation++ server-side;
+# `cli._edit_desired` retry semantics)."
+#
+# WHY THIS IS NOT JUST `PUT /v1/refs/refs%2Ffleet%2Fdesired`. The CAS
+# facade would carry the document perfectly well; what it cannot carry is
+# the ONE invariant `refs/fleet/desired` has that no other ref does --
+# `generation` is a monotonic counter of edits, and every writer bumping
+# it for itself means every writer can get it wrong. `tools/fleet/cli.py`'s
+# `_edit_desired` (L84-100) does the arithmetic client-side today because
+# there was nowhere else to do it; with a server there is, and the server
+# is the only participant that sees the pre-image and the post-image of
+# the same CAS. So the body a client PUTs here is its DESIRED STATE, never
+# its idea of the next generation: whatever `generation` the body carries
+# is discarded and replaced with `<generation at the witnessed version> +
+# 1`. Two operators racing with the same witness therefore produce exactly
+# one landed edit and exactly one increment -- the lost-update that a
+# last-writer-wins PUT would hide.
+#
+# `cli._edit_desired`'s RETRY semantics stay CLIENT-side, unchanged and on
+# purpose: the retry re-applies the caller's own `mutate` to the fresh
+# document, so both racing operators' edits survive. The server cannot do
+# that for them -- it never sees `mutate`, only its result -- so it answers
+# 409 and lets the client re-read, re-mutate and re-PUT. A server that
+# silently merged instead would be inventing a desired state neither
+# operator asked for.
+#
+# Preconditions, and what each refusal means:
+#   * `If-Match: <sha>`   -> read-modify-CAS at that version. 200 + the
+#                            stored document on success, 409 on a lost
+#                            race (the ref moved, or is absent).
+#   * `If-None-Match: *`  -> create the ref iff absent (generation 1).
+#                            201, or 409 if someone created it first.
+#   * neither              -> 412. A PUT with no witness is the
+#                            lost-update this route exists to refuse; it
+#                            is never treated as "clobber".
+#   * a malformed witness  -> 400. Includes `If-Match: *` (a wildcard is
+#                            not a version, and honouring it would be
+#                            exactly the clobber above) and any weak
+#                            validator `W/"..."` (weak comparison cannot
+#                            arbitrate a CAS).
+
+DESIRED_REF = "refs/fleet/desired"
+
+# A witness is opaque to this module -- a real store returns git object
+# ids, `store_api.InMemoryStore` returns `mem0000...`-shaped tokens -- so
+# "malformed" is checked structurally (non-empty, one token, no control
+# characters, bounded) rather than against a hex pattern this file has no
+# business asserting.
+_MAX_WITNESS_LEN = 200
+
+
+class _BadWitness(Exception):
+    """`(status, code)` for a witness the CAS cannot use."""
+
+    def __init__(self, status: int, code: str):
+        super().__init__(code)
+        self.status = status
+        self.code = code
+
+
+def _normalize_witness(raw: Optional[str]) -> str:
+    """An `If-Match` header value -> the bare sha `Store.update` wants.
+
+    Strips one layer of HTTP entity-tag quoting (the route answers with an
+    `ETag`, so a well-behaved client may echo it back quoted) and refuses
+    everything a CAS cannot arbitrate."""
+    if raw is None:
+        raise _BadWitness(412, "precondition-required")
+    value = raw.strip()
+    if value.startswith("W/"):
+        raise _BadWitness(400, "weak-witness")
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        value = value[1:-1].strip()
+    if not value:
+        raise _BadWitness(400, "malformed-witness")
+    if value == "*":
+        raise _BadWitness(400, "wildcard-witness")
+    if len(value) > _MAX_WITNESS_LEN or any(c.isspace() for c in value) or not value.isprintable():
+        raise _BadWitness(400, "malformed-witness")
+    return value
+
+
+def _next_generation(current: Optional[Payload]) -> int:
+    """`cli._edit_desired` L94, moved server-side: the generation at the
+    witnessed version plus one, tolerating a document that has never
+    carried one (absent, null) or carries something that is not a whole
+    number (a hand-edited ref) rather than 500-ing on it."""
+    raw = (current or {}).get("generation")
+    try:
+        return int(raw) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def handle_desired_get(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    # Always fresh: `desired` is what a PUT is about to CAS against, and a
+    # witness handed out from a stale index is a 409 the client cannot
+    # explain (or, worse, a CAS against a version the store never had).
+    sha, payload = handler.server.store.read_with_sha(DESIRED_REF, fresh=True)
+    if sha is None:
+        handler._send_json(404, {"error": "not-found", "ref": DESIRED_REF})
+        return
+    handler._send_json(200, {"sha": sha, "ref": DESIRED_REF, "payload": payload}, extra_headers={"ETag": f'"{sha}"'})
+
+
+def handle_desired_put(handler: "KeelRequestHandler", params: Dict[str, str], query: Dict[str, List[str]], principal: Optional[Principal]) -> None:
+    # A zero-length body is refused BEFORE parsing, because
+    # `_read_json_body` answers `{}` for both "no body at all" and an
+    # explicit `{}` -- and the first is a client bug that would otherwise
+    # wipe every host out of `desired` and bump the generation while
+    # doing it. An operator who really means "empty document" sends the
+    # two bytes.
+    if int(handler.headers.get("Content-Length", "0") or "0") <= 0:
+        handler._send_json(400, {"error": "empty-body", "hint": "PUT /v1/desired takes the whole desired document; send {} to mean an empty one"})
+        return
+    body = _read_json_body(handler)
+    if body is None:
+        handler._send_json(400, {"error": "invalid-json"})
+        return
+    if not isinstance(body, dict):
+        handler._send_json(400, {"error": "desired-must-be-an-object"})
+        return
+    store = handler.server.store
+    if_match = handler.headers.get("If-Match")
+    if_none_match = handler.headers.get("If-None-Match")
+
+    if if_none_match is not None and if_none_match.strip() == "*":
+        if if_match is not None:
+            handler._send_json(400, {"error": "conflicting-preconditions"})
+            return
+        doc = dict(body)
+        doc["generation"] = _next_generation(None)
+        result = store.create(DESIRED_REF, doc)
+        if result is False:
+            handler._send_json(409, {"error": "conflict", "ref": DESIRED_REF})
+            return
+        handler._send_json(201, {"sha": result, "ref": DESIRED_REF, "payload": doc}, extra_headers={"ETag": f'"{result}"'})
+        return
+    if if_none_match is not None:
+        handler._send_json(400, {"error": "unsupported-if-none-match"})
+        return
+
+    try:
+        witness = _normalize_witness(if_match)
+    except _BadWitness as bad:
+        handler._send_json(bad.status, {"error": bad.code, "hint": "PUT /v1/desired requires If-Match: <sha>, or If-None-Match: * to create"})
+        return
+
+    # Read the PRE-IMAGE at the witnessed version. The short-circuit below
+    # is an optimisation and a better error, never the CAS itself: the
+    # store's `update(expect_sha=...)` is what actually arbitrates, so a
+    # writer that lands between this read and that call still loses here
+    # (409), not silently wins.
+    cur_sha, cur_payload = store.read_with_sha(DESIRED_REF, fresh=True)
+    if cur_sha != witness:
+        handler._send_json(
+            409,
+            {"error": "conflict", "ref": DESIRED_REF, "sha": cur_sha,
+             "detail": "the witness is stale; re-read, re-apply your edit, and PUT again"},
+        )
+        return
+    doc = dict(body)
+    doc["generation"] = _next_generation(cur_payload)
+    result = store.update(DESIRED_REF, doc, expect_sha=witness)
+    if result is False:
+        handler._send_json(
+            409,
+            {"error": "conflict", "ref": DESIRED_REF,
+             "detail": "lost the CAS; re-read, re-apply your edit, and PUT again"},
+        )
+        return
+    handler._send_json(200, {"sha": result, "ref": DESIRED_REF, "payload": doc}, extra_headers={"ETag": f'"{result}"'})
+
+
 def _parse_since_events(query: Dict[str, List[str]], headers) -> int:
     if query.get("since") and query["since"][0] != "":
         try:
@@ -640,6 +822,13 @@ def build_router() -> Router:
     router.add("DELETE", "/v1/refs/{ref:path}", handle_refs_delete, auth=frozenset({"runner", "operator"}))
     router.add("GET", "/v1/events", handle_events, auth=frozenset())
     router.add("GET", "/v1/wait", handle_wait, auth=frozenset())
+    # `desired` is READ by everyone with a token (a runner needs its own
+    # targets) and WRITTEN only by the operator token class: SPEC SS3.1
+    # names the writers `keel up/down/drain` + OPERATOR, and SS5 puts both
+    # in the operator class. A runner token authenticates fine here and
+    # gets 403 -- the distinction AuthError exists to make.
+    router.add("GET", "/v1/desired", handle_desired_get, auth=frozenset())
+    router.add("PUT", "/v1/desired", handle_desired_put, auth=frozenset({"operator"}))
     # Election hooks (see the comment block above `handle_status`).
     router.add("GET", "/v1/status", handle_status, auth=frozenset())
     router.add("POST", "/v1/runners/{id}/register", handle_runner_register, auth=frozenset({"runner", "operator"}))
@@ -672,6 +861,41 @@ class ServerConfig:
 class KeelHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    # THE LISTEN BACKLOG MUST BE AT LEAST THE CONNECTION CAP.
+    # `socketserver.TCPServer.request_queue_size` is 5, and it is the
+    # argument `server_activate()` passes to `listen(2)`: the depth of the
+    # kernel's completed-connection queue, i.e. how many connections may
+    # sit fully established but not yet `accept()`ed. It is a completely
+    # different quantity from `config.max_connections` (64, SPEC SS2 C6),
+    # which bounds how many this process will SERVE at once -- and leaving
+    # it at 5 caps the server far below its own cap in the one situation
+    # that matters. Every `ServerHub` call opens a fresh connection (that
+    # module's docstring: one connection per request buys phase certainty
+    # at `connect()`), so a fleet-wide moment -- a settle ending, a
+    # re-host, a burst of renewals coming due together -- arrives as N
+    # simultaneous SYNs, not N requests on N idle keep-alive sockets.
+    # Past the backlog the kernel drops or RSTs them, and the client sees
+    # a connect-time failure, which is precisely the BEFORE-SEND phase
+    # `FallbackHub` is entitled to route around (SPEC SS4.3 r2): a healthy,
+    # reachable server silently stops being used. `test_serverhub.py`'s
+    # own fixture had to subclass this class to raise the backlog for an
+    # eight-process race (7 red runs in 8 at the default); that override
+    # was evidence about production, not about the test.
+    #
+    # `server_activate` below raises this further when `max_connections`
+    # is configured above it; the class attribute is the floor and keeps
+    # `restart_accept_loop()`'s re-bind (which calls `server_activate()`
+    # again) at the same depth.
+    request_queue_size = DEFAULT_MAX_CONNECTIONS
+
+    def server_activate(self) -> None:
+        # Called by `TCPServer.__init__` (after `self.config` is set) and
+        # again by `restart_accept_loop()`. The kernel silently clamps the
+        # backlog to its own `somaxconn`; asking for the cap is still the
+        # right ask.
+        self.request_queue_size = max(type(self).request_queue_size, int(self.config.max_connections))
+        super().server_activate()
 
     def __init__(
         self,

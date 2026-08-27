@@ -119,6 +119,7 @@ from _env import HermeticCase  # noqa: E402
 from claim import claim_ref, is_expired  # noqa: E402
 from fleetlib import Hub  # noqa: E402
 from keel.cachedhub import CachedHub  # noqa: E402
+from keel.serverhub import ServerHub  # noqa: E402
 
 CLI_PATH = KEEL_DIR / "cli.py"
 TIP_REF = "refactor/tag-machinery"
@@ -455,6 +456,145 @@ class TestEvents(_KeelCliCase):
         result = self.run_cli("events", env=env)
         self.assertEqual(result.returncode, 2)
         self.assertIn("KEEL_SERVER_URL", result.stderr)
+
+
+# ------------------------------------------------------------------------ #
+# keel desired show / set  (SPEC SS5.1's GET|PUT /v1/desired, from the
+# operator's end of the wire; the route's own contract is pinned by
+# tests/test_desired_route.py)
+# ------------------------------------------------------------------------ #
+
+
+class TestDesired(_KeelCliCase):
+    """The CLI half of Stage 2 review finding F2.
+
+    What each test would miss otherwise, checked by reverting one thing
+    and re-running this class:
+      * dropping `doc["generation"] = _next_generation(cur_payload)` from
+        `server.py`'s `handle_desired_put` fails
+        `test_set_via_the_server_bumps_the_generation_server_side` with
+        `1 != 2` (the CLI's `mutate` edits the document it just read, so
+        the PRE-IMAGE's generation rides along in the body and survives
+        untouched) and `test_the_server_route_does_not_send_a_generation`
+        with `4242 != 2`. The second is the one that pins WHERE the
+        arithmetic happened: a client that computed it would also land
+        the right number, so the only distinguishing evidence is a body
+        generation the server had to overrule.
+      * removing the `--direct` branch from `_build_desired_client` fails
+        `test_set_direct_needs_no_server_at_all` (rc 1 with a `ValueError`
+        traceback -- it runs with `KEEL_SERVER_URL` set to a string
+        `ServerHub.__init__` rejects outright) and
+        `test_set_direct_bumps_the_generation_client_side` on
+        `'server' != 'direct'`.
+    """
+
+    def _desired(self) -> dict:
+        """The landed document, read with a hub the CLI never touched."""
+        return self.direct_hub.read("refs/fleet/desired")
+
+    def test_show_on_an_absent_desired_says_so(self):
+        result = self.run_cli("desired", "show", "--direct", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertIsNone(payload["sha"])
+        self.assertIsNone(payload["desired"])
+
+    def test_show_via_the_server_and_direct_agree(self):
+        self.seed_desired({"m5": {"gates": 2, "agents": 1, "enabled": True}})
+        via_server = json.loads(self.run_cli("desired", "show", "--json").stdout)
+        via_direct = json.loads(self.run_cli("desired", "show", "--direct", "--json").stdout)
+        self.assertEqual(via_server, via_direct)
+        self.assertEqual(via_server["desired"]["generation"], 1)
+
+    def test_set_creates_desired_when_it_does_not_exist_yet(self):
+        result = self.run_cli("desired", "set", "--host", "m5", "--gates", "3", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["route"], "server")
+        self.assertEqual(payload["desired"]["generation"], 1)
+        self.assertEqual(self._desired()["hosts"]["m5"]["gates"], 3)
+
+    def test_set_via_the_server_bumps_the_generation_server_side(self):
+        self.seed_desired({"m5": {"gates": 1}})  # generation 1
+        result = self.run_cli("desired", "set", "--host", "i7", "--gates", "2", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        landed = json.loads(result.stdout)["desired"]
+        self.assertEqual(landed["generation"], 2)
+        # Both hosts survive: `mutate` edits the document it just read.
+        self.assertEqual(set(landed["hosts"]), {"m5", "i7"})
+        self.assertEqual(self._desired(), landed)
+
+    def test_the_server_route_does_not_send_a_generation(self):
+        """A body generation the server did not compute must not survive.
+        The CLI does not send one, so this drives the same route with a
+        deliberately wrong one through `ServerHub.put_desired` and pins
+        that the stored number came from the PRE-IMAGE."""
+        self.seed_desired({"m5": {}})  # generation 1
+        hub = ServerHub(self.server_url, token=self.token)
+        sha, _doc = hub.read_desired()
+        landed = hub.put_desired({"generation": 4242, "hosts": {"m5": {}}}, sha)
+        self.assertEqual(landed["generation"], 2)
+        self.assertEqual(self._desired()["generation"], 2)
+
+    def test_set_direct_bumps_the_generation_client_side(self):
+        self.seed_desired({"m5": {"gates": 1}})  # generation 1
+        result = self.run_cli("desired", "set", "--host", "m5", "--gates", "5", "--direct", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["route"], "direct")
+        self.assertEqual(payload["desired"]["generation"], 2)
+        self.assertEqual(self._desired()["hosts"]["m5"]["gates"], 5)
+
+    def test_set_direct_needs_no_server_at_all(self):
+        """Same pin as `test_direct_ignores_a_dead_server_url`: a URL
+        `ServerHub.__init__` REJECTS, not merely an unreachable one, so a
+        `--direct` that still constructed a ServerHub would traceback."""
+        env = self.env(KEEL_SERVER_URL="not-a-url-at-all::::")
+        result = self.run_cli("desired", "set", "--host", "m5", "--gates", "1", "--direct", "--json", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["route"], "direct")
+
+    def test_disable_records_a_reason_and_enable_clears_it(self):
+        self.run_cli("desired", "set", "--host", "m5", "--gates", "2")
+        self.run_cli("desired", "set", "--host", "m5", "--disable", "--reason", "psu suspect")
+        entry = self._desired()["hosts"]["m5"]
+        self.assertIs(entry["enabled"], False)
+        self.assertEqual(entry["reason"], "psu suspect")
+        self.assertEqual(entry["gates"], 2, "disabling must not forget the targets")
+        self.run_cli("desired", "set", "--host", "m5", "--enable")
+        entry = self._desired()["hosts"]["m5"]
+        self.assertIs(entry["enabled"], True)
+        self.assertNotIn("reason", entry, "re-enabling clears the stale note (fleet up's behaviour)")
+
+    def test_set_with_nothing_to_change_is_a_clear_error(self):
+        result = self.run_cli("desired", "set", "--host", "m5")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("nothing to change", result.stderr)
+        self.assertIsNone(self._desired())
+
+    def test_set_without_a_server_or_direct_is_a_clear_error(self):
+        env = self.env()
+        env.pop("KEEL_SERVER_URL", None)
+        result = self.run_cli("desired", "set", "--host", "m5", "--gates", "1", env=env)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--direct", result.stderr)
+        self.assertIn("server-side", result.stderr)
+
+    def test_set_never_re_issues_the_write_on_the_other_route(self):
+        """With the server dead, a `desired set` over the server route
+        FAILS rather than quietly writing to the hub: SPEC SS4.3 r2 for the
+        ambiguous case, and for the reachable-server case the generation++
+        would silently migrate back to this process. `--direct` is the
+        deliberate way to choose the other semantics."""
+        self.seed_desired({"m5": {"gates": 1}})
+        self.server.stop()
+        result = self.run_cli("desired", "set", "--host", "m5", "--gates", "9")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("SS4.3 r2", result.stderr)
+        self.assertEqual(
+            self._desired()["hosts"]["m5"]["gates"], 1,
+            "the write must not have landed by any route",
+        )
 
 
 # ------------------------------------------------------------------------ #
