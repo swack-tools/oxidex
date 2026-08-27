@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -44,6 +45,15 @@ from typing import List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
+
+# Qualified `keel.<name>` imports, not bare ones -- keel/cli.py's own
+# comment explains why: a bare `import fallbackhub`/`import serverhub`
+# here would risk a second, distinct module object (and therefore a
+# second, distinct exception class) alongside whatever this same process
+# imported qualified elsewhere (e.g. a runner that also calls into
+# verdict.py's functions in-process rather than as a subprocess).
+from keel.fallbackhub import FallbackHub  # noqa: E402
+from keel.serverhub import ServerHub  # noqa: E402
 
 SCHEMA_VERSION = 1
 
@@ -235,8 +245,66 @@ def store(hub: Hub, payload: dict, max_attempts: int = 5) -> str:
 # --------------------------------------------------------------------- #
 
 
+def _read_token_file(path: Optional[str]) -> Optional[str]:
+    """The bearer token in `path`, stripped, or None. Duplicates
+    `keel.cli._read_token_file`'s eight lines rather than importing
+    `keel.cli`: that module also imports `workqueue` and the full `keel`
+    operator-CLI surface, which is the wrong thing to pull into a lean,
+    gate.sh-invoked module for the sake of one helper. Never raises --
+    a token file this script cannot read is reported and treated as "no
+    token", matching `_cli_store`'s own best-effort posture."""
+    if not path:
+        return None
+    try:
+        text = Path(path).expanduser().read_text().strip()
+    except OSError as exc:
+        print(f"verdict.py: warning: could not read token file {path}: {exc}", file=sys.stderr)
+        return None
+    return text or None
+
+
+def build_hub(args: argparse.Namespace):
+    """The `Hub`-shaped object every verdict operation reads/writes
+    through: a plain `fleetlib.Hub` when no server is configured (today's
+    exact behaviour, byte for byte -- every existing `gate.sh` invocation
+    never passes `--server-url` and must keep working unchanged), or
+    `FallbackHub(ServerHub, Hub)` when one is (PLAN Stage 3 task 7: "a
+    gate can store its verdict through the server, falling back to
+    direct" -- SPEC SS4.3's two rules apply unmodified, since this is the
+    identical `FallbackHub` every other coordination write goes through).
+
+    `--server-url` with no `--hub-url` still requires `--hub-url`
+    (`argparse` already enforces it as `required=True`): the server is an
+    accelerant for the SAME state repo, never a replacement for knowing
+    where it is -- `FallbackHub` needs its GitHub half regardless of
+    whether the primary ever gets used.
+    """
+    github = Hub(url=args.hub_url, workdir=Path(args.workdir))
+    server_url = getattr(args, "server_url", None) or os.environ.get("KEEL_SERVER_URL")
+    if not server_url:
+        return github
+    token = _read_token_file(getattr(args, "token_file", None) or os.environ.get("KEEL_TOKEN_FILE"))
+    primary = ServerHub(server_url, token=token)
+    return FallbackHub(primary, github)
+
+
+def _add_server_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--server-url", dest="server_url", default=None,
+        help="keel-server base URL (or KEEL_SERVER_URL); when set, this operation is "
+        "attempted through the server first and falls back to the hub directly on an "
+        "unreachable/before-send failure (SPEC SS4.3). Omit to talk to the hub directly, "
+        "exactly as before this flag existed.",
+    )
+    p.add_argument(
+        "--token-file", dest="token_file", default=None,
+        help="file holding the server bearer token (or KEEL_TOKEN_FILE); ignored when "
+        "--server-url is not set.",
+    )
+
+
 def _cli_lookup(args: argparse.Namespace) -> int:
-    hub = Hub(url=args.hub_url, workdir=Path(args.workdir))
+    hub = build_hub(args)
     try:
         payload = lookup(hub, args.tree_sha, args.gate_version, args.platform_id)
     except HubUnreachableError as exc:
@@ -250,7 +318,7 @@ def _cli_lookup(args: argparse.Namespace) -> int:
 
 def _cli_store(args: argparse.Namespace) -> int:
     payload = json.loads(Path(args.json_file).read_text(encoding="utf-8"))
-    hub = Hub(url=args.hub_url, workdir=Path(args.workdir))
+    hub = build_hub(args)
     try:
         outcome = store(hub, payload)
     except HubUnreachableError as exc:
@@ -270,12 +338,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     lookup_p.add_argument("--tree-sha", required=True)
     lookup_p.add_argument("--gate-version", required=True)
     lookup_p.add_argument("--platform-id", required=True)
+    _add_server_args(lookup_p)
     lookup_p.set_defaults(func=_cli_lookup)
 
     store_p = sub.add_parser("store", help="write a verdict JSON file to its cache slot")
     store_p.add_argument("--hub-url", required=True)
     store_p.add_argument("--workdir", required=True)
     store_p.add_argument("--json-file", required=True)
+    _add_server_args(store_p)
     store_p.set_defaults(func=_cli_store)
 
     ns = parser.parse_args(argv)
