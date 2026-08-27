@@ -75,10 +75,11 @@ from __future__ import annotations
 
 import http.client
 import json
+import socket
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/fleet
 
@@ -102,6 +103,40 @@ DEFAULT_READ_TIMEOUT_S = 20.0
 # Trailing slash so `refs/fleet/claimsX` can never match by accident
 # (same normalisation as `cachedhub.FRESH_PREFIXES`).
 FRESH_PREFIX = CLAIMS_PREFIX.rstrip("/") + "/"
+
+
+def _parse_sse_frame(lines: List[str]) -> Optional[Tuple[int, str, dict]]:
+    """One SSE frame's lines (blank-line-terminated, blank line itself
+    excluded) -> `(seq, kind, payload)`, or `None` for a frame with no
+    `id`/`event` (a bare `: keepalive` comment, `server.py`'s
+    `_SSE_KEEPALIVE_LINE`). Ported from the CLI task's ServerHub draft
+    when the two implementations were merged (`keel events` consumes it
+    through `ServerHub.events`)."""
+    seq: Optional[int] = None
+    kind: Optional[str] = None
+    data_raw: Optional[str] = None
+    for line in lines:
+        if not line or line.startswith(":"):
+            continue  # SSE comment -- keepalive
+        field, _, value = line.partition(":")
+        if value.startswith(" "):
+            value = value[1:]
+        if field == "id":
+            try:
+                seq = int(value)
+            except ValueError:
+                pass
+        elif field == "event":
+            kind = value
+        elif field == "data":
+            data_raw = value
+    if seq is None or kind is None:
+        return None
+    try:
+        payload = json.loads(data_raw) if data_raw else {}
+    except json.JSONDecodeError:
+        payload = {"raw": data_raw}
+    return (seq, kind, payload)
 
 
 class ServerHub:
@@ -264,6 +299,96 @@ class ServerHub:
                 "HTTP carrier; the server route cannot honour them, and dropping "
                 "one silently would disarm whatever hook expected it"
             )
+
+    # ---------------------------------------------------------------- #
+    # Extras beyond the eight-method contract: health, events. The keel
+    # CLI (`keel/cli.py`) consumes both; they were ported from the CLI
+    # task's parallel ServerHub draft onto this module's plumbing when
+    # the two implementations were merged. Both are READS -- FallbackHub
+    # falls back on any raise -- but the r2 phase vocabulary is kept
+    # consistent anyway.
+    # ---------------------------------------------------------------- #
+
+    def health(self) -> dict:
+        """`GET /v1/health` (SPEC §5.1; unauthenticated on the server)."""
+        status, body = self._request("GET", "/v1/health")
+        if status == 200 and isinstance(body, dict):
+            return body
+        if status == 200:
+            raise PrimaryFailure(
+                "GET /v1/health: server answered 200 with a non-object body",
+                request_sent=True, status=status,
+            )
+        self._unexpected("GET", "/v1/health", status, body)
+
+    def events(
+        self, since: int = 0, *, follow: bool = False, timeout: Optional[float] = None,
+    ) -> Iterator[Tuple[int, str, dict]]:
+        """`GET /v1/events?since=` as an iterator of `(seq, kind,
+        payload)`. `follow=False` (default) stops the first time no new
+        line arrives within the idle timeout ("caught up"); `follow=True`
+        keeps blocking for the next event and treats the same timeout as
+        a real failure (SPEC §5.1's 15 s keepalive should have arrived
+        long before it). `timeout` overrides the computed idle timeout
+        either way -- mainly for tests that want a fast bound in
+        `follow=True` mode without waiting out the real default."""
+        idle_timeout = timeout if timeout is not None else (self.read_timeout_s if follow else 1.5)
+        path = f"/v1/events?since={int(since)}"
+        conn_cls = http.client.HTTPSConnection if self.scheme == "https" else http.client.HTTPConnection
+        conn = conn_cls(self.host, self.port, timeout=self.connect_timeout_s)
+        try:
+            try:
+                conn.connect()
+            except Exception as exc:
+                raise PrimaryFailure(
+                    f"GET {self.base_url}{path}: could not connect "
+                    f"({type(exc).__name__}: {exc})",
+                    request_sent=False,
+                ) from exc
+            try:
+                conn.request("GET", path, headers=self._headers(None, False))
+                resp = conn.getresponse()
+            except Exception as exc:
+                raise PrimaryFailure(
+                    f"GET {self.base_url}{path}: failed after the request may "
+                    f"have been sent ({type(exc).__name__}: {exc})",
+                    request_sent=True,
+                ) from exc
+            if resp.status != 200:
+                raw = resp.read()
+                body = None
+                if raw:
+                    try:
+                        body = json.loads(raw.decode("utf-8"))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        body = None
+                self._unexpected("GET", "/v1/events", resp.status, body)
+            if conn.sock is not None:
+                conn.sock.settimeout(idle_timeout)
+            frame: List[str] = []
+            while True:
+                try:
+                    raw_line = resp.readline()
+                except socket.timeout as exc:
+                    if follow:
+                        raise PrimaryFailure(
+                            f"GET {self.base_url}{path}: stream idle past "
+                            f"{idle_timeout} s in follow mode",
+                            request_sent=True,
+                        ) from exc
+                    return  # caught up
+                if raw_line == b"":
+                    return  # server closed the stream
+                line = raw_line.decode("utf-8", "replace").rstrip("\r\n")
+                if line == "":
+                    parsed = _parse_sse_frame(frame)
+                    frame = []
+                    if parsed is not None:
+                        yield parsed
+                    continue
+                frame.append(line)
+        finally:
+            conn.close()
 
     # ---------------------------------------------------------------- #
     # Wire plumbing
