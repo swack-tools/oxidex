@@ -1,7 +1,8 @@
 # Keel — staged migration plan
 
 Companion to `docs/AGENT-SERVER-SPEC.md`. Seven stages; each lands on a `staging/keel-N-*` branch
-of the code repo and must PASS `tools/fleet/gate.sh` (GATE_VERSION 7, whose fleet-tests stage runs
+of the code repo and must PASS `tools/fleet/gate.sh` (GATE_VERSION 8 since 2026-08-22 — v7 plus a
+1800 s fleet-tests budget, `gate.sh`'s version-history block — whose fleet-tests stage runs
 the whole `tools/fleet/tests` suite, `gate.sh` L478-630) before the next begins. Every acceptance
 criterion names the instrument that proves it; a stage whose acceptance cannot be shown with that
 instrument is not done. Hours are focused engineering hours for the implementing agent(s)
@@ -13,14 +14,16 @@ adapter, budgets, policy, or security; **Sonnet-class** for plumbing, config, re
 mechanical test adaptation. "∥" marks tasks that can run in parallel with the others in the same
 stage (distinct files, no shared state).
 
-Starting state *(measured 2026-08-21 from m5)*: fleet drained; ryzen (hub + pod) dark; tree
+Starting state *(measured 2026-08-21 from m5)*: fleet drained; ryzen (hub + pod) dark (removed
+from the fleet by operator decision 2026-08-22); tree
 `fd154c5d` gate-PASSED; code repo `swack-tools/oxidex` PUBLIC with one active ruleset (`main`);
 `git ls-remote origin 'refs/fleet/*'` → 0 refs; `tailscale status` on m5 → not running;
 `python3` 3.14.7 on m5; `uv`, `claude`, `codex` present on m5; i7 up (only regen/oracle host).
 
 Human preconditions (not engineering hours, not automatable, listed once): create the private repo
 `swack-tools/oxidex-fleet-state`; create the deploy key and fine-grained PATs; bring Tailscale up on
-m5 and i7 (and on m4/ryzen when they return); distribute the secrets bundle to the i7.
+m5 and i7 (and on m4 when it returns; the ryzen was removed 2026-08-22); distribute the secrets
+bundle to the i7.
 
 ---
 

@@ -168,8 +168,23 @@
 #     unset keeps today's exact default. See
 #     tools/fleet/tests/test_no_hardcoded_hosts.py for the fence this
 #     keeps green.
+#
+# GATE_VERSION bumped 7 -> 8: FLEET_TESTS_TIMEOUT_S default 600 -> 1800.
+# The budget exists to catch HANGS, not to race a growing suite: at 600 s
+# it was sized for the ~360-test suite that existed when BLOCKER 6 added
+# it, the suite has since grown past 650 tests (Stage 1e + Stage 2 land
+# ~790), and gate keel2 on the i7 FAILed "fleet-tests-timeout" at 600 s
+# (2026-08-22) with a fully green suite -- the exact false-FAIL the flake
+# policy above calls unbounded, manufactured by the budget itself. 1800 s
+# still kills a genuine hang three tenths into a typical 90-min gate
+# while leaving a green-but-slow suite room to finish. This changes what
+# counts as pass/fail (a 900 s green run was FAIL at v7, PASS at v8), so
+# it needs the bump; gate_version is part of the shared verdict-cache key
+# (tree_sha, gate_version, platform_id), so v7 verdicts simply never
+# collide with v8 ones -- no cached v7 FAIL manufactured by the old
+# budget can condemn a branch under v8, and no re-measurement is needed.
 set -u
-GATE_VERSION="7"
+GATE_VERSION="8"
 
 # BLOCKER 6 (i): wall-clock budget for the whole fleet-tests stage
 # (py_compile sweep + unittest run together), overridable for tests that
@@ -177,7 +192,9 @@ GATE_VERSION="7"
 # BLOCKER A: this is now the budget for the stage AND its isolation
 # retries together -- the retry round spends what the first run left over,
 # never a fresh allowance.
-FLEET_TESTS_TIMEOUT_S="${FLEET_TESTS_TIMEOUT_S:-600}"
+# GATE_VERSION 8: default 600 -> 1800 (see the version-history block
+# above -- the budget catches hangs, it does not race the suite's size).
+FLEET_TESTS_TIMEOUT_S="${FLEET_TESTS_TIMEOUT_S:-1800}"
 
 # BLOCKER A: JSON array ITEMS (no brackets) for the verdict's optional
 # `fleet_tests_flakes` field. Empty means the field is omitted entirely --
