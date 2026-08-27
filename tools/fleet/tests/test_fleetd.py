@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _env import HermeticCase, scrub_env  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
 
 import cli
 import claim as claim_mod
@@ -71,7 +72,7 @@ class FleetdBase(HermeticCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         self.bare, self.seed = make_fixture_hub(self.tmp)
-        self.hub = Hub(str(self.bare), workdir=self.tmp / "hubcache")
+        self.hub = make_hub(self, str(self.bare), workdir=self.tmp / "hubcache")
         self.stub = make_stub_gate(self.tmp)
         self.workers = []
         self.host = "testhost"

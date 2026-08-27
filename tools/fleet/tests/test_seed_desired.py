@@ -26,9 +26,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/fleet
 
-from fleetlib import Hub  # noqa: E402
 from rollout import seed_desired  # noqa: E402
 from _env import HermeticCase  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
 
 DESIRED_REF = seed_desired.DESIRED_REF
 
@@ -59,7 +59,7 @@ class SeedDesiredTestCase(HermeticCase):
         )
         self.assertNotIn("work2.oxidex.net", resolved)
 
-        self.hub = Hub(self.hub_path, workdir=Path(self._tmp_root) / "cache")
+        self.hub = make_hub(self, self.hub_path, workdir=Path(self._tmp_root) / "cache")
 
         # A real FLEET_HUB_URL in the ambient shell must never leak into a
         # test that is exercising the "no --hub given" code path.

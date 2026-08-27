@@ -55,6 +55,7 @@ import fleetd  # noqa: E402
 from claim import Claim  # noqa: E402
 from fleetlib import Hub, HubError  # noqa: E402
 from _env import HermeticCase, scrub_env  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 GIT_ENV = {
@@ -209,7 +210,7 @@ class TestClaimAdopt(HermeticCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         self.bare = build_hub(self.tmp)
-        self.hub = Hub(str(self.bare), workdir=self.tmp / "cache")
+        self.hub = make_hub(self, str(self.bare), workdir=self.tmp / "cache")
         self.held: list = []
 
     def tearDown(self):
@@ -392,7 +393,7 @@ class TestAdoptWorkers(HermeticCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         self.bare = build_hub(self.tmp)
-        self.hub = Hub(str(self.bare), workdir=self.tmp / "cache")
+        self.hub = make_hub(self, str(self.bare), workdir=self.tmp / "cache")
         self.workers: list = []
         self.procs: list = []
         self.marker = f"adoption-stub-{os.getpid()}"
@@ -917,7 +918,7 @@ class TestRestartAdoption(HermeticCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         self.bare = build_hub(self.tmp)
-        self.hub = Hub(str(self.bare), workdir=self.tmp / "cache")
+        self.hub = make_hub(self, str(self.bare), workdir=self.tmp / "cache")
         self.daemons: list = []
         # The marker must appear in the worker's COMMAND LINE, not merely
         # in its source: `fleet_worker_pgids` matches `ps -eo command=`.

@@ -33,6 +33,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _env import HermeticCase, scrub_env  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
 
 import fleetlib
 import train
@@ -98,7 +99,7 @@ class TrainBase(HermeticCase):
         sh(["commit", "-qm", "tip"], cwd=w)
         sh(["push", "-q", str(self.bare), f"HEAD:{TIP}"], cwd=w)
         self.seed = w
-        self.hub = Hub(str(self.bare), workdir=self.tmp / "cache")
+        self.hub = make_hub(self, str(self.bare), workdir=self.tmp / "cache")
         # Never the real ~/git/oxidex.git/train.token: an unrelated file on
         # the developer's box must not decide whether these tests exercise
         # the token path.
