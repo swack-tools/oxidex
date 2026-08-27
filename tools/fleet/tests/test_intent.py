@@ -64,7 +64,7 @@ from intent import (  # noqa: E402
     withdraw,
 )
 from _env import HermeticCase  # noqa: E402
-from _fixtures import make_hub  # noqa: E402
+from _fixtures import hub_spec, make_hub  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -425,19 +425,26 @@ class TestAcceptance(IntentTestCase):
 # --------------------------------------------------------------------- #
 
 
-def _race_worker(hub_path: str, workdir: str, repo_root: str, slug: str, claimed_by: str) -> bool:
+def _race_worker(spec: dict, workdir: str, repo_root: str, slug: str, claimed_by: str) -> bool:
     """Runs in a forked child process (see `_MP_CONTEXT` above). Uses a
     scope with no formats/tags -- files-only -- so this test isolates the
     property under test (the hub ref's create-only CAS) from needing a
     live oracle/binary in every worker, while still exercising the SAME
     `register()` code path the acceptance test uses, including all three
     real checks.
+
+    `spec` comes from `_fixtures.hub_spec`, so each racer builds the hub
+    shape the parent's fixture mode dictates: a plain `Hub` in bare mode,
+    `FallbackHub(ServerHub, Hub)` through the fixture keel-server under
+    `FLEET_TEST_HUB=server` -- the race then contends on the server's CAS,
+    not around it.
     """
     sys.path.insert(0, str(Path(repo_root) / "tools" / "fleet"))
-    from fleetlib import Hub as _Hub  # local import: see child-process sys.path note above
+    sys.path.insert(0, str(Path(repo_root) / "tools" / "fleet" / "tests"))
+    from _fixtures import hub_from_spec as _hub_from_spec  # local import: see note above
     from intent import register as _register
 
-    hub = _Hub(url=hub_path, workdir=workdir)
+    hub = _hub_from_spec(spec, workdir)
     result = _register(
         hub,
         Path(repo_root),
@@ -452,9 +459,10 @@ def _race_worker(hub_path: str, workdir: str, repo_root: str, slug: str, claimed
 class TestConcurrentRegistration(IntentTestCase):
     def test_two_racers_same_slug_exactly_one_wins(self):
         n = 6
+        spec = hub_spec(self.hub, self.hub_path)
         with ProcessPoolExecutor(max_workers=n, mp_context=_MP_CONTEXT) as pool:
             futures = [
-                pool.submit(_race_worker, self.hub_path, tempfile.mkdtemp(prefix=f"race-cache-{i}-"), str(REPO_ROOT), "race-slug", f"host-{i}")
+                pool.submit(_race_worker, spec, tempfile.mkdtemp(prefix=f"race-cache-{i}-"), str(REPO_ROOT), "race-slug", f"host-{i}")
                 for i in range(n)
             ]
             outcomes = [f.result(timeout=60) for f in as_completed(futures)]
@@ -464,11 +472,12 @@ class TestConcurrentRegistration(IntentTestCase):
 
     def test_two_racers_different_slugs_both_win(self):
         n = 4
+        spec = hub_spec(self.hub, self.hub_path)
         with ProcessPoolExecutor(max_workers=n, mp_context=_MP_CONTEXT) as pool:
             futures = [
                 pool.submit(
                     _race_worker,
-                    self.hub_path,
+                    spec,
                     tempfile.mkdtemp(prefix=f"race-cache-distinct-{i}-"),
                     str(REPO_ROOT),
                     f"distinct-slug-{i}",

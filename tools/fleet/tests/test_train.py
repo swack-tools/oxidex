@@ -33,7 +33,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _env import HermeticCase, scrub_env  # noqa: E402
-from _fixtures import make_hub  # noqa: E402
+from _fixtures import make_hub, within_sweep  # noqa: E402
 
 import fleetlib
 import train
@@ -585,7 +585,15 @@ class TestSingleton(TrainBase):
     def test_claim_is_released_after_a_normal_run(self):
         self.add_branch("rel", {"rel.txt": "r\n"})
         self.run_train({})
-        self.assertEqual(self.hub.list("refs/fleet/claims/"), {})
+        # The train ran through its own plain Hub, out-of-band to the
+        # fixture server; `list()` on claims is index-served by design
+        # (cachedhub rule 3 covers sha/read, not listings), so poll the
+        # listing empty across one sweep rather than asserting the index
+        # was never behind.
+        self.assertEqual(
+            within_sweep(lambda: self.hub.list("refs/fleet/claims/"), lambda v: v == {}),
+            {},
+        )
 
 
 # ---------------------------------------------------------------------- #
@@ -787,7 +795,10 @@ class TestTipSignalBump(TrainBase):
         self.add_branch("sig", {"sig.txt": "s\n"})
         res, _ = self.run_train({})
         self.assertEqual(res.outcome, "advanced")
-        signal = self.hub.read(train.TIP_SIGNAL_REF)
+        # The train bumped the signal through its own plain Hub -- out of
+        # band to the fixture server -- so poll the fixture hub's view
+        # across one sweep instead of asserting the cache was never behind.
+        signal = within_sweep(lambda: self.hub.read(train.TIP_SIGNAL_REF), lambda v: v is not None)
         self.assertIsNotNone(signal, "a landed train run must bump refs/fleet/signals/tip")
         self.assertEqual(signal["generation"], 1)
         self.assertEqual(signal["sha"], res.new_tip)

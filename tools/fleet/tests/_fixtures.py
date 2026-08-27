@@ -59,9 +59,11 @@ import os
 import shutil
 import sys
 import tempfile
+import time
+import unittest
 import uuid
 from pathlib import Path
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 _FLEET_DIR = Path(__file__).resolve().parents[1]  # tools/fleet
 _KEEL_DIR = _FLEET_DIR / "keel"
@@ -75,7 +77,16 @@ from keel.fallbackhub import FallbackHub  # noqa: E402
 from keel.hubstore import build_store  # noqa: E402
 from keel.serverhub import ServerHub  # noqa: E402
 
-__all__ = ["MODE", "MODES", "make_hub"]
+__all__ = [
+    "MODE",
+    "MODES",
+    "bare_only",
+    "break_hub",
+    "hub_from_spec",
+    "hub_spec",
+    "make_hub",
+    "within_sweep",
+]
 
 MODES = ("bare", "server")
 
@@ -146,13 +157,32 @@ class _ServerHubFixture:
         self._server = keel_server.build_server(config, store=self._store, tokens=tokens, events=self._events)
         self._server.start()
         port = self._server.server_address[1]
-        primary = ServerHub(f"http://127.0.0.1:{port}", token=_FIXTURE_TOKEN)
+        # `server_url`/`token` are what `hub_spec` hands to ANOTHER process
+        # (a ProcessPool racer) so it can talk to this same fixture server;
+        # the token is the per-process fixture token, never a real secret.
+        self.server_url = f"http://127.0.0.1:{port}"
+        self.token = _FIXTURE_TOKEN
+        primary = ServerHub(self.server_url, token=_FIXTURE_TOKEN)
         # The fallback half sits at `workdir` itself -- byte-identical to
         # the plain `Hub(hub_path, workdir=workdir, ...)` the `bare` branch
         # returns -- so a test that treats `workdir` as a raw local git
         # cache sees the same thing in both modes.
         fallback = Hub(url=hub_path, workdir=str(workdir), code_url=code_url)
         self.hub = FallbackHub(primary, fallback)
+        # Back-pointer for the mode-aware helpers below (`hub_spec`,
+        # `break_hub`). Private by underscore; tests reach it only through
+        # those helpers.
+        self.hub._keel_fixture = self
+
+    def stop_server(self) -> None:
+        """Stop ONLY the HTTP server, leaving the store for `close()`.
+        `break_hub` uses this to make the primary unreachable the way
+        production sees it: connection refused, a BEFORE-SEND failure that
+        `FallbackHub` classifies and falls back from."""
+        try:
+            self._server.stop()
+        except Exception:
+            pass
 
     def close(self) -> None:
         for step in (self._server.stop, self._store.close, self._events.close):
@@ -188,3 +218,106 @@ def make_hub(
     fixture = _ServerHubFixture(str(hub_path), workdir, code_url)
     case.addCleanup(fixture.close)
     return fixture.hub
+
+
+def bare_only(rationale: str):
+    """Skip a test (or a whole class) under `FLEET_TEST_HUB=server`,
+    because its PREMISE is the git transport itself -- raw `git push`
+    stderr classification, `--force-with-lease` plumbing evidence, a poke
+    at a `fleetlib.Hub` internal (`_interpret_push`) that has no analogue
+    on the HTTP route. The rationale string is REQUIRED and lands in the
+    skip message, so a skipped run says exactly why each skip is honest
+    rather than convenient.
+
+    This is a marker for premise, never a workaround: a test whose
+    ASSERTION merely observes an out-of-band write through the fixture
+    server belongs with `within_sweep`, and a test of a property that must
+    hold through the server (one-winner races, CAS composition, read
+    coherence) must never carry this decorator.
+    """
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise TypeError(
+            "@bare_only requires a rationale string naming the git-layer "
+            "premise, e.g. @bare_only('tests raw git stderr classification')"
+        )
+    return unittest.skipIf(MODE == "server", f"bare-only: {rationale}")
+
+
+def within_sweep(
+    fn: Callable[[], object],
+    until: Callable[[object], bool],
+    *,
+    timeout_s: float = 5.0,
+    interval_s: float = 0.05,
+):
+    """Return `fn()` once `until(value)` is truthy, re-calling until the
+    fixture server's periodic sweep (`_SWEEP_INTERVAL_S`) has had time to
+    observe a write made through some OTHER route than the fixture hub --
+    a raw `git push`, a subprocess CLI, a second plain `Hub`. That lag is
+    a real property of the production server (SPEC SS3.2), not a fixture
+    artifact, so observations of out-of-band writes poll for convergence
+    instead of asserting instantaneity.
+
+    In `bare` mode the first call is already live and returns immediately.
+    On timeout the LAST value is returned, so the caller's own assertion
+    still fails with the real observed value -- this helper can delay a
+    genuine failure by `timeout_s`, never hide one.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        value = fn()
+        if until(value) or time.monotonic() >= deadline:
+            return value
+        time.sleep(interval_s)
+
+
+def hub_spec(hub, hub_url, *, code_url: Optional[str] = None) -> dict:
+    """A picklable recipe for building, in ANOTHER process (a ProcessPool
+    racer), a hub with the same MODE and remote as `hub` (an object
+    `make_hub` returned). Without this, every racer child that builds a
+    plain `fleetlib.Hub(url=...)` silently bypasses the fixture server,
+    and a race the suite claims to prove "through the server" never
+    touches it.
+    """
+    fixture = getattr(hub, "_keel_fixture", None)
+    if fixture is None:
+        return {"mode": "bare", "url": str(hub_url), "code_url": code_url}
+    return {
+        "mode": "server",
+        "url": str(hub_url),
+        "code_url": code_url,
+        "server_url": fixture.server_url,
+        "token": fixture.token,
+    }
+
+
+def hub_from_spec(spec: dict, workdir: Union[str, "os.PathLike[str]"]):
+    """Build the hub a `hub_spec` describes, in this (possibly child)
+    process: a plain `Hub` in bare mode, the production
+    `FallbackHub(ServerHub(...), Hub(...))` shape in server mode."""
+    github = Hub(url=spec["url"], workdir=str(workdir), code_url=spec.get("code_url"))
+    if spec.get("mode") != "server":
+        return github
+    return FallbackHub(ServerHub(spec["server_url"], token=spec["token"]), github)
+
+
+def break_hub(hub, dead_url: str) -> None:
+    """Make `hub` unreachable the way production would experience it, in
+    whichever shape `make_hub` returned.
+
+    * bare: repoint the plain `Hub` at a path that is not a repository --
+      every subsequent read fails at the transport, through real git
+      (exactly what the fleetd lost-lease tests always did).
+    * server: stop the fixture HTTP server (connection refused -- the
+      BEFORE-SEND `PrimaryFailure` `FallbackHub` falls back from) AND
+      repoint the fallback half at the dead path, so the fall-back itself
+      then fails through real git. Hub-unreachability THROUGH the
+      `FallbackHub` shape is a real production path (SPEC SS4.3), which is
+      why these tests are made to pass through it rather than skipped.
+    """
+    fixture = getattr(hub, "_keel_fixture", None)
+    if fixture is None:
+        hub.url = dead_url
+        return
+    fixture.stop_server()
+    hub.github.url = dead_url

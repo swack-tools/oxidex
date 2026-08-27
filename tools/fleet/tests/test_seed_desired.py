@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/fleet
 
 from rollout import seed_desired  # noqa: E402
 from _env import HermeticCase  # noqa: E402
-from _fixtures import make_hub  # noqa: E402
+from _fixtures import make_hub, within_sweep  # noqa: E402
 
 DESIRED_REF = seed_desired.DESIRED_REF
 
@@ -168,7 +168,10 @@ class TestExecuteIdempotency(SeedDesiredTestCase):
         rc, out, _err = self.run_main(["--hub", self.hub_path, "--execute"])
         self.assertEqual(rc, 0)
         self.assertIn("created", out)
-        stored = self.hub.read(DESIRED_REF)
+        # `seed_desired.main` writes through its own plain Hub -- out of
+        # band to the fixture server under FLEET_TEST_HUB=server -- so the
+        # fixture hub's view converges at the next sweep; poll for it.
+        stored = within_sweep(lambda: self.hub.read(DESIRED_REF), lambda v: v is not None)
         self.assertIsNotNone(stored)
         for key, value in seed_desired.SEED.items():
             self.assertEqual(stored[key], value)
@@ -176,7 +179,11 @@ class TestExecuteIdempotency(SeedDesiredTestCase):
     def test_second_execute_refuses_and_leaves_a_live_desired_state_untouched(self):
         first_rc, _out, _err = self.run_main(["--hub", self.hub_path, "--execute"])
         self.assertEqual(first_rc, 0)
-        sha_after_first = self.hub.sha(DESIRED_REF)
+        # The seed write is out-of-band (see above): poll the sha into
+        # view before using it as a CAS witness -- handing a None witness
+        # to `update` is a caller bug, not a race.
+        sha_after_first = within_sweep(lambda: self.hub.sha(DESIRED_REF), lambda v: v is not None)
+        self.assertIsNotNone(sha_after_first)
 
         # An operator raises a real host's targets in between -- exactly
         # the live state a careless re-seed must never step on.

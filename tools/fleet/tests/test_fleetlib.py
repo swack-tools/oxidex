@@ -58,7 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import fleetlib  # noqa: E402
 from _env import HermeticCase, scrub_env  # noqa: E402
-from _fixtures import make_hub  # noqa: E402
+from _fixtures import bare_only, hub_from_spec, hub_spec, make_hub, within_sweep  # noqa: E402
 from fleetlib import (  # noqa: E402
     Hub,
     HubError,
@@ -329,16 +329,21 @@ class TestCreate(FleetlibTestCase):
         )
 
 
-def _attempt_create(hub_url: str, ref: str, idx: int):
+def _attempt_create(spec: dict, ref: str, idx: int):
     """Top-level (picklable) worker for the multiprocessing race test.
-    Each worker builds its own Hub with its own local cache dir, so the
-    only shared state is the remote -- real inter-process contention on the
+    Each worker builds its own hub (from `_fixtures.hub_spec`, so it has
+    the SAME mode and remote as the parent's fixture hub: a plain `Hub`
+    in bare mode, `FallbackHub(ServerHub, Hub)` through the fixture
+    server in server mode) with its own local cache dir, so the only
+    shared state is the remote -- real inter-process contention on the
     actual CAS primitive, not a mock. Against `FLEET_TEST_HUB_URL` the
-    shared state is GitHub itself, which is the point of the live run.
+    shared state is GitHub itself, which is the point of the live run;
+    under `FLEET_TEST_HUB=server` it is the keel-server, which is the
+    Stage 2 acceptance point (one winner THROUGH the server).
     """
     workdir = tempfile.mkdtemp(prefix=f"fleetlib-race-{idx}-")
     try:
-        hub = Hub(url=hub_url, workdir=workdir)
+        hub = hub_from_spec(spec, workdir)
         ok = hub.create(ref, {"claimant_idx": idx})
         return idx, ok
     finally:
@@ -364,8 +369,9 @@ class TestConcurrentCreate(FleetlibTestCase):
     def _race(self, n: int):
         ref = self.ref(f"race{n}")
 
+        spec = hub_spec(self.hub, self.hub_url)
         with ProcessPoolExecutor(max_workers=n) as pool:
-            futures = [pool.submit(_attempt_create, self.hub_url, ref, i) for i in range(n)]
+            futures = [pool.submit(_attempt_create, spec, ref, i) for i in range(n)]
             results = [f.result() for f in as_completed(futures)]
 
         winners = [idx for idx, ok in results if ok]
@@ -440,6 +446,12 @@ class TestDelete(FleetlibTestCase):
         self.assertEqual(self.hub.sha(self.ref("del2")), current_sha)
         self.assertIsNotNone(self.hub.read(self.ref("del2")))
 
+    @bare_only(
+        "direct raw-git evidence that --force-with-lease guards a delete; "
+        "the premise is the git transport itself (raw pushes that bypass "
+        "any hub API), and the raw pushes would bypass the fixture server "
+        "too -- running it there would prove nothing about the server"
+    )
     def test_raw_git_force_with_lease_on_delete(self):
         """Direct evidence that `--force-with-lease=<ref>:<sha>` actually
         guards a *deletion*, not just an update, for this git version. The
@@ -595,9 +607,14 @@ class TestReadIsCoherentUnderConcurrentWrites(FleetlibTestCase):
         self.assertEqual(payload["v"], 2)
         # Coherence is the whole point: the sha handed back is the one whose
         # payload was handed back. A `sha()` + `read()` pair cannot promise
-        # that, which is why this method exists.
+        # that, which is why this method exists. The forced move was made
+        # by a plain `fresh_hub()` writer -- out-of-band to the fixture
+        # server -- so under FLEET_TEST_HUB=server the fixture hub's view
+        # converges at the next sweep; poll for it rather than asserting
+        # the cache was never behind (behind is what a cache may be).
         self.assertEqual(
-            got_sha, self.hub.sha(self.REF),
+            got_sha,
+            within_sweep(lambda: self.hub.sha(self.REF), lambda v: v == got_sha),
             "read_with_sha returned a sha that is not the one it read the payload from",
         )
 
@@ -891,7 +908,14 @@ class TestCodeUrl(FleetlibTestCase):
             code_url=other,
         )
         self.assertTrue(split.create(self.ref("split"), {"secret": "hostname:pid"}))
-        self.assertIsNotNone(self.hub.sha(self.ref("split")))
+        # `split` is deliberately a plain Hub (the unit under test is
+        # Hub's url/code_url routing), so under FLEET_TEST_HUB=server its
+        # write is out-of-band to the fixture server and becomes visible
+        # at the next sweep -- poll for convergence, don't assert
+        # instantaneity.
+        self.assertIsNotNone(
+            within_sweep(lambda: self.hub.sha(self.ref("split")), lambda v: v is not None)
+        )
 
         code_side = Hub(url=other, workdir=str(Path(self._tmp_root) / "cache-split3"))
         self.assertEqual({}, code_side.list("refs/fleet"))
@@ -1081,6 +1105,12 @@ class TestGitHubRateLimitsAreTransient(FleetlibTestCase):
             with self.subTest(stderr=msg):
                 self.assertTrue(_is_transport_failure(msg))
 
+    @bare_only(
+        "pokes fleetlib.Hub._interpret_push with a synthesized raw `git "
+        "push` stderr; the premise is the git stderr classification layer, "
+        "which the HTTP route does not have (the server answers status "
+        "codes, and its own git layer is covered by the bare run)"
+    )
     def test_a_rate_limited_push_raises_rather_than_reporting_a_lost_race(self):
         from fleetlib import _Result
 
@@ -1096,6 +1126,11 @@ class TestGitHubRateLimitsAreTransient(FleetlibTestCase):
         with self.assertRaises(HubUnreachableError):
             self.hub._interpret_push(result)
 
+    @bare_only(
+        "pokes fleetlib.Hub._interpret_push with synthesized raw `git "
+        "push` stderr; the premise is the git stderr classification layer, "
+        "which the HTTP route does not have"
+    )
     def test_a_plain_lost_race_still_returns_false(self):
         """The negative control, and the reason the change is an ORDERING
         rather than a deletion. git's ordinary CAS rejections carry no

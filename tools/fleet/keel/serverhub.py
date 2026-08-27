@@ -257,6 +257,7 @@ class ServerHub:
         `PUT /v1/refs/{ref}` + `If-Match`. True = landed (200); False =
         the witness is stale, lost the race (409)."""
         self._refuse_push_options("update", push_options)
+        self._require_expect_sha("update", ref, expect_sha)
         status, body = self._request(
             "PUT", self._ref_path(ref, fresh=False), body=payload, headers={"If-Match": expect_sha}
         )
@@ -272,6 +273,7 @@ class ServerHub:
         `DELETE /v1/refs/{ref}` + `If-Match`. True = deleted (204);
         False = moved or already gone (409)."""
         self._refuse_push_options("delete", push_options)
+        self._require_expect_sha("delete", ref, expect_sha)
         status, body = self._request(
             "DELETE", self._ref_path(ref, fresh=False), headers={"If-Match": expect_sha}
         )
@@ -290,6 +292,21 @@ class ServerHub:
             "branch pushes never go through the server (SPEC §4.2); use the "
             "GitHub half's push_ref/push_code_ref/push_tip_ref"
         )
+
+    @staticmethod
+    def _require_expect_sha(op: str, ref: str, expect_sha) -> None:
+        """CAS writes need a witness. A `None` slipped this far (a caller
+        that read a stale/absent sha) used to reach `http.client` as an
+        `If-Match: None` header value, whose `TypeError` surfaced as an
+        AMBIGUOUS write (`request_sent=True`) even though nothing was ever
+        sent. Refuse it here, before any connection exists, with the real
+        diagnosis."""
+        if not isinstance(expect_sha, str) or not expect_sha:
+            raise ValueError(
+                f"{op} {ref}: expect_sha must be a non-empty sha string, got "
+                f"{expect_sha!r} -- the caller read a stale or absent sha; "
+                "no request was sent"
+            )
 
     @staticmethod
     def _refuse_push_options(op: str, push_options: Optional[Sequence[str]]) -> None:
