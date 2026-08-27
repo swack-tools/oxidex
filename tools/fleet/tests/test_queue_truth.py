@@ -48,6 +48,7 @@ from fleetlib import Hub, HubUnreachableError  # noqa: E402
 from test_fleetd import FleetdBase, HUB_TIP_REF  # noqa: E402
 from test_queue import QueueTestCase  # noqa: E402
 from workqueue import Queue  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 
 def _kill_worker_process(worker) -> None:
@@ -256,8 +257,7 @@ class VerdictSelectionBase(FleetdBase):
         """Rewrite `branch` to a brand-new commit on the same tip -- what an
         author does in response to NEEDS_AUTHOR. Returns the new sha."""
         work = self.tmp / f"fp-{content}"
-        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        env = scrub_env()
         subprocess.run(["git", "init", "-q", str(work)], check=True)
         subprocess.run(["git", "-C", str(work), "fetch", "-q", str(self.bare), HUB_TIP_REF],
                        check=True, env=env)
@@ -738,12 +738,13 @@ class TestParkedBranchesCarryTheirSha(VerdictSelectionBase):
 
 
 
-class TestScanGatelogsMemoUnit(unittest.TestCase):
+class TestScanGatelogsMemoUnit(HermeticCase):
     """Narrow unit coverage on _scan_gatelogs_memo/classify_branch as pure
     functions, independent of the full reconcile_once/fixture-hub path
     exercised above."""
 
     def setUp(self):
+        super().setUp()
         import tempfile
         self._tmp = tempfile.TemporaryDirectory()
         self.log_dir = Path(self._tmp.name)

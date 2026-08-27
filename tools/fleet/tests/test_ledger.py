@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import ledger  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -156,13 +157,14 @@ def _require_uncovered_exemplar(binary: Path) -> "ledger.FormatCapability":
 @unittest.skipUnless(_not_hermetic(), f"{HERMETIC_ENV}=1: skips real-binary/real-oracle/real-corpus tests")
 @unittest.skipUnless(_oracle_available(), "pinned ExifTool oracle not usable in this environment")
 @unittest.skipUnless(_corpus_available(), "combined-samples corpus not present in this environment")
-class LedgerTestCase(unittest.TestCase):
+class LedgerTestCase(HermeticCase):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         cls.binary = _ensure_binary_built()
 
 
-class TestCapabilityProbe(unittest.TestCase):
+class TestCapabilityProbe(HermeticCase):
     # HERMETIC SKIP: the only test in this class that shells to the REAL
     # pinned oracle (no override) -- its three siblings below all pass a
     # fake oracle script and stay hermetic, so only this one method is
@@ -212,7 +214,7 @@ class TestCapabilityProbe(unittest.TestCase):
             self.assertIn("degraded", probe.detail.lower())
 
 
-class TestNormalizeToken(unittest.TestCase):
+class TestNormalizeToken(HermeticCase):
     def test_case_and_punctuation_insensitive(self):
         self.assertEqual(ledger.normalize_token("KyoceraRAW"), "KYOCERARAW")
         self.assertEqual(ledger.normalize_token("kyocera-raw"), "KYOCERARAW")
@@ -220,7 +222,7 @@ class TestNormalizeToken(unittest.TestCase):
 
 
 @unittest.skipUnless(_corpus_available(), "combined-samples corpus not present in this environment")
-class TestFindSampleForFormat(unittest.TestCase):
+class TestFindSampleForFormat(HermeticCase):
     def test_extension_match(self):
         for fmt, expected in (("SWF", "Flash.swf"), ("PICT", "PICT.pict"), ("PPM", "PPM.ppm"), ("RA", "Real.ra"), ("MRC", "MRC.mrc")):
             with self.subTest(fmt=fmt):
@@ -245,7 +247,7 @@ class TestFindSampleForFormat(unittest.TestCase):
         self.assertIsNone(ledger.find_sample_for_format("TotallyMadeUpFormatXyz"))
 
 
-class TestResolveOxidexBinary(unittest.TestCase):
+class TestResolveOxidexBinary(HermeticCase):
     def test_missing_binary_raises_ledger_error(self):
         with tempfile.TemporaryDirectory() as td:
             empty_repo = Path(td)
@@ -270,7 +272,7 @@ class TestResolveOxidexBinary(unittest.TestCase):
         self.assertEqual(resolution.candidate, "target/release/oxidex")
 
 
-class TestGrepDispatchEvidenceIsNeverAuthoritativeAlone(unittest.TestCase):
+class TestGrepDispatchEvidenceIsNeverAuthoritativeAlone(HermeticCase):
     """Locks in the exact trap `measure_format` exists to avoid: KyoceraRAW
     has no `FileFormat::KyoceraRAW` token in format_dispatch.rs at all.
     """

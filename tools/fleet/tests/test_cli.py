@@ -48,12 +48,14 @@ sys.path.insert(0, str(FLEET_DIR))
 import cli  # noqa: E402
 
 from test_code_url_split import _RepoPair  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 
 _QUEUE_LINE_RE = re.compile(r"^QUEUE\s+(.*?)\s{2,}CLAIMS\s+(\S+)\s{2,}DESIRED gen (\S+)\s*$")
 
 
-class _CliCase(unittest.TestCase):
+class _CliCase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self._tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmpdir.name)
         self.repos = _RepoPair(self.tmp)

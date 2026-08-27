@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/fleet
 
 from fleetlib import Hub  # noqa: E402
 from rollout import seed_desired  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 
 DESIRED_REF = seed_desired.DESIRED_REF
 
@@ -36,10 +37,11 @@ def _run_git(args, cwd=None):
     return subprocess.run(["git"] + args, cwd=cwd, capture_output=True)
 
 
-class SeedDesiredTestCase(unittest.TestCase):
+class SeedDesiredTestCase(HermeticCase):
     """Base fixture: a throwaway bare repo standing in for the state hub."""
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="seed-desired-test-")
         self.addCleanup(shutil.rmtree, self._tmp_root, ignore_errors=True)
         self.hub_path = str(Path(self._tmp_root) / "hub.git")

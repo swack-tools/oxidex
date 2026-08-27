@@ -93,6 +93,7 @@ GATE_VERSION_TXT = FLEET_DIR / "gate_version.txt"
 
 sys.path.insert(0, str(FLEET_DIR))
 import ledger  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 
 GIT_ENV = {
@@ -101,7 +102,7 @@ GIT_ENV = {
 }
 
 
-class TestGateVersionMatchesFile(unittest.TestCase):
+class TestGateVersionMatchesFile(HermeticCase):
     """gate.sh's own header comment states the contract: 'GATE_VERSION and
     tools/fleet/gate_version.txt must always hold the same value; bump
     both together whenever gate BEHAVIOUR changes.' Parsing the script
@@ -163,7 +164,7 @@ def _extract_shell_function(source: str, name: str) -> str:
     return source[m.start():end + 1]
 
 
-class TestFleetTestModulesExcludeSeams(unittest.TestCase):
+class TestFleetTestModulesExcludeSeams(HermeticCase):
     """`_fleet_test_modules()` (gate.sh's BLOCKER-6(iv) helper) extracted
     verbatim from the real script text and run, standalone, against a
     throwaway directory -- the cheap mechanical half of the exclusion
@@ -172,6 +173,7 @@ class TestFleetTestModulesExcludeSeams(unittest.TestCase):
     """
 
     def setUp(self):
+        super().setUp()
         self.tmp = Path(tempfile.mkdtemp(prefix="fleet-test-modules-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         tests_dir = self.tmp / "tools" / "fleet" / "tests"
@@ -200,7 +202,7 @@ class TestFleetTestModulesExcludeSeams(unittest.TestCase):
         )
 
 
-class TestFleetTestsFailedModuleParsing(unittest.TestCase):
+class TestFleetTestsFailedModuleParsing(HermeticCase):
     """BLOCKER A: `_fleet_tests_failed_modules()` decides whether a red
     fleet-tests stage is even a candidate for the isolation retry, so it is
     the hinge of the whole policy. Extracted verbatim from the real script
@@ -317,7 +319,7 @@ def _build_fixture_hub(tmp: Path, staging_files: dict, branch: str) -> Path:
     assert str(tmp).startswith(tempfile.gettempdir()), "fixture must live under tempdir"
     bare = tmp / "hub.git"
     work = tmp / "seed"
-    env = {**os.environ, **GIT_ENV}
+    env = scrub_env(**GIT_ENV)
     subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
     subprocess.run(["git", "init", "-q", str(work)], check=True)
     (work / "README.md").write_text("tip\n")
@@ -344,7 +346,7 @@ def _build_fixture_hub(tmp: Path, staging_files: dict, branch: str) -> Path:
     return bare
 
 
-class TestFleetCodeUrlDefaultsToHubUrl(unittest.TestCase):
+class TestFleetCodeUrlDefaultsToHubUrl(HermeticCase):
     """B4 (Stage 1 integration review): `FLEET_CODE_URL` must default to
     `FLEET_HUB_URL` when unset, so a single-repo stand-in (one host, one
     repo playing both the verdict-cache-hub and code-repo role -- the i7
@@ -365,6 +367,7 @@ class TestFleetCodeUrlDefaultsToHubUrl(unittest.TestCase):
     """
 
     def setUp(self):
+        super().setUp()
         self.tmp = Path(tempfile.mkdtemp(prefix="gate-code-url-default-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
@@ -467,6 +470,7 @@ class _RealGateHarness:
 
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         probe = ledger.probe_capability()
         if not probe.ok:
             raise unittest.SkipTest(
@@ -476,6 +480,7 @@ class _RealGateHarness:
             )
 
     def setUp(self):
+        super().setUp()
         self.tmp = Path(tempfile.mkdtemp(prefix="gate-script-teeth-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.fakebin = _build_fake_bin(self.tmp)
@@ -520,7 +525,7 @@ class _RealGateHarness:
         }
 
 
-class TestFleetTestsStageHasTeeth(_RealGateHarness, unittest.TestCase):
+class TestFleetTestsStageHasTeeth(_RealGateHarness, HermeticCase):
     """Runs the real `tools/fleet/gate.sh` against fixture hubs, proving
     BLOCKER 6 (ii) and (iii): the fleet-tests stage exists in the actual
     script (not merely described in a comment), a red suite there yields
@@ -733,7 +738,7 @@ _FIXTURE_ALWAYS_GREEN = (
 )
 
 
-class TestFleetTestsFlakeRetry(_RealGateHarness, unittest.TestCase):
+class TestFleetTestsFlakeRetry(_RealGateHarness, HermeticCase):
     """BLOCKER A, end-to-end against the REAL gate.sh (shares the fixture
     hub / stubbed-cargo harness above, including its oracle skip).
 
@@ -873,7 +878,7 @@ class TestFleetTestsFlakeRetry(_RealGateHarness, unittest.TestCase):
                          "no retry may run when nothing went red")
 
 
-class TestStoreVerdictLoudFailure(unittest.TestCase):
+class TestStoreVerdictLoudFailure(HermeticCase):
     """R4: `store_verdict()` extracted verbatim from gate.sh's own text
     (same brace-matched technique as `TestFleetTestModulesExcludeSeams`/
     `TestFleetTestsFailedModuleParsing` above), run standalone against a
@@ -884,6 +889,7 @@ class TestStoreVerdictLoudFailure(unittest.TestCase):
     """
 
     def setUp(self):
+        super().setUp()
         self.tmp = Path(tempfile.mkdtemp(prefix="fleet-store-verdict-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.self_dir = self.tmp / "self_dir"

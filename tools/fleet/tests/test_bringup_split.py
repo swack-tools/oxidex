@@ -58,6 +58,7 @@ sys.path.insert(0, str(FLEET_DIR))
 
 import claim as claim_mod  # noqa: E402
 from fleetlib import Hub  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 STAGING_REF = "refs/heads/staging/x"
@@ -76,7 +77,7 @@ DRENEW_S = 2.0
 def _run(args, cwd=None, check=True, env=None):
     return subprocess.run(
         args, cwd=cwd, check=check, capture_output=True, text=True,
-        env={**os.environ, **GIT_ENV, **(env or {})},
+        env=scrub_env(**{**GIT_ENV, **(env or {})}),  # `env` may carry its own GIT_* (see _env())
     )
 
 
@@ -93,8 +94,9 @@ def _ls_remote(repo: Path) -> dict:
     return refs
 
 
-class TestBringupSplitSpine(unittest.TestCase):
+class TestBringupSplitSpine(HermeticCase):
     def setUp(self):
+        super().setUp()
         self.tmpdir = tempfile.TemporaryDirectory(prefix="bringup-split-")
         self.tmp = Path(self.tmpdir.name)
         assert str(self.tmp).startswith(tempfile.gettempdir())
@@ -185,9 +187,9 @@ class TestBringupSplitSpine(unittest.TestCase):
     def _env(self) -> dict:
         """What a unit file gives fleetd -- minus FLEET_HUB_URL/FLEET_CODE_URL,
         deliberately: the repos arrive on ARGV only, which is the B4 shape
-        (argv config never reached spawned gates)."""
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("FLEET_HUB_URL", "FLEET_CODE_URL", "GIT_SSH_COMMAND")}
+        (argv config never reached spawned gates). `scrub_env` drops those
+        two along with every other FLEET_*/KEEL_* the invoker exported."""
+        env = scrub_env()
         env.update({
             **GIT_ENV,
             "HOME": str(self.home),  # hubcache/seedcache/clicache live here, never ~

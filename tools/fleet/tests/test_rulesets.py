@@ -38,6 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/fleet
 
 from rollout import rulesets  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 
 
 REPO = "swack-tools/oxidex"
@@ -99,7 +100,7 @@ class StubGh:
         return {**payload, "id": rid, "rules": rules, "bypass_actors": actors, "enforcement": payload["enforcement"]}
 
 
-class RulesetsTestCase(unittest.TestCase):
+class RulesetsTestCase(HermeticCase):
     def install(self, stub):
         real = rulesets.gh_api
         real_ver = rulesets._gh_version
@@ -130,7 +131,7 @@ class RulesetsTestCase(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestDeclaration(unittest.TestCase):
+class TestDeclaration(HermeticCase):
     def test_exactly_the_five_named_rulesets(self):
         self.assertEqual(
             [r["name"] for r in rulesets.RULESETS],
@@ -211,7 +212,7 @@ class TestDeclaration(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestSkipUpdateDefault(unittest.TestCase):
+class TestSkipUpdateDefault(HermeticCase):
     def test_default_is_on(self):
         args = rulesets.build_parser().parse_args(["apply"])
         self.assertTrue(args.skip_update_rulesets)
@@ -356,7 +357,7 @@ class TestApply(RulesetsTestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestComparable(unittest.TestCase):
+class TestComparable(HermeticCase):
     def test_false_rule_parameters_compare_equal_to_absent_ones(self):
         """GitHub stores `{"type":"update","parameters":{
         "update_allows_fetch_and_merge":false}}` as bare `{"type":"update"}`

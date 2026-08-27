@@ -32,6 +32,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _env import HermeticCase, scrub_env  # noqa: E402
 
 import fleetlib
 import train
@@ -53,8 +54,7 @@ def gated_set(label: str) -> frozenset:
 def sh(args, cwd=None):
     global ENV
     if ENV is None:
-        ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        ENV = scrub_env()  # pins the same t/t@t identity, drops FLEET_*/KEEL_*
     return subprocess.run(["git"] + args, cwd=cwd, check=True, env=ENV,
                           capture_output=True, text=True)
 
@@ -81,8 +81,9 @@ def _attempt_tip_bump(hub_url: str, sha_suffix: str, idx: int):
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-class TrainBase(unittest.TestCase):
+class TrainBase(HermeticCase):
     def setUp(self):
+        super().setUp()
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         assert str(self.tmp).startswith(tempfile.gettempdir())

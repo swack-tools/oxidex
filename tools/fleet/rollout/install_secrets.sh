@@ -125,12 +125,26 @@ EOF
   exit 3
 fi
 
-# Portable mode read: BSD `stat -f` (macOS) then GNU `stat -c` (Linux).
-mode="$(stat -f '%Lp' "$token_file" 2>/dev/null || stat -c '%a' "$token_file" 2>/dev/null || true)"
-if [ -z "$mode" ]; then
-  echo "install_secrets.sh: could not stat $token_file" >&2
-  exit 4
-fi
+# Portable mode read: GNU `stat -c` (Linux) FIRST, then BSD `stat -f`
+# (macOS). The order matters and the old one was wrong: on GNU coreutils
+# `-f` means `--file-system`, so `stat -f '%Lp' FILE` prints a whole
+# filesystem report for FILE to STDOUT and then fails on the literal
+# file '%Lp' -- the `||` fallback ran, but the command substitution had
+# already captured the report, so `$mode` was a multi-line string that
+# never equalled "600" and every well-formed token exited 4 on Linux
+# (keel1 gate, i7: test_install_secrets rc 4 where 5/6 was expected).
+# BSD stat rejects `-c` with nothing on stdout, so this order is clean on
+# both, and the result is checked for SHAPE, never just non-emptiness.
+mode="$(stat -c '%a' "$token_file" 2>/dev/null)" \
+  || mode="$(stat -f '%Lp' "$token_file" 2>/dev/null)" \
+  || mode=""
+case "$mode" in
+  [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+  *)
+    echo "install_secrets.sh: could not stat $token_file (got mode: ${mode:-<empty>})" >&2
+    exit 4
+    ;;
+esac
 if [ "$mode" != "600" ]; then
   echo "install_secrets.sh: $token_file has mode $mode, expected 600 -- run: chmod 0600 \"$token_file\"" >&2
   exit 4
