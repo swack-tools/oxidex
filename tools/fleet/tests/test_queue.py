@@ -28,9 +28,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from claim import Claim  # noqa: E402
-from fleetlib import Hub  # noqa: E402
 from workqueue import INTENTS_PREFIX, Queue, QueueError  # noqa: E402
 from _env import HermeticCase  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
 
 
 def _run_git(args, cwd=None, input_bytes=None):
@@ -70,7 +70,7 @@ class QueueTestCase(HermeticCase):
 
         self._init_history()
 
-        self.hub = Hub(url=self.hub_path, workdir=self.workdir)
+        self.hub = make_hub(self, self.hub_path, workdir=self.workdir)
         self.queue = Queue(self.hub, tip_ref=self.TIP_REF)
 
     def tearDown(self):

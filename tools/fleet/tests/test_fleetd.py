@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _env import HermeticCase, scrub_env  # noqa: E402
+from _fixtures import break_hub, make_hub, within_sweep  # noqa: E402
 
 import cli
 import claim as claim_mod
@@ -71,7 +72,7 @@ class FleetdBase(HermeticCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = Path(self.tmpdir.name)
         self.bare, self.seed = make_fixture_hub(self.tmp)
-        self.hub = Hub(str(self.bare), workdir=self.tmp / "hubcache")
+        self.hub = make_hub(self, str(self.bare), workdir=self.tmp / "hubcache")
         self.stub = make_stub_gate(self.tmp)
         self.workers = []
         self.host = "testhost"
@@ -742,11 +743,16 @@ class TestDesiredCAS(FleetdBase):
         def racing_read(hub_self, ref):
             doc = orig_read(hub_self, ref)
             # After caller A reads, sneak in operator B's committed edit
-            # once, so A's first CAS write hits a stale expect_sha.
+            # once, so A's first CAS write hits a stale expect_sha. The
+            # sneak goes through `self.hub` by BOUND calls (not the
+            # unbound `orig_read`): under FLEET_TEST_HUB=server the
+            # fixture hub is a FallbackHub, not a plain Hub, and the
+            # `sneak["done"]` guard set above already prevents recursion
+            # into this patch either way.
             if ref == cli.DESIRED_REF and not sneak["done"]:
                 sneak["done"] = True
                 cur = self.hub.sha(cli.DESIRED_REF)
-                d2 = orig_read(self.hub, cli.DESIRED_REF)
+                d2 = self.hub.read(cli.DESIRED_REF)
                 d2["hosts"]["otherhost"] = {"gates": 2, "enabled": True}
                 d2["generation"] += 1
                 assert self.hub.update(cli.DESIRED_REF, d2, cur)
@@ -758,7 +764,16 @@ class TestDesiredCAS(FleetdBase):
         finally:
             cli.Hub.read = orig_read
         self.assertEqual(rc, 0)
-        final = self.hub.read(cli.DESIRED_REF)
+        # `cli.main` writes through its OWN plain Hub, out-of-band to the
+        # fixture server; the fixture hub's view converges at the next
+        # sweep, so poll for the composed doc rather than asserting the
+        # cache was never behind.
+        final = within_sweep(
+            lambda: self.hub.read(cli.DESIRED_REF),
+            lambda d: bool(d)
+            and d.get("hosts", {}).get(self.host, {}).get("gates") == 4
+            and "otherhost" in d.get("hosts", {}),
+        )
         self.assertEqual(final["hosts"][self.host]["gates"], 4, "our edit landed")
         self.assertEqual(final["hosts"]["otherhost"]["gates"], 2, "racer's edit survived")
 
@@ -1034,10 +1049,15 @@ class TestLostLeaseIsKilledWhileTheHubIsUnreachable(FleetdBase):
     """
 
     def break_the_hub(self):
-        """Repoint the Hub at a path that is not a git repository. Every
-        subsequent read fails at the transport, through real git."""
+        """Make the hub unreachable in whichever shape `make_hub` built.
+        Bare: repoint the Hub at a path that is not a git repository, so
+        every subsequent read fails at the transport, through real git.
+        Server: `_fixtures.break_hub` stops the fixture keel-server
+        (connection refused on the primary) AND repoints the fallback Hub
+        at the dead path -- hub-unreachability THROUGH the production
+        FallbackHub shape, which is a real outage path, not a skip."""
         dead = self.tmp / "hub-is-gone.git"
-        self.hub.url = str(dead)
+        break_hub(self.hub, str(dead))
         self.assertFalse(dead.exists())
 
     def start_one_gate(self):
@@ -1272,7 +1292,15 @@ class TestReapDeadSameHostSingleton(FleetdBase):
         self.assertTrue(self.hub.update(ref, renewed_payload, stale_sha))
 
         import unittest.mock as mock
-        with mock.patch.object(fleetd.Hub, "sha", return_value=stale_sha):
+        # Patch the sha read on the CLASS OF THE FIXTURE HUB: plain Hub in
+        # bare mode (exactly the old `fleetd.Hub` patch), FallbackHub under
+        # FLEET_TEST_HUB=server -- where patching `fleetd.Hub` would miss
+        # the server route entirely, the reaper would read the RENEWED sha
+        # and its CAS would legitimately succeed, testing nothing. This way
+        # the reaper is fed the stale witness in both modes and the delete
+        # must be refused by the hub's own CAS (through the server, that is
+        # the server's CAS).
+        with mock.patch.object(type(self.hub), "sha", return_value=stale_sha):
             reaped = fleetd.reap_dead_same_host_singleton(
                 self.hub, self.host, ref, own_pid=os.getpid(),
                 marker_probe=lambda pgid, exclude_pid: None,

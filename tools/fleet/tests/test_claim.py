@@ -46,6 +46,7 @@ from claim import (  # noqa: E402
 )
 from fleetlib import Hub  # noqa: E402
 from _env import HermeticCase  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
 
 
 def _run_git(args, cwd=None, input_bytes=None):
@@ -76,7 +77,7 @@ class ClaimTestCase(HermeticCase):
         )
         self.assertNotIn("work2.oxidex.net", resolved)
 
-        self.hub = Hub(url=self.hub_path, workdir=self.workdir)
+        self.hub = make_hub(self, self.hub_path, workdir=self.workdir)
 
     def tearDown(self):
         shutil.rmtree(self._tmp_root, ignore_errors=True)
