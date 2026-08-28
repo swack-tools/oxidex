@@ -107,7 +107,7 @@ use crate::parsers::specialized::torrent::parse_torrent_metadata;
 use crate::parsers::specialized::x509::parse_x509_metadata;
 use crate::parsers::text::eps::parse_eps_metadata;
 use crate::parsers::text::html::parse_html_metadata;
-use crate::parsers::text::txt::parse_txt_metadata;
+use crate::parsers::text::txt::{parse_csv_metadata, parse_txt_metadata};
 use crate::parsers::text::vcf::parse_vcf_metadata;
 use crate::parsers::tiff::bigtiff::parse_bigtiff_metadata;
 use crate::parsers::video::asf::parse_asf_metadata;
@@ -257,6 +257,7 @@ pub fn dispatch_format_parser(
         FileFormat::HDF5 => convert_string_error(parse_hdf5_metadata(reader), "HDF5"),
         FileFormat::VCF => convert_string_error(parse_vcf_metadata(reader), "VCF"),
         FileFormat::TXT => convert_string_error(parse_txt_metadata(reader), "TXT"),
+        FileFormat::CSV => convert_string_error(parse_csv_metadata(reader), "CSV"),
         FileFormat::HTML => convert_string_error(parse_html_metadata(reader), "HTML"),
         FileFormat::LNK => convert_string_error(parse_lnk_metadata(reader), "LNK"),
         FileFormat::LFP => convert_string_error(parse_lytro_metadata(reader), "LFP"),
