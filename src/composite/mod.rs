@@ -16,6 +16,8 @@
 
 pub mod compute;
 mod generated_compute;
+mod lens_alternatives;
+mod lens_id;
 pub mod tables;
 
 pub use tables::{COMPOSITES, Composite};
@@ -145,6 +147,23 @@ fn resolve_dependency(map: &MetadataMap, key: &str) -> Option<String> {
     occurrence_value_string(occurrence)
 }
 
+/// The family-0 group of whichever occurrence wins the bare tag name `key`,
+/// under the same arbitration [`resolve_dependency`] uses for its value.
+///
+/// Exactly one Composite needs this: `Exif`'s primary `LensID`, whose ExifTool
+/// `PrintConv` is handed `$self` and reads `$$self{TAG_INFO}{LensType}
+/// {PrintConv}` (Exif.pm:5326) -- i.e. *which manufacturer's* LensType lookup
+/// produced the string, which no positional `$val[N]` carries. See
+/// [`lens_id`]'s module doc for why `Make` is not a substitute (a Samsung body
+/// writing `Pentax:LensType`).
+fn resolve_group0(map: &MetadataMap, key: &str) -> Option<String> {
+    let requested = [key.to_string()];
+    let resolved = crate::cli::tag_resolution::resolve_requested_tags(map, &requested, false);
+    let occurrence = resolved.into_iter().next()?.occurrence;
+    let group = occurrence.group0.as_ref().to_string();
+    (!group.is_empty()).then_some(group)
+}
+
 /// Resolve a composite input.
 ///
 /// An unqualified dependency is not a search across groups in ExifTool: it
@@ -203,6 +222,23 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // it once up front rather than per composite.
     let make = resolve(map, "Make");
     let file_type = resolve(map, "FileType");
+    // Which manufacturer's `LensType` lookup won the bare name -- the one piece
+    // of context `Composite:LensID` needs that a positional input cannot carry.
+    // Resolved once here rather than per pass; no Composite in this table
+    // produces a `LensType`, so it cannot change between passes.
+    let lens_type_group = resolve_group0(map, "LensType");
+    // `%Image::ExifTool::Olympus::Composite{LensType}` is
+    // `Require => {0 => 'LensTypeMake', 1 => 'LensTypeModel'}`,
+    // `ValueConv => '"$val[0] $val[1]"'`, `PrintConv => \%olympusLensTypes`.
+    // Both present is therefore exactly the condition under which ExifTool
+    // answers the bare `LensType` name from that table -- `'2 20 10' =>
+    // 'Lumix G Vario 12-32mm F3.5-5.6 Asph. Mega OIS'` (Olympus.pm:175) --
+    // rather than from Panasonic's own plain string. A zero *make* does not
+    // exempt a body: `PanasonicDC-GH7.jpg` is `0 20 10`. The table is not
+    // transcribed here, so `lens_id` refuses those bodies; see
+    // `lens_id::OMITTED`.
+    let olympus_lens_type_pair =
+        resolve(map, "LensTypeMake").is_some() && resolve(map, "LensTypeModel").is_some();
     // Composites this run produced, keyed by each definition's own index
     // into COMPOSITES -- NOT by `comp.name`. Two distinct table rows can
     // share one output Name (`Exif::LensID` and `Exif::LensID-2` both
@@ -315,7 +351,57 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             }
 
             let inputs: Vec<Option<&str>> = owned.iter().map(|o| o.as_deref()).collect();
-            if let Some(c) = compute::compute(comp.module, comp.name, &inputs, make.as_deref()) {
+            // `Composite:LensID` is the one definition whose ExifTool
+            // conversion is not a function of its positional inputs alone --
+            // it is handed `$self` and reads the winning LensType's own
+            // PrintConv identity back out of it (Exif.pm:5326). Both Exif rows
+            // that produce this Name are routed here rather than through
+            // `compute::compute`, which has no such context; see [`lens_id`].
+            let computed = if comp.module == "Exif" && comp.name == "LensID" {
+                if comp.require.is_empty() {
+                    // `LensID-2` (Exif.pm:5362-5385): the LensModel/Lens text
+                    // fallback, whose ValueConv and PrintConv genuinely differ.
+                    //
+                    // `Inhibit => {4 => 'Composite:LensID'}` (Exif.pm:5371-5373)
+                    // -- this row is suppressed outright whenever *any* module
+                    // already produced a `Composite:LensID`. A maker `LensType`
+                    // is exactly the condition under which one is: either the
+                    // Exif primary above fires on it, or a manufacturer's own
+                    // Composite does (`%Image::ExifTool::Nikon::Composite`
+                    // {LensID}, Nikon.pm:13222-13238, built from LensIDNumber +
+                    // 7 more raw tags against %nikonLensIDs; likewise Ricoh.pm
+                    // and XMP.pm).
+                    //
+                    // oxidex implements only the Exif rows, so when the primary
+                    // refuses -- a maker whose lookup tables are not transcribed
+                    // (see `lens_id::OMITTED`) -- ExifTool would still have
+                    // emitted a real lens name here while this fallback emits
+                    // the camera's raw `LensModel`/`Lens` text. That is the
+                    // plausible-but-wrong value AGENTS.md forbids: on
+                    // Nikon.nef the oracle says `AF-S DX Zoom-Nikkor 18-70mm
+                    // f/3.5-4.5G IF-ED` and the fallback says `18-70mm
+                    // f/3.5-4.5`. Omit and count it instead.
+                    if lens_type_group.is_some() {
+                        None
+                    } else {
+                        lens_id::compute_fallback(&inputs)
+                            .and_then(|(print, value)| compute::Computed::new(value, print))
+                    }
+                } else {
+                    // The primary (Exif.pm:5303-5360): PrintConv only, so the
+                    // value and print forms are the same string.
+                    lens_id::compute_primary(
+                        &inputs,
+                        lens_type_group.as_deref(),
+                        make.as_deref(),
+                        olympus_lens_type_pair,
+                    )
+                    .and_then(compute::Computed::same)
+                }
+            } else {
+                compute::compute(comp.module, comp.name, &inputs, make.as_deref())
+            };
+            if let Some(c) = computed {
                 // Count only genuine changes, so the fixpoint still terminates.
                 let changed = map.get_string(&key) != Some(c.print.as_str());
                 // Carrying the composite's own declared `Composite::priority`
@@ -896,22 +982,26 @@ mod tests {
 
     #[test]
     fn inhibited_lens_id_fallback_never_overwrites_the_primarys_answer() {
-        // Exif's primary LensID composite only has a narrow hand-written
-        // implementation today (the Canon "n/a"/65535 unknown-lens
-        // fallback, `compute::compute`'s `("Exif", "LensID")` arm) -- but
-        // that is enough to exercise the real Inhibit-gated ordering
-        // end-to-end: seed BOTH the primary's inputs (which fire) and
-        // LensID-2's own inputs (LensModel/Lens/Make, which would let it
-        // attempt to fire too), and confirm the primary's answer survives
-        // untouched. `pass_order` guarantees the primary is attempted
-        // first in this same pass; `Composite:LensID` being already
-        // populated is what then keeps LensID-2 from ever landing --
-        // whether via its own (currently absent) implementation or via a
-        // future one, this must stay true.
+        // Seed BOTH the primary's inputs (a real `%canonLensTypes` string
+        // with fractional alternatives) and LensID-2's own inputs
+        // (LensModel/Lens/Make, which would otherwise let it fire too), and
+        // confirm the primary's disambiguated answer survives untouched.
+        //
+        // These are `CanonEOS-1D.jpg`'s own values, and the expected string
+        // is what the pinned 13.59 oracle prints for that file -- note it is
+        // NOT the `Canon:LensType` text: `PrintLensID` narrows
+        // "... or Other Lens" down to the Sigma alternative using
+        // FocalLength/MaxAperture, which is the whole reason this composite
+        // cannot be an alias of LensType.
         let mut m = map_of(&[
-            ("ExifIFD:LensType", "n/a"),
-            ("ExifIFD:MinFocalLength", "18"),
-            ("ExifIFD:MaxFocalLength", "55"),
+            (
+                "Canon:LensType",
+                "Canon EF 28-70mm f/2.8L USM or Other Lens",
+            ),
+            ("ExifIFD:FocalLength", "47.0 mm"),
+            ("Canon:MaxAperture", "2.8"),
+            ("Canon:MinFocalLength", "28 mm"),
+            ("Canon:MaxFocalLength", "70 mm"),
             ("ExifIFD:LensModel", "EF 50mm f/1.8"),
             ("ExifIFD:Lens", "50mm F1.8"),
             ("IFD0:Make", "Canon"),
@@ -919,29 +1009,46 @@ mod tests {
         apply(&mut m);
         assert_eq!(
             m.get_string("Composite:LensID"),
-            Some("Unknown 18-55mm"),
+            Some("Canon EF 28-70mm f/2.8L USM or Sigma 28-70mm f/2.8 EX"),
             "the LensType-based primary must win, not the LensModel/Lens fallback"
         );
     }
 
+    /// With no `LensType` at all, nothing inhibits `LensID-2`
+    /// (Exif.pm:5371-5373), so the LensModel text fallback is the whole of
+    /// ExifTool's answer and oxidex must reproduce it.
     #[test]
-    fn lens_id_2_does_not_fire_without_the_primary_when_unimplemented() {
-        // Honest-state pin: LensID-2 has no computation of its own
-        // registered in compute.rs (it is listed in
-        // codegen_composite.py's "no registered computation" triage), so
-        // even when the primary genuinely cannot fire (no LensType at
-        // all) and LensID-2's own Inhibit target is absent -- meaning the
-        // Inhibit gate correctly lets it ATTEMPT -- Composite:LensID
-        // still ends up absent rather than silently wrong. This is the
-        // "refused and counted, never approximated" rule, not a bug: it
-        // stays true only until someone adds real LensID-2 logic.
+    fn lens_id_2_fires_when_no_lens_type_inhibits_it() {
         let mut m = map_of(&[
             ("ExifIFD:LensModel", "EF 50mm f/1.8"),
             ("ExifIFD:Lens", "50mm F1.8"),
             ("IFD0:Make", "Canon"),
         ]);
         apply(&mut m);
-        assert_eq!(m.get_string("Composite:LensID"), None);
+        assert_eq!(m.get_string("Composite:LensID"), Some("EF 50mm f/1.8"));
+    }
+
+    /// The regression this step exists to prevent: a maker `LensType` whose
+    /// lookup tables are NOT transcribed here (Nikon -- its real
+    /// `Composite:LensID` is `%Image::ExifTool::Nikon::Composite{LensID}`,
+    /// Nikon.pm:13222-13238) must leave the tag ABSENT, never fall through to
+    /// LensID-2's raw text. On `Nikon.nef` the oracle says `AF-S DX
+    /// Zoom-Nikkor 18-70mm f/3.5-4.5G IF-ED`; the fallback would say
+    /// `18-70mm f/3.5-4.5`.
+    #[test]
+    fn unimplemented_maker_lens_type_omits_rather_than_falling_back() {
+        let mut m = map_of(&[
+            ("Nikon:LensType", "G"),
+            ("Nikon:Lens", "18-70mm f/3.5-4.5"),
+            ("IFD0:Make", "NIKON CORPORATION"),
+        ]);
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:LensID"),
+            None,
+            "a maker LensType with no transcribed lookup must omit, not \
+             emit the raw Lens text"
+        );
     }
 }
 

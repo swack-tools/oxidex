@@ -36,7 +36,7 @@ pub struct Computed {
 
 impl Computed {
     /// A tag whose display form is its value form.
-    fn same(v: impl Into<String>) -> Option<Self> {
+    pub(super) fn same(v: impl Into<String>) -> Option<Self> {
         let v = v.into();
         Some(Computed {
             print: v.clone(),
@@ -45,7 +45,7 @@ impl Computed {
     }
 
     /// Distinct value and display forms.
-    fn new(value: impl Into<String>, print: impl Into<String>) -> Option<Self> {
+    pub(super) fn new(value: impl Into<String>, print: impl Into<String>) -> Option<Self> {
         Some(Computed {
             value: value.into(),
             print: print.into(),
@@ -1139,41 +1139,19 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::new(v.to_string(), print_fnumber(v))
         }
 
-        // Exif.pm's PrintLensID falls back to an unknown focal range when a
-        // Canon body records LensType as 65535 (displayed as `n/a`) and no
-        // lens lookup entry exists. Keep this narrow: known lens labels need
-        // the full model-matching routine and are intentionally left alone.
+        // `("Exif", "LensID")` -- BOTH Exif rows that produce the
+        // `Composite:LensID` Name (the `Require => 'LensType'` primary,
+        // Exif.pm:5303-5360, and the `LensID-2` LensModel/Lens fallback,
+        // Exif.pm:5362-5385) are dispatched by [`super::apply`] to
+        // [`super::lens_id`] instead of arriving here.
         //
-        // This arm is ALSO the dispatch target for the *other* Exif-module
-        // `LensID`: `LensID-2` (Exif.pm:5362-5385, `Desire => {0 =>
-        // 'LensModel', 1 => 'Lens', 2 => 'XMP-aux:LensID', 3 => 'Make'}`,
-        // `Inhibit => {4 => 'Composite:LensID'}`). Both rows share the
-        // `("Exif", "LensID")` key `compute()` is looked up by (its Name,
-        // not its ExifTool tagID -- `tables::Composite` has no separate
-        // tagID field), so a call arriving with `LensID-2`'s inputs lands
-        // here too, with `i[0]` holding LensModel instead of LensType. That
-        // is harmless rather than a silent misfire: `i.len()` for
-        // `LensID-2` is 4 (its highest Desire index is 3), so `get(i, 4)`
-        // and `get(i, 5)` are always out-of-bounds `None` for that call,
-        // and the `?` on `f(get(i, 4))` below returns `None` before
-        // `i[0]`'s value (whatever it means for that row) is ever used.
-        // `LensID-2` has no real implementation of its own -- it is
-        // deliberately absent from `compute()`, which is why the "no
-        // registered computation" triage in `codegen_composite.py` cannot
-        // see it: that check is precision-limited to the `(module, name)`
-        // dispatch key, and this is the one place in the whole Composite
-        // table where two distinct rows share one.
-        ("Exif", "LensID") => {
-            if !matches!(get(i, 0).map(str::trim), Some("n/a" | "N/A" | "65535")) {
-                return None;
-            }
-            let short = f(get(i, 4))?;
-            let long = f(get(i, 5))?;
-            if short <= 0.0 || long <= 0.0 {
-                return None;
-            }
-            Computed::same(format!("Unknown {:.0}-{:.0}mm", short, long))
-        }
+        // They are the one pair in the whole Composite table whose ExifTool
+        // conversion is not a function of its positional `$val[N]` inputs: the
+        // primary's PrintConv is handed `$self` and immediately reads
+        // `$$self{TAG_INFO}{LensType}{PrintConv}` (Exif.pm:5326) to find out
+        // *which manufacturer's* lookup produced the string it was given.
+        // `compute`'s signature has no way to carry that, which is why the arm
+        // lives elsewhere rather than here.
 
         // require: FocalLength; desire: ScaleFactor35efl
         // ValueConv: `($val[0] || 0) * ($val[1] || 1)`
@@ -2824,8 +2802,13 @@ mod tests {
         );
     }
 
+    /// `LensID` no longer reaches `compute` at all -- `super::apply` routes
+    /// both Exif rows to `super::lens_id`, which needs context this function's
+    /// signature cannot carry (see the `("Exif", "LensID")` note above). The
+    /// unknown-focal-range case this test used to pin now lives as
+    /// `lens_id::tests`, against the real `Canon::PrintLensID` fallback.
     #[test]
-    fn canon_unknown_lens_type_uses_focal_range_fallback() {
+    fn lens_id_is_not_dispatched_through_compute() {
         assert_eq!(
             compute(
                 "Exif",
@@ -2839,9 +2822,8 @@ mod tests {
                     Some("21.3125 mm"),
                 ],
                 Some("Canon"),
-            )
-            .map(|computed| computed.print),
-            Some("Unknown 7-21mm".to_string())
+            ),
+            None
         );
     }
 

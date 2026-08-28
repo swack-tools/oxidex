@@ -982,6 +982,38 @@ impl PanasonicParser {
                 );
                 return;
             }
+            // LensTypeMake (Panasonic.pm:1412-1416) and the two LensTypeModel
+            // ids (0xc5 at Panasonic.pm:1417-1424, 0xe4 at :1461-1470). Both
+            // are `Condition => '$format eq "int16u"'`; LensTypeMake
+            // additionally ignores make 65535 (`$$valPt ne "\xff\xff"`) and
+            // LensTypeModel is dropped when zero (`return undef unless $val`).
+            //
+            // ExifTool notes these two "are combined into a Composite LensType
+            // tag defined in Olympus.pm" (Panasonic.pm:1410-1411), which is
+            // also why `composite::lens_id` needs LensTypeMake: a non-zero
+            // make means %olympusLensTypes -- not Panasonic's own string --
+            // owns `Composite:LensID` for that body.
+            0x00c4 | 0x00c5 | 0x00e4 => {
+                if entry.field_type != 3 {
+                    return;
+                }
+                let raw = inline_u16_value(entry, byte_order);
+                if tag_id == 0x00c4 {
+                    if raw != 0xFFFF {
+                        tags.insert("Panasonic:LensTypeMake".to_string(), raw.to_string());
+                    }
+                } else if raw != 0 {
+                    // ValueConv: `sprintf("%.4x",$val); s/(..)(..)/$2 $1/` --
+                    // the two hex bytes printed low-then-high, e.g. 0x1020 ->
+                    // "20 10", which is the second half of %olympusLensTypes'
+                    // "$make $model" key.
+                    tags.insert(
+                        "Panasonic:LensTypeModel".to_string(),
+                        format!("{:02x} {:02x}", raw & 0xFF, raw >> 8),
+                    );
+                }
+                return;
+            }
             // TravelDay: 65535 means "n/a"
             0x0036 => {
                 let value = inline_u16_value(entry, byte_order);
