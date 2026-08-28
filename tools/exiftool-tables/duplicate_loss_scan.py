@@ -183,6 +183,10 @@ THE THREE DEFECTS, THEIR FIXTURES, AND WHAT GREEN WILL MEAN:
       through the suffixed flat-key insert shim instead of occurrence records
       carrying a TrackN group and an instance index, so per-track identity is
       destroyed at extraction time.
+      NOT a general absence of track awareness: the D3-control-b/-c fixtures
+      measure `TrackID` on the same file emerging correctly as four occurrences
+      grouped Track1..Track4, so the track-group machinery exists and works.
+      D3 is that this one write path bypasses it.
       GREEN = `MediaCreateDate` on CanonRaw.cr3 has FOUR occurrences whose
       family-1 groups are the ordered sequence Track1, Track2, Track3, Track4,
       every one emitted under the real ExifTool tag name.
@@ -235,6 +239,14 @@ INSTRUMENT SELF-CHECKS (why a red result is believable):
      agree. Without them a harness bug and a product bug are indistinguishable.
      A failing control is a HARDER failure than a failing defect fixture (exit
      3, not 1) and suppresses every product conclusion in the run.
+     A control must be able to FAIL FOR THE REASON THE DEFECT WOULD, or it is
+     decoration. `MajorBrand` alone was not good enough for D3: it is a
+     single-occurrence movie-level tag, so it cannot tell "per-track groups are
+     preserved" apart from "there is only one group to get right". `TrackID` is
+     the real D3 control -- four per-track occurrences that oxidex groups
+     correctly -- and it is asserted on name, value AND group ordering, not
+     merely on count. `MajorBrand` is kept as a weaker secondary control with
+     its limitation written into its own rationale rather than left implied.
 
 Known, deliberately-unasserted divergence: under the ungrouped projection oxidex
 emits `Make`'s two occurrences in the opposite source order from ExifTool
@@ -668,14 +680,49 @@ FIXTURES: tuple[Fixture, ...] = (
         checks=(COUNT, GROUP1_SEQ), cause=D3_CAUSE,
     ),
     Fixture(
-        fid="D3-control", defect="D3", kind="control",
+        fid="D3-control-a", defect="D3", kind="control",
         title="a movie-level QuickTime tag on the same file, same projection",
         path=CANON_CR3, tag="MajorBrand",
         projection="grouped", filtered=False,
         checks=(COUNT, GROUP1_SEQ, NAME_SEQ, VALUE_SEQ),
-        note=("Proves the harness reads family-1 groups out of the CR3's QuickTime "
-              "container and compares them correctly -- so D3's [QuickTime] x5 vs "
-              "[Track1..Track4] is a product result, not a group-parsing artifact."),
+        note=("Proves the harness reads a family-1 group out of the CR3's QuickTime "
+              "container at all. LIMITED ON PURPOSE, and insufficient by itself: "
+              "MajorBrand is a single-occurrence movie-level tag, so it cannot "
+              "distinguish 'per-track groups are preserved' from 'there is only one "
+              "group to get right'. It cannot fail for the reason D3 fails. "
+              "D3-control-b/-c are the controls that can."),
+    ),
+    Fixture(
+        fid="D3-control-b", defect="D3", kind="control",
+        title="FOUR per-track occurrences oxidex groups CORRECTLY -- the control that "
+              "can fail the way D3 fails",
+        path=CANON_CR3, tag="TrackID",
+        projection="grouped", filtered=False,
+        checks=(COUNT, GROUP1_SEQ, NAME_SEQ, VALUE_SEQ),
+        note=("Measured: both sides emit 4 occurrences, groups [Track1, Track2, Track3, "
+              "Track4], names all 'TrackID', values ['1','2','3','4'] in that order. "
+              "This is the control MajorBrand could not be: it exercises exactly the "
+              "multi-track group preservation D3 loses, and it would go red if the "
+              "harness could not see per-track grouping, or if oxidex flattened tracks "
+              "generally.\n"
+              "          It also SHARPENS D3's diagnosis rather than merely supporting "
+              "it: oxidex's QuickTime parser demonstrably CAN assign per-track family-1 "
+              "groups, and does so here. So D3 is not 'oxidex has no notion of tracks' "
+              "-- the notion exists and works. D3 is that MediaCreateDate is written "
+              "through the suffixed flat-key insert shim at metadata_extractor.rs:1072, "
+              "which bypasses the track-group machinery this control proves is present."),
+    ),
+    Fixture(
+        fid="D3-control-c", defect="D3", kind="control",
+        title="...and the same four survive an explicit -TAG request",
+        path=CANON_CR3, tag="TrackID",
+        projection="grouped", filtered=True,
+        checks=(COUNT, GROUP1_SEQ, NAME_SEQ, VALUE_SEQ),
+        note=("The filtered-surface twin of D3-control-b, and the same-surface control "
+              "for the D3-filtered red fixture, which would otherwise have had none: it "
+              "proves an explicit -TAG request CAN return four correctly-grouped "
+              "per-track occurrences, so D3-filtered's 4-vs-2 is not an artifact of "
+              "filtering per-track tags."),
     ),
 )
 
@@ -1115,6 +1162,20 @@ def main() -> int:
 
     if args.json_out:
         payload = {
+            # Self-describing identity, so the two projections in this file are
+            # machine-distinguishable and the claim that they are versioned
+            # independently is checkable rather than asserted in prose.
+            # Additive only: every pre-existing key below keeps its name and its
+            # value, and the text report is untouched. `schema_version` names
+            # the payload shape as it already stood -- it does not announce a
+            # change to it.
+            #
+            # NOTE this is not conformance.py's winner/display projection
+            # either. Three distinct measurements exist and must not be
+            # conflated: conformance.py's winner/display baseline,
+            # `duplicate_loss` here, and `occurrence` from --fixtures.
+            "schema_version": 1,
+            "projection": "duplicate_loss",
             "oracle": oracle.provenance(),
             "oxidex": str(binary.path),
             "commit": git.commit,
