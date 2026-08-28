@@ -41,7 +41,21 @@
 #      updated after one -- see classify_failure() and the cache
 #      lookup/store calls below.
 set -u
-GATE_VERSION="4"
+# GATE_VERSION bumped 4 -> 9: this pass changes gate BEHAVIOUR (the cache-hit
+# branch below now exits 1 on a cached non-PASS instead of exiting 0
+# unconditionally), so verdicts written under the old semantics must not be
+# served under the new ones. gate_version is part of the verdict-cache key
+# precisely so that never happens; tools/fleet/gate_version.txt carries the
+# same value for the Python consumers (verdict.py, claim.py, fleetd.py).
+#
+# Why 9 and not 5: this file exists on two lines that share one verdict cache.
+# The Keel line (staging/agent-server) already consumed 5, 6, 7 and sits at 8
+# for unrelated semantics (the fleet-tests stage, then its 1800s budget). Bumping
+# this line to 5 would mint a key whose number already means something else on
+# the other line -- a silent cross-line cache hit with different gate semantics,
+# which is the exact failure the key is designed to prevent. 9 is the first
+# value unused by either line.
+GATE_VERSION="9"
 BRANCH="$1"; TAG="$2"
 START_TS=$(date +%s)
 HOST=$(hostname)
@@ -232,7 +246,17 @@ if [ "$CACHE_STATUS" -eq 0 ] && [ -n "$CACHED_JSON" ]; then
     echo "GATE CACHE HIT $TAG -> $CACHED_RESULT (tree $TREE_SHA)" >> "$L"
     echo "GATE DONE $TAG" >> "$L"
     rm -rf "$CARGO_TARGET_DIR" "$D"
-    exit 0
+    # A cache hit must exit with the SAME status a fresh run of that verdict
+    # would. This previously `exit 0`-ed unconditionally, so a cached FAIL
+    # wrote "FAIL cache-hit" into the verdict file and then reported success
+    # to its caller -- a re-gate of a known-bad tree passes silently, and the
+    # verdict file (which fleetd reads) and the exit status (which a human or
+    # a shell `&&` reads) disagree. Fresh failures exit 1 via `fail()`; a
+    # cached PASS is the only 0.
+    if [ "$CACHED_RESULT" = "PASS" ]; then
+      exit 0
+    fi
+    exit 1
   fi
 fi
 
