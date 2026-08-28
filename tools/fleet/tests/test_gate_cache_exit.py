@@ -21,11 +21,15 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 FLEET = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(FLEET / "tests"))
+
+from _env import HermeticCase  # noqa: E402
 GATE_SH = FLEET / "gate.sh"
 VERSION_TXT = FLEET / "gate_version.txt"
 
@@ -43,7 +47,7 @@ def _cache_block() -> str:
     return text[start:end] + "  fi\n"
 
 
-class TestCacheHitExitStatus(unittest.TestCase):
+class TestCacheHitExitStatus(HermeticCase):
     """The four verdicts a cache lookup can produce, plus a malformed payload."""
 
     def _run(self, cached_json: str) -> tuple[int, str]:
@@ -104,7 +108,7 @@ exit 42  # sentinel: reached only when the block did NOT exit
                 )
 
 
-class TestFullScriptCacheChain(unittest.TestCase):
+class TestFullScriptCacheChain(HermeticCase):
     """The whole chain, not just the branch: real gate.sh, real verdict lookup.
 
     WHY THIS EXISTS. `TestCacheHitExitStatus` above extracts the INNER cache
@@ -201,7 +205,7 @@ class TestFullScriptCacheChain(unittest.TestCase):
                 )
 
 
-class TestGateVersionIsSpelledOnceEffectively(unittest.TestCase):
+class TestGateVersionIsSpelledOnceEffectively(HermeticCase):
     """gate.sh and gate_version.txt must agree.
 
     Two spellings of one constant, with nothing pinning them together, is how

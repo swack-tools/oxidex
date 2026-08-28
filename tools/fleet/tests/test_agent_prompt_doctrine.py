@@ -57,7 +57,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import agentworker
+import agentworker  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 
 # Representative arguments, mirroring what agentworker.run() actually passes.
 TIP_SHA = "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567"
@@ -81,7 +82,7 @@ def _around(haystack: str, needle: str, pad: int = 90) -> str:
     return haystack[max(0, i - pad):i + len(needle) + pad].replace("\n", " ")
 
 
-class ClauseAssertions(unittest.TestCase):
+class ClauseAssertions(HermeticCase):
     """assertIn/assertNotIn print the entire multi-KB prompt before the
     message, so the one line a reader needs scrolls off. These report the
     clause and nothing else."""
@@ -143,6 +144,7 @@ class RenderedPromptsTest(ClauseAssertions):
     """Both prompts render; the f-strings actually interpolate."""
 
     def setUp(self):
+        super().setUp()
         self.converge = agentworker.build_prompt(BRANCH, HUB_URL, TIP_SHA, HOST)
         self.authoring = agentworker.build_authoring_prompt(
             SLUG, INTENT, HUB_URL, TIP_SHA, HOST)
@@ -198,6 +200,7 @@ class ContentConditionalRulePresentTest(ClauseAssertions):
     (5c3df01f). Each needle is one clause the defect deleted."""
 
     def setUp(self):
+        super().setUp()
         self.prompt = agentworker.build_prompt(BRANCH, HUB_URL, TIP_SHA, HOST)
 
     def test_captures_base_and_branch_before(self):
@@ -251,6 +254,7 @@ class DefectiveAncestorsAbsentTest(ClauseAssertions):
     the likeliest way it comes back."""
 
     def setUp(self):
+        super().setUp()
         self.prompts = {
             "build_prompt": agentworker.build_prompt(BRANCH, HUB_URL, TIP_SHA, HOST),
             "build_authoring_prompt": agentworker.build_authoring_prompt(
@@ -303,6 +307,7 @@ class GuardrailsPresentTest(ClauseAssertions):
     """The other hard rules the prompts are the only carrier of."""
 
     def setUp(self):
+        super().setUp()
         self.prompts = {
             "build_prompt": agentworker.build_prompt(BRANCH, HUB_URL, TIP_SHA, HOST),
             "build_authoring_prompt": agentworker.build_authoring_prompt(
