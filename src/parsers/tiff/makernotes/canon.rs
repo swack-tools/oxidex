@@ -740,6 +740,18 @@ fn join_i16_slice(values: &[i16]) -> String {
         .join(" ")
 }
 
+/// Reads one slot of a `%Canon::AFInfo*` serial record back as the `int16u` the
+/// table's `FORMAT` declares (Canon.pm:6436, Canon.pm:6507).
+///
+/// The extractor hands these records over as `i16` because most of their named
+/// slots are `Format => 'int16s[...]'` coordinate arrays, but the two
+/// `PrimaryAFPoint` slots carry no `Format` of their own and so inherit the
+/// table's unsigned one. The difference is not academic: a PowerShot SX740 HS
+/// writes 0xffff there and ExifTool prints `65535`, not `-1`.
+fn af_info_slot_as_int16u(value: i16) -> String {
+    u16::from_ne_bytes(value.to_ne_bytes()).to_string()
+}
+
 /// Drops the stray leading element from a Canon binary record that was read one slot early.
 ///
 /// Every `%Canon` record with `FIRST_ENTRY => 1` (CameraSettings, ShotInfo, Processing,
@@ -1121,6 +1133,16 @@ const AF_INFO_AF_AREA_WIDTH: usize = 6;
 const AF_INFO_AF_AREA_HEIGHT: usize = 7;
 /// First variable-length slot of `%Canon::AFInfo` (Perl key 8, `AFAreaXPositions`).
 const AF_INFO_VARIABLE_START: usize = 8;
+/// The one `$$self{AFInfoCount}` value that routes key 11 to `Canon_AFInfo_0x000b`
+/// instead of `PrimaryAFPoint` (Canon.pm:6487: `$$self{AFInfoCount} != 36`).
+///
+/// A PowerShot G3's tag 0x12 is `int16u[36]`: 8 scalars + 9 `AFAreaXPositions` +
+/// 9 `AFAreaYPositions` + 1 `AFPointsInFocus` word = 27, then the 8 unknown words
+/// of key 11, then key 12's `PrimaryAFPoint` as word 36. A PowerShot A400 writes
+/// `int16u[28]` for the same NumAFPoints = 9 and has no room for either.
+const AF_INFO_COUNT_WITH_UNKNOWN_TAIL: u32 = 36;
+/// `Format => 'int16u[8]'` on `Canon_AFInfo_0x000b` (Canon.pm:6492).
+const AF_INFO_UNKNOWN_TAIL_WORDS: usize = 8;
 
 // AFInfo2 sequence indices (tag 0x0026)
 //
@@ -6570,6 +6592,11 @@ fn parse_canon_makernote_impl_located_with_values(
                     if let Some(&points) = array.get(AF_INFO_NUM_AF_POINTS) {
                         tags.insert("Canon:NumAFPoints".to_string(), points.to_string());
                     }
+                    // `$$self{AFInfoCount} = $count` (Canon.pm:1601) -- the IFD entry's
+                    // own count field, stashed by tag 0x12's "not really a condition"
+                    // Condition and read back at Canon.pm:6487. Real files write the
+                    // entry as `int16u[N]`, so this is the record's word count.
+                    let af_info_count = entry.value_count;
 
                     // ValidAFPoints (key 1), CanonImageWidth (key 2), CanonImageHeight
                     // (key 3) - scalars ExifTool reports alongside the AF geometry.
@@ -6622,6 +6649,55 @@ fn parse_canon_makernote_impl_located_with_values(
                                 "Canon:AFPointsInFocus".to_string(),
                                 decode_bits_16(&array[focus_start..focus_start + focus_words]),
                             );
+                        }
+
+                        // Keys 11-12 -- the tail slot the serial walk stopped short of.
+                        //
+                        // Key 11 is a Condition list (Canon.pm:6483-6497). ExifTool's
+                        // `GetTagInfo` returns undef when no branch matches and
+                        // `ProcessSerialData` then does `or last` (Canon.pm:10543), which
+                        // is what the Perl's "(serial processing stops here for EOS
+                        // cameras)" comment at Canon.pm:6496 means: an EOS body reaches
+                        // key 11, matches neither branch, and the record ends. Both
+                        // branches require `$$self{Model} !~ /EOS/`.
+                        if !camera_info_model.contains("EOS") {
+                            let after_focus = focus_start + focus_words;
+                            if af_info_count == AF_INFO_COUNT_WITH_UNKNOWN_TAIL {
+                                // Branch 2 (Canon.pm:6489-6495): `Canon_AFInfo_0x000b`,
+                                // `Format => 'int16u[8]'`, `Unknown => 1`. ExifTool never
+                                // prints it (ProcessSerialData restores the caller's
+                                // Unknown option before the `FoundTag` gate at
+                                // Canon.pm:10585) but it does advance the cursor 8 words,
+                                // after which key 12 (Canon.pm:6499) is a plain
+                                // `PrimaryAFPoint`. This is the "some PowerShot 9-point
+                                // systems put PrimaryAFPoint after 8 unknown values" case
+                                // named at Canon.pm:6488.
+                                let primary = after_focus + AF_INFO_UNKNOWN_TAIL_WORDS;
+                                if let Some(&value) = array.get(primary) {
+                                    tags.insert(
+                                        "Canon:PrimaryAFPoint".to_string(),
+                                        af_info_slot_as_int16u(value),
+                                    );
+                                }
+                            } else if let Some(&value) = array.get(after_focus) {
+                                // Branch 1 (Canon.pm:6484-6488): `PrimaryAFPoint` right
+                                // here, one `int16u` under the table's `FORMAT`.
+                                //
+                                // Key 12 is deliberately not also read in this branch.
+                                // On every corpus file that takes it the record ends
+                                // exactly here (A400: `int16u[28]`, 8 scalars + 9 + 9 + 1
+                                // = 27 words consumed, key 11 takes the 28th), so
+                                // `last if $pos + $len > $size` (Canon.pm:10552) fires and
+                                // ExifTool never reaches key 12. A hypothetical longer
+                                // record would make ExifTool emit PrimaryAFPoint twice;
+                                // which of the two duplicates it then prefers is not
+                                // observable in this corpus, so that case is left alone
+                                // rather than guessed at.
+                                tags.insert(
+                                    "Canon:PrimaryAFPoint".to_string(),
+                                    af_info_slot_as_int16u(value),
+                                );
+                            }
                         }
                     }
                 }
@@ -6713,15 +6789,50 @@ fn parse_canon_makernote_impl_located_with_values(
                             );
                         }
                         let selected_start = focus_start + focus_words;
-                        if camera_info_model.contains("EOS")
-                            && array.len() >= selected_start + focus_words
-                        {
-                            tags.insert(
-                                "Canon:AFPointsSelected".to_string(),
-                                decode_bits_16(
-                                    &array[selected_start..selected_start + focus_words],
-                                ),
-                            );
+                        if camera_info_model.contains("EOS") {
+                            if array.len() >= selected_start + focus_words {
+                                tags.insert(
+                                    "Canon:AFPointsSelected".to_string(),
+                                    decode_bits_16(
+                                        &array[selected_start..selected_start + focus_words],
+                                    ),
+                                );
+                            }
+                        } else {
+                            // Key 13's second branch (Canon.pm:6595-6599),
+                            // `Canon_AFInfo2_0x000d`: no Condition, so a non-EOS body
+                            // always lands here, and its
+                            // `Format => 'int16s[int(($val{2}+15)/16)+1]'` is one word
+                            // WIDER than the EOS branch's AFPointsSelected. It carries
+                            // `Unknown => 1` so ExifTool prints nothing for it, but
+                            // ProcessSerialData still advances the cursor past it
+                            // (Canon.pm:10585 gates only the FoundTag, not the `$pos +=
+                            // $len` at Canon.pm:10592). Missing that extra word is why
+                            // key 14 was never reached.
+                            //
+                            // Key 14 (Canon.pm:6600-6604) is then `PrimaryAFPoint`,
+                            // Condition `$$self{Model} !~ /EOS/ and not $$self{AFInfo3}`
+                            // -- one `int16u` under the table's `FORMAT => 'int16u'`
+                            // (Canon.pm:6507), with no PrintConv, so the raw word is the
+                            // printed value. A PowerShot SX740 HS writes 65535 there,
+                            // which is why it is read unsigned rather than through the
+                            // i16 the rest of this record uses.
+                            //
+                            // `$$self{AFInfo3}` is a per-file sticky flag set by tag
+                            // 0x3c's own Condition (Canon.pm:1766), not a per-record one.
+                            // Testing this entry's tag id instead is equivalent here
+                            // because 0x26 sorts before 0x3c in the IFD, so a file
+                            // carrying both would still see the flag clear while 0x26 is
+                            // processed -- and no corpus file carries both anyway.
+                            let primary = selected_start + focus_words + 1;
+                            if entry.tag_id != CANON_AF_INFO3
+                                && let Some(&value) = array.get(primary)
+                            {
+                                tags.insert(
+                                    "Canon:PrimaryAFPoint".to_string(),
+                                    af_info_slot_as_int16u(value),
+                                );
+                            }
                         }
                     }
                 }
@@ -8026,7 +8137,19 @@ mod tests {
         ];
         let data = canon_makernote_with_short_array(0x0012, &af_info);
 
-        let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
+        // The Model matters: `%Canon::AFInfo` key 11 is a Condition list whose
+        // every branch requires `$$self{Model} !~ /EOS/` (Canon.pm:6483-6497), so
+        // on this body `GetTagInfo` returns undef, `ProcessSerialData` does
+        // `or last` (Canon.pm:10543), and the record ends before PrimaryAFPoint.
+        // Passing no model at all would let the non-EOS branch run and invent a
+        // tag the real file does not have -- `exiftool -s3 -PrimaryAFPoint
+        // CanonRaw.cr2` prints nothing.
+        let result = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon EOS 350D DIGITAL"),
+        )
+        .unwrap();
 
         // Literal strings below are exactly what
         // `exiftool -s -G1 CanonRaw.cr2` prints for this record.
@@ -8046,6 +8169,100 @@ mod tests {
         assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"3".to_string()));
         // %Canon::AFInfo has no AFPointsSelected key - it must not be invented.
         assert_eq!(result.get("Canon:AFPointsSelected"), None);
+        // Serial processing stopped at key 11 (Canon.pm:6496).
+        assert_eq!(result.get("Canon:PrimaryAFPoint"), None);
+    }
+
+    /// `%Canon::AFInfo` key 11, branch 1 (Canon.pm:6484-6488): a non-EOS body whose
+    /// `$$self{AFInfoCount}` is not 36 reads `PrimaryAFPoint` immediately after
+    /// `AFPointsInFocus`.
+    ///
+    /// Byte-for-byte the CanonAFInfo record of
+    /// `/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotA400.jpg`,
+    /// as dumped by the pinned `exiftool -v3`:
+    ///
+    /// ```text
+    ///   | | |     - Tag 0x0012 (56 bytes, int16u[28] read as undef[56]):
+    ///   | | |         0550: 09 00 09 00 00 08 00 06 00 08 00 01 71 01 2e 00
+    ///   | | |         0560: 8e fe 00 00 72 01 8e fe 00 00 72 01 8e fe 00 00
+    ///   | | |         0570: 72 01 cf ff cf ff cf ff 00 00 00 00 00 00 31 00
+    ///   | | |         0580: 31 00 31 00 02 00 01 00
+    /// ```
+    ///
+    /// `exiftool -s3 -T -Model -NumAFPoints -ValidAFPoints -AFPointsInFocus
+    /// -PrimaryAFPoint` on that file prints
+    /// `Canon PowerShot A400 <TAB> 9 <TAB> 9 <TAB> 1 <TAB> 1`.
+    #[test]
+    fn af_info_reads_primary_af_point_in_place_when_count_is_not_36() {
+        let af_info: Vec<i16> = vec![
+            9, 9, 2048, 1536, 2048, 256, 369, 46, // keys 0-7
+            -370, 0, 370, -370, 0, 370, -370, 0, 370, // key 8: AFAreaXPositions[9]
+            -49, -49, -49, 0, 0, 0, 49, 49, 49, // key 9: AFAreaYPositions[9]
+            2,  // key 10: AFPointsInFocus, bit 1
+            1,  // key 11: PrimaryAFPoint
+        ];
+        assert_eq!(af_info.len(), 28, "the A400 writes int16u[28]");
+        let data = canon_makernote_with_short_array(0x0012, &af_info);
+
+        let result = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon PowerShot A400"),
+        )
+        .unwrap();
+
+        assert_eq!(result.get("Canon:NumAFPoints"), Some(&"9".to_string()));
+        assert_eq!(result.get("Canon:ValidAFPoints"), Some(&"9".to_string()));
+        assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"1".to_string()));
+        assert_eq!(result.get("Canon:PrimaryAFPoint"), Some(&"1".to_string()));
+    }
+
+    /// `%Canon::AFInfo` key 11, branch 2 (Canon.pm:6489-6495): when
+    /// `$$self{AFInfoCount}` IS 36, key 11 is the eight-word `Canon_AFInfo_0x000b`
+    /// and `PrimaryAFPoint` is key 12 (Canon.pm:6499) eight words further on. This
+    /// is the "some PowerShot 9-point systems put PrimaryAFPoint after 8 unknown
+    /// values" case of Canon.pm:6488.
+    ///
+    /// Byte-for-byte the CanonAFInfo record of
+    /// `/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotG3.jpg`:
+    ///
+    /// ```text
+    ///   | | |     - Tag 0x0012 (72 bytes, int16u[36] read as undef[72]):
+    ///   | | |         052c: 09 00 01 00 80 02 e0 01 e0 08 d4 00 99 01 26 00
+    ///   | | |         053c: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    ///   | | |         054c: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    ///   | | |         055c: 00 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00
+    ///   | | |         056c: 00 00 00 00 00 00 00 00
+    /// ```
+    ///
+    /// `exiftool -s3 -T -Model -NumAFPoints -ValidAFPoints -AFPointsInFocus
+    /// -PrimaryAFPoint` on that file prints
+    /// `Canon PowerShot G3 <TAB> 9 <TAB> 1 <TAB> 0 <TAB> 0`.
+    #[test]
+    fn af_info_skips_the_eight_unknown_words_when_count_is_36() {
+        let mut af_info: Vec<i16> = vec![9, 1, 640, 480, 2272, 212, 409, 38];
+        af_info.extend(std::iter::repeat_n(0i16, 9)); // key 8: AFAreaXPositions[9]
+        af_info.extend(std::iter::repeat_n(0i16, 9)); // key 9: AFAreaYPositions[9]
+        af_info.push(1); // key 10: AFPointsInFocus, bit 0
+        af_info.extend(std::iter::repeat_n(0i16, 8)); // key 11: Canon_AFInfo_0x000b
+        af_info.push(0); // key 12: PrimaryAFPoint
+        assert_eq!(af_info.len(), 36, "the G3 writes int16u[36]");
+        let data = canon_makernote_with_short_array(0x0012, &af_info);
+
+        let result = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon PowerShot G3"),
+        )
+        .unwrap();
+
+        assert_eq!(result.get("Canon:NumAFPoints"), Some(&"9".to_string()));
+        assert_eq!(result.get("Canon:ValidAFPoints"), Some(&"1".to_string()));
+        assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"0".to_string()));
+        assert_eq!(result.get("Canon:PrimaryAFPoint"), Some(&"0".to_string()));
+        // `Canon_AFInfo_0x000b` carries `Unknown => 1`, so ExifTool prints it only
+        // under -u. It must not leak out under its real name either.
+        assert_eq!(result.get("Canon:Canon_AFInfo_0x000b"), None);
     }
 
     /// Mirrors the AFInfo2 record of
@@ -8091,6 +8308,153 @@ mod tests {
             Some(&vec!["168"; n].join(" "))
         );
         assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"13".to_string()));
+    }
+
+    /// Byte-for-byte the AFInfo2 record of
+    /// `/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotSD880IS.jpg`,
+    /// as dumped by the pinned `exiftool -v3`:
+    ///
+    /// ```text
+    ///   | | |     - Tag 0x0026 (96 bytes, int16u[48] read as undef[96]):
+    ///   | | |         07c8: 60 00 04 00 09 00 09 00 40 06 b0 04 64 00 64 00
+    ///   | | |         07d8: 12 00 12 00 12 00 12 00 12 00 12 00 12 00 12 00
+    ///   | | |         07e8: 12 00 12 00 12 00 12 00 12 00 12 00 12 00 12 00
+    ///   | | |         07f8: 12 00 12 00 ee ff 00 00 12 00 ee ff 00 00 12 00
+    ///   | | |         0808: ee ff 00 00 12 00 ee ff ee ff ee ff 00 00 00 00
+    ///   | | |         0818: 00 00 12 00 12 00 12 00 10 00 00 00 00 00 04 00
+    ///   | | | | 13) Canon_AFInfo2_0x000d = 0 0
+    /// ```
+    ///
+    /// `exiftool -s3 -T -Model -NumAFPoints -AFPointsInFocus -PrimaryAFPoint` on
+    /// that file prints `Canon PowerShot SD880 IS <TAB> 9 <TAB> 4 <TAB> 4`.
+    ///
+    /// The two-word `Canon_AFInfo2_0x000d` in the verbose dump is the whole point:
+    /// key 13's non-EOS branch is `int16s[int(($val{2}+15)/16)+1]` (Canon.pm:6597),
+    /// one word wider than the EOS branch, and `PrimaryAFPoint` is the word after.
+    #[test]
+    fn af_info2_reads_primary_af_point_past_the_wider_unknown_slot() {
+        let n = 9usize;
+        let mut af_info2: Vec<i16> = vec![
+            96,   // key 0: AFInfoSize
+            4,    // key 1: AFAreaMode -> 'Auto'
+            9,    // key 2: NumAFPoints
+            9,    // key 3: ValidAFPoints
+            1600, // key 4: CanonImageWidth
+            1200, // key 5: CanonImageHeight
+            100,  // key 6: AFImageWidth
+            100,  // key 7: AFImageHeight
+        ];
+        af_info2.extend(std::iter::repeat_n(18i16, n)); // key 8: AFAreaWidths
+        af_info2.extend(std::iter::repeat_n(18i16, n)); // key 9: AFAreaHeights
+        af_info2.extend_from_slice(&[-18, 0, 18, -18, 0, 18, -18, 0, 18]); // key 10
+        af_info2.extend_from_slice(&[-18, -18, -18, 0, 0, 0, 18, 18, 18]); // key 11
+        af_info2.push(0x0010); // key 12: AFPointsInFocus, bit 4
+        af_info2.extend_from_slice(&[0, 0]); // key 13: Canon_AFInfo2_0x000d
+        af_info2.push(4); // key 14: PrimaryAFPoint
+        assert_eq!(af_info2.len(), 48, "the SD880 IS writes int16u[48]");
+        let data = canon_makernote_with_short_array(0x0026, &af_info2);
+
+        let result = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon PowerShot SD880 IS"),
+        )
+        .unwrap();
+
+        assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"4".to_string()));
+        assert_eq!(result.get("Canon:PrimaryAFPoint"), Some(&"4".to_string()));
+        // Key 13's AFPointsSelected branch is `Condition => '$$self{Model} =~ /EOS/'`
+        // (Canon.pm:6592); a PowerShot must not get one.
+        assert_eq!(result.get("Canon:AFPointsSelected"), None);
+    }
+
+    /// `PrimaryAFPoint` is `int16u` under `%Canon::AFInfo2`'s `FORMAT`
+    /// (Canon.pm:6507) with no PrintConv, so the raw word prints unsigned.
+    ///
+    /// Byte-for-byte the tail of the AFInfo2 record of
+    /// `/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotSX740HS.jpg`:
+    ///
+    /// ```text
+    ///   | | |     - Tag 0x0026 (96 bytes, int16u[48] read as undef[96]):
+    ///   | | |         0d5e: 00 00 00 00 00 00 00 00 01 00 01 00 00 00 ff ff
+    ///   | | | | 13) Canon_AFInfo2_0x000d = 1 0
+    /// ```
+    ///
+    /// `exiftool -s3 -T -Model -AFPointsInFocus -PrimaryAFPoint` prints
+    /// `Canon PowerShot SX740 HS <TAB> 0 <TAB> 65535`. Reading that last word
+    /// through the `i16` the rest of the record uses would print `-1`.
+    #[test]
+    fn af_info2_primary_af_point_is_unsigned() {
+        let n = 9usize;
+        let mut af_info2: Vec<i16> = vec![96, 0, 9, 1, 5184, 3888, 5184, 3888];
+        af_info2.extend(std::iter::repeat_n(0i16, 4 * n)); // keys 8-11
+        af_info2.push(1); // key 12: AFPointsInFocus, bit 0
+        af_info2.extend_from_slice(&[1, 0]); // key 13: Canon_AFInfo2_0x000d
+        af_info2.push(-1); // key 14: PrimaryAFPoint, 0xffff
+        assert_eq!(af_info2.len(), 48, "the SX740 HS writes int16u[48]");
+        let data = canon_makernote_with_short_array(0x0026, &af_info2);
+
+        let result = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon PowerShot SX740 HS"),
+        )
+        .unwrap();
+
+        assert_eq!(result.get("Canon:AFPointsInFocus"), Some(&"0".to_string()));
+        assert_eq!(
+            result.get("Canon:PrimaryAFPoint"),
+            Some(&"65535".to_string())
+        );
+    }
+
+    /// Key 14's Condition is `$$self{Model} !~ /EOS/ and not $$self{AFInfo3}`
+    /// (Canon.pm:6602). Both halves have to bite.
+    ///
+    /// The `AFInfo3` half is the G1XmkII case the Perl's own comment names: a
+    /// PowerShot, so the model half passes, reading `%Canon::AFInfo2` through tag
+    /// 0x3c (Canon.pm:1764-1771) rather than 0x26. `exiftool -s3 -T -Model
+    /// -NumAFPoints -PrimaryAFPoint
+    /// /tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotG1X_MarkII.jpg`
+    /// prints `Canon PowerShot G1 X Mark II <TAB> 35 <TAB> -`.
+    #[test]
+    fn af_info2_withholds_primary_af_point_for_eos_and_for_af_info3() {
+        let n = 9usize;
+        let mut record: Vec<i16> = vec![96, 2, 9, 9, 5184, 3456, 5184, 3456];
+        record.extend(std::iter::repeat_n(0i16, 4 * n)); // keys 8-11
+        record.push(1); // key 12: AFPointsInFocus
+        record.extend_from_slice(&[7, 0]); // key 13
+        record.push(3); // key 14 slot
+
+        // EOS body under tag 0x26: key 13 is AFPointsSelected instead, and key 14's
+        // Condition fails, so serial processing ends there.
+        let eos = parse_canon_makernote_impl_with_model(
+            &canon_makernote_with_short_array(0x0026, &record),
+            ByteOrder::LittleEndian,
+            Some("Canon EOS R6m2"),
+        )
+        .unwrap();
+        assert_eq!(eos.get("Canon:PrimaryAFPoint"), None);
+        // `DecodeBits` with no lookup joins on a bare comma (ExifTool.pm:6362);
+        // `exiftool -s3 -AFPointsSelected CanonEOS_REBEL_T1i.jpg` prints `4,8`.
+        assert_eq!(
+            eos.get("Canon:AFPointsSelected"),
+            Some(&"0,1,2".to_string())
+        );
+
+        // PowerShot body, same record, but arriving under tag 0x3c -- which sets
+        // `$$self{AFInfo3}` (Canon.pm:1766) and so also fails key 14's Condition.
+        let af_info3 = parse_canon_makernote_impl_with_model(
+            &canon_makernote_with_short_array(0x003C, &record),
+            ByteOrder::LittleEndian,
+            Some("Canon PowerShot G1 X Mark II"),
+        )
+        .unwrap();
+        assert_eq!(af_info3.get("Canon:PrimaryAFPoint"), None);
+        assert_eq!(
+            af_info3.get("Canon:AFPointsInFocus"),
+            Some(&"0".to_string())
+        );
     }
 
     /// Byte-for-byte the SensorInfo record of `CanonRaw.cr2`, as dumped by
