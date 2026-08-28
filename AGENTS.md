@@ -114,7 +114,9 @@ result argues *against* adding a safety check, re-run it with the tool the
 harness itself uses before believing it.
 
 Five more, one session, each a proxy standing in for the thing being
-measured, made mechanical below rather than left as a story:
+measured, made mechanical below rather than left as a story. Five more again
+followed, another session, same shape — the list keeps growing because the
+instrument keeps lying in a new way, not because the old ways stopped:
 
 1. **Implicit binary resolution.** `jpeg-tag-matrix` resolved oxidex from
    `$repo/target/release/oxidex` by convention while `CARGO_TARGET_DIR` was
@@ -145,6 +147,41 @@ measured, made mechanical below rather than left as a story:
    on five consecutive failed pushes — `&&` sees `tail`'s exit status, which
    is almost always 0, never `git push`'s. Check `${PIPESTATUS[0]}` (bash) or
    avoid the pipe.
+6. **A global start-method flip masqueraded as a hang.** A test module's
+   import-time `multiprocessing.set_start_method("fork", force=True)` flipped
+   the whole suite process to fork; under the server fixture the thread-heavy
+   parent then deadlocked in a semaphore cloned while held, hanging the suite
+   past the gate's wall-clock budget. A green suite and a hung suite were the
+   same code — the gate result depended on which module got imported first.
+   Fix: no global start-method flips; every pool passes its own `mp_context`;
+   a test asserts that importing the suite does not change
+   `multiprocessing.get_start_method()`.
+7. **Hermetic tests inherited the ambient environment.** Fixtures read
+   `FLEET_HUB_URL` et al. from the real environment instead of their temp
+   repos — green on the developer's laptop, red only on the gate host, and
+   the failure text blamed a merge conflict. Fix: `tests/_env.py` scrubs
+   `FLEET_*`/`KEEL_*`/`EXIFTOOL_CACHE_DIR`/`GIT_SSH_COMMAND` for every
+   fixture, plus a fence test that runs the suite with hostile values
+   exported and requires green.
+8. **A macOS-only green suite hid two Linux-deterministic bugs.** GNU vs BSD
+   `stat` argument order, and `/bin/sh` being dash, not bash. The suite had
+   never run on Linux because the gate stage that runs it did not exist yet.
+   Fix: dual-platform before "green" means anything; spell `bash` explicitly
+   when using bash syntax.
+9. **A `ps` column that lies on one platform.** `ps -o sess=` prints 0 for
+   every process on macOS (a masked kernel address), so a session-based
+   process check silently no-ops there while working on Linux. Fix: use the
+   `getsid(2)` syscall; never trust a `ps` column not verified on both
+   platforms.
+10. **A mangled refspec produced a confident, wrong diagnosis.**
+    `"$SHA:refs/..."` in zsh applies the `:r` modifier and mangles the
+    refspec, which produced a confident "the credential lacks write
+    permission" — the credential was fine. A second attempt failed because
+    the probe ran in a repo that did not contain the object being pushed. Two
+    broken instruments in a row, both wrong in the direction already
+    expected. Fix: brace refspec variables (`"${SHA}:refs/heads/x"`); and
+    when a probe reports a permission failure, first prove the probe itself
+    is well-formed against a known-good case.
 
 Every measurement script under `tools/exiftool-tables/` and
 `src/bin/jpeg-tag-matrix/` prints an `=== instrument: <tool> ===` header
