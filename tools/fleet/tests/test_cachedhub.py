@@ -36,6 +36,11 @@ sys.path.insert(0, str(FLEET_DIR))
 
 import claim as claim_mod  # noqa: E402
 from _env import HermeticCase  # noqa: E402
+from _mp import pool_context  # noqa: E402
+
+# Explicit, per-call-site start method; nothing here touches the
+# process-global default. See `tests/_mp.py`.
+_MP_CONTEXT = pool_context()
 from fleetlib import Hub, HubUnreachableError  # noqa: E402
 from keel.cachedhub import (  # noqa: E402
     FRESH_PREFIXES,
@@ -609,7 +614,7 @@ class TestIndexAgreesWithStoreUnderConcurrentWriters(CachedHubTestCase):
         sampler = threading.Thread(target=sample_claim, daemon=True)
         sampler.start()
 
-        with ProcessPoolExecutor(max_workers=self.WORKERS) as pool:
+        with ProcessPoolExecutor(max_workers=self.WORKERS, mp_context=_MP_CONTEXT) as pool:
             futures = [
                 pool.submit(_direct_writer, self.hub_url, self.ns, claim_ref, i, self.ROUNDS)
                 for i in range(self.WORKERS)

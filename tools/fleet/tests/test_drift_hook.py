@@ -27,6 +27,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import drift  # noqa: E402
 from _env import HermeticCase, scrub_env  # noqa: E402
+from _mp import pool_context  # noqa: E402
+
+# Explicit, per-call-site start method; nothing here touches the
+# process-global default. See `tests/_mp.py`.
+_MP_CONTEXT = pool_context()
 
 FLEET_DIR = Path(__file__).resolve().parents[1]
 HOOK_SCRIPT = FLEET_DIR / "hooks" / "post-receive"
@@ -184,7 +189,7 @@ class TestConcurrentBumps(DriftHookTestCase):
         """
         n = 16
         digits = "0123456789abcdef"
-        with ProcessPoolExecutor(max_workers=n) as pool:
+        with ProcessPoolExecutor(max_workers=n, mp_context=_MP_CONTEXT) as pool:
             futures = [pool.submit(_attempt_bump, self.hub_path, digits[i]) for i in range(n)]
             results = [f.result() for f in as_completed(futures)]
 

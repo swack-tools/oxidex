@@ -47,6 +47,11 @@ from claim import (  # noqa: E402
 from fleetlib import Hub  # noqa: E402
 from _env import HermeticCase  # noqa: E402
 from _fixtures import make_hub  # noqa: E402
+from _mp import pool_context  # noqa: E402
+
+# Explicit, per-call-site start method; nothing here touches the
+# process-global default. See `tests/_mp.py`.
+_MP_CONTEXT = pool_context()
 
 
 def _run_git(args, cwd=None, input_bytes=None):
@@ -236,7 +241,7 @@ def _try_acquire_in_subprocess(hub_path, kind, key):
 class TestConcurrentClaims(ClaimTestCase):
     def test_two_simulated_hosts_cannot_hold_the_same_key(self):
         n_workers = 6
-        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=_MP_CONTEXT) as pool:
             futures = [
                 pool.submit(_try_acquire_in_subprocess, self.hub_path, "gate", "contested-tree")
                 for _ in range(n_workers)
@@ -363,7 +368,7 @@ class TestConcurrentReap(ClaimTestCase):
         self.assertTrue(self.hub.create(ref, payload))
 
         n_workers = 5
-        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=_MP_CONTEXT) as pool:
             futures = [
                 pool.submit(_try_reap_in_subprocess, self.hub_path, "gate")
                 for _ in range(n_workers)

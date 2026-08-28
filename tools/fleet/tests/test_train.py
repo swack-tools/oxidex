@@ -34,6 +34,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _env import HermeticCase, scrub_env  # noqa: E402
 from _fixtures import make_hub, within_sweep  # noqa: E402
+from _mp import pool_context  # noqa: E402
+
+# Explicit, per-call-site start method; nothing here touches the
+# process-global default. See `tests/_mp.py`.
+_MP_CONTEXT = pool_context()
 
 import fleetlib
 import train
@@ -775,7 +780,7 @@ class TestTipSignalBump(TrainBase):
         exactly {1..N}: no duplicates and no gaps."""
         n = 8
         digits = "0123456789abcdef"
-        with ProcessPoolExecutor(max_workers=n) as pool:
+        with ProcessPoolExecutor(max_workers=n, mp_context=_MP_CONTEXT) as pool:
             futures = [pool.submit(_attempt_tip_bump, str(self.bare), digits[i], i)
                        for i in range(n)]
             results = [f.result() for f in as_completed(futures)]

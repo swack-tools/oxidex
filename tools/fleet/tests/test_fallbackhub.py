@@ -46,6 +46,9 @@ from __future__ import annotations
 
 import http.client
 import os
+# `pickle` here only ever round-trips objects this same test just built
+# in-process (the exceptions under test); nothing untrusted reaches it.
+import pickle
 import shutil
 import socket
 import ssl
@@ -56,12 +59,18 @@ import threading
 import time
 import unittest
 import urllib.error
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/fleet
 
 from _env import HermeticCase  # noqa: E402
+from _mp import pool_context  # noqa: E402
+
+# Explicit, per-call-site start method; nothing here touches the
+# process-global default. See `tests/_mp.py`.
+_MP_CONTEXT = pool_context()
 from claim import Claim  # noqa: E402
 from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
 from keel import fallbackhub  # noqa: E402
@@ -1064,6 +1073,123 @@ class TestRouteFlipNeverMarksLost(FallbackHubTestCase):
         self.assertGreaterEqual(len(set(observed)), 4)
         self.assertGreaterEqual(self.github.writes, 1)  # at least one direct renewal
         self.assertIn("update", self.primary_ops())  # and the route flipped back
+
+
+# --------------------------------------------------------------------- #
+# The ambiguous error has to survive a process boundary
+# --------------------------------------------------------------------- #
+
+
+def _raise_ambiguous_write_in_a_child(hub_path: str, workdir: str, ref: str) -> None:
+    """Top-level (picklable) worker: drive a real `FallbackHub` whose
+    primary fails AFTER the CAS, and let r2's `AmbiguousWriteError` out of
+    this process the way any real multiprocessing consumer would.
+
+    Deliberately a real write through a real `FallbackHub` and not a bare
+    `raise AmbiguousWriteError(...)`: the cause then is whatever r2
+    actually attaches, which is the part the pickling has to carry.
+    """
+    store = Hub(url=hub_path, workdir=str(Path(workdir) / "server-cache"))
+    github = Hub(url=hub_path, workdir=str(Path(workdir) / "github-cache"))
+    primary = FakePrimary(store)
+    primary.fault = "timeout-after-cas"
+    FallbackHub(primary, github).create(ref, {"from": "a child process"})
+
+
+class TestAmbiguousWriteErrorCrossesAProcessBoundary(FallbackHubTestCase):
+    """`AmbiguousWriteError` must reach a multiprocessing consumer INTACT.
+
+    THE BUG. `BaseException.__reduce__` reconstructs with `cls(*self.args)`,
+    and `self.args` here is the single formatted message `__init__` passed
+    up -- so unpickling called `AmbiguousWriteError(<message>)` and raised
+    `TypeError: missing 2 required positional arguments: 'ref' and 'cause'`.
+    Inside `concurrent.futures` that TypeError surfaces in the result
+    channel, so the parent saw `BrokenProcessPool` and its
+    `except HubUnreachableError` -- the handler r2's whole design routes
+    to (`claim._note_renew_failure` tolerating a blip rather than marking
+    the lease lost) -- never ran. An unpicklable error silently converts a
+    tolerated blip into a pool-wide crash.
+
+    FAILS WITH THE BUG PRESENT. Verified by mutation, not by reasoning:
+    with `AmbiguousWriteError.__reduce__` deleted, the round-trip test
+    raises `TypeError` at `pickle.loads` and the pool test raises
+    `BrokenProcessPool`; both are green with it in place. The
+    unpicklable-cause case was checked the same way -- with the cause
+    substitution removed it fails on `hubstore.WriteOutcomeUnknownError`,
+    which carries the very same `(op, ref, cause)` signature and is the
+    realistic cause of a real ambiguous write.
+    """
+
+    def _ambiguous(self, ref_name: str) -> AmbiguousWriteError:
+        """A REAL r2 error: produced by a fault-injected write, never by
+        constructing the exception by hand."""
+        self.primary.fault = "timeout-after-cas"
+        with self.assertRaises(AmbiguousWriteError) as caught:
+            self.fb.create(self.ref(ref_name), {"v": 1})
+        return caught.exception
+
+    def test_round_trips_through_pickle_intact(self):
+        original = self._ambiguous("pickle-me")
+        revived = pickle.loads(pickle.dumps(original))
+
+        self.assertIsInstance(revived, AmbiguousWriteError)
+        # The type consumers actually switch on (claim.py, verdict.py,
+        # fleetd) is the base class, so pin that explicitly.
+        self.assertIsInstance(revived, HubUnreachableError)
+        self.assertEqual(str(revived), str(original))
+        self.assertEqual(revived.op, original.op)
+        self.assertEqual(revived.ref, original.ref)
+        self.assertEqual(type(revived.cause).__name__, type(original.cause).__name__)
+        self.assertEqual(str(revived.cause), str(original.cause))
+
+    def test_round_trips_when_the_cause_itself_cannot_be_pickled(self):
+        """The realistic cause has this exact defect one level down.
+
+        `keel.hubstore.WriteOutcomeUnknownError(op, ref, exc)` -- what the
+        server raises when its own CAS blew up in transport -- reconstructs
+        as `cls(<message>)` and dies the same way. The stand-in keeps the
+        diagnosis (the cause's type name and text are already inside the
+        formatted message) and keeps the ERROR TYPE the parent catches.
+        """
+        from keel.hubstore import WriteOutcomeUnknownError
+
+        unpicklable = WriteOutcomeUnknownError("create", self.ref("x"), RuntimeError("inner"))
+        with self.assertRaises(TypeError):  # control: the cause really is broken
+            pickle.loads(pickle.dumps(unpicklable))
+
+        original = AmbiguousWriteError("create", self.ref("x"), unpicklable)
+        revived = pickle.loads(pickle.dumps(original))
+
+        self.assertIsInstance(revived, AmbiguousWriteError)
+        self.assertEqual(str(revived), str(original))
+        self.assertEqual((revived.op, revived.ref), (original.op, original.ref))
+        self.assertIn("WriteOutcomeUnknownError", str(revived))
+        self.assertIn("WriteOutcomeUnknownError", str(revived.cause))
+
+    def test_a_process_pool_consumer_gets_the_typed_error_not_a_broken_pool(self):
+        """End to end, through a real `ProcessPoolExecutor`.
+
+        This is the property the round-trip tests above stand in for: what
+        a consumer sees. A `BrokenProcessPool` here is the bug -- it is
+        not a subclass of `HubUnreachableError`, so every `except` clause
+        r2 was designed for misses it.
+        """
+        ref = self.ref("pool-ambiguous")
+        with ProcessPoolExecutor(max_workers=1, mp_context=_MP_CONTEXT) as pool:
+            future = pool.submit(
+                _raise_ambiguous_write_in_a_child, str(self.state), str(self.tmp), ref
+            )
+            with self.assertRaises(HubUnreachableError) as caught:
+                future.result(timeout=120)
+
+        exc = caught.exception
+        self.assertIsInstance(exc, AmbiguousWriteError)
+        self.assertEqual(exc.op, "create")
+        self.assertEqual(exc.ref, ref)
+        self.assertIn("AMBIGUOUS", str(exc))
+        # And the child's write really did land once -- the error is about
+        # an executed CAS, not a write that never happened.
+        self.assertIsNotNone(self.store.sha(ref))
 
 
 if __name__ == "__main__":
