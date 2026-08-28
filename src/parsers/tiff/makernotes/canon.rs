@@ -1553,20 +1553,32 @@ const_decoder!(
     ]
 );
 
-// Canon digital zoom decoder
-// Used for DigitalZoom in CameraSettings (index 12)
-// Reference: ExifTool Canon.pm DigitalZoom table
-// Note: -1 indicates "Off" (not available), 0 indicates "None" (not used)
+// `%Canon::CameraSettings` key 12, `DigitalZoom` (Canon.pm:2408-2416).
+//
+// ```text
+//     12 => {
+//         Name => 'DigitalZoom',
+//         PrintConv => {
+//             0 => 'None',
+//             1 => '2x',
+//             2 => '4x',
+//             3 => 'Other',  # value obtained from 2*$val[37]/$val[36]
+//         },
+//     },
+// ```
+//
+// Four keys, and -1 is not one of them: ExifTool prints `Unknown (-1)` for the
+// 0xffff every EOS body that has no digital zoom writes here. A `(-1, "Off")`
+// entry used to sit at the top of this list with no counterpart in the Perl,
+// which is the failure AGENTS.md's "never approximate a conversion" rule names
+// exactly -- a plausible-looking string under a real ExifTool tag name, which
+// nothing downstream can tell from the real answer. `CanonRaw.crw` is one file
+// where the two differ: the pinned oracle prints
+// `[Canon] DigitalZoom : Unknown (-1)`.
 const_decoder!(
     pub DIGITAL_ZOOM,
     i16,
-    [
-        (-1, "Off"),
-        (0, "None"),
-        (1, "2x"),
-        (2, "4x"),
-        (3, "Other"),
-    ]
+    [(0, "None"), (1, "2x"), (2, "4x"), (3, "Other")]
 );
 
 // Canon focus range decoder
@@ -3329,7 +3341,7 @@ fn print_parameter(value: i16) -> String {
 ///
 /// ExifTool Canon.pm:1264 — `PrintConv => '$_=$val,s/(\d+)(\d{4})/$1-$2/,$_'`: the last
 /// four digits are the file number, everything before them the directory number.
-fn format_canon_file_number(value: u32) -> String {
+pub(crate) fn format_canon_file_number(value: u32) -> String {
     let digits = value.to_string();
     if digits.len() > 4 {
         let split = digits.len() - 4;
@@ -6923,6 +6935,132 @@ pub fn parse_canon_makernotes(
     if let Err(e) = parser.parse(data, byte_order, tags) {
         eprintln!("Canon MakerNotes parse error: {}", e);
     }
+}
+
+/// The MakerNote tag id a CIFF (CRW) record shares its `%Canon::*` table with,
+/// or `None` for a CIFF record this parser does not decode.
+///
+/// This is not an analogy between two similar records; it is the *same* Perl
+/// table reached from two tag dictionaries. `%Image::ExifTool::CanonRaw::Main`
+/// declares each of these CIFF ids with a `SubDirectory => { TagTable =>
+/// 'Image::ExifTool::Canon::<T>' }`, and `%Image::ExifTool::Canon::Main`
+/// declares the id returned here with a `SubDirectory` naming the identical
+/// `<T>`; both are then read by `ProcessBinaryData` against that one table, so
+/// the bytes have one layout, not two (pinned ExifTool 13.59):
+///
+/// | CIFF id | `CanonRaw.pm` | `%Canon::<T>` | MakerNote id | `Canon.pm` |
+/// |---|---|---|---|---|
+/// | 0x1029 | :118-122 | `FocalLength`   | 0x0002 | :1233-1236 |
+/// | 0x102a | :123-127 | `ShotInfo`      | 0x0004 | :1241-1247 |
+/// | 0x102d | :136-140 | `CameraSettings`| 0x0001 | :1226-1232 |
+/// | 0x1031 | :149-153 | `SensorInfo`    | 0x00e0 | :1966-1972 |
+/// | 0x1038 | :191-195 | `AFInfo`        | 0x0012 | :1598-1610 |
+/// | 0x1093 | :196-202 | `FileInfo`      | 0x0093 | :1817-1823 |
+///
+/// `%Canon::ColorBalance` (CIFF 0x10a9, CanonRaw.pm:203-207) is deliberately
+/// absent: this file has no MakerNote decoder for it either, so routing it here
+/// would produce nothing. It is decoded from its generated table by the CRW
+/// parser instead.
+#[must_use]
+pub(crate) fn canon_makernote_id_for_ciff_record(ciff_id: u16) -> Option<u16> {
+    Some(match ciff_id {
+        0x1029 => CANON_FOCAL_LENGTH,
+        0x102a => CANON_SHOT_INFO,
+        0x102d => CANON_CAMERA_SETTINGS,
+        0x1031 => CANON_SENSOR_INFO,
+        0x1038 => CANON_AF_INFO,
+        0x1093 => CANON_FILE_INFO,
+        _ => return None,
+    })
+}
+
+/// Decode the `%Canon::*` binary records a CRW file carries, by presenting them
+/// to this file's MakerNote decoders as the IFD they are byte-identical to.
+///
+/// # Why re-present rather than re-decode
+///
+/// The decoders above are not "the MakerNote versions" of these records --
+/// there is only one version. Every branch of the big entry match reads a
+/// `Vec<i16>` and applies the conversions transcribed from `%Canon::<T>`; the
+/// only MakerNote-specific step is getting that `Vec<i16>` out of an IFD entry.
+/// A second copy of those conversions written against CIFF bytes would be a
+/// second chance to get `AEBBracketValue`'s 32nds, `TargetAperture`'s APEX or
+/// `AFPointsInFocus`'s bit list subtly wrong, under real ExifTool tag names --
+/// exactly the confident-wrong-value failure AGENTS.md's "never approximate a
+/// conversion" rule is about. So the CIFF records are packed into a minimal
+/// TIFF IFD and the one set of decoders runs.
+///
+/// # What makes the base a fact here
+///
+/// [`canon_makernote_base_located`] answers `dir_tiff_offset` whenever the
+/// block carries no Canon TIFF footer. This builder writes buffer-absolute
+/// value offsets, passes `Some(0)`, and appends eight NUL bytes so the footer
+/// test (`II\x2a\0`/`MM\0\x2a` in the last eight bytes) cannot match on record
+/// data that happens to end that way. So the base is 0 by construction, and
+/// [`calculate_makernote_base`]'s vote -- which exists for detached payloads
+/// whose position is unknown -- never runs.
+///
+/// `records` are `(CIFF id, value bytes)` pairs, the value bytes exactly as the
+/// CIFF directory stores them (leading length word included, which is what the
+/// `%Canon::*` tables' `FIRST_ENTRY` counts from). An odd-length record is
+/// skipped rather than truncated: TIFF `SHORT` has no half element, and a
+/// silently shortened record would shift every field after it.
+///
+/// `model` is `$$self{Model}`, which the model-conditional branches
+/// (`%Canon::FileInfo` key 1, `%Canon::ShotInfo` key 22, `%Canon::FocalLength`
+/// keys 2-3) read. In a CRW it comes from `CanonRawMakeModel` (CanonRaw.pm:74-78,
+/// table `%CanonRaw::MakeModel` at :402-424), not from IFD0.
+#[must_use]
+pub(crate) fn parse_canon_ciff_records(
+    records: &[(u16, &[u8])],
+    model: Option<&str>,
+) -> HashMap<String, String> {
+    /// TIFF `SHORT`. Every `%Canon::*` table reached from CIFF has an
+    /// `int16`-family `FORMAT`, and the decoders read the record as `i16`
+    /// words regardless of sign, so one field type serves all of them.
+    const TIFF_SHORT: u16 = 3;
+    /// Guards against the footer test matching real record bytes.
+    const FOOTER_GUARD: usize = 8;
+
+    let entries: Vec<(u16, &[u8])> = records
+        .iter()
+        .filter_map(|&(ciff_id, bytes)| {
+            let makernote_id = canon_makernote_id_for_ciff_record(ciff_id)?;
+            (!bytes.is_empty() && bytes.len() % 2 == 0).then_some((makernote_id, bytes))
+        })
+        .collect();
+
+    if entries.is_empty() {
+        return HashMap::new();
+    }
+
+    let header = 2 + entries.len() * 12 + 4;
+    let mut buffer = vec![0u8; header];
+    buffer[..2].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+
+    let mut values: Vec<u8> = Vec::new();
+    for (index, (tag, bytes)) in entries.iter().enumerate() {
+        let entry = 2 + index * 12;
+        buffer[entry..entry + 2].copy_from_slice(&tag.to_le_bytes());
+        buffer[entry + 2..entry + 4].copy_from_slice(&TIFF_SHORT.to_le_bytes());
+        let count = u32::try_from(bytes.len() / 2).unwrap_or(0);
+        buffer[entry + 4..entry + 8].copy_from_slice(&count.to_le_bytes());
+        if bytes.len() <= 4 {
+            // TIFF stores a value of four bytes or fewer in the offset slot.
+            buffer[entry + 8..entry + 8 + bytes.len()].copy_from_slice(bytes);
+        } else {
+            let Ok(offset) = u32::try_from(header + values.len()) else {
+                continue;
+            };
+            buffer[entry + 8..entry + 12].copy_from_slice(&offset.to_le_bytes());
+            values.extend_from_slice(bytes);
+        }
+    }
+    buffer.extend_from_slice(&values);
+    buffer.extend(std::iter::repeat_n(0u8, FOOTER_GUARD));
+
+    parse_canon_makernote_impl_located(&buffer, &buffer, ByteOrder::LittleEndian, model, Some(0))
+        .unwrap_or_default()
 }
 
 /// Extracts inline value bytes from the value_offset field.
