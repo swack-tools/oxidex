@@ -6,6 +6,11 @@
                                           server or --direct
     keel events [--follow] [--since N]   the server's event stream (SSE) --
                                           server-only, never on the hub
+    keel desired show [--json]           refs/fleet/desired and its sha
+    keel desired set --host H ...        read-modify-CAS one host's targets;
+                                          generation++ server-side over
+                                          PUT /v1/desired, client-side
+                                          under --direct
     keel server status [--json]          server health + FallbackHub route
                                           + the server lease
     keel server rehost                   CAS-acquire the server lease if it
@@ -54,14 +59,16 @@ entering settle, and re-sweeping (steps 2-6) needs `election.py`/
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import socket
 import sys
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 _KEEL_DIR = Path(__file__).resolve().parent
 _FLEET_DIR = _KEEL_DIR.parent
@@ -91,6 +98,22 @@ HEARTBEAT_STALE_S = 180
 SERVER_CLAIM_KIND = "server"
 SERVER_CLAIM_KEY = "singleton"
 SERVER_CLAIM_TTL_S = 120
+
+# `cli._edit_desired`'s retry semantics, which SPEC SS5.1 names as the
+# ones `PUT /v1/desired` must preserve -- same counts as
+# `tools/fleet/cli.py` L58-59 (CAS_RETRIES / CAS_BACKOFF_S), because a
+# retry that re-applies the caller's own mutation to the fresh document
+# is what lets two racing operators' edits BOTH survive, and the number
+# of attempts is part of that promise.
+CAS_RETRIES = 5
+CAS_BACKOFF_S = 3
+
+# `tools/fleet/cli.py` L62's DEFAULT_LIMITS, verbatim. Deliberately the
+# other writer's defaults rather than SPEC SS3.1's fuller list: the only
+# time this matters is a create-from-nothing, and `fleet up` and `keel
+# desired set` creating two DIFFERENT initial documents would be worse
+# than either one being short a key the operator can add.
+DEFAULT_LIMITS = {"min_free_gb": 14, "min_free_mem_gb": 8}
 
 DEFAULT_CLICACHE = Path.home() / ".keel" / "clicache"
 
@@ -334,6 +357,204 @@ def cmd_events(args: argparse.Namespace) -> int:
 
 
 # ------------------------------------------------------------------------ #
+# desired: read-modify-CAS over PUT /v1/desired (SPEC SS5.1), or over the
+# hub CAS under --direct
+# ------------------------------------------------------------------------ #
+#
+# ONE retry loop, TWO places the generation++ can happen, and the
+# difference is the whole point of the route. `edit_desired` below is
+# `tools/fleet/cli.py`'s `_edit_desired` (L84-100) with the arithmetic
+# lifted out into the client object:
+#
+#   * `_ServerDesired` PUTs the mutated document at `/v1/desired` and the
+#     SERVER computes `generation` from the pre-image at the witnessed
+#     version (SPEC SS5.1 "generation++ server-side"). Two operators
+#     racing with the same witness produce one landed edit and exactly
+#     one increment, decided by the one participant that can see both
+#     images of the same CAS.
+#   * `_DirectDesired` (`--direct`, no server) does the arithmetic here,
+#     byte-identical to `cli._edit_desired`, because with no server there
+#     is nowhere else to do it.
+#
+# The RETRY stays client-side on both routes: it re-applies the caller's
+# own `mutate` to the freshly-read document, so a conflict means both
+# operators' edits survive. A server cannot do that on the client's
+# behalf -- it never sees `mutate`, only its result -- so it answers 409
+# and this loop re-reads. Anything that merged server-side would be
+# inventing a desired state neither operator asked for.
+
+
+def _blank_desired() -> dict:
+    return {"generation": 0, "hosts": {}, "limits": dict(DEFAULT_LIMITS)}
+
+
+def _next_generation(current: Optional[dict]) -> int:
+    """`cli._edit_desired` L94's arithmetic, tolerant of a document that
+    has never carried a generation. `keel/server.py` carries the same
+    three lines for the server route; they are the same rule stated at
+    both ends on purpose -- the direct route has no server to ask."""
+    raw = (current or {}).get("generation")
+    try:
+        return int(raw) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
+class _DirectDesired:
+    """The hub CAS, generation bumped client-side."""
+
+    route = "direct"
+
+    def __init__(self, hub):
+        self.hub = hub
+
+    def read(self) -> Tuple[Optional[str], Optional[dict]]:
+        return self.hub.read_with_sha(DESIRED_REF)
+
+    def write(self, doc: dict, expect_sha: Optional[str], pre_image: Optional[dict]) -> Optional[dict]:
+        doc = dict(doc)
+        doc["generation"] = _next_generation(pre_image)
+        ok = self.hub.create(DESIRED_REF, doc) if expect_sha is None else self.hub.update(DESIRED_REF, doc, expect_sha)
+        return doc if ok else None
+
+
+class _ServerDesired:
+    """`PUT /v1/desired`. `pre_image` is deliberately unused: the server
+    reads it for itself at the witnessed version, which is the only place
+    the pre-image and the post-image of one CAS are both visible."""
+
+    route = "server"
+
+    def __init__(self, primary: ServerHub):
+        self.primary = primary
+
+    def read(self) -> Tuple[Optional[str], Optional[dict]]:
+        return self.primary.read_desired()
+
+    def write(self, doc: dict, expect_sha: Optional[str], pre_image: Optional[dict]) -> Optional[dict]:
+        del pre_image
+        return self.primary.put_desired(doc, expect_sha)
+
+
+def edit_desired(client, mutate: Callable[[dict], dict], *, retries: int = CAS_RETRIES, backoff_s: float = CAS_BACKOFF_S) -> dict:
+    """Read-modify-CAS-write with retry. `mutate(doc) -> doc` must be
+    idempotent: on conflict it is re-applied to the FRESH document, so
+    both racing operators' edits land. Returns the document the store
+    now holds (generation included, whichever end computed it)."""
+    last = "unknown"
+    for attempt in range(retries):
+        cur_sha, cur_doc = client.read()
+        doc = mutate(copy.deepcopy(cur_doc) if cur_doc is not None else _blank_desired())
+        # A `HubError` from `write` is a ROUTE failure, not a lost race,
+        # and is deliberately NOT caught here: for an AMBIGUOUS write
+        # (SPEC SS4.3 r2) re-issuing is the one thing that must not
+        # happen, and a retry loop that swallowed the raise would do
+        # exactly that on the next pass. It propagates to the caller,
+        # which reports it and exits non-zero.
+        landed = client.write(doc, cur_sha, cur_doc)
+        if landed is not None:
+            return landed
+        last = "lost the CAS race"
+        if attempt + 1 < retries:
+            time.sleep(backoff_s * (attempt + 1))
+    raise SystemExit(f"keel desired: could not update {DESIRED_REF} after {retries} attempts ({last})")
+
+
+def _build_desired_client(args: argparse.Namespace):
+    """`--direct` -> the hub CAS; otherwise the server route.
+
+    There is no fallback for the WRITE. `FallbackHub` can route a read
+    around an absent server safely, but a `PUT /v1/desired` that failed
+    ambiguously must not be re-issued anywhere (SPEC SS4.3 r2), and a PUT
+    that never reached the server would silently move the generation++
+    from the server back to this process -- the same last-writer-wins
+    hazard the route exists to remove. With no server configured, say so
+    and name `--direct`, which is a DELIBERATE choice of the other
+    semantics rather than an accident of reachability."""
+    if getattr(args, "direct", False):
+        return _DirectDesired(build_github_hub(args))
+    primary = build_server_hub(args)
+    if primary is None:
+        print(
+            "keel: desired needs a server (--server or KEEL_SERVER_URL) so the "
+            "generation is bumped server-side (SPEC SS5.1); pass --direct to "
+            "read-modify-CAS the hub yourself instead",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    return _ServerDesired(primary)
+
+
+def cmd_desired_show(args: argparse.Namespace) -> int:
+    hub, _primary = build_hub(args)
+    try:
+        sha, doc = hub.read_with_sha(DESIRED_REF)
+    except HubUnreachableError as exc:
+        print(f"keel desired show: hub unreachable: {exc}", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps({"ref": DESIRED_REF, "sha": sha, "desired": doc}, indent=2, sort_keys=True))
+        return 0
+    if doc is None:
+        print(f"{DESIRED_REF}: absent")
+        return 0
+    print(f"{DESIRED_REF} @ {sha}  generation {doc.get('generation')}")
+    for host, entry in sorted((doc.get("hosts") or {}).items()):
+        print(f"  {host}: {json.dumps(entry, sort_keys=True)}")
+    limits = doc.get("limits")
+    if limits:
+        print(f"  limits: {json.dumps(limits, sort_keys=True)}")
+    return 0
+
+
+def cmd_desired_set(args: argparse.Namespace) -> int:
+    if args.gates is None and args.agents is None and args.enabled is None and args.reason is None:
+        print(
+            "keel desired set: nothing to change -- pass at least one of "
+            "--gates/--agents/--enable/--disable/--reason",
+            file=sys.stderr,
+        )
+        return 2
+
+    def mutate(doc: dict) -> dict:
+        entry = doc.setdefault("hosts", {}).setdefault(args.host, {})
+        if args.gates is not None:
+            entry["gates"] = args.gates
+        if args.agents is not None:
+            entry["agents"] = args.agents
+        if args.enabled is not None:
+            entry["enabled"] = args.enabled
+        if args.reason is not None:
+            entry["reason"] = args.reason
+        elif args.enabled is True:
+            # `fleet up`'s own behaviour: re-enabling clears the stale
+            # "why was this host down" note rather than leaving it to be
+            # read as current.
+            entry.pop("reason", None)
+        return doc
+
+    client = _build_desired_client(args)
+    try:
+        landed = edit_desired(client, mutate)
+    except HubError as exc:
+        print(
+            f"keel desired set: {exc}\n"
+            f"(the write was NOT re-issued on another route -- SPEC SS4.3 r2; "
+            f"re-run once the server answers, or use --direct)",
+            file=sys.stderr,
+        )
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps({"route": client.route, "desired": landed}, indent=2, sort_keys=True))
+    else:
+        print(
+            f"desired gen {landed.get('generation')} via {client.route}: "
+            f"{args.host} -> {json.dumps((landed.get('hosts') or {}).get(args.host), sort_keys=True)}"
+        )
+    return 0
+
+
+# ------------------------------------------------------------------------ #
 # Server: health/lease status, and the (partial, honestly-scoped) rehost
 # ------------------------------------------------------------------------ #
 
@@ -457,6 +678,27 @@ def main(argv=None) -> int:
         "the configured read timeout with --follow)",
     )
     p_events.set_defaults(func=cmd_events)
+
+    p_desired = sub.add_parser("desired", help="read/edit refs/fleet/desired (SPEC SS3.1, SS5.1)")
+    desired_sub = p_desired.add_subparsers(dest="desired_cmd", required=True)
+
+    p_desired_show = desired_sub.add_parser("show", help="print refs/fleet/desired and its sha")
+    _add_hub_args(p_desired_show)
+    p_desired_show.set_defaults(func=cmd_desired_show)
+
+    p_desired_set = desired_sub.add_parser(
+        "set",
+        help="read-modify-CAS one host's targets (generation++ server-side unless --direct)",
+    )
+    _add_hub_args(p_desired_set)
+    p_desired_set.add_argument("--host", required=True, help="the host whose entry to edit")
+    p_desired_set.add_argument("--gates", type=int, default=None, help="gate slots wanted on this host")
+    p_desired_set.add_argument("--agents", type=int, default=None, help="agent slots wanted on this host")
+    enable_group = p_desired_set.add_mutually_exclusive_group()
+    enable_group.add_argument("--enable", dest="enabled", action="store_const", const=True, default=None)
+    enable_group.add_argument("--disable", dest="enabled", action="store_const", const=False, default=None)
+    p_desired_set.add_argument("--reason", default=None, help="why (recorded on the host's entry)")
+    p_desired_set.set_defaults(func=cmd_desired_set)
 
     p_server = sub.add_parser("server", help="server lease/health (SPEC SS3.4)")
     server_sub = p_server.add_subparsers(dest="server_cmd", required=True)
