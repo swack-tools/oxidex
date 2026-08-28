@@ -307,6 +307,10 @@ pub enum FileFormat {
     /// Plain text format (.txt)
     TXT,
 
+    /// Comma-separated values (.csv) -- ExifTool types it from the
+    /// extension and derives its statistics in `Text.pm`'s `ProcessTXT`
+    CSV,
+
     /// HTML / XHTML document (.htm, .html, .xhtml)
     HTML,
 
@@ -554,6 +558,7 @@ impl FileFormat {
             FileFormat::ICS => "iCalendar",
             FileFormat::EML => "EML",
             FileFormat::TXT => "TXT",
+            FileFormat::CSV => "CSV",
             FileFormat::LFP => "LFP",
             FileFormat::HTML => "HTML",
             FileFormat::LNK => "Windows Shortcut",
@@ -703,6 +708,7 @@ impl FileFormat {
             FileFormat::ICS => &["ics", "ical"],
             FileFormat::EML => &["eml", "email"],
             FileFormat::TXT => &["txt", "text"],
+            FileFormat::CSV => &["csv"],
             FileFormat::LFP => &["lfp", "lfr"],
             FileFormat::HTML => &["htm", "html", "xhtml"],
             FileFormat::LNK => &["lnk"],
