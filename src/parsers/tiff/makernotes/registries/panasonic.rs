@@ -17,13 +17,16 @@ use super::super::shared::tag_registry::TagRegistry;
 // Re-export decoders from panasonic.rs
 // These decoders are defined using const_decoder! macros in the main parser
 use super::super::panasonic::{
-    AF_ASSIST_LAMP, AUDIO, BRACKET_SETTINGS, BURST_MODE, CAMERA_ORIENTATION, CLEAR_RETOUCH,
-    COLOR_EFFECT, COLOR_MODE, CONTRAST_MODE, CONVERSION_LENS, FILM_MODE, FLASH_CURTAIN,
-    FLASH_WARNING, FOCUS_MODE, HDR, IMAGE_QUALITY, IMAGE_STABILIZATION, INTELLIGENT_D_RANGE,
-    INTELLIGENT_EXPOSURE, INTELLIGENT_RESOLUTION, LONG_EXPOSURE_NR, MACRO_MODE, NOISE_REDUCTION,
-    OPTICAL_ZOOM_MODE, PHOTO_STYLE, ROTATION, SELF_TIMER, SHADING_COMPENSATION, SHOOTING_MODE,
-    SHUTTER_TYPE, SWEEP_PANORAMA_DIRECTION, TEXT_STAMP, TIMER_RECORDING, TOUCH_AE, WHITE_BALANCE,
-    WORLD_TIME_LOCATION,
+    AF_ASSIST_LAMP, AF_SUBJECT_DETECTION, AUDIO, BRACKET_SETTINGS, BURST_MODE, CAMERA_ORIENTATION,
+    CLEAR_RETOUCH, COLOR_EFFECT, COLOR_MODE, CONTRAST_MODE, CONVERSION_LENS,
+    DIFFRACTION_CORRECTION, DYNAMIC_RANGE_BOOST, FILM_MODE, FLASH_CURTAIN, FLASH_WARNING,
+    FOCUS_MODE, HDR, HYBRID_LOG_GAMMA, IMAGE_QUALITY, IMAGE_STABILIZATION, INTELLIGENT_D_RANGE,
+    INTELLIGENT_EXPOSURE, INTELLIGENT_RESOLUTION, LONG_EXPOSURE_NR, LONG_EXPOSURE_NR_USED,
+    MACRO_MODE, MONOCHROME_FILTER_EFFECT, MONOCHROME_GRAIN_EFFECT, MULTI_EXPOSURE, NOISE_REDUCTION,
+    OPTICAL_ZOOM_MODE, PHOTO_STYLE, RED_EYE_REMOVAL, ROTATION, SELF_TIMER, SENSOR_TYPE,
+    SHADING_COMPENSATION, SHOOTING_MODE, SHUTTER_TYPE, SWEEP_PANORAMA_DIRECTION, TEXT_STAMP,
+    TIMER_RECORDING, TOUCH_AE, VIDEO_BURST_RESOLUTION, VIDEO_PREBURST, WHITE_BALANCE,
+    WORLD_TIME_LOCATION, decode_video_burst_mode,
 };
 
 // ============================================================================
@@ -180,6 +183,63 @@ pub fn panasonic_registry() -> TagRegistry {
         // instead of the wrong integer decode of the raw numerator bytes.
         .register_raw(0x00A3, "ClearRetouchValue")
         .register_enum_tag_required(0x00AB, "TouchAE", &TOUCH_AE)
+        // ====================================================================
+        // %Panasonic::Main above 0x00AB
+        // ====================================================================
+        // None of these ids were registered at all, so oxidex reported no row
+        // for any of them -- 1,294 MISSING over the 477 Panasonic samples,
+        // concentrated in 46 names. They are plain `%Panasonic::Main` entries
+        // (not ProcessBinaryData), so `src/exiftool_tables` carries no layout
+        // for them; the ids and maps come from the `%Image::ExifTool::Panasonic::Main`
+        // hash in the pinned 13.59 tree, cited per decoder in `panasonic.rs`.
+        //
+        // 0x0063 `RecognizedFaceFlags` (Panasonic.pm:1018-1026) is deliberately
+        // NOT registered: it carries `Unknown => 1`, so ExifTool reports it only
+        // under `-u`. A default `-a -G1 -s` sweep of all 544 Panasonic+Leica
+        // samples with the pinned 13.59 oracle returns it zero times, so
+        // emitting it would add a tag ExifTool does not report -- an EXTRA, not
+        // coverage.
+        .register_enum_tag_required(0x00AC, "MonochromeFilterEffect", &MONOCHROME_FILTER_EFFECT)
+        // 0x00AD HighlightShadow is int16u[2] read as int16s[2]; 0x00AF
+        // TimeStamp, 0x00F1 LUT1Name and 0x00F4 LUT2Name are strings; 0x00A1
+        // FilterEffect, 0x00BF PostFocusMerging, 0x00D6 NoiseReductionStrength
+        // and 0x00DE AFAreaSize need their real value bytes; 0x00A7 OutputLUT
+        // is a Binary placeholder; 0x00C4/0x00C5/0x00E4 carry ExifTool
+        // Conditions and 0x00D1 ISO a RawConv. All are decoded in
+        // `parse_entry`; these entries only carry the names.
+        .register_raw(0x00A1, "FilterEffect")
+        .register_raw(0x00A7, "OutputLUT")
+        .register_raw(0x00AD, "HighlightShadow")
+        .register_string_tag(0x00AF, "TimeStamp")
+        .register_enum_tag_required(0x00B3, "VideoBurstResolution", &VIDEO_BURST_RESOLUTION)
+        .register_enum_tag_required(0x00B4, "MultiExposure", &MULTI_EXPOSURE)
+        .register_enum_tag_required(0x00B9, "RedEyeRemoval", &RED_EYE_REMOVAL)
+        .register_i32(0x00BB, "VideoBurstMode", decode_video_burst_mode)
+        .register_enum_tag_required(0x00BC, "DiffractionCorrection", &DIFFRACTION_CORRECTION)
+        // 0x00BD FocusBracket is int16u-wire/int16s-Format, handled in
+        // parse_entry alongside WBShiftIntelligentAuto (0x008B).
+        .register_raw(0x008B, "WBShiftIntelligentAuto")
+        .register_raw(0x0092, "WBShiftCreativeControl")
+        .register_raw(0x00BD, "FocusBracket")
+        .register_enum_tag_required(0x00BE, "LongExposureNRUsed", &LONG_EXPOSURE_NR_USED)
+        .register_raw(0x00BF, "PostFocusMerging")
+        .register_enum_tag_required(0x00C1, "VideoPreburst", &VIDEO_PREBURST)
+        .register_raw(0x00C4, "LensTypeMake")
+        .register_raw(0x00C5, "LensTypeModel")
+        .register_raw(0x00E4, "LensTypeModel")
+        .register_enum_tag_required(0x00CA, "SensorType", &SENSOR_TYPE)
+        .register_raw(0x00D1, "ISO")
+        .register_enum_tag_required(0x00D2, "MonochromeGrainEffect", &MONOCHROME_GRAIN_EFFECT)
+        .register_enum_tag_required(0x00D4, "HybridLogGamma", &HYBRID_LOG_GAMMA)
+        .register_raw(0x00D6, "NoiseReductionStrength")
+        .register_raw(0x00DE, "AFAreaSize")
+        .register_integer_tag(0x00E8, "MinimumISO", None)
+        .register_enum_tag_required(0x00E9, "AFSubjectDetection", &AF_SUBJECT_DETECTION)
+        .register_enum_tag_required(0x00EE, "DynamicRangeBoost", &DYNAMIC_RANGE_BOOST)
+        .register_string_tag(0x00F1, "LUT1Name")
+        .register_integer_tag(0x00F3, "LUT1Opacity", None)
+        .register_string_tag(0x00F4, "LUT2Name")
+        .register_integer_tag(0x00F5, "LUT2Opacity", None)
         // ====================================================================
         // Additional integer/numeric tags
         // ====================================================================

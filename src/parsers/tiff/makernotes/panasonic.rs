@@ -563,6 +563,92 @@ const_decoder!(pub SHUTTER_TYPE, i32,
 // Touch AE decoder (tag 0x00AB)
 const_decoder!(pub TOUCH_AE, i32, [(0, "Off"), (1, "On"),]);
 
+// ============================================================================
+// %Panasonic::Main tags above 0x00AB
+// ============================================================================
+// Everything from here down is a plain `%Image::ExifTool::Panasonic::Main`
+// entry -- not a ProcessBinaryData record, so none of it is in
+// `src/exiftool_tables` (the nine transcribed Panasonic tables are Data1,
+// FaceDetInfo, FaceRecInfo, FocusInfo, PANA, SerialInfo, ShotInfo, TimeInfo
+// and Type2). The ids and PrintConv maps below are transcribed by hand from
+// the `%Image::ExifTool::Panasonic::Main` hash in the pinned 13.59 tree, one
+// citation per decoder.
+
+// MonochromeFilterEffect (tag 0x00AC), Panasonic.pm:1324-1328.
+const_decoder!(pub MONOCHROME_FILTER_EFFECT,
+    i32,
+    [
+        (0, "Off"),
+        (1, "Yellow"),
+        (2, "Orange"),
+        (3, "Red"),
+        (4, "Green"),
+    ]
+);
+
+// VideoBurstResolution (tag 0x00B3), Panasonic.pm:1343-1347.
+//
+// Only two keys; ExifTool's own hash-miss fallback (`Unknown ($val)`,
+// ExifTool.pm:3633) covers the rest, and the corpus exercises it --
+// `PanasonicDC-TZ200.jpg` reads 0 and the pinned oracle prints
+// `Unknown (0)`, which `SimpleValueDecoder::decode` reproduces verbatim.
+const_decoder!(pub VIDEO_BURST_RESOLUTION, i32, [(1, "Off or 4K"), (4, "6K"),]);
+
+// MultiExposure (tag 0x00B4), Panasonic.pm:1348-1352.
+const_decoder!(pub MULTI_EXPOSURE, i32, [(0, "n/a"), (1, "Off"), (2, "On"),]);
+
+// RedEyeRemoval (tag 0x00B9), Panasonic.pm:1353-1357.
+const_decoder!(pub RED_EYE_REMOVAL, i32, [(0, "Off"), (1, "On"),]);
+
+// DiffractionCorrection (tag 0x00BC), Panasonic.pm:1375-1379.
+const_decoder!(pub DIFFRACTION_CORRECTION, i32, [(0, "Off"), (1, "Auto"),]);
+
+// LongExposureNRUsed (tag 0x00BE), Panasonic.pm:1386-1390.
+//
+// Note the keys are 1/2, not 0/1 -- this is "used", not the 0x0049
+// LongExposureNoiseReduction *setting*, whose own map is also 1/2 but
+// Off/On rather than No/Yes.
+const_decoder!(pub LONG_EXPOSURE_NR_USED, i32, [(1, "No"), (2, "Yes"),]);
+
+// VideoPreburst (tag 0x00C1), Panasonic.pm:1397-1401.
+const_decoder!(pub VIDEO_PREBURST, i32, [(0, "No"), (1, "4K or 6K"),]);
+
+// SensorType (tag 0x00CA), Panasonic.pm:1402-1411.
+const_decoder!(pub SENSOR_TYPE, i32, [(0, "Multi-aspect"), (1, "Standard"),]);
+
+// MonochromeGrainEffect (tag 0x00D2), Panasonic.pm:1434-1443.
+const_decoder!(pub MONOCHROME_GRAIN_EFFECT,
+    i32,
+    [(0, "Off"), (1, "Low"), (2, "Standard"), (3, "High"),]
+);
+
+// HybridLogGamma (tag 0x00D4), Panasonic.pm:1444-1448.
+const_decoder!(pub HYBRID_LOG_GAMMA, i32, [(0, "Off"), (1, "On"),]);
+
+// AFSubjectDetection (tag 0x00E9), Panasonic.pm:1477-1496.
+const_decoder!(pub AF_SUBJECT_DETECTION,
+    i32,
+    [
+        (0, "n/a"),
+        (1, "Human Eye/Face/Body"),
+        (2, "Animal"),
+        (3, "Human Eye/Face"),
+        (4, "Animal Body"),
+        (5, "Animal Eye/Body"),
+        (6, "Car"),
+        (7, "Motorcycle"),
+        (8, "Car (main part priority)"),
+        (9, "Motorcycle (helmet priority)"),
+        (10, "Train"),
+        (11, "Train (main part priority)"),
+        (12, "Airplane"),
+        (13, "Airplane (nose priority)"),
+    ]
+);
+
+// DynamicRangeBoost (tag 0x00EE), Panasonic.pm:1497-1501.
+const_decoder!(pub DYNAMIC_RANGE_BOOST, i32, [(0, "Off"), (1, "On"),]);
+
 /// Represents a Panasonic MakerNote parser
 pub struct PanasonicParser;
 
@@ -771,6 +857,24 @@ impl PanasonicParser {
             if let Some(record) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order)
             {
                 decode_binary_subdir(table, &record, byte_order, "Panasonic", tags);
+            }
+            return;
+        }
+
+        // TimeInfo (0x2003), Panasonic.pm:1620-1623: another `SubDirectory`
+        // over a `ProcessBinaryData` table -- but unlike FaceDetInfo and
+        // FaceRecInfo above, this one *is* in `src/exiftool_tables` as
+        // `PANASONIC_TIMEINFO`, so its layout comes from ExifTool's own
+        // in-memory hash rather than from a hand transcription here (AGENTS.md,
+        // "check whether the answer is already transcribed"). `find_table`
+        // reports FIRST_ENTRY 0, FORMAT int8u, and two fields:
+        // `PanasonicDateTime` at index 0 (`undef[8]`) and
+        // `TimeLapseShotNumber` at index 16 (`int32u`).
+        if tag_id == 0x2003 {
+            if let Some(record) =
+                extract_typed_bytes(entry, data, ifd_offset, data_base, byte_order)
+            {
+                decode_panasonic_time_info(&record, byte_order, tags);
             }
             return;
         }
@@ -988,6 +1092,206 @@ impl PanasonicParser {
                 }
                 return;
             }
+            // OutputLUT: `Binary => 1` with no Writable and no PrintConv
+            // (Panasonic.pm:1310-1318) -- ExifTool prints the byte-count
+            // placeholder unless -b is given, exactly as for DataDump above.
+            // The entry is `undef[864]` on every carrier in the corpus, so
+            // `extract_raw_bytes`'s value_count-as-byte-count convention is
+            // the right one here.
+            0x00A7 => {
+                if let Some(bytes) = extract_raw_bytes(entry, data, ifd_offset, data_base, byte_order) {
+                    tags.insert(
+                        "Panasonic:OutputLUT".to_string(),
+                        crate::cli::output_formatter::binary_placeholder(bytes.len()),
+                    );
+                }
+                return;
+            }
+            // TimeStamp (Panasonic.pm:1335-1342): `Writable => 'string'` with
+            // `PrintConv => '$self->ConvertDateTime($val)'`. `ConvertDateTime`
+            // (ExifTool.pm) applies the `DateFormat` option, which is unset
+            // here, so it returns the value unchanged -- the stored string is
+            // already "YYYY:MM:DD HH:MM:SS".
+            //
+            // LUT1Name / LUT2Name (Panasonic.pm:1502-1505, :1510-1513): plain
+            // `string` with no conversion. Both are `string[256]` of NULs on
+            // every carrier in the corpus and ExifTool reports them as the
+            // empty string rather than suppressing them.
+            0x00AF | 0x00F1 | 0x00F4 => {
+                if let Some(value) = extract_string_value(entry, data, ifd_offset, data_base)
+                    && let Some(tag_name) = registry.get_tag_name(tag_id) {
+                        tags.insert(format!("Panasonic:{}", tag_name), value);
+                    }
+                return;
+            }
+            // WBShiftCreativeControl: `Writable => 'int8u'`, `Format =>
+            // 'int8s'` (Panasonic.pm:1216-1221) -- one *signed* byte with no
+            // ValueConv/PrintConv. `exiftool -v3` on
+            // `combined-samples/Panasonic/PanasonicDC-GH7.jpg` shows the entry
+            // as `int8u[1] read as int8s[1]`; a Leica reads -2, which an
+            // unsigned decode would print as 254.
+            0x0092 => {
+                if let Some(bytes) =
+                    extract_typed_bytes(entry, data, ifd_offset, data_base, byte_order)
+                    && let Some(&raw) = bytes.first()
+                {
+                    tags.insert(
+                        "Panasonic:WBShiftCreativeControl".to_string(),
+                        (raw as i8).to_string(),
+                    );
+                }
+                return;
+            }
+            // HighlightShadow: `Writable => 'int16u'`, `Format => 'int16s'`,
+            // `Count => 2` (Panasonic.pm:1329-1334) -- a signed pair, no
+            // conversion, space-joined by ExifTool's default list ValueConv.
+            0x00AD => {
+                if let Some(bytes) =
+                    extract_typed_bytes(entry, data, ifd_offset, data_base, byte_order)
+                {
+                    let joined = join_i16(&bytes, byte_order);
+                    if !joined.is_empty() {
+                        tags.insert("Panasonic:HighlightShadow".to_string(), joined);
+                    }
+                }
+                return;
+            }
+            // FilterEffect: `Writable => 'rational64u'` with `Format =>
+            // 'int32u'` (Panasonic.pm:1274-1304), i.e. the 8 bytes of one
+            // rational are read as *two* int32u. `exiftool -v3` prints the
+            // entry as `rational64u[1] read as int32u[2]`, and every
+            // PrintConv key in the hash is a two-number string ('0 0' =>
+            // 'Off', '0 1' => 'Expressive', ...). A hash miss falls back to
+            // ExifTool's `Unknown ($val)` (ExifTool.pm:3633) -- not
+            // `Unknown (0x...)`, since this tag carries no PrintHex.
+            0x00A1 => {
+                if let Some(bytes) =
+                    extract_typed_bytes(entry, data, ifd_offset, data_base, byte_order)
+                {
+                    let joined = join_u32(&bytes, byte_order);
+                    if !joined.is_empty() {
+                        tags.insert(
+                            "Panasonic:FilterEffect".to_string(),
+                            decode_filter_effect(&joined),
+                        );
+                    }
+                }
+                return;
+            }
+            // PostFocusMerging: `Format => 'int32u'`, `Count => 2`, and a
+            // PrintConv with the single key '0 0' (Panasonic.pm:1391-1396).
+            // Anything else takes ExifTool's `Unknown ($val)` fallback.
+            0x00BF => {
+                if let Some(bytes) =
+                    extract_typed_bytes(entry, data, ifd_offset, data_base, byte_order)
+                {
+                    let joined = join_u32(&bytes, byte_order);
+                    if !joined.is_empty() {
+                        let printed = if joined == "0 0" {
+                            "Post Focus Auto Merging or None".to_string()
+                        } else {
+                            format!("Unknown ({joined})")
+                        };
+                        tags.insert("Panasonic:PostFocusMerging".to_string(), printed);
+                    }
+                }
+                return;
+            }
+            // NoiseReductionStrength: `Writable => 'rational64s'` with no
+            // conversion at all (Panasonic.pm:1449-1452). Signed, so
+            // `GetRational64s` (ExifTool.pm:6107-6113) reads two *Get32s* and
+            // the existing unsigned `extract_rational_values` would misread a
+            // negative strength as a value near 2^32.
+            0x00D6 => {
+                if let Some(printed) =
+                    extract_typed_bytes(entry, data, ifd_offset, data_base, byte_order)
+                        .and_then(|bytes| first_rational64s(&bytes, byte_order))
+                {
+                    tags.insert("Panasonic:NoiseReductionStrength".to_string(), printed);
+                }
+                return;
+            }
+            // AFAreaSize: `Writable => 'rational64u'`, `Count => 2`, and
+            // `PrintConv => '$val =~ /^4194303\.9/ ? "n/a" : $val'`
+            // (Panasonic.pm:1453-1460). The manual-focus sentinel is
+            // 4294967295/1024, whose `GetRational64u` (RoundFloat .. 10)
+            // rendering is "4194303.999" -- which is what the regex matches,
+            // so the test is on the *converted* string, not the raw pair.
+            0x00DE => {
+                if let Some(pairs) =
+                    extract_rational_values(entry, data, ifd_offset, data_base, byte_order)
+                {
+                    let parts: Vec<String> = pairs
+                        .iter()
+                        .filter_map(|&(n, d)| format_rational64u(n, d))
+                        .collect();
+                    if parts.len() == pairs.len() && !parts.is_empty() {
+                        let joined = parts.join(" ");
+                        let printed = if joined.starts_with("4194303.9") {
+                            "n/a".to_string()
+                        } else {
+                            joined
+                        };
+                        tags.insert("Panasonic:AFAreaSize".to_string(), printed);
+                    }
+                }
+                return;
+            }
+            // LensTypeMake: `Condition => '$format eq "int16u" and $$valPt ne
+            // "\xff\xff"'`, `Writable => 'int16u'`, no conversion
+            // (Panasonic.pm:1412-1416). Both halves of the condition are
+            // real: the format test rejects a body that writes some other
+            // type at this id, and 65535 is ExifTool's explicit
+            // "(ignore make 65535 for now)".
+            0x00C4 => {
+                if entry.field_type == 3 {
+                    let raw = inline_u16_value(entry, byte_order);
+                    if raw != 0xFFFF {
+                        tags.insert("Panasonic:LensTypeMake".to_string(), raw.to_string());
+                    }
+                }
+                return;
+            }
+            // LensTypeModel, at two ids with identical definitions
+            // (Panasonic.pm:1417-1428 for 0x00c5, :1461-1472 for 0x00e4):
+            //
+            //   Condition => '$format eq "int16u"',
+            //   RawConv   => 'return undef unless $val; ...',
+            //   ValueConv => '$_=sprintf("%.4x",$val); s/(..)(..)/$2 $1/; $_',
+            //
+            // so a zero reading is suppressed outright and a non-zero one is
+            // printed as its byte-swapped hex pair: 0x1020 -> "1020" ->
+            // "20 10", which is what `exiftool -G1 -s` reports for
+            // `PanasonicDC-GH7.jpg`. The `require Image::ExifTool::Olympus`
+            // inside the RawConv only loads the Composite LensID table; it
+            // does not change this tag's value.
+            //
+            // Seven corpus files carry both ids non-zero and always with the
+            // *same* number (e.g. `PanasonicDC-S1H.jpg`, 16391 at both), so
+            // collapsing them onto one key cannot pick a wrong winner.
+            0x00C5 | 0x00E4 => {
+                if entry.field_type == 3 {
+                    let raw = inline_u16_value(entry, byte_order);
+                    if raw != 0 {
+                        tags.insert(
+                            "Panasonic:LensTypeModel".to_string(),
+                            format!("{:02x} {:02x}", raw & 0xFF, raw >> 8),
+                        );
+                    }
+                }
+                return;
+            }
+            // ISO: `RawConv => '$val > 0xfffffff0 ? undef : $val'`,
+            // `Writable => 'int32u'` (Panasonic.pm:1429-1433). The sentinel
+            // window is above i32::MAX, so the comparison is done on the
+            // unsigned reading.
+            0x00D1 => {
+                let raw = inline_scalar_i32(entry, byte_order) as u32;
+                if raw <= 0xFFFF_FFF0 {
+                    tags.insert("Panasonic:ISO".to_string(), raw.to_string());
+                }
+                return;
+            }
             _ => {}
         }
 
@@ -998,7 +1302,17 @@ impl PanasonicParser {
         // Format override means the wire field type (SHORT, unsigned) cannot
         // tell the generic fallback below to sign-interpret these, so they
         // stay a hand-picked case like RollAngle/PitchAngle just below.
-        if matches!(tag_id, 0x0046 | 0x0047 | 0x008C | 0x008D | 0x008E) {
+        //
+        // WBShiftIntelligentAuto (0x008B, Panasonic.pm:1164-1169, "-9 for blue
+        // to +9 for amber") and FocusBracket (0x00BD, Panasonic.pm:1380-1385,
+        // "positive is further, negative is closer") are the same shape --
+        // `Writable => 'int16u'` with `Format => 'int16s'` and no conversion --
+        // so they belong in this group rather than in the registry fallback,
+        // which would print a -1 reading as 65535.
+        if matches!(
+            tag_id,
+            0x0046 | 0x0047 | 0x008B | 0x008C | 0x008D | 0x008E | 0x00BD
+        ) {
             let value = inline_u16_value(entry, byte_order) as i16;
             if let Some(tag_name) = registry.get_tag_name(tag_id) {
                 tags.insert(format!("Panasonic:{}", tag_name), value.to_string());
@@ -1057,7 +1371,26 @@ impl PanasonicParser {
 /// 4-byte value field, which the IFD parser has already decoded using the
 /// directory's byte order, so `value_offset` needs no further adjustment.
 fn inline_scalar_i32(entry: &IfdEntry, byte_order: ByteOrder) -> i32 {
-    if entry.value_count == 1 && matches!(entry.field_type, 3 | 8) {
+    if entry.value_count == 1 && matches!(entry.field_type, 1 | 6) {
+        // BYTE/SBYTE count==1: ExifTool reads the FIRST byte of the 4-byte
+        // value field, which after parsing the field as a u32 is the low byte
+        // on little-endian files and the high byte on big-endian ones. Reading
+        // the whole `value_offset` happens to work on little-endian files only
+        // because the three padding bytes are normally zero -- nothing in the
+        // format guarantees that, and on a big-endian directory it is wrong by
+        // a factor of 2^24. Panasonic has six int8u tags reached through this
+        // fallback (0x0070, 0x008F, 0x0093, 0x0096, and the LUT opacities
+        // 0x00F3/0x00F5 added here).
+        let raw = match byte_order {
+            ByteOrder::LittleEndian => (entry.value_offset & 0xFF) as u8,
+            ByteOrder::BigEndian => (entry.value_offset >> 24) as u8,
+        };
+        if entry.field_type == 6 {
+            i32::from(raw as i8)
+        } else {
+            i32::from(raw)
+        }
+    } else if entry.value_count == 1 && matches!(entry.field_type, 3 | 8) {
         let raw = inline_u16_value(entry, byte_order);
         if entry.field_type == 8 {
             i32::from(raw as i16)
@@ -1333,6 +1666,242 @@ fn inline_u16_value(entry: &IfdEntry, byte_order: ByteOrder) -> u16 {
     } else {
         (entry.value_offset & 0xFFFF) as u16
     }
+}
+
+/// `%Image::ExifTool::Panasonic::TimeInfo` (Panasonic.pm:1939-1968), reached
+/// from `%Panasonic::Main` tag 0x2003 (Panasonic.pm:1524-1527).
+///
+/// The layout is NOT re-derived here: it is read from the transcription,
+/// `exiftool_tables::find_table("Panasonic", "TimeInfo")` ->
+/// `PANASONIC_TIMEINFO`, which carries `FIRST_ENTRY = 0`, `FORMAT = int8u`
+/// (so a field's byte offset is its index), and the two fields below. The
+/// walk itself is done here rather than through `process_binary_data` because
+/// that entry point is behind the Step 28 Gate-B allowlist
+/// (`exiftool_tables::enabled`), whose admission price is a full-corpus
+/// control/treatment conformance run for the *table*; this call site needs
+/// only the two fields and supplies the one conversion the generator refused.
+///
+/// * `TimeLapseShotNumber` (index 16, `int32u`, `Omitted::NONE`) is reproduced
+///   exactly as transcribed -- no `RawConv`, `ValueConv`, `Condition` or
+///   `PrintConv`, so the decoded number is the reported value.
+/// * `PanasonicDateTime` (index 0, `undef[8]`) is transcribed with
+///   `omitted.value_conv` and `omitted.raw_conv` set, i.e. the generator
+///   refused to model
+///   ```perl
+///   RawConv   => '$val =~ /^\0/ ? undef : $val',
+///   ValueConv => 'sprintf("%s:%s:%s %s:%s:%s.%s", unpack "H4H2H2H2H2H2H2", $val)',
+///   PrintConv => '$self->ConvertDateTime($val)',
+///   ```
+///   (Panasonic.pm:1946-1962, `Format => 'undef[8]'` at :1950). Emitting the raw bytes under that name would be
+///   exactly the confident wrong value AGENTS.md forbids, so the conversion is
+///   supplied by hand here instead: the 8 bytes are BCD, `H4` taking the first
+///   two as a 4-digit year and each following `H2` one byte as two digits, and
+///   a leading NUL byte suppresses the tag. `ConvertDateTime` applies the
+///   `DateFormat` option, which is unset, so it returns its input unchanged.
+///   Verified against the pinned oracle on
+///   `combined-samples/Panasonic/PanasonicDC-S5M2.jpg`, which reports
+///   `[Panasonic] PanasonicDateTime : 2023:01:15 22:30:54.37`.
+fn decode_panasonic_time_info(
+    record: &[u8],
+    byte_order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+) {
+    // PanasonicDateTime -- index 0, undef[8].
+    if let Some(bytes) = record.get(0..8)
+        && bytes[0] != 0
+    {
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        tags.insert(
+            "Panasonic:PanasonicDateTime".to_string(),
+            format!(
+                "{}:{}:{} {}:{}:{}.{}",
+                &hex[0..4],
+                &hex[4..6],
+                &hex[6..8],
+                &hex[8..10],
+                &hex[10..12],
+                &hex[12..14],
+                &hex[14..16],
+            ),
+        );
+    }
+
+    // TimeLapseShotNumber -- index 16, int32u. FORMAT is int8u, so the field's
+    // byte offset is its index unchanged.
+    if let Some(c) = record.get(16..20) {
+        let value = match byte_order {
+            ByteOrder::LittleEndian => u32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+            ByteOrder::BigEndian => u32::from_be_bytes([c[0], c[1], c[2], c[3]]),
+        };
+        tags.insert(
+            "Panasonic:TimeLapseShotNumber".to_string(),
+            value.to_string(),
+        );
+    }
+}
+
+/// Bytes one component of a TIFF field type occupies.
+///
+/// `extract_raw_bytes` treats `value_count` as a byte count, which is only
+/// right for the 1-byte types (BYTE/ASCII/SBYTE/UNDEF) it was written for. A
+/// `rational64u[2]` entry such as AFAreaSize (0x00DE) has `value_count == 2`
+/// and occupies 16 bytes; reading two of them lands inside the first
+/// numerator.
+const fn field_type_size(field_type: u16) -> Option<usize> {
+    match field_type {
+        // BYTE, ASCII, SBYTE, UNDEFINED
+        1 | 2 | 6 | 7 => Some(1),
+        // SHORT, SSHORT
+        3 | 8 => Some(2),
+        // LONG, SLONG, FLOAT
+        4 | 9 | 11 => Some(4),
+        // RATIONAL, SRATIONAL, DOUBLE
+        5 | 10 | 12 => Some(8),
+        _ => None,
+    }
+}
+
+/// The raw value bytes of an entry, sized by `value_count * sizeof(field_type)`
+/// rather than by `value_count` alone.
+///
+/// Same inline/out-of-line convention as [`extract_raw_bytes`]: a value of 4
+/// bytes or fewer lives in the entry's own value field, anything larger is an
+/// offset that [`resolve_value_offset`] dereferences.
+fn extract_typed_bytes(
+    entry: &IfdEntry,
+    full_data: &[u8],
+    ifd_offset: usize,
+    data_base: Option<TiffValueBase>,
+    byte_order: ByteOrder,
+) -> Option<Vec<u8>> {
+    let unit = field_type_size(entry.field_type)?;
+    let byte_len = (entry.value_count as usize).checked_mul(unit)?;
+    if byte_len == 0 {
+        return None;
+    }
+    if byte_len <= 4 {
+        let bytes = match byte_order {
+            ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+            ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+        };
+        return Some(bytes[0..byte_len].to_vec());
+    }
+    let abs_offset = resolve_value_offset(entry, ifd_offset, data_base, byte_len)?;
+    full_data
+        .get(abs_offset..abs_offset + byte_len)
+        .map(<[u8]>::to_vec)
+}
+
+/// A byte run read as `int16s[n]` and space-joined, ExifTool's default list
+/// ValueConv over a `Format => 'int16s'` field.
+fn join_i16(bytes: &[u8], byte_order: ByteOrder) -> String {
+    bytes
+        .chunks_exact(2)
+        .map(|c| {
+            let raw = match byte_order {
+                ByteOrder::LittleEndian => u16::from_le_bytes([c[0], c[1]]),
+                ByteOrder::BigEndian => u16::from_be_bytes([c[0], c[1]]),
+            };
+            (raw as i16).to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A byte run read as `int32u[n]` and space-joined -- the string form the
+/// multi-number PrintConv hashes of FilterEffect (0x00A1) and PostFocusMerging
+/// (0x00BF) are keyed on.
+fn join_u32(bytes: &[u8], byte_order: ByteOrder) -> String {
+    bytes
+        .chunks_exact(4)
+        .map(|c| {
+            match byte_order {
+                ByteOrder::LittleEndian => u32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+                ByteOrder::BigEndian => u32::from_be_bytes([c[0], c[1], c[2], c[3]]),
+            }
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `GetRational64s` (ExifTool.pm:6107-6113) over the first 8 bytes of a run:
+/// two `Get32s`, `$denom or return $numer ? 'inf' : 'undef'`, else
+/// `RoundFloat($numer/$denom, 10)`.
+fn first_rational64s(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    let chunk = bytes.get(0..8)?;
+    let read = |c: &[u8]| -> i32 {
+        match byte_order {
+            ByteOrder::LittleEndian => i32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+            ByteOrder::BigEndian => i32::from_be_bytes([c[0], c[1], c[2], c[3]]),
+        }
+    };
+    let numerator = read(&chunk[0..4]);
+    let denominator = read(&chunk[4..8]);
+    if denominator == 0 {
+        return Some(if numerator != 0 { "inf" } else { "undef" }.to_string());
+    }
+    sprintf_g(f64::from(numerator) / f64::from(denominator), 10)
+}
+
+/// FilterEffect (tag 0x00A1) PrintConv, Panasonic.pm:1274-1304.
+///
+/// Keyed on the space-joined `int32u[2]` reading of the tag's 8 bytes. The
+/// commented-out `# '0 0' => 'Expressive'` line above the live `'0 0' =>
+/// 'Off'` in the Perl is ExifTool's own superseded reading (forum11194 vs
+/// forum14033) -- the live entry is the one reproduced here.
+fn decode_filter_effect(joined: &str) -> String {
+    let name = match joined {
+        "0 0" => "Off",
+        "0 1" => "Expressive",
+        "0 2" => "Retro",
+        "0 4" => "High Key",
+        "0 8" => "Sepia",
+        "0 16" => "High Dynamic",
+        "0 32" => "Miniature Effect",
+        "0 256" => "Low Key",
+        "0 512" => "Toy Effect",
+        "0 1024" => "Dynamic Monochrome",
+        "0 2048" => "Soft Focus",
+        "0 4096" => "Impressive Art",
+        "0 8192" => "Cross Process",
+        "0 16384" => "One Point Color",
+        "0 32768" => "Star Filter",
+        "0 524288" => "Old Days",
+        "0 1048576" => "Sunshine",
+        "0 2097152" => "Bleach Bypass",
+        "0 4194304" => "Toy Pop",
+        "0 8388608" => "Fantasy",
+        "0 33554432" => "Monochrome",
+        "0 67108864" => "Rough Monochrome",
+        "0 134217728" => "Silky Monochrome",
+        _ => return format!("Unknown ({joined})"),
+    };
+    name.to_string()
+}
+
+/// VideoBurstMode (tag 0x00BB) PrintConv, Panasonic.pm:1358-1374.
+///
+/// The tag carries `PrintHex => 1`, so its keys are written as hex in the
+/// Perl *and* an unmatched value takes ExifTool's hex-formatted miss branch
+/// (`sprintf('Unknown (0x%x)',$val)`, ExifTool.pm:3631) rather than the plain
+/// decimal `Unknown ($val)` every other tag here uses. The reading is
+/// `int32u`, so the fallback formats the unsigned value.
+pub(crate) fn decode_video_burst_mode(value: i32) -> String {
+    let name = match value {
+        0x01 => "Off",
+        0x04 => "Post Focus",
+        0x18 => "4K Burst",
+        0x28 => "4K Burst (Start/Stop)",
+        0x48 => "4K Pre-burst",
+        0x108 => "Loop Recording",
+        0x408 => "Focus Stacking",
+        0x810 => "6K Burst",
+        0x820 => "6K Burst (Start/Stop)",
+        0x1001 => "High Resolution Mode",
+        _ => return format!("Unknown (0x{:x})", value as u32),
+    };
+    name.to_string()
 }
 
 /// Extracts an entry's value as a list of numeric components, honoring the
@@ -1859,6 +2428,265 @@ mod byte_order_tests {
             err.contains("Panasonic"),
             "error must name the directory: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod time_info_tests {
+    use super::*;
+    use crate::exiftool_tables::{Fmt, find_table};
+
+    /// The layout `decode_panasonic_time_info` walks is the transcribed one,
+    /// not a hand re-derivation, so this pins it to `find_table` rather than
+    /// to a copy of the numbers. If a regeneration moves either field, this
+    /// fails instead of the decoder silently reading the wrong offset.
+    ///
+    /// `%Panasonic::TimeInfo` has FORMAT `int8u` (Panasonic.pm:1939-1945 sets
+    /// no FORMAT, and `ProcessBinaryData` defaults to int8u), so a field's
+    /// byte offset is its index unchanged -- which is why the decoder reads
+    /// `record[0..8]` and `record[16..20]`.
+    #[test]
+    fn time_info_layout_matches_the_transcription() {
+        let table = find_table("Panasonic", "TimeInfo").expect("PANASONIC_TIMEINFO is transcribed");
+        assert_eq!(table.first_entry, 0);
+        assert_eq!(table.default_format, Fmt::Int8u);
+        assert_eq!(table.default_format.size(), 1);
+
+        let date = table
+            .fields
+            .iter()
+            .find(|f| f.name == "PanasonicDateTime")
+            .expect("PanasonicDateTime is transcribed");
+        assert_eq!(date.index, 0);
+        assert_eq!(date.format, Some(Fmt::Undef(8)));
+        // The generator refused this field's RawConv and ValueConv, which is
+        // exactly why the conversion is supplied by hand in the decoder. If a
+        // regeneration ever models them, the decoder should be deleted in
+        // favour of the generated one -- so assert the refusal is still real.
+        assert!(date.omitted.value_conv, "PanasonicDateTime ValueConv");
+        assert!(date.omitted.raw_conv, "PanasonicDateTime RawConv");
+
+        let shot = table
+            .fields
+            .iter()
+            .find(|f| f.name == "TimeLapseShotNumber")
+            .expect("TimeLapseShotNumber is transcribed");
+        assert_eq!(shot.index, 16);
+        assert_eq!(shot.format, Some(Fmt::Int32u));
+        assert_eq!(shot.count, 1);
+        // Nothing omitted: the decoded int32u *is* the reported value.
+        assert!(!shot.omitted.any(), "TimeLapseShotNumber has no refusals");
+    }
+
+    /// `combined-samples/Panasonic/PanasonicDC-S5M2.jpg` tag 0x2003, whose
+    /// first eight bytes are the BCD date `20 23 01 15 22 30 54 37`. The
+    /// pinned 13.59 oracle (`exiftool-pinned.sh -a -G1 -s`) reports
+    /// `[Panasonic] PanasonicDateTime : 2023:01:15 22:30:54.37` for it --
+    /// `H4` takes the first two bytes as the four-digit year and each `H2`
+    /// one byte as two digits (Panasonic.pm:1952).
+    #[test]
+    fn panasonic_date_time_decodes_bcd() {
+        let mut record = vec![0x20, 0x23, 0x01, 0x15, 0x22, 0x30, 0x54, 0x37];
+        record.extend_from_slice(&[0xFF; 8]);
+        record.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut tags = HashMap::new();
+        decode_panasonic_time_info(&record, ByteOrder::LittleEndian, &mut tags);
+
+        assert_eq!(
+            tags.get("Panasonic:PanasonicDateTime").map(String::as_str),
+            Some("2023:01:15 22:30:54.37")
+        );
+        assert_eq!(
+            tags.get("Panasonic:TimeLapseShotNumber")
+                .map(String::as_str),
+            Some("0")
+        );
+    }
+
+    /// `RawConv => '$val =~ /^\0/ ? undef : $val'` (Panasonic.pm:1951): a
+    /// leading NUL suppresses the tag outright. Every Panasonic body writes a
+    /// TimeInfo record, but only six files in the 544-file Panasonic+Leica
+    /// corpus have a non-NUL first byte, so without this gate 538 files would
+    /// gain a `PanasonicDateTime` ExifTool does not report.
+    #[test]
+    fn panasonic_date_time_suppressed_on_leading_nul() {
+        let mut record = vec![0x00; 20];
+        record[16] = 0x04;
+
+        let mut tags = HashMap::new();
+        decode_panasonic_time_info(&record, ByteOrder::LittleEndian, &mut tags);
+
+        assert!(!tags.contains_key("Panasonic:PanasonicDateTime"));
+        // The shot number is a separate field and is unaffected by the gate.
+        assert_eq!(
+            tags.get("Panasonic:TimeLapseShotNumber")
+                .map(String::as_str),
+            Some("4")
+        );
+    }
+
+    /// A record too short to reach index 16 reports neither field rather than
+    /// reading past its end (ExifTool's `ReadValue` drops a value that does
+    /// not fit).
+    #[test]
+    fn time_info_short_record_reports_nothing() {
+        let mut tags = HashMap::new();
+        decode_panasonic_time_info(&[0x00; 12], ByteOrder::LittleEndian, &mut tags);
+        assert!(tags.is_empty());
+    }
+}
+
+/// The `%Panasonic::Main` tags above 0x00AB added for the panasonic-main-ifd
+/// gap. Every expected string here is the pinned 13.59 oracle's own output for
+/// a named corpus file, quoted in the test that asserts it.
+#[cfg(test)]
+mod main_ifd_high_tag_tests {
+    use super::*;
+
+    /// `PanasonicDC-GH7.jpg`, tag 0x00a1, 8 bytes of zero read as `int32u[2]`
+    /// (`exiftool -v3`: `rational64u[1] read as int32u[2]`, `FilterEffect =
+    /// 0 0`). `-a -G1 -s` prints `[Panasonic] FilterEffect : Off`.
+    /// `PanasonicDC-GH6.jpg` is the `0 1` -> `Expressive` case and
+    /// `PanasonicDC-S1H.jpg` the `0 2097152` -> `Bleach Bypass` case.
+    #[test]
+    fn filter_effect_matches_exiftool() {
+        assert_eq!(decode_filter_effect("0 0"), "Off");
+        assert_eq!(decode_filter_effect("0 1"), "Expressive");
+        assert_eq!(decode_filter_effect("0 2097152"), "Bleach Bypass");
+        assert_eq!(decode_filter_effect("0 134217728"), "Silky Monochrome");
+        // Hash miss: ExifTool.pm:3633's `Unknown ($val)`, decimal -- this tag
+        // carries no PrintHex.
+        assert_eq!(decode_filter_effect("0 3"), "Unknown (0 3)");
+    }
+
+    /// VideoBurstMode carries `PrintHex => 1` (Panasonic.pm:1360), so a miss
+    /// takes ExifTool.pm:3631's `sprintf('Unknown (0x%x)',$val)` rather than
+    /// the decimal form every other Panasonic hash uses. `PanasonicDC-GH7.jpg`
+    /// reads 1 and the oracle prints `Off`; `PanasonicDC-GX9.jpg` reads 0x18
+    /// and prints `4K Burst`.
+    #[test]
+    fn video_burst_mode_matches_exiftool() {
+        assert_eq!(decode_video_burst_mode(0x01), "Off");
+        assert_eq!(decode_video_burst_mode(0x18), "4K Burst");
+        assert_eq!(decode_video_burst_mode(0x1001), "High Resolution Mode");
+        assert_eq!(decode_video_burst_mode(0x408), "Focus Stacking");
+        assert_eq!(decode_video_burst_mode(0x99), "Unknown (0x99)");
+    }
+
+    /// `VideoBurstResolution` has only two keys; a `PanasonicDC-TZ200.jpg`
+    /// reading of 0 is printed `Unknown (0)` by the pinned oracle, which is
+    /// `SimpleValueDecoder`'s own hash-miss form.
+    #[test]
+    fn video_burst_resolution_unknown_matches_exiftool() {
+        assert_eq!(VIDEO_BURST_RESOLUTION.decode(1), "Off or 4K");
+        assert_eq!(VIDEO_BURST_RESOLUTION.decode(4), "6K");
+        assert_eq!(VIDEO_BURST_RESOLUTION.decode(0), "Unknown (0)");
+    }
+
+    /// `LongExposureNRUsed` (0x00BE) is keyed 1/2 => No/Yes
+    /// (Panasonic.pm:1386-1390) -- deliberately different from the 0x0049
+    /// `LongExposureNoiseReduction` *setting*, whose 1/2 mean Off/On. Mixing
+    /// them would print a plausible wrong word.
+    #[test]
+    fn long_exposure_nr_used_is_not_the_setting() {
+        assert_eq!(LONG_EXPOSURE_NR_USED.decode(1), "No");
+        assert_eq!(LONG_EXPOSURE_NR_USED.decode(2), "Yes");
+        assert_eq!(LONG_EXPOSURE_NR.decode(1), "Off");
+        assert_eq!(LONG_EXPOSURE_NR.decode(2), "On");
+    }
+
+    /// `AFSubjectDetection` (Panasonic.pm:1477-1496). The corpus exercises
+    /// 0, 1, 3, 5 and 8; `PanasonicDC-GH7.jpg` reads 5 and the oracle prints
+    /// `Animal Eye/Body`.
+    #[test]
+    fn af_subject_detection_matches_exiftool() {
+        assert_eq!(AF_SUBJECT_DETECTION.decode(0), "n/a");
+        assert_eq!(AF_SUBJECT_DETECTION.decode(1), "Human Eye/Face/Body");
+        assert_eq!(AF_SUBJECT_DETECTION.decode(3), "Human Eye/Face");
+        assert_eq!(AF_SUBJECT_DETECTION.decode(5), "Animal Eye/Body");
+        assert_eq!(AF_SUBJECT_DETECTION.decode(8), "Car (main part priority)");
+        assert_eq!(AF_SUBJECT_DETECTION.decode(13), "Airplane (nose priority)");
+    }
+
+    /// `HighlightShadow` is `int16u[2]` read as `int16s[2]`
+    /// (Panasonic.pm:1329-1334): a -1 pair must print `-1 -1`, not
+    /// `65535 65535`.
+    #[test]
+    fn highlight_shadow_reads_signed_pairs() {
+        assert_eq!(
+            join_i16(&[0x00, 0x00, 0x00, 0x00], ByteOrder::LittleEndian),
+            "0 0"
+        );
+        assert_eq!(
+            join_i16(&[0xFF, 0xFF, 0x02, 0x00], ByteOrder::LittleEndian),
+            "-1 2"
+        );
+        assert_eq!(
+            join_i16(&[0xFF, 0xFF, 0x00, 0x02], ByteOrder::BigEndian),
+            "-1 2"
+        );
+    }
+
+    /// `NoiseReductionStrength` is `rational64s` (Panasonic.pm:1449-1452), so
+    /// `GetRational64s` reads two *signed* 32-bit words (ExifTool.pm:6107).
+    /// `PanasonicDC-GH7.jpg` stores `0/100` and the oracle prints `0`
+    /// (`exiftool -v3`: `NoiseReductionStrength = 0 (0/100)`). A negative
+    /// numerator is the case an unsigned reader would render as ~4.29e9.
+    #[test]
+    fn noise_reduction_strength_is_signed() {
+        let zero_over_hundred = [0, 0, 0, 0, 100, 0, 0, 0];
+        assert_eq!(
+            first_rational64s(&zero_over_hundred, ByteOrder::LittleEndian).as_deref(),
+            Some("0")
+        );
+        let minus_fifty_over_hundred = [
+            0xCE, 0xFF, 0xFF, 0xFF, // -50
+            0x64, 0x00, 0x00, 0x00, // 100
+        ];
+        assert_eq!(
+            first_rational64s(&minus_fifty_over_hundred, ByteOrder::LittleEndian).as_deref(),
+            Some("-0.5")
+        );
+        // `$denom or return $numer ? 'inf' : 'undef'` (ExifTool.pm:6111).
+        assert_eq!(
+            first_rational64s(&[1, 0, 0, 0, 0, 0, 0, 0], ByteOrder::LittleEndian).as_deref(),
+            Some("inf")
+        );
+        assert_eq!(
+            first_rational64s(&[0; 8], ByteOrder::LittleEndian).as_deref(),
+            Some("undef")
+        );
+    }
+
+    /// `field_type_size` is what stops a `rational64u[2]` entry (AFAreaSize,
+    /// 0x00DE, 16 bytes) from being read as 2 bytes the way
+    /// `extract_raw_bytes`'s value_count-as-byte-count convention would.
+    #[test]
+    fn field_type_size_covers_the_types_this_module_reads() {
+        assert_eq!(field_type_size(1), Some(1)); // BYTE
+        assert_eq!(field_type_size(2), Some(1)); // ASCII
+        assert_eq!(field_type_size(3), Some(2)); // SHORT
+        assert_eq!(field_type_size(4), Some(4)); // LONG
+        assert_eq!(field_type_size(5), Some(8)); // RATIONAL
+        assert_eq!(field_type_size(7), Some(1)); // UNDEFINED
+        assert_eq!(field_type_size(10), Some(8)); // SRATIONAL
+        assert_eq!(field_type_size(0), None);
+        assert_eq!(field_type_size(13), None);
+    }
+
+    /// `LensTypeModel`'s ValueConv is `sprintf("%.4x",$val)` with the two hex
+    /// byte-pairs swapped (Panasonic.pm:1425). `PanasonicDC-GH7.jpg` reads
+    /// 4128 = 0x1020 and the oracle prints `20 10`; `PanasonicDC-GH6.jpg`
+    /// reads 4144 = 0x1030 -> `30 10`; `PanasonicDC-S1H.jpg` reads
+    /// 16391 = 0x4007 -> `07 40`.
+    #[test]
+    fn lens_type_model_swaps_hex_pairs() {
+        let printed = |raw: u16| format!("{:02x} {:02x}", raw & 0xFF, raw >> 8);
+        assert_eq!(printed(4128), "20 10");
+        assert_eq!(printed(4144), "30 10");
+        assert_eq!(printed(16391), "07 40");
+        assert_eq!(printed(1), "01 00");
     }
 }
 
