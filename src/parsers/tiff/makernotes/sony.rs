@@ -167,14 +167,26 @@ impl MakerNoteParser for SonyParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        self.parse_with_context_and_values(ctx, byte_order, model, tags, &mut HashMap::new())
+    }
+
+    fn parse_with_context_and_values(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
         // `payload_tiff_offset` is the `data_base` this decoder subtracts from a
         // TIFF-relative value offset: `None` rather than 0 when the caller had
         // no enclosing block, so the subtraction is skipped instead of landing
         // somewhere plausible and wrong.
         let data = ctx.payload();
         match parse_sony_makernote_impl(data, byte_order, model, ctx.payload_tiff_offset()) {
-            Ok(parsed_tags) => {
+            Ok((parsed_tags, parsed_forms)) => {
                 tags.extend(parsed_tags);
+                value_forms.extend(parsed_forms);
                 Ok(())
             }
             Err(e) => Err(format!("Sony MakerNote parse error: {}", e)),
@@ -297,9 +309,9 @@ fn parse_sony_makernote_impl(
     _byte_order: ByteOrder,
     model: Option<&str>,
     data_base: Option<u32>,
-) -> Result<HashMap<String, String>> {
+) -> Result<(HashMap<String, String>, HashMap<String, String>)> {
     if data.is_empty() {
-        return Ok(HashMap::new());
+        return Ok((HashMap::new(), HashMap::new()));
     }
 
     // Skip whichever header this body writes; the IFD follows it.
@@ -327,7 +339,7 @@ fn parse_sony_makernote_impl(
     };
     let ifd_data = &data[ifd_start..];
     if ifd_data.len() < 2 {
-        return Ok(HashMap::new());
+        return Ok((HashMap::new(), HashMap::new()));
     }
 
     // Sony writes the MakerNote in the file's own byte order, but a bare count
@@ -341,7 +353,7 @@ fn parse_sony_makernote_impl(
     } else if is_reasonable(entry_count_be) {
         (entry_count_be, ByteOrder::BigEndian)
     } else {
-        return Ok(HashMap::new());
+        return Ok((HashMap::new(), HashMap::new()));
     };
 
     let entries = read_entries(&ifd_data[2..], entry_count, byte_order);
@@ -393,7 +405,7 @@ fn parse_sony_makernote_impl(
                 &mut cipher_ctx,
             );
             for tag in tags {
-                found.push(Found::new(
+                found.push(Found::with_form(
                     format!("Sony:{}", tag.name),
                     tag.value,
                     if tag.low_priority {
@@ -401,6 +413,7 @@ fn parse_sony_makernote_impl(
                     } else {
                         DEFAULT_PRIORITY
                     },
+                    tag.value_form,
                 ));
             }
             continue;
@@ -490,8 +503,13 @@ fn parse_sony_makernote_impl(
                 for (key, printed) in main {
                     found.push(Found::new(key, printed, DEFAULT_PRIORITY));
                 }
-                for (key, printed) in sub {
-                    found.push(Found::new(key, printed, SUB_DIRECTORY_PRIORITY));
+                for (key, printed, value_form) in sub {
+                    found.push(Found::with_form(
+                        key,
+                        printed,
+                        SUB_DIRECTORY_PRIORITY,
+                        value_form,
+                    ));
                 }
             }
             _ => {
@@ -551,6 +569,12 @@ struct Found {
     value: String,
     /// ExifTool priority.
     priority: u8,
+    /// The ValueConv text when PrintConv rounded it away -- see
+    /// [`binary_data::Found::value_form`]. Rides along so the winner's
+    /// unrounded form reaches `MetadataMap::set_value_form` and the
+    /// composites consume ValueConv-level inputs, the way
+    /// `BuildCompositeTags` does (ExifTool.pm:4008+).
+    value_form: Option<String>,
 }
 
 impl Found {
@@ -559,6 +583,16 @@ impl Found {
             key,
             value,
             priority,
+            value_form: None,
+        }
+    }
+
+    fn with_form(key: String, value: String, priority: u8, value_form: Option<String>) -> Self {
+        Found {
+            key,
+            value,
+            priority,
+            value_form,
         }
     }
 
@@ -585,7 +619,7 @@ fn push_plain(
     let mut out = Vec::new();
     binary_data::process(plain_tables::TABLES, table, bytes, order, ctx, &mut out);
     for tag in out {
-        found.push(Found::new(
+        found.push(Found::with_form(
             format!("Sony:{}", tag.name),
             tag.value,
             if tag.low_priority {
@@ -593,6 +627,7 @@ fn push_plain(
             } else {
                 DEFAULT_PRIORITY
             },
+            tag.value_form,
         ));
     }
 }
@@ -622,22 +657,27 @@ fn push_all(found: &mut Vec<Found>, tags: HashMap<String, String>, priority: u8)
 /// with different values. ExifTool reports 0x9405's, because a Sony MakerNote
 /// IFD is *not* sorted by tag id -- the ILCA-68 lists 0x9400..0x940f, then
 /// 0xa100, then 0x2010 -- and 0x9405 is therefore the copy it reaches first.
-fn resolve_duplicates(found: Vec<Found>) -> HashMap<String, String> {
-    let mut winners: HashMap<String, (u8, String, String)> = HashMap::new();
+fn resolve_duplicates(found: Vec<Found>) -> (HashMap<String, String>, HashMap<String, String>) {
+    let mut winners: HashMap<String, (u8, String, String, Option<String>)> = HashMap::new();
     for tag in found {
         let name = tag.name().to_string();
-        if let Some((stored, _, _)) = winners.get(&name) {
+        if let Some((stored, _, _, _)) = winners.get(&name) {
             let effective = (*stored).max(DEFAULT_PRIORITY);
             if tag.priority < effective {
                 continue;
             }
         }
-        winners.insert(name, (tag.priority, tag.key, tag.value));
+        winners.insert(name, (tag.priority, tag.key, tag.value, tag.value_form));
     }
-    winners
-        .into_values()
-        .map(|(_, key, value)| (key, value))
-        .collect()
+    let mut tags = HashMap::new();
+    let mut value_forms = HashMap::new();
+    for (_, key, value, value_form) in winners.into_values() {
+        if let Some(form) = value_form {
+            value_forms.insert(key.clone(), form);
+        }
+        tags.insert(key, value);
+    }
+    (tags, value_forms)
 }
 
 /// Reads `count` 12-byte IFD entries, stopping early if the data runs out.

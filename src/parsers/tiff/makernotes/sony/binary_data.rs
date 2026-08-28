@@ -547,6 +547,17 @@ pub struct Found {
     pub value: String,
     /// `Priority => 0`
     pub low_priority: bool,
+    /// The ValueConv scalar's Perl stringification, carried only when the
+    /// PrintConv changed it. ExifTool's `BuildCompositeTags` reads `@val`
+    /// from the post-ValueConv store (`$$rawValue{...}`, ExifTool.pm:4008+),
+    /// never the printed form, so a table like the DSLR-A100's
+    /// `FocusDistance` (`2**(($val-126)/16)` = 10.3747164372081, printed
+    /// `10.37 m`) must hand the composites the unrounded number or
+    /// `Composite:FOV`'s distance term drifts in its final digit. `None`
+    /// when printing was lossless -- the stored string then *is* the
+    /// ValueConv form, which is what `occurrence_value_string`
+    /// (`src/composite/mod.rs`) already assumes for a bare stored value.
+    pub value_form: Option<String>,
 }
 
 // ===========================================================================
@@ -1197,10 +1208,16 @@ fn process_depth(
         let Some(val) = apply_vc(tag.vc, val, &raw_bytes) else {
             continue;
         };
+        // The ValueConv scalar's own text, captured before PrintConv formats
+        // it away -- see `Found::value_form`.
+        let vc_text = val.text();
+        let printed = apply_pc(tag.pc, val, tag.print_hex);
+        let value_form = (printed != vc_text).then_some(vc_text);
         out.push(Found {
             name: tag.name,
-            value: apply_pc(tag.pc, val, tag.print_hex),
+            value: printed,
             low_priority: tag.low_priority,
+            value_form,
         });
     }
 }
