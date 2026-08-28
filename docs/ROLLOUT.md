@@ -77,9 +77,31 @@ git clone --branch refactor/tag-machinery <hub> ~/fleet-checkout   # or pull
 # work2 pod only: FLEET_HOST=work2pod in the unit env (k8s hostname is unstable)
 ```
 
+**Set `FLEET_HOST` in the unit on EVERY host**, to that host's key under `hosts`
+in `tools/fleet/rollout/seed_desired.py` — `server`, `oldair`, `m5`. It is not
+`hostname -s`, and the two only happen to coincide on the i7.
+`fleetd.host_identity()` falls back to the hostname when the variable is unset,
+which made this look like a pod-only quirk: in the Stage 1 LIVE run
+(2026-08-27/28) the m5 reported as `Allens-Air`, a name `refs/fleet/desired` has
+never heard of, and `fleet status --why` printed `refused: disabled ()` — an
+EMPTY reason — with no `m5` row at all, which reads as "an operator took this
+host down" and was the opposite of the truth. The committed `fleetd.service`,
+`com.oxidex.fleetd.plist` and `cron-backstop.txt` now carry `FLEET_HOST`; the
+plist's and the cron line's values are hand-substituted per host, exactly like
+the `/Users/allen/...` paths beside them. A wrong or missing name now refuses
+with `unknown-host` instead of `disabled`.
+
+**Both units also set `PATH` with `~/.cargo/bin` first.** `fleetd.service` did
+not until 2026-08-28 — see the `platform_id` row in the table below.
+
 **Verify before the next host** (this is the trust gate):
-1. `fleet status` shows the host `up`, heartbeat < 30s, correct
-   `owning_user`, oracle ✓.
+0. `python3 tools/fleet/toolchain.py ids --format sh` on the host, and the same
+   value in the heartbeat's `platform_id`. fleetd refuses to start when its own
+   `platform_id` differs from the one its gate command computes, so a mismatch
+   shows up as a refusing daemon in `systemctl --user status fleetd` /
+   `/tmp/fleetd.log` rather than as silence.
+1. `fleet status` shows the host `up` **under its seeded name**, heartbeat < 30s,
+   correct `owning_user`, oracle ✓.
 2. `gates_running` in the heartbeat matches an independent
    `ps -eo pid,pgid,cmd | grep "[g]ate"` count on that host.
 3. Watch one full cycle: `fleet up <host> --gates 1`, see fleetd claim a
@@ -116,4 +138,6 @@ only gate entry point from here on.
 | heartbeat DOWN, host reachable | fleetd died AND its cron backstop was removed | reinstall backstop; `systemctl --user status fleetd` / `/tmp/fleetd.log` |
 | gate FAIL on both Macs, same code green on Linux | platform-specific verdict — this is why `platform_id` is in the cache key | never let a Linux PASS satisfy a Mac slot; investigate the macOS-only failure |
 | fleetd on work2 pod heartbeats under a `work2box-*` name | FLEET_HOST not set in unit env | set `FLEET_HOST=work2pod`, restart fleetd, delete the stray hosts ref |
+| a host heartbeats under its `hostname -s` and `fleet status --why` says `refused: disabled ()` with an empty reason (m5 as `Allens-Air`, live run 2026-08-27/28) | same cause as the row above, and it is NOT pod-specific: no unit set `FLEET_HOST` at all, so every host whose seeded name differs from its hostname reported under a name `refs/fleet/desired` does not contain | set `FLEET_HOST=<seeded name>` in the unit, restart fleetd, delete the stray `refs/fleet/hosts/<hostname>`; the reason line is now `unknown-host (… set FLEET_HOST)` instead of `disabled` |
+| a host re-gates the same branch every ~21 min while a PASS for that tree is already on the state repo; `classify_branch` never says AWAITING_TRAIN (i7, live run 2026-08-27/28) | fleetd and the gate it spawns computed different `platform_id`s (`b2bdf493…` vs `b6613b19…`) for the SAME rustc, so the scheduler read a cache slot nothing writes. Root cause was a trailing newline: `$(rustc -vV)` strips it, `subprocess.run().stdout` keeps it — three implementations of one formula, none of them compared | one resolver now (`tools/fleet/toolchain.py`, sourced into shell by `units/fleet-toolchain.sh`); fleetd refuses to start on a mismatch. Verify with `python3 tools/fleet/toolchain.py ids --format sh` and the last path segment of `refs/fleet/verdicts/<tree>/<gv>/<platform_id>` |
 | regen fails on any non-i7 host with a digest-mismatch abort | oracle ledger is Perl-version-bound (i7 5.38.2 only) — the abort being loud is `fix-ledger-loud` working | route regen work to the i7; do not "fix" by regenerating the ledger casually |

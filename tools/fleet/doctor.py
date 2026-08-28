@@ -49,7 +49,6 @@ capability probe is the exact failure mode this script exists to catch.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import platform
 import shutil
@@ -66,6 +65,7 @@ sys.path.insert(0, str(FLEET_DIR))
 from scripts import instrument  # noqa: E402  (path must be set up first)
 import config  # noqa: E402  (sibling module; R6 -- the one EXIFTOOL_CACHE_DIR default)
 import fleetlib  # noqa: E402  (sibling module; R2 -- the one token-file resolver)
+import toolchain  # noqa: E402  (sibling module; L1 -- the one rustc resolver)
 
 # ---------------------------------------------------------------------------
 # Canonical constants
@@ -149,11 +149,13 @@ def gate_path_env() -> dict:
     rustup-managed toolchain the gate actually uses (once PATH is overridden
     the way the gate overrides it) is a stale 1.90.0. Measuring with anything
     other than this exact PATH order measures the wrong rustc.
+
+    L1 (Keel Stage 1 LIVE, 2026-08-27/28): "replicated here" was the
+    problem -- this was the third of three replications and they had
+    drifted. Delegated to `toolchain.toolchain_env()`, which `gate.sh`
+    also builds its own PATH prefix from.
     """
-    home = os.environ.get("HOME", str(Path.home()))
-    env = dict(os.environ)
-    env["PATH"] = f"{home}/.cargo/bin:{home}/.local/bin:{env.get('PATH', '')}"
-    return env
+    return toolchain.toolchain_env()
 
 
 def run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -180,10 +182,13 @@ def check_toolchain() -> Check:
     # line. Dropping it here silently changes the hash and desyncs from the
     # documented regeneration command -- caught by doctor.py failing against
     # itself on a host that was, in fact, canonical.
-    normalized = "\n".join(
-        line for line in raw.splitlines() if not line.startswith("host:")
-    ) + "\n"
-    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    #
+    # L1: that reasoning was right and is now `toolchain.compute_ids`'s,
+    # spelled once. This file was the ONLY one of the three old
+    # implementations that got it right, which is exactly why the other
+    # two could be wrong for months without doctor.py ever disagreeing
+    # with itself.
+    digest = toolchain.compute_rustc_id(raw)
     release_line = next((l for l in raw.splitlines() if l.startswith("release:")), "release: ?")
     if digest == CANONICAL_TOOLCHAIN_ID:
         c.passed(

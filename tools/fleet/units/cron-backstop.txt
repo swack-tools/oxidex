@@ -59,5 +59,16 @@
 # below, so the expansion here is real -- unlike the plist unit, where the
 # equivalent value must be a literal, hand-substituted path.
 #
+# L1/L2 (Keel Stage 1 LIVE, 2026-08-27/28): FLEET_HOST and PATH are set
+# here for the same reasons the two units now set them. `hostname -s` is
+# not the fleet name (the m5 answers to `Allens-Air`, is seeded as `m5`,
+# and spent the live run reporting `refused: disabled ()` under a name
+# refs/fleet/desired had never heard of), and a cron environment carries
+# an even shorter PATH than systemd's -- with no ~/.cargo/bin, fleetd and
+# the gate it spawns hash different descriptions of the same compiler and
+# address different verdict-cache slots. REPLACE `<fleet-host-name>` with
+# this machine's key under `hosts` in tools/fleet/rollout/seed_desired.py;
+# fleetd refuses with `unknown-host` if it is wrong.
+#
 # Add via `crontab -e`:
-*/5 * * * * pidfile="$HOME/.fleetd/wrapper.pid"; kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || (FLEET_HUB_URL=https://github.com/swack-tools/oxidex-fleet-state.git FLEET_CODE_URL=https://github.com/swack-tools/oxidex.git FLEET_GIT_TOKEN_FILE=$HOME/.keel/secrets/git-token nohup $HOME/fleet-checkout/tools/fleet/units/fleetd-wrapper.sh >> $HOME/gatelogs/fleetd-wrapper-cron.log 2>&1 &)
+*/5 * * * * pidfile="$HOME/.fleetd/wrapper.pid"; kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || (FLEET_HUB_URL=https://github.com/swack-tools/oxidex-fleet-state.git FLEET_CODE_URL=https://github.com/swack-tools/oxidex.git FLEET_GIT_TOKEN_FILE=$HOME/.keel/secrets/git-token FLEET_HOST=<fleet-host-name> PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH nohup $HOME/fleet-checkout/tools/fleet/units/fleetd-wrapper.sh >> $HOME/gatelogs/fleetd-wrapper-cron.log 2>&1 &)

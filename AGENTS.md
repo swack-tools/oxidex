@@ -114,7 +114,9 @@ result argues *against* adding a safety check, re-run it with the tool the
 harness itself uses before believing it.
 
 Five more, one session, each a proxy standing in for the thing being
-measured, made mechanical below rather than left as a story:
+measured — plus a sixth from the Keel Stage 1 live run, where the proxy was
+the acceptance check itself. Made mechanical below rather than left as a
+story:
 
 1. **Implicit binary resolution.** `jpeg-tag-matrix` resolved oxidex from
    `$repo/target/release/oxidex` by convention while `CARGO_TARGET_DIR` was
@@ -145,6 +147,32 @@ measured, made mechanical below rather than left as a story:
    on five consecutive failed pushes — `&&` sees `tail`'s exit status, which
    is almost always 0, never `git push`'s. Check `${PIPESTATUS[0]}` (bash) or
    avoid the pipe.
+6. **Two spellings of one identity, and an acceptance check that only
+   asserted the value existed.** On the i7, `fleetd` recorded
+   `platform_id b2bdf493…` while the gate it had itself just spawned wrote
+   its verdict under `b6613b19…` — same host, same minute, same rustc.
+   `platform_id` is a third of the verdict cache key, so the component
+   that PAYS for a gate could not read the result of the gate it started:
+   `verdict.lookup` missed, `classify_branch` never returned
+   AWAITING_TRAIN, and the host re-gated the identical merge tree every
+   ~21 minutes forever while a correct PASS sat unread. The formula was
+   spelled three times (`gate.sh`, `claim.py`, `verdict.py`) and no two
+   agreed on both fields; the difference was one trailing newline —
+   `$(rustc -vV)` strips it, `subprocess.run().stdout` keeps it — not
+   which compiler. It survived because the acceptance bullet checked that
+   `git ls-remote 'refs/fleet/verdicts/*'` listed **a** `platform_id`,
+   which was true throughout: the gate's key was perfectly well formed.
+   **An assertion that a value exists cannot catch two components
+   disagreeing about the value; only an assertion that the two sides
+   AGREE can.** Fix: one resolver (`tools/fleet/toolchain.py`, carried
+   into shell by `units/fleet-toolchain.sh`, which `gate.sh` sources, so
+   there is one implementation rather than a reference one and some
+   copies), `fleetd` refuses to start when its own `platform_id` differs
+   from the one its gate command computes, and
+   `tools/fleet/tests/test_toolchain_seam.py` drives the real `gate.sh`
+   lines against the Python side rather than re-spelling the formula in
+   the test — a test that spells the formula itself proves only that its
+   author repeated the mistake.
 
 Every measurement script under `tools/exiftool-tables/` and
 `src/bin/jpeg-tag-matrix/` prints an `=== instrument: <tool> ===` header

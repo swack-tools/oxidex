@@ -96,16 +96,14 @@ Standard library only.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import socket
-import subprocess
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Optional
 
+import toolchain  # L1: the ONE rustc resolver + id formula
 from fleetlib import Hub, HubError, HubUnreachableError
 
 # ---------------------------------------------------------------------- #
@@ -222,44 +220,40 @@ def is_expired(payload: dict, now: Optional[datetime] = None) -> bool:
 
 
 def _rustc_vv(timeout: int = 10) -> str:
-    """Raw `rustc -vV` output, replicating the gate's PATH resolution
-    (`$HOME/.cargo/bin` before anything a login shell would otherwise pick
-    up) -- see docs/FLEET.md, "Toolchain must be measured the way the gate
-    resolves it." Returns "" if rustc cannot be found or run; callers hash
-    whatever they get, so an empty toolchain is still a stable (if useless)
-    id rather than a crash.
+    """`rustc -vV` output, resolved and normalized by `toolchain.py`.
+
+    L1 (Keel Stage 1 LIVE, 2026-08-27/28): this used to build the PATH and
+    run the subprocess here, and returned `stdout` VERBATIM -- trailing
+    newline included. `gate.sh` captured the same output through `$(...)`,
+    which strips it. Same compiler, two `platform_id`s, and a verdict
+    cache in which the scheduler could not find the PASS its own gate had
+    just published (fleetd b2bdf493..., gate b6613b19..., one host, one
+    minute apart). Delegated so there is one PATH rule and one
+    normalization. Still "" when rustc cannot be run.
     """
-    env = dict(os.environ)
-    cargo_bin = str(Path.home() / ".cargo" / "bin")
-    env["PATH"] = cargo_bin + os.pathsep + env.get("PATH", "")
-    try:
-        result = subprocess.run(
-            ["rustc", "-vV"], capture_output=True, timeout=timeout, env=env
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout.decode("utf-8", "replace")
+    return toolchain.rustc_vv(timeout=timeout)
 
 
 def compute_platform_id(rustc_vv: Optional[str] = None) -> str:
     """sha256(`rustc -vV`), UNSTRIPPED. Part of a verdict/claim's transfer
-    identity -- see module docstring.
+    identity -- see module docstring. Delegated to the fleet's single
+    formula (L1); the digest is `gate.sh`'s, byte for byte, so every
+    verdict already published under it stays readable.
     """
-    text = _rustc_vv() if rustc_vv is None else rustc_vv
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return toolchain.compute_platform_id(rustc_vv)
 
 
 def compute_rustc_id(rustc_vv: Optional[str] = None) -> str:
     """sha256(`rustc -vV`) with the `host:` line stripped. Canonical
     compiler identity -- see module docstring.
+
+    L1: the implementation this replaces joined the surviving lines with
+    `"\\n"` and appended nothing, which is not what `grep -v '^host:'`
+    emits, so it disagreed with `gate.sh` AND with
+    `doctor.CANONICAL_TOOLCHAIN_ID` (b5d14336..., itself derived under
+    gate.sh's formula) on every host in this fleet.
     """
-    text = _rustc_vv() if rustc_vv is None else rustc_vv
-    kept = [
-        line for line in text.splitlines() if not line.strip().startswith("host:")
-    ]
-    return hashlib.sha256("\n".join(kept).encode("utf-8")).hexdigest()
+    return toolchain.compute_rustc_id(rustc_vv)
 
 
 # ---------------------------------------------------------------------- #

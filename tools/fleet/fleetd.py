@@ -83,6 +83,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import signal
 import socket
@@ -101,6 +102,7 @@ import dispatch as dispatch_mod
 import verdict
 import workqueue
 import config
+import toolchain
 from claim import Claim, compute_platform_id, compute_rustc_id
 from fleetlib import Hub, HubError, HubUnreachableError
 
@@ -1049,8 +1051,159 @@ class HostWarnings:
         self.entries.update(seen)
         return self.current()
 
+    def note(self, key: str, reason: str, detail: str) -> None:
+        """Record a warning that is NOT backed by a marker file.
+
+        `scan` only owns the `verdict-store-failed` reason and leaves
+        every other entry alone (see its final block), so an entry noted
+        here persists for the daemon's life -- which is right for a
+        condition like L1's toolchain disagreement: it is a property of
+        how this host is installed, and it does not clear because fifteen
+        seconds passed. `key` namespaces the entry the way a marker path
+        does, so re-noting the same condition cannot accumulate copies.
+        """
+        self.entries[key] = (reason, detail)
+
     def current(self) -> list:
         return [self.entries[k] for k in sorted(self.entries)]
+
+
+# --------------------------------------------------------------------- #
+# L1 -- the scheduler and the gate it spawns must derive the same key
+# --------------------------------------------------------------------- #
+#
+# THE INCIDENT (Keel Stage 1 LIVE, 2026-08-27/28). On the i7, fleetd's
+# host claim recorded `platform_id b2bdf493...` while the gate fleetd had
+# itself just spawned wrote its verdict under `b6613b19...` -- same host,
+# same minute, same compiler. `platform_id` is one third of the verdict
+# cache key, so `verdict.lookup` under fleetd's key returned None for a
+# tree whose PASS was already published under the gate's key.
+# `classify_branch` therefore never returned AWAITING_TRAIN and this host
+# re-gated the identical merge tree forever, ~21 minutes a pass, while
+# the answer it was paying for sat unread on the state repo.
+#
+# WHAT MADE IT INVISIBLE, and what this check fixes. Nothing anywhere
+# compared the two sides. Stage 1's acceptance bullet asserted only that
+# `git ls-remote` listed A verdict with A platform_id -- true in the
+# broken state, because the GATE's key was perfectly well formed. An
+# assertion that a value exists cannot catch two components disagreeing
+# about the value; only an assertion that the two AGREE can.
+#
+# So fleetd now derives the id BOTH ways at startup -- its own
+# (`toolchain.compute_platform_id`) and its gate command's (by running
+# the gate's own `units/fleet-toolchain.sh` in a shell, not by
+# re-deriving the formula here, which would only add a fourth
+# implementation) -- and refuses to start when they differ.
+
+TOOLCHAIN_MISMATCH_WARNING = "toolchain-id-mismatch"
+TOOLCHAIN_UNVERIFIED_WARNING = "toolchain-id-unverified"
+
+# Escape hatch. A mismatch means every gate this host runs writes to a
+# cache slot this host cannot read, so refusing is right -- but an
+# operator who is mid-migration and knows it should be able to run
+# degraded rather than have a supervisor respawn a refusing daemon every
+# ten seconds. Downgrades the refusal to a durable warning; it never
+# suppresses the warning itself.
+ALLOW_TOOLCHAIN_MISMATCH_ENV = "FLEET_ALLOW_TOOLCHAIN_MISMATCH"
+
+
+def gate_toolchain_ids(gate_command: list, timeout: int = 30,
+                       env: Optional[dict] = None) -> "tuple[dict, Optional[str]]":
+    """`{"rustc_id", "platform_id"}` as THE GATE COMMAND would compute
+    them, plus an error string when they could not be obtained.
+
+    Runs the gate's own `units/fleet-toolchain.sh` -- the file `gate.sh`
+    sources -- resolved relative to the gate script fleetd would actually
+    spawn, so a fleetd pointed at some other checkout measures THAT
+    checkout's resolver rather than this process's sibling directory.
+    Deliberately not a re-implementation: a fourth spelling of the
+    formula is the disease, not the cure.
+
+    `env` is the environment the shell side is measured under, and it
+    MUST be the same dict the Python side is measured under -- comparing
+    two ids derived under two environments would answer a question
+    nobody asked.
+    """
+    if not gate_command:
+        return {}, "no gate command configured"
+    gate_path = Path(gate_command[0])
+    helper = gate_path.parent / "units" / "fleet-toolchain.sh"
+    if not helper.is_file():
+        return {}, f"gate toolchain resolver not found at {helper}"
+    script = "\n".join((
+        f"SELF_DIR={shlex.quote(str(gate_path.parent))}",
+        f". {shlex.quote(str(helper))}",
+        'if ! fleet_toolchain_ids; then',
+        '  printf "ERROR=%s\\n" "$FLEET_TOOLCHAIN_ERROR"',
+        '  exit 1',
+        'fi',
+        'printf "RUSTC_ID=%s\\nPLATFORM_ID=%s\\n" "$RUSTC_ID" "$PLATFORM_ID"',
+        "",
+    ))
+    try:
+        out = subprocess.run(  # nosec B603 -- list argv, our own script text
+            ["bash", "-c", script], capture_output=True, text=True, timeout=timeout,
+            env=dict(os.environ if env is None else env),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {}, f"could not run {helper}: {exc}"
+    parsed = {}
+    for line in out.stdout.splitlines():
+        key, _, value = line.partition("=")
+        if key in ("RUSTC_ID", "PLATFORM_ID"):
+            parsed[key.lower()] = value
+    if out.returncode != 0 or not parsed.get("platform_id"):
+        detail = (out.stdout + out.stderr).strip().replace("\n", "; ")[:400]
+        return {}, f"{helper} exited {out.returncode}: {detail or 'no ids produced'}"
+    return parsed, None
+
+
+def check_toolchain_agreement(gate_command: list, host: str,
+                              warnings: "HostWarnings",
+                              env: Optional[dict] = None) -> "tuple[bool, str]":
+    """`(may_start, message)` -- L1's loud mismatch check.
+
+    THREE OUTCOMES, kept distinct on purpose (the same doctrine as
+    `desired_readable` vs `enabled` below: "we could not ask" is not "the
+    answer is no"):
+
+      * AGREE     -- `(True, "")`, no warning.
+      * DISAGREE  -- `(False, ...)` and a durable warning. Every verdict
+                     this host's gates write lands in a slot this host
+                     cannot read; there is no useful work it can do.
+                     `FLEET_ALLOW_TOOLCHAIN_MISMATCH=1` turns this into
+                     `(True, ...)` with the warning intact.
+      * UNVERIFIED -- `(True, ...)` and a durable warning. The gate's
+                     resolver could not be run at all (no bash, no
+                     checkout, a fixture whose "gate" is a stub script).
+                     Not being able to compare is not evidence of a
+                     mismatch, and taking a host down for it would turn
+                     one silent bug into a different one.
+    """
+    src = os.environ if env is None else env
+    mine = toolchain.compute_platform_id(env=src)
+    theirs, err = gate_toolchain_ids(gate_command, env=src)
+    if err is not None:
+        detail = (
+            f"could not compute the gate's platform_id to compare against this "
+            f"scheduler's {mine[:12]}...: {err}. Until this is resolved, nothing "
+            f"proves fleetd and gate.sh address the same verdict-cache slot"
+        )
+        warnings.note(f"toolchain:{host}", TOOLCHAIN_UNVERIFIED_WARNING, detail)
+        return True, detail
+    if theirs.get("platform_id") == mine:
+        return True, ""
+    detail = (
+        f"fleetd computes platform_id {mine} but its own gate command "
+        f"({gate_command[0]}) computes {theirs.get('platform_id')}. The verdict "
+        f"cache is keyed by (tree, gate_version, platform_id), so every PASS "
+        f"this host's gates publish would be unreadable by the scheduler that "
+        f"paid for it, and this host would re-gate the same merge tree forever. "
+        f"Set {ALLOW_TOOLCHAIN_MISMATCH_ENV}=1 to run degraded anyway"
+    )
+    warnings.note(f"toolchain:{host}", TOOLCHAIN_MISMATCH_WARNING, detail)
+    allowed = (src.get(ALLOW_TOOLCHAIN_MISMATCH_ENV) or "").strip() not in ("", "0", "false")
+    return allowed, detail
 
 
 # Where a classification came from, carried into the heartbeat so an
@@ -2027,10 +2180,26 @@ def reconcile_once(
         desired_readable = False
         desired_doc = {}
         res.refused.append(("hub-unreadable", f"{DESIRED_REF}: {e}"))
-    my_desired = (desired_doc.get("hosts") or {}).get(host) or {}
+    desired_hosts = desired_doc.get("hosts") or {}
+    my_desired = desired_hosts.get(host) or {}
     limits = desired_doc.get("limits") or {}
     want_gates = int(my_desired.get("gates") or 0)
     enabled = bool(my_desired.get("enabled", False))
+    # L2 (Keel Stage 1 LIVE, 2026-08-27/28): "this host is not in the
+    # desired state at all" is a DIFFERENT fact from "an operator turned
+    # this host off", and collapsing them is how the m5 spent the live run
+    # reporting `refused: disabled ()` -- the reason `disabled` with an
+    # EMPTY detail, because `my_desired` was `{}` and `{}.get("reason")`
+    # is None. `fleet status --why` then showed a row named `Allens-Air`
+    # (this machine's `hostname -s`) and no `m5` row at all, while
+    # `rollout/seed_desired.py` had seeded the host as `m5` and no unit
+    # file set `FLEET_HOST`. The operator's read of that screen is "the
+    # laptop is deliberately down", which is the opposite of the truth:
+    # it was running, enabled, and answering to the wrong name.
+    #
+    # Same doctrine as `desired_readable` above -- an unread target and a
+    # deliberate stand-down must never render as the same line.
+    unknown_host = desired_readable and host not in desired_hosts
 
     try:
         tip_sig = hub.read(TIP_SIGNAL_REF) or {}
@@ -2048,6 +2217,17 @@ def reconcile_once(
 
     if not desired_readable:
         pass  # already recorded as hub-unreadable; nothing to start
+    elif unknown_host:
+        # L2: names the actual defect and the actual fix, because the
+        # operator cannot see either from a `disabled` line. The detail
+        # carries the name this daemon is using, which is the one thing
+        # that has to change.
+        known = ", ".join(sorted(desired_hosts)) or "<none>"
+        res.refused.append((
+            "unknown-host",
+            f"{host} not in {DESIRED_REF} (known: {known}); set FLEET_HOST to this "
+            f"machine's fleet name, or add {host} to the desired state",
+        ))
     elif not enabled:
         if running == 0:
             pass  # fully drained
@@ -2393,6 +2573,39 @@ def main(argv: Optional[list] = None) -> int:
         singleton.release()
         return 5
 
+    # T3: one warning store for the daemon's whole lifetime, so a warning
+    # survives every reconcile until its marker file is gone. Owned by
+    # `main` rather than module-global so two fleetds in one process (the
+    # test suite) cannot bleed into each other. Built here, ahead of the
+    # L1 check, so a toolchain condition noted before the first reconcile
+    # is carried into every heartbeat afterwards.
+    host_warnings = HostWarnings()
+
+    # L1 (Keel Stage 1 LIVE, 2026-08-27/28): refuse to schedule work whose
+    # results this scheduler could not read. See `check_toolchain_agreement`
+    # for the incident and for why "could not verify" is a warning rather
+    # than a refusal.
+    #
+    # AFTER adoption, not before, and the ordering is load-bearing in the
+    # other direction from the singleton's. This check spawns `rustc -vV`
+    # and a shell; adoption is racing a predecessor's gate claims against
+    # their TTL, and a second of avoidable startup latency there is a live
+    # gate reported as an orphan and killed. Nothing this check protects
+    # against is urgent enough to pay for that: a mismatched host has been
+    # writing unreadable verdicts for however long it took to notice, so
+    # one more reconcile's worth is free. Refusing here still costs the
+    # host lease, exactly like the adoption failure above -- a host that
+    # will not run must not hold the lease that stops a fixed peer from
+    # taking over.
+    may_start, toolchain_msg = check_toolchain_agreement(gate_command, host, host_warnings)
+    if toolchain_msg:
+        print(f"fleetd[{host}] TOOLCHAIN: {toolchain_msg}", file=sys.stderr, flush=True)
+    if not may_start:
+        print(f"fleetd[{host}]: refusing to start on a toolchain-id mismatch",
+              file=sys.stderr, flush=True)
+        singleton.release()
+        return 6
+
     stop = {"flag": False}
 
     def _sigterm(_sig, _frm):
@@ -2403,11 +2616,10 @@ def main(argv: Optional[list] = None) -> int:
 
     rc = 0
     hub_failures = 0
-    # T3: one store for the daemon's whole lifetime, so a warning survives
-    # every reconcile until its marker file is gone. Owned here rather than
-    # module-global so two fleetds in one process (the test suite) cannot
-    # bleed into each other.
-    host_warnings = HostWarnings()
+    # `host_warnings` is built above, before the L1 toolchain check, so a
+    # condition that check notes survives into every heartbeat. Owned by
+    # `main` rather than module-global so two fleetds in one process (the
+    # test suite) cannot bleed into each other.
     try:
         while True:
             # A hub failure degrades THIS ITERATION, never the daemon --

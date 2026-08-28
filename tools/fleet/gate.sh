@@ -262,7 +262,23 @@ BRANCH="$1"; TAG="$2"
 START_TS=$(date +%s)
 HOST=$(hostname)
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+# L1 (Keel Stage 1 LIVE, 2026-08-27/28): the toolchain PATH prefix and the
+# rustc_id/platform_id formula both come from the ONE resolver now --
+# units/fleet-toolchain.sh (shell entry point) over tools/fleet/toolchain.py
+# (the formula). This gate and the fleetd that spawns it therefore cannot
+# derive different verdict-cache keys for the same compiler, which is
+# exactly what they did on the i7: fleetd stored b2bdf493..., this script
+# stored b6613b19..., and the scheduler could not read the PASS it had
+# just paid twenty-one minutes for. Sourced BEFORE the PATH export so the
+# prefix below is the resolver's, not a second spelling of it. Guarded
+# because the very next line reads FLEET_TOOLCHAIN_PATH_PREFIX under
+# `set -u`: without this, a missing resolver kills the gate with bash's
+# own "unbound variable" and no hint as to what is actually missing.
+. "$SELF_DIR/units/fleet-toolchain.sh" || {
+  echo "gate.sh: cannot source $SELF_DIR/units/fleet-toolchain.sh -- refusing to gate without a toolchain identity" >&2
+  exit 7
+}
+export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:$FLEET_TOOLCHAIN_PATH_PREFIX:$PATH"
 unset RUSTC_WRAPPER
 export CARGO_INCREMENTAL=0
 # PLAN Stage 1 task 4: EXIFTOOL_CACHE_DIR overrides the pinned-oracle
@@ -287,14 +303,22 @@ L="$HOME/gatelogs/gate-$TAG.log"; V="$HOME/gatelogs/gate-$TAG.verdict"; J="$HOME
 SV="$HOME/gatelogs/gate-$TAG$FLEET_VERDICT_STORE_FAILED_SUFFIX"
 
 # rustc_id / platform_id (T1.2, replaces the single T0.3 TOOLCHAIN_ID).
-# Computed once, after PATH is set, so both reflect the same rustc the
-# checks below will actually invoke. platform_id hashes `rustc -vV`
-# verbatim; rustc_id hashes it with the `host:` line stripped -- the exact
-# split tools/fleet/verdict.py's compute_ids() documents and mirrors.
-RUSTC_VV=$(rustc -vV 2>/dev/null)
-_sha256() { { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } | awk '{print $1}'; }
-PLATFORM_ID=$(printf '%s' "$RUSTC_VV" | _sha256)
-RUSTC_ID=$(printf '%s\n' "$RUSTC_VV" | grep -v '^host:' | _sha256)
+#
+# L1 (Keel Stage 1 LIVE, 2026-08-27/28): this block USED to spell the two
+# digests itself --
+#     RUSTC_VV=$(rustc -vV 2>/dev/null)
+#     PLATFORM_ID=$(printf '%s' "$RUSTC_VV" | _sha256)
+#     RUSTC_ID=$(printf '%s\n' "$RUSTC_VV" | grep -v '^host:' | _sha256)
+# -- one of THREE implementations in the tree, no two of which agreed on
+# both fields. `$(...)` strips the trailing newline; `subprocess.run`'s
+# stdout keeps it; so fleetd and this script hashed the same compiler to
+# different platform_ids and wrote/read different verdict-cache slots on
+# the same host. The formula now lives in tools/fleet/toolchain.py alone
+# and `fleet_toolchain_ids` (units/fleet-toolchain.sh, sourced above)
+# fetches it, preserving these exact bytes so every verdict already on
+# the state repo stays readable. Checked for failure below, beside the
+# FLEET_HUB_URL check, once `write_json` exists to ABORT loudly.
+fleet_toolchain_ids || true
 
 # The hub this gate's verdict cache reads/writes. PLAN Stage 1 task 4:
 # REQUIRED, no default -- a gate with no FLEET_HUB_URL must never guess
@@ -354,6 +378,19 @@ JSONEOF
 # which checks run or the verdict contract, so GATE_VERSION stays 7.
 if [ -z "$HUB_URL" ]; then
   echo "ABORT config: FLEET_HUB_URL not set" > "$V"
+  write_json "ABORT" "config"
+  exit 7
+fi
+
+# L1: same doctrine one line up -- a gate that could not resolve its own
+# toolchain identity must not invent one. An empty or guessed PLATFORM_ID
+# is not a harmless missing field: it is a verdict written to, and read
+# from, a cache slot no other component on this host addresses, which is
+# precisely the failure this resolver exists to make impossible. ABORT
+# (not FAIL) because it says nothing about the branch. Config only --
+# GATE_VERSION stays 8.
+if [ -n "$FLEET_TOOLCHAIN_ERROR" ] || [ -z "$PLATFORM_ID" ] || [ -z "$RUSTC_ID" ]; then
+  echo "ABORT config: toolchain identity unresolved: ${FLEET_TOOLCHAIN_ERROR:-empty platform_id/rustc_id}" > "$V"
   write_json "ABORT" "config"
   exit 7
 fi
