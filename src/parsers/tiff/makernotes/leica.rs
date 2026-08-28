@@ -29,6 +29,7 @@ use super::lens_data::leica as leica_lenses;
 use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
+use super::shared::table_ifd::fmt_g15;
 use crate::const_decoder;
 
 // ===== Leica MakerNote Tag IDs =====
@@ -123,6 +124,11 @@ mod leica5 {
     /// ASCII.
     pub(super) const LENS_TYPE: u16 = 0x0303;
     pub(super) const SERIAL_NUMBER: u16 = 0x0305;
+    /// `0x040a => { Name => 'FocusInfo', SubDirectory => { TagTable =>
+    /// 'Image::ExifTool::Panasonic::FocusInfo' } }` (Panasonic.pm:2021-2024).
+    /// The only source of `Leica:FocusDistance` on a Leica5/Leica8 body, and
+    /// therefore of `Composite:FOV`'s distance term and `Composite:DOF`.
+    pub(super) const FOCUS_INFO: u16 = 0x040A;
 }
 
 /// `%Panasonic::Leica6` (Panasonic.pm:2111), used by the S2 and M (Typ 240)
@@ -238,11 +244,23 @@ const LEICA_HEADER_LEICA9: &[u8] = b"LEICA\0\x02\0";
 /// the inline-only fields this parser reads from that table.
 const LEICA_HEADER_LEICA6: &[u8] = b"LEICA\0\x02\xff";
 
-/// `MakerNoteLeica5`/`MakerNoteLeica8`'s shared second byte values
-/// (MakerNotes.pm:650, 703): X1/X2/X VARIO/T/TL/X-U (`\x01,\x04,\x05,\x06,
-/// \x07,\x10,\x1a`) and Q/SL/CL (`\x08,\x09,\x0a`). Both route to
-/// `%Panasonic::Leica5`.
-const LEICA5_SECOND_BYTES: &[u8] = b"\x01\x04\x05\x06\x07\x08\x09\x0a\x10\x1a";
+/// `MakerNoteLeica5`'s second byte values (MakerNotes.pm:657): the
+/// X1/X2/X VARIO/T/TL/X (Typ 113)/X-U.
+///
+/// Kept apart from [`LEICA8_SECOND_BYTES`] even though both route to
+/// `%Panasonic::Leica5`, because the two dispatch entries do *not* share a
+/// value base: `MakerNoteLeica5` declares `Base => '$start - 8'`
+/// (MakerNotes.pm:661), making its out-of-line offsets payload-relative, and
+/// `MakerNoteLeica8` declares no `Base` at all (MakerNotes.pm:707-711), so
+/// its offsets are measured from the enclosing TIFF header like any ordinary
+/// IFD. Treating the Q/SL/CL as `Base => '$start - 8'` reads the wrong bytes:
+/// `LeicaCL.jpg`'s FocusInfo came out `0 m` against the oracle's `1.546 m`,
+/// and `LeicaQ2MONO.jpg`'s `8.96 m` against `0.446 m`.
+const LEICA5_SECOND_BYTES: &[u8] = b"\x01\x04\x05\x06\x07\x10\x1a";
+
+/// `MakerNoteLeica8`'s second byte values (MakerNotes.pm:706): the
+/// Q (Typ 116), SL (Typ 601), CL and their successors (Q2/Q3/SL2/SL3).
+const LEICA8_SECOND_BYTES: &[u8] = b"\x08\x09\x0a";
 
 /// Which of ExifTool's Leica MakerNote layouts a payload is in.
 ///
@@ -259,9 +277,14 @@ enum LeicaLayout {
     /// `MakerNoteLeica4`, written by the M9 and M Monochrom
     /// (MakerNotes.pm:638-648).
     Leica4,
-    /// `MakerNoteLeica5`/`MakerNoteLeica8`, sharing `%Panasonic::Leica5`:
-    /// the X1/X2/X VARIO/T/TL/X-U and the Q/SL/CL (MakerNotes.pm:650-712).
+    /// `MakerNoteLeica5`: the X1/X2/X VARIO/T/TL/X (Typ 113)/X-U
+    /// (MakerNotes.pm:650-664). `%Panasonic::Leica5`, `Base => '$start - 8'`.
     Leica5,
+    /// `MakerNoteLeica8`: the Q/SL/CL and successors
+    /// (MakerNotes.pm:703-712). The same `%Panasonic::Leica5` tag table as
+    /// [`LeicaLayout::Leica5`], but with no `Base` -- its out-of-line value
+    /// offsets are measured from the enclosing TIFF header.
+    Leica8,
     /// `MakerNoteLeica6`/`MakerNoteLeica7`, sharing `%Panasonic::Leica6`:
     /// the S2, M (Typ 240) and M Monochrom (Typ 246) (MakerNotes.pm:666-701).
     Leica6,
@@ -281,6 +304,7 @@ impl LeicaLayout {
             | LeicaLayout::Leica4
             | LeicaLayout::Leica5
             | LeicaLayout::Leica6
+            | LeicaLayout::Leica8
             | LeicaLayout::Leica9 => 8,
             LeicaLayout::Leica3 => 0,
         }
@@ -305,13 +329,13 @@ fn leica_layout(data: &[u8]) -> Option<LeicaLayout> {
     if data.starts_with(LEICA_HEADER_LEICA4) {
         return Some(LeicaLayout::Leica4);
     }
-    if data.len() >= 8
-        && data[0..5] == *b"LEICA"
-        && data[5] == 0
-        && LEICA5_SECOND_BYTES.contains(&data[6])
-        && data[7] == 0
-    {
-        return Some(LeicaLayout::Leica5);
+    if data.len() >= 8 && data[0..5] == *b"LEICA" && data[5] == 0 && data[7] == 0 {
+        if LEICA5_SECOND_BYTES.contains(&data[6]) {
+            return Some(LeicaLayout::Leica5);
+        }
+        if LEICA8_SECOND_BYTES.contains(&data[6]) {
+            return Some(LeicaLayout::Leica8);
+        }
     }
     if data.starts_with(b"LEICA") {
         // Some other LEICA-signed layout (Leica10's variants). Reading its
@@ -419,6 +443,157 @@ fn read_leica_string(values: LeicaValues<'_>, value_offset: u32, count: u32) -> 
     // where `trim_end_matches('\0')` alone would leave the space padding in.
     let text = bytes.split(|&b| b == 0).next().unwrap_or(bytes);
     Some(String::from_utf8_lossy(text).trim_end().to_string())
+}
+
+/// Resolves a `SubDirectory`'s `ByteOrder => 'Unknown'` the way ExifTool does.
+///
+/// Every one of `MakerNotes.pm`'s `MakerNoteLeica`..`MakerNoteLeica10` entries
+/// declares `ByteOrder => 'Unknown'` (MakerNotes.pm:607, 622, 635, 646, 662,
+/// 680, 698, 710, 720, 729), meaning the sub-directory's endianness is not
+/// inherited from the enclosing TIFF and has to be sniffed. Exif.pm:6984-6992
+/// spells out the test verbatim -- read the entry count in the *current* order
+/// and flip if it cannot be one:
+///
+/// ```text
+/// Exif.pm:6987   my $num = Get16u($subdirDataPt, $subdirStart);
+/// Exif.pm:6988   if ($num & 0xff00 and ($num>>8) > ($num&0xff)) {
+/// Exif.pm:6989       # This looks wrong, we shouldn't have this many entries
+/// Exif.pm:6990       my %otherOrder = ( II=>'MM', MM=>'II' );
+/// Exif.pm:6991       $newByteOrder = $otherOrder{$oldByteOrder};
+/// Exif.pm:6992   } else { $newByteOrder = $oldByteOrder; }
+/// ```
+///
+/// `LeicaX_VARIO.jpg` is the corpus file this decides: its enclosing TIFF is
+/// big-endian but its MakerNote IFD is little-endian, so the count read as
+/// `MM` is 0x1800 = 6144 -- rejected outright by the entry-count sanity check
+/// as "Invalid Leica IFD entry count: 6144", which dropped all eight of its
+/// `Leica:` tags. Read as `II` it is 24.
+fn resolve_unknown_byte_order(ifd_data: &[u8], inherited: ByteOrder) -> ByteOrder {
+    let Some(num) = EndianReader::new(ifd_data, inherited.to_io_byte_order()).u16_at(0) else {
+        return inherited;
+    };
+    if num & 0xff00 != 0 && (num >> 8) > (num & 0xff) {
+        return match inherited {
+            ByteOrder::LittleEndian => ByteOrder::BigEndian,
+            ByteOrder::BigEndian => ByteOrder::LittleEndian,
+        };
+    }
+    inherited
+}
+
+/// Byte width of a TIFF field type, for the types a Leica5 sub-directory
+/// entry is written with. `None` for a type this parser does not size.
+fn tiff_type_size(field_type: u16) -> Option<usize> {
+    Some(match field_type {
+        1 | 2 | 6 | 7 => 1, // BYTE, ASCII, SBYTE, UNDEFINED
+        3 | 8 => 2,         // SHORT, SSHORT
+        4 | 9 | 11 => 4,    // LONG, SLONG, FLOAT
+        5 | 10 | 12 => 8,   // RATIONAL, SRATIONAL, DOUBLE
+        _ => return None,
+    })
+}
+
+/// The bytes a `SubDirectory` entry's value spans.
+///
+/// A TIFF entry's four value bytes hold the value itself whenever it fits in
+/// four, and an offset to it otherwise (Exif.pm:6502 sets `$valuePtr = $entry
+/// + 8` and only follows the pointer `if ($size > 4)`) -- the same rule
+/// `l4_string` below spells out for Leica4's short strings. `entry_bytes` is
+/// the whole 12-byte IFD entry, whose value field is its last four bytes.
+fn subdir_bytes<'a>(
+    entry: &IfdEntry,
+    entry_bytes: &'a [u8],
+    values: Option<LeicaValues<'a>>,
+) -> Option<&'a [u8]> {
+    let size = tiff_type_size(entry.field_type)?;
+    let len = usize::try_from(entry.value_count).ok()?.checked_mul(size)?;
+    if len == 0 {
+        return None;
+    }
+    if len <= 4 {
+        return entry_bytes.get(8..8 + len);
+    }
+    values?.read(entry.value_offset, len)
+}
+
+/// One decoded `%Panasonic::FocusInfo` field: its ExifTool name, its ValueConv
+/// form and its PrintConv form, in that order.
+///
+/// The ValueConv form is the one `Composite:FOV` and `Composite:DOF` read
+/// (`Exif.pm`'s `Desire => { 3 => 'FocusDistance' }` resolves against the
+/// post-ValueConv store, ExifTool.pm:4008+), so it has to reach
+/// `MetadataMap::set_value_form` unrounded. Handing a composite the *printed*
+/// `"1.546 m"` is precisely the defect the composite-precision stack fixed for
+/// Olympus and Sony.
+type FocusInfoField = (&'static str, String, String);
+
+/// `%Image::ExifTool::Panasonic::FocusInfo` (Panasonic.pm:2083-2107), the
+/// Leica type5 FocusInfo sub-directory reached from `Leica5` 0x040a.
+///
+/// Transcribed layout, `src/exiftool_tables` `PANASONIC_FOCUSINFO`
+/// (`find_table("Panasonic", "FocusInfo")`) -- `default_format: Fmt::Int16u`,
+/// `first_entry: 0`, `group1: "Leica"`:
+///
+/// ```text
+/// Panasonic.pm:2093    FORMAT => 'int16u',
+/// Panasonic.pm:2094    0 => {
+/// Panasonic.pm:2095        Name => 'FocusDistance',
+/// Panasonic.pm:2096        ValueConv => '$val / 1000',
+/// Panasonic.pm:2098        PrintConv => '$val < 65535 ? "$val m" : "inf"',
+/// Panasonic.pm:2100    },
+/// Panasonic.pm:2101    1 => {
+/// Panasonic.pm:2102        Name => 'FocalLength',
+/// Panasonic.pm:2103        Priority => 0,
+/// Panasonic.pm:2104        RawConv => '$val ? $val : undef',
+/// Panasonic.pm:2105        ValueConv => '$val / 1000',
+/// Panasonic.pm:2106        PrintConv => 'sprintf("%.1f mm",$val)',
+/// Panasonic.pm:2107    },
+/// ```
+///
+/// `FocalLength`'s `RawConv` is the one field of this table the generator
+/// refused (`PANASONIC_FOCUSINFO` marks it `Omitted { raw_conv: true, .. }`),
+/// so the zero guard below is hand-written against the Perl rather than read
+/// from the transcription -- without it `LeicaCL.jpg`, whose entry 1 is
+/// literally `00 00`, would gain a fabricated `Leica:FocalLength: 0.0 mm`
+/// that ExifTool does not print (verified: `-v3` shows `FocalLength = 0`
+/// extracted and then dropped).
+///
+/// `ProcessBinaryData` visits entries in ascending index order at byte offset
+/// `index * 2` and stops at the first offset at or past the end of the
+/// directory (`last if $more <= 0`, ExifTool.pm), so a directory shorter than
+/// four bytes yields `FocusDistance` alone.
+fn focus_info_fields(dir: &[u8], byte_order: ByteOrder) -> Vec<FocusInfoField> {
+    let reader = EndianReader::new(dir, byte_order.to_io_byte_order());
+    let mut out = Vec::new();
+
+    // Index 0 -- FocusDistance.
+    if let Some(raw) = reader.u16_at(0) {
+        // `ValueConv => '$val / 1000'`.
+        let metres = f64::from(raw) / 1000.0;
+        let value = fmt_g15(metres);
+        // `PrintConv => '$val < 65535 ? "$val m" : "inf"'` -- the comparison
+        // is against the *ValueConv* metre count, not the raw int16u, which
+        // is why `LeicaSL2-S.jpg`'s raw 65535 prints `65.535 m` and not
+        // `inf`. Transcribed verbatim even though no int16u can reach the
+        // `inf` branch.
+        let print = if metres < 65535.0 {
+            format!("{value} m")
+        } else {
+            "inf".to_string()
+        };
+        out.push(("FocusDistance", value, print));
+    }
+
+    // Index 1 -- FocalLength, byte offset 1 * 2.
+    if let Some(raw) = reader.u16_at(2) {
+        // `RawConv => '$val ? $val : undef'`: a zero suppresses the tag.
+        if raw != 0 {
+            let mm = f64::from(raw) / 1000.0;
+            out.push(("FocalLength", fmt_g15(mm), format!("{mm:.1} mm")));
+        }
+    }
+
+    out
 }
 
 /// Reads an ASCII entry of the `%Panasonic::Leica4` sub-directories.
@@ -595,7 +770,7 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         // No enclosing block, so a Leica9 payload's TIFF-relative value offsets
         // stay unresolvable and the two tags that need them are skipped rather
         // than guessed. `parse_with_context` is the entry point that has them.
-        self.parse_payload(data, byte_order, None, tags)
+        self.parse_payload(data, byte_order, None, tags, &mut HashMap::new())
     }
 
     /// Leica9's value offsets are measured from the enclosing TIFF header
@@ -606,10 +781,26 @@ impl MakerNoteParser for LeicaMakerNoteParser {
         &self,
         ctx: &MakerNoteContext<'_>,
         byte_order: ByteOrder,
-        _model: Option<&str>,
+        model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_payload(ctx.payload(), byte_order, Some(ctx), tags)
+        self.parse_with_context_and_values(ctx, byte_order, model, tags, &mut HashMap::new())
+    }
+
+    /// `%Panasonic::FocusInfo`'s `FocusDistance` carries a `ValueConv` whose
+    /// result differs from its printed form (`1.546` vs `"1.546 m"`), and
+    /// `Composite:FOV`/`Composite:DOF` read the ValueConv side. That channel
+    /// is this override; every other Leica tag still reaches metadata through
+    /// `tags` alone.
+    fn parse_with_context_and_values(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_payload(ctx.payload(), byte_order, Some(ctx), tags, value_forms)
     }
 }
 
@@ -624,6 +815,7 @@ impl LeicaMakerNoteParser {
         byte_order: ByteOrder,
         ctx: Option<&MakerNoteContext<'_>>,
         tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
         // Validate minimum data length
         if data.len() < 8 {
@@ -653,6 +845,14 @@ impl LeicaMakerNoteParser {
             return Err("Insufficient data for IFD entry count".to_string());
         }
 
+        // Every `MakerNoteLeicaN` declares `ByteOrder => 'Unknown'`, so the
+        // IFD's endianness is sniffed from its own entry count rather than
+        // inherited from the enclosing TIFF -- see
+        // `resolve_unknown_byte_order`. Shadowing `byte_order` here is
+        // deliberate: every read below this line, entry fields and
+        // out-of-line values alike, must use the directory's own order.
+        let byte_order = resolve_unknown_byte_order(ifd_data, byte_order);
+
         // Parse IFD entry count using EndianReader
         let ifd_reader = EndianReader::new(ifd_data, byte_order.to_io_byte_order());
         let entry_count = ifd_reader.u16_at(0).unwrap_or(0);
@@ -673,7 +873,13 @@ impl LeicaMakerNoteParser {
             // `SerialInfo` (0x0b) entry holds `value_offset=772`, which
             // resolves to `1000975` only when read from the enclosing TIFF
             // block, not the ~240-byte MakerNote payload alone.
-            LeicaLayout::Leica9 | LeicaLayout::Leica3 => {
+            //
+            // `MakerNoteLeica8` (MakerNotes.pm:703-712) declares no `Base`
+            // either -- unlike its `%Panasonic::Leica5` tag-table mate
+            // `MakerNoteLeica5`, which declares `Base => '$start - 8'` -- so
+            // the Q/SL/CL belong here rather than with the payload-relative
+            // arm below.
+            LeicaLayout::Leica9 | LeicaLayout::Leica3 | LeicaLayout::Leica8 => {
                 ctx.filter(|ctx| ctx.is_located()).map(|ctx| LeicaValues {
                     block: ctx.tiff(),
                     base: 0,
@@ -701,10 +907,21 @@ impl LeicaMakerNoteParser {
                 })
             }
             // `MakerNoteLeica5` declares `Base => '$start - 8'`
-            // (MakerNotes.pm:657) -- the payload's own start, same
+            // (MakerNotes.pm:661) -- the payload's own start, same
             // convention as Leica4.
+            //
+            // `window()` is preferred over the bare payload because it begins
+            // on that very byte and merely reaches further: a Leica5 value can
+            // sit past the *declared* MakerNote length, exactly as Leica2's
+            // arm above notes for `LeicaM8.2.jpg`. `LeicaX_VARIO.jpg` puts its
+            // 0x040a FocusInfo bytes at TIFF offset 0x146e with the payload
+            // declared from 0x1320, so the payload-relative offset 334 lands
+            // outside the declared block and the read failed -- the oracle
+            // prints `0.948 m`, oxidex printed nothing at all.
             LeicaLayout::Leica5 => Some(LeicaValues {
-                block: data,
+                block: ctx
+                    .filter(|ctx| ctx.is_located())
+                    .map_or(data, MakerNoteContext::window),
                 base: 0,
             }),
             // Leica3, Leica6 (inline-only in this parser) and the
@@ -753,7 +970,17 @@ impl LeicaMakerNoteParser {
             match layout {
                 LeicaLayout::Leica2 => self.decode_leica2_entry(&entry, values, byte_order, tags),
                 LeicaLayout::Leica3 => self.decode_leica3_entry(&entry, values, byte_order, tags),
-                LeicaLayout::Leica5 => self.decode_leica5_entry(&entry, values, tags),
+                // One tag table, two dispatch entries: the layouts differ only
+                // in where their out-of-line values are measured from, which
+                // `values` above has already settled.
+                LeicaLayout::Leica5 | LeicaLayout::Leica8 => self.decode_leica5_entry(
+                    &entry,
+                    entry_data,
+                    values,
+                    byte_order,
+                    tags,
+                    value_forms,
+                ),
                 LeicaLayout::Leica6 => self.decode_leica6_entry(&entry, tags),
                 LeicaLayout::Leica9 => self.decode_leica9_entry(&entry, values, byte_order, tags),
                 // No ExifTool table is known to correspond to this header;
@@ -961,10 +1188,27 @@ impl LeicaMakerNoteParser {
     fn decode_leica5_entry(
         &self,
         entry: &IfdEntry,
+        entry_bytes: &[u8],
         values: Option<LeicaValues<'_>>,
+        byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
     ) {
         match entry.tag_id {
+            // `SubDirectory => { TagTable => 'Image::ExifTool::Panasonic::
+            // FocusInfo' }` (Panasonic.pm:2021-2024). Undecoded until now,
+            // which is why every Leica5/Leica8 body was missing
+            // `Leica:FocusDistance`, and with it `Composite:DOF` and
+            // `Composite:FOV`'s distance term.
+            leica5::FOCUS_INFO => {
+                let Some(dir) = subdir_bytes(entry, entry_bytes, values) else {
+                    return;
+                };
+                for (name, value, print) in focus_info_fields(dir, byte_order) {
+                    tags.insert(format!("Leica:{name}"), print);
+                    value_forms.insert(format!("Leica:{name}"), value);
+                }
+            }
             // `Condition => '$format eq "string"'` (Panasonic.pm:2003) --
             // field type 2 is TIFF ASCII.
             leica5::LENS_TYPE if entry.field_type == 2 => {
@@ -1469,12 +1713,29 @@ mod tests {
     // parser (`LeicaT.jpg`, `LeicaTL.jpg`, `LeicaTL2.jpg` all use \x06).
     #[test]
     fn test_leica5_header_recognised() {
-        for second_byte in [0x01u8, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x10, 0x1a] {
+        for second_byte in [0x01u8, 0x04, 0x05, 0x06, 0x07, 0x10, 0x1a] {
             let data = [b'L', b'E', b'I', b'C', b'A', 0, second_byte, 0];
             assert_eq!(
                 leica_layout(&data),
                 Some(LeicaLayout::Leica5),
                 "second byte {second_byte:#04x} should resolve to Leica5"
+            );
+        }
+    }
+
+    // `MakerNoteLeica8` (MakerNotes.pm:703-712) shares `%Panasonic::Leica5`'s
+    // tag table with `MakerNoteLeica5` but declares no `Base`, so it must be
+    // a layout of its own -- reading the Q/SL/CL with Leica5's
+    // `Base => '$start - 8'` resolved every out-of-line value to the wrong
+    // bytes (`LeicaCL.jpg` FocusDistance `0 m` for the oracle's `1.546 m`).
+    #[test]
+    fn test_leica8_header_is_its_own_layout() {
+        for second_byte in [0x08u8, 0x09, 0x0a] {
+            let data = [b'L', b'E', b'I', b'C', b'A', 0, second_byte, 0];
+            assert_eq!(
+                leica_layout(&data),
+                Some(LeicaLayout::Leica8),
+                "second byte {second_byte:#04x} should resolve to Leica8"
             );
         }
     }
@@ -1485,5 +1746,171 @@ mod tests {
     fn test_leica9_header_still_recognised() {
         let data = b"LEICA\0\x02\0\0\0\0\0";
         assert_eq!(leica_layout(data), Some(LeicaLayout::Leica9));
+    }
+
+    // `%Panasonic::FocusInfo` (Panasonic.pm:2083-2107), reached from Leica5
+    // 0x040a. The bytes are `LeicaCL.jpg`'s own, quoted from the pinned
+    // oracle's `-v3` dump of tag 0x040a at file offset 0x0514:
+    //
+    //     0514: 0a 06 00 00 00 00 00 00   [........]
+    //     | FocusDistance = 1546
+    //     | FocalLength = 0
+    //
+    // and the oracle prints `[Leica] FocusDistance : 1.546 m` with no
+    // `Leica:FocalLength` at all -- the `RawConv => '$val ? $val : undef'`
+    // zero guard.
+    #[test]
+    fn focus_info_decodes_leica_cl_bytes() {
+        let dir = [0x0a, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let fields = focus_info_fields(&dir, ByteOrder::LittleEndian);
+        assert_eq!(
+            fields,
+            vec![("FocusDistance", "1.546".to_string(), "1.546 m".to_string())],
+            "raw 1546 -> ValueConv 1.546, PrintConv \"1.546 m\"; \
+             FocalLength raw 0 is suppressed by its RawConv"
+        );
+    }
+
+    // `LeicaQ2MONO.jpg`: the oracle prints `FocusDistance : 0.446 m` and
+    // `FocalLength : 50.0 mm`, so entry 1's non-zero raw survives its
+    // RawConv and takes `sprintf("%.1f mm",$val)`.
+    #[test]
+    fn focus_info_decodes_focal_length_when_non_zero() {
+        // 446 = 0x01be, 50000 = 0xc350, little-endian.
+        let dir = [0xbe, 0x01, 0x50, 0xc3];
+        let fields = focus_info_fields(&dir, ByteOrder::LittleEndian);
+        assert_eq!(
+            fields,
+            vec![
+                ("FocusDistance", "0.446".to_string(), "0.446 m".to_string()),
+                ("FocalLength", "50".to_string(), "50.0 mm".to_string()),
+            ]
+        );
+    }
+
+    // `LeicaSL2-S.jpg` and `LeicaTL.jpg` both store raw 65535. ExifTool's
+    // `PrintConv => '$val < 65535 ? "$val m" : "inf"'` compares the *metre*
+    // count, not the raw int16u, so the oracle prints `65.535 m` -- reading
+    // the comparison against the raw value instead would print `inf` and be
+    // wrong on both files.
+    #[test]
+    fn focus_info_inf_branch_compares_metres_not_raw() {
+        let dir = [0xff, 0xff, 0x00, 0x00];
+        let fields = focus_info_fields(&dir, ByteOrder::LittleEndian);
+        assert_eq!(
+            fields,
+            vec![(
+                "FocusDistance",
+                "65.535".to_string(),
+                "65.535 m".to_string()
+            )]
+        );
+    }
+
+    // `ProcessBinaryData` stops at the first entry offset at or past the end
+    // of the directory, so a two-byte directory yields FocusDistance alone
+    // rather than reading FocalLength off the end.
+    #[test]
+    fn focus_info_stops_at_directory_end() {
+        let dir = [0xbe, 0x01];
+        let fields = focus_info_fields(&dir, ByteOrder::LittleEndian);
+        assert_eq!(
+            fields,
+            vec![("FocusDistance", "0.446".to_string(), "0.446 m".to_string())]
+        );
+    }
+
+    /// A minimal Leica5 payload carrying one 0x040a `FocusInfo` entry whose
+    /// eight bytes sit out of line, `MakerNoteLeica5`'s `Base => '$start - 8'`
+    /// making the offset payload-relative.
+    fn leica5_payload_with_focus_info(focus_info: [u8; 8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(b"LEICA\0\x06\0"); // 0..8
+        p.extend_from_slice(&1u16.to_le_bytes()); // 8..10  entry count
+        p.extend_from_slice(&leica5::FOCUS_INFO.to_le_bytes()); // 10..12 tag
+        p.extend_from_slice(&3u16.to_le_bytes()); // 12..14 int16u
+        p.extend_from_slice(&4u32.to_le_bytes()); // 14..18 count 4
+        p.extend_from_slice(&22u32.to_le_bytes()); // 18..22 value offset
+        p.extend_from_slice(&focus_info); // 22..30
+        p
+    }
+
+    // End to end through the public parser entry point, which is the shape
+    // that was broken: `%Panasonic::Leica5` 0x040a was never followed, so no
+    // Leica5/Leica8 body produced `Leica:FocusDistance` at all and
+    // `Composite:FOV`/`Composite:DOF` had no distance to consume. Bytes are
+    // `LeicaCL.jpg`'s; the oracle prints `1.546 m`.
+    #[test]
+    fn leica5_focus_info_subdirectory_is_followed() {
+        let payload =
+            leica5_payload_with_focus_info([0x0a, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        let mut tags = HashMap::new();
+        LeicaMakerNoteParser
+            .parse(&payload, ByteOrder::LittleEndian, &mut tags)
+            .expect("Leica5 payload should parse");
+        assert_eq!(
+            tags.get("Leica:FocusDistance").map(String::as_str),
+            Some("1.546 m"),
+            "0x040a FocusInfo must be followed; got {tags:?}"
+        );
+        assert!(
+            !tags.contains_key("Leica:FocalLength"),
+            "entry 1 is zero here and its RawConv suppresses the tag; got {tags:?}"
+        );
+    }
+
+    // `LeicaQ2MONO.jpg`'s pair: the oracle prints `0.446 m` and `50.0 mm`.
+    #[test]
+    fn leica5_focus_info_emits_focal_length_when_present() {
+        let payload =
+            leica5_payload_with_focus_info([0xbe, 0x01, 0x50, 0xc3, 0x00, 0x00, 0x00, 0x00]);
+        let mut tags = HashMap::new();
+        LeicaMakerNoteParser
+            .parse(&payload, ByteOrder::LittleEndian, &mut tags)
+            .expect("Leica5 payload should parse");
+        assert_eq!(
+            tags.get("Leica:FocusDistance").map(String::as_str),
+            Some("0.446 m")
+        );
+        assert_eq!(
+            tags.get("Leica:FocalLength").map(String::as_str),
+            Some("50.0 mm")
+        );
+    }
+
+    // A `SubDirectory` entry whose value is longer than four bytes holds an
+    // offset; one that fits holds the bytes themselves (Exif.pm:6502).
+    #[test]
+    fn subdir_bytes_reads_inline_and_out_of_line() {
+        // int16u[4] = 8 bytes -> out of line, at offset 4 of `block`.
+        let entry = IfdEntry {
+            tag_id: leica5::FOCUS_INFO,
+            field_type: 3,
+            value_count: 4,
+            value_offset: 4,
+        };
+        let entry_bytes = [0u8; 12];
+        let block = [0xffu8, 0xff, 0xff, 0xff, 0x0a, 0x06, 0, 0, 0, 0, 0, 0];
+        let values = LeicaValues {
+            block: &block,
+            base: 0,
+        };
+        assert_eq!(
+            subdir_bytes(&entry, &entry_bytes, Some(values)),
+            Some(&block[4..12])
+        );
+
+        // int16u[2] = 4 bytes -> inline, in the entry's own last four bytes.
+        let entry = IfdEntry {
+            tag_id: leica5::FOCUS_INFO,
+            field_type: 3,
+            value_count: 2,
+            value_offset: 0,
+        };
+        let entry_bytes = [0u8, 0, 0, 0, 0, 0, 0, 0, 0xbe, 0x01, 0x50, 0xc3];
+        assert_eq!(
+            subdir_bytes(&entry, &entry_bytes, None),
+            Some(&entry_bytes[8..12])
+        );
     }
 }
