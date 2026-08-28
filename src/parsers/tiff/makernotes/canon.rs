@@ -5984,7 +5984,21 @@ fn parse_canon_makernote_impl_located_with_values(
                     // FocalPlaneXSize / FocalPlaneYSize (keys 2 and 3), in 1/1000 inch.
                     // ExifTool only trusts these on the bodies listed in its Condition,
                     // and drops implausibly small values via `$val < 40 ? undef : $val`.
-                    if focal_plane_size_supported(&model) {
+                    //
+                    // The Condition reads `$$self{Model}` (Canon.pm:2735-2740) -- the
+                    // IFD0 Model DataMember (Exif.pm:595), NOT CanonImageType. The
+                    // distinction decides the match: the regex anchors its EOS body
+                    // list to the END of the string (`/\b(1DS?|5D|D30|D60|10D|20D|
+                    // 30D|K236)$/`), and "Canon EOS 10D" ends in `10D` while the
+                    // same body's CanonImageType ("IMG:EOS 10D JPEG") ends in
+                    // `JPEG` -- gating on the latter silently dropped both sizes,
+                    // and `CalcScaleFactor35efl` (Exif.pm) then derived the sensor
+                    // diagonal from the focal-plane resolutions instead (1.5886 vs
+                    // ExifTool's 1.55016), skewing DOF/FOV/FocalLength35efl/
+                    // HyperfocalDistance downstream. An absent IFD0 Model matches
+                    // ExifTool too: `undef !~ /EOS/` is true, so the first
+                    // alternative passes.
+                    if focal_plane_size_supported(exif_model.unwrap_or("")) {
                         for (index, name) in [
                             (2usize, "Canon:FocalPlaneXSize"),
                             (3usize, "Canon:FocalPlaneYSize"),
@@ -5992,10 +6006,16 @@ fn parse_canon_makernote_impl_located_with_values(
                             if let Some(&raw) = array.get(index) {
                                 let thousandths = raw as u16 as f64;
                                 if thousandths >= 40.0 {
-                                    tags.insert(
-                                        name.to_string(),
-                                        format!("{:.2} mm", thousandths * 25.4 / 1000.0),
-                                    );
+                                    let value = thousandths * 25.4 / 1000.0;
+                                    tags.insert(name.to_string(), format!("{:.2} mm", value));
+                                    // `PrintConv => 'sprintf("%.2f mm",$val)'` rounds
+                                    // away the ValueConv (`$val * 25.4 / 1000`,
+                                    // Canon.pm:2742) that CalcScaleFactor35efl
+                                    // actually consumes (914 -> 23.2156, printed
+                                    // "23.22 mm"); carry it for the composites.
+                                    if let Some(forms) = value_forms.as_deref_mut() {
+                                        forms.insert(name.to_string(), value.to_string());
+                                    }
                                 }
                             }
                         }

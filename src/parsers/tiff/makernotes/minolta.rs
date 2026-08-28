@@ -307,7 +307,7 @@ pub fn parse_minolta_ifd(
     data_base: Option<u32>,
     sony_host: bool,
     model: Option<&str>,
-) -> (Vec<(String, String)>, Vec<(String, String)>) {
+) -> (Vec<(String, String)>, Vec<(String, String, Option<String>)>) {
     let mut main = Vec::new();
     let mut sub_dir = Vec::new();
     let is_a100 = model == Some("DSLR-A100");
@@ -360,11 +360,14 @@ pub fn parse_minolta_ifd(
                 &mut found,
             );
             // All four tables are PRIORITY => 0, the same tier CameraSettings
-            // reports under.
+            // reports under. `f.value_form` is the ValueConv text a rounding
+            // PrintConv would otherwise discard (the A100's FocusDistance,
+            // `2**(($val-126)/16)`, prints `%.2f m`) -- carried so composites
+            // consume ValueConv-level inputs (ExifTool.pm:4008+).
             sub_dir.extend(
                 found
                     .into_iter()
-                    .map(|f| (format!("Minolta:{}", f.name), f.value)),
+                    .map(|f| (format!("Minolta:{}", f.name), f.value, f.value_form)),
             );
             continue;
         }
@@ -372,7 +375,7 @@ pub fn parse_minolta_ifd(
         if matches!(tag_id, TAG_CAMERA_SETTINGS_OLD | TAG_CAMERA_SETTINGS) {
             let mut tags = HashMap::new();
             CAMERA_SETTINGS.extract(value.bytes(), "Minolta", &mut tags);
-            sub_dir.extend(tags);
+            sub_dir.extend(tags.into_iter().map(|(k, v)| (k, v, None)));
             continue;
         }
 
@@ -477,6 +480,17 @@ impl MakerNoteParser for MinoltaParser {
         _model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        self.parse_with_context_and_values(ctx, byte_order, _model, tags, &mut HashMap::new())
+    }
+
+    fn parse_with_context_and_values(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
         // See `SonyParser::parse_with_context`: `payload_tiff_offset` is the
         // `data_base` an entry's TIFF-relative offset is measured against, and
         // is `None` rather than 0 when there is no enclosing block.
@@ -490,7 +504,13 @@ impl MakerNoteParser for MinoltaParser {
 
         // ExifTool prefers the higher-priority Main entry when both tables
         // define a name, and the first-extracted copy among equals.
-        for (key, value) in sub_dir.into_iter().chain(main) {
+        for (key, value, value_form) in sub_dir {
+            if let Some(form) = value_form {
+                value_forms.insert(key.clone(), form);
+            }
+            tags.insert(key, value);
+        }
+        for (key, value) in main {
             tags.insert(key, value);
         }
         if let Some(version) = decode_print_im_from_ifd(ctx, 0, byte_order) {

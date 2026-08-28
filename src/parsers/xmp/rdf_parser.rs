@@ -588,6 +588,25 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                     ) {
                         rational_forms.push((tag.clone(), value.clone()));
                     }
+                    // exif:FocalLength (XMP.pm:2161-2165) is a plain rational
+                    // whose PrintConv (`sprintf("%.1f mm",$val)`) discards
+                    // precision the composites need: BuildCompositeTags hands
+                    // `@val` the post-ValueConv store (ExifTool.pm:4008+), so
+                    // ExifTool's DOF/FOV/FocalLength35efl see the evaluated
+                    // quotient (11109/1000 -> 11.109), never the printed
+                    // "11.1 mm". Carry that ValueConv beside the print form --
+                    // as the evaluated quotient, not the raw `n/d`, because
+                    // (unlike the FocalPlane pair above, whose denominator
+                    // Canon.pm:10152-10153 reads back out) nothing needs the
+                    // fraction itself, and the quotient is also what
+                    // `--no-print-conv` should show. Gated on the source
+                    // actually being an `n/d` fraction: a plain-decimal
+                    // source has no extra precision to preserve.
+                    if matches!(tag.rsplit(':').next(), Some("FocalLength"))
+                        && parse_xmp_rational(&value).is_some()
+                    {
+                        rational_forms.push((tag.clone(), format_xmp_plain_rational(&value)));
+                    }
                     let formatted = format_xmp_value(&tag, &value);
                     (tag, XmpValue::Scalar(formatted))
                 }

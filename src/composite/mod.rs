@@ -670,6 +670,58 @@ mod tests {
     }
 
     #[test]
+    fn exif_rational_beats_xmp_print_form_for_composite_inputs() {
+        // Canon/CanonPowerShotS110-new.jpg, reduced to the two FocalLength
+        // occurrences and the DOF inputs the real file resolves. The EXIF
+        // sub-IFD stores 0x920a as the full-precision rational 11109/1000
+        // (ValueConv 11.109); the XMP packet repeats the tag as
+        // exif:FocalLength="11109/1000", which the XMP parser stores already
+        // PrintConv-formatted ("11.1 mm"). XMP.pm declares the whole exif
+        // namespace `PRIORITY => 0, # not as reliable as actual EXIF tags`
+        // (XMP.pm:1992; XMP-tiff at 1900 and XMP-exifEX at 2462 likewise), so
+        // in ExifTool the EXIF occurrence keeps the bare `FocalLength` key and
+        // BuildCompositeTags hands DOF `$val[0]` = 11.109, printing
+        // `2.19 m (1.45 - 3.64 m)`. When the XMP occurrence (recorded later,
+        // minted at the same shim priority) is allowed to win instead, the
+        // composite consumes the rounded 11.1 and prints 2.20 -- a value no
+        // ExifTool ever emits for this file.
+        let mut m = MetadataMap::new();
+        m.insert(
+            "ExifIFD:FocalLength",
+            TagValue::Rational {
+                numerator: 11109,
+                denominator: 1000,
+            },
+        );
+        // The XMP APP1 segment is recorded after the EXIF one, exactly as
+        // `process_xmp_segments` does for this file.
+        m.insert("XMP-exif:FocalLength", TagValue::new_string("11.1 mm"));
+        m.insert("Composite:Aperture", TagValue::new_string("4.0"));
+        m.set_value_form("Composite:Aperture", "4");
+        m.insert(
+            "Composite:CircleOfConfusion",
+            TagValue::new_string("0.006 mm"),
+        );
+        m.set_value_form("Composite:CircleOfConfusion", "0.00646288985171026");
+        // DOF's `$d = $val[4]` (SubjectDistance) is the distance the real
+        // file resolves; the Canon pair below is present but unused.
+        m.insert("XMP-exif:SubjectDistance", TagValue::new_string("2.07 m"));
+        m.insert("Canon:FocusDistanceUpper", TagValue::new_string("2.11 m"));
+        m.insert("Canon:FocusDistanceLower", TagValue::new_string("0 m"));
+
+        // The bare key must resolve to the EXIF rational, not the XMP print
+        // string (ExifTool.pm:9564's priority arbitration with the XMP table's
+        // PRIORITY => 0).
+        assert_eq!(resolve(&m, "FocalLength").as_deref(), Some("11109/1000"));
+
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:DOF"),
+            Some("2.19 m (1.45 - 3.64 m)")
+        );
+    }
+
+    #[test]
     fn upgrades_a_composite_once_a_derived_input_appears() {
         // FocalLength35efl can be computed from FocalLength alone, but gains
         // its 35 mm equivalent once ScaleFactor35efl is derived. Whichever
@@ -1133,6 +1185,70 @@ mod step29_generated_expression_regression {
         assert_eq!(
             composite_string(PANASONIC_RW2, "Composite:ImageHeight"),
             Some("2736".to_string())
+        );
+    }
+
+    const CANON_S110_JPG: &str =
+        "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotS110-new.jpg";
+    const SONY_A100_JPG: &str =
+        "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A100.jpg";
+    const CANON_EOS10D_JPG: &str =
+        "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS10D.jpg";
+
+    /// The optics composites must consume ValueConv-level inputs, exactly as
+    /// `BuildCompositeTags` reads `$$rawValue{...}` (the post-ValueConv
+    /// store) for every `@val` element (ExifTool.pm:4008+). This file's
+    /// EXIF 0x920a is 11109/1000 (ValueConv 11.109); the XMP packet repeats
+    /// the tag PrintConv-rounded, and XMP.pm:1992 demotes the whole exif
+    /// namespace to `PRIORITY => 0`, so ExifTool's DOF sees 11.109 and prints
+    /// `2.19 m (1.45 - 3.64 m)` (pinned 13.59 oracle, `-G1 -s`). Consuming
+    /// the rounded 11.1 instead prints 2.20 -- and FOV flips 38.4 -> 38.5.
+    #[test]
+    fn canon_s110_dof_and_fov_consume_the_exif_rational_not_the_xmp_print_form() {
+        fixture_or_skip!(CANON_S110_JPG);
+        assert_eq!(
+            composite_string(CANON_S110_JPG, "Composite:DOF"),
+            Some("2.19 m (1.45 - 3.64 m)".to_string())
+        );
+        assert_eq!(
+            composite_string(CANON_S110_JPG, "Composite:FOV"),
+            Some("38.4 deg".to_string())
+        );
+    }
+
+    /// The DSLR-A100's `FocusDistance` (Minolta.pm `%minoltaA100`, ValueConv
+    /// `2**(($val-126)/16)` = 10.3747164372081, PrintConv `%.2f m`) feeds
+    /// Composite:FOV's distance term. The pinned 13.59 oracle prints
+    /// `67.3 deg (13.81 m)`; feeding the PrintConv-rounded 10.37 instead
+    /// prints 13.80.
+    #[test]
+    fn sony_a100_fov_consumes_the_focus_distance_value_conv() {
+        fixture_or_skip!(SONY_A100_JPG);
+        assert_eq!(
+            composite_string(SONY_A100_JPG, "Composite:FOV"),
+            Some("67.3 deg (13.81 m)".to_string())
+        );
+    }
+
+    /// Canon.pm's `%Canon::FocalLength` keys 2/3 (FocalPlaneXSize/YSize,
+    /// Canon.pm:2727-2769) are conditioned on `$$self{Model}` -- the IFD0
+    /// Model ("Canon EOS 10D"), whose trailing `10D` passes
+    /// `/\b(1DS?|5D|D30|D60|10D|20D|30D|K236)$/`. With those sizes present,
+    /// `CalcScaleFactor35efl` derives 1.55015938943742 and the pinned 13.59
+    /// oracle prints DOF `0.42 m (12.59 - 13.01 m)` and FocalLength35efl
+    /// `365.0 mm (35 mm equivalent: 565.8 mm)`. Gating them on
+    /// CanonImageType ("IMG:EOS 10D JPEG", which ends in "JPEG") drops both
+    /// sizes, and the fallback sensor-size path lands on 1.5886 instead.
+    #[test]
+    fn canon_eos10d_scale_factor_uses_the_focal_plane_sizes_gated_on_the_exif_model() {
+        fixture_or_skip!(CANON_EOS10D_JPG);
+        assert_eq!(
+            composite_string(CANON_EOS10D_JPG, "Composite:DOF"),
+            Some("0.42 m (12.59 - 13.01 m)".to_string())
+        );
+        assert_eq!(
+            composite_string(CANON_EOS10D_JPG, "Composite:FocalLength35efl"),
+            Some("365.0 mm (35 mm equivalent: 565.8 mm)".to_string())
         );
     }
 }
