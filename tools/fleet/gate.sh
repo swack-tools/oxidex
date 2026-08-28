@@ -184,7 +184,33 @@
 # collide with v8 ones -- no cached v7 FAIL manufactured by the old
 # budget can condemn a branch under v8, and no re-measurement is needed.
 set -u
-GATE_VERSION="8"
+# GATE_VERSION is "tip-5": NAMESPACED, not a bigger integer.
+#
+# Two lines fed this file and each kept its own counter -- the tip line
+# (refactor/tag-machinery) reached "4" and then "tip-5" when the cache-hit
+# branch below started exiting 1 on a cached non-PASS instead of exiting 0
+# unconditionally; the agent-server line independently reached "8". Both
+# sequences are now merged into this one script, so neither counter's next
+# value describes it.
+#
+# A bare integer only avoids collision by inspecting what the other line has
+# already used -- a HISTORICAL check that cannot stop the other line picking
+# the same number tomorrow. The cache key is a free-form string (verdict.py
+# `verdict_ref` validates only non-empty, no "/", not "." or ".."), so a
+# per-line prefix makes a cross-line collision STRUCTURALLY impossible
+# instead of merely unobserved.
+#
+# Landing on "tip-5" rather than "8" or "9" is also the conservative choice
+# for the CACHE ITSELF: this merged gate is neither the script that wrote
+# the tip line's "4" verdicts nor the one that wrote agent-server's "8"
+# verdicts, and its behaviour is the union of both. gate_version is part of
+# the verdict-cache key precisely so verdicts are never served across a
+# behaviour change, so a key that matches NEITHER predecessor is correct --
+# every cached verdict is re-earned under the semantics now in this file.
+# tools/fleet/gate_version.txt carries the same value for the Python
+# consumers (verdict.py, claim.py, fleetd.py); tests/test_gate_cache_exit.py
+# pins the two spellings against each other.
+GATE_VERSION="tip-5"
 
 # BLOCKER 6 (i): wall-clock budget for the whole fleet-tests stage
 # (py_compile sweep + unittest run together), overridable for tests that
@@ -565,7 +591,17 @@ if [ "$CACHE_STATUS" -eq 0 ] && [ -n "$CACHED_JSON" ]; then
     echo "GATE CACHE HIT $TAG -> $CACHED_RESULT (tree $TREE_SHA)" >> "$L"
     echo "GATE DONE $TAG" >> "$L"
     rm -rf "$CARGO_TARGET_DIR" "$D"
-    exit 0
+    # A cache hit must exit with the SAME status a fresh run of that verdict
+    # would. This previously `exit 0`-ed unconditionally, so a cached FAIL
+    # wrote "FAIL cache-hit" into the verdict file and then reported success
+    # to its caller -- a re-gate of a known-bad tree passes silently, and the
+    # verdict file (which fleetd reads) and the exit status (which a human or
+    # a shell `&&` reads) disagree. Fresh failures exit 1 via `fail()`; a
+    # cached PASS is the only 0.
+    if [ "$CACHED_RESULT" = "PASS" ]; then
+      exit 0
+    fi
+    exit 1
   fi
 fi
 
