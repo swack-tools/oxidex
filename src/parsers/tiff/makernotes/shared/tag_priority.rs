@@ -242,6 +242,16 @@ pub(crate) fn record_makernote_tag(
 ///   several MakerNote sub-formats, both `Priority => 0`).
 ///   `Pentax:FocalLength` -- Pentax.pm:1746/1759 explicitly (the
 ///   model-conditional `%Pentax::Main` tag 0x0006 entries).
+/// * `Leica:FocalLength` -- Panasonic.pm:2103 explicitly, the
+///   `%Panasonic::FocusInfo` entry 1 reached from `Leica5`/`Leica8` 0x040a.
+///   Confirmed on `LeicaQ2MONO.jpg`, where the Q2 Monochrom's cropped-frame
+///   FocusInfo reads `50.0 mm` against `ExifIFD:FocalLength`'s `28.0 mm`:
+///   left at the default priority the MakerNote copy won the composite
+///   arbitration on order alone and drove `Composite:FOV` to `35.5 deg`
+///   where the oracle prints `37.3 deg`. Every other Leica body in the
+///   corpus stores the same number in both places, so this one file is the
+///   whole observable difference -- and the reason the demotion is needed at
+///   all rather than assumed harmless.
 ///
 /// Not exhaustive: other manufacturers declare the same `Priority => 0` "let
 /// EXIF take priority" convention for their own ISO/FNumber/FocalLength-
@@ -280,6 +290,7 @@ const PRIORITY_ZERO_DUPLICATES: &[(&str, &str)] = &[
     ("Sony:ExposureTime", "Sony"),
     ("Sony:ISO", "Sony"),
     ("Sony:FocalLength", "Sony"),
+    ("Leica:FocalLength", "Leica"),
 ];
 
 fn priority_zero_duplicate_group1(tag_name: &str) -> Option<&'static str> {
