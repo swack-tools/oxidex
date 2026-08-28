@@ -157,6 +157,13 @@ pub enum FileFormat {
     /// ZIP archive format (.zip)
     ZIP,
 
+    /// Capture One Enhanced Image Package (.eip) -- a ZIP container whose
+    /// members carry the real metadata (an IIQ/TIFF/JPEG image plus COS
+    /// settings XML). ExifTool detects it inside `ProcessZIP` by member name
+    /// (`ZIP.pm:619-623`) and hands the archive to
+    /// `Image::ExifTool::CaptureOne::ProcessEIP`.
+    EIP,
+
     /// DOCX document format (.docx)
     DOCX,
 
@@ -482,6 +489,7 @@ impl FileFormat {
             FileFormat::RA => "RA",
             FileFormat::DSS => "DSS",
             FileFormat::ZIP => "ZIP",
+            FileFormat::EIP => "EIP",
             FileFormat::DOCX => "DOCX",
             FileFormat::XLSX => "XLSX",
             FileFormat::PPTX => "PPTX",
@@ -625,6 +633,7 @@ impl FileFormat {
             FileFormat::RA => &["ra"],
             FileFormat::DSS => &["dss", "ds2"],
             FileFormat::ZIP => &["zip"],
+            FileFormat::EIP => &["eip"],
             FileFormat::DOCX => &["docx"],
             FileFormat::XLSX => &["xlsx"],
             FileFormat::PPTX => &["pptx"],
