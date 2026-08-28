@@ -243,34 +243,37 @@ fn test_parse_dpx_direct_table_fields() {
     // answer that `normalize_identity_tags` dropped on every read, since it
     // never promotes a parser's MIMEType.
     assert!(metadata.get_string("MIMEType").is_none());
-    assert_eq!(metadata.get_string("ByteOrder"), Some("Big-endian"));
-    assert_eq!(metadata.get_string("HeaderVersion"), Some("V2.0"));
-    assert_eq!(metadata.get_integer("DPXFileSize"), Some(2080));
-    assert_eq!(metadata.get_string("DittoKey"), Some("New"));
-    assert_eq!(metadata.get_string("ImageFileName"), Some("frame0001.dpx"));
-    assert_eq!(metadata.get_string("Creator"), Some("OxiDex Test"));
+    assert_eq!(metadata.get_string("File:ByteOrder"), Some("Big-endian"));
+    assert_eq!(metadata.get_string("File:HeaderVersion"), Some("V2.0"));
+    assert_eq!(metadata.get_integer("File:DPXFileSize"), Some(2080));
+    assert_eq!(metadata.get_string("File:DittoKey"), Some("New"));
     assert_eq!(
-        metadata.get_string("Orientation"),
+        metadata.get_string("File:ImageFileName"),
+        Some("frame0001.dpx")
+    );
+    assert_eq!(metadata.get_string("File:Creator"), Some("OxiDex Test"));
+    assert_eq!(
+        metadata.get_string("File:Orientation"),
         Some("Horizontal (normal)")
     );
-    assert_eq!(metadata.get_integer("ImageElements"), Some(1));
-    assert_eq!(metadata.get_integer("ImageWidth"), Some(1920));
-    assert_eq!(metadata.get_integer("ImageHeight"), Some(1080));
+    assert_eq!(metadata.get_integer("File:ImageElements"), Some(1));
+    assert_eq!(metadata.get_integer("File:ImageWidth"), Some(1920));
+    assert_eq!(metadata.get_integer("File:ImageHeight"), Some(1080));
     assert_eq!(
-        metadata.get_string("ComponentsConfiguration"),
+        metadata.get_string("File:ComponentsConfiguration"),
         Some("R, G, B")
     );
     assert_eq!(
-        metadata.get_string("TransferCharacteristic"),
+        metadata.get_string("File:TransferCharacteristic"),
         Some("ITU-R 709-4")
     );
     assert_eq!(
-        metadata.get_string("ColorimetricSpecification"),
+        metadata.get_string("File:ColorimetricSpecification"),
         Some("ITU-R 709-4")
     );
-    assert_eq!(metadata.get_integer("BitDepth"), Some(10));
+    assert_eq!(metadata.get_integer("File:BitDepth"), Some(10));
     assert_eq!(
-        metadata.get_string("ImageDescription"),
+        metadata.get_string("File:ImageDescription"),
         Some("Synthetic DPX test")
     );
 }
