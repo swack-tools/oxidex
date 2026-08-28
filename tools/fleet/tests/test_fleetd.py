@@ -52,6 +52,76 @@ def make_fixture_hub(tmp: Path) -> tuple:
     return bare, work
 
 
+# --------------------------------------------------------------------- #
+# Waiting for real processes
+# --------------------------------------------------------------------- #
+#
+# Every wait in this file waits on a REAL child -- a stub gate noticing its
+# stop-file, a spawned process writing a dump, a killed process group going
+# away. How long that takes is a property of the HOST, not of the behaviour
+# under test: the same stub that exits in 0.1s on an idle laptop can take
+# tens of seconds on a gate host simultaneously building Rust.
+#
+# `deadline = time.time() + 10` encoded a machine speed into a behavioural
+# assertion, and -- worse -- missing the window fell through SILENTLY into
+# the next assertion. Observed on the i7 under gate keel3 (gate_version 8,
+# duration 2013s), recorded as `fleet_tests_flakes[0]`:
+#
+#     FAIL: test_the_reaped_gate_refusal_is_still_one_shot_and_the_warning_is_not
+#     AssertionError: 'testhost-one-73575' not found in []
+#
+# which reads as "fleetd stopped reaping gates" and was in fact "the gate
+# had not exited yet". A test that is green alone and red under load is a
+# defect in the test (AGENTS.md, "Name the instrument"): it corrupts the
+# gate, which is the instrument every other measurement here is graded by.
+#
+# So: a budget generous enough for a loaded host, and a timeout that is an
+# explicit self-describing failure instead of a fall-through. The budget
+# bounds nothing any test asserts -- each wait returns the instant its
+# condition holds, so on a healthy host raising it costs zero wall time and
+# buys a red that says which of "still running", "killed instead of reaped"
+# and "reaped but not reported" actually happened. It is NOT a retry: the
+# assertions after it are unchanged and still run exactly once.
+WAIT_BUDGET_S = float(os.environ.get("FLEET_TESTS_WAIT_BUDGET_S", "180"))
+
+
+def poll_until(predicate, budget: float = None, interval: float = 0.05) -> tuple:
+    """Poll `predicate` until true or `budget` expires.
+
+    Returns `(ok, elapsed)`. The caller says what a timeout means -- this
+    never decides on its own that a timeout is harmless.
+    """
+    budget = WAIT_BUDGET_S if budget is None else budget
+    t0 = time.time()
+    while True:
+        if predicate():
+            return True, time.time() - t0
+        elapsed = time.time() - t0
+        if elapsed >= budget:
+            return False, elapsed
+        time.sleep(interval)
+
+
+class WaitsForProcesses:
+    """`self.await_true(...)`: poll for a real-process condition, and fail
+    LOUDLY and specifically if the budget runs out."""
+
+    def await_true(self, predicate, describe, budget: float = None,
+                   interval: float = 0.05) -> float:
+        """`describe` is the thing being waited FOR. Pass a callable to have
+        the current state rendered at failure time rather than at call
+        time -- the whole value of the message is that it reports what was
+        true when the wait gave up."""
+        budget = WAIT_BUDGET_S if budget is None else budget
+        ok, elapsed = poll_until(predicate, budget=budget, interval=interval)
+        if not ok:
+            what = describe() if callable(describe) else describe
+            self.fail(f"timed out after {elapsed:.1f}s (budget {budget:.0f}s, raise "
+                      f"FLEET_TESTS_WAIT_BUDGET_S if this host is genuinely that "
+                      f"slow) waiting for {what}")
+        return elapsed
+
+
 def make_stub_gate(tmp: Path) -> Path:
     """A gate that parks until its stop-file appears, so tests control
     exactly when a 'gate' finishes."""
@@ -66,7 +136,7 @@ def make_stub_gate(tmp: Path) -> Path:
     return stub
 
 
-class FleetdBase(HermeticCase):
+class FleetdBase(WaitsForProcesses, HermeticCase):
     def setUp(self):
         super().setUp()
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -88,14 +158,54 @@ class FleetdBase(HermeticCase):
         # finish any parked stub gates so nothing outlives the test
         for w in self.workers:
             (self.tmp / f"stop-{w.tag}").write_text("")
-        deadline = time.time() + 10
-        while time.time() < deadline and any(w.alive() for w in self.workers):
-            time.sleep(0.2)
+        poll_until(lambda: not any(w.alive() for w in self.workers))
         for w in self.workers:
             if w.popen is not None:
-                w.popen.wait(timeout=10)
+                w.popen.wait(timeout=WAIT_BUDGET_S)
         self.tmpdir.cleanup()
         os.environ.pop("FLEET_HOST", None)
+
+    # -- process-state reporting, for failure messages ------------------ #
+
+    def worker_states(self) -> list:
+        """What `self.workers` actually is right now. `alive()` is polled
+        here (not cached) because "was the process still running?" is the
+        first question any reap failure raises and the answer is worthless
+        if it is stale."""
+        out = []
+        for w in self.workers:
+            rc = w.popen.returncode if w.popen is not None else "no-popen"
+            out.append(f"{w.tag}(kind={w.kind} alive={w.alive()} rc={rc})")
+        return out
+
+    def reap_report(self, tag: str, res) -> str:
+        """Everything a reap assertion needs to be diagnosable: whether the
+        worker is still alive, and all four channels a reaped worker can
+        land in -- `finished` (the reap), `killed` (a lost lease took it
+        instead), `refused` (this loop's one-shot reasons) and `warnings`
+        (the durable ones). Without `killed` here, a lease-loss and a slow
+        exit are indistinguishable in the failure text, and they need
+        opposite fixes."""
+        return (f"tag={tag} workers={self.worker_states()} "
+                f"finished={res.finished} killed={res.killed} "
+                f"refused={res.refused} warnings={res.warnings}")
+
+    def finish_worker(self, tag: str) -> float:
+        """Tell the stub with this tag to stop, then block until it is
+        GENUINELY gone -- `Worker.alive()` false, which for a worker we
+        spawned means `Popen.poll()` has returned and reaped the child.
+
+        `reconcile_once` moves a worker to `finished` on the first pass
+        that sees `alive()` false, so asserting on `finished` before this
+        returns is asserting on how fast this host schedules a parked bash
+        loop. Returns the elapsed seconds so a caller can report them."""
+        (self.tmp / f"stop-{tag}").write_text("")
+        return self.await_true(
+            lambda: not any(w.tag == tag and w.alive() for w in self.workers),
+            lambda: (f"stub worker {tag} to exit after its stop-file was written "
+                     f"(it never did, so nothing below is evidence about fleetd's "
+                     f"reaping); workers={self.worker_states()}"),
+        )
 
     def reconcile(self, disk=100.0, mem=32.0):
         return fleetd.reconcile_once(
@@ -141,7 +251,7 @@ class TestConvergence(FleetdBase):
 
         # Let it finish; next reconcile reaps it and releases the claim.
         (self.tmp / f"stop-{self.workers[0].tag}").write_text("")
-        self.workers[0].popen.wait(timeout=15)
+        self.workers[0].popen.wait(timeout=WAIT_BUDGET_S)
         res3 = self.reconcile()
         self.assertEqual(len(res3.finished), 1)
         self.assertEqual(self.workers, [])
@@ -323,12 +433,6 @@ class TestGateVerdictStoreFailureSurfaced(FleetdBase):
     rather than inventing a second, parallel channel for the same fact.
     """
 
-    def _finish_gate(self, tag: str) -> None:
-        (self.tmp / f"stop-{tag}").write_text("")
-        deadline = time.time() + 10
-        while time.time() < deadline and any(w.tag == tag and w.alive() for w in self.workers):
-            time.sleep(0.1)
-
     def test_marker_left_by_gate_sh_becomes_a_refused_reason_on_reap(self):
         self.set_desired(gates=1)
         res1 = self.reconcile()
@@ -343,9 +447,10 @@ class TestGateVerdictStoreFailureSurfaced(FleetdBase):
         self.assertTrue(marker.parent.is_dir(), "start_gate must have created the log dir")
         marker.write_text("")
 
-        self._finish_gate(tag)
+        self.finish_worker(tag)
         res2 = self.reconcile()
-        self.assertIn(tag, res2.finished, f"gate never reaped: finished={res2.finished}")
+        self.assertIn(tag, res2.finished,
+                      f"gate exited but was not reaped: {self.reap_report(tag, res2)}")
         self.assertIn("verdict-store-failed", [r[0] for r in res2.refused],
                       f"refused={res2.refused}")
         detail = dict(res2.refused)["verdict-store-failed"]
@@ -367,9 +472,10 @@ class TestGateVerdictStoreFailureSurfaced(FleetdBase):
         self.assertEqual(len(res1.started), 1, f"refused={res1.refused}")
         tag = res1.started[0]
 
-        self._finish_gate(tag)
+        self.finish_worker(tag)
         res2 = self.reconcile()
-        self.assertIn(tag, res2.finished, f"gate never reaped: finished={res2.finished}")
+        self.assertIn(tag, res2.finished,
+                      f"gate exited but was not reaped: {self.reap_report(tag, res2)}")
         self.assertNotIn("verdict-store-failed", [r[0] for r in res2.refused],
                          f"refused={res2.refused}")
 
@@ -515,22 +621,32 @@ class TestVerdictStoreFailureIsDurableAndOwnerless(FleetdBase):
         tag = res1.started[0]
         self._marker(tag)
 
-        (self.tmp / f"stop-{tag}").write_text("")
-        deadline = time.time() + 10
-        while time.time() < deadline and any(w.tag == tag and w.alive() for w in self.workers):
-            time.sleep(0.1)
+        # Wait for the gate to be GENUINELY gone before reconciling. The
+        # reap is what puts `tag` in `finished`, and the reap only happens
+        # once `alive()` is false -- so a fixed sleep here would be
+        # measuring this host's scheduler, not fleetd (see WAIT_BUDGET_S:
+        # that is the flake this line replaces).
+        self.finish_worker(tag)
 
         reaped = self.reconcile()
-        self.assertIn(tag, reaped.finished)
-        self.assertIn("verdict-store-failed", self._reasons(reaped.refused))
-        self.assertIn("verdict-store-failed", self._reasons(reaped.warnings))
+        self.assertIn(tag, reaped.finished,
+                      f"the gate exited but the reap did not report it: "
+                      f"{self.reap_report(tag, reaped)}")
+        self.assertIn("verdict-store-failed", self._reasons(reaped.refused),
+                      f"the reap loop did not raise the one-shot refusal: "
+                      f"{self.reap_report(tag, reaped)}")
+        self.assertIn("verdict-store-failed", self._reasons(reaped.warnings),
+                      f"the marker sweep did not raise the durable warning: "
+                      f"{self.reap_report(tag, reaped)}")
 
         after = self.reconcile()
         self.assertNotIn("verdict-store-failed", self._reasons(after.refused),
-                         "the per-loop refusal is (still) one-shot by design")
+                         f"the per-loop refusal is (still) one-shot by design: "
+                         f"{self.reap_report(tag, after)}")
         self.assertIn("verdict-store-failed", self._reasons(after.warnings),
-                      "the durable warning vanished with the refusal -- this is "
-                      "exactly the 15-second visibility window T3 exists to close")
+                      f"the durable warning vanished with the refusal -- this is "
+                      f"exactly the 15-second visibility window T3 exists to close: "
+                      f"{self.reap_report(tag, after)}")
 
 
 class TestHostWarningsScanOnAMissingLogDir(HermeticCase):
@@ -647,12 +763,20 @@ class TestSpawnEnv(FleetdBase):
         return stub
 
     def _read_dump(self, tag: str) -> str:
-        dump = self.tmp / f"envdump-{tag}.txt"
-        deadline = time.time() + 10
-        while time.time() < deadline and not dump.exists():
-            time.sleep(0.1)
-        self.assertTrue(dump.exists(), f"spawned process never wrote {dump}")
-        return dump.read_text()
+        return self._await_file(self.tmp / f"envdump-{tag}.txt",
+                                f"the env dump for {tag}").read_text()
+
+    def _await_file(self, path: Path, what: str) -> Path:
+        """The spawned process writes this file as its first act, so its
+        absence means the spawn is slow or the spawn failed -- two very
+        different findings, and neither is "the env was wrong", which is
+        what the assertions below would otherwise report."""
+        self.await_true(
+            path.exists,
+            lambda: (f"the spawned process to write {what} at {path}; "
+                     f"log dir contents={sorted(p.name for p in (self.tmp / 'logs').glob('*'))}"),
+        )
+        return path
 
     def test_start_gate_env_carries_hub_and_code_url_given_only_argv_config(self):
         """Simulates `fleetd --hub <state> --code <code>`: a `Hub` with a
@@ -719,10 +843,8 @@ class TestSpawnEnv(FleetdBase):
         # S2 (Stage 1 integration review): the worker is told the CODE
         # repo on argv too, not left to infer it. `--hub` stays the STATE
         # repo; `--code` is what it clones and probes `refs/heads/*` on.
-        deadline = time.time() + 10
-        argv_dump = self.tmp / "argvdump-agent1.txt"
-        while time.time() < deadline and not argv_dump.exists():
-            time.sleep(0.1)
+        argv_dump = self._await_file(self.tmp / "argvdump-agent1.txt",
+                                     "the agent's argv dump")
         argv = argv_dump.read_text().splitlines()
         self.assertIn("--code", argv, argv)
         self.assertEqual(argv[argv.index("--code") + 1], distinct_code_url, argv)
@@ -824,7 +946,7 @@ class TestAgentSlots(FleetdBase):
             self.assertEqual(self.workers[0].kind, "agent")
             self.assertEqual(len(self.hub.list("refs/fleet/claims/agent/")), 1)
             # worker exits (stub pushes nothing -> exit 7); next reconcile reaps
-            self.workers[0].popen.wait(timeout=30)
+            self.workers[0].popen.wait(timeout=WAIT_BUDGET_S)
             res2 = self.reconcile()
             self.assertEqual(len(res2.finished), 1)
             # cooldown: the no-progress branch is NOT respawned this loop
@@ -1082,10 +1204,15 @@ class TestLostLeaseIsKilledWhileTheHubIsUnreachable(FleetdBase):
             self.reconcile()
 
         self.assertNotIn(w, self.workers, "killed worker must leave the worker list")
-        deadline = time.time() + 15
-        while time.time() < deadline and w.alive():
-            time.sleep(0.2)
-        self.assertFalse(w.alive(), "the lost-lease gate is still running")
+        # SIGKILL to a process group is asynchronous: the kernel has to
+        # schedule each member to die. Waiting for that is not waiting for
+        # fleetd's behaviour, which already happened above.
+        self.await_true(
+            lambda: not w.alive(),
+            lambda: (f"the lost-lease gate {w.tag} (pgid {w.pgid}) to die after "
+                     f"kill_worker; rc={w.popen.returncode if w.popen else 'no-popen'} "
+                     f"live_pgids_contains_it={w.pgid in fleetd.live_pgids()}"),
+        )
         self.assertNotIn(
             pgid, fleetd.live_pgids(),
             "the process GROUP must be gone (M8) -- children go with the leader",
@@ -1174,7 +1301,7 @@ class TestLostLeaseIsKilledWhileTheHubIsUnreachable(FleetdBase):
 
         # Finish the first for real, so the reap path runs for it.
         (self.tmp / f"stop-{finished.tag}").write_text("")
-        finished.popen.wait(timeout=15)
+        finished.popen.wait(timeout=WAIT_BUDGET_S)
         lost.claim._mark_lost("hub no longer records us as the holder")
         self.break_the_hub()
 
@@ -1182,11 +1309,13 @@ class TestLostLeaseIsKilledWhileTheHubIsUnreachable(FleetdBase):
             self.reconcile()
 
         self.assertEqual(self.workers, [], "both workers must have left the list")
-        deadline = time.time() + 15
-        while time.time() < deadline and lost.alive():
-            time.sleep(0.2)
-        self.assertFalse(lost.alive(),
-                         "the lost-lease worker was stranded by the finished one's failed release")
+        self.await_true(
+            lambda: not lost.alive(),
+            lambda: (f"the lost-lease worker {lost.tag} (pgid {lost.pgid}) to die -- it "
+                     f"was stranded by the finished worker's failed release; "
+                     f"rc={lost.popen.returncode if lost.popen else 'no-popen'} "
+                     f"live_pgids_contains_it={lost.pgid in fleetd.live_pgids()}"),
+        )
 
 
 class TestReapDeadSameHostSingleton(FleetdBase):
@@ -1309,7 +1438,7 @@ class TestReapDeadSameHostSingleton(FleetdBase):
         self.assertIsNotNone(self.hub.sha(ref), "the renewed claim must survive")
 
 
-class TestFleetdMarkerInGroup(HermeticCase):
+class TestFleetdMarkerInGroup(WaitsForProcesses, HermeticCase):
     """`fleetd_marker_in_group` against REAL processes -- the whole point of
     this function is that fleetd shares its wrapper's process group and so
     is never that group's LEADER (see the function's docstring), so a fake
@@ -1351,9 +1480,14 @@ class TestFleetdMarkerInGroup(HermeticCase):
         script.chmod(0o755)
         p = subprocess.Popen(["bash", str(script)], start_new_session=True)
         self.procs.append(p)
-        deadline = time.time() + 10
-        while time.time() < deadline and not self.pidfile.exists():
-            time.sleep(0.1)
+        # Without this wait being an assertion, a slow fork turned into a
+        # FileNotFoundError from `read_text()` below -- an error about a
+        # missing temp file, in a test about process-group scanning.
+        self.await_true(
+            self.pidfile.exists,
+            lambda: (f"the leader script to record its child's pid at {self.pidfile}; "
+                     f"bash alive={p.poll() is None} rc={p.returncode}"),
+        )
         child_pid = int(self.pidfile.read_text().strip())
         pgid = os.getpgid(p.pid)
         self.assertEqual(pgid, p.pid, "sanity: bash must be the group leader here")
