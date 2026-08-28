@@ -386,6 +386,16 @@ pub enum FileFormat {
     /// Medical Research Council electron-microscopy image (.mrc)
     MRC,
 
+    /// Extensible Image Serialization Format (.xisf), PixInsight's astronomy
+    /// image container
+    XISF,
+
+    /// Windows Recorded TV Show (.wtv)
+    WTV,
+
+    /// RealMedia audio/video container (.rm, .rv, .rmvb)
+    RealMedia,
+
     /// Audible audiobook (.aa)
     AA,
 
@@ -555,6 +565,9 @@ impl FileFormat {
             FileFormat::PCX => "PCX",
             FileFormat::PGF => "PGF",
             FileFormat::MRC => "MRC",
+            FileFormat::XISF => "XISF",
+            FileFormat::WTV => "WTV",
+            FileFormat::RealMedia => "RM",
             FileFormat::AA => "AA",
             FileFormat::PICT => "PICT",
             FileFormat::PPM => "PPM",
@@ -701,6 +714,12 @@ impl FileFormat {
             FileFormat::PCX => &["pcx"],
             FileFormat::PGF => &["pgf"],
             FileFormat::MRC => &["mrc"],
+            FileFormat::XISF => &["xisf"],
+            FileFormat::WTV => &["wtv"],
+            // ExifTool's `%fileTypeLookup` routes all three RealMedia
+            // extensions to the same `Real` module (`ExifTool.pm`); `rm` is
+            // the canonical one it reports as `FileTypeExtension`.
+            FileFormat::RealMedia => &["rm", "rv", "rmvb"],
             FileFormat::AA => &["aa"],
             FileFormat::PICT => &["pict", "pct"],
             FileFormat::PPM => &["ppm", "pgm", "pbm"],

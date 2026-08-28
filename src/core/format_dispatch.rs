@@ -57,6 +57,9 @@ use crate::parsers::image::pict::parse_pict_metadata;
 use crate::parsers::image::ppm::parse_ppm_metadata;
 use crate::parsers::image::radiance::parse_radiance_metadata;
 use crate::parsers::image::xcf::parse_xcf_metadata;
+use crate::parsers::image::xisf::parse_xisf_metadata;
+use crate::parsers::video::realmedia::parse_realmedia_metadata;
+use crate::parsers::video::wtv::parse_wtv_metadata;
 // Note: HEIF uses parse_quicktime_metadata since HEIF is ISOBMFF-based
 use crate::parsers::canon_vrd::{parse_dr4_file, parse_vrd_file};
 use crate::parsers::document::indesign::parse_indesign_metadata;
@@ -289,6 +292,11 @@ pub fn dispatch_format_parser(
         FileFormat::PCX => convert_string_error(parse_pcx_metadata(reader), "PCX"),
         FileFormat::PGF => convert_string_error(parse_pgf_metadata(reader), "PGF"),
         FileFormat::MRC => convert_string_error(parse_mrc_metadata(reader), "MRC"),
+        FileFormat::XISF => convert_string_error(parse_xisf_metadata(reader), "XISF"),
+        FileFormat::WTV => convert_string_error(parse_wtv_metadata(reader), "WTV"),
+        FileFormat::RealMedia => {
+            convert_string_error(parse_realmedia_metadata(reader), "RealMedia")
+        }
         FileFormat::R3D => convert_string_error(parse_r3d_metadata(reader), "R3D"),
         FileFormat::PSP => convert_string_error(parse_psp_metadata(reader), "PSP"),
         FileFormat::PMP => convert_string_error(parse_pmp_metadata(reader), "PMP"),

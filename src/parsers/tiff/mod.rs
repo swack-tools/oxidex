@@ -7,6 +7,7 @@
 pub mod bigtiff;
 pub mod file_parser;
 pub mod geotiff_parser;
+pub mod geotiff_printconv;
 pub mod ifd_parser;
 pub mod makernote_dispatcher;
 pub mod makernote_parser;

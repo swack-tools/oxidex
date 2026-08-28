@@ -73,6 +73,16 @@ pub fn resolve_family0(group0: &str) -> &str {
         // (e.g. Canon.pm's own `%Main`).
         "CIFF" | "Canon" | "CanonCustom" | "Nikon" | "Sony" | "Pentax" | "Panasonic"
         | "Olympus" | "FujiFilm" | "Leica" | "SigmaRaw" | "PhaseOne" => "MakerNotes",
+        // ID3.pm's per-version tables set only family 1 -- `%ID3::v1` is
+        // `GROUPS => { 1 => 'ID3v1', 2 => 'Audio' }` (ID3.pm:335-337) -- so
+        // family 0 falls through to `%ID3::Main`'s own 'ID3'. The pinned
+        // oracle prints `[ID3] Title` under `-G0` and `[ID3v1] Title` under
+        // `-G1` for the same tag. Without this, `Composite:DateTimeOriginal`'s
+        // `Desire => 'ID3:Year'` (ID3.pm:841-859) never binds a v1-only file:
+        // `t/images/Real.rm` carries an ID3v1 trailer and nothing else, and
+        // its `DateTimeOriginal` was the one tag still missing after the
+        // RealMedia reader landed.
+        "ID3v1" | "ID3v1_Enh" | "ID3v2_2" | "ID3v2_3" | "ID3v2_4" => "ID3",
         // XMP.pm namespaces are all family-0 'XMP' with the namespace
         // prefix (xmp-exif, xmp-dc, ...) as family 1.
         other if other.starts_with("XMP-") => "XMP",
