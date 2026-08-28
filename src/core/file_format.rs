@@ -386,6 +386,14 @@ pub enum FileFormat {
     /// Medical Research Council electron-microscopy image (.mrc)
     MRC,
 
+    /// Mac OS resource fork, either a bare resource file (.rsrc) or a
+    /// data-fork font suitcase (.dfont) -- the parser reports DFONT when a
+    /// font resource is present, matching ExifTool's RSRC.pm override
+    RSRC,
+
+    /// Adobe Font Metrics text file (.afm; also its ACFM/AMFM siblings)
+    AFM,
+
     /// Audible audiobook (.aa)
     AA,
 
@@ -555,6 +563,8 @@ impl FileFormat {
             FileFormat::PCX => "PCX",
             FileFormat::PGF => "PGF",
             FileFormat::MRC => "MRC",
+            FileFormat::RSRC => "RSRC",
+            FileFormat::AFM => "AFM",
             FileFormat::AA => "AA",
             FileFormat::PICT => "PICT",
             FileFormat::PPM => "PPM",
@@ -701,6 +711,8 @@ impl FileFormat {
             FileFormat::PCX => &["pcx"],
             FileFormat::PGF => &["pgf"],
             FileFormat::MRC => &["mrc"],
+            FileFormat::RSRC => &["rsrc", "dfont"],
+            FileFormat::AFM => &["afm", "acfm", "amfm"],
             FileFormat::AA => &["aa"],
             FileFormat::PICT => &["pict", "pct"],
             FileFormat::PPM => &["ppm", "pgm", "pbm"],

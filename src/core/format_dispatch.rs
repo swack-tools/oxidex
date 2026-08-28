@@ -35,6 +35,7 @@ use crate::parsers::document::ooxml::parse_docx_metadata;
 use crate::parsers::document::ooxml::parse_pptx_metadata;
 use crate::parsers::document::ooxml::parse_xlsx_metadata;
 use crate::parsers::document::tnef::parse_tnef_metadata;
+use crate::parsers::font::afm::parse_afm_metadata;
 use crate::parsers::font::otf::parse_otf_metadata;
 use crate::parsers::font::pfm::{PrinterFontMetricsParser, parse_printer_font_metrics};
 use crate::parsers::font::ttf::parse_ttf_metadata;
@@ -204,6 +205,11 @@ pub fn dispatch_format_parser(
         // Font formats
         FileFormat::TTF => convert_string_error(parse_ttf_metadata(reader), "TTF"),
         FileFormat::OTF => convert_string_error(parse_otf_metadata(reader), "OTF"),
+        FileFormat::AFM => convert_string_error(parse_afm_metadata(reader), "AFM"),
+        // Mac OS resource fork; a font suitcase (.dfont) is this too
+        FileFormat::RSRC => {
+            convert_string_error(crate::parsers::rsrc::parse_rsrc_metadata(reader), "RSRC")
+        }
         FileFormat::WOFF => convert_string_error(parse_woff_metadata(reader), "WOFF"),
         FileFormat::WOFF2 => convert_string_error(parse_woff2_metadata(reader), "WOFF2"),
         // Advanced image formats

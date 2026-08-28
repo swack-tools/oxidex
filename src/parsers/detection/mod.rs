@@ -333,6 +333,29 @@ pub fn detect_format(reader: &dyn FileReader) -> io::Result<FileFormat> {
         return Ok(FileFormat::MacOSSidecar);
     }
 
+    // Mac OS resource fork (RSRC / DFONT). The `%magicNumber` pattern --
+    // `(....)?\0\0\x01\0` (ExifTool.pm:1030) -- shares its four bytes with
+    // every ICO file, so the byte match alone cannot decide. ExifTool
+    // arbitrates by module acceptance: `ProcessRSRC` validates the whole
+    // resource-fork geometry before claiming the file (RSRC.pm:76-93), and
+    // an ICO's bytes never survive that. Running the same validation here,
+    // ahead of Phase 2's `\0\0\x01\0 -> ICO` entry, reproduces the
+    // arbitration; anything that fails it falls through to ICO as before.
+    if crate::filetype::matches_magic("RSRC", magic_bytes)
+        && crate::parsers::rsrc::validate_rsrc(reader).is_some()
+    {
+        return Ok(FileFormat::RSRC);
+    }
+
+    // Adobe Font Metrics (AFM/ACFM/AMFM): `Start(Comp|Master)?FontMetrics`
+    // followed by whitespace and a number (Font.pm:596). The alternation
+    // and the `\s+\d+` tail are outside `signature!`'s literal-bytes
+    // grammar, so it is checked here, with the same test the parser gates
+    // on.
+    if crate::parsers::font::afm::is_afm_file(magic_bytes) {
+        return Ok(FileFormat::AFM);
+    }
+
     // INDD/IND: the 16-byte master-page GUID at offset 0 (InDesign.pm:25,
     // and ExifTool.pm's `%magicNumber` `IND` entry). `indesign.rs` repeats
     // the test and goes on to validate the second master page the way
