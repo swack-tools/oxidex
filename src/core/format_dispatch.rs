@@ -6,6 +6,7 @@
 use super::{FileFormat, FileReader, MetadataMap, ReadOptions};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::archive::ar::parse_ar_metadata;
+use crate::parsers::archive::captureone::parse_eip_metadata;
 use crate::parsers::archive::gz::parse_gz_metadata;
 use crate::parsers::archive::iso::parse_iso_metadata;
 use crate::parsers::archive::ole::parse_ole_metadata;
@@ -35,6 +36,7 @@ use crate::parsers::document::ooxml::parse_docx_metadata;
 use crate::parsers::document::ooxml::parse_pptx_metadata;
 use crate::parsers::document::ooxml::parse_xlsx_metadata;
 use crate::parsers::document::tnef::parse_tnef_metadata;
+use crate::parsers::font::afm::parse_afm_metadata;
 use crate::parsers::font::otf::parse_otf_metadata;
 use crate::parsers::font::pfm::{PrinterFontMetricsParser, parse_printer_font_metrics};
 use crate::parsers::font::ttf::parse_ttf_metadata;
@@ -57,6 +59,9 @@ use crate::parsers::image::pict::parse_pict_metadata;
 use crate::parsers::image::ppm::parse_ppm_metadata;
 use crate::parsers::image::radiance::parse_radiance_metadata;
 use crate::parsers::image::xcf::parse_xcf_metadata;
+use crate::parsers::image::xisf::parse_xisf_metadata;
+use crate::parsers::video::realmedia::parse_realmedia_metadata;
+use crate::parsers::video::wtv::parse_wtv_metadata;
 // Note: HEIF uses parse_quicktime_metadata since HEIF is ISOBMFF-based
 use crate::parsers::canon_vrd::{parse_dr4_file, parse_vrd_file};
 use crate::parsers::document::indesign::parse_indesign_metadata;
@@ -107,7 +112,7 @@ use crate::parsers::specialized::torrent::parse_torrent_metadata;
 use crate::parsers::specialized::x509::parse_x509_metadata;
 use crate::parsers::text::eps::parse_eps_metadata;
 use crate::parsers::text::html::parse_html_metadata;
-use crate::parsers::text::txt::parse_txt_metadata;
+use crate::parsers::text::txt::{parse_csv_metadata, parse_txt_metadata};
 use crate::parsers::text::vcf::parse_vcf_metadata;
 use crate::parsers::tiff::bigtiff::parse_bigtiff_metadata;
 use crate::parsers::video::asf::parse_asf_metadata;
@@ -188,6 +193,7 @@ pub fn dispatch_format_parser(
         FileFormat::RA => convert_string_error(parse_real_audio_metadata(reader), "RA"),
         FileFormat::DSS => convert_string_error(parse_dss_metadata(reader), "DSS"),
         FileFormat::ZIP => convert_string_error(parse_zip_metadata(reader), "ZIP"),
+        FileFormat::EIP => convert_string_error(parse_eip_metadata(reader), "EIP"),
         FileFormat::DOCX => convert_string_error(parse_docx_metadata(reader), "DOCX"),
         FileFormat::XLSX => convert_string_error(parse_xlsx_metadata(reader), "XLSX"),
         FileFormat::PPTX => convert_string_error(parse_pptx_metadata(reader), "PPTX"),
@@ -204,6 +210,11 @@ pub fn dispatch_format_parser(
         // Font formats
         FileFormat::TTF => convert_string_error(parse_ttf_metadata(reader), "TTF"),
         FileFormat::OTF => convert_string_error(parse_otf_metadata(reader), "OTF"),
+        FileFormat::AFM => convert_string_error(parse_afm_metadata(reader), "AFM"),
+        // Mac OS resource fork; a font suitcase (.dfont) is this too
+        FileFormat::RSRC => {
+            convert_string_error(crate::parsers::rsrc::parse_rsrc_metadata(reader), "RSRC")
+        }
         FileFormat::WOFF => convert_string_error(parse_woff_metadata(reader), "WOFF"),
         FileFormat::WOFF2 => convert_string_error(parse_woff2_metadata(reader), "WOFF2"),
         // Advanced image formats
@@ -257,6 +268,7 @@ pub fn dispatch_format_parser(
         FileFormat::HDF5 => convert_string_error(parse_hdf5_metadata(reader), "HDF5"),
         FileFormat::VCF => convert_string_error(parse_vcf_metadata(reader), "VCF"),
         FileFormat::TXT => convert_string_error(parse_txt_metadata(reader), "TXT"),
+        FileFormat::CSV => convert_string_error(parse_csv_metadata(reader), "CSV"),
         FileFormat::HTML => convert_string_error(parse_html_metadata(reader), "HTML"),
         FileFormat::LNK => convert_string_error(parse_lnk_metadata(reader), "LNK"),
         FileFormat::LFP => convert_string_error(parse_lytro_metadata(reader), "LFP"),
@@ -289,6 +301,11 @@ pub fn dispatch_format_parser(
         FileFormat::PCX => convert_string_error(parse_pcx_metadata(reader), "PCX"),
         FileFormat::PGF => convert_string_error(parse_pgf_metadata(reader), "PGF"),
         FileFormat::MRC => convert_string_error(parse_mrc_metadata(reader), "MRC"),
+        FileFormat::XISF => convert_string_error(parse_xisf_metadata(reader), "XISF"),
+        FileFormat::WTV => convert_string_error(parse_wtv_metadata(reader), "WTV"),
+        FileFormat::RealMedia => {
+            convert_string_error(parse_realmedia_metadata(reader), "RealMedia")
+        }
         FileFormat::R3D => convert_string_error(parse_r3d_metadata(reader), "R3D"),
         FileFormat::PSP => convert_string_error(parse_psp_metadata(reader), "PSP"),
         FileFormat::PMP => convert_string_error(parse_pmp_metadata(reader), "PMP"),

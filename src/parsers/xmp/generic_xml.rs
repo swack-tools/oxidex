@@ -147,11 +147,23 @@ impl Prop {
         }
     }
 
-    /// `$ignoreNamespace{$ns} or $ignoreEtProp{$prop}` (XMP.pm:3026).
-    /// `%ignoreProp` is only ever populated from a SubDirectory's `IgnoreProp`
-    /// (XMP.pm:4601-4603), which no plain-XML file has, so it is empty here.
-    fn ignored(&self) -> bool {
+    /// The property string `GetXMPTagID` tests `%ignoreProp` against -- the
+    /// qualified name when there is a prefix, the bare local name otherwise.
+    fn qname(&self) -> String {
+        if self.prefix.is_empty() {
+            self.local.clone()
+        } else {
+            format!("{}:{}", self.prefix, self.local)
+        }
+    }
+
+    /// `$ignoreNamespace{$ns} or $ignoreProp{$prop} or $ignoreEtProp{$prop}`
+    /// (XMP.pm:3026). `%ignoreProp` is populated from a SubDirectory's or
+    /// `dirInfo`'s `IgnoreProp` (XMP.pm:4601-4603), which is empty for a
+    /// plain-XML file and `{ xisf, Metadata, Property }` for XISF.
+    fn ignored(&self, ignore_prop: &[&str]) -> bool {
         IGNORE_NAMESPACE.contains(&self.prefix.as_str())
+            || ignore_prop.contains(&self.qname().as_str())
             || IGNORE_ET_PROP.contains(&format!("{}:{}", self.prefix, self.local).as_str())
     }
 }
@@ -163,7 +175,13 @@ pub(crate) struct XmlProperty {
     pub group1: String,
     /// The reported tag name, `ucfirst` of the concatenated path.
     pub name: String,
+    /// The value after `XMPAutoConv` (XMP.pm:3677-3688), which is what a tag
+    /// `FoundXMP` just minted gets.
     pub value: String,
+    /// The value before any conversion. A caller whose table declares its own
+    /// `ValueConv` for this name must start here: `XMPAutoConv` runs only for
+    /// `$$tagInfo{IsDefault}`, i.e. tags with no table entry at all.
+    pub raw: String,
 }
 
 /// `GetXMPTagID` (XMP.pm:3018-3070) plus `FoundXMP`'s closing
@@ -172,12 +190,12 @@ pub(crate) struct XmlProperty {
 /// Returns `(name, group1-namespace)`, or `None` when no property contributed
 /// -- `FoundXMP`'s own `return 0 unless $tag` (XMP.pm:3441), "ignore things
 /// that aren't valid tags".
-fn xmp_tag_id(props: &[Prop]) -> Option<(String, String)> {
+fn xmp_tag_id(props: &[Prop], ignore_prop: &[&str]) -> Option<(String, String)> {
     let mut tag: Option<String> = None;
     let mut namespace = String::new();
 
     for prop in props {
-        if prop.ignored() {
+        if prop.ignored(ignore_prop) {
             // The one exception: `rdf:_1`, `rdf:_2`, ... "not technically
             // allowed in XMP, but used in RDF/XML" (XMP.pm:3028-3030). It
             // appends the bare `_N` and, unlike every other ignored property,
@@ -343,11 +361,89 @@ struct Frame {
     /// non-empty (XMP.pm:4180, `if (length $val or not $shorthand)`), so
     /// `<Foo bar="1"/>` reports `Foobar` alone and not also an empty `Foo`.
     shorthand: bool,
+    /// Whether [`Frame::text`] came from an `AttrProc` rather than the
+    /// document. XMP.pm:4036 sets `$valStart = $valEnd` in that case, so the
+    /// element's own content is discarded rather than appended.
+    hook_value: bool,
+}
+
+/// What an `AttrProc` hook did to one element, mirroring the four arguments
+/// `ParseXMPElement` hands it (XMP.pm:4031-4037).
+#[derive(Debug, Default)]
+pub(crate) struct AttrHook {
+    /// `$$prop` after the hook rewrote it.
+    pub prop: Option<String>,
+    /// `$$valPt` when the hook returned true, which makes `ParseXMPElement`
+    /// set `$valStart = $valEnd` and use this string as the element's value
+    /// instead of its content (XMP.pm:4034-4036).
+    pub value: Option<String>,
+    /// Attribute names the hook removed from `@$attrList`, so they never reach
+    /// the shorthand-attribute loop and never become tags of their own.
+    pub consumed: Vec<String>,
+}
+
+/// `$$et{XMPParseOpts}{AttrProc}` (XMP.pm:3782): a per-element hook that sees
+/// the element's attributes and may rename the property or supply its value.
+type AttrProc = fn(&[(String, String)]) -> Option<AttrHook>;
+
+/// The two `ProcessXMP` knobs a caller can set through `dirInfo`, defaulted to
+/// what a plain XML file gets: neither one.
+#[derive(Clone, Copy)]
+pub(crate) struct XmlWalkOptions {
+    /// `GROUPS => { 0 => ... }` of the table being walked -- `XMP` for a plain
+    /// XML document, `XML` for XISF's own table. `FoundXMP` builds family 1
+    /// from it as `"$$tagTablePtr{GROUPS}{0}-$ns"` (XMP.pm:3785-3787).
+    pub group0: &'static str,
+    /// `%ignoreProp` (XMP.pm:268), populated from a SubDirectory's or
+    /// `dirInfo`'s `IgnoreProp` (XMP.pm:4600-4603). Tested against the whole
+    /// property string in `GetXMPTagID` (XMP.pm:3026) and, in the attribute
+    /// loop, against the *containing* element's name (XMP.pm:4124).
+    pub ignore_prop: &'static [&'static str],
+    /// `$$et{XMPParseOpts}{AttrProc}`.
+    pub attr_proc: Option<AttrProc>,
+    /// `$$et{XmpIgnoreProps}` (XMP.pm:4064-4068). A different mechanism from
+    /// [`Self::ignore_prop`]: rather than testing each property as
+    /// `GetXMPTagID` walks it, this strips leading path elements right after
+    /// the element is pushed --
+    ///
+    /// ```perl
+    ///     foreach (@{$$et{XmpIgnoreProps}}) {
+    ///         last unless @$propList;
+    ///         pop @$propList if $_ eq $$propList[0];
+    ///     }
+    /// ```
+    ///
+    /// -- so ZISRAW's `[ 'ImageDocument', 'Metadata', 'Information' ]` drops
+    /// exactly that prefix and nothing deeper that happens to repeat a name.
+    pub xmp_ignore_props: &'static [&'static str],
+    /// `$$et{ShortenXmpTags}` (XMP.pm:3591-3593), applied by `FoundXMP` to the
+    /// finished `ucfirst` name of a tag that has no table entry.
+    pub shorten: Option<fn(&str) -> String>,
+}
+
+impl Default for XmlWalkOptions {
+    fn default() -> Self {
+        Self {
+            group0: "XMP",
+            ignore_prop: &[],
+            attr_proc: None,
+            xmp_ignore_props: &[],
+            shorten: None,
+        }
+    }
 }
 
 /// Every tag ExifTool would report for the plain XML document in `bytes`, in
 /// extraction order.
 pub(crate) fn extract_xml_properties(bytes: &[u8]) -> Result<Vec<XmlProperty>> {
+    extract_xml_properties_with(bytes, &XmlWalkOptions::default())
+}
+
+/// [`extract_xml_properties`] under a caller-supplied `ProcessXMP` `dirInfo`.
+pub(crate) fn extract_xml_properties_with(
+    bytes: &[u8],
+    options: &XmlWalkOptions,
+) -> Result<Vec<XmlProperty>> {
     let mut reader = Reader::from_reader(bytes);
     // No `trim_text`: `ParseXMPElement` takes the raw substring between the
     // tags. `xsi:schemaLocation` in Geotag.gpx spans two lines and ExifTool
@@ -360,13 +456,13 @@ pub(crate) fn extract_xml_properties(bytes: &[u8]) -> Result<Vec<XmlProperty>> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                open_element(&e, &mut props, &mut frames, &mut found)?;
+                open_element(&e, &mut props, &mut frames, &mut found, options)?;
             }
             Ok(Event::Empty(e)) => {
-                open_element(&e, &mut props, &mut frames, &mut found)?;
-                close_element(&mut props, &mut frames, &mut found);
+                open_element(&e, &mut props, &mut frames, &mut found, options)?;
+                close_element(&mut props, &mut frames, &mut found, options);
             }
-            Ok(Event::End(_)) => close_element(&mut props, &mut frames, &mut found),
+            Ok(Event::End(_)) => close_element(&mut props, &mut frames, &mut found, options),
             Ok(Event::Text(e)) => {
                 if let (Some(frame), Ok(text)) = (frames.last_mut(), e.xml10_content()) {
                     frame.text.push_str(
@@ -401,24 +497,78 @@ fn open_element(
     props: &mut Vec<Prop>,
     frames: &mut Vec<Frame>,
     found: &mut Vec<XmlProperty>,
+    options: &XmlWalkOptions,
 ) -> Result<()> {
     if let Some(parent) = frames.last_mut() {
         parent.had_child = true;
     }
-    let qname = std::str::from_utf8(element.name().as_ref())
+    let mut qname = std::str::from_utf8(element.name().as_ref())
         .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8 in XML element name: {e}")))?
         .to_string();
+
+    // XMP.pm:4030-4037's "hook for special parsing of attributes", which runs
+    // before the property is pushed onto the path and may rename it, replace
+    // the element's value outright, and prune attributes from the shorthand
+    // loop below.
+    let mut hook = AttrHook::default();
+    if let Some(attr_proc) = options.attr_proc {
+        let attrs = attribute_pairs(element)?;
+        if let Some(result) = attr_proc(&attrs) {
+            hook = result;
+        }
+    }
+    if let Some(renamed) = hook.prop.take() {
+        qname = renamed;
+    }
+
     props.push(Prop::new(&qname));
+    // XMP.pm:4064-4068, `$$et{XmpIgnoreProps}` -- run after the push and
+    // before the shorthand-attribute loop, exactly where the Perl runs it, so
+    // an attribute of a stripped element lands at the parent's depth too.
+    for ignore in options.xmp_ignore_props {
+        if props.is_empty() {
+            break;
+        }
+        if *ignore == props[0].qname() {
+            props.pop();
+        }
+    }
     frames.push(Frame {
         text: String::new(),
         had_child: false,
         shorthand: false,
+        hook_value: false,
     });
-    let shorthand = emit_attributes(element, &qname, props, found)?;
+    let shorthand = emit_attributes(element, &qname, props, found, options, &hook.consumed)?;
     if let Some(frame) = frames.last_mut() {
         frame.shorthand = shorthand;
+        // `$valStart = $valEnd` (XMP.pm:4036): the hook's value stands in for
+        // the element's content, so nothing the document holds is appended.
+        if let Some(value) = hook.value {
+            frame.text = value;
+            frame.hook_value = true;
+        }
     }
     Ok(())
+}
+
+/// The element's attributes as `(name, value)` pairs in document order, which
+/// is what `ParseXMPElement` hands an `AttrProc` as `(\@attrs, \%attrs)`.
+fn attribute_pairs(element: &BytesStart) -> Result<Vec<(String, String)>> {
+    let mut pairs = Vec::new();
+    for attr in element.attributes().flatten() {
+        let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
+            ExifToolError::parse_error(format!("Invalid UTF-8 in XML attribute name: {e}"))
+        })?;
+        let Ok(value) = std::str::from_utf8(&attr.value) else {
+            continue;
+        };
+        let value = quick_xml::escape::unescape(value)
+            .map(|v| v.into_owned())
+            .unwrap_or_else(|_| value.to_string());
+        pairs.push((key.to_string(), value));
+    }
+    Ok(pairs)
 }
 
 /// `ParseXMPElement`'s shorthand-attribute loop (XMP.pm:4074-4148): each
@@ -431,12 +581,24 @@ fn emit_attributes(
     parent_qname: &str,
     props: &mut Vec<Prop>,
     found: &mut Vec<XmlProperty>,
+    options: &XmlWalkOptions,
+    consumed: &[String],
 ) -> Result<bool> {
+    // XMP.pm:4124's `$ignoreProp{$prop}`: `$prop` here is the *containing*
+    // element, so an ignored element's attributes are all ignored with it.
+    let container_ignored = options
+        .ignore_prop
+        .contains(&Prop::new(parent_qname).qname().as_str());
     let mut shorthand = false;
     for attr in element.attributes().flatten() {
         let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
             ExifToolError::parse_error(format!("Invalid UTF-8 in XML attribute name: {e}"))
         })?;
+        // Removed from `@$attrList` by the `AttrProc`, so `next unless defined
+        // $attrs{$shortName}` skips it (XMP.pm:4074-4075).
+        if consumed.iter().any(|name| name == key) {
+            continue;
+        }
         // XMP.pm:4077-4088: an unprefixed attribute inherits its element's
         // prefix, if the element has one. Otherwise it stays unprefixed -- and
         // `xmlns` on an unprefixed root is exactly that case, which is why
@@ -451,7 +613,7 @@ fn emit_attributes(
                 None => Prop::new(key),
             },
         };
-        if prop.ignored() {
+        if container_ignored || prop.ignored(options.ignore_prop) {
             continue;
         }
         let Ok(value) = std::str::from_utf8(&attr.value) else {
@@ -461,36 +623,50 @@ fn emit_attributes(
             .map(|v| v.into_owned())
             .unwrap_or_else(|_| value.to_string());
         props.push(prop);
-        record(props, &value, found);
+        record(props, &value, found, options);
         props.pop();
         shorthand = true;
     }
     Ok(shorthand)
 }
 
-fn close_element(props: &mut Vec<Prop>, frames: &mut Vec<Frame>, found: &mut Vec<XmlProperty>) {
+fn close_element(
+    props: &mut Vec<Prop>,
+    frames: &mut Vec<Frame>,
+    found: &mut Vec<XmlProperty>,
+    options: &XmlWalkOptions,
+) {
     let Some(frame) = frames.pop() else { return };
     // Only a leaf reports a value. An empty element still does -- `<description/>`
     // in Geotag.kml is reported by ExifTool with an empty value -- unless the
-    // element's own attributes already became tags (XMP.pm:4180).
-    if !frame.had_child && (!frame.text.is_empty() || !frame.shorthand) {
-        record(props, &frame.text, found);
+    // element's own attributes already became tags (XMP.pm:4180). An `AttrProc`
+    // value stands in for the content even when the element also had children.
+    if (!frame.had_child || frame.hook_value) && (!frame.text.is_empty() || !frame.shorthand) {
+        record(props, &frame.text, found, options);
     }
     props.pop();
 }
 
-fn record(props: &[Prop], value: &str, found: &mut Vec<XmlProperty>) {
-    let Some((name, namespace)) = xmp_tag_id(props) else {
+fn record(props: &[Prop], value: &str, found: &mut Vec<XmlProperty>, options: &XmlWalkOptions) {
+    let Some((name, namespace)) = xmp_tag_id(props, options.ignore_prop) else {
         return;
+    };
+    let group0 = options.group0;
+    // XMP.pm:3589-3595: the shortener runs only on the default tagInfo, i.e.
+    // a name with no table entry -- which is every name this walk produces.
+    let name = match options.shorten {
+        Some(shorten) => shorten(&name),
+        None => name,
     };
     found.push(XmlProperty {
         group1: if namespace.is_empty() {
-            "XMP".to_string()
+            group0.to_string()
         } else {
-            format!("XMP-{namespace}")
+            format!("{group0}-{namespace}")
         },
         name,
         value: auto_convert(value),
+        raw: value.to_string(),
     });
 }
 

@@ -1,3 +1,11 @@
+//! Integration tests for the PLIST parser's public surface.
+//!
+//! The parser mirrors ExifTool's `PLIST.pm`: tags are generated from the
+//! `/`-joined key path (family-1 group `XML` for the XML encoding, `PLIST`
+//! for binary), and only what ExifTool reports is emitted -- the fine-grained
+//! decode pins live in the module's own unit tests against the pinned 13.59
+//! oracle's `t/images` outputs.
+
 #[path = "common/mod.rs"]
 mod common;
 
@@ -5,37 +13,6 @@ use common::TestReader;
 use oxidex::core::TagValue;
 use oxidex::parsers::specialized::plist::{PlistParser, parse_plist_metadata};
 
-/// Creates a minimal valid binary plist for testing
-fn create_test_binary_plist() -> Vec<u8> {
-    let mut data = Vec::new();
-
-    // Header: "bplist00"
-    data.extend_from_slice(b"bplist00");
-
-    // Simple object data (minimal - just padding for now)
-    let objects_size = 100;
-    data.extend(vec![0u8; objects_size]);
-
-    // Trailer (32 bytes)
-    let mut trailer = vec![0u8; 32];
-    trailer[6] = 2; // offset_int_size = 2 bytes
-    trailer[7] = 1; // object_ref_size = 1 byte
-
-    // num_objects = 5 (big-endian u64 at offset 8)
-    trailer[8..16].copy_from_slice(&5u64.to_be_bytes());
-
-    // top_object = 0 (big-endian u64 at offset 16)
-    trailer[16..24].copy_from_slice(&0u64.to_be_bytes());
-
-    // offset_table_offset = 108 (8 + 100) (big-endian u64 at offset 24)
-    trailer[24..32].copy_from_slice(&108u64.to_be_bytes());
-
-    data.extend(trailer);
-
-    data
-}
-
-/// Creates a minimal XML plist for testing
 fn create_test_xml_plist() -> Vec<u8> {
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,66 +30,65 @@ fn create_test_xml_plist() -> Vec<u8> {
 }
 
 #[test]
-fn test_parse_binary_plist() {
-    let data = create_test_binary_plist();
-    let reader = TestReader::new(data);
-    let result = parse_plist_metadata(&reader);
+fn test_parse_xml_plist_generates_exiftool_names() {
+    let reader = TestReader::new(create_test_xml_plist());
+    let metadata = parse_plist_metadata(&reader).expect("XML plist parses");
 
-    assert!(result.is_ok(), "Failed to parse binary plist: {:?}", result);
-    let metadata = result.unwrap();
-
+    // Undeclared keys get ExifTool's generated names under the XML group.
     assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("Plist".to_string()))
-    );
-    assert_eq!(
-        metadata.get("Plist:Format"),
-        Some(&TagValue::String("Binary".to_string()))
-    );
-    assert_eq!(
-        metadata.get("Plist:FormatVersion"),
-        Some(&TagValue::String("00".to_string()))
-    );
-    assert!(metadata.contains_key("Plist:NumObjects"));
-}
-
-#[test]
-fn test_parse_xml_plist() {
-    let data = create_test_xml_plist();
-    let reader = TestReader::new(data);
-    let result = parse_plist_metadata(&reader);
-
-    assert!(result.is_ok(), "Failed to parse XML plist: {:?}", result);
-    let metadata = result.unwrap();
-
-    assert_eq!(
-        metadata.get("FileType"),
-        Some(&TagValue::String("Plist".to_string()))
-    );
-    assert_eq!(
-        metadata.get("Plist:Format"),
-        Some(&TagValue::String("XML".to_string()))
-    );
-    assert_eq!(
-        metadata.get("Plist:CFBundleIdentifier"),
+        metadata.get("XML:CFBundleIdentifier"),
         Some(&TagValue::String("com.example.testapp".to_string()))
     );
     assert_eq!(
-        metadata.get("Plist:CFBundleName"),
+        metadata.get("XML:CFBundleName"),
         Some(&TagValue::String("TestApp".to_string()))
+    );
+    assert_eq!(
+        metadata.get("XML:CFBundleVersion"),
+        Some(&TagValue::String("1.2.3".to_string()))
+    );
+    // The old hand-rolled parser reported Plist:* tags ExifTool never emits.
+    assert_eq!(metadata.get("Plist:Format"), None);
+    assert_eq!(metadata.get("Plist:KeyCount"), None);
+}
+
+#[test]
+fn test_parse_binary_plist_reports_runtime_mime_type() {
+    // Minimal complete binary plist: the single object is an ASCII string.
+    let mut data = b"bplist00".to_vec();
+    data.extend_from_slice(&[0x52, b'h', b'i']);
+    let table_offset = data.len() as u64;
+    data.push(8);
+    let mut trailer = vec![0u8; 32];
+    trailer[6] = 1;
+    trailer[7] = 1;
+    trailer[8..16].copy_from_slice(&1u64.to_be_bytes());
+    trailer[24..32].copy_from_slice(&table_offset.to_be_bytes());
+    data.extend(trailer);
+
+    let reader = TestReader::new(data);
+    let metadata = parse_plist_metadata(&reader).expect("binary plist parses");
+    assert_eq!(
+        metadata.get("File:MIMEType"),
+        Some(&TagValue::String("application/x-plist".to_string()))
     );
 }
 
 #[test]
-fn test_verify_binary_signature() {
-    let data = create_test_binary_plist();
-    let reader = TestReader::new(data);
-    assert!(PlistParser::verify_signature(&reader).unwrap());
+fn test_verify_signature_accepts_both_encodings() {
+    let mut binary = b"bplist00".to_vec();
+    binary.extend(vec![0u8; 40]);
+    assert!(PlistParser::verify_signature(&TestReader::new(binary)).unwrap());
+    assert!(PlistParser::verify_signature(&TestReader::new(create_test_xml_plist())).unwrap());
 }
 
 #[test]
-fn test_verify_xml_signature() {
-    let data = create_test_xml_plist();
-    let reader = TestReader::new(data);
-    assert!(PlistParser::verify_signature(&reader).unwrap());
+fn test_verify_signature_rejects_other_content() {
+    assert!(!PlistParser::verify_signature(&TestReader::new(vec![0u8; 100])).unwrap());
+    assert!(!PlistParser::verify_signature(&TestReader::new(vec![0u8; 4])).unwrap());
+}
+
+#[test]
+fn test_parse_invalid_signature_is_an_error() {
+    assert!(parse_plist_metadata(&TestReader::new(vec![0u8; 100])).is_err());
 }

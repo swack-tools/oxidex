@@ -188,6 +188,22 @@ pub static SIMPLE_SIGNATURES: &[Signature] = &[
     // XMP Sidecar (<?xpacket or <x:xmpmeta)
     signature!(b"<?xpacket", 0, FileFormat::XMP),
     signature!(b"<x:xmpmeta", 0, FileFormat::XMP),
+    // PixInsight XISF. ExifTool.pm's `%magicNumber` gives `XISF0100`, which
+    // `XISF::ProcessXISF` re-checks (XISF.pm:124).
+    signature!(b"XISF0100", 0, FileFormat::XISF),
+    // Windows Recorded TV Show. ExifTool.pm:1042's magic is the literal
+    // 16-byte container GUID, which `WTV::ProcessWTV` re-checks (WTV.pm:213).
+    signature!(
+        b"\xb7\xd8\x00\x20\x37\x49\xda\x11\xa6\x4e\x00\x07\xe9\x5e\xad\x8d",
+        0,
+        FileFormat::WTV
+    ),
+    // RealMedia. ExifTool.pm:1028's `Real` magic is
+    // `(\.RMF|\.ra\xfd|pnm://|rtsp://|http://)` -- one pattern covering the
+    // RealMedia container, the standalone RealAudio format and the three URL
+    // metafiles. Only the `.RMF` alternative is a RealMedia container; the
+    // others already route to `FileFormat::RA` and the RAM/RPM readers.
+    signature!(b".RMF", 0, FileFormat::RealMedia),
     // Archive formats with offset signatures
     signature!(b"ustar", 257, FileFormat::TAR),
     signature!(b"CD001", 32769, FileFormat::ISO),

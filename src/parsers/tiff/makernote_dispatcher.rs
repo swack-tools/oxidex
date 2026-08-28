@@ -207,7 +207,15 @@ pub fn dispatch_makernote_with_context_and_values(
     // reached a parser at all.
     if let Some(parser) = parser_for_make_prefix(&make_normalized, data) {
         if parser.validate_header(data) {
-            parser.parse_with_context(ctx, byte_order, model, tags)?;
+            // `..._and_values`, not `parse_with_context`: the prefix-dispatched
+            // makes reached the value-less entry point, so any ValueConv form
+            // they produced was dropped on the floor before
+            // `core::tiff_helpers` could call `set_value_form` with it --
+            // which is why Olympus `FocusDistance` could not feed
+            // `Composite:DOF`. The trait's default implementation ignores
+            // `value_forms` and calls `parse_with_context`, so Pentax, Ricoh,
+            // GE and Samsung are unaffected.
+            parser.parse_with_context_and_values(ctx, byte_order, model, tags, value_forms)?;
         }
         return Ok(());
     }

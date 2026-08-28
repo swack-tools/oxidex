@@ -5,6 +5,7 @@
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::{ByteOrder, EndianReader};
+use crate::parsers::specialized::dicom_dict;
 
 mod tables;
 
@@ -503,12 +504,11 @@ fn dicom_datetime_bytes(bytes: &[u8]) -> Vec<u8> {
     }
 }
 
-/// Converts a string element exactly as ProcessDICOM does for its effective
-/// VR. Returns `None` when the resulting bytes are not valid UTF-8: the
-/// oracle emits raw bytes (Perl strings are byte strings), which a Rust
-/// `String` cannot hold losslessly, so the tag is omitted rather than
-/// approximated with U+FFFD replacement characters.
-fn dicom_string_value(vr: [u8; 2], value: &[u8], order: ByteOrder) -> Option<String> {
+/// Applies ProcessDICOM's string-path conversions for the effective VR and
+/// returns the converted BYTES. Kept as bytes (not `String`) because the
+/// `Binary => 1` placeholder needs `length($$val)` of exactly these bytes
+/// even when they are not valid UTF-8.
+fn dicom_string_bytes(vr: [u8; 2], value: &[u8], order: ByteOrder) -> Option<Vec<u8>> {
     // `$buff =~ s/ $// unless $format or length($buff) & 0x01;` -- exactly
     // one trailing space (the even-length pad) is removed before any VR
     // rule. Format VRs never reach this function.
@@ -546,78 +546,201 @@ fn dicom_string_value(vr: [u8; 2], value: &[u8], order: ByteOrder) -> Option<Str
         // in particular trailing nulls are NOT stripped outside UI.
         _ => bytes.to_vec(),
     };
-    String::from_utf8(converted).ok()
+    Some(converted)
 }
 
-/// US/OW values follow ExifTool's `ReadValue(..., 'int16u', undef, $len)`:
-/// the count is floor(len / 2), so a stray odd byte is ignored, not an
-/// error.
-fn dicom_int16u(value: &[u8], order: ByteOrder) -> String {
+/// Converts a string element exactly as ProcessDICOM does for its effective
+/// VR. Returns `None` when the resulting bytes are not valid UTF-8: the
+/// oracle emits raw bytes (Perl strings are byte strings), which a Rust
+/// `String` cannot hold losslessly, so the tag is omitted rather than
+/// approximated with U+FFFD replacement characters.
+fn dicom_string_value(vr: [u8; 2], value: &[u8], order: ByteOrder) -> Option<String> {
+    String::from_utf8(dicom_string_bytes(vr, value, order)?).ok()
+}
+
+/// ExifTool's `%dicomFormat` integer formats, decoded exactly as
+/// `ReadValue(\$buff, 0, $format, undef, $len)` does: count is
+/// floor(len / size) -- stray trailing bytes are ignored, not an error --
+/// and multiple values join with a single space.
+///
+/// The float members of `%dicomFormat` (FD => double, FL/OF => float) are
+/// deliberately NOT here: their text form is Perl's NV stringification,
+/// which this crate does not reproduce digit-for-digit, so float-valued
+/// elements are omitted and counted rather than approximated (repo rule;
+/// see `%dicomFormat` in the pinned DICOM.pm).
+fn dicom_int_values(format: DicomIntFormat, value: &[u8], order: ByteOrder) -> String {
     let reader = EndianReader::new(value, order);
-    let mut values = Vec::with_capacity(value.len() / 2);
-    for index in 0..value.len() / 2 {
-        if let Some(number) = reader.u16_at(index * 2) {
-            values.push(number.to_string());
-        }
+    let size = format.size();
+    let count = value.len() / size;
+    let mut values = Vec::with_capacity(count);
+    for index in 0..count {
+        let at = index * size;
+        let Some(text) = (match format {
+            DicomIntFormat::Int8u => value.get(at).map(ToString::to_string),
+            DicomIntFormat::Int16u => reader.u16_at(at).map(|v| v.to_string()),
+            #[allow(clippy::cast_possible_wrap)]
+            DicomIntFormat::Int16s => reader.u16_at(at).map(|v| (v as i16).to_string()),
+            DicomIntFormat::Int32u => reader.u32_at(at).map(|v| v.to_string()),
+            #[allow(clippy::cast_possible_wrap)]
+            DicomIntFormat::Int32s => reader.u32_at(at).map(|v| (v as i32).to_string()),
+        }) else {
+            break;
+        };
+        values.push(text);
     }
     values.join(" ")
 }
 
-fn dicom_tag_name(group: u16, element: u16) -> Option<String> {
-    let name = match (group, element) {
-        (0x0008, 0x0050) => "AccessionNumber",
-        (0x0008, 0x0022) => "AcquisitionDate",
-        (0x0008, 0x0032) => "AcquisitionTime",
-        (0x0010, 0x21B0) => "AdditionalPatientHistory",
-        (0x0018, 0x1310) => "AcquisitionMatrix",
-        (0x0020, 0x0012) => "AcquisitionNumber",
-        _ => return None,
-    };
-
-    let table = oxidex_tags::specialty::get_tag_table("DICOM::Main")?;
-    let tag = table.tags.iter().find(|tag| tag.name == name)?;
-    let group = table.name.split("::").next()?;
-    Some(format!("{group}:{}", tag.name))
+#[derive(Clone, Copy)]
+enum DicomIntFormat {
+    Int8u,
+    Int16u,
+    Int16s,
+    Int32u,
+    Int32s,
 }
 
-/// The pinned table VR for each wired tag (`%Image::ExifTool::DICOM::Main`),
-/// used when the transfer syntax is implicit VR, mirroring
-/// `$vr = $$tagInfo{VR} ... if $tagInfo and not $vr`.
-fn dicom_table_vr(group: u16, element: u16) -> Option<[u8; 2]> {
-    let vr: &[u8; 2] = match (group, element) {
-        (0x0008, 0x0050) => b"SH",
-        (0x0008, 0x0022) => b"DA",
-        (0x0008, 0x0032) => b"TM",
-        (0x0010, 0x21B0) => b"LT",
-        (0x0018, 0x1310) => b"US",
-        (0x0020, 0x0012) => b"IS",
-        _ => return None,
-    };
-    Some(*vr)
-}
-
-/// Converts a wired element's value; `None` omits the tag (per repo rule:
-/// omit when the oracle's exact output cannot be reproduced).
-fn dicom_value(element: &DicomElement<'_>, encoding: DicomEncoding) -> Option<TagValue> {
-    // ExifTool renders any element longer than 1024 bytes as a binary-data
-    // placeholder; rather than approximate that rendering, omit.
-    if element.value.len() > 1024 {
-        return None;
+impl DicomIntFormat {
+    const fn size(self) -> usize {
+        match self {
+            Self::Int8u => 1,
+            Self::Int16u | Self::Int16s => 2,
+            Self::Int32u | Self::Int32s => 4,
+        }
     }
+}
+
+/// The integer members of ExifTool's `%dicomFormat` (pinned DICOM.pm):
+/// OB => int8u, OW/US => int16u, SS => int16s, UL => int32u, SL => int32s.
+/// FD/FL/OF (the float members) return `Float` so callers can omit them.
+enum DicomFormat {
+    Int(DicomIntFormat),
+    Float,
+    None,
+}
+
+fn dicom_format(vr: [u8; 2]) -> DicomFormat {
+    match &vr {
+        b"OB" => DicomFormat::Int(DicomIntFormat::Int8u),
+        b"OW" | b"US" => DicomFormat::Int(DicomIntFormat::Int16u),
+        b"SS" => DicomFormat::Int(DicomIntFormat::Int16s),
+        b"UL" => DicomFormat::Int(DicomIntFormat::Int32u),
+        b"SL" => DicomFormat::Int(DicomIntFormat::Int32s),
+        b"FD" | b"FL" | b"OF" => DicomFormat::Float,
+        _ => DicomFormat::None,
+    }
+}
+
+/// Resolves the `%Image::ExifTool::DICOM::Main` entry for a tag, mirroring
+/// ProcessDICOM's lookup: exact `'%.4X,%.4X'` key first, then the five
+/// wildcard substitutions in order --
+/// `s/^(..)../$1xx/`, `s/..$/xx/`, `s/.(.)$/x$1/`, `s/...(.)$/xxx$1/`,
+/// `s/....$/xxxx/` -- each applied to the ORIGINAL tag string.
+fn dicom_dict_entry(group: u16, element: u16) -> Option<&'static dicom_dict::DicomDictEntry> {
+    let tag = format!("{group:04X},{element:04X}");
+    if let Some(entry) = dicom_dict::dicom_main_entry(&tag) {
+        return Some(entry);
+    }
+    // Each substitution patches a copy of the 9-byte "GGGG,EEEE" key:
+    // byte ranges 2..4 (group low byte), 7..9 / 7..8 / 5..8 / 5..9 (element).
+    let original: &[u8; 9] = tag.as_bytes().try_into().ok()?;
+    let ranges: [(usize, usize); 5] = [
+        (2, 4), // '60xx,1203'
+        (7, 9), // '0020,31xx'
+        (7, 8), // '0028,04x2'
+        (5, 8), // '1000,xxx0'
+        (5, 9), // '1010,xxxx'
+    ];
+    for (start, end) in ranges {
+        let mut candidate = *original;
+        candidate[start..end].fill(b'x');
+        let key = std::str::from_utf8(&candidate).ok()?;
+        if let Some(entry) = dicom_dict::dicom_main_entry(key) {
+            return Some(entry);
+        }
+    }
+    None
+}
+
+/// The `(Binary data N bytes, use -b option to extract)` placeholder the
+/// oracle prints for binary values when `-b` is not given.
+fn dicom_binary_placeholder(byte_count: usize) -> TagValue {
+    TagValue::String(format!(
+        "(Binary data {byte_count} bytes, use -b option to extract)"
+    ))
+}
+
+/// Converts an element's value; `None` omits the tag (per repo rule: omit
+/// when the oracle's exact output cannot be reproduced).
+fn dicom_value(
+    element: &DicomElement<'_>,
+    encoding: DicomEncoding,
+    entry: &dicom_dict::DicomDictEntry,
+) -> Option<TagValue> {
+    // `if ($len > 1024)`: ExifTool stores `\"Binary data $len bytes"` for
+    // ANY oversized element and the app renders the scalar ref as
+    // "($$val, use -b option to extract)" -- N here is the raw element
+    // length.
+    if element.value.len() > 1024 {
+        return Some(dicom_binary_placeholder(element.value.len()));
+    }
+
     // In explicit VR the header's VR is authoritative even when it disagrees
-    // with the table; the table VR applies only to implicit VR syntax.
-    let vr = element
-        .vr
-        .or_else(|| dicom_table_vr(element.group, element.element))?;
-    let value = match &vr {
-        // `%dicomFormat` maps US and OW to int16u.
-        b"US" | b"OW" => dicom_int16u(element.value, encoding.order),
-        // The remaining %dicomFormat VRs (FD/FL/OB/OF/SL/SS/UL) cannot occur
-        // for the wired tags in a conformant file; rather than approximate
-        // ExifTool's numeric formatting for them, omit.
-        b"FD" | b"FL" | b"OB" | b"OF" | b"SL" | b"SS" | b"UL" => return None,
-        _ => dicom_string_value(vr, element.value, encoding.order)?,
+    // with the table; the table VR applies only to implicit VR syntax
+    // (`$vr = $$tagInfo{VR} || '  ' if $tagInfo and not $vr`).
+    let mut vr = element.vr.or(entry.vr).unwrap_or(*b"  ");
+    // `$vr = 'UL' if $element == 0` -- a group length is always int32u.
+    if element.element == 0 {
+        vr = *b"UL";
+    }
+
+    let value = match dicom_format(vr) {
+        DicomFormat::Int(format) => dicom_int_values(format, element.value, encoding.order),
+        // FD/FL/OF: Perl NV stringification is not reproduced here -- omit
+        // and count (this also covers Binary float tags, whose placeholder
+        // length would depend on that stringification).
+        DicomFormat::Float => return None,
+        DicomFormat::None => {
+            if entry.binary {
+                // `Binary => 1` with no format: the placeholder length is
+                // the CONVERTED string's byte length, valid UTF-8 or not.
+                let bytes = dicom_string_bytes(vr, element.value, encoding.order)?;
+                return Some(dicom_binary_placeholder(bytes.len()));
+            }
+            dicom_string_value(vr, element.value, encoding.order)?
+        }
     };
+
+    // `$$tagInfo{PrintConv} = \%uid if $uid{$val}` -- registered UIDs print
+    // their names; unregistered UIDs print verbatim (no "Unknown (...)").
+    if &vr == b"UI" {
+        if let Some(name) = dicom_dict::dicom_uid_name(&value) {
+            return Some(TagValue::String(name.to_string()));
+        }
+        return Some(TagValue::String(value));
+    }
+
+    // `Binary => 1` on a formatted tag (e.g. PixelData, OB/OW): GetValue's
+    // implicit `\$val` ValueConv makes the DECODED string binary, so the
+    // placeholder length is that string's length -- the oracle prints
+    // "(Binary data 53 bytes, ...)" for an 18-byte OW PixelData that
+    // decodes to a 53-character int16u string.
+    if entry.binary {
+        return Some(dicom_binary_placeholder(value.len()));
+    }
+
+    // The single inline PrintConv in the pinned table
+    // (`{ 0 => 'Unsigned', 1 => 'Signed' }` on PixelRepresentation), with
+    // GetValue's hash-PrintConv fallback for unmapped values.
+    if entry.unsigned_signed {
+        let printed = match value.as_str() {
+            "0" => "Unsigned".to_string(),
+            "1" => "Signed".to_string(),
+            other => format!("Unknown ({other})"),
+        };
+        return Some(TagValue::String(printed));
+    }
+
     Some(TagValue::String(value))
 }
 
@@ -725,9 +848,9 @@ pub fn parse_dicom_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             data_syntax = dicom_transfer_syntax(element.value);
         }
 
-        if let Some(name) = dicom_tag_name(element.group, element.element) {
-            if let Some(value) = dicom_value(&element, encoding) {
-                metadata.insert(name, value);
+        if let Some(entry) = dicom_dict_entry(element.group, element.element) {
+            if let Some(value) = dicom_value(&element, encoding, entry) {
+                metadata.insert(format!("DICOM:{}", entry.name), value);
             }
         }
         if element.next_offset <= offset {
@@ -825,8 +948,158 @@ mod dicom_tests {
 
     #[test]
     fn odd_length_int16u_ignores_the_stray_byte() {
-        assert_eq!(dicom_int16u(&[1, 0, 2, 0, 9], ByteOrder::Little), "1 2");
-        assert_eq!(dicom_int16u(&[7], ByteOrder::Little), "");
+        assert_eq!(
+            dicom_int_values(DicomIntFormat::Int16u, &[1, 0, 2, 0, 9], ByteOrder::Little),
+            "1 2"
+        );
+        assert_eq!(
+            dicom_int_values(DicomIntFormat::Int16u, &[7], ByteOrder::Little),
+            ""
+        );
+    }
+
+    #[test]
+    fn int_formats_decode_like_readvalue() {
+        // int8u (OB): FileMetaInfoVersion b"\x00\x01" -> "0 1" (oracle-quoted
+        // for the pinned corpus DICOM.dcm).
+        assert_eq!(
+            dicom_int_values(DicomIntFormat::Int8u, &[0, 1], ByteOrder::Little),
+            "0 1"
+        );
+        // int16s (SS): LargestImagePixelValue b"\x10\x03" -> "784".
+        assert_eq!(
+            dicom_int_values(DicomIntFormat::Int16s, &[0x10, 0x03], ByteOrder::Little),
+            "784"
+        );
+        assert_eq!(
+            dicom_int_values(DicomIntFormat::Int16s, &[0xFF, 0xFF], ByteOrder::Little),
+            "-1"
+        );
+        // int32u (UL): FileMetaInfoGroupLength 180.
+        assert_eq!(
+            dicom_int_values(DicomIntFormat::Int32u, &[0xB4, 0, 0, 0], ByteOrder::Little),
+            "180"
+        );
+        // int32s (SL).
+        assert_eq!(
+            dicom_int_values(
+                DicomIntFormat::Int32s,
+                &[0xFF, 0xFF, 0xFF, 0xFF],
+                ByteOrder::Little
+            ),
+            "-1"
+        );
+        // Big-endian order is honored (explicit VR big endian syntax).
+        assert_eq!(
+            dicom_int_values(DicomIntFormat::Int16u, &[0x01, 0x00], ByteOrder::Big),
+            "256"
+        );
+    }
+
+    #[test]
+    fn dictionary_lookup_matches_processdicom_wildcards() {
+        // Exact key.
+        let entry = dicom_dict_entry(0x0002, 0x0000).expect("FileMetaInfoGroupLength");
+        assert_eq!(entry.name, "FileMetaInfoGroupLength");
+        assert_eq!(entry.vr, Some(*b"UL"));
+        // s/^(..)../$1xx/: '60xx,1203' matches any overlay group 60NN.
+        let entry = dicom_dict_entry(0x6012, 0x1203).expect("60xx wildcard");
+        assert_eq!(entry.name, "OverlaysBlue");
+        // s/..$/xx/: '0020,31xx' (SourceImageIDs).
+        let entry = dicom_dict_entry(0x0020, 0x3101).expect("31xx wildcard");
+        assert_eq!(entry.name, "SourceImageIDs");
+        // s/.(.)$/x$1/: '0028,04x2' (CoefficientCoding).
+        let entry = dicom_dict_entry(0x0028, 0x0412).expect("04x2 wildcard");
+        assert_eq!(entry.name, "CoefficientCoding");
+        // s/...(.)$/xxx$1/: '1000,xxx0' (EscapeTriplet).
+        let entry = dicom_dict_entry(0x1000, 0x0010).expect("xxx0 wildcard");
+        assert_eq!(entry.name, "EscapeTriplet");
+        // s/....$/xxxx/: '1010,xxxx' (ZonalMap).
+        let entry = dicom_dict_entry(0x1010, 0xABCD).expect("xxxx wildcard");
+        assert_eq!(entry.name, "ZonalMap");
+        // '7Fxx,0010' PixelData carries Binary => 1.
+        let entry = dicom_dict_entry(0x7FE0, 0x0010).expect("PixelData");
+        assert_eq!(entry.name, "PixelData");
+        assert!(entry.binary);
+        // Perl hash-literal duplicate keys: the LATER entry wins.
+        let entry = dicom_dict_entry(0x0021, 0x1019).expect("duplicate key");
+        assert_eq!(entry.name, "AcqreconRecordChecksum");
+        // Unmapped private tag: no entry, tag omitted (matches the oracle
+        // without -u).
+        assert!(dicom_dict_entry(0x0009, 0x0001).is_none());
+        // The three lowercase-hex keys are transcribed verbatim but stay
+        // unreachable, exactly as in ExifTool: ProcessDICOM formats every
+        // lookup key with uppercase '%.4X,%.4X' against a case-sensitive
+        // hash. Byte-verified: the pinned oracle reports nothing for element
+        // (0043,106F) without -u, and generic DICOM_0043_106F with it --
+        // never ScannerTableEntry.
+        assert!(dicom_dict::dicom_main_entry("0043,106f").is_some());
+        assert!(dicom_dict_entry(0x0043, 0x106F).is_none());
+        assert!(dicom_dict_entry(0x0074, 0x100A).is_none());
+        assert!(dicom_dict_entry(0x0074, 0x100C).is_none());
+    }
+
+    #[test]
+    fn transcribed_dictionary_is_complete() {
+        // 13.59's %Image::ExifTool::DICOM::Main has 5674 tag-ID lines, five
+        // of which are Perl hash-literal duplicate keys (later wins), and
+        // %uid has 1979 lines with one duplicate. A shrink here means the
+        // generator or its input changed; re-run
+        // tools/exiftool-tables/gen_dicom_dict.py against the pinned tree.
+        assert_eq!(dicom_dict::DICOM_MAIN.len(), 5669);
+        assert_eq!(dicom_dict::DICOM_UID.len(), 1978);
+        // Sorted (byte order) so the binary-search lookups are sound.
+        assert!(dicom_dict::DICOM_MAIN.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(dicom_dict::DICOM_UID.windows(2).all(|w| w[0].0 < w[1].0));
+    }
+
+    #[test]
+    fn uid_printconv_applies_only_to_registered_uids() {
+        assert_eq!(
+            dicom_dict::dicom_uid_name("1.2.840.10008.1.2.1"),
+            Some("Explicit VR Little Endian")
+        );
+        assert_eq!(
+            dicom_dict::dicom_uid_name("1.2.840.10008.5.1.4.1.1.4"),
+            Some("MR Image Storage")
+        );
+        // Unregistered UIDs print verbatim; there is no Unknown() fallback.
+        assert_eq!(dicom_dict::dicom_uid_name("0.0.0.0"), None);
+    }
+
+    #[test]
+    fn oversized_and_unmapped_printconv_values_match_the_oracle() {
+        // Both expectations quoted from the pinned 13.59 oracle
+        // (`-a -G1 -s` on this exact synthesized file):
+        //   PixelRepresentation : Unknown (2)
+        //   PixelData           : (Binary data 1026 bytes, use -b option to extract)
+        let mut body = Vec::new();
+        // (0028,0103) US PixelRepresentation = 2: not in the inline
+        // PrintConv { 0 => 'Unsigned', 1 => 'Signed' }, so GetValue's
+        // hash-PrintConv fallback prints "Unknown (2)".
+        body.extend_from_slice(&[0x28, 0x00, 0x03, 0x01]);
+        body.extend_from_slice(b"US");
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(&2u16.to_le_bytes());
+        // (7FE0,0010) OW PixelData, 1026 bytes: `if ($len > 1024)` stores
+        // the placeholder with the RAW element length, taking priority over
+        // both the int16u format and the Binary => 1 decoded-length rule.
+        body.extend_from_slice(&[0xE0, 0x7F, 0x10, 0x00]);
+        body.extend_from_slice(b"OW");
+        body.extend_from_slice(&[0, 0]);
+        body.extend_from_slice(&1026u32.to_le_bytes());
+        body.extend_from_slice(&[0u8; 1026]);
+
+        let reader = TestReader::new(dicom_file(&body));
+        let metadata = parse_dicom_metadata(&reader).unwrap();
+        assert_eq!(
+            metadata.get_string("DICOM:PixelRepresentation"),
+            Some("Unknown (2)")
+        );
+        assert_eq!(
+            metadata.get_string("DICOM:PixelData"),
+            Some("(Binary data 1026 bytes, use -b option to extract)")
+        );
     }
 
     #[test]
@@ -932,7 +1205,24 @@ mod dicom_tests {
         let reader = TestReader::new(dicom_file(&body));
         let metadata = parse_dicom_metadata(&reader).unwrap();
         assert_eq!(metadata.get_string("File:FileType"), Some("DICOM"));
-        assert!(!metadata.keys().any(|name| name.starts_with("DICOM:")));
+        // The file-meta group itself was still read (the oracle reports it
+        // before warning about the compressed stream), and the registered
+        // UID prints its %uid name.
+        assert_eq!(
+            metadata.get("DICOM:TransferSyntaxUID"),
+            Some(&TagValue::String(
+                "Deflated Explicit VR Little Endian".to_string()
+            ))
+        );
+        // ...but nothing was fabricated from the compressed bytes that
+        // follow: the only DICOM tag is the transfer syntax itself.
+        assert_eq!(
+            metadata
+                .keys()
+                .filter(|name| name.starts_with("DICOM:"))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -989,6 +1279,57 @@ mod dicom_tests {
         assert_eq!(
             metadata.get("DICOM:AdditionalPatientHistory"),
             Some(&TagValue::String(String::new()))
+        );
+
+        // One pin per newly-decoded class, each quoted from the pinned
+        // oracle (`exiftool-pinned.sh -a -G1 -s` on this sample).
+        // UL group length.
+        assert_eq!(
+            metadata.get_string("DICOM:FileMetaInfoGroupLength"),
+            Some("180")
+        );
+        // OB -> int8u multi-value.
+        assert_eq!(
+            metadata.get_string("DICOM:FileMetaInfoVersion"),
+            Some("0 1")
+        );
+        // Registered UID PrintConv (%uid).
+        assert_eq!(
+            metadata.get_string("DICOM:TransferSyntaxUID"),
+            Some("Explicit VR Little Endian")
+        );
+        assert_eq!(
+            metadata.get_string("DICOM:MediaStorageSOPClassUID"),
+            Some("MR Image Storage")
+        );
+        // Unregistered UID prints verbatim.
+        assert_eq!(
+            metadata.get_string("DICOM:ImplementationClassUID"),
+            Some("0.0.0.0")
+        );
+        // US single value.
+        assert_eq!(metadata.get_string("DICOM:Rows"), Some("256"));
+        // SS (int16s).
+        assert_eq!(
+            metadata.get_string("DICOM:LargestImagePixelValue"),
+            Some("784")
+        );
+        // Inline PrintConv { 0 => 'Unsigned', 1 => 'Signed' }.
+        assert_eq!(
+            metadata.get_string("DICOM:PixelRepresentation"),
+            Some("Signed")
+        );
+        // Binary => 1: the placeholder length is the DECODED int16u
+        // string's length (18 OW bytes -> 9 numbers -> 53 characters).
+        assert_eq!(
+            metadata.get_string("DICOM:PixelData"),
+            Some("(Binary data 53 bytes, use -b option to extract)")
+        );
+        // DS keeps ExifTool's exact string form (no numeric reformatting).
+        assert_eq!(metadata.get_string("DICOM:PatientWeight"), Some("61.2350"));
+        assert_eq!(
+            metadata.get_string("DICOM:ImagePositionPatient"),
+            Some("-110.500\\-96.2063\\59.0425")
         );
     }
 }

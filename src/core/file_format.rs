@@ -157,6 +157,13 @@ pub enum FileFormat {
     /// ZIP archive format (.zip)
     ZIP,
 
+    /// Capture One Enhanced Image Package (.eip) -- a ZIP container whose
+    /// members carry the real metadata (an IIQ/TIFF/JPEG image plus COS
+    /// settings XML). ExifTool detects it inside `ProcessZIP` by member name
+    /// (`ZIP.pm:619-623`) and hands the archive to
+    /// `Image::ExifTool::CaptureOne::ProcessEIP`.
+    EIP,
+
     /// DOCX document format (.docx)
     DOCX,
 
@@ -300,6 +307,10 @@ pub enum FileFormat {
     /// Plain text format (.txt)
     TXT,
 
+    /// Comma-separated values (.csv) -- ExifTool types it from the
+    /// extension and derives its statistics in `Text.pm`'s `ProcessTXT`
+    CSV,
+
     /// HTML / XHTML document (.htm, .html, .xhtml)
     HTML,
 
@@ -385,6 +396,24 @@ pub enum FileFormat {
 
     /// Medical Research Council electron-microscopy image (.mrc)
     MRC,
+
+    /// Extensible Image Serialization Format (.xisf), PixInsight's astronomy
+    /// image container
+    XISF,
+
+    /// Windows Recorded TV Show (.wtv)
+    WTV,
+
+    /// RealMedia audio/video container (.rm, .rv, .rmvb)
+    RealMedia,
+
+    /// Mac OS resource fork, either a bare resource file (.rsrc) or a
+    /// data-fork font suitcase (.dfont) -- the parser reports DFONT when a
+    /// font resource is present, matching ExifTool's RSRC.pm override
+    RSRC,
+
+    /// Adobe Font Metrics text file (.afm; also its ACFM/AMFM siblings)
+    AFM,
 
     /// Audible audiobook (.aa)
     AA,
@@ -482,6 +511,7 @@ impl FileFormat {
             FileFormat::RA => "RA",
             FileFormat::DSS => "DSS",
             FileFormat::ZIP => "ZIP",
+            FileFormat::EIP => "EIP",
             FileFormat::DOCX => "DOCX",
             FileFormat::XLSX => "XLSX",
             FileFormat::PPTX => "PPTX",
@@ -528,6 +558,7 @@ impl FileFormat {
             FileFormat::ICS => "iCalendar",
             FileFormat::EML => "EML",
             FileFormat::TXT => "TXT",
+            FileFormat::CSV => "CSV",
             FileFormat::LFP => "LFP",
             FileFormat::HTML => "HTML",
             FileFormat::LNK => "Windows Shortcut",
@@ -555,6 +586,11 @@ impl FileFormat {
             FileFormat::PCX => "PCX",
             FileFormat::PGF => "PGF",
             FileFormat::MRC => "MRC",
+            FileFormat::XISF => "XISF",
+            FileFormat::WTV => "WTV",
+            FileFormat::RealMedia => "RM",
+            FileFormat::RSRC => "RSRC",
+            FileFormat::AFM => "AFM",
             FileFormat::AA => "AA",
             FileFormat::PICT => "PICT",
             FileFormat::PPM => "PPM",
@@ -625,6 +661,7 @@ impl FileFormat {
             FileFormat::RA => &["ra"],
             FileFormat::DSS => &["dss", "ds2"],
             FileFormat::ZIP => &["zip"],
+            FileFormat::EIP => &["eip"],
             FileFormat::DOCX => &["docx"],
             FileFormat::XLSX => &["xlsx"],
             FileFormat::PPTX => &["pptx"],
@@ -671,6 +708,7 @@ impl FileFormat {
             FileFormat::ICS => &["ics", "ical"],
             FileFormat::EML => &["eml", "email"],
             FileFormat::TXT => &["txt", "text"],
+            FileFormat::CSV => &["csv"],
             FileFormat::LFP => &["lfp", "lfr"],
             FileFormat::HTML => &["htm", "html", "xhtml"],
             FileFormat::LNK => &["lnk"],
@@ -701,6 +739,14 @@ impl FileFormat {
             FileFormat::PCX => &["pcx"],
             FileFormat::PGF => &["pgf"],
             FileFormat::MRC => &["mrc"],
+            FileFormat::XISF => &["xisf"],
+            FileFormat::WTV => &["wtv"],
+            // ExifTool's `%fileTypeLookup` routes all three RealMedia
+            // extensions to the same `Real` module (`ExifTool.pm`); `rm` is
+            // the canonical one it reports as `FileTypeExtension`.
+            FileFormat::RealMedia => &["rm", "rv", "rmvb"],
+            FileFormat::RSRC => &["rsrc", "dfont"],
+            FileFormat::AFM => &["afm", "acfm", "amfm"],
             FileFormat::AA => &["aa"],
             FileFormat::PICT => &["pict", "pct"],
             FileFormat::PPM => &["ppm", "pgm", "pbm"],

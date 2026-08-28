@@ -9,5 +9,5 @@ pub mod vcf;
 
 pub use eps::{EPSParser, parse_eps_metadata};
 pub use html::{HTMLParser, parse_html_metadata};
-pub use txt::{TXTParser, parse_txt_metadata};
+pub use txt::{CSVParser, TXTParser, parse_csv_metadata, parse_txt_metadata};
 pub use vcf::VCFParser;

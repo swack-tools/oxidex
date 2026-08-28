@@ -53,6 +53,12 @@ const INTEROPERABILITY_IFD_POINTER: u16 = 0xA005;
 const MAKERNOTE: u16 = 0x927C;
 const TAG_SUBFILE_TYPE: u16 = 0x00FE;
 
+/// `PreviewImage` as ExifTool reports it from `%Image::ExifTool::Extra`
+/// (ExifTool.pm:1781-1791), whose family-0 group is `File`. This is the tag
+/// `ProcessUnknownOrPreview` emits for a maker note that is itself a JPEG,
+/// and the one the JPEG APP-segment preview path already writes.
+const PREVIEW_IMAGE_FILE_TAG: &str = "File:PreviewImage";
+
 // Image-carrying tags some cameras (Samsung SPH-A800/A940, Canon XL H1) write
 // into the Interoperability IFD alongside - or instead of - the DCF tags.
 // 0x0201/0x0202 are the JPEGInterchangeFormat pair, but ExifTool names that
@@ -1711,7 +1717,9 @@ fn unknown_text_condition(prefix: &[u8]) -> bool {
 /// Applies ExifTool's condition-specific names to the MakerNote (0x927C)
 /// values it stores as plain values rather than parsed subdirectories:
 /// `MakerNoteSamsung1a`, `MakerNoteUnknownText` and `MakerNoteUnknownBinary`
-/// (MakerNotes.pm, pinned 13.59).
+/// (MakerNotes.pm, pinned 13.59) -- plus the one case where the last entry in
+/// the list reports the value under a different tag name entirely, described
+/// below.
 ///
 /// ExifTool resolves the name by walking `@MakerNotes::Main` in order and
 /// taking the first entry whose `Condition` holds; a Condition sees
@@ -1721,6 +1729,31 @@ fn unknown_text_condition(prefix: &[u8]) -> bool {
 /// entry claims the note this returns `None` - oxidex may lack that maker's
 /// parser, and a `MakerNoteUnknown*` name for a claimed note would be a
 /// wrong name, not a fallback.
+///
+/// # The MakerNote that is itself a preview image
+///
+/// `MakerNoteUnknown` (MakerNotes.pm:1116-1126) is the final entry, and it is
+/// a SubDirectory whose `ProcessProc` inspects the bytes before deciding they
+/// are a directory at all:
+///
+/// ```text
+/// MakerNotes.pm:1762  sub ProcessUnknownOrPreview($$$)
+/// MakerNotes.pm:1769      if ($dirLen > 6 and substr($$dataPt, $dirStart, 3) eq "\xff\xd8\xff") {
+/// MakerNotes.pm:1775          $et->FoundTag('PreviewImage', substr($$dataPt, $dirStart, $dirLen));
+/// ```
+///
+/// So a maker note that begins with a JPEG SOI is reported as `PreviewImage`,
+/// not as a maker note -- and through `%Image::ExifTool::Extra`'s
+/// `PreviewImage` (ExifTool.pm:1781-1791), whose family-0 group is `File`.
+/// 89 Samsung Techwin JPEGs in the sample corpus are exactly this: a 0x927C
+/// value that is a complete 40 KB JPEG and nothing else. The pinned 13.59
+/// oracle prints `[File] PreviewImage` for `SamsungDigimax370.jpg` and no
+/// `MakerNote*` tag at all.
+///
+/// Note this is a whole-value test, not a 128-byte-prefix Condition: the
+/// `Condition` for `MakerNoteUnknown` is empty (it always matches), and the
+/// JPEG test lives in the ProcessProc, which sees `$dirLen` -- the entire
+/// value.
 fn special_makernote_value(
     resolved_name: &str,
     data: &[u8],
@@ -1786,6 +1819,17 @@ fn special_makernote_value(
     if condition_prefix.starts_with(b"LSI1\0") {
         return Some((
             contextual_tag_name(resolved_name, "MakerNoteUnknownBinary"),
+            TagValue::new_binary(data.to_vec()),
+        ));
+    }
+
+    // MakerNoteUnknown -> ProcessUnknownOrPreview (MakerNotes.pm:1769-1776):
+    // a value longer than six bytes that starts with a JPEG SOI is the
+    // preview image, reported as `PreviewImage` in group File rather than as
+    // any `MakerNote*` tag. See this function's doc comment for the citation.
+    if data.len() > 6 && data.starts_with(b"\xff\xd8\xff") {
+        return Some((
+            PREVIEW_IMAGE_FILE_TAG.to_string(),
             TagValue::new_binary(data.to_vec()),
         ));
     }
@@ -1864,6 +1908,38 @@ mod makernote_fallback_tests {
         );
         assert_eq!(fallback(b"VER:1.0\0", "JVC", "GR-D230"), None);
         assert_eq!(fallback(b"LSI1\0abc", "Canon", "EOS"), None);
+    }
+
+    /// `MakerNoteUnknown`'s ProcessProc reports a maker note that is itself a
+    /// JPEG as `PreviewImage` rather than as any `MakerNote*` tag
+    /// (MakerNotes.pm:1769-1776). This is the 89 Samsung Techwin JPEGs in the
+    /// corpus, e.g. `SamsungDigimax370.jpg`, whose whole 0x927C value is a
+    /// 40960-byte JPEG.
+    #[test]
+    fn a_makernote_that_is_a_jpeg_is_the_preview_image() {
+        let mut data = b"\xff\xd8\xff\xe0\0\x10JFIF".to_vec();
+        data.resize(4096, 0x41);
+        let (name, value) =
+            fallback(&data, "SAMSUNG TECHWIN CO., LTD", "Digimax 370").expect("JPEG maker note");
+        assert_eq!(name, "File:PreviewImage");
+        assert_eq!(value, TagValue::new_binary(data));
+    }
+
+    /// `$dirLen > 6` is the guard, so a six-byte value is not a preview even
+    /// with the right first three bytes -- and nothing else in the list
+    /// claims it either.
+    #[test]
+    fn a_six_byte_jpeg_magic_is_not_a_preview_image() {
+        assert_eq!(fallback(b"\xff\xd8\xff\xdb\0\x84", "", ""), None);
+    }
+
+    /// The JPEG test lives at the END of `@MakerNotes::Main`, so a maker
+    /// whose own entry claims the note never reaches it.
+    #[test]
+    fn a_claimed_makers_jpeg_note_is_not_reported_as_a_preview() {
+        let mut data = b"\xff\xd8\xff\xe0".to_vec();
+        data.resize(512, 0);
+        assert_eq!(fallback(&data, "Canon", "EOS"), None);
     }
 
     /// Makes that defeat their maker's Condition fall through to the
@@ -2802,6 +2878,11 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
         return;
     }
 
+    // `Composite:PreviewImage` over whichever `PreviewImageStart`/
+    // `PreviewImageLength` pair this MakerNote produced. See
+    // `derive_makernote_preview_image`.
+    derive_makernote_preview_image(ctx, &makernote_tags, metadata);
+
     // Add manufacturer tags to metadata
     // Note: tag names already include manufacturer prefix (e.g., "Canon:", "Nikon:")
     for (tag_name, tag_value_str) in makernote_tags {
@@ -2848,6 +2929,145 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     for (tag_name, value) in value_forms {
         metadata.set_value_form(tag_name, value);
     }
+}
+
+/// Bare tag name of an `OffsetPair`'s offset half.
+const PREVIEW_IMAGE_START: &str = "PreviewImageStart";
+/// Bare tag name of an `OffsetPair`'s byte-count half.
+const PREVIEW_IMAGE_LENGTH: &str = "PreviewImageLength";
+/// Bare tag name of the derived image itself.
+const PREVIEW_IMAGE: &str = "PreviewImage";
+/// Bare tag name of the flag that suppresses the derivation when false.
+const PREVIEW_IMAGE_VALID: &str = "PreviewImageValid";
+
+/// The part of `Group:Tag` after the colon, or the whole string when
+/// unqualified.
+fn bare_tag_name(key: &str) -> &str {
+    key.split_once(':').map_or(key, |(_, name)| name)
+}
+
+/// ExifTool's `Composite:PreviewImage`, applied to whichever
+/// `PreviewImageStart`/`PreviewImageLength` pair a MakerNote produced.
+///
+/// # What ExifTool does
+///
+/// `PreviewImage` is not stored anywhere: every maker that has one declares
+/// an `OffsetPair` with `DataTag => 'PreviewImage'` (Pentax.pm:940-957 for
+/// 0x0003/0x0004, Nikon.pm:5414-5431 for `PreviewIFD`'s 0x201/0x202,
+/// Samsung.pm:86-99 for STMN's 2/3), and one generic Composite turns any such
+/// pair into the image:
+///
+/// ```text
+/// Exif.pm:5018  PreviewImage => {
+/// Exif.pm:5029      Require => { 0 => 'PreviewImageStart', 1 => 'PreviewImageLength' },
+/// Exif.pm:5033      Desire  => { 2 => 'PreviewImageValid', ... },
+/// Exif.pm:5054      return undef if defined $val[2] and not $val[2];
+/// Exif.pm:5055      @grps = $self->GetGroup($$val{0});
+/// Exif.pm:5056      return Image::ExifTool::Exif::ExtractImage($self,$val[0],$val[1],'PreviewImage');
+/// ```
+///
+/// `ExtractImage` (Exif.pm:6215-6245) returns undef for a zero length, takes
+/// the bytes straight out of the loaded EXIF block when the range lies inside
+/// it, and otherwise falls back to `ExtractBinary` -- which, when neither the
+/// `Binary` option nor an explicit request for the tag is in force, returns
+/// the string `"Binary data $length bytes"` **without reading the file at
+/// all** (ExifTool.pm:9846-9853). So a range outside the EXIF block still
+/// produces the tag; only a zero length and a false `PreviewImageValid`
+/// suppress it. Both of those are reproduced below.
+///
+/// # Why here rather than in `crate::composite`
+///
+/// The composite layer derives from strings and has no bytes: this one needs
+/// the enclosing block to turn the offset pair into an actual image, exactly
+/// as Sigma's, Sony's, Casio's, Olympus's and Minolta's own preview hooks
+/// above do. `@grps = GetGroup($$val{0})` also puts the result in the
+/// *offset tag's* group -- `[Pentax]` for a Pentax pair -- not in
+/// `Composite`, so it is not a `Composite:` key either.
+///
+/// # Bounds and refusals
+///
+/// * A detached context has no verified file position, so a stored
+///   `PreviewImageStart` there is a MakerNote-relative number that was never
+///   absolutised (`absolutise_is_offset` is a no-op on a zero base). Deriving
+///   from it would read the wrong bytes, so this refuses to run at all.
+/// * A pair whose bytes lie inside the enclosing block is read from it; any
+///   other pair gets ExifTool's own un-read placeholder, never a guess at
+///   which other bytes might have been meant.
+/// * A `PreviewImage` already extracted by a maker-specific path (Nikon's
+///   `sub_ifds`, Olympus's `CameraSettings` hook, the APP-segment reader) is
+///   left alone -- ExifTool's Composite never overwrites an existing tag
+///   either.
+fn derive_makernote_preview_image(
+    ctx: &MakerNoteContext<'_>,
+    makernote_tags: &HashMap<String, String>,
+    metadata: &mut MetadataMap,
+) {
+    if !ctx.is_located() {
+        return;
+    }
+    // Already found by a maker-specific path, in either sink.
+    if makernote_tags
+        .keys()
+        .any(|key| bare_tag_name(key) == PREVIEW_IMAGE)
+        || metadata
+            .iter()
+            .any(|(key, _)| bare_tag_name(key) == PREVIEW_IMAGE)
+    {
+        return;
+    }
+
+    let Some((group, start)) = makernote_tags.iter().find_map(|(key, value)| {
+        (bare_tag_name(key) == PREVIEW_IMAGE_START)
+            .then(|| value.parse::<u64>().ok())
+            .flatten()
+            .map(|start| (key.split_once(':').map_or("", |(group, _)| group), start))
+    }) else {
+        return;
+    };
+
+    // Exif.pm:5054 -- an explicit false `PreviewImageValid` is a real
+    // omission. Its absence is not (`Desire`, not `Require`).
+    if let Some(valid) = makernote_tags
+        .get(&format!("{group}:{PREVIEW_IMAGE_VALID}"))
+        .map(String::as_str)
+        && matches!(valid, "0" | "No")
+    {
+        return;
+    }
+
+    // Exif.pm:6228 -- `return undef if not $len`.
+    let Some(length) = makernote_tags
+        .get(&format!("{group}:{PREVIEW_IMAGE_LENGTH}"))
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|length| *length > 0)
+    else {
+        return;
+    };
+
+    // `start` is a file offset; `ctx.tiff()` is the enclosing block, whose
+    // first byte sits at `ctx.tiff_base()` in the file.
+    let inside_block = start
+        .checked_sub(ctx.tiff_base())
+        .and_then(|offset| usize::try_from(offset).ok())
+        .zip(usize::try_from(length).ok())
+        .and_then(|(offset, length)| {
+            offset
+                .checked_add(length)
+                .and_then(|end| ctx.tiff().get(offset..end))
+        });
+
+    let key = if group.is_empty() {
+        PREVIEW_IMAGE.to_string()
+    } else {
+        format!("{group}:{PREVIEW_IMAGE}")
+    };
+    let value = match inside_block {
+        Some(bytes) => TagValue::new_binary(bytes.to_vec()),
+        None => TagValue::new_string(format!(
+            "(Binary data {length} bytes, use -b option to extract)"
+        )),
+    };
+    metadata.insert(key, value);
 }
 
 /// Decodes a Sigma/Foveon MakerNote, and reports whether it did.
@@ -3922,6 +4142,223 @@ mod makernote_window_tests {
 
         assert_eq!(ctx.tiff_base(), 292);
         assert_eq!(ctx.tiff()[0..2], *b"II", "index 0 is the TIFF header");
+    }
+}
+
+#[cfg(test)]
+mod makernote_preview_image_tests {
+    use super::*;
+
+    /// The enclosing block: 1024 bytes at file offset 12 (a JPEG APP1's TIFF
+    /// header sits at 12), with a recognisable 32-byte "preview" at block
+    /// offset 500 -- file offset 512.
+    fn block() -> Vec<u8> {
+        let mut tiff = vec![0u8; 1024];
+        for (i, byte) in tiff[500..532].iter_mut().enumerate() {
+            *byte = 0x80 | (i as u8);
+        }
+        tiff
+    }
+
+    fn tags(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    fn derive(
+        tiff: &[u8],
+        makernote_tags: &HashMap<String, String>,
+        metadata: &mut MetadataMap,
+    ) -> Option<TagValue> {
+        let ctx = MakerNoteContext::in_tiff(tiff, 100, 200, 12);
+        derive_makernote_preview_image(&ctx, makernote_tags, metadata);
+        metadata.get("Pentax:PreviewImage").cloned()
+    }
+
+    /// The Pentax case: `PreviewImageStart` has already been absolutised to a
+    /// file offset, and the bytes it names lie inside the enclosing block, so
+    /// the real bytes are what gets stored.
+    #[test]
+    fn an_in_block_pair_yields_the_actual_bytes() {
+        let tiff = block();
+        let mut metadata = MetadataMap::new();
+        let value = derive(
+            &tiff,
+            &tags(&[
+                ("Pentax:PreviewImageStart", "512"),
+                ("Pentax:PreviewImageLength", "32"),
+            ]),
+            &mut metadata,
+        )
+        .expect("in-block pair");
+        assert_eq!(value, TagValue::new_binary(tiff[500..532].to_vec()));
+    }
+
+    /// ExifTool's `ExtractBinary` returns `"Binary data $length bytes"`
+    /// without reading anything when the range is outside the loaded EXIF
+    /// block and the tag was not specifically requested
+    /// (ExifTool.pm:9846-9853), so the tag is still reported.
+    #[test]
+    fn an_out_of_block_pair_still_reports_the_placeholder() {
+        let mut metadata = MetadataMap::new();
+        let value = derive(
+            &block(),
+            &tags(&[
+                ("Pentax:PreviewImageStart", "900000"),
+                ("Pentax:PreviewImageLength", "37370"),
+            ]),
+            &mut metadata,
+        )
+        .expect("out-of-block pair");
+        assert_eq!(
+            value.as_string(),
+            Some("(Binary data 37370 bytes, use -b option to extract)")
+        );
+    }
+
+    /// Exif.pm:6228 -- `return undef if not $len`.
+    #[test]
+    fn a_zero_length_yields_nothing() {
+        let mut metadata = MetadataMap::new();
+        assert!(
+            derive(
+                &block(),
+                &tags(&[
+                    ("Pentax:PreviewImageStart", "512"),
+                    ("Pentax:PreviewImageLength", "0"),
+                ]),
+                &mut metadata,
+            )
+            .is_none()
+        );
+    }
+
+    /// Exif.pm:5054 -- `return undef if defined $val[2] and not $val[2]`.
+    #[test]
+    fn an_explicit_false_preview_image_valid_suppresses_it() {
+        let mut metadata = MetadataMap::new();
+        assert!(
+            derive(
+                &block(),
+                &tags(&[
+                    ("Pentax:PreviewImageStart", "512"),
+                    ("Pentax:PreviewImageLength", "32"),
+                    ("Pentax:PreviewImageValid", "No"),
+                ]),
+                &mut metadata,
+            )
+            .is_none()
+        );
+    }
+
+    /// A `PreviewImage` a maker-specific path already extracted is left
+    /// alone, whichever sink it landed in.
+    #[test]
+    fn an_existing_preview_image_is_never_displaced() {
+        let pair = tags(&[
+            ("Pentax:PreviewImageStart", "512"),
+            ("Pentax:PreviewImageLength", "32"),
+        ]);
+
+        let mut from_string_map = pair.clone();
+        from_string_map.insert("MakerNotes:PreviewImage".to_string(), "already".to_string());
+        let mut metadata = MetadataMap::new();
+        assert!(derive(&block(), &from_string_map, &mut metadata).is_none());
+
+        let mut metadata = MetadataMap::new();
+        metadata.insert("MakerNotes:PreviewImage", TagValue::new_string("already"));
+        assert!(derive(&block(), &pair, &mut metadata).is_none());
+    }
+
+    /// A detached context never absolutised its offsets, so the stored number
+    /// is MakerNote-relative and deriving from it would read the wrong bytes.
+    #[test]
+    fn a_detached_context_derives_nothing() {
+        let tiff = block();
+        let ctx = MakerNoteContext::detached(&tiff);
+        let mut metadata = MetadataMap::new();
+        derive_makernote_preview_image(
+            &ctx,
+            &tags(&[
+                ("Pentax:PreviewImageStart", "512"),
+                ("Pentax:PreviewImageLength", "32"),
+            ]),
+            &mut metadata,
+        );
+        assert!(metadata.get("Pentax:PreviewImage").is_none());
+    }
+
+    /// `@grps = $self->GetGroup($$val{0})` (Exif.pm:5055) puts the result in
+    /// the offset tag's own group, not in `Composite`.
+    #[test]
+    fn the_result_takes_the_offset_tags_group() {
+        let tiff = block();
+        let ctx = MakerNoteContext::in_tiff(&tiff, 100, 200, 12);
+        let mut metadata = MetadataMap::new();
+        derive_makernote_preview_image(
+            &ctx,
+            &tags(&[
+                ("Nikon:PreviewImageStart", "512"),
+                ("Nikon:PreviewImageLength", "32"),
+            ]),
+            &mut metadata,
+        );
+        assert!(metadata.get("Nikon:PreviewImage").is_some());
+        assert!(metadata.get("Composite:PreviewImage").is_none());
+    }
+
+    /// The corpus case this closes, pinned against the 13.59 oracle:
+    /// `exiftool -a -G1 -s Pentax/PentaxOptioRZ10.jpg` prints
+    /// `[Pentax] PreviewImage : (Binary data 37370 bytes, use -b option to
+    /// extract)`.
+    #[test]
+    fn pinned_pentax_optio_rz10_reports_its_preview_image() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxOptioRZ10.jpg",
+        );
+        let Ok(metadata) = crate::core::operations::read_metadata(path) else {
+            return;
+        };
+        let preview = metadata
+            .get("Pentax:PreviewImage")
+            .expect("Pentax PreviewImage");
+        // The pair points inside the APP1 EXIF segment, so the real bytes are
+        // stored -- and they are a JPEG, which is what makes the oracle's
+        // "(Binary data 37370 bytes, ...)" line the same 37370 bytes.
+        let TagValue::Binary(bytes) = preview else {
+            panic!("expected the extracted preview bytes, got {preview:?}");
+        };
+        assert_eq!(bytes.len(), 37370);
+        assert_eq!(&bytes[..3], b"\xff\xd8\xff");
+    }
+
+    /// The Samsung case, same oracle: `SamsungDigimax370.jpg`'s whole
+    /// MakerNote is a 40960-byte JPEG and ExifTool reports it as
+    /// `[File] PreviewImage`.
+    #[test]
+    fn pinned_samsung_digimax_370_reports_its_makernote_as_the_preview() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungDigimax370.jpg",
+        );
+        let Ok(metadata) = crate::core::operations::read_metadata(path) else {
+            return;
+        };
+        let preview = metadata
+            .get(PREVIEW_IMAGE_FILE_TAG)
+            .expect("File:PreviewImage");
+        let TagValue::Binary(bytes) = preview else {
+            panic!("expected the MakerNote's own JPEG bytes, got {preview:?}");
+        };
+        assert_eq!(bytes.len(), 40960);
+        assert_eq!(&bytes[..3], b"\xff\xd8\xff");
     }
 }
 

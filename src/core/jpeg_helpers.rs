@@ -23,7 +23,6 @@ use crate::parsers::jpeg::app_segments::{
 use crate::parsers::jpeg::icc_chunk_assembler::IccChunkAssembler;
 use crate::parsers::jpeg::quality_estimate::estimate_quality_from_dqt_tables;
 use crate::parsers::jpeg::segment_parser::Segment;
-use crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::lookup_tag_name;
@@ -451,8 +450,8 @@ pub fn process_xmp_segments(
     metadata: &mut MetadataMap,
     diagnostics: &mut DiagnosticSink,
 ) {
-    match extract_xmp_from_segments(segments) {
-        Ok(xmp_tags) => {
+    match crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments_with_value_forms(segments) {
+        Ok((xmp_tags, value_forms)) => {
             // Add all XMP tags to metadata
             for (tag_name, value) in xmp_tags {
                 // A List keeps its entries apart -- ExifTool reports
@@ -471,6 +470,16 @@ pub fn process_xmp_segments(
                     }
                 };
                 metadata.insert(tag_name, tag_value);
+            }
+            // The ValueConv text of any property whose print formatting
+            // discarded precision (exif:FocalLength's `%.1f mm`, the
+            // FocalPlane resolution pair's unreduced `n/d`) -- attached the
+            // same way the `.xmp` sidecar path (`parse_xmp_file`) attaches
+            // it, so composites consume ValueConv-level inputs whichever
+            // container the packet arrived in. `set_value_form` only sticks
+            // to a key already present, which the inserts above guarantee.
+            for (tag_name, form) in value_forms {
+                metadata.set_value_form(tag_name, form);
             }
         }
         Err(e) => {

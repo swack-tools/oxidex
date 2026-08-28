@@ -34,7 +34,7 @@
 use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::xmp::parse_xmp_history;
-use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
+use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed_with_rational_forms};
 
 /// The XMP identifier string that appears at the start of XMP APP1 segments.
 /// This is a null-terminated string: "http://ns.adobe.com/xap/1.0/\0"
@@ -206,7 +206,22 @@ fn xmp_payload_to_utf8(payload: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, XmpValue)>> {
+    Ok(extract_xmp_from_segments_with_value_forms(segments)?.0)
+}
+
+/// [`extract_xmp_from_segments`], plus each property's ValueConv text where
+/// the rdf parser's print formatting discarded precision -- see
+/// `parse_xmp_typed_with_rational_forms` (`src/parsers/xmp/rdf_parser.rs`)
+/// for exactly which properties carry one and in what shape. The embedded
+/// JPEG path needs this for the same reason the `.xmp` sidecar path
+/// (`parse_xmp_file`) already consumed it: composites read the ValueConv
+/// form, and a JPEG whose XMP packet wins a bare tag key otherwise feeds
+/// them the PrintConv-rounded string.
+pub fn extract_xmp_from_segments_with_value_forms(
+    segments: &[Segment],
+) -> Result<(Vec<(String, XmpValue)>, Vec<(String, String)>)> {
     let mut all_xmp_tags = Vec::new();
+    let mut all_value_forms = Vec::new();
 
     // Iterate through all segments looking for XMP APP1 segments
     for segment in segments {
@@ -228,11 +243,13 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, Xm
         let xml_payload: &[u8] = converted.as_deref().unwrap_or(raw_payload);
 
         // Parse the XMP XML data for standard properties
-        let xmp_tags = parse_xmp_typed(xml_payload).map_err(|e| {
-            ExifToolError::parse_error(format!("Failed to parse XMP segment: {}", e))
-        })?;
+        let (xmp_tags, value_forms) =
+            parse_xmp_typed_with_rational_forms(xml_payload).map_err(|e| {
+                ExifToolError::parse_error(format!("Failed to parse XMP segment: {}", e))
+            })?;
 
         all_xmp_tags.extend(xmp_tags);
+        all_value_forms.extend(value_forms);
 
         // Parse XMP history for forensic metadata
         let xml_str = std::str::from_utf8(xml_payload).unwrap_or("");
@@ -252,8 +269,9 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, Xm
     for packet in assemble_extended_xmp(segments) {
         let converted = xmp_payload_to_utf8(&packet);
         let xml_payload: &[u8] = converted.as_deref().unwrap_or(&packet);
-        if let Ok(xmp_tags) = parse_xmp_typed(xml_payload) {
+        if let Ok((xmp_tags, value_forms)) = parse_xmp_typed_with_rational_forms(xml_payload) {
             all_xmp_tags.extend(xmp_tags);
+            all_value_forms.extend(value_forms);
         }
         let xml_str = std::str::from_utf8(xml_payload).unwrap_or("");
         if let Ok(history_tags) = parse_xmp_history(xml_str) {
@@ -265,7 +283,7 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, Xm
         }
     }
 
-    Ok(all_xmp_tags)
+    Ok((all_xmp_tags, all_value_forms))
 }
 
 /// Checks if a segment is an XMP APP1 segment.

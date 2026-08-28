@@ -1040,7 +1040,7 @@ pub(crate) fn parse_current_user(data: &[u8]) -> Option<String> {
 }
 
 /// `Image::ExifTool::Microsoft::%codePage`.
-fn code_page_name(cp: i64) -> String {
+pub(crate) fn code_page_name(cp: i64) -> String {
     let name = match cp {
         37 => "IBM EBCDIC US-Canada",
         437 => "DOS United States",

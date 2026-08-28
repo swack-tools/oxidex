@@ -56,6 +56,36 @@ pub struct Provenance {
 /// invariant relies on (see [`TagSink::record`]).
 pub const SHIM_DEFAULT_PRIORITY: u8 = 1;
 
+/// The table `PRIORITY` for a shim-minted occurrence, keyed on its family-0
+/// group -- the one piece of "enclosing table" configuration the shim *can*
+/// see, because the XMP parsers encode the schema namespace into the key's
+/// group prefix.
+///
+/// ExifTool demotes exactly three XMP schema tables below ordinary tags:
+///
+/// ```text
+/// XMP.pm:1900    PRIORITY => 0, # not as reliable as actual TIFF tags
+/// XMP.pm:1992    PRIORITY => 0, # not as reliable as actual EXIF tags
+/// XMP.pm:2462    PRIORITY => 0, # not as reliable as actual EXIF tags
+/// ```
+///
+/// (`%Image::ExifTool::XMP::tiff`, `::exif` and `::exifEX` respectively.)
+/// Without this, an `XMP-exif:FocalLength` recorded after the EXIF IFD's own
+/// `ExifIFD:FocalLength` ties it on priority and -- by `FoundTag`'s
+/// newer-wins tiebreak -- takes the bare `FocalLength` key away from it, so
+/// every composite that Requires `FocalLength` consumes the XMP packet's
+/// PrintConv-rounded copy ("11.1 mm") instead of the EXIF rational's
+/// ValueConv (11.109). `BuildCompositeTags` hands `@val` the post-ValueConv
+/// store of the *priority winner* (ExifTool.pm:4008), and with these tables
+/// at `PRIORITY => 0` that winner is the EXIF tag whenever one exists --
+/// which is precisely ExifTool's observed `-G1 -s -FocalLength` answer.
+fn shim_group_priority(group0: &str) -> u8 {
+    match group0 {
+        "XMP-tiff" | "XMP-exif" | "XMP-exifEX" => 0,
+        _ => SHIM_DEFAULT_PRIORITY,
+    }
+}
+
 /// A single extracted tag occurrence, in the shape ExifTool's `FoundTag`
 /// actually tracks: a value in up to three forms, a priority, a file-order
 /// position, and group/instance identity -- rather than the one `TagValue`
@@ -126,6 +156,7 @@ impl TagOccurrence {
             Some((g, n)) => (intern(g), intern(n)),
             None => (intern(""), intern(key)),
         };
+        let priority = shim_group_priority(&group0);
         TagOccurrence {
             id: TagId::Named(key.to_string()),
             name,
@@ -136,7 +167,7 @@ impl TagOccurrence {
             raw: value,
             value: None,
             print: None,
-            priority: SHIM_DEFAULT_PRIORITY,
+            priority,
             is_list: false,
             order,
             origin: Provenance::default(),

@@ -175,7 +175,25 @@ pub fn format_for_exiftool(metadata: &MetadataMap) -> MetadataMap {
 ///
 /// A new TagValue containing the formatted result. If no formatting rule applies,
 /// returns a clone of the original value.
+///
+/// Whatever the rules produce, a `String` result then loses any trailing NULs:
+/// the exiftool *application* strips them from every value it prints unless
+/// the value is binary (`$str =~ s/\0+$// unless $isBinary`, exiftool:3825),
+/// so a raw value faithfully kept NUL-terminated for `-b` (TNEF MessageClass
+/// is 24 bytes raw, 23 printed) must still display without the terminator.
+/// Only trailing NULs: interior ones survive printing in exiftool too.
 pub fn format_tag_value(tag_name: &str, value: &TagValue) -> TagValue {
+    match format_tag_value_rules(tag_name, value) {
+        TagValue::String(s) if s.ends_with('\0') => {
+            TagValue::String(s.trim_end_matches('\0').to_string())
+        }
+        formatted => formatted,
+    }
+}
+
+/// The rule dispatch behind [`format_tag_value`], before the application-level
+/// trailing-NUL strip (exiftool:3825) that wrapper applies to string results.
+fn format_tag_value_rules(tag_name: &str, value: &TagValue) -> TagValue {
     let base_name = strip_family_prefix(tag_name);
 
     if base_name == "ProfileEmbedPolicy"
@@ -1868,6 +1886,37 @@ fn format_icc_string_values(value: &str, base_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The exiftool application strips trailing NULs from every printed
+    /// value unless it is binary (`$str =~ s/\0+$// unless $isBinary`,
+    /// exiftool:3825). Pinned by the oracle on `t/images/TNEF.tnef`:
+    /// `-b -MessageClass` is 24 bytes (`IPM.Microsoft Mail.Note\0`) while
+    /// `-json` prints the 23-char string without the terminator.
+    #[test]
+    fn trailing_nuls_are_stripped_from_string_display_values() {
+        assert_eq!(
+            format_tag_value(
+                "TNEF:MessageClass",
+                &TagValue::new_string("IPM.Microsoft Mail.Note\0")
+            ),
+            TagValue::new_string("IPM.Microsoft Mail.Note")
+        );
+        // All trailing NULs go, not just one.
+        assert_eq!(
+            format_tag_value("EXIF:Whatever", &TagValue::new_string("abc\0\0")),
+            TagValue::new_string("abc")
+        );
+        // Interior NULs survive printing in exiftool too.
+        assert_eq!(
+            format_tag_value("EXIF:Whatever", &TagValue::new_string("ab\0cd")),
+            TagValue::new_string("ab\0cd")
+        );
+        // `unless $isBinary`: binary values keep their bytes.
+        assert_eq!(
+            format_tag_value("EXIF:Blob", &TagValue::Binary(vec![0x41, 0x00])),
+            TagValue::Binary(vec![0x41, 0x00])
+        );
+    }
 
     /// The dispatch, not just the table.
     ///

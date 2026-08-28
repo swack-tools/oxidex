@@ -438,6 +438,23 @@ pub fn read_metadata_with_detector_and_options(
         format = FileFormat::MPC;
     }
 
+    // Step 3d: CSV is an extension-assigned type, exactly as in ExifTool:
+    // `ProcessTXT` computes Delimiter/Quoting/ColumnCount/RowCount only when
+    // `$$et{FileType} eq 'CSV'`, and that FileType comes from the `.csv`
+    // extension's `%fileTypeLookup` entry (`CSV => ['TXT', 'Comma-Separated
+    // Values']`, ExifTool.pm) -- the content alone is indistinguishable from
+    // plain text, which is why `detect_format` (which never sees a filename)
+    // resolves it to TXT. A `.txt` file with identical bytes stays TXT and
+    // keeps LineCount/WordCount, matching the oracle on both.
+    if format == FileFormat::TXT
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
+    {
+        format = FileFormat::CSV;
+    }
+
     // Step 4: Route to appropriate parser based on detected format and extract format-specific metadata
     //
     // Detection returning Unknown, or a parser refusing the file, still leaves
@@ -642,6 +659,23 @@ pub fn read_metadata_report_with_detector_and_options(
             .is_some_and(|e| e.eq_ignore_ascii_case("mpc"))
     {
         format = FileFormat::MPC;
+    }
+
+    // Step 3d: CSV is an extension-assigned type, exactly as in ExifTool:
+    // `ProcessTXT` computes Delimiter/Quoting/ColumnCount/RowCount only when
+    // `$$et{FileType} eq 'CSV'`, and that FileType comes from the `.csv`
+    // extension's `%fileTypeLookup` entry (`CSV => ['TXT', 'Comma-Separated
+    // Values']`, ExifTool.pm) -- the content alone is indistinguishable from
+    // plain text, which is why `detect_format` (which never sees a filename)
+    // resolves it to TXT. A `.txt` file with identical bytes stays TXT and
+    // keeps LineCount/WordCount, matching the oracle on both.
+    if format == FileFormat::TXT
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
+    {
+        format = FileFormat::CSV;
     }
 
     // Step 4: Dispatch. JPEG and PNG go through their diagnostics-carrying

@@ -973,9 +973,12 @@ fn read_metadata_routes_ole_vba_stream_from_minifat_chain() {
 
 #[test]
 fn read_metadata_routes_binary_plist() {
+    // The binary encoding's MIME type is assigned at run time
+    // (`$et->SetFileType('PLIST', 'application/x-plist')`, PLIST.pm) -- the
+    // parser reports it even for this contentless fixture.
     assert_eq!(
-        read_temp_file(&binary_plist_fixture(), ".plist").get("Plist:Format"),
-        Some(&TagValue::String("Binary".to_string()))
+        read_temp_file(&binary_plist_fixture(), ".plist").get("File:MIMEType"),
+        Some(&TagValue::String("application/x-plist".to_string()))
     );
 }
 
@@ -989,12 +992,9 @@ fn read_metadata_routes_xml_plist() {
         metadata.get("File:FileType"),
         Some(&TagValue::String("PLIST".to_string()))
     );
+    // Content tags carry ExifTool's family-1 group for an XML plist.
     assert_eq!(
-        metadata.get("Plist:Format"),
-        Some(&TagValue::String("XML".to_string()))
-    );
-    assert_eq!(
-        metadata.get("Plist:CFBundleIdentifier"),
+        metadata.get("XML:CFBundleIdentifier"),
         Some(&TagValue::String("com.example.production".to_string()))
     );
 }

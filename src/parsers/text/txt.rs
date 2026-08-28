@@ -348,8 +348,11 @@ impl TXTParser {
         // Detect encoding and BOM
         let (encoding, has_bom) = Self::detect_encoding(data);
 
+        // `Text::Main`'s GROUPS are `{ 0 => 'File', 1 => 'File', 2 =>
+        // 'Document' }` -- every tag lands in the `File` family-1 group. An
+        // ungrouped key renders as `[]` under `-G1` and matches nothing.
         metadata.insert(
-            "MIMEEncoding".to_string(),
+            "File:MIMEEncoding".to_string(),
             TagValue::String(encoding.mime_name().to_string()),
         );
 
@@ -359,7 +362,7 @@ impl TXTParser {
         // deliberately declines to state.
         if encoding.can_carry_bom() {
             metadata.insert(
-                "ByteOrderMark".to_string(),
+                "File:ByteOrderMark".to_string(),
                 TagValue::String(if has_bom { "Yes" } else { "No" }.to_string()),
             );
         }
@@ -387,7 +390,7 @@ impl TXTParser {
                 // ExifTool finds it in the raw bytes without decoding.
                 let line_ending = Self::detect_multibyte_line_endings(data, &encoding);
                 metadata.insert(
-                    "Newlines".to_string(),
+                    "File:Newlines".to_string(),
                     TagValue::String(line_ending.display_name().to_string()),
                 );
                 return Ok(metadata);
@@ -398,22 +401,214 @@ impl TXTParser {
         // Detect line endings
         let line_ending = Self::detect_line_endings(text);
         metadata.insert(
-            "Newlines".to_string(),
+            "File:Newlines".to_string(),
             TagValue::String(line_ending.display_name().to_string()),
         );
 
         // Compute statistics
         let stats = Self::compute_stats(text);
         metadata.insert(
-            "LineCount".to_string(),
-            TagValue::String(stats.line_count.to_string()),
+            "File:LineCount".to_string(),
+            TagValue::Integer(stats.line_count as i64),
         );
         metadata.insert(
-            "WordCount".to_string(),
-            TagValue::String(stats.word_count.to_string()),
+            "File:WordCount".to_string(),
+            TagValue::Integer(stats.word_count as i64),
         );
 
         Ok(metadata)
+    }
+}
+
+/// The CSV statistics ExifTool's `Text.pm` `ProcessTXT` derives when
+/// `$$et{FileType} eq 'CSV'` (Text.pm, pinned 13.59, the `generate stats for
+/// CSV files` block).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CsvStats {
+    /// The winning delimiter, `None` for `''` (rendered "(none)").
+    pub delimiter: Option<char>,
+    /// The first quote character seen in a quoted field, if any.
+    pub quoting: Option<char>,
+    /// Columns in the first line.
+    pub column_count: i64,
+    /// Rows in the file; `None` past ExifTool's 1000-row counting cap
+    /// ("Not counting rows past 1000" -- the tag is then omitted).
+    pub row_count: Option<i64>,
+}
+
+impl TXTParser {
+    /// Mirrors the CSV branch of `Text.pm`'s `ProcessTXT` exactly:
+    ///
+    /// ```perl
+    /// while ($raf->ReadLine($buff)) {
+    ///     if (not defined $delim) {
+    ///         my %count = ( ',' => 0, ';' => 0, "\t" => 0 );
+    ///         ++$count{$_} foreach $buff =~ /[,;\t]/g;
+    ///         if ($count{','} > $count{';'} and $count{','} > $count{"\t"}) { $delim = ','; }
+    ///         elsif ($count{';'} > $count{"\t"}) { $delim = ';'; }
+    ///         elsif ($count{"\t"}) { $delim = "\t"; }
+    ///         else { $delim = ''; $ncols = 1; }
+    ///         unless ($ncols) {
+    ///             while ($buff =~ /(^|$delim)(["'])(.*?)\2(?=$delim|$)/sg) {
+    ///                 $quot = $2;
+    ///                 $count{$delim} -= () = $3 =~ /$delim/g;
+    ///             }
+    ///             $ncols = $count{$delim} + 1;
+    ///         }
+    ///     } elsif (not $quot) {
+    ///         $quot = $2 if $buff =~ /(^|$delim)(["'])(.*?)\2(?=$delim|$)/sg;
+    ///     }
+    ///     if (++$nrows == 1000 and $et->Warn(...)) { undef $nrows; last; }
+    /// }
+    /// ```
+    ///
+    /// `ReadLine` splits on `"\n"` regardless of the file's `Newlines`
+    /// answer (Perl's `$/` is still at its default here), a trailing
+    /// unterminated line still counts as a row, and `$` in the lookahead is
+    /// Perl's end-of-string-or-before-final-`\n` -- all reproduced below.
+    /// Byte-based, exactly as Perl reads it: the delimiter and quote
+    /// characters are ASCII, so this holds for every 8-bit encoding.
+    pub fn compute_csv_stats(data: &[u8]) -> CsvStats {
+        let mut delimiter: Option<Option<u8>> = None; // outer None = "not decided yet"
+        let mut quoting: Option<u8> = None;
+        let mut column_count: i64 = 1;
+        let mut row_count: i64 = 0;
+        let mut counting = true;
+
+        for line in data.split_inclusive(|&b| b == b'\n') {
+            match delimiter {
+                None => {
+                    let tally = |c: u8| line.iter().filter(|&&b| b == c).count() as i64;
+                    let (commas, semis, tabs) = (tally(b','), tally(b';'), tally(b'\t'));
+                    let (delim, mut count) = if commas > semis && commas > tabs {
+                        (Some(b','), commas)
+                    } else if semis > tabs {
+                        (Some(b';'), semis)
+                    } else if tabs > 0 {
+                        (Some(b'\t'), tabs)
+                    } else {
+                        (None, 0)
+                    };
+                    if let Some(d) = delim {
+                        // account for delimiters in quotes (simplistically)
+                        for (quote, field) in QuotedFields::new(line, Some(d)) {
+                            quoting = Some(quote);
+                            count -= field.iter().filter(|&&b| b == d).count() as i64;
+                        }
+                        column_count = count + 1;
+                    }
+                    delimiter = Some(delim);
+                }
+                Some(delim) if quoting.is_none() => {
+                    if let Some((quote, _)) = QuotedFields::new(line, delim).next() {
+                        quoting = Some(quote);
+                    }
+                }
+                _ => {}
+            }
+            row_count += 1;
+            if row_count == 1000 {
+                counting = false;
+                break;
+            }
+        }
+
+        CsvStats {
+            delimiter: delimiter.flatten().map(char::from),
+            quoting: quoting.map(char::from),
+            column_count,
+            row_count: counting.then_some(row_count),
+        }
+    }
+}
+
+/// Iterator over Perl's `/(^|$delim)(["'])(.*?)\2(?=$delim|$)/sg` matches on
+/// one line: yields `(quote_char, field_content)` pairs. With an empty
+/// delimiter (`$delim` = `''`) the anchors degenerate exactly as in Perl:
+/// `(^|)` matches anywhere and `(?=|$)` always holds.
+struct QuotedFields<'a> {
+    line: &'a [u8],
+    delim: Option<u8>,
+    pos: usize,
+}
+
+impl<'a> QuotedFields<'a> {
+    fn new(line: &'a [u8], delim: Option<u8>) -> Self {
+        Self {
+            line,
+            delim,
+            pos: 0,
+        }
+    }
+}
+
+impl<'a> Iterator for QuotedFields<'a> {
+    type Item = (u8, &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let bytes = self.line;
+        // `(["'])(.*?)\2(?=$delim|$)` starting at `after_anchor`: quote, the
+        // shortest content run to a closing quote whose lookahead holds (`.`
+        // under /s matches anything, so no newline exclusion).
+        let delim = self.delim;
+        // Perl's `$` (no `/m`): end of string, or immediately before a final
+        // `"\n"`.
+        let at_perl_eol = |index: usize| {
+            index == bytes.len() || (index == bytes.len() - 1 && bytes.last() == Some(&b'\n'))
+        };
+        let try_match = move |after_anchor: usize| -> Option<(u8, usize, usize)> {
+            let quote = match bytes.get(after_anchor) {
+                Some(&b) if b == b'"' || b == b'\'' => b,
+                _ => return None,
+            };
+            let content_start = after_anchor + 1;
+            let mut close = content_start;
+            while let Some(offset) = bytes[close..].iter().position(|&b| b == quote) {
+                let close_at = close + offset;
+                let after_close = close_at + 1;
+                // `(?=$delim|$)` lookahead.
+                let ok = match delim {
+                    Some(d) => bytes.get(after_close) == Some(&d) || at_perl_eol(after_close),
+                    None => true,
+                };
+                if ok {
+                    return Some((quote, close_at, after_close));
+                }
+                // Non-greedy backtracking: extend the content past this
+                // quote and look for the next closer.
+                close = after_close;
+            }
+            None
+        };
+        let mut start = self.pos;
+        while start < bytes.len() {
+            // `(^|$delim)`, in Perl's alternation order. A match beginning at
+            // position 0 tries `^` (consuming nothing) first, then -- on any
+            // failure of that branch -- `$delim` at position 0; elsewhere
+            // only the delimiter branch can open a match (the empty
+            // alternative stands in for both when the delimiter is '').
+            let candidates: [Option<usize>; 2] = if start == 0 {
+                match self.delim {
+                    Some(d) if bytes.first() == Some(&d) => [Some(0), Some(1)],
+                    _ => [Some(0), None],
+                }
+            } else {
+                match self.delim {
+                    Some(d) if bytes[start] == d => [Some(start + 1), None],
+                    Some(_) => [None, None],
+                    None => [Some(start), None],
+                }
+            };
+            for after_anchor in candidates.into_iter().flatten() {
+                if let Some((quote, close_at, after_close)) = try_match(after_anchor) {
+                    self.pos = after_close;
+                    return Some((quote, &bytes[after_anchor + 1..close_at]));
+                }
+            }
+            start += 1;
+        }
+        self.pos = bytes.len();
+        None
     }
 }
 
@@ -460,6 +655,115 @@ impl FormatParser for TXTParser {
     fn supports_format(&self, format: FileFormat) -> bool {
         matches!(format, FileFormat::TXT)
     }
+}
+
+/// CSV parser: ExifTool's `Text.pm` `ProcessTXT`, taking the branch it takes
+/// when the extension named the file CSV (`$$et{FileType} eq 'CSV'`).
+///
+/// Same encoding/BOM/Newlines analysis as TXT, then `Delimiter`, `Quoting`,
+/// `ColumnCount` and `RowCount` instead of `LineCount`/`WordCount`. The tags
+/// live in `Image::ExifTool::Text::Main`, whose `GROUPS` are
+/// `{ 0 => 'File', 1 => 'File', 2 => 'Document' }`, so they are emitted under
+/// the `File` group here.
+pub struct CSVParser;
+
+impl FormatParser for CSVParser {
+    fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap> {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("FileType".to_string(), TagValue::String("CSV".to_string()));
+
+        let probe_size = (reader.size() as usize).min(MAX_ANALYSIS_BYTES);
+        let probe = reader.read(0, probe_size)?;
+        let (encoding, has_bom) = TXTParser::detect_encoding(probe);
+
+        metadata.insert(
+            "File:MIMEEncoding".to_string(),
+            TagValue::String(encoding.mime_name().to_string()),
+        );
+        if encoding.can_carry_bom() {
+            metadata.insert(
+                "File:ByteOrderMark".to_string(),
+                TagValue::String(if has_bom { "Yes" } else { "No" }.to_string()),
+            );
+        }
+
+        // Newlines: same rule as TXT (first sequence wins; found in the raw
+        // bytes for the multi-byte encodings).
+        let line_ending = match encoding {
+            Encoding::UTF16LE | Encoding::UTF16BE | Encoding::UTF32LE | Encoding::UTF32BE => {
+                let ending = TXTParser::detect_multibyte_line_endings(probe, &encoding);
+                metadata.insert(
+                    "File:Newlines".to_string(),
+                    TagValue::String(ending.display_name().to_string()),
+                );
+                // Text.pm: `return 1 if $fast or not defined $isUTF8;` --
+                // `$isUTF8` is left undefined for the multi-byte encodings,
+                // so the CSV statistics are not generated for them.
+                return Ok(metadata);
+            }
+            Encoding::Unknown => return Ok(metadata),
+            _ => {
+                let text = String::from_utf8_lossy(probe);
+                TXTParser::detect_line_endings(&text)
+            }
+        };
+        metadata.insert(
+            "File:Newlines".to_string(),
+            TagValue::String(line_ending.display_name().to_string()),
+        );
+
+        // The statistics walk the whole file (ExifTool's ReadLine loop), but
+        // stop at the 1000-row counting cap; a memory-mapped read makes the
+        // full-length slice cheap.
+        let data = reader.read(0, reader.size() as usize)?;
+        let stats = TXTParser::compute_csv_stats(data);
+
+        // The `Delimiter` and `Quoting` PrintConv hashes, Text.pm:45-46.
+        let delimiter = match stats.delimiter {
+            None => "(none)",
+            Some(',') => "Comma",
+            Some(';') => "Semicolon",
+            Some('\t') => "Tab",
+            // Unreachable: compute_csv_stats only ever picks the three above.
+            Some(_) => "(none)",
+        };
+        let quoting = match stats.quoting {
+            None => "(none)",
+            Some('"') => "Double quotes",
+            Some('\'') => "Single quotes",
+            Some(_) => "(none)",
+        };
+        metadata.insert(
+            "File:Delimiter".to_string(),
+            TagValue::String(delimiter.to_string()),
+        );
+        metadata.insert(
+            "File:Quoting".to_string(),
+            TagValue::String(quoting.to_string()),
+        );
+        metadata.insert(
+            "File:ColumnCount".to_string(),
+            TagValue::Integer(stats.column_count),
+        );
+        // `HandleTag(RowCount => $nrows) if $nrows` -- omitted past the cap,
+        // and 0 is falsy in Perl, so a zero row count is omitted too.
+        if let Some(rows) = stats.row_count {
+            if rows > 0 {
+                metadata.insert("File:RowCount".to_string(), TagValue::Integer(rows));
+            }
+        }
+
+        Ok(metadata)
+    }
+
+    fn supports_format(&self, format: FileFormat) -> bool {
+        matches!(format, FileFormat::CSV)
+    }
+}
+
+/// Parses metadata from CSV files (ExifTool `Text.pm`'s CSV branch).
+pub fn parse_csv_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
+    CSVParser.parse(reader).map_err(|e| e.to_string())
 }
 
 /// Parses metadata from plain text files.
@@ -592,12 +896,12 @@ mod tests {
     fn test_stats_reported_for_eight_bit_text() {
         let reader = crate::test_support::TestReader::new(b"this \xe9 is Latin1\r\n".to_vec());
         let metadata = TXTParser::parse_text_content(&reader).unwrap();
-        assert_eq!(metadata.get_string("MIMEEncoding"), Some("iso-8859-1"));
-        assert_eq!(metadata.get_string("Newlines"), Some("Windows CRLF"));
-        assert_eq!(metadata.get_string("LineCount"), Some("1"));
-        assert_eq!(metadata.get_string("WordCount"), Some("4"));
+        assert_eq!(metadata.get_string("File:MIMEEncoding"), Some("iso-8859-1"));
+        assert_eq!(metadata.get_string("File:Newlines"), Some("Windows CRLF"));
+        assert_eq!(metadata.get("File:LineCount"), Some(&TagValue::Integer(1)));
+        assert_eq!(metadata.get("File:WordCount"), Some(&TagValue::Integer(4)));
         // iso-8859-1 has no byte order to mark, so ExifTool says nothing.
-        assert_eq!(metadata.get_string("ByteOrderMark"), None);
+        assert_eq!(metadata.get_string("File:ByteOrderMark"), None);
     }
 
     #[test]
@@ -651,11 +955,11 @@ mod tests {
 
         let reader = crate::test_support::TestReader::new(data);
         let metadata = TXTParser::parse_text_content(&reader).unwrap();
-        assert_eq!(metadata.get_string("MIMEEncoding"), Some("utf-16be"));
-        assert_eq!(metadata.get_string("Newlines"), Some("Unix LF"));
+        assert_eq!(metadata.get_string("File:MIMEEncoding"), Some("utf-16be"));
+        assert_eq!(metadata.get_string("File:Newlines"), Some("Unix LF"));
         // Statistics stay absent, as they do in ExifTool.
-        assert_eq!(metadata.get_string("LineCount"), None);
-        assert_eq!(metadata.get_string("WordCount"), None);
+        assert_eq!(metadata.get("File:LineCount"), None);
+        assert_eq!(metadata.get("File:WordCount"), None);
     }
 
     #[test]
@@ -665,8 +969,8 @@ mod tests {
 
         let reader = crate::test_support::TestReader::new(data);
         let metadata = TXTParser::parse_text_content(&reader).unwrap();
-        assert_eq!(metadata.get_string("MIMEEncoding"), Some("utf-16le"));
-        assert_eq!(metadata.get_string("Newlines"), Some("Windows CRLF"));
+        assert_eq!(metadata.get_string("File:MIMEEncoding"), Some("utf-16le"));
+        assert_eq!(metadata.get_string("File:Newlines"), Some("Windows CRLF"));
     }
 
     #[test]
@@ -693,5 +997,135 @@ mod tests {
         let stats = TXTParser::compute_stats(text);
         assert_eq!(stats.line_count, 1);
         assert_eq!(stats.word_count, 2);
+    }
+
+    /// The `t/images/Text.csv` sample verbatim; the pinned 13.59 oracle
+    /// reports `Delimiter Comma`, `Quoting (none)`, `ColumnCount 6`,
+    /// `RowCount 3` (`exiftool -G1 -s Text.csv`).
+    #[test]
+    fn test_csv_stats_text_csv_sample() {
+        let data = b"SourceFile,Make,Model,ShutterSpeed,Aperture,ISO\n\
+                     t/images/Canon.jpg,Canon,Canon EOS DIGITAL REBEL,4,14.0,100\n\
+                     t/images/Nikon.jpg,NIKON,E775,1/213,9.4,100\n";
+        let stats = TXTParser::compute_csv_stats(data);
+        assert_eq!(
+            stats,
+            CsvStats {
+                delimiter: Some(','),
+                quoting: None,
+                column_count: 6,
+                row_count: Some(3),
+            }
+        );
+    }
+
+    /// `Text.pm` subtracts delimiters found inside quoted fields
+    /// ("account for delimiters in quotes (simplistically)") and remembers
+    /// the first quote character seen on any line.
+    #[test]
+    fn test_csv_stats_quoted_fields() {
+        // First line: 3 commas, one quoted field containing 1 -> 3 columns.
+        let stats = TXTParser::compute_csv_stats(b"\"a,b\",c,d\n1,2,3\n");
+        assert_eq!(
+            stats,
+            CsvStats {
+                delimiter: Some(','),
+                quoting: Some('"'),
+                column_count: 3,
+                row_count: Some(2),
+            }
+        );
+        // Quoting first appears on a later line; single quotes count too.
+        let stats = TXTParser::compute_csv_stats(b"a,b\n'q',r\n");
+        assert_eq!(stats.quoting, Some('\''));
+        assert_eq!(stats.column_count, 2);
+        // A quoted field right after a leading (empty-field) delimiter:
+        // Perl's `(^|$delim)` alternation backtracks from `^` into the
+        // delimiter branch at position 0, so the field still registers.
+        let stats = TXTParser::compute_csv_stats(b",\"a,b\",c\n");
+        assert_eq!(
+            stats,
+            CsvStats {
+                delimiter: Some(','),
+                quoting: Some('"'),
+                column_count: 3,
+                row_count: Some(1),
+            }
+        );
+    }
+
+    /// The delimiter contest is decided on the first line alone: comma wins
+    /// only by strict majority, then semicolon over tab, then tab if present
+    /// at all, else no delimiter and one column.
+    #[test]
+    fn test_csv_stats_delimiter_tie_breaks() {
+        // 1 semicolon vs 1 tab: `;' > "\t"` is false, tabs exist -> Tab.
+        let stats = TXTParser::compute_csv_stats(b"a;b\tc\n");
+        assert_eq!(stats.delimiter, Some('\t'));
+        assert_eq!(stats.column_count, 2);
+        // 2 semicolons vs 1 tab -> Semicolon.
+        let stats = TXTParser::compute_csv_stats(b"a;b;c\td\n");
+        assert_eq!(stats.delimiter, Some(';'));
+        assert_eq!(stats.column_count, 3);
+        // No delimiter characters -> "(none)", 1 column.
+        let stats = TXTParser::compute_csv_stats(b"plain line\nanother\n");
+        assert_eq!(
+            stats,
+            CsvStats {
+                delimiter: None,
+                quoting: None,
+                column_count: 1,
+                row_count: Some(2),
+            }
+        );
+    }
+
+    /// ExifTool stops counting at 1000 rows ("Not counting rows past 1000")
+    /// and then omits `RowCount` entirely; 999 rows still report.
+    #[test]
+    fn test_csv_stats_row_cap() {
+        let mut data = Vec::new();
+        for _ in 0..999 {
+            data.extend_from_slice(b"a,b\n");
+        }
+        assert_eq!(TXTParser::compute_csv_stats(&data).row_count, Some(999));
+        data.extend_from_slice(b"a,b\n");
+        assert_eq!(TXTParser::compute_csv_stats(&data).row_count, None);
+    }
+
+    /// A trailing unterminated line still counts as a row (Perl's ReadLine
+    /// returns it), and Perl's `$` matches before a final `"\n"` only -- a
+    /// CRLF-terminated quoted field does not satisfy the `(?=$delim|$)`
+    /// lookahead, so it does not register quoting. Bug-compatible.
+    #[test]
+    fn test_csv_stats_line_semantics() {
+        assert_eq!(TXTParser::compute_csv_stats(b"a,b\nc,d").row_count, Some(2));
+        let stats = TXTParser::compute_csv_stats(b"x,\"q\"\r\n");
+        assert_eq!(stats.quoting, None);
+        let stats = TXTParser::compute_csv_stats(b"x,\"q\"\n");
+        assert_eq!(stats.quoting, Some('"'));
+    }
+
+    /// The CSV parser end-to-end: the same encoding tags as TXT, then the
+    /// `Text::Main` CSV statistics under the `File` group.
+    #[test]
+    fn test_csv_parser_emits_file_group_tags() {
+        let reader = crate::test_support::TestReader::new(
+            b"SourceFile,Make,Model,ShutterSpeed,Aperture,ISO\n\
+              t/images/Canon.jpg,Canon,Canon EOS DIGITAL REBEL,4,14.0,100\n\
+              t/images/Nikon.jpg,NIKON,E775,1/213,9.4,100\n"
+                .to_vec(),
+        );
+        let metadata = CSVParser.parse(&reader).unwrap();
+        assert_eq!(metadata.get_string("FileType"), Some("CSV"));
+        assert_eq!(metadata.get_string("File:MIMEEncoding"), Some("us-ascii"));
+        assert_eq!(metadata.get_string("File:Newlines"), Some("Unix LF"));
+        assert_eq!(metadata.get_string("File:Delimiter"), Some("Comma"));
+        assert_eq!(metadata.get_string("File:Quoting"), Some("(none)"));
+        assert_eq!(
+            metadata.get("File:ColumnCount"),
+            Some(&TagValue::Integer(6))
+        );
+        assert_eq!(metadata.get("File:RowCount"), Some(&TagValue::Integer(3)));
     }
 }
