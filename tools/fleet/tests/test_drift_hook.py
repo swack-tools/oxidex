@@ -26,13 +26,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import drift  # noqa: E402
+from _env import HermeticCase, scrub_env  # noqa: E402
+from _mp import pool_context  # noqa: E402
+
+# Explicit, per-call-site start method; nothing here touches the
+# process-global default. See `tests/_mp.py`.
+_MP_CONTEXT = pool_context()
 
 FLEET_DIR = Path(__file__).resolve().parents[1]
 HOOK_SCRIPT = FLEET_DIR / "hooks" / "post-receive"
 
 
 def _run_git(args, cwd=None, input_bytes=None, env=None):
-    full_env = dict(os.environ)
+    full_env = scrub_env()
     full_env.update(
         {
             "GIT_AUTHOR_NAME": "t",
@@ -47,10 +53,11 @@ def _run_git(args, cwd=None, input_bytes=None, env=None):
     return subprocess.run(args, cwd=cwd, input=input_bytes, capture_output=True, env=full_env)
 
 
-class DriftHookTestCase(unittest.TestCase):
+class DriftHookTestCase(HermeticCase):
     """Base fixture: a throwaway bare repo standing in for the hub."""
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="drift-hook-test-")
         self.addCleanup(shutil.rmtree, self._tmp_root, ignore_errors=True)
         self.hub_path = str(Path(self._tmp_root) / "hub.git")
@@ -70,15 +77,16 @@ class DriftHookTestCase(unittest.TestCase):
         self.assertNotIn("work2.oxidex.net", resolved)
 
     def _install_hook(self):
-        """Copy hooks/post-receive + drift.py + fleetlib.py into the
-        fixture hub's hooks/ dir, exactly as the T1.3 install
-        instructions describe -- but ONLY into this throwaway repo, never
-        the real hub.
+        """Copy hooks/post-receive + drift.py + fleetlib.py + config.py
+        (fleetlib's sibling import) into the fixture hub's hooks/ dir,
+        exactly as the T1.3 install instructions describe -- but ONLY
+        into this throwaway repo, never the real hub.
         """
         hooks_dir = Path(self.hub_path) / "hooks"
         shutil.copy2(HOOK_SCRIPT, hooks_dir / "post-receive")
         shutil.copy2(FLEET_DIR / "drift.py", hooks_dir / "drift.py")
         shutil.copy2(FLEET_DIR / "fleetlib.py", hooks_dir / "fleetlib.py")
+        shutil.copy2(FLEET_DIR / "config.py", hooks_dir / "config.py")
         target = hooks_dir / "post-receive"
         target.chmod(target.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
@@ -181,7 +189,7 @@ class TestConcurrentBumps(DriftHookTestCase):
         """
         n = 16
         digits = "0123456789abcdef"
-        with ProcessPoolExecutor(max_workers=n) as pool:
+        with ProcessPoolExecutor(max_workers=n, mp_context=_MP_CONTEXT) as pool:
             futures = [pool.submit(_attempt_bump, self.hub_path, digits[i]) for i in range(n)]
             results = [f.result() for f in as_completed(futures)]
 

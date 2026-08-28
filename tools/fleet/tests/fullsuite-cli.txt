@@ -1,0 +1,291 @@
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 87554 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp6i7l0kzz/adoption-) has no live claim -- killed: fake-killed
+.fleetd[adoptionhost] ORPHAN SWEEP SKIPPED -- 1 claim(s) unreadable: refs/fleet/claims/gate/staging-one. An unreadable claim is not an unowned one: its pgid cannot be excluded, so nothing is killed this pass.
+.fleetd[adoptionhost] RELEASED orphaned claim refs/fleet/claims/gate/staging-recycled: recorded pgid 87949 is not a scoped fleet worker (recycled, or pre-scope)
+fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] worker-shaped group 88507 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp089vnldi/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[adoptionhost] RELEASED orphaned claim refs/fleet/claims/agent/staging-one: no adoptable process group (pgid=None)
+fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 88995 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpdfs5jtk9/adoption-) has no live claim -- killed: fake-killed
+.fleetd[adoptionhost] RELEASED orphaned claim refs/fleet/claims/gate/staging-one: process group 89239 is gone
+fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[adoptionhost] ORPHAN process group 424242 (a real orphan fleet-scope=c3e1aaf96689) has no live claim -- killed: fake
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 89852 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpztwdhmxw/adoption-) has no live claim -- killed: exited on SIGTERM
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 89991 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpl373wsjt/adoption-) has no live claim -- killed: fake-killed
+.fleetd[adoptionhost] ORPHAN SWEEP SKIPPED -- 1 claim(s) unreadable: refs/fleet/claims/gate/staging-one. An unreadable claim is not an unowned one: its pgid cannot be excluded, so nothing is killed this pass.
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 90414 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpg7ws5sbl/adoption-) has no live claim -- killed: fake-killed
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] worker-shaped group 90574 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp9r5ojyn7/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 90584 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp9r5ojyn7/adoption-) has no live claim -- killed: fake-killed
+.........../Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1067: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpgc1bta0x/fleetd-a.log'>
+  a = self.start_fleetd("a")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1084: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpgc1bta0x/fleetd-b.log'>
+  self.start_fleetd("b")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1211: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpxl_8bfp5/fleetd-b.log'>
+  self.start_fleetd("b")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1142: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpw43obvyz/fleetd-a.log'>
+  a = self.start_fleetd("a")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1151: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpw43obvyz/fleetd-b.log'>
+  self.start_fleetd("b")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1171: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp645et1dy/fleetd-a.log'>
+  a = self.start_fleetd("a")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1184: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp645et1dy/fleetd-b.log'>
+  self.start_fleetd("b")
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..........agentworker[t] staging/alpha: push to /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp3ouc5b2s/code.git failed (exit 128): ! [rejected]  HEAD -> staging/alpha (stale info)
+error: failed to push some refs
+.agentworker[t] staging/alpha: PUSH AUTHENTICATION FAILED to /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpq6i4rinr/code.git -- the agent's work is committed locally and could NOT be delivered. This is a host credential condition, not a verdict on the branch: check FLEET_GIT_TOKEN_FILE / /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpq6i4rinr/home/.keel/secrets/git-token. git said: remote: Invalid username or password.
+fatal: Authentication failed for 'https://github.com/swack-tools/oxidex.git/'
+.......................agentworker[t] staging/alpha: launching stub (timeout 3600s)
+agentworker[t] staging/alpha: stub exited 0 in 0s; tail: CONVERGED stub
+agentworker[t] staging/alpha: CONVERGED c372d5df -> bc88dab0 (tip-ancestry verified: False) under stub exit 0
+agentworker[t] staging/alpha: launching stub (timeout 3600s)
+agentworker[t] staging/alpha: stub exited 0 in 0s; tail: CONVERGED stub
+agentworker[t] staging/alpha: branch unchanged (no progress); stub exit 0
+agentworker[t] staging/alpha: launching stub (timeout 3600s)
+agentworker[t] staging/alpha: stub exited 0 in 0s; tail: CONVERGED stub
+agentworker[t] staging/alpha: launching stub (timeout 3600s)
+agentworker[t] staging/alpha: stub exited 0 in 0s; tail: CONVERGED stub
+agentworker[t] staging/alpha: CONVERGED 73f4440a -> 2821a322 (tip-ancestry verified: False) under stub exit 0
+agentworker[t] staging/alpha: launching stub (timeout 3600s)
+agentworker[t] staging/alpha: stub exited 0 in 0s; tail: BLOCKED: nothing to do
+agentworker[t] staging/alpha: agent reported BLOCKED under stub exit 0; pushing nothing (no local commits)
+agentworker[t] staging/alpha: launching stub (timeout 3600s)
+agentworker[t] staging/alpha: stub exited 0 in 0s; tail: CONVERGED stub
+agentworker[t] staging/alpha: CONVERGED 97e4fdfb -> 7d8caf28 (tip-ancestry verified: False) under stub exit 0
+agentworker[t] staging/alpha: launching stub (timeout 3600s)
+agentworker[t] staging/alpha: stub exited 0 in 0s; tail: CONVERGED stub
+agentworker[t] staging/alpha: CONVERGED 3e35287d -> 61140e1b (tip-ancestry verified: False) under stub exit 0
+agentworker[t] staging/alpha: launching stub (timeout 3600s)
+agentworker[t] staging/alpha: stub exited 0 in 0s; tail: CONVERGED stub
+agentworker[t] staging/alpha: CONVERGED 994d26bb -> e6efed0a (tip-ancestry verified: False) under stub exit 0
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/popen_fork.py:76: DeprecationWarning: This process (pid=86867) is multi-threaded, use of fork() may lead to deadlocks in the child.
+  self.pid = os.fork()
+...................................................................................train: WARNING FLEET_TRAIN_DEPLOY_KEY=/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpqyj29j3z/absent does not name an existing file -- pushing the tip without the deploy key
+train: WARNING FLEET_TRAIN_DEPLOY_KEY=/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpqyj29j3z/absent does not name an existing file -- pushing the tip without the deploy key
+..train: WARNING refs/heads/staging/alpha NOT retired: expected 9e285946fa8d, hub has f4ae5a6e779c -- the branch moved while the train gated. staging/alpha IS in the new tip; its staging ref is kept and requeued.
+................................................fleetlib: WARNING /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/doctor-token-w48n5iss/home/.keel/secrets/git-token is group/world accessible (mode 0644); expected 0600 -- the host PAT is readable by other users
+...........agentworker: missing tip or refs/heads/staging/alpha on the code repo /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpjh461p7j/state.git; exiting
+  staging/alpha                            BATCH  (1 files)
+train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)
+train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)
+train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/popen_fork.py:76: DeprecationWarning: This process (pid=86867) is multi-threaded, use of fork() may lead to deadlocks in the child.
+  self.pid = os.fork()
+...FF............................/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 500: 'boom'>
+  _warnings.warn(self.warn_message, ResourceWarning)
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 500: 'boom'>
+  _warnings.warn(self.warn_message, ResourceWarning)
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 500: 'boom'>
+  _warnings.warn(self.warn_message, ResourceWarning)
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 500: 'boom'>
+  _warnings.warn(self.warn_message, ResourceWarning)
+..../opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 503: 'not ready'>
+  _warnings.warn(self.warn_message, ResourceWarning)
+........../opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 500: 'err'>
+  _warnings.warn(self.warn_message, ResourceWarning)
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 502: 'err'>
+  _warnings.warn(self.warn_message, ResourceWarning)
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 500: 'boom'>
+  _warnings.warn(self.warn_message, ResourceWarning)
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 504: 'err'>
+  _warnings.warn(self.warn_message, ResourceWarning)
+.......................................fleetd[testhost] LOST LEASE refs/fleet/claims/gate/staging-two kind=gate branch=staging/two tag=testhost-two-7235 pgid=81804: hub no longer records us as the holder -- killed process group: exited on SIGTERM
+.fleetd[testhost] LOST LEASE refs/fleet/claims/gate/staging-one kind=gate branch=staging/one tag=testhost-one-7237 pgid=83099: hub no longer records us as the holder -- killed process group: exited on SIGTERM
+....desired gen 3: testhost -> {'agents': 0, 'enabled': True, 'gates': 4}
+fleetd[testhost] adoption: adopted=[] released=[] orphans_killed=[] skipped=0
+.fleetd[testhost] adoption: adopted=[] released=[] orphans_killed=[] skipped=0
+fleetd[testhost] RECONCILE DEGRADED (1/5 consecutive): HubError: ls-remote refs/fleet/desired failed: exit 128: could not read from remote -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (2/5 consecutive): HubError: ls-remote refs/fleet/desired failed: exit 128: could not read from remote -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (3/5 consecutive): HubError: ls-remote refs/fleet/desired failed: exit 128: could not read from remote -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (4/5 consecutive): HubError: ls-remote refs/fleet/desired failed: exit 128: could not read from remote -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (5/5 consecutive): HubError: ls-remote refs/fleet/desired failed: exit 128: could not read from remote -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] HUB UNUSABLE: 5 consecutive reconcile steps failed against /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp8wwtseyn/hub.git (last: ls-remote refs/fleet/desired failed: exit 128: could not read from remote) -- exiting for the supervisor to restart, leaving 0 live worker(s) alone
+.fleetd[testhost] adoption: adopted=[] released=[] orphans_killed=[] skipped=0
+fleetd[testhost] RECONCILE DEGRADED (1/5 consecutive): HubError: refs/fleet/claims/gate/x@abc has no readable payload.json: simulated -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (2/5 consecutive): HubError: refs/fleet/claims/gate/x@abc has no readable payload.json: simulated -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
+.fleetd[testhost] adoption: adopted=[] released=[] orphans_killed=[] skipped=0
+fleetd[testhost] RECONCILE DEGRADED (1/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
+.fleetd[testhost] worker-shaped group 86004 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp9r9p9_vz/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[testhost] adoption: adopted=[] released=[] orphans_killed=[] skipped=0 unscoped=[86004]
+fleetd[testhost] RECONCILE DEGRADED (1/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (2/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (3/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (4/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
+fleetd[testhost] RECONCILE DEGRADED (1/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (2/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (3/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] RECONCILE DEGRADED (4/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
+fleetd[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
+fleetd[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
+.................fleetd[testhost] adoption: adopted=[] released=[] orphans_killed=[] skipped=0
+fleetd[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
+................/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/popen_fork.py:76: DeprecationWarning: This process (pid=86867) is multi-threaded, use of fork() may lead to deadlocks in the child.
+  self.pid = os.fork()
+./opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/popen_fork.py:76: DeprecationWarning: This process (pid=86867) is multi-threaded, use of fork() may lead to deadlocks in the child.
+  self.pid = os.fork()
+...................................................s.............................ss.............................ERROR:root:keel-server: unhandled error handling PUT /v1/refs/refs/fleet/test/def7326f81b3/f
+Traceback (most recent call last):
+  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/hubstore.py", line 161, in _write
+    ok = cas()
+  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/hubstore.py", line 150, in <lambda>
+    return self._write("update", ref, lambda: self._cached.update(ref, payload, expect_sha))
+                                              ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/cachedhub.py", line 447, in update
+    return self._write(ref, lambda: self._hub.update(ref, payload, expect_sha, push_options=push_options))
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/cachedhub.py", line 465, in _write
+    ok = cas()
+  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/cachedhub.py", line 447, in <lambda>
+    return self._write(ref, lambda: self._hub.update(ref, payload, expect_sha, push_options=push_options))
+                                    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/allen/git/keel-2-cli/tools/fleet/tests/test_hubstore.py", line 119, in broken
+    raise HubUnreachableError(f"injected: {method} unreachable")
+fleetlib.HubUnreachableError: injected: update unreachable
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/server.py", line 837, in _dispatch
+    route.handler(self, params, query, principal)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/server.py", line 448, in handle_refs_put
+    result = handler.server.store.update(ref, payload, expect_sha=if_match)
+  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/hubstore.py", line 150, in update
+    return self._write("update", ref, lambda: self._cached.update(ref, payload, expect_sha))
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/hubstore.py", line 163, in _write
+    raise WriteOutcomeUnknownError(op, ref, exc) from exc
+hubstore.WriteOutcomeUnknownError: update refs/fleet/test/def7326f81b3/f raised in transport; outcome unknown: HubUnreachableError: injected: update unreachable
+.................ssssss/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/popen_fork.py:76: DeprecationWarning: This process (pid=86867) is multi-threaded, use of fork() may lead to deadlocks in the child.
+  self.pid = os.fork()
+./opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/popen_fork.py:76: DeprecationWarning: This process (pid=86867) is multi-threaded, use of fork() may lead to deadlocks in the child.
+  self.pid = os.fork()
+.............................fleetd[leasehost] LOST LEASE refs/fleet/claims/gate/staging-one kind=gate branch=staging/one tag=leasehost-one-7385 pgid=27786: refs/fleet/claims/gate/staging-one no longer exists on the hub (reaped as expired, or deleted) -- killed process group: exited on SIGTERM
+...................s.ssssss..ssssssss...s.............................................................................................................INFO:root:127.0.0.1 - "GET /v1/refs/refs/fleet/test/x HTTP/1.1" 401 -
+..........................................WARNING:root:keel-server watchdog: no successful accept probe in 10.0s; restarting accept loop
+.........train: WARNING refs/heads/staging/mv NOT retired: expected 3a66222e8030, hub has 9cfe59e56ad2 -- the branch moved while the train gated. staging/mv IS in the new tip; its staging ref is kept and requeued.
+....train: WARNING temp gate ref refs/heads/staging/train-tmp-train-y-7537 not deleted (moved or unreachable)
+.......train: intent 'a1' not marked done -- no open intent at 'refs/fleet/intents/a1' (never registered, already closed, or a lost race)
+train: intent 'c0' not marked done -- no open intent at 'refs/fleet/intents/c0' (never registered, already closed, or a lost race)
+train: intent 'c1' not marked done -- no open intent at 'refs/fleet/intents/c1' (never registered, already closed, or a lost race)
+train: intent 'c2' not marked done -- no open intent at 'refs/fleet/intents/c2' (never registered, already closed, or a lost race)
+train: intent 'c3' not marked done -- no open intent at 'refs/fleet/intents/c3' (never registered, already closed, or a lost race)
+train: intent 'censusy' not marked done -- no open intent at 'refs/fleet/intents/censusy' (never registered, already closed, or a lost race)
+train: intent 'normal' not marked done -- no open intent at 'refs/fleet/intents/normal' (never registered, already closed, or a lost race)
+train: intent 'ok' not marked done -- no open intent at 'refs/fleet/intents/ok' (never registered, already closed, or a lost race)
+train: intent 'w1' not marked done -- no open intent at 'refs/fleet/intents/w1' (never registered, already closed, or a lost race)
+train: intent 'p0' not marked done -- no open intent at 'refs/fleet/intents/p0' (never registered, already closed, or a lost race)
+train: intent 'p1' not marked done -- no open intent at 'refs/fleet/intents/p1' (never registered, already closed, or a lost race)
+train: intent 'p3' not marked done -- no open intent at 'refs/fleet/intents/p3' (never registered, already closed, or a lost race)
+train: intent 'st' not marked done -- no open intent at 'refs/fleet/intents/st' (never registered, already closed, or a lost race)
+train: intent 'rel' not marked done -- no open intent at 'refs/fleet/intents/rel' (never registered, already closed, or a lost race)
+train: intent 'cc' not marked done -- no open intent at 'refs/fleet/intents/cc' (never registered, already closed, or a lost race)
+train: intent 'sig' not marked done -- no open intent at 'refs/fleet/intents/sig' (never registered, already closed, or a lost race)
+/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/popen_fork.py:76: DeprecationWarning: This process (pid=86867) is multi-threaded, use of fork() may lead to deadlocks in the child.
+  self.pid = os.fork()
+.train: WARNING tip signal bump to 75c8e0a51648 failed (train run continues): boom
+...train: WARNING train token /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpw_s83jom/train.token is group/world accessible (mode 0644); expected 0600
+train: WARNING hub does not advertise push options (receive.advertisePushOptions); retrying the tip push WITHOUT the train token -- the update hook cannot be enforcing one in this state
+.train: WARNING train token /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp9n7khard/tok is group/world accessible (mode 0644); expected 0600
+train: WARNING train token /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp9n7khard/tok is empty -- pushing without it
+...train: WARNING FLEET_TRAIN_DEPLOY_KEY=/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpdvvyomvs/no-such-key does not name an existing file -- pushing the tip without the deploy key
+..........train: WARNING FLEET_TRAIN_DEPLOY_KEY=/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpsbtqwdi4/no-such-key does not name an existing file -- pushing the tip without the deploy key
+........train: WARNING verdict-store-failed train-alpha-7594: gate.sh could not push its verdict to the hub cache (see /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpkeapi8wc/home/gatelogs/gate-train-alpha-7594.log); this gate's own PASS/FAIL is unaffected, but the next train run on this tree will pay for the gate again
+..train: WARNING verdict-store-failed train-alpha-7598: gate.sh could not push its verdict to the hub cache (see /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpy_b03nxc/home/gatelogs/gate-train-alpha-7598.log); this gate's own PASS/FAIL is unaffected, but the next train run on this tree will pay for the gate again
+........................................................................
+======================================================================
+FAIL: test_every_setup_calls_super_so_the_scrub_runs (test_env_hermetic.TestEveryFixtureIsHermetic.test_every_setup_calls_super_so_the_scrub_runs)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allen/git/keel-2-cli/tools/fleet/tests/test_env_hermetic.py", line 242, in test_every_setup_calls_super_so_the_scrub_runs
+    self.assertEqual(missing, [], "these setUp/setUpClass never call super(), so "
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                     "HermeticEnvMixin never scrubs for them:\n" + "\n".join(missing))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: ['test_cachedhub.py:62 CachedHubTestCase.s[155 chars]tUp'] != []
+
+First list contains 4 additional elements.
+First extra element 0:
+'test_cachedhub.py:62 CachedHubTestCase.setUp'
+
++ []
+- ['test_cachedhub.py:62 CachedHubTestCase.setUp',
+-  'test_cachedhub.py:499 TestRefIndexRule.setUp',
+-  'test_fallbackhub.py:336 FallbackHubTestCase.setUp',
+-  'test_server_transport.py:136 ServerTestCase.setUp'] : these setUp/setUpClass never call super(), so HermeticEnvMixin never scrubs for them:
+test_cachedhub.py:62 CachedHubTestCase.setUp
+test_cachedhub.py:499 TestRefIndexRule.setUp
+test_fallbackhub.py:336 FallbackHubTestCase.setUp
+test_server_transport.py:136 ServerTestCase.setUp
+
+======================================================================
+FAIL: test_no_fixture_inherits_unittest_testcase_directly (test_env_hermetic.TestEveryFixtureIsHermetic.test_no_fixture_inherits_unittest_testcase_directly)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allen/git/keel-2-cli/tools/fleet/tests/test_env_hermetic.py", line 232, in test_no_fixture_inherits_unittest_testcase_directly
+    self.assertEqual(bare, [], "these fixtures bypass _env.HermeticCase:\n" + "\n".join(bare))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: ['test_cachedhub.py:61 CachedHubTestCase(u[534 chars]se)'] != []
+
+First list contains 9 additional elements.
+First extra element 0:
+'test_cachedhub.py:61 CachedHubTestCase(unittest.TestCase)'
+
++ []
+- ['test_cachedhub.py:61 CachedHubTestCase(unittest.TestCase)',
+-  'test_cachedhub.py:496 TestRefIndexRule(unittest.TestCase)',
+-  'test_fallbackhub.py:335 FallbackHubTestCase(unittest.TestCase)',
+-  'test_fallbackhub.py:370 TestClassification(unittest.TestCase)',
+-  'test_server_transport.py:124 ServerTestCase(unittest.TestCase)',
+-  'test_server_transport.py:196 TestBindValidation(unittest.TestCase)',
+-  'test_server_transport.py:274 TestTokenStore(unittest.TestCase)',
+-  'test_server_transport.py:306 TestRouter(unittest.TestCase)',
+-  'test_server_transport.py:339 TestEventLog(unittest.TestCase)'] : these fixtures bypass _env.HermeticCase:
+test_cachedhub.py:61 CachedHubTestCase(unittest.TestCase)
+test_cachedhub.py:496 TestRefIndexRule(unittest.TestCase)
+test_fallbackhub.py:335 FallbackHubTestCase(unittest.TestCase)
+test_fallbackhub.py:370 TestClassification(unittest.TestCase)
+test_server_transport.py:124 ServerTestCase(unittest.TestCase)
+test_server_transport.py:196 TestBindValidation(unittest.TestCase)
+test_server_transport.py:274 TestTokenStore(unittest.TestCase)
+test_server_transport.py:306 TestRouter(unittest.TestCase)
+test_server_transport.py:339 TestEventLog(unittest.TestCase)
+
+----------------------------------------------------------------------
+Ran 811 tests in 731.610s
+
+FAILED (failures=2, skipped=25)
+train: intent 'be' not marked done -- no open intent at 'refs/fleet/intents/be' (never registered, already closed, or a lost race)
+train: intent 'sig1' not marked done -- no open intent at 'refs/fleet/intents/sig1' (never registered, already closed, or a lost race)
+train: intent 'sig2' not marked done -- no open intent at 'refs/fleet/intents/sig2' (never registered, already closed, or a lost race)
+train: intent 't2' not marked done -- no open intent at 'refs/fleet/intents/t2' (never registered, already closed, or a lost race)
+train: intent 't0' not marked done -- no open intent at 'refs/fleet/intents/t0' (never registered, already closed, or a lost race)
+train: intent 't1' not marked done -- no open intent at 'refs/fleet/intents/t1' (never registered, already closed, or a lost race)
+train: intent 'nokey' not marked done -- no open intent at 'refs/fleet/intents/nokey' (never registered, already closed, or a lost race)
+train: intent 'key1' not marked done -- no open intent at 'refs/fleet/intents/key1' (never registered, already closed, or a lost race)
+train: intent 'ra' not marked done -- no open intent at 'refs/fleet/intents/ra' (never registered, already closed, or a lost race)
+train: intent 'ra' not marked done -- no open intent at 'refs/fleet/intents/ra' (never registered, already closed, or a lost race)
+train: intent 'rb' not marked done -- no open intent at 'refs/fleet/intents/rb' (never registered, already closed, or a lost race)
+  staging/alpha                            BATCH  (1 files)
+train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)
+train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)
+train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)
+train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)
+train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)
+train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)

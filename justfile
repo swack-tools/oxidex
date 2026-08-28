@@ -1432,6 +1432,31 @@ gate branch tag:
 fleet-test: build-bin-release
     cd tools/fleet && python3 -m unittest discover -s tests -v
 
+# The non-seam fleet suite, twice: once against a plain bare-repo Hub, once
+# through a real fixture keel-server (FLEET_TEST_HUB=bare|server,
+# tests/_fixtures.py, PLAN Stage 2 task 7) -- every module in tests/ whose
+# name matches test_*.py except test_seams.py, which gets its own bare/
+# server treatment as test_seams_keel.py (SPEC SS11), not this recipe.
+# Runs both unconditionally so a maintainer sees both outcomes in one
+# invocation, then fails (non-zero exit) if either run failed -- a
+# server-only regression cannot hide behind a green bare run.
+fleet-tests-both: build-bin-release
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cd tools/fleet/tests
+    mods=$(ls test_*.py | grep -v '^test_seams\.py$' | sed 's/\.py$//')
+    status=0
+    for hub in bare server; do
+        echo "=========================================================="
+        echo ">> fleet suite (non-seam), FLEET_TEST_HUB=$hub"
+        echo "=========================================================="
+        if ! FLEET_TESTS_HERMETIC=1 FLEET_TEST_HUB=$hub python3 -m unittest $mods; then
+            echo ">> FLEET_TEST_HUB=$hub: FAILED"
+            status=1
+        fi
+    done
+    exit $status
+
 # Host health: toolchain id, oracle capability probe, corpus count, disk.
 fleet-doctor host:
     python3 tools/fleet/doctor.py {{host}}

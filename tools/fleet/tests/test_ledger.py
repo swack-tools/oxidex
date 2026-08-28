@@ -29,6 +29,7 @@ Run with:
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import ledger  # noqa: E402
+from _env import HermeticCase  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -50,6 +52,33 @@ def _oracle_available() -> bool:
 
 def _corpus_available() -> bool:
     return ledger.CORPUS_DIR.is_dir()
+
+
+# --------------------------------------------------------------------- #
+# Hermetic mode (ARCH-FIX-SPEC.md R7, gate.sh's new fleet-tests stage)
+# --------------------------------------------------------------------- #
+#
+# `gate.sh` now runs `python3 -m unittest discover -s tools/fleet/tests`
+# as a hard-FAIL stage before the ratchet. This file's behavioral classes
+# (anything that builds a release oxidex binary and/or shells to the real
+# pinned ExifTool oracle over the real combined-samples corpus) cost
+# 50-125s dominated by an uncached `cargo build --release` -- unacceptable
+# on every gate run when the gate already builds that exact binary a few
+# lines later (`gate.sh`'s own `cargo build --release ... --bin oxidex`
+# precedes this stage). FLEET_TESTS_HERMETIC=1 skips them so the gate's
+# fleet-tests stage stays fast and has no dependency on host-local paths
+# (`/tmp/oxidex-exiftool-cache/...`) that a hermetic CI runner may not have
+# at all. Every class/test this file skips under hermetic mode is listed
+# next to its own skipUnless below.
+HERMETIC_ENV = "FLEET_TESTS_HERMETIC"
+
+
+def _hermetic() -> bool:
+    return os.environ.get(HERMETIC_ENV) == "1"
+
+
+def _not_hermetic() -> bool:
+    return not _hermetic()
 
 
 def _ensure_binary_built(timeout: int = 420) -> Path:
@@ -75,15 +104,72 @@ def _ensure_binary_built(timeout: int = 420) -> Path:
     return candidate
 
 
+# --------------------------------------------------------------------- #
+# Exemplar guard (ARCH-FIX-SPEC.md R7/T7 fixture refresh, 2026-08-15)
+# --------------------------------------------------------------------- #
+#
+# `test_a_currently_uncovered_format_measures_not_covered` and
+# `TestMeasureTag.test_tag_oxidex_does_not_emit_is_not_covered` used to
+# hard-code MRC as an "obviously still uncovered" example. 83bf5265 closed
+# MRC's gap (MISSING 60->0) and both tests kept asserting the exact
+# opposite of measured reality -- the suite was red at tip until this
+# refresh, and nothing caught it because MRC was never re-measured, only
+# assumed.
+#
+# EXEMPLAR_FORMAT was picked EMPIRICALLY, not by re-reading a stale sweep:
+# measured with this same `ledger.py` against a release build of THIS tree
+# on 2026-08-15 --
+#   DICOM  MISSING 92/101 (91.1%)
+#   MIFF   MISSING 78/90  (86.7%)
+#   EIP    MISSING 74/91  (81.3%)
+# DICOM chosen for the largest margin. To avoid silently repeating the
+# same failure with a new fixed name, `_require_uncovered_exemplar`
+# RE-MEASURES at test time (real oracle, real release binary, real corpus
+# sample) and SKIPS loudly instead of asserting a false premise if someone
+# closes DICOM too -- see its docstring.
+EXEMPLAR_FORMAT = "DICOM"
+EXEMPLAR_MISSING_THRESHOLD = 10  # generous margin under the measured 92
+
+
+def _require_uncovered_exemplar(binary: Path) -> "ledger.FormatCapability":
+    """Re-measure EXEMPLAR_FORMAT right now and skip loudly if it has been
+    closed since this fixture was written, instead of asserting a premise
+    that measured reality no longer supports (the exact MRC failure mode
+    this refresh exists to fix).
+    """
+    result = ledger.measure_format(REPO_ROOT, binary, ledger.ORACLE_SCRIPT, EXEMPLAR_FORMAT)
+    if result.missing <= EXEMPLAR_MISSING_THRESHOLD:
+        raise unittest.SkipTest(
+            f"exemplar closed -- repoint me: {EXEMPLAR_FORMAT} now measures "
+            f"MISSING={result.missing} (<= threshold {EXEMPLAR_MISSING_THRESHOLD}) under "
+            f"tools/fleet/ledger.py against a release build. Pick a new still-uncovered "
+            f"format (`python3 tools/fleet/ledger.py --repo . --format <X>`) and update "
+            f"EXEMPLAR_FORMAT here."
+        )
+    return result
+
+
+# HERMETIC SKIP: this base class (and TestMeasureFormat/TestMeasureTag/
+# TestCheckScope below it, which inherit the skip via subclassing --
+# same pattern the file already used for the oracle/corpus skips) builds
+# the release oxidex binary in setUpClass and every test method shells to
+# the real pinned oracle over the real corpus.
+@unittest.skipUnless(_not_hermetic(), f"{HERMETIC_ENV}=1: skips real-binary/real-oracle/real-corpus tests")
 @unittest.skipUnless(_oracle_available(), "pinned ExifTool oracle not usable in this environment")
 @unittest.skipUnless(_corpus_available(), "combined-samples corpus not present in this environment")
-class LedgerTestCase(unittest.TestCase):
+class LedgerTestCase(HermeticCase):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         cls.binary = _ensure_binary_built()
 
 
-class TestCapabilityProbe(unittest.TestCase):
+class TestCapabilityProbe(HermeticCase):
+    # HERMETIC SKIP: the only test in this class that shells to the REAL
+    # pinned oracle (no override) -- its three siblings below all pass a
+    # fake oracle script and stay hermetic, so only this one method is
+    # gated rather than the whole class.
+    @unittest.skipUnless(_not_hermetic(), f"{HERMETIC_ENV}=1: skips the real pinned-oracle probe")
     def test_real_pinned_oracle_probes_ok(self):
         probe = ledger.probe_capability()
         if not probe.ok:
@@ -128,7 +214,7 @@ class TestCapabilityProbe(unittest.TestCase):
             self.assertIn("degraded", probe.detail.lower())
 
 
-class TestNormalizeToken(unittest.TestCase):
+class TestNormalizeToken(HermeticCase):
     def test_case_and_punctuation_insensitive(self):
         self.assertEqual(ledger.normalize_token("KyoceraRAW"), "KYOCERARAW")
         self.assertEqual(ledger.normalize_token("kyocera-raw"), "KYOCERARAW")
@@ -136,7 +222,7 @@ class TestNormalizeToken(unittest.TestCase):
 
 
 @unittest.skipUnless(_corpus_available(), "combined-samples corpus not present in this environment")
-class TestFindSampleForFormat(unittest.TestCase):
+class TestFindSampleForFormat(HermeticCase):
     def test_extension_match(self):
         for fmt, expected in (("SWF", "Flash.swf"), ("PICT", "PICT.pict"), ("PPM", "PPM.ppm"), ("RA", "Real.ra"), ("MRC", "MRC.mrc")):
             with self.subTest(fmt=fmt):
@@ -161,7 +247,7 @@ class TestFindSampleForFormat(unittest.TestCase):
         self.assertIsNone(ledger.find_sample_for_format("TotallyMadeUpFormatXyz"))
 
 
-class TestResolveOxidexBinary(unittest.TestCase):
+class TestResolveOxidexBinary(HermeticCase):
     def test_missing_binary_raises_ledger_error(self):
         with tempfile.TemporaryDirectory() as td:
             empty_repo = Path(td)
@@ -173,6 +259,12 @@ class TestResolveOxidexBinary(unittest.TestCase):
         with self.assertRaises(ledger.LedgerError):
             ledger.resolve_oxidex_binary(REPO_ROOT, override="/nonexistent/oxidex")
 
+    # HERMETIC SKIP: the only test in this class that calls
+    # `_ensure_binary_built()` -- an uncached call triggers a real `cargo
+    # build --release`. Its two siblings above never touch the binary at
+    # all (missing-target-dir / nonexistent-override, both LedgerError
+    # paths) and stay hermetic.
+    @unittest.skipUnless(_not_hermetic(), f"{HERMETIC_ENV}=1: skips the real release-binary build/resolve")
     def test_resolves_real_release_binary(self):
         binary = _ensure_binary_built()
         resolution = ledger.resolve_oxidex_binary(REPO_ROOT)
@@ -180,7 +272,7 @@ class TestResolveOxidexBinary(unittest.TestCase):
         self.assertEqual(resolution.candidate, "target/release/oxidex")
 
 
-class TestGrepDispatchEvidenceIsNeverAuthoritativeAlone(unittest.TestCase):
+class TestGrepDispatchEvidenceIsNeverAuthoritativeAlone(HermeticCase):
     """Locks in the exact trap `measure_format` exists to avoid: KyoceraRAW
     has no `FileFormat::KyoceraRAW` token in format_dispatch.rs at all.
     """
@@ -226,18 +318,22 @@ class TestMeasureFormat(LedgerTestCase):
         self.assertEqual(result.missing, 0)
 
     def test_a_currently_uncovered_format_measures_not_covered(self):
-        # MRC has a real dispatched parser (`FileFormat::MRC` IS present in
-        # format_dispatch.rs -- a grep-only check would call it covered)
-        # but the parser only implements a fraction of ExifTool's MRC.pm
-        # table, so a real diff finds a large MISSING count. This is the
-        # mirror-image proof to the KyoceraRAW case above: presence in
-        # format_dispatch.rs is neither necessary NOR sufficient for
+        # DICOM has a real dispatched parser (`FileFormat::DICOM` IS
+        # present in format_dispatch.rs -- a grep-only check would call it
+        # covered) but the parser only implements a fraction of ExifTool's
+        # DICOM.pm table, so a real diff finds a large MISSING count. This
+        # is the mirror-image proof to the KyoceraRAW case above: presence
+        # in format_dispatch.rs is neither necessary NOR sufficient for
         # "covered" -- only the measured MISSING count decides it.
         #
-        # NOTE: if a future commit closes the MRC gap, this test's
-        # `assertFalse` will need to move to a still-open format -- that is
-        # the correct outcome of a real fix landing, not a flake.
-        result = ledger.measure_format(REPO_ROOT, self.binary, ledger.ORACLE_SCRIPT, "MRC")
+        # Re-pointed from MRC (ARCH-FIX T7 fixture refresh, 2026-08-15):
+        # 83bf5265 closed MRC's gap (MISSING 60->0) and this exact
+        # assertion went stale, asserting the opposite of measured reality.
+        # See _require_uncovered_exemplar above -- it re-measures now and
+        # SKIPS loudly if DICOM closes too, rather than repeating the same
+        # failure with a new hard-coded name.
+        _require_uncovered_exemplar(self.binary)
+        result = ledger.measure_format(REPO_ROOT, self.binary, ledger.ORACLE_SCRIPT, EXEMPLAR_FORMAT)
         self.assertIn("src/core/format_dispatch.rs", result.dispatch_hits)
         self.assertFalse(result.covered, result.reason)
         self.assertGreater(result.missing, 0)
@@ -261,6 +357,11 @@ class TestMeasureTag(LedgerTestCase):
         cls._tmp = tempfile.mkdtemp(prefix="ledger-tag-corpus-")
         cls.corpus_dir = Path(cls._tmp)
         shutil.copy(ledger.CORPUS_DIR / "MRC.mrc", cls.corpus_dir / "MRC.mrc")
+        # DICOM.dcm added alongside MRC.mrc (not replacing it) so the
+        # still-covered MRC:CellAlpha case below is untouched by the
+        # exemplar refresh -- only the "does not emit" case needed a new,
+        # still-uncovered format after 83bf5265 closed MRC.
+        shutil.copy(ledger.CORPUS_DIR / "DICOM.dcm", cls.corpus_dir / "DICOM.dcm")
 
     @classmethod
     def tearDownClass(cls):
@@ -274,7 +375,18 @@ class TestMeasureTag(LedgerTestCase):
         self.assertIsNotNone(result.sample)
 
     def test_tag_oxidex_does_not_emit_is_not_covered(self):
-        result = ledger.measure_tag(REPO_ROOT, self.binary, ledger.ORACLE_SCRIPT, "MRC:AlphaTilt", corpus_dir=self.corpus_dir)
+        # Re-pointed from MRC:AlphaTilt (ARCH-FIX T7 fixture refresh,
+        # 2026-08-15): 83bf5265 closed MRC's gap and AlphaTilt is one of
+        # the (now-covered-scope) MRC.pm tags, so this assertion went
+        # stale. DICOM:PatientName is confirmed observed in the pinned
+        # oracle's output for DICOM.dcm and NOT emitted by oxidex (see the
+        # T7 report). Guarded by the same exemplar check as the
+        # format-level test above -- if DICOM closes too, skip loudly
+        # rather than assert a false premise again.
+        _require_uncovered_exemplar(self.binary)
+        result = ledger.measure_tag(
+            REPO_ROOT, self.binary, ledger.ORACLE_SCRIPT, f"{EXEMPLAR_FORMAT}:PatientName", corpus_dir=self.corpus_dir
+        )
         self.assertFalse(result.covered, result.reason)
         self.assertIsNotNone(result.sample)
 

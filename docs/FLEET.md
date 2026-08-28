@@ -1,6 +1,11 @@
 # Fleet Coordination — Implementation Spec
 
-**Status:** draft for review · **Scope:** 4 hosts (i7 `server`, ryzen `ubuntuwork`, M4 `oldair`, m5 localhost) · **Substrate:** the existing hub at `work2.oxidex.net:2244`
+**Status:** HISTORICAL — superseded by `docs/AGENT-SERVER-SPEC.md` (§3–§4 topology) and by the
+ryzen's removal from the fleet (operator decision, 2026-08-22): the ryzen (`ubuntuwork`, the
+work2 pod) and its `work2.oxidex.net:2244` hub below are history, not current hosts. Kept for the
+incident table and mechanism rationale. · **Scope (as written):** 4 hosts (i7 `server`, ryzen
+`ubuntuwork` (removed 2026-08-22), M4 `oldair`, m5 localhost) · **Substrate (as written):** the
+old hub at `work2.oxidex.net:2244` (retired)
 
 ---
 
@@ -117,21 +122,15 @@ fleet drain ubuntuwork          # finish current work, start nothing new
 
 `enabled: false` is a hard stop: `fleetd` refuses to start work and releases nothing already running (drain, don't kill).
 
-**Surviving dead schedulers.** `fleetd` is started by systemd (`Restart=always`) on Linux and launchd (`KeepAlive`) on macOS, *plus* a cron/`launchd` backstop that starts it if the process is absent. A host whose heartbeat is older than 3 min renders as **DOWN** in `fleet status` — the ryzen's dead cron would have been visible within minutes instead of a full day.
+**Surviving dead schedulers.** `fleetd` is started by systemd (`Restart=always`) on Linux hosts that have it (i7 `server`) and launchd (`KeepAlive`) on macOS (M4 `oldair`, m5), *plus* a cron backstop that starts the supervisor if it is absent. The work2 pod is neither — a k8s container with no systemd or launchd — so it runs `tools/fleet/units/fleetd-wrapper.sh` (T7, ARCH-FIX-SPEC.md R8: loop { run fleetd in the foreground; restart on a non-zero exit; exit, don't restart, on a deliberate zero-exit stop }, with a pid-file guard against double-start) kept alive by `tools/fleet/units/cron-backstop.txt`'s cron line. That cron line used to run `fleetd --once` unconditionally every 5 minutes; Stage 1 found this **actively harmful** before R2's lease fix landed — `--once` still ran the full reconcile step including the host-singleton claim's `acquire_or_reap()`, and because the live daemon back then never renewed that claim, roughly every third tick reaped the live daemon's own expired singleton and ran a second scheduler alongside it, all day, on 2026-08-14. The cron line now starts the wrapper only if it isn't already running (a local pid-file check, no hub round-trip) rather than unconditionally reconciling. A host whose heartbeat is older than 3 min renders as **DOWN** in `fleet status` — the ryzen's dead cron would have been visible within minutes instead of a full day.
 
 ### M3 — Tip propagation and forced convergence
 
 This is the direct answer to "drift from head is a major issue."
 
-On every update to `refs/heads/refactor/tag-machinery`, the hub's `post-receive` hook bumps `refs/fleet/signals/tip` to `{sha, generation, ts}`.
+On every update to `refs/heads/refactor/tag-machinery`, the hub's `post-receive` hook bumps `refs/fleet/signals/tip` to `{sha, generation, ts}` (`tools/fleet/drift.py`'s `bump_tip_signal`); `fleetd` polls that ref every 15 s and surfaces the generation it observed in its heartbeat. That much is real and load-bearing.
 
-Every `fleetd` polls that ref every 15 s. On a generation bump it broadcasts to its local workers:
-
-- **Idle worker** → fetch, fast-forward.
-- **Worker mid-engineering** → fetch, then immediately `git rebase` its working branch onto the new tip, run `fastcheck` (fmt + clippy + `cargo check`, ~2 min), and continue. It does *not* wait for a natural pause.
-- **Rebase conflicts** → the worker stops and posts the conflict to `refs/fleet/intents/<slug>` as `status: blocked-on-rebase`. Surfacing it in minutes is the entire point; today those conflicts sat for hours and were discovered at merge time.
-
-**Drift budget, enforced at claim time.** A worker may not claim a gate if its branch base is more than `MAX_DRIFT_COMMITS` (default 5) behind the tip or older than `MAX_DRIFT_MINUTES` (default 30). It must rebase first. Today's queue was 6–24 commits behind — every one of those would have been refused and rebased automatically.
+The rest of this section as originally written — per-worker broadcast on a generation bump, an automatic `git rebase` onto the moved tip mid-engineering, a `MAX_DRIFT_COMMITS`/`MAX_DRIFT_MINUTES` budget enforced at claim time — was never implemented as more than prose: `drift.py` grew a `check()` and a `converge()` with no production caller (no `fleetd`/`workqueue` code path ever shelled out to either), and both were deleted 2026-08-15 (ARCH-FIX R9) rather than left advertising a protection that never ran. Convergence onto a moved tip is superseded by tree-keyed verdict caching (M6) plus LLM convergence agents doing the rebase work directly; the tip signal above is unaffected by the deletion and remains the cheap poll target it always was.
 
 ### M4 — Queue derived from refs, never copied
 
@@ -223,7 +222,7 @@ The M4's own defect (root-owned files inside `~/.rustup` blocking `rustup update
 Every gate and agent runs inside its own process group — `systemd-run --scope --unit=fleet-<kind>-<key>` on Linux, a dedicated pgid on macOS — recorded in its claim.
 
 - Kill = kill the whole group. Orphaned `cargo`/`rustc` become impossible (incident 9).
-- **Leak detector**: any process group matching `fleet-*` with no live claim is orphaned; the reaper kills it and logs the leak.
+- **Leak detector**: a worker-shaped process group (marker match) with no live claim **and carrying this daemon's own scope token** is orphaned; the reaper kills it and logs the leak. The token (`fleet-scope=<12 hex of sha256(hub URL)>`, an inert extra argv stamped at spawn — see `fleetd.fleet_scope_token`) is what entitles a sweep to kill: marker match alone proves a process is gate-*shaped*, not that it is *ours*. Marker-matched groups without the sweeping daemon's token are reported (`unscoped` in the adoption summary) and left alone — a hand-launched gate is never sweepable (caveat: launching by copy-pasting a fleet worker's *exact* argv, token included, re-opts into sweeping — the token is visible in `ps` and is provenance, not a secret), and a test's fixture daemon can never kill the real fleet. Two companion rules share the provenance principle: **kin** — a group whose *session* belongs to a claimed/adopted worker (gate.sh's `set -m` stage subshells: own pgid, the gate's argv, no claim of their own) is part of that worker and never an orphan (`kin` in the adoption summary); and **identity-verified adoption** — a claim is only adopted if its recorded pgid currently names a same-uid group carrying a marker *and* this daemon's token, otherwise it is released (work requeues) and the process — a recycled-pid bystander, or a pre-scope worker across the upgrade boundary — is left alone, closing the recycled-pgid → lost-lease-kill path. Incident 2026-08-20: `TestFleetdSingletonRenews`' fixture daemon, on an empty fixture hub with production markers, swept and killed a live manually-launched gate on the i7 mid-run — the gate's own fleet-tests stage was running the test that murdered it. Pinned end-to-end by `test_lease_protocol.TestFixtureDaemonCannotSweepUnscopedWorkers` (with a verified negative control) and in-process by `test_adoption`'s unscoped/foreign-token tests.
 - Disk/memory guards run *before* start, from `limits` in the desired state, and drain rather than evict when a host crosses a threshold.
 
 ### M9 — Observability
