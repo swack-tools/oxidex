@@ -1327,6 +1327,18 @@ check-staleness version="":
         [[ -n "$VERSION" ]] || { echo "❌ .exiftool-version is empty" >&2; exit 1; }
     fi
 
+    # Stage 0, before any download: the committed artifacts under
+    # tools/exiftool-tables/ that grade THEMSELVES rather than the pin --
+    # expr_oracle_ledger.json (must load under the committed codegen.py; it
+    # sat at schema 1, refused on every host, with nothing in CI or the
+    # justfile mentioning it) and triage_bump.py's derived generator-less
+    # list. Needs neither ExifTool nor a dump, so it runs first and fails
+    # in under a second.
+    echo "=========================================================="
+    echo ">> committed tool artifacts (tools/exiftool-tables unit tests)"
+    echo "=========================================================="
+    (cd tools/exiftool-tables && python3 -m unittest discover -p 'test_*.py' -v)
+
     CACHE="${OXIDEX_ET_CACHE:-target/exiftool-src}"
     ROOT="$CACHE/exiftool-$VERSION"
     LIB="$ROOT/lib"
@@ -1359,7 +1371,7 @@ check-staleness version="":
     fi
 
     echo "=========================================================="
-    echo ">> coarse enum-fingerprint drift (six generator-less files + canon.rs)"
+    echo ">> coarse enum-fingerprint drift (six bespoke-DSL files + canon.rs)"
     echo "=========================================================="
     python3 tools/exiftool-tables/check_hand_enum_drift.py \
         --dump "$DUMP" \

@@ -1,25 +1,27 @@
 {
   "exiftool_version": "13.59",
   "expression_counts": {
-    "total": 1529,
-    "translated": 478,
-    "verified": 478
+    "total": 1537,
+    "translated": 486,
+    "verified": 486
   },
   "instrument": {
-    "et_lib": "/tmp/oxidex-exiftool-cache/exiftool-13.59/lib",
+    "et_lib": "/home/allen/git/fx30-regen/target/exiftool-src/exiftool-13.59/lib",
     "perl": "/usr/bin/perl",
+    "perl_version": "v5.38.2",
     "rust": "cargo run --quiet --bin expr_oracle_harness"
   },
+  "perl_version": "v5.38.2",
   "probe_counts": {
     "fail": 0,
-    "pass": 12717,
+    "pass": 12999,
     "skip": 10
   },
-  "schema": 1,
+  "schema": 2,
   "tables_sha256": "6b6bd4f85f1b259d6386c7b9770ab0f26ff243adad205c76c3eaed302f6214a6",
   "use_counts": {
-    "total": 6993,
-    "verified": 4654
+    "total": 7039,
+    "verified": 4700
   },
   "verified_expressions": [
     "\"$val %\"",
@@ -396,11 +398,19 @@
     "53190 - $val",
     "6 - $val",
     "8 * ($val + 1)",
+    "Image::ExifTool::CanonCustom::ConvertPfn($val)",
+    "Image::ExifTool::ConvertFileSize($val)",
     "Image::ExifTool::Exif::PrintExposureTime($val)",
     "Image::ExifTool::Exif::PrintFNumber($val)",
     "Image::ExifTool::GPS::ToDMS($self, $val, 1)",
     "Image::ExifTool::GPS::ToDMS($self, $val, 1, \"E\")",
     "Image::ExifTool::GPS::ToDMS($self, $val, 1, \"N\")",
+    "Image::ExifTool::Nikon::PrintAFPointsLeftRight($val, 19)",
+    "Image::ExifTool::Nikon::PrintAFPointsLeftRight($val, 21)",
+    "Image::ExifTool::Nikon::PrintAFPointsLeftRight($val, 29)",
+    "Image::ExifTool::Nikon::PrintAFPointsUpDown($val, 11)",
+    "Image::ExifTool::Nikon::PrintAFPointsUpDown($val, 13)",
+    "Image::ExifTool::Nikon::PrintAFPointsUpDown($val, 17)",
     "IsInt($val) ? \"$val C\" : $val",
     "abs($val)",
     "abs($val)<100 ? 1/(2**$val) : 0",

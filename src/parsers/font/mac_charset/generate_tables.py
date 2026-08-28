@@ -8,7 +8,13 @@ standard codecs. The only way to reproduce ExifTool's output byte for byte is
 to carry ExifTool's tables verbatim, so this script transcribes them
 mechanically rather than by hand.
 
-Source of truth: `Image/ExifTool/Charset/Mac*.pm` from an installed ExifTool.
+Source of truth: `Image/ExifTool/Charset/Mac*.pm` from the ExifTool release
+`.exiftool-version` pins -- never "an installed ExifTool", and never a bare
+`exiftool` off PATH (AGENTS.md: PATH resolved to 13.55 while the tables were
+transcribed from 13.59, and the two disagree). `tools/exiftool-tables/
+regen-all.sh` tier 2e runs this script against the one resolved tree the rest
+of the bump uses, and CI's verify-tables job re-runs it and diffs the result
+against what is committed.
 Each of those files is a Perl hash whose keys are single bytes and whose values
 are one of:
 
@@ -21,13 +27,17 @@ are one of:
 `Charset.pm` never nests deeper than that (see its `Decompose` routine, the
 "variable-width characters" branch), which this script asserts.
 
-Usage:
+Usage (normally via `tools/exiftool-tables/regen-all.sh`, which supplies the
+pinned tree and runs rustfmt afterwards):
 
     python3 generate_tables.py \
-        /opt/homebrew/Cellar/exiftool/13.55/libexec/lib/perl5/Image/ExifTool/Charset
+        target/exiftool-src/exiftool-$(cat .exiftool-version)/lib/Image/ExifTool/Charset
 
 Writes `mac_japanese.rs`, `mac_chinese_tw.rs`, `mac_korean.rs` and
-`mac_chinese_cn.rs` next to this script. Run `cargo fmt` afterwards.
+`mac_chinese_cn.rs` next to this script. Run `cargo fmt` afterwards --
+without it the only difference from the committed files is the wrapping of
+the `_LEADS` array literal, which is why CI can diff the output byte for
+byte.
 """
 
 from __future__ import annotations
