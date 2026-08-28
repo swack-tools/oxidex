@@ -7455,8 +7455,19 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     }
 
     let model_for_canon = (!model.is_empty()).then_some(model.as_str());
-    for (name, value) in parse_canon_ciff_records(&canon_records, model_for_canon) {
+    let mut canon_value_forms = std::collections::HashMap::new();
+    for (name, value) in
+        parse_canon_ciff_records(&canon_records, model_for_canon, &mut canon_value_forms)
+    {
         metadata.insert(name, TagValue::new_string(value));
+    }
+    // The unrounded ValueConv forms ride the same channel the JPEG MakerNote
+    // route uses (`set_value_form`), so `Composite:Aperture` and
+    // `Composite:ScaleFactor35efl` -- and through them DOF and
+    // HyperfocalDistance -- do their arithmetic on ExifTool's numbers, not on
+    // this file's print-rounded strings. See `parse_canon_ciff_records`.
+    for (name, value) in canon_value_forms {
+        metadata.set_value_form(name, value);
     }
 
     Ok(metadata)
@@ -11271,5 +11282,180 @@ mod rational_array_tests {
             metadata.get_string("Canon:ControlMode"),
             Some("Camera Local Control"),
         );
+    }
+
+    /// The CIFF bridge carries the unrounded `ValueConv` forms across, so the
+    /// Composite chain does ExifTool's arithmetic, not arithmetic on
+    /// print-rounded strings.
+    ///
+    /// The numbers are CanonRaw.crw's own, pinned against the oracle
+    /// (`exiftool-pinned.sh -G1 -s -n`, 13.59): ShotInfo key 21 FNumber raw 116
+    /// -> `exp(CanonEv(116)*log(2)/2)` = 2^(11/6) = 3.56359487256136 printed
+    /// "3.6" (Canon.pm:2957-2966), FocalLength keys 2/3 raw 914/610 ->
+    /// 23.2156/15.494 mm printed "23.22 mm"/"15.49 mm" (Canon.pm:2726-2770).
+    /// `CalcScaleFactor35efl` (Exif.pm:5451-5513) then takes the
+    /// FocalPlaneX/YSize branch -- a CRW has no FocalPlane*Resolution -- and
+    /// HyperfocalDistance comes out 8.33911..., printed "8.34 m". Fed the
+    /// printed forms instead, the same chain prints "8.25 m": a wrong value
+    /// under a real ExifTool tag name, which is how this file's first attempt
+    /// was refused.
+    #[test]
+    fn ciff_value_forms_reach_the_composite_chain() {
+        let mut make_model = b"Canon\0".to_vec();
+        make_model.extend_from_slice(b"Canon EOS D60\0");
+
+        // %Canon::ShotInfo: FORMAT int16s, FIRST_ENTRY 1, leading length word.
+        let mut shot_info = vec![0u8; 33 * 2];
+        let declared = shot_info.len() as u16;
+        shot_info[..2].copy_from_slice(&declared.to_le_bytes());
+        shot_info[21 * 2..21 * 2 + 2].copy_from_slice(&116i16.to_le_bytes());
+
+        // %Canon::FocalLength: FORMAT int16u, FIRST_ENTRY 0.
+        let mut focal_length = Vec::new();
+        for word in [2u16, 24, 914, 610] {
+            focal_length.extend_from_slice(&word.to_le_bytes());
+        }
+
+        let file = build_ciff(&[
+            (0x080a, make_model),
+            (0x102a, shot_info),
+            (0x1029, focal_length),
+        ]);
+        let mut metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+
+        // Printed forms stay ExifTool's PrintConv strings...
+        assert_eq!(metadata.get_string("Canon:FNumber"), Some("3.6"));
+        assert_eq!(
+            metadata.get_string("Canon:FocalPlaneXSize"),
+            Some("23.22 mm")
+        );
+        assert_eq!(
+            metadata.get_string("Canon:FocalPlaneYSize"),
+            Some("15.49 mm")
+        );
+
+        // ...while the attached value forms are the ValueConv numbers.
+        let fnumber: f64 = metadata
+            .value_form("Canon:FNumber")
+            .expect("FNumber value form")
+            .parse()
+            .expect("numeric value form");
+        assert!((fnumber - 3.56359487256136).abs() < 1e-12);
+        let xsize: f64 = metadata
+            .value_form("Canon:FocalPlaneXSize")
+            .expect("FocalPlaneXSize value form")
+            .parse()
+            .expect("numeric value form");
+        assert!((xsize - 23.2156).abs() < 1e-12);
+
+        crate::composite::apply(&mut metadata);
+        assert_eq!(
+            metadata.get_string("Composite:ScaleFactor35efl"),
+            Some("1.6"),
+        );
+        assert_eq!(
+            metadata.get_string("Composite:HyperfocalDistance"),
+            Some("8.34 m"),
+        );
+    }
+
+    /// The hand-written `%CanonRaw::Main` scalar arms in [`emit_ciff_main_tag`]
+    /// follow the cited Perl, including the branches `CanonRaw.crw` itself
+    /// never exercises.
+    ///
+    /// The per-file oracle run pins only the one value each tag has in that
+    /// file (an EOS D60), so the model-conditional and unknown-value arms
+    /// would otherwise be unreachable by any check: `0x180b SerialNumber`
+    /// renders `sprintf("%x-%.5d",$val>>16,$val&0xffff)` on a D30,
+    /// `sprintf("%.10d",$val)` on other EOS bodies, and is `UnknownNumber,
+    /// Unknown => 1` -- not reported without `-u` -- on a PowerShot
+    /// (CanonRaw.pm:248-270). `0x1814 MeasuredEV` is `Format => 'float'`,
+    /// `ValueConv => '$val + 5'` with no PrintConv (CanonRaw.pm:292-302);
+    /// `0x1806 SelfTimerTime` is `$val / 1000` printed `"$val s"`
+    /// (CanonRaw.pm:234-241); `0x1807 TargetDistanceSetting` is a float
+    /// printed `"$val mm"` (CanonRaw.pm:242-247); `0x10b4 ColorSpace`'s
+    /// `0xffff => 'Uncalibrated'` and `0x183b SerialNumberFormat`'s
+    /// `PrintHex` unknown arm are CanonRaw.pm:219-227 and :332-341;
+    /// `0x1817 FileNumber` routes through the same `\d{4}` split as Canon
+    /// MakerNote tag 0x0008 (CanonRaw.pm:303-309). Float inputs are chosen
+    /// exactly representable in `f32` so the pinned strings are the
+    /// arithmetic, not accidents of binary rounding.
+    #[test]
+    fn ciff_main_scalar_arms_follow_the_perl() {
+        let scalar_records = |make_model: &[u8]| {
+            vec![
+                (0x080a_u16, make_model.to_vec()),
+                (0x100a, 0u16.to_le_bytes().to_vec()), // TargetImageType
+                (0x1010, 2u16.to_le_bytes().to_vec()), // ShutterReleaseMethod
+                (0x1011, 1u16.to_le_bytes().to_vec()), // ShutterReleaseTiming
+                (0x101c, 200u16.to_le_bytes().to_vec()), // BaseISO
+                (0x10b4, 0xffffu16.to_le_bytes().to_vec()), // ColorSpace
+                (0x1806, 10_000u32.to_le_bytes().to_vec()), // SelfTimerTime
+                (0x1807, 2.5f32.to_le_bytes().to_vec()), // TargetDistanceSetting
+                (0x180b, 0x1234_0042u32.to_le_bytes().to_vec()), // SerialNumber
+                (0x1814, 7.5f32.to_le_bytes().to_vec()), // MeasuredEV
+                (0x1817, 1_601_602u32.to_le_bytes().to_vec()), // FileNumber
+                (0x183b, 0x1234_5678u32.to_le_bytes().to_vec()), // SerialNumberFormat
+            ]
+        };
+
+        let mut d30 = b"Canon\0".to_vec();
+        d30.extend_from_slice(b"Canon EOS D30\0");
+        let file = build_ciff(&scalar_records(&d30));
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(
+            metadata.get_string("CanonRaw:TargetImageType"),
+            Some("Real-world Subject"),
+        );
+        assert_eq!(
+            metadata.get_string("CanonRaw:ShutterReleaseMethod"),
+            Some("Continuous Shooting"),
+        );
+        assert_eq!(
+            metadata.get_string("CanonRaw:ShutterReleaseTiming"),
+            Some("Priority on focus"),
+        );
+        assert_eq!(
+            metadata.get("CanonRaw:BaseISO"),
+            Some(&TagValue::Integer(200)),
+        );
+        assert_eq!(
+            metadata.get_string("CanonRaw:ColorSpace"),
+            Some("Uncalibrated"),
+        );
+        assert_eq!(metadata.get_string("CanonRaw:SelfTimerTime"), Some("10 s"));
+        assert_eq!(
+            metadata.get_string("CanonRaw:TargetDistanceSetting"),
+            Some("2.5 mm"),
+        );
+        assert_eq!(metadata.get_string("CanonRaw:MeasuredEV"), Some("12.5"));
+        assert_eq!(metadata.get_string("CanonRaw:FileNumber"), Some("160-1602"),);
+        assert_eq!(
+            metadata.get_string("CanonRaw:SerialNumberFormat"),
+            Some("Unknown (0x12345678)"),
+        );
+        // D30: `sprintf("%x-%.5d",$val>>16,$val&0xffff)` (CanonRaw.pm:255).
+        assert_eq!(
+            metadata.get_string("CanonRaw:SerialNumber"),
+            Some("1234-00066"),
+        );
+
+        // Any other EOS: `sprintf("%.10d",$val)` (CanonRaw.pm:261).
+        let mut d60 = b"Canon\0".to_vec();
+        d60.extend_from_slice(b"Canon EOS D60\0");
+        let file = build_ciff(&scalar_records(&d60));
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(
+            metadata.get_string("CanonRaw:SerialNumber"),
+            Some("0305397826"),
+        );
+
+        // A PowerShot's value is not a serial number (`UnknownNumber`,
+        // `Unknown => 1`, CanonRaw.pm:265-269): omitted, not approximated.
+        let mut powershot = b"Canon\0".to_vec();
+        powershot.extend_from_slice(b"Canon PowerShot S30\0");
+        let file = build_ciff(&scalar_records(&powershot));
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(metadata.get_string("CanonRaw:SerialNumber"), None);
     }
 }

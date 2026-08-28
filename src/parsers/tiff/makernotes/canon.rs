@@ -6113,13 +6113,26 @@ fn parse_canon_makernote_impl_located_with_values(
                     }
 
                     // FNumber (index 21). `RawConv => '$val ? $val : undef'`,
-                    // `ValueConv => 'exp(CanonEv($val)*log(2)/2)'`, `PrintConv => '%.2g'`.
+                    // `ValueConv => 'exp(CanonEv($val)*log(2)/2)'`, `PrintConv => '%.2g'`
+                    // (Canon.pm:2957-2966).
+                    //
+                    // The unrounded form matters downstream: `Composite:Aperture`
+                    // is `$val[0] || $val[1]` over FNumber/ApertureValue
+                    // (Exif.pm:4715-4725), and DOF/HyperfocalDistance multiply
+                    // that *ValueConv* number, not the "%.2g" print. On a CRW --
+                    // where no EXIF FNumber exists to win the bare name -- feeding
+                    // the printed 3.6 instead of the ValueConv 3.56359487256136
+                    // moves HyperfocalDistance from ExifTool's 8.34 m to 8.25 m
+                    // on CanonRaw.crw.
                     if let Some(&f_number) = array.get(SHOT_INFO_FNUMBER)
                         && f_number != 0
                     {
                         let value =
                             (canon_ev(f_number as i32) * std::f64::consts::LN_2 / 2.0).exp();
                         tags.insert("Canon:FNumber".to_string(), format_g2(value));
+                        if let Some(forms) = value_forms.as_deref_mut() {
+                            forms.insert("Canon:FNumber".to_string(), value.to_string());
+                        }
                     }
 
                     // ExposureTime (index 22). ExifTool has two variants of this key: the
@@ -6240,7 +6253,15 @@ fn parse_canon_makernote_impl_located_with_values(
                     }
                     // FocalPlaneXSize / FocalPlaneYSize (keys 2 and 3), in 1/1000 inch.
                     // ExifTool only trusts these on the bodies listed in its Condition,
-                    // and drops implausibly small values via `$val < 40 ? undef : $val`.
+                    // and drops implausibly small values via `$val < 40 ? undef : $val`
+                    // (Canon.pm:2726-2770).
+                    //
+                    // The unrounded `$val * 25.4 / 1000` form is attached because
+                    // `CalcScaleFactor35efl` squares these as `$val[5]`/`$val[6]`
+                    // (Exif.pm:5477-5485) when the file has no FocalPlane*Resolution
+                    // to derive a diagonal from -- exactly a CRW's situation -- and
+                    // the "%.2f" print (23.22 for 23.2156) is a different number
+                    // than the one ExifTool's arithmetic sees.
                     if focal_plane_size_supported(&model) {
                         for (index, name) in [
                             (2usize, "Canon:FocalPlaneXSize"),
@@ -6249,10 +6270,11 @@ fn parse_canon_makernote_impl_located_with_values(
                             if let Some(&raw) = array.get(index) {
                                 let thousandths = raw as u16 as f64;
                                 if thousandths >= 40.0 {
-                                    tags.insert(
-                                        name.to_string(),
-                                        format!("{:.2} mm", thousandths * 25.4 / 1000.0),
-                                    );
+                                    let value = thousandths * 25.4 / 1000.0;
+                                    tags.insert(name.to_string(), format!("{value:.2} mm"));
+                                    if let Some(forms) = value_forms.as_deref_mut() {
+                                        forms.insert(name.to_string(), value.to_string());
+                                    }
                                 }
                             }
                         }
@@ -7344,10 +7366,21 @@ pub(crate) fn canon_makernote_id_for_ciff_record(ciff_id: u16) -> Option<u16> {
 /// (`%Canon::FileInfo` key 1, `%Canon::ShotInfo` key 22, `%Canon::FocalLength`
 /// keys 2-3) read. In a CRW it comes from `CanonRawMakeModel` (CanonRaw.pm:74-78,
 /// table `%CanonRaw::MakeModel` at :402-424), not from IFD0.
+///
+/// `value_forms` collects the unrounded `ValueConv` forms the decoders attach
+/// (`Canon:FNumber`, `Canon:FocalPlaneXSize`/`YSize`, `Canon:AutoISO`/
+/// `BaseISO`) -- the same sidecar the JPEG MakerNote route hands to
+/// [`MakerNoteParser::parse_with_context_and_values`]. A CRW needs it more
+/// than a JPEG does: with no EXIF IFD, the Canon copies are the *only*
+/// occurrences of these names, so every Composite that reads them
+/// (`Aperture` -> `DOF`/`HyperfocalDistance`, `ScaleFactor35efl` ->
+/// `CircleOfConfusion`) reproduces ExifTool's arithmetic only if it sees the
+/// ValueConv number rather than the print-rounded string.
 #[must_use]
 pub(crate) fn parse_canon_ciff_records(
     records: &[(u16, &[u8])],
     model: Option<&str>,
+    value_forms: &mut HashMap<String, String>,
 ) -> HashMap<String, String> {
     /// TIFF `SHORT`. Every `%Canon::*` table reached from CIFF has an
     /// `int16`-family `FORMAT`, and the decoders read the record as `i16`
@@ -7393,8 +7426,15 @@ pub(crate) fn parse_canon_ciff_records(
     buffer.extend_from_slice(&values);
     buffer.extend(std::iter::repeat_n(0u8, FOOTER_GUARD));
 
-    parse_canon_makernote_impl_located(&buffer, &buffer, ByteOrder::LittleEndian, model, Some(0))
-        .unwrap_or_default()
+    parse_canon_makernote_impl_located_with_values(
+        &buffer,
+        &buffer,
+        ByteOrder::LittleEndian,
+        model,
+        Some(0),
+        Some(value_forms),
+    )
+    .unwrap_or_default()
 }
 
 /// Extracts inline value bytes from the value_offset field.
