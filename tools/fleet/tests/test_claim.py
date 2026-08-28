@@ -45,16 +45,24 @@ from claim import (  # noqa: E402
     reap_expired,
 )
 from fleetlib import Hub  # noqa: E402
+from _env import HermeticCase  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
+from _mp import pool_context  # noqa: E402
+
+# Explicit, per-call-site start method; nothing here touches the
+# process-global default. See `tests/_mp.py`.
+_MP_CONTEXT = pool_context()
 
 
 def _run_git(args, cwd=None, input_bytes=None):
     return subprocess.run(args, cwd=cwd, input=input_bytes, capture_output=True)
 
 
-class ClaimTestCase(unittest.TestCase):
+class ClaimTestCase(HermeticCase):
     """Base fixture: a throwaway bare repo standing in for the hub."""
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="claim-test-")
         self.hub_path = str(Path(self._tmp_root) / "hub.git")
         self.workdir = str(Path(self._tmp_root) / "cache")
@@ -74,7 +82,7 @@ class ClaimTestCase(unittest.TestCase):
         )
         self.assertNotIn("work2.oxidex.net", resolved)
 
-        self.hub = Hub(url=self.hub_path, workdir=self.workdir)
+        self.hub = make_hub(self, self.hub_path, workdir=self.workdir)
 
     def tearDown(self):
         shutil.rmtree(self._tmp_root, ignore_errors=True)
@@ -105,7 +113,7 @@ class TestFixtureGuard(ClaimTestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestRefNaming(unittest.TestCase):
+class TestRefNaming(HermeticCase):
     def test_claim_ref_shape(self):
         self.assertEqual(claim_ref("gate", "abc123"), "refs/fleet/claims/gate/abc123")
 
@@ -233,7 +241,7 @@ def _try_acquire_in_subprocess(hub_path, kind, key):
 class TestConcurrentClaims(ClaimTestCase):
     def test_two_simulated_hosts_cannot_hold_the_same_key(self):
         n_workers = 6
-        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=_MP_CONTEXT) as pool:
             futures = [
                 pool.submit(_try_acquire_in_subprocess, self.hub_path, "gate", "contested-tree")
                 for _ in range(n_workers)
@@ -360,7 +368,7 @@ class TestConcurrentReap(ClaimTestCase):
         self.assertTrue(self.hub.create(ref, payload))
 
         n_workers = 5
-        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=_MP_CONTEXT) as pool:
             futures = [
                 pool.submit(_try_reap_in_subprocess, self.hub_path, "gate")
                 for _ in range(n_workers)
@@ -435,7 +443,7 @@ class TestWorkdirLiveness(ClaimTestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestToolchainIdentity(unittest.TestCase):
+class TestToolchainIdentity(HermeticCase):
     MAC_VV = (
         "rustc 1.97.1 (abc123 2026-01-01)\n"
         "binary: rustc\n"

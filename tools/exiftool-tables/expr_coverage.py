@@ -13,13 +13,28 @@ only for tables ExifTool reads via ProcessBinaryData. The census here has no
 such restriction: it is every expression in the dump, which is what the Step
 15 decision gate's ~69.5%-of-uses figure was measured against, and what this
 script re-measures against the actually-shipped compiler.
+
+Instrument (AGENTS.md, "Name the instrument, or the measurement is not
+evidence"): the committed `exprs.py` translator, read in-process, against a
+`dump_tables.pl` JSON named on the command line -- no ExifTool and no oxidex
+binary are involved, so the header below names the source tree and the dump
+and nothing else. This script publishes the headline "% of uses translated"
+number, and until Step 30 it was the one census tool in this directory with
+no header and no dirty-tree refusal at all: a percentage attributed to no
+commit. Set `OXIDEX_ALLOW_DIRTY_TREE=1` to measure a dirty tree anyway; the
+header records the override.
 """
 import collections
 import json
+import pathlib
 import re
 import sys
 
 import exprs
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import instrument  # noqa: E402 -- git/instrument identity header
 
 SLOTS = ("ValueConv", "PrintConv", "RawConv")
 
@@ -33,7 +48,8 @@ def walk_tags(node, out):
 
 
 def census(tables_json_path):
-    d = json.load(open(tables_json_path, encoding="utf-8"))
+    with open(tables_json_path, encoding="utf-8") as fh:
+        d = json.load(fh)
     counter = collections.Counter()
     slot_of = {}
     for _modname, mod in d["modules"].items():
@@ -56,6 +72,18 @@ def main():
     if len(sys.argv) != 2:
         print(f"usage: {sys.argv[0]} <tables.json>", file=sys.stderr)
         raise SystemExit(2)
+
+    # Before the first number, never after it.
+    git = instrument.git_state()
+    dirty_overridden = instrument.refuse_if_dirty(git, "expr_coverage.py")
+    instrument.print_header(
+        tool="expr_coverage.py",
+        git=git,
+        dirty_overridden=dirty_overridden,
+        extra=[f"tables:  {sys.argv[1]}",
+               "reads:   the committed tools/exiftool-tables/exprs.py translator against "
+               "that dump (no ExifTool and no oxidex binary involved)"],
+    )
 
     version, counter, slot_of = census(sys.argv[1])
     total_uses = sum(counter.values())

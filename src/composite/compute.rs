@@ -13,6 +13,7 @@
 //! why this layer is worth building before chasing per-format gaps.
 use crate::core::formatters::duration::convert_duration;
 use crate::core::formatters::exif_print_conv::print_exposure_time;
+use crate::core::formatters::numeric_precision::perl_number;
 use crate::parsers::tiff::makernotes::panasonic::SHOOTING_MODE;
 
 /// Inputs to a composite: `require` values followed by `desire` values, in the
@@ -36,7 +37,7 @@ pub struct Computed {
 
 impl Computed {
     /// A tag whose display form is its value form.
-    fn same(v: impl Into<String>) -> Option<Self> {
+    pub(super) fn same(v: impl Into<String>) -> Option<Self> {
         let v = v.into();
         Some(Computed {
             print: v.clone(),
@@ -45,12 +46,49 @@ impl Computed {
     }
 
     /// Distinct value and display forms.
-    fn new(value: impl Into<String>, print: impl Into<String>) -> Option<Self> {
+    pub(super) fn new(value: impl Into<String>, print: impl Into<String>) -> Option<Self> {
         Some(Computed {
             value: value.into(),
             print: print.into(),
         })
     }
+}
+
+/// ExifTool's `join(' ', @list)` over `ValueConv` numbers, returning both the
+/// joined text *and* the numbers its `PrintConv` will actually be handed.
+///
+/// Most composites hand their `PrintConv` a Perl NV, which `sprintf` formats
+/// at full double precision. A few do not. When a `ValueConv` packs several
+/// numbers into one scalar with `join(' ', ...)` and the matching `PrintConv`
+/// unpacks them with `split`, the numbers make a round trip through decimal
+/// text on the way: `join` stringifies each with Perl's `%.15g`, and `split`
+/// hands back strings that `sprintf` re-numifies. Fifteen significant digits
+/// is fewer than a double carries, so what reaches `%.2f` is not what the
+/// arithmetic produced, and on a rounding boundary the two round opposite
+/// ways.
+///
+/// `Composite:FOV` on `Olympus/OlympusTG-610.jpg` is the worked example.
+/// `2*FocusDistance*tan(fd2)` is 2.8350000000000004, which `%.2f` rounds up
+/// to 2.84 -- but `join` renders it `2.835`, and re-parsing that text gives
+/// 2.8349999999999999, which rounds *down*. ExifTool prints `2.83 m`.
+///
+/// This models a data flow, so it belongs exactly where ExifTool's `ValueConv`
+/// returns a joined string and nowhere else. `HyperfocalDistance`, `DOF`'s
+/// sibling `CircleOfConfusion` and `FocalLength35efl` return bare numbers --
+/// their `PrintConv` sees the unrounded double, and routing them through here
+/// would introduce the very divergence it exists to remove.
+///
+/// Returning the text and the numbers from one call is deliberate: they are
+/// two views of a single Perl scalar, and computing them at separate call
+/// sites is how they drift apart.
+fn perl_join(values: &[f64]) -> (String, Vec<f64>) {
+    let rendered: Vec<String> = values.iter().copied().map(perl_number).collect();
+    let reparsed = rendered
+        .iter()
+        .zip(values)
+        .map(|(text, original)| text.parse().unwrap_or(*original))
+        .collect();
+    (rendered.join(" "), reparsed)
 }
 
 /// Parse a value ExifTool would have fed to `ToFloat`.
@@ -1139,45 +1177,27 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::new(v.to_string(), print_fnumber(v))
         }
 
-        // Exif.pm's PrintLensID falls back to an unknown focal range when a
-        // Canon body records LensType as 65535 (displayed as `n/a`) and no
-        // lens lookup entry exists. Keep this narrow: known lens labels need
-        // the full model-matching routine and are intentionally left alone.
+        // `("Exif", "LensID")` -- BOTH Exif rows that produce the
+        // `Composite:LensID` Name (the `Require => 'LensType'` primary,
+        // Exif.pm:5303-5360, and the `LensID-2` LensModel/Lens fallback,
+        // Exif.pm:5362-5385) are dispatched by [`super::apply`] to
+        // [`super::lens_id`] instead of arriving here.
         //
-        // This arm is ALSO the dispatch target for the *other* Exif-module
-        // `LensID`: `LensID-2` (Exif.pm:5362-5385, `Desire => {0 =>
-        // 'LensModel', 1 => 'Lens', 2 => 'XMP-aux:LensID', 3 => 'Make'}`,
-        // `Inhibit => {4 => 'Composite:LensID'}`). Both rows share the
-        // `("Exif", "LensID")` key `compute()` is looked up by (its Name,
-        // not its ExifTool tagID -- `tables::Composite` has no separate
-        // tagID field), so a call arriving with `LensID-2`'s inputs lands
-        // here too, with `i[0]` holding LensModel instead of LensType. That
-        // is harmless rather than a silent misfire: `i.len()` for
-        // `LensID-2` is 4 (its highest Desire index is 3), so `get(i, 4)`
-        // and `get(i, 5)` are always out-of-bounds `None` for that call,
-        // and the `?` on `f(get(i, 4))` below returns `None` before
-        // `i[0]`'s value (whatever it means for that row) is ever used.
-        // `LensID-2` has no real implementation of its own -- it is
-        // deliberately absent from `compute()`, which is why the "no
-        // registered computation" triage in `codegen_composite.py` cannot
-        // see it: that check is precision-limited to the `(module, name)`
-        // dispatch key, and this is the one place in the whole Composite
-        // table where two distinct rows share one.
-        ("Exif", "LensID") => {
-            if !matches!(get(i, 0).map(str::trim), Some("n/a" | "N/A" | "65535")) {
-                return None;
-            }
-            let short = f(get(i, 4))?;
-            let long = f(get(i, 5))?;
-            if short <= 0.0 || long <= 0.0 {
-                return None;
-            }
-            Computed::same(format!("Unknown {:.0}-{:.0}mm", short, long))
-        }
+        // They are the one pair in the whole Composite table whose ExifTool
+        // conversion is not a function of its positional `$val[N]` inputs: the
+        // primary's PrintConv is handed `$self` and immediately reads
+        // `$$self{TAG_INFO}{LensType}{PrintConv}` (Exif.pm:5326) to find out
+        // *which manufacturer's* lookup produced the string it was given.
+        // `compute`'s signature has no way to carry that, which is why the arm
+        // lives elsewhere rather than here.
 
         // require: FocalLength; desire: ScaleFactor35efl
-        // ValueConv: `($val[0] || 0) * ($val[1] || 1)`
+        // ValueConv: `ToFloat(@val); ($val[0] || 0) * ($val[1] || 1)`
         // PrintConv: `$val[1] ? "%.1f mm (35 mm equivalent: %.1f mm)" : "%.1f mm"`
+        //
+        // Left on the raw doubles for the same reason as HyperfocalDistance:
+        // this ValueConv returns a product, not a `join`ed string, so its
+        // PrintConv is handed a Perl NV and rounds at full precision.
         ("Exif", "FocalLength35efl") => {
             let fl = f(get(i, 0))?;
             match f(get(i, 1)) {
@@ -1203,6 +1223,16 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         // require: FocalLength, Aperture, CircleOfConfusion
         // ValueConv: `return 'inf' unless $val[1] and $val[2];
         //             $val[0]*$val[0] / ($val[1] * $val[2] * 1000)`
+        // PrintConv: `sprintf("%.2f m", $val)`
+        //
+        // Deliberately *not* routed through `perl_join`: that ValueConv
+        // returns a bare Perl NV, so `sprintf` formats the unrounded double
+        // and there is no %.15g round trip to reproduce. Verified against the
+        // pinned tree with a UserDefined composite pair over one value --
+        // 2.8350000000000004 prints `2.84` when the ValueConv returns the
+        // number and `2.83` when it returns `join(" ", $number)` -- which also
+        // shows ExifTool adds no stringification of its own. Adding the round
+        // trip here would manufacture the divergence, not remove it.
         ("Exif", "HyperfocalDistance") => {
             let fl = f(get(i, 0))?;
             let (ap, coc) = (f(get(i, 1))?, f(get(i, 2))?);
@@ -1263,11 +1293,20 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             if far < 0.0 {
                 far = 0.0;
             }
-            let value = format!("{near} {far}");
+            // `return join(' ',@v)`, then `my @v = split ' ', $val` in the
+            // PrintConv -- so every printed digit below, and the subtraction
+            // that picks the format, run on %.15g text read back as doubles.
+            // See `perl_join`.
+            let (value, v) = perl_join(&[near, far]);
+            let (near, far) = (v[0], v[1]);
             if far == 0.0 {
                 return Computed::new(value, format!("inf ({near:.2} m - inf)"));
             }
 
+            // `my $dof = $v[1] - $v[0];` -- ExifTool subtracts the re-parsed
+            // values, so this must too: differencing the unrounded doubles
+            // instead can land the result on the other side of the 0.02 m
+            // cutoff that selects three decimals over two.
             let dof = far - near;
             if dof > 0.0 && dof < 0.02 {
                 Computed::new(value, format!("{dof:.3} m ({near:.3} - {far:.3} m)"))
@@ -1319,15 +1358,25 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             }
             let fd2 = (36.0f64).atan2(2.0 * fl * sf * corr);
             let deg = fd2 * 360.0 / 3.14159;
-            if focus > 0.0 && focus < 10000.0 {
+            // `return join(' ', @fov)` -- so the PrintConv's `split(' ',$val)`
+            // reads back %.15g text, not the doubles computed above. See
+            // `perl_join`: on a boundary the two round opposite ways.
+            let (value, print) = if focus > 0.0 && focus < 10000.0 {
                 let dist = 2.0 * focus * fd2.sin() / fd2.cos();
-                Computed::new(
-                    format!("{deg} {dist}"),
-                    format!("{deg:.1} deg ({dist:.2} m)"),
-                )
+                let (value, v) = perl_join(&[deg, dist]);
+                // `$str .= sprintf(" (%.2f m)", $v[1]) if $v[1];` -- the
+                // distance is appended only when it is non-zero.
+                let print = if v[1] == 0.0 {
+                    format!("{:.1} deg", v[0])
+                } else {
+                    format!("{:.1} deg ({:.2} m)", v[0], v[1])
+                };
+                (value, print)
             } else {
-                Computed::new(deg.to_string(), format!("{deg:.1} deg"))
-            }
+                let (value, v) = perl_join(&[deg]);
+                (value, format!("{:.1} deg", v[0]))
+            };
+            Computed::new(value, print)
         }
 
         // desire, in ExifTool's declared order (indices match its `shift`s):
@@ -2566,6 +2615,118 @@ mod tests {
         assert_eq!(c("FOV", &[Some("0"), Some("5.5"), None]), None);
     }
 
+    /// `Composite:FOV` on a value that lands exactly on a `%.2f` rounding tie.
+    ///
+    /// Inputs are `combined-samples/Olympus/OlympusTG-610.jpg`: FocalLength 5,
+    /// ScaleFactor35efl 5.6, FocusDistance 2.21. The subject width reduces to
+    /// `36*focus/(fl*sf*corr)`, whose *exact rational* value is 2.835 -- a tie,
+    /// not a near-miss. The double evaluates to 2.8350000000000004, so
+    /// formatting it directly rounds up to 2.84; ExifTool's ValueConv instead
+    /// returns `join(' ', @fov)`, which renders it with `%.15g` as "2.835",
+    /// and the PrintConv's `split` re-parses that as 2.8349999999999999 --
+    /// which rounds *down*.
+    ///
+    /// Pinned against ExifTool 13.59 (`exiftool-pinned.sh -s -FOV`):
+    ///   `FOV : 65.4 deg (2.83 m)`, and with `-n`, `65.3525005746021 2.835`.
+    #[test]
+    fn fov_rounds_the_reparsed_value_not_the_raw_double() {
+        let olympus = &[Some("5"), Some("5.6"), Some("2.21")];
+        let computed = compute("Exif", "FOV", olympus, None).expect("FOV computes");
+
+        // 2.83, not the 2.84 that formatting the unrounded double produces.
+        assert_eq!(computed.print, "65.4 deg (2.83 m)");
+        // The ValueConv form is Perl's %.15g of each element, not Rust's
+        // shortest round-trip form ("65.35250057460213 2.8350000000000004").
+        assert_eq!(computed.value, "65.3525005746021 2.835");
+    }
+
+    /// `Composite:DOF`'s ValueConv is `join(' ',@v)` too, so the same round
+    /// trip governs both its value text and its printed limits.
+    ///
+    /// Its `PrintConv` subtracts *after* the round trip -- `my $dof = $v[1] -
+    /// $v[0]` runs on the re-parsed strings -- so the difference, and the
+    /// 0.02 m cutoff that selects three decimals over two, both read the
+    /// re-parsed numbers.
+    ///
+    /// A DOF tie is unreachable from a real `CircleOfConfusion`, which is
+    /// `sqrt(2592)/(sf*1440)` and therefore irrational -- so this pins a
+    /// constructed one. fl=6, ap=2.5, coc=0.01, d=0.87 gives t=0.6 exactly and
+    /// far = 0.87/0.4 = 2.175 exactly, a `%.2f` tie whose double is
+    /// 2.1750000000000003. Confirmed by running Exif.pm's ValueConv and
+    /// PrintConv verbatim under perl: direct formatting yields
+    /// `1.63 m (0.54 - 2.18 m)`, ExifTool yields `... - 2.17 m)`.
+    #[test]
+    fn dof_prints_the_reparsed_limits_not_the_raw_doubles() {
+        let computed = compute(
+            "Exif",
+            "DOF",
+            &[Some("6"), Some("2.5"), Some("0.01"), Some("0.87")],
+            None,
+        )
+        .expect("DOF computes");
+
+        // Far limit 2.17, not the 2.18 the unrounded double rounds to.
+        assert_eq!(computed.print, "1.63 m (0.54 - 2.17 m)");
+        assert_eq!(computed.value, "0.54375 2.175");
+    }
+
+    /// The same Olympus file's DOF, where the round trip changes the value
+    /// text on an ordinary (non-tie) result.
+    ///
+    /// Pinned against ExifTool 13.59: `-n` gives `0.776639919706934 0` and the
+    /// printed form is `inf (0.78 m - inf)`. Rust's `{}` would have written a
+    /// 16th and 17th digit here that Perl never emits. The far limit is
+    /// negative and clamped to 0, which is what makes the PrintConv take its
+    /// `inf` branch.
+    ///
+    /// The CircleOfConfusion input is spelled the way the `CircleOfConfusion`
+    /// arm actually hands it over -- full double precision, not its 15-digit
+    /// display form. That distinction is deliberate: ExifTool keeps an
+    /// unrounded NV in `VALUE` and only truncates when printing, so a
+    /// composite that consumes another's value must receive every bit.
+    #[test]
+    fn dof_value_text_uses_perls_fifteen_significant_digits() {
+        let coc = (24.0f64 * 24.0 + 36.0 * 36.0).sqrt() / (5.6 * 1440.0);
+        let computed = compute(
+            "Exif",
+            "DOF",
+            &[Some("5"), Some("3.9"), Some(&coc.to_string()), Some("2.21")],
+            None,
+        )
+        .expect("DOF computes");
+
+        assert_eq!(computed.value, "0.776639919706934 0");
+        assert_eq!(computed.print, "inf (0.78 m - inf)");
+    }
+
+    /// The siblings that must *not* acquire the round trip.
+    ///
+    /// `HyperfocalDistance` returns `$val[0]*$val[0]/($val[1]*$val[2]*1000)`
+    /// and `FocalLength35efl` returns `($val[0]||0)*($val[1]||1)` -- bare Perl
+    /// NVs, not `join`ed strings -- so their `sprintf` sees the unrounded
+    /// double. Verified against the pinned tree with a UserDefined composite
+    /// mirroring FocalLength35efl: fl=4.5, sf=4.7 (exact product 21.15, double
+    /// 21.150000000000002) prints `4.5 mm (35 mm equivalent: 21.2 mm)`.
+    /// Routing these through `perl_join` would print 21.1 and *introduce* a
+    /// divergence, so this test fails in the opposite direction from the two
+    /// above.
+    #[test]
+    fn siblings_returning_bare_numbers_keep_full_double_precision() {
+        assert_eq!(
+            c("FocalLength35efl", &[Some("4.5"), Some("4.7")]).as_deref(),
+            Some("4.5 mm (35 mm equivalent: 21.2 mm)")
+        );
+        // HyperfocalDistance likewise formats the unrounded quotient.
+        assert_eq!(
+            c(
+                "HyperfocalDistance",
+                &[Some("5"), Some("3.9"), Some("0.00536540368372618")]
+            )
+            .as_deref(),
+            Some("1.19 m")
+        );
+    }
+
     #[test]
     fn canon_scalar_composites_match_the_source_expressions() {
         let canon = |name, inputs: &[Option<&str>]| {
@@ -2824,8 +2985,13 @@ mod tests {
         );
     }
 
+    /// `LensID` no longer reaches `compute` at all -- `super::apply` routes
+    /// both Exif rows to `super::lens_id`, which needs context this function's
+    /// signature cannot carry (see the `("Exif", "LensID")` note above). The
+    /// unknown-focal-range case this test used to pin now lives as
+    /// `lens_id::tests`, against the real `Canon::PrintLensID` fallback.
     #[test]
-    fn canon_unknown_lens_type_uses_focal_range_fallback() {
+    fn lens_id_is_not_dispatched_through_compute() {
         assert_eq!(
             compute(
                 "Exif",
@@ -2839,9 +3005,8 @@ mod tests {
                     Some("21.3125 mm"),
                 ],
                 Some("Canon"),
-            )
-            .map(|computed| computed.print),
-            Some("Unknown 7-21mm".to_string())
+            ),
+            None
         );
     }
 

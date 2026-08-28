@@ -508,6 +508,10 @@ jobs:
               src/parsers/tiff/makernotes/lens_data.rs \
               src/parsers/tiff/makernotes/sony/main_extra_tables.rs \
               src/parsers/tiff/makernotes/minolta_a100_tables.rs \
+              src/parsers/font/mac_charset/mac_japanese.rs \
+              src/parsers/font/mac_charset/mac_chinese_tw.rs \
+              src/parsers/font/mac_charset/mac_korean.rs \
+              src/parsers/font/mac_charset/mac_chinese_cn.rs \
               tools/exiftool-tables/af_points.json; then
             echo "::error::a committed tier-2 generated file does not match what its generator produces against ExifTool ${ET_VERSION}. Either the file was hand-edited, or it is stale relative to the pin -- re-run 'tools/exiftool-tables/regen-all.sh --tier2-only' and commit the result." >&2
             exit 1
@@ -522,11 +526,21 @@ jobs:
       # `just` binary on this runner). Reuses the SAME extracted tree the two
       # steps above already fetched, rather than fetching ExifTool a third
       # time in this job.
-      - name: Check staleness facts, drift baselines and Perl-source anchors
+      - name: Check tool artifacts, staleness facts, drift baselines and Perl-source anchors
         env:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
         run: |
           set -euo pipefail
+          # Stage 0 (needs neither ExifTool nor a dump): the committed
+          # artifacts under tools/exiftool-tables/ that grade themselves.
+          # `expr_oracle_ledger.json` was schema 1 while codegen.py required
+          # schema 2 -- REFUSED on every host regardless of digest -- and
+          # `rg -n 'expr_oracle_ledger' justfile .github/workflows/*.yml`
+          # returned zero hits, so nothing anywhere said so. Same recipe as
+          # `just check-staleness`'s stage 0, inlined (no `just` on this
+          # runner).
+          (cd tools/exiftool-tables && python3 -m unittest discover -p 'test_*.py' -v)
+
           ROOT="$PWD/exiftool-${ET_VERSION}"
           LIB="$ROOT/lib"
           DUMP="$RUNNER_TEMP/tables-${ET_VERSION}.json"

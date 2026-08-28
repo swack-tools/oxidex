@@ -340,6 +340,35 @@ pub(crate) fn format_unix_time_local(secs: i64) -> String {
     }
 }
 
+/// `ConvertUnixTime`'s own seconds rounding (ExifTool.pm:6791-6796) at the
+/// default `$dec = 0`:
+///
+/// ```perl
+/// my $itime = int($time);
+/// my $frac = $time - $itime;
+/// $frac < 0 and $frac += 1, $itime -= 1;
+/// $dec = sprintf('%.*f', $dec, $frac);
+/// $dec =~ s/^(\d)// and $1 eq '1' and $itime += 1;
+/// ```
+///
+/// `int` truncates toward zero and `sprintf '%.0f'` rounds half to even, so
+/// this is neither `floor` nor `round`. Callers that hand `ConvertUnixTime` a
+/// fractional second -- WTV's 100-ns `%timeInfo` and TNEF's MAPI `SYSTIME` --
+/// print one second early without it.
+pub(crate) fn round_to_second(seconds: f64) -> i64 {
+    let truncated = seconds.trunc();
+    let mut whole = truncated as i64;
+    let mut frac = seconds - truncated;
+    if frac < 0.0 {
+        frac += 1.0;
+        whole -= 1;
+    }
+    // `sprintf('%.0f', $frac)` for a fraction in [0,1) prints "0" or "1", and
+    // exactly one half rounds to the even integer, which is 0.
+    let carry = i64::from(frac > 0.5);
+    whole + carry
+}
+
 /// Formats Unix file permissions to a string.
 ///
 /// Format: drwxrwxrwx where:

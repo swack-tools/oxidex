@@ -52,7 +52,7 @@ of them, so this script and the generators cannot silently drift apart:
            strings), or a table whose PROCESS_PROC identity itself changed.
 
 On top of the diff-driven classification, this script ALSO always lists the
-six generator-less files from docs/TRANSCRIPTION.md's "Honest limits" as a
+still-generator-less files from docs/TRANSCRIPTION.md's "Honest limits" as a
 standing HAND item apiece, regardless of whether this particular release
 touched Sony/Nikon/Minolta at all: Step 14 deliberately did not build a
 generator for them, so no bump -- this one included -- refreshes them, and a
@@ -60,6 +60,14 @@ report that omitted them would misrepresent the automation level (see
 OVERHAUL_OXIDEX_PLAN.md Step 17 and this repo's AGENTS.md). They are counted
 into the totals precisely because "nothing changed here" is not the same
 claim as "this is covered".
+
+Which of them are *still* generator-less is DERIVED from the regen scripts
+(`generator_less_files()`), not hard-coded. The hard-coded version of this
+list is the exact defect that motivated the change: Step 18 added
+`gen_sony_main_extra_tables.py` and `gen_minolta_a100_tables.py` at
+2026-08-13T19:20:45-05:00 and wired both into `regen-all.sh` tier 2d, while
+the last edit to this file (`cbc6618f`, 1 h 33 m later) left all six in the
+literal, so every bump report inflated standing HAND work by 2.
 
 This script does NOT attempt reachability (whether a transcribed table is
 ever actually called by a parser -- see AGENTS.md "Detected is not parsed",
@@ -86,10 +94,19 @@ import codegen  # noqa: E402  -- reuse is_binary_table so classification cannot 
 import conds  # noqa: E402  -- Step 23's Condition compiler; reused so a _variants classification cannot drift from compile_variant_group
 import exprs  # noqa: E402
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # ---------------------------------------------------------------------------
-# The six files docs/TRANSCRIPTION.md "Honest limits" names as generator-less.
-# Always listed as HAND -- see module docstring.
-GENERATOR_LESS_FILES = [
+# The six files docs/TRANSCRIPTION.md "Honest limits" names as targeting a
+# bespoke, per-file Rust DSL hand-matched against ExifTool's Condition/
+# RawConv/ValueConv/PrintConv text. THIS half stays a literal on purpose:
+# "this file's contents were hand-translated through a vocabulary sized to
+# one file" is a judgement about how the Rust was written, and there is
+# nothing on disk to derive it from.
+#
+# Whether any given one of them still has NO generator is a different
+# question, and that half IS derived -- see `generator_less_files()`.
+BESPOKE_DSL_FILES = [
     ("Sony", "src/parsers/tiff/makernotes/sony/enciphered_tables.rs",
      "%Image::ExifTool::Sony::* (enciphered arrays)"),
     ("Sony", "src/parsers/tiff/makernotes/sony/plain_tables.rs",
@@ -103,6 +120,72 @@ GENERATOR_LESS_FILES = [
     ("Minolta", "src/parsers/tiff/makernotes/minolta_a100_tables.rs",
      "%Image::ExifTool::Minolta::* (A100 subset)"),
 ]
+
+# The committed scripts that regenerate tier-1 and tier-2 output. A file
+# named by one of these has a generator; a file named by neither does not.
+REGEN_SCRIPTS = (
+    "tools/exiftool-tables/regen.sh",
+    "tools/exiftool-tables/regen-all.sh",
+)
+
+
+def _strip_shell_comments(text: str) -> str:
+    """Drop `#` comments from a shell script, respecting quotes.
+
+    Necessary, not decorative: `regen-all.sh`'s tier-2d banner comment
+    *names* the four files it explicitly did NOT build a generator for, so a
+    plain substring search over the raw text concludes all six are wired.
+    This is the same failure `reachability.py`'s docstring records for
+    `ricoh.rs:215`, where a comment explaining that a `find_table(...)` call
+    is NOT made got counted as a call site and allowlisted a table on the
+    strength of a sentence (docs/reference/corpus-synthesis.md).
+    """
+    out = []
+    for line in text.splitlines():
+        quote = None
+        cut = len(line)
+        for i, ch in enumerate(line):
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in "'\"":
+                quote = ch
+            elif ch == "#" and (i == 0 or line[i - 1].isspace()):
+                cut = i
+                break
+        out.append(line[:cut])
+    return "\n".join(out)
+
+
+def generator_less_files(root: Path = REPO_ROOT):
+    """The `BESPOKE_DSL_FILES` entries no committed regen script regenerates.
+
+    Derived rather than listed: the previous hard-coded literal went stale
+    the same afternoon two of the six got generators (see module docstring),
+    and a bump report that over-states standing HAND work is a measurement
+    error in exactly the direction AGENTS.md warns about. A file drops off
+    this list automatically the moment a regen script names its path.
+
+    A missing regen script is a hard error, not a shrug: silently treating
+    "cannot read regen-all.sh" as "nothing is wired" would flip every one of
+    these back to HAND with no signal at all.
+    """
+    named = []
+    for rel in REGEN_SCRIPTS:
+        path = root / rel
+        try:
+            named.append(_strip_shell_comments(path.read_text(encoding="utf-8")))
+        except OSError as exc:
+            raise SystemExit(
+                f"triage_bump.py: cannot read {rel} ({exc}); refusing to guess "
+                "which generated files still have no generator -- that guess "
+                "would silently inflate every bump report's HAND count."
+            ) from exc
+    body = "\n".join(named)
+    return [entry for entry in BESPOKE_DSL_FILES if entry[1] not in body]
+
+
+GENERATOR_LESS_FILES = generator_less_files()
 
 # regen-all.sh tier 2a's manifest: (module, table) pairs codegen_subdirs.py
 # already regenerates wholesale from the dump on every bump. A field-level

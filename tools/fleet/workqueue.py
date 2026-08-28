@@ -54,14 +54,13 @@ the module, not in the consumers. Please don't rename this back to
 
 from __future__ import annotations
 
-import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Optional, Set
 
 from claim import CLAIMS_PREFIX, is_expired
-from fleetlib import Hub, HubUnreachableError
+from fleetlib import Hub, HubUnreachableError, run_git
 
 TIP_REF = "refs/heads/refactor/tag-machinery"
 STAGING_PREFIX = "refs/heads/staging"
@@ -120,9 +119,19 @@ class Queue:
         """
         now = now or _utcnow()
 
-        tip_sha = self.hub.sha(self.tip_ref)
+        # `code_sha`, not `sha`: the tip is a CODE ref. Against a split
+        # spine, `hub.sha(TIP_REF)` asks the STATE repo -- which carries
+        # only `refs/fleet/*` -- and gets a perfectly successful `None`.
+        # That `None` becomes the QueueError below on every single call,
+        # which is how `fleetd --hub <state> --code <code>` died in a
+        # traceback before it wrote its first heartbeat: the daemon's loop
+        # catches HubError, and QueueError is not one.
+        tip_sha = self.hub.code_sha(self.tip_ref)
         if tip_sha is None:
-            raise QueueError(f"tip ref {self.tip_ref!r} does not exist on the hub")
+            raise QueueError(
+                f"tip ref {self.tip_ref!r} does not exist on the code repo "
+                f"{self.hub.code_url!r}"
+            )
 
         staging = self._list_staging()
         if not staging:
@@ -137,7 +146,8 @@ class Queue:
             for slug, (ref, sha) in staging.items():
                 if self._is_ancestor(cache_ns, sha, tip_sha):
                     continue  # already merged -- nothing left to do
-                if slug in live_claim_keys or ref in live_claim_keys:
+                branch = ref.removeprefix("refs/heads/")
+                if slug in live_claim_keys or ref in live_claim_keys or branch in live_claim_keys:
                     continue  # somebody is already working this key
                 if slug in withdrawn_slugs:
                     continue  # intent was withdrawn -- ref is stale intent
@@ -145,6 +155,32 @@ class Queue:
             return out
         finally:
             self._cleanup_cache(cache_ns, staging)
+
+    def compute_or_refusal(self, now: Optional[datetime] = None) -> tuple:
+        """`(queue, None)` on success, or `({}, (reason, detail))` when the
+        queue cannot be computed for a reason that is ABOUT THE QUEUE
+        rather than about the hub.
+
+        This exists because `compute()` raises `QueueError`, which is not a
+        `HubError`, and `fleetd`'s reconcile loop catches exactly
+        `HubError` -- on purpose ("a bug in this file, a KeyboardInterrupt
+        or a MemoryError must still take the process down loudly"). A
+        missing tip is neither a bug nor a transport failure: it is a
+        configuration fact the operator needs stated, and the whole point
+        of `fleet status --why` is that a host which starts nothing says
+        why. So the scheduler asks through this method and gets a
+        `refused` reason it can put in the heartbeat, and the daemon keeps
+        running, keeps heartbeating, and keeps reaping.
+
+        `HubUnreachableError` deliberately still propagates: that IS a hub
+        failure, the loop's existing degrade-this-step path handles it,
+        and turning it into a refusal reason would report a network outage
+        as a permanent configuration verdict.
+        """
+        try:
+            return self.compute(now=now), None
+        except QueueError as exc:
+            return {}, ("queue-unavailable", str(exc))
 
     def slugs(self, now: Optional[datetime] = None) -> list:
         """Sorted list of queued slugs -- convenience for callers that only
@@ -157,7 +193,11 @@ class Queue:
     # ------------------------------------------------------------------ #
 
     def _list_staging(self) -> Dict[str, tuple]:
-        raw = self.hub.list(self.staging_prefix)  # {refname: sha}
+        # `code_list`, not `list`: `refs/heads/staging/*` lives on the CODE
+        # repo. Aimed at the state repo this returns `{}` -- no error, no
+        # log line -- and `compute()` reads that as "the queue is empty",
+        # which is a fleet that idles while reporting itself healthy.
+        raw = self.hub.code_list(self.staging_prefix)  # {refname: sha}
         prefix = self.staging_prefix + "/"
         out: Dict[str, tuple] = {}
         for ref, sha in raw.items():
@@ -168,6 +208,23 @@ class Queue:
         return out
 
     def _live_claim_work_keys(self, now: datetime) -> Set[str]:
+        """`work_key` of every live (unexpired) claim on the hub.
+
+        ARCH-FIX R4: `fleetd.start_gate`/`start_agent` set `work_key=branch`,
+        e.g. `"staging/foo"` -- the ref with `refs/heads/` stripped, never
+        the bare slug (`"foo"`) and never the full ref
+        (`"refs/heads/staging/foo"`). `compute()` below matches against all
+        three forms for exactly this reason: comparing only slug/ref left a
+        real fleetd-held gate claim invisible to this set, so a second host
+        computing the queue would offer the same branch as gate work while
+        another host was already gating it -- the double-gate leases exist
+        to prevent, reintroduced at the queue layer instead of the claim
+        layer. `is_expired` here relies on the holder actually renewing
+        (claim.py's `acquire`-owns-renewal contract, R2); before that fix
+        this filter silently dropped every gate past ten minutes, which is
+        every real gate, and was a second, independent path to the same
+        double-gate outcome.
+        """
         keys: Set[str] = set()
         for ref in self.hub.list(CLAIMS_PREFIX):
             payload = self.hub.read(ref)
@@ -197,6 +254,12 @@ class Queue:
         branch into the local cache, under a disposable ref namespace, so
         `merge-base --is-ancestor` can run against it. Returns the
         namespace used, for later cleanup.
+
+        The tip and every staging branch are CODE refs, so this fetches
+        from `hub.code_url` -- not `hub.url` (the state hub once code and
+        state are split across two repos). `code_url` defaults to `url`
+        (`fleetlib.Hub`), so a fixture with a single combined repo behaves
+        exactly as before.
         """
         cache_ns = f"{_QUEUE_CACHE_NS}/{uuid.uuid4().hex}"
         refspecs = [f"+{self.tip_ref}:{cache_ns}/tip"]
@@ -204,17 +267,17 @@ class Queue:
             safe = slug.replace("/", "__")
             refspecs.append(f"+{ref}:{cache_ns}/staging/{safe}")
 
-        result = self._git(["fetch", "--no-tags", "--quiet", self.hub.url, *refspecs])
+        result = self._git(["fetch", "--no-tags", "--quiet", self.hub.code_url, *refspecs])
         if result.returncode != 0:
             raise HubUnreachableError(
-                f"fetch for ancestry check failed: {result.stderr.decode('utf-8', 'replace').strip()}"
+                f"fetch for ancestry check failed: {result.stderr.strip()}"
             )
         return cache_ns
 
     def _is_ancestor(self, cache_ns: str, candidate_sha: str, tip_sha: str) -> bool:
         result = self._git(["merge-base", "--is-ancestor", candidate_sha, tip_sha])
         if result.returncode not in (0, 1):
-            stderr = result.stderr.decode("utf-8", "replace").strip()
+            stderr = result.stderr.strip()
             raise QueueError(f"merge-base --is-ancestor failed unexpectedly: {stderr}")
         return result.returncode == 0
 
@@ -229,8 +292,29 @@ class Queue:
             self._git(["update-ref", "-d", ref])
 
     def _git(self, args, timeout: int = 30):
-        cmd = ["git", "--git-dir", str(self.hub.workdir)] + args
-        try:
-            return subprocess.run(cmd, capture_output=True, timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            raise HubUnreachableError(f"{' '.join(cmd)} timed out after {timeout}s") from exc
+        """Every git command this module runs, through `fleetlib.run_git`
+        -- the same helper `fleetlib.Hub` itself spawns git with (R5).
+
+        This was a bare `subprocess.run(["git", ...])`, which is fine for
+        the two LOCAL commands here (`merge-base --is-ancestor`,
+        `update-ref -d` inside the hub's own disposable cache) and was
+        wrong for the third: `_fetch_for_ancestry` fetches from
+        `self.hub.code_url`, a real remote. That fetch therefore ran with
+        no credential helper (so against a private HTTPS code remote it
+        failed with an authentication error naming the remote, never the
+        missing token), with whatever `GIT_SSH_COMMAND` the ambient
+        environment happened to carry instead of the pinned
+        `BatchMode=yes`/`ConnectTimeout=10` baseline, and with
+        `GIT_TERMINAL_PROMPT` unset -- i.e. a daemon's queue computation
+        one credential prompt away from blocking forever.
+
+        Routing ALL THREE through one helper rather than only the remote
+        one is deliberate: "which of these talks to a remote" is exactly
+        the judgement that was wrong the first time, and the two local
+        commands lose nothing by running under the same pinned env.
+
+        Returns a `fleetlib._Result` (str stdout/stderr), not a
+        `CompletedProcess` (bytes) -- the call sites read `.stderr`
+        directly.
+        """
+        return run_git(["git", "--git-dir", str(self.hub.workdir)] + args, timeout=timeout)

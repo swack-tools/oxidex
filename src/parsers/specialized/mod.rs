@@ -6,6 +6,7 @@
 //! moved to `crate::parsers::macho`.
 
 pub mod aa;
+pub(crate) mod dicom_dict;
 pub mod dwg;
 pub mod dxf;
 pub mod evtx;

@@ -28,8 +28,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from claim import Claim  # noqa: E402
-from fleetlib import Hub  # noqa: E402
 from workqueue import INTENTS_PREFIX, Queue, QueueError  # noqa: E402
+from _env import HermeticCase  # noqa: E402
+from _fixtures import make_hub  # noqa: E402
 
 
 def _run_git(args, cwd=None, input_bytes=None):
@@ -41,7 +42,7 @@ def _run_git(args, cwd=None, input_bytes=None):
     return result
 
 
-class QueueTestCase(unittest.TestCase):
+class QueueTestCase(HermeticCase):
     """Base fixture: a throwaway bare repo with real commit history for the
     tip and a handful of staging branches, standing in for the hub.
     """
@@ -49,6 +50,7 @@ class QueueTestCase(unittest.TestCase):
     TIP_REF = "refs/heads/refactor/tag-machinery"
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="queue-test-")
         self.hub_path = str(Path(self._tmp_root) / "hub.git")
         self.workdir = str(Path(self._tmp_root) / "cache")
@@ -68,7 +70,7 @@ class QueueTestCase(unittest.TestCase):
 
         self._init_history()
 
-        self.hub = Hub(url=self.hub_path, workdir=self.workdir)
+        self.hub = make_hub(self, self.hub_path, workdir=self.workdir)
         self.queue = Queue(self.hub, tip_ref=self.TIP_REF)
 
     def tearDown(self):

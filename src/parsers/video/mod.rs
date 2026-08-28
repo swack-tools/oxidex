@@ -13,8 +13,10 @@ pub mod mkv;
 pub mod mp4;
 pub mod mts;
 pub mod mxf;
+pub mod realmedia;
 pub mod swf;
 pub mod webm;
+pub mod wtv;
 
 pub use asf::{AsfParser, parse_asf_metadata};
 pub use avi::{AviParser, parse_avi_metadata};

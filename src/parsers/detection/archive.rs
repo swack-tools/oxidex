@@ -63,6 +63,18 @@ pub fn detect_zip_variant(reader: &dyn FileReader) -> FileFormat {
             return FileFormat::PPTX;
         }
 
+        // Capture One EIP. ExifTool's ProcessZIP recognises it by member
+        // name -- `membersMatching('^CaptureOne/.*\.(cos|COS)$')`
+        // (`ZIP.pm:619-623`, after the OOXML check and before iWork) -- and
+        // hands the archive to `CaptureOne::ProcessEIP`. The pattern is
+        // case-sensitive on the directory and admits exactly the two literal
+        // extension spellings, so this mirrors it byte for byte.
+        if archive.file_names().any(|name| {
+            name.starts_with("CaptureOne/") && (name.ends_with(".cos") || name.ends_with(".COS"))
+        }) {
+            return FileFormat::EIP;
+        }
+
         if archive.by_name("Index/Presentation.iwa").is_ok() {
             return FileFormat::Keynote;
         }

@@ -657,6 +657,29 @@ pub(crate) fn parse_id3v1(data: &[u8], metadata: &mut MetadataMap) -> Result<()>
     // ID3v1 tag size is always 128 bytes
     metadata.insert("ID3TagSize".to_string(), TagValue::new_integer(128));
 
+    // `%Image::ExifTool::ID3::v1`'s own `PRIORITY => 0` (ID3.pm:338, "let ID3v2
+    // tags replace these if they come later") and its `GROUPS => { 1 =>
+    // 'ID3v1' }` (ID3.pm:337). Both matter to `Composite:DateTimeOriginal`,
+    // whose `Desire => 'ID3:Year'` (ID3.pm:841-859) is a family-0 qualifier
+    // that these tags satisfy: at the default priority the v1 Year would beat
+    // the v2 one and report the wrong year for any file carrying both.
+    const ID3V1_PRIORITY: u8 = 0;
+    // Left empty on purpose: `tag_resolution::family1_label` falls back to the
+    // key's own `ID3v1` prefix, while `family0_label` routes an empty group1
+    // through `resolve_family0`, which is where the `ID3v1 -> ID3` mapping
+    // lives. Naming `ID3v1` here instead would make family 0 report `ID3v1`
+    // too and the `ID3:Year` dependency would stop resolving at all.
+    const ID3V1_GROUP1: &str = "";
+    let mut put = |key: &str, value: TagValue| {
+        metadata.insert_occurrence(
+            key.to_string(),
+            value,
+            ID3V1_PRIORITY,
+            ID3V1_GROUP1,
+            crate::core::tag_occurrence::Instance::default(),
+        );
+    };
+
     // Extract fields (all ISO-8859-1 encoded)
     let title = decode_latin1(&data[3..33]);
     let artist = decode_latin1(&data[33..63]);
@@ -666,19 +689,19 @@ pub(crate) fn parse_id3v1(data: &[u8], metadata: &mut MetadataMap) -> Result<()>
     let genre = data[127];
 
     if !title.is_empty() {
-        metadata.insert("ID3v1:Title".to_string(), TagValue::new_string(title));
+        put("ID3v1:Title", TagValue::new_string(title));
     }
     if !artist.is_empty() {
-        metadata.insert("ID3v1:Artist".to_string(), TagValue::new_string(artist));
+        put("ID3v1:Artist", TagValue::new_string(artist));
     }
     if !album.is_empty() {
-        metadata.insert("ID3v1:Album".to_string(), TagValue::new_string(album));
+        put("ID3v1:Album", TagValue::new_string(album));
     }
     if !year.is_empty() {
-        metadata.insert("ID3v1:Year".to_string(), TagValue::new_string(year));
+        put("ID3v1:Year", TagValue::new_string(year));
     }
     if !comment.is_empty() {
-        metadata.insert("ID3v1:Comment".to_string(), TagValue::new_string(comment));
+        put("ID3v1:Comment", TagValue::new_string(comment));
     }
     // ID3.pm:373-378 gives the ID3v1 Genre byte `PrintConv => \%genre`, the very
     // hash PrintGenre uses, so the two paths must agree. Emitting the raw byte
@@ -695,8 +718,8 @@ pub(crate) fn parse_id3v1(data: &[u8], metadata: &mut MetadataMap) -> Result<()>
     // repo warns against. Omission is the safe direction; every code the gate does
     // admit (0..191 are all present in %genre) now renders as its real name.
     if genre < 192 {
-        metadata.insert(
-            "ID3v1:Genre".to_string(),
+        put(
+            "ID3v1:Genre",
             TagValue::new_string(genre_name(&genre.to_string())),
         );
     }

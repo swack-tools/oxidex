@@ -29,6 +29,7 @@ pub mod svg;
 pub mod webp;
 pub mod wpg;
 pub mod xcf;
+pub mod xisf;
 
 pub use avif::AVIFParser;
 pub use bmp::BMPParser;

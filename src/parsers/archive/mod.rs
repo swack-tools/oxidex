@@ -1,6 +1,7 @@
 //! Archive format parsers
 
 pub mod ar;
+pub mod captureone;
 pub mod gz;
 pub mod iso;
 pub mod ole;

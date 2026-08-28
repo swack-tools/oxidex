@@ -1,0 +1,1280 @@
+#!/usr/bin/env python3
+"""Tests for the code/state split (docs/AGENT-SERVER-SPEC.md §4.4's routing
+table, Stage 1 of docs/AGENT-SERVER-PLAN.md): once the fleet spine is two
+GitHub repos instead of one -- a PUBLIC code repo carrying `refs/heads/*`
+(the tip, `staging/*`, `rescued/*`) and a PRIVATE state repo carrying
+`refs/fleet/*` -- every call site that answers a *code* question has to be
+routed at the code repo, and every code WRITE at the code push repo.
+
+The table has four columns of consequence and this file pins all four:
+
+  * code READS -> `hub.code_url`: `workqueue`'s tip sha, `staging/*`
+    listing and ancestry fetch; `dispatch._have_objects` and its branch-sha
+    probe; `train`'s clone and tip reads; `agentworker`'s clone and branch
+    probes.
+  * code WRITES -> `hub.code_push_url`, over HTTPS with the host PAT:
+    `rescued/*`, the `staging/*` retirement CAS, the temp gate ref.
+  * THE TIP -> `hub.tip_push_url`, over ssh with the train deploy key, and
+    nothing else goes there. The tip is split out from the other three
+    because its CREDENTIAL is: the `tip-update` ruleset's bypass actor is a
+    deploy key, which cannot authenticate an HTTPS push, while the PAT is
+    HTTPS and is not a bypass actor. One shared URL had no correct setting
+    -- at ssh the three non-tip pushes ran under whatever key the ambient
+    agent offered, at HTTPS the deploy key was inert.
+  * coordination -> `hub.url`, unchanged, and asserted to have stayed
+    there after a full train run.
+
+Plus the three things that made the routing bugs survivable-looking:
+`QueueError` from a missing tip must become a `refused` reason rather than
+a daemon traceback; the tip push's deploy key must reach ONE subprocess's
+environment rather than `os.environ` (where the train singleton's renewer
+thread inherits it -- pinned here against the REAL renewer, on a
+`FLEET_TEST_RENEW_S` cadence, not a thread this file spawns to look like
+one); and every git command the fleet runs, `workqueue`'s ancestry fetch
+included, must go through `fleetlib.run_git` so it carries the credential
+helper, the pinned ssh options and `GIT_TERMINAL_PROMPT=0`.
+
+Two real bare repos stand in for the split, never one repo wearing two
+hats: `state.git` gets nothing but `refs/fleet/*` CAS payloads, exactly the
+way `fleetlib.Hub.create`/`read` write them in production; `code.git` gets
+a real tip commit plus two staging branches with real commit history,
+because `git merge-base`/`git merge-tree` need real objects, not orphan
+payload commits. `state.git` deliberately NEVER receives the code refs, so
+a call site that regresses to `hub.url` fails LOUD -- an actual git error,
+or a `None` this file asserts against -- rather than quietly succeeding
+against the wrong repo by coincidence.
+
+The tip in the fixture has ALSO moved past `staging/alpha`, which is not
+decoration: with the tip as alpha's merge-base, `dispatch.economic_refusal`
+correctly answers "no-drift" and the agentworker and train cases would exit
+before reaching the call site under test.
+
+Instrument: plain `unittest`, standard library only, against throwaway
+`git init --bare` repos under `tempfile.gettempdir()` -- never the
+production hub or code repo.
+
+Run with:
+    python3 -m unittest discover -s tools/fleet/tests -v
+"""
+
+from __future__ import annotations
+
+import contextlib
+import io
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+from _env import HermeticCase, scrub_env  # noqa: E402
+
+FLEET_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(FLEET_DIR))
+
+import agentworker  # noqa: E402
+import dispatch  # noqa: E402
+import fleetlib  # noqa: E402
+import train  # noqa: E402
+import workqueue  # noqa: E402
+from fleetlib import Hub, HubUnreachableError  # noqa: E402
+
+TIP_REF = "refs/heads/refactor/tag-machinery"
+GIT_ENV = {
+    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+}
+
+
+def _run(args, cwd=None, check=True):
+    import os
+    return subprocess.run(
+        args, cwd=cwd, check=check, capture_output=True, text=True,
+        env=scrub_env(**GIT_ENV),
+    )
+
+
+class _RepoPair:
+    """`state.git` (empty of code refs -- the STATE hub after the split)
+    and `code.git` (the tip plus two staging branches with real commit
+    history -- the CODE hub after the split), plus a seed worktree used
+    only to build that history."""
+
+    def __init__(self, tmp: Path):
+        assert str(tmp).startswith(tempfile.gettempdir()), "fixture must live under tempdir"
+        self.tmp = tmp
+        self.state = tmp / "state.git"
+        self.code = tmp / "code.git"
+        self.workdir = tmp / "cache"
+        self.work = tmp / "seed"
+        _run(["git", "init", "-q", "--bare", str(self.state)])
+        _run(["git", "init", "-q", "--bare", str(self.code)])
+        _run(["git", "init", "-q", str(self.work)])
+        self.tip_sha = self._seed_code()
+
+    def _git(self, *args, check=True):
+        return _run(["git", "-C", str(self.work), *args], check=check)
+
+    def _seed_code(self) -> str:
+        (self.work / "domains.toml").write_text("[[domain]]\nname = \"root\"\n")
+        self._git("add", ".")
+        self._git("commit", "-qm", "root")
+        self._git("branch", "-M", "refactor/tag-machinery")
+        root = self._git("rev-parse", "HEAD").stdout.strip()
+        self._git("push", "-q", str(self.code), "refactor/tag-machinery")
+
+        # staging/merged: an ancestor of the tip -- `_is_ancestor` must say
+        # True and the queue must filter it out as already landed.
+        self._git("push", "-q", str(self.code),
+                  "refactor/tag-machinery:refs/heads/staging/merged")
+        self.merged_sha = root
+
+        # staging/alpha: real drift off the tip, never merged into it --
+        # `_is_ancestor` must say False, and its own commit's object must
+        # only be reachable through `code.git`.
+        self._git("checkout", "-q", "-b", "staging/alpha")
+        (self.work / "alpha.txt").write_text("alpha\n")
+        self._git("add", "alpha.txt")
+        self._git("commit", "-qm", "alpha work")
+        self.alpha_sha = self._git("rev-parse", "HEAD").stdout.strip()
+        self._git("push", "-q", str(self.code), "staging/alpha:refs/heads/staging/alpha")
+
+        # Then the tip moves ON ITS OWN. Without this, alpha's merge-base
+        # IS the tip and `dispatch.economic_refusal` answers "no-drift" --
+        # a correct refusal that would stop the agentworker and train cases
+        # below before they reach the call site under test.
+        self._git("checkout", "-q", "refactor/tag-machinery")
+        (self.work / "tip2.txt").write_text("tip moved on\n")
+        self._git("add", "tip2.txt")
+        self._git("commit", "-qm", "tip advances past alpha")
+        tip = self._git("rev-parse", "HEAD").stdout.strip()
+        self._git("push", "-q", str(self.code), "refactor/tag-machinery")
+        self.root_sha = root
+        return tip
+
+    def hub(self, *, with_code_url: bool, workdir_name: str = "cache") -> Hub:
+        """A `Hub` whose `.url` is the STATE repo, built through the real
+        constructor: `code_url`/`code_push_url` are `fleetlib.Hub`'s own
+        arguments, so the fixture exercises the production shape rather
+        than an attribute stapled on afterwards."""
+        if with_code_url:
+            return Hub(str(self.state), workdir=self.tmp / workdir_name,
+                       code_url=str(self.code), code_push_url=str(self.code))
+        return Hub(str(self.state), workdir=self.tmp / workdir_name)
+
+    def refs_on(self, repo: Path, pattern: str) -> dict:
+        """`{refname: sha}` read with a plain `git ls-remote` -- the
+        instrument is git itself, never the code under test."""
+        out = _run(["git", "ls-remote", str(repo), pattern]).stdout
+        got = {}
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            sha, refname = line.split("\t", 1)
+            got[refname] = sha
+        return got
+
+    def combined_hub(self, workdir_name: str = "cache-combined") -> Hub:
+        """Pre-split shape: `.url` IS the code repo and `code_url`/
+        `code_push_url` are left to default to it -- "defaults to `url`, so
+        nothing changes when unset"."""
+        return Hub(str(self.code), workdir=self.tmp / workdir_name)
+
+    def staging_dict(self) -> dict:
+        return {
+            "alpha": ("refs/heads/staging/alpha", self.alpha_sha),
+            "merged": ("refs/heads/staging/merged", self.merged_sha),
+        }
+
+
+class _FixtureCase(HermeticCase):
+    def setUp(self):
+        super().setUp()
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpdir.name)
+        # HOME is redirected for every case in this file, the same way
+        # test_bringup_split.py does it, and for two independent reasons:
+        #
+        #   * `agentworker.run` builds its Hub at `Path.home()/.fleetd/
+        #     agentcache` and `train.run_train` at `~/.fleetd/traincache`
+        #     when no `hub_workdir` is passed, so the tests below were
+        #     writing into the DEVELOPER'S real ~/.fleetd -- outside any
+        #     tempdir, and on a live host into the directory a running
+        #     fleetd owns;
+        #   * `fleetlib.credential_env` now falls back to
+        #     `$HOME/.keel/secrets/git-token` when
+        #     `FLEET_GIT_TOKEN_FILE` is unset (R2), so a host that has
+        #     been through `install_secrets.sh` would wire its real PAT
+        #     helper into these fixtures' git commands. Harmless against
+        #     local bare repos, but "the test behaves differently on a
+        #     provisioned host" is exactly the property a fixture must
+        #     not have.
+        self._home = self.tmp / "home"
+        self._home.mkdir()
+        self._saved_home = os.environ.get("HOME")
+        os.environ["HOME"] = str(self._home)
+        self.repos = _RepoPair(self.tmp)
+
+    def tearDown(self):
+        if self._saved_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._saved_home
+        self._tmpdir.cleanup()
+
+
+# --------------------------------------------------------------------- #
+# workqueue.Queue._fetch_for_ancestry
+# --------------------------------------------------------------------- #
+
+
+class TestWorkqueueFetchForAncestry(_FixtureCase):
+    def test_reads_branch_history_from_code_url_not_state_url(self):
+        hub = self.repos.hub(with_code_url=True)
+        queue = workqueue.Queue(hub, tip_ref=TIP_REF)
+        staging = self.repos.staging_dict()
+        cache_ns = queue._fetch_for_ancestry(self.repos.tip_sha, staging)
+        try:
+            self.assertFalse(
+                queue._is_ancestor(cache_ns, self.repos.alpha_sha, self.repos.tip_sha),
+                msg="staging/alpha drifted off the tip and must not read as an ancestor",
+            )
+            self.assertTrue(
+                queue._is_ancestor(cache_ns, self.repos.merged_sha, self.repos.tip_sha),
+                msg="staging/merged IS the tip and must read as an ancestor",
+            )
+        finally:
+            queue._cleanup_cache(cache_ns, staging)
+
+    def test_raises_when_code_url_absent_and_state_url_lacks_the_history(self):
+        # No code_url set -> falls back to hub.url == state.git, which has
+        # none of these branches. Proves the fallback is real (it truly
+        # tries hub.url), not a silent no-op that happens to pass anyway.
+        hub = self.repos.hub(with_code_url=False)
+        queue = workqueue.Queue(hub, tip_ref=TIP_REF)
+        with self.assertRaises(HubUnreachableError):
+            queue._fetch_for_ancestry(self.repos.tip_sha, self.repos.staging_dict())
+
+    def test_still_works_when_code_and_state_are_one_combined_hub(self):
+        # "code_url defaults to url, so nothing changes when unset."
+        hub = self.repos.combined_hub()
+        queue = workqueue.Queue(hub, tip_ref=TIP_REF)
+        staging = self.repos.staging_dict()
+        cache_ns = queue._fetch_for_ancestry(self.repos.tip_sha, staging)
+        try:
+            self.assertTrue(queue._is_ancestor(cache_ns, self.repos.merged_sha, self.repos.tip_sha))
+        finally:
+            queue._cleanup_cache(cache_ns, staging)
+
+
+class TestWorkqueueGitGoesThroughFleetlib(_FixtureCase):
+    """R5. `Queue._git` was a bare `subprocess.run(["git", ...])`.
+
+    Two of its three call sites are local, but the third
+    (`_fetch_for_ancestry`) fetches from `hub.code_url` -- a real remote
+    -- so on a private HTTPS spine it ran with no credential helper, with
+    whatever `GIT_SSH_COMMAND` the ambient environment carried instead of
+    the pinned `BatchMode=yes`/`ConnectTimeout=10`/
+    `StrictHostKeyChecking=accept-new`, and with `GIT_TERMINAL_PROMPT`
+    unset -- one prompt away from a daemon parked forever on a queue
+    computation. The instrument is the `env=` dict actually handed to
+    `subprocess.run`, because that is the only observation that
+    distinguishes "routed through fleetlib" from "looks routed".
+    """
+
+    def _envs_for(self, fn) -> list:
+        spy = _SubprocessSpy()
+        with mock.patch.object(fleetlib.subprocess, "run", spy):
+            fn()
+        return [c for c in spy.calls if c["argv"] and c["argv"][0] == "git"]
+
+    def test_the_ancestry_fetch_runs_under_the_pinned_transport(self):
+        hub = self.repos.hub(with_code_url=True)
+        queue = workqueue.Queue(hub, tip_ref=TIP_REF)
+        staging = self.repos.staging_dict()
+        state = {}
+
+        def run_it():
+            state["ns"] = queue._fetch_for_ancestry(self.repos.tip_sha, staging)
+
+        calls = self._envs_for(run_it)
+        queue._cleanup_cache(state["ns"], staging)
+
+        fetches = [c for c in calls if "fetch" in c["argv"]]
+        self.assertTrue(fetches, "no fetch was issued")
+        for call in fetches:
+            self.assertTrue(call["via_fleetlib"],
+                            msg="the code-remote fetch bypassed fleetlib's env")
+            self.assertEqual(call["env_ssh"], fleetlib.DEFAULT_SSH_COMMAND)
+            self.assertIn(str(self.repos.code), call["argv"])
+
+    def test_every_queue_git_command_carries_the_fleet_environment(self):
+        """Including the two local ones. "Which of these talks to a
+        remote" is precisely the judgement that was wrong the first time,
+        so the fence is all of them, not the one that matters today."""
+        hub = self.repos.hub(with_code_url=True)
+        queue = workqueue.Queue(hub, tip_ref=TIP_REF)
+        calls = self._envs_for(lambda: queue.compute())
+        self.assertTrue(calls)
+        for call in calls:
+            self.assertTrue(call["via_fleetlib"], msg=f"raw git: {call['argv']}")
+
+    def test_the_helper_is_fleetlibs_and_the_terminal_prompt_is_disabled(self):
+        """A direct read of the env `run_git` builds, so a regression that
+        keeps `via_fleetlib` true while dropping a variable still fails."""
+        seen = {}
+        real = fleetlib.subprocess.run
+
+        def capture(cmd, **kw):
+            seen.update(kw.get("env") or {})
+            return real(cmd, **kw)
+
+        with mock.patch.object(fleetlib.subprocess, "run", capture):
+            fleetlib.run_git(["git", "--version"])
+        self.assertEqual(seen.get("GIT_TERMINAL_PROMPT"), "0")
+        self.assertEqual(seen.get("GIT_SSH_COMMAND"), fleetlib.DEFAULT_SSH_COMMAND)
+
+
+# --------------------------------------------------------------------- #
+# dispatch._have_objects / dispatch.merge_tree_sha
+# --------------------------------------------------------------------- #
+
+
+class TestDispatchHaveObjects(_FixtureCase):
+    def test_reads_objects_and_computes_merge_tree_from_code_url(self):
+        hub = self.repos.hub(with_code_url=True)
+        self.assertTrue(
+            dispatch._have_objects(hub, [TIP_REF, "refs/heads/staging/alpha"])
+        )
+        tree = dispatch.merge_tree_sha(hub, self.repos.tip_sha, self.repos.alpha_sha)
+        self.assertIsNotNone(tree, "alpha only adds a file onto the tip -- the merge must succeed")
+
+    def test_fails_closed_when_code_url_absent_and_state_url_lacks_the_objects(self):
+        hub = self.repos.hub(with_code_url=False)
+        self.assertFalse(
+            dispatch._have_objects(hub, [TIP_REF, "refs/heads/staging/alpha"]),
+            msg="hub.url (state.git) has neither ref; the fetch must fail, not silently succeed",
+        )
+
+    def test_still_works_when_code_and_state_are_one_combined_hub(self):
+        hub = self.repos.combined_hub()
+        self.assertTrue(
+            dispatch._have_objects(hub, [TIP_REF, "refs/heads/staging/alpha"])
+        )
+        tree = dispatch.merge_tree_sha(hub, self.repos.tip_sha, self.repos.alpha_sha)
+        self.assertIsNotNone(tree)
+
+
+# --------------------------------------------------------------------- #
+# train._run_train_locked's initial clone
+# --------------------------------------------------------------------- #
+
+
+class _StopAfterClone(Exception):
+    """Raised by the `train._git` stub right after it records the `clone`
+    command's source, so the test never has to stand up the rest of the
+    train pipeline (gate, bisect, push) just to observe one `git clone`
+    argument."""
+
+
+class TestTrainClonesFromCodeUrl(_FixtureCase):
+    def _capture_clone_src(self, hub: Hub, hub_url: str) -> list:
+        seen: list = []
+        real_git = train._git
+
+        def fake_git(args, cwd=None, check=True):
+            if args and args[0] == "clone":
+                seen.append(args[2])
+                raise _StopAfterClone()
+            return real_git(args, cwd=cwd, check=check)
+
+        with mock.patch.object(train, "_git", side_effect=fake_git):
+            with self.assertRaises(_StopAfterClone):
+                train._run_train_locked(
+                    hub, hub_url,
+                    gate_fn=lambda *_a, **_k: "PASS",
+                    batch_max=10,
+                    dry_run=True,
+                    _clone_src=None,
+                )
+        return seen
+
+    def test_clones_from_code_url_not_state_url(self):
+        hub = self.repos.hub(with_code_url=True)
+        seen = self._capture_clone_src(hub, str(self.repos.state))
+        self.assertEqual(seen, [str(self.repos.code)])
+
+    def test_clones_from_url_when_code_url_absent(self):
+        hub = self.repos.hub(with_code_url=False)
+        seen = self._capture_clone_src(hub, str(self.repos.state))
+        self.assertEqual(seen, [str(self.repos.state)])
+
+    def test_explicit_clone_src_still_wins_over_both(self):
+        # `_clone_src` is the test-injection seam `run_train` itself
+        # exposes; it must keep outranking code_url exactly as it always
+        # outranked hub_url.
+        hub = self.repos.hub(with_code_url=True)
+        seen: list = []
+        real_git = train._git
+
+        def fake_git(args, cwd=None, check=True):
+            if args and args[0] == "clone":
+                seen.append(args[2])
+                raise _StopAfterClone()
+            return real_git(args, cwd=cwd, check=check)
+
+        with mock.patch.object(train, "_git", side_effect=fake_git):
+            with self.assertRaises(_StopAfterClone):
+                train._run_train_locked(
+                    hub, str(self.repos.state),
+                    gate_fn=lambda *_a, **_k: "PASS",
+                    batch_max=10,
+                    dry_run=True,
+                    _clone_src=str(self.repos.code) + "-explicit-override",
+                )
+        self.assertEqual(seen, [str(self.repos.code) + "-explicit-override"])
+
+
+# --------------------------------------------------------------------- #
+# refs/fleet/* stay on the state hub, unaffected by any of the above
+# --------------------------------------------------------------------- #
+
+
+class TestStateRefsStayOnStateUrl(_FixtureCase):
+    def test_hub_cas_reads_and_writes_use_url_never_code_url(self):
+        hub = self.repos.hub(with_code_url=True)
+        ok = hub.create("refs/fleet/intents/demo", {"status": "open"})
+        self.assertTrue(ok)
+
+        payload = hub.read("refs/fleet/intents/demo")
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload.get("status"), "open")
+
+        # It must have landed on the STATE repo, never the code repo --
+        # Hub.create/read never look at code_url.
+        on_state = subprocess.run(
+            ["git", "ls-remote", str(self.repos.state), "refs/fleet/intents/demo"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertTrue(on_state.stdout.strip(), "payload must be on state.git")
+
+        on_code = subprocess.run(
+            ["git", "ls-remote", str(self.repos.code), "refs/fleet/intents/demo"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(on_code.stdout.strip(), "", "payload must NOT be on code.git")
+
+
+# --------------------------------------------------------------------- #
+# B1 -- workqueue.compute() against a real split spine
+# --------------------------------------------------------------------- #
+
+
+class TestQueueComputeAgainstSplitSpine(_FixtureCase):
+    """`Queue.compute()` asks two questions before it can answer anything:
+    "where is the tip" and "what staging branches exist". Both were asked
+    of `hub.url`. Against a state repo carrying only `refs/fleet/*` the
+    first returns None -- so `compute()` raises `QueueError` on EVERY call
+    -- and the second returns `{}`. `QueueError` is not a `HubError`, and
+    `fleetd`'s reconcile loop catches exactly `HubError`, so the daemon
+    died in a traceback before its first heartbeat.
+    """
+
+    def test_state_repo_really_has_no_code_refs(self):
+        # The fixture's own premise, asserted rather than assumed: if
+        # state.git ever grew a refs/heads/*, every test below would pass
+        # for the wrong reason.
+        self.assertEqual(self.repos.refs_on(self.repos.state, "refs/heads/*"), {})
+
+    def test_compute_lists_staging_and_the_tip_from_the_code_repo(self):
+        hub = self.repos.hub(with_code_url=True)
+        queue = workqueue.Queue(hub, tip_ref=TIP_REF)
+        got = queue.compute()
+        self.assertEqual(sorted(got), ["alpha"])
+        self.assertEqual(got["alpha"].sha, self.repos.alpha_sha)
+        self.assertEqual(got["alpha"].ref, "refs/heads/staging/alpha")
+
+    def test_compute_raises_queue_error_when_the_tip_is_looked_for_on_state(self):
+        # The pre-fix routing, reproduced exactly: code_url == url == the
+        # state repo. This is the traceback B1 names.
+        hub = self.repos.hub(with_code_url=False)
+        with self.assertRaises(workqueue.QueueError) as caught:
+            workqueue.Queue(hub, tip_ref=TIP_REF).compute()
+        self.assertIn(TIP_REF, str(caught.exception))
+        self.assertNotIsInstance(caught.exception, fleetlib.HubError)
+
+    def test_compute_or_refusal_returns_a_reason_instead_of_raising(self):
+        hub = self.repos.hub(with_code_url=False)
+        got, refusal = workqueue.Queue(hub, tip_ref=TIP_REF).compute_or_refusal()
+        self.assertEqual(got, {})
+        self.assertIsNotNone(refusal)
+        reason, detail = refusal
+        self.assertEqual(reason, "queue-unavailable")
+        self.assertIn(TIP_REF, detail)
+
+    def test_compute_or_refusal_is_transparent_on_the_happy_path(self):
+        hub = self.repos.hub(with_code_url=True)
+        queue = workqueue.Queue(hub, tip_ref=TIP_REF)
+        got, refusal = queue.compute_or_refusal()
+        self.assertIsNone(refusal)
+        self.assertEqual(sorted(got), ["alpha"])
+
+    def test_an_unreachable_code_repo_still_raises_rather_than_refusing(self):
+        # A transport failure is not a configuration verdict: it must keep
+        # its HubUnreachableError so fleetd's degrade-this-step path sees
+        # it, instead of being flattened into a "refused" reason that reads
+        # as permanent.
+        hub = Hub(str(self.repos.state), workdir=self.tmp / "cache-gone",
+                  code_url=str(self.tmp / "no-such-repo.git"))
+        with self.assertRaises(HubUnreachableError):
+            workqueue.Queue(hub, tip_ref=TIP_REF).compute_or_refusal()
+
+
+# --------------------------------------------------------------------- #
+# B2 -- the train writes CODE to the code repo and STATE to the state repo
+# --------------------------------------------------------------------- #
+
+
+class _TrainSplitBase(_FixtureCase):
+    def setUp(self):
+        super().setUp()
+        # Never the developer's real ~/git/oxidex.git/train.token, and
+        # never a deploy key leaked in from the ambient shell.
+        self._saved_env = {
+            k: os.environ.get(k)
+            for k in (train.TRAIN_TOKEN_ENV, train.TRAIN_DEPLOY_KEY_ENV, "GIT_SSH_COMMAND")
+        }
+        os.environ[train.TRAIN_TOKEN_ENV] = str(self.tmp / "no-such-train.token")
+        os.environ.pop(train.TRAIN_DEPLOY_KEY_ENV, None)
+        os.environ.pop("GIT_SSH_COMMAND", None)
+
+    def tearDown(self):
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        super().tearDown()
+
+    def run_train(self, **kw):
+        return train.run_train(
+            str(self.repos.state),
+            self.tmp,
+            gate_fn=lambda clone, label: "PASS",
+            epoch="split-test",
+            hub_workdir=self.tmp / "traincache",
+            code_url=str(self.repos.code),
+            code_push_url=str(self.repos.code),
+            **kw,
+        )
+
+
+class TestTrainLandsCodeOnCodeAndStateOnState(_TrainSplitBase):
+    def test_one_run_puts_every_ref_on_the_repo_that_owns_it(self):
+        res = self.run_train()
+        self.assertEqual(res.outcome, "advanced", msg=f"ejected={res.ejected}")
+        self.assertEqual(res.landed, ["staging/alpha"])
+
+        code_heads = self.repos.refs_on(self.repos.code, "refs/heads/*")
+        new_tip = res.new_tip
+        self.assertTrue(new_tip)
+
+        # 1. the tip advanced ON THE CODE REPO
+        self.assertEqual(code_heads.get(TIP_REF), new_tip)
+        self.assertNotEqual(new_tip, self.repos.tip_sha)
+
+        # 2. rescued/alpha landed on the code repo at the gated sha
+        self.assertEqual(code_heads.get("refs/heads/rescued/alpha"),
+                         self.repos.alpha_sha)
+
+        # 3. staging/alpha was RETIRED from the code repo
+        self.assertNotIn("refs/heads/staging/alpha", code_heads)
+
+        # 4. the tip signal is a coordination ref: state repo, not code
+        signal = self.repos.refs_on(self.repos.state, "refs/fleet/signals/*")
+        self.assertIn("refs/fleet/signals/tip", signal)
+        hub = self.repos.hub(with_code_url=True, workdir_name="verify")
+        self.assertEqual((hub.read("refs/fleet/signals/tip") or {}).get("sha"), new_tip)
+
+        # 5. NOTHING code-shaped leaked onto the state repo. This is the
+        #    assertion the pre-fix train fails outright: its tip push, its
+        #    staging retirement and its temp gate ref all aimed here.
+        self.assertEqual(self.repos.refs_on(self.repos.state, "refs/heads/*"), {})
+
+        # 6. ...and nothing coordination-shaped leaked onto the PUBLIC
+        #    code repo. `refs/fleet/*` carries user@host:pid provenance
+        #    (SPEC 8) and the code repo is public.
+        self.assertEqual(self.repos.refs_on(self.repos.code, "refs/fleet/*"), {})
+
+    def test_a_moved_staging_branch_is_not_retired(self):
+        """The CAS survives the move to the code repo: `delete_code_ref`
+        carries `--force-with-lease`, so an author who pushed during the
+        gate window keeps their commit."""
+        original = self.repos.alpha_sha
+        moved = {}
+
+        real_push_tip = train._push_tip
+
+        def push_then_move(hub, clone, options):
+            r = real_push_tip(hub, clone, options)
+            # The author pushes during the (here, instantaneous) gate
+            # window, after the train captured alpha's sha.
+            _run(["git", "-C", str(self.repos.work), "checkout", "-q", "staging/alpha"])
+            (self.repos.work / "late.txt").write_text("pushed during the gate\n")
+            _run(["git", "-C", str(self.repos.work), "add", "late.txt"])
+            _run(["git", "-C", str(self.repos.work), "commit", "-qm", "late work"])
+            moved["sha"] = _run(
+                ["git", "-C", str(self.repos.work), "rev-parse", "HEAD"]).stdout.strip()
+            _run(["git", "-C", str(self.repos.work), "push", "-q", str(self.repos.code),
+                  "staging/alpha:refs/heads/staging/alpha"])
+            return r
+
+        with mock.patch.object(train, "_push_tip", side_effect=push_then_move):
+            res = self.run_train()
+
+        self.assertEqual(res.outcome, "advanced")
+        self.assertEqual([b for b, _why in res.retire_failures], ["staging/alpha"])
+        code_heads = self.repos.refs_on(self.repos.code, "refs/heads/*")
+        self.assertEqual(code_heads.get("refs/heads/staging/alpha"), moved["sha"])
+        self.assertNotEqual(moved["sha"], original)
+
+
+# --------------------------------------------------------------------- #
+# B2/B3 -- the deploy key is a per-subprocess env, never os.environ
+# --------------------------------------------------------------------- #
+
+
+class _SubprocessSpy:
+    """Records `(argv, env["GIT_SSH_COMMAND"])` for every git subprocess
+    `fleetlib` launches, and the value of `os.environ["GIT_SSH_COMMAND"]`
+    at that instant.
+
+    The instrument matters here. The test this replaces spied
+    `Hub.push_ref` and read `os.environ` from inside it, which passes
+    whether or not the value ever reaches git -- it was green while the
+    feature was broken in three separate ways (wrong repo, HTTPS URL a
+    deploy key cannot authenticate, three pinned ssh options dropped).
+    Reading the `env=` dict actually handed to `subprocess.run` is the
+    only observation that distinguishes them.
+    """
+
+    def __init__(self):
+        self.calls = []
+        self._lock = threading.Lock()
+        self._real = fleetlib.subprocess.run
+        self.on_call = None
+
+    def __call__(self, cmd, **kw):
+        env = kw.get("env")
+        record = {
+            "argv": list(cmd),
+            # `via_fleetlib`: `fleetlib.subprocess` and `train.subprocess`
+            # are the same module object, so patching one patches both.
+            # Only `fleetlib.run_git` passes an explicit `env=`; the
+            # train's own `_git` helper (local merges, checkouts, and the
+            # clone of the PUBLIC code repo) inherits os.environ and is
+            # not part of the routing contract under test here.
+            "via_fleetlib": env is not None,
+            "env_ssh": (env or {}).get("GIT_SSH_COMMAND"),
+            "os_environ_ssh": os.environ.get("GIT_SSH_COMMAND"),
+            "thread": threading.current_thread().name,
+        }
+        with self._lock:
+            self.calls.append(record)
+        if self.on_call is not None:
+            self.on_call(record)
+        return self._real(cmd, **kw)
+
+    @property
+    def fleetlib_calls(self) -> list:
+        """The git commands `fleetlib` launched. Two exclusions, both
+        deliberate: commands with no explicit `env=` are the train's own
+        raw `_git` helper (local merges/checkouts and the clone of the
+        PUBLIC code repo), and `claim.py`'s `rustc -vV` platform probe is
+        given an env but is not a git command and has no ssh transport to
+        pin."""
+        return [c for c in self.calls
+                if c["via_fleetlib"] and c["argv"] and c["argv"][0] == "git"]
+
+    def pushes_to(self, url: str) -> list:
+        return [c for c in self.fleetlib_calls
+                if "push" in c["argv"] and url in c["argv"]]
+
+    def touching(self, url: str) -> list:
+        return [c for c in self.fleetlib_calls if url in c["argv"]]
+
+
+class TestTrainDeployKeyIsScopedToOneSubprocess(_TrainSplitBase):
+    """The concurrency this pins is REAL, not simulated (R7).
+
+    An earlier version of this test spawned its own thread doing a state
+    write while the tip push was in flight -- the right *shape*, but a
+    shape the test itself built. It could not have caught a regression in
+    which `claim.py`'s renewer, the actual thread at risk, stopped going
+    through `fleetlib` at all. Here the renewer is the train singleton's
+    own: `FLEET_TEST_RENEW_S` (`claim.py` L121/L336, read per-Claim from
+    the environment) drops the renewal cadence from 120 s to 1 s so the
+    120-s-timer-inside-a-45-minute-gate overlap happens inside a few
+    seconds of test, and the tip push is HELD until a renewal has actually
+    been observed on the wire.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.key = self.tmp / "train_deploy_key"
+        self.key.write_text("not a real key, never offered to a real host\n")
+        self.key.chmod(0o600)
+        os.environ[train.TRAIN_DEPLOY_KEY_ENV] = str(self.key)
+        self.spy = _SubprocessSpy()
+
+    def _short_lease(self, ttl: str = "8", renew: str = "1"):
+        """Real lease renewals on a test-length timer. `Claim.__init__`
+        re-reads both variables per instance, so setting them here reaches
+        the singleton `run_train` takes."""
+        import claim as claim_mod
+        for key, value in ((claim_mod.TTL_ENV, ttl), (claim_mod.RENEW_ENV, renew)):
+            self.addCleanup(_restore_env, key, os.environ.get(key))
+            os.environ[key] = value
+
+    @staticmethod
+    def _renewer_calls(calls) -> list:
+        return [c for c in calls if c["thread"].startswith("claim-renew-")]
+
+    def test_the_deploy_key_reaches_the_tip_push_and_nothing_else(self):
+        expected = train._train_deploy_key_ssh_command()
+        self.assertIsNotNone(expected)
+
+        # B2's dropped options: the hand-rolled string had none of these.
+        for option in ("-o BatchMode=yes", "-o ConnectTimeout=10",
+                       "-o StrictHostKeyChecking=accept-new",
+                       "-o IdentitiesOnly=yes", "-o IdentityAgent=none"):
+            self.assertIn(option, expected)
+        self.assertIn(f"-i {self.key}", expected)
+
+        self._short_lease()
+
+        # Hold the tip push at the door until the singleton's own renewer
+        # has pushed refs/fleet/claims/train/singleton at the STATE repo.
+        # With the deploy key in os.environ (the shape B2 fixed) that push
+        # inherits `-i <deploy key> -o IdentitiesOnly=yes` and offers the
+        # CODE repo's key to a repo that has never heard of it.
+        concurrent = {}
+
+        def on_call(record):
+            if record["env_ssh"] != expected or "done" in concurrent:
+                return
+            concurrent["done"] = True
+            with self.spy._lock:
+                before = len(self._renewer_calls(self.spy.calls))
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                with self.spy._lock:
+                    now = self._renewer_calls(self.spy.calls)
+                if len(now) > before:
+                    concurrent["observed"] = len(now) - before
+                    return
+                time.sleep(0.05)
+
+        self.spy.on_call = on_call
+        with mock.patch.object(fleetlib.subprocess, "run", self.spy):
+            res = self.run_train()
+        self.assertEqual(res.outcome, "advanced", msg=f"ejected={res.ejected}")
+
+        code = str(self.repos.code)
+        state = str(self.repos.state)
+
+        tip_pushes = [c for c in self.spy.pushes_to(code)
+                      if any(a.endswith(":" + TIP_REF) for a in c["argv"])]
+        self.assertTrue(self.spy.fleetlib_calls)
+        self.assertEqual(len(tip_pushes), 1, msg=[c["argv"] for c in self.spy.calls])
+        self.assertEqual(tip_pushes[0]["env_ssh"], expected)
+
+        # os.environ was NEVER touched -- not during the push, not after.
+        self.assertTrue(all(c["os_environ_ssh"] is None for c in self.spy.calls),
+                        msg="the deploy key was exported process-wide")
+        # ...which also means the train's own raw `_git` subprocesses,
+        # which inherit os.environ wholesale, never saw it either.
+        self.assertTrue(any(not c["via_fleetlib"] for c in self.spy.calls))
+        self.assertNotIn("GIT_SSH_COMMAND", os.environ)
+
+        # Every command aimed at the STATE repo -- claims, the attempt
+        # ledger, the tip signal, the concurrent renewer probe -- ran under
+        # the pinned default, never the deploy key.
+        state_calls = self.spy.touching(state)
+        self.assertTrue(state_calls)
+        for call in state_calls:
+            self.assertEqual(call["env_ssh"], fleetlib.DEFAULT_SSH_COMMAND,
+                             msg=f"deploy key leaked onto {call['argv']}")
+
+        # THE ASSERTION R7 ASKED FOR. The singleton's OWN renewer thread
+        # pushed while the deploy-key push was held open, and its
+        # subprocess environment carries the pinned default -- no `-i`, no
+        # IdentitiesOnly, and the STATE repo as its remote.
+        self.assertTrue(concurrent.get("done"), "the tip push never fired")
+        self.assertGreaterEqual(
+            concurrent.get("observed", 0), 1,
+            "no real claim renewal landed inside the tip-push window "
+            "(FLEET_TEST_RENEW_S did not take effect)")
+        renewer_calls = self._renewer_calls(self.spy.fleetlib_calls)
+        self.assertTrue(renewer_calls, "the singleton's renewer issued no git command")
+        for call in renewer_calls:
+            self.assertEqual(call["env_ssh"], fleetlib.DEFAULT_SSH_COMMAND)
+            self.assertNotIn("-i ", call["env_ssh"])
+            self.assertNotIn(str(self.key), call["env_ssh"])
+            self.assertNotIn(code, call["argv"],
+                             msg="a renewal aimed at the CODE repo")
+        self.assertTrue(
+            any("push" in c["argv"] for c in renewer_calls),
+            msg="the renewer read but never pushed; the lease was not renewed")
+
+        # And the non-tip CODE writes (rescued/*, the staging retirement)
+        # do not carry the key either: SPEC 3.1 routes them through the
+        # PAT, and the ruleset bypass exists for the tip alone.
+        other_code_pushes = [c for c in self.spy.pushes_to(code) if c not in tip_pushes]
+        self.assertTrue(other_code_pushes)
+        for call in other_code_pushes:
+            self.assertEqual(call["env_ssh"], fleetlib.DEFAULT_SSH_COMMAND)
+
+    def test_a_missing_key_file_is_normal_and_leaves_the_default(self):
+        os.environ[train.TRAIN_DEPLOY_KEY_ENV] = str(self.tmp / "absent")
+        self.assertIsNone(train._train_deploy_key_ssh_command())
+        with mock.patch.object(fleetlib.subprocess, "run", self.spy):
+            res = self.run_train()
+        self.assertEqual(res.outcome, "advanced")
+        self.assertTrue(self.spy.fleetlib_calls)
+        for call in self.spy.fleetlib_calls:
+            self.assertEqual(call["env_ssh"], fleetlib.DEFAULT_SSH_COMMAND)
+
+
+class TestAmbientSshCommandIsIgnored(_FixtureCase):
+    """B3. `run_git` used to read `env.get("GIT_SSH_COMMAND", <default>)`,
+    so any value inherited from the operator's shell, a systemd unit or a
+    parent process replaced `BatchMode=yes`, `ConnectTimeout=10` and
+    `StrictHostKeyChecking=accept-new` for every fleet git operation --
+    silently, and with failure modes (a daemon blocked on a passphrase
+    prompt; a two-minute connect stall inside a 30 s timeout) that name
+    none of them."""
+
+    def setUp(self):
+        super().setUp()
+        self._saved = os.environ.get("GIT_SSH_COMMAND")
+        self.addCleanup(self._restore)
+        self.spy = _SubprocessSpy()
+
+    def _restore(self):
+        if self._saved is None:
+            os.environ.pop("GIT_SSH_COMMAND", None)
+        else:
+            os.environ["GIT_SSH_COMMAND"] = self._saved
+
+    def test_an_ambient_value_never_reaches_git(self):
+        os.environ["GIT_SSH_COMMAND"] = "ssh -o BatchMode=no -o ConnectTimeout=0"
+        hub = self.repos.hub(with_code_url=True)
+        with mock.patch.object(fleetlib.subprocess, "run", self.spy):
+            hub.create("refs/fleet/intents/amb", {"status": "open"})
+        self.assertTrue(self.spy.fleetlib_calls)
+        for call in self.spy.fleetlib_calls:
+            self.assertEqual(call["env_ssh"], fleetlib.DEFAULT_SSH_COMMAND)
+
+    def test_an_explicit_parameter_is_the_only_way_to_change_it(self):
+        hub = self.repos.hub(with_code_url=True)
+        wanted = fleetlib.ssh_command(identity_file=str(self.tmp / "k"))
+        # `push_tip_ref` is now the ONLY push that takes an ssh_command --
+        # see TestNonTipCodeWritesCannotCarryAnIdentity below.
+        with mock.patch.object(fleetlib.subprocess, "run", self.spy):
+            hub.push_tip_ref(f"{self.repos.tip_sha}:refs/heads/proof",
+                             ssh_command=wanted)
+        pushes = [c for c in self.spy.fleetlib_calls if "push" in c["argv"]]
+        self.assertEqual(len(pushes), 1)
+        self.assertEqual(pushes[0]["env_ssh"], wanted)
+        self.assertNotIn("GIT_SSH_COMMAND", os.environ)
+
+    def test_the_pinned_options_survive_an_identity_file(self):
+        got = fleetlib.ssh_command(identity_file="/k/ey")
+        for option in ("-o ConnectTimeout=10", "-o BatchMode=yes",
+                       "-o StrictHostKeyChecking=accept-new",
+                       "-o IdentitiesOnly=yes", "-o IdentityAgent=none"):
+            self.assertIn(option, got)
+        self.assertIn("-i /k/ey", got)
+        self.assertEqual(fleetlib.ssh_command(), fleetlib.DEFAULT_SSH_COMMAND)
+
+
+# --------------------------------------------------------------------- #
+# B2 -- code pushes target code_push_url, which may differ from code_url
+# --------------------------------------------------------------------- #
+
+
+class TestCodePushUrl(_FixtureCase):
+    def test_defaults_to_code_url_which_defaults_to_url(self):
+        plain = Hub(str(self.repos.state), workdir=self.tmp / "c1")
+        self.assertEqual(plain.code_push_url, plain.code_url)
+        self.assertEqual(plain.code_url, plain.url)
+
+        split = Hub(str(self.repos.state), workdir=self.tmp / "c2",
+                    code_url=str(self.repos.code))
+        self.assertEqual(split.code_push_url, str(self.repos.code))
+
+    def test_reads_and_writes_can_use_different_code_remotes(self):
+        """The real shape on a deploy-key host: reads over the cheap
+        token-authenticated remote, writes over the one the key can
+        authenticate. Two bare repos stand in for the two transports."""
+        push_target = self.tmp / "code-push.git"
+        _run(["git", "init", "-q", "--bare", str(push_target)])
+        hub = Hub(str(self.repos.state), workdir=self.tmp / "c3",
+                  code_url=str(self.repos.code), code_push_url=str(push_target))
+
+        # read from code_url
+        self.assertEqual(hub.code_sha(TIP_REF), self.repos.tip_sha)
+        self.assertIn("refs/heads/staging/alpha", hub.code_list("refs/heads/staging"))
+
+        # write to code_push_url
+        _run(["git", "--git-dir", str(self.tmp / "c3"), "fetch", "--quiet",
+              str(self.repos.code), TIP_REF])
+        r = hub.push_code_ref(f"{self.repos.tip_sha}:refs/heads/proof")
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("refs/heads/proof",
+                      self.repos.refs_on(push_target, "refs/heads/*"))
+        self.assertNotIn("refs/heads/proof",
+                         self.repos.refs_on(self.repos.code, "refs/heads/*"))
+        self.assertEqual(self.repos.refs_on(self.repos.state, "refs/heads/*"), {})
+
+    def test_delete_code_ref_is_a_cas_on_the_push_remote(self):
+        hub = self.repos.hub(with_code_url=True)
+        self.assertFalse(
+            hub.delete_code_ref("refs/heads/staging/alpha", self.repos.tip_sha),
+            msg="a stale expect_sha must lose the CAS, not delete the branch",
+        )
+        self.assertIn("refs/heads/staging/alpha",
+                      self.repos.refs_on(self.repos.code, "refs/heads/*"))
+        self.assertTrue(
+            hub.delete_code_ref("refs/heads/staging/alpha", self.repos.alpha_sha))
+        self.assertNotIn("refs/heads/staging/alpha",
+                         self.repos.refs_on(self.repos.code, "refs/heads/*"))
+
+
+# --------------------------------------------------------------------- #
+# R3 -- the tip push has its own URL because it has its own credential
+# --------------------------------------------------------------------- #
+
+
+class TestTipPushUrlIsSeparateFromTheOtherCodeWrites(_FixtureCase):
+    """SPEC §3.1/§4.4(b): the tip goes via the DEPLOY KEY over ssh;
+    `rescued/*`, the `staging/*` retirement and `staging/train-tmp-*` go
+    via the PAT over HTTPS.
+
+    With one `code_push_url` for all four there was no correct setting,
+    and both wrong settings were silent:
+
+      * pointed at ssh (so the deploy key can authenticate the tip), the
+        three non-tip pushes ran with no pinned identity at all -- ssh
+        offered whatever the ambient agent had, i.e. the operator's
+        personal key, from the daemon of a host whose entire point is
+        that it holds a *scoped* credential;
+      * pointed at https (so the PAT authenticates the three), the deploy
+        key became inert -- `GIT_SSH_COMMAND` is not consulted for an
+        HTTPS remote at all -- and the tip push failed the `tip-update`
+        ruleset with a permission error that names neither.
+    """
+
+    def _hubs(self):
+        tip_target = self.tmp / "code-tip.git"
+        _run(["git", "init", "-q", "--bare", str(tip_target)])
+        hub = Hub(str(self.repos.state), workdir=self.tmp / "tp",
+                  code_url=str(self.repos.code),
+                  tip_push_url=str(tip_target))
+        return hub, tip_target
+
+    def test_tip_push_url_defaults_down_the_chain_to_url(self):
+        plain = Hub(str(self.repos.state), workdir=self.tmp / "d1")
+        self.assertEqual(plain.tip_push_url, plain.code_push_url)
+        self.assertEqual(plain.code_push_url, plain.code_url)
+        self.assertEqual(plain.code_url, plain.url)
+
+        coded = Hub(str(self.repos.state), workdir=self.tmp / "d2",
+                    code_url=str(self.repos.code))
+        self.assertEqual(coded.tip_push_url, str(self.repos.code))
+
+        pushed = Hub(str(self.repos.state), workdir=self.tmp / "d3",
+                     code_url=str(self.repos.code),
+                     code_push_url=str(self.tmp / "elsewhere.git"))
+        self.assertEqual(pushed.tip_push_url, str(self.tmp / "elsewhere.git"))
+
+    def test_the_tip_goes_to_tip_push_url_and_nothing_else_does(self):
+        hub, tip_target = self._hubs()
+        _run(["git", "--git-dir", str(self.tmp / "tp"), "fetch", "--quiet",
+              str(self.repos.code), f"+{TIP_REF}:refs/tmp/tip",
+              f"+refs/heads/staging/alpha:refs/tmp/alpha"])
+
+        self.assertEqual(
+            hub.push_tip_ref(f"{self.repos.tip_sha}:{TIP_REF}").returncode, 0)
+        self.assertEqual(
+            hub.push_code_ref(f"{self.repos.alpha_sha}:refs/heads/rescued/alpha").returncode, 0)
+
+        # The tip landed on the tip remote and NOWHERE else...
+        self.assertIn(TIP_REF, self.repos.refs_on(tip_target, "refs/heads/*"))
+        # ...and rescued/* landed on the code (PAT) remote, not on it.
+        self.assertIn("refs/heads/rescued/alpha",
+                      self.repos.refs_on(self.repos.code, "refs/heads/*"))
+        self.assertNotIn("refs/heads/rescued/alpha",
+                         self.repos.refs_on(tip_target, "refs/heads/*"))
+        self.assertEqual(self.repos.refs_on(self.repos.state, "refs/heads/*"), {})
+
+    def test_non_tip_code_writes_cannot_carry_an_identity_at_all(self):
+        """Not "do not", CANNOT: the parameter is gone. A reviewer can
+        satisfy "the rescue push must not use the deploy key" by reading
+        two call sites; a caller cannot satisfy it by remembering to omit
+        an argument at three of them, one of which is in a retry loop.
+        """
+        hub = self.repos.hub(with_code_url=True)
+        for method in ("push_code_ref", "delete_code_ref"):
+            with self.subTest(method=method):
+                with self.assertRaises(TypeError):
+                    getattr(hub, method)("refs/heads/nope", ssh_command="ssh -i /k")
+
+    def test_train_threads_the_url_through_run_train(self):
+        """`run_train(tip_push_url=...)` must reach the Hub it builds --
+        the knob is useless if the train's own Hub construction drops it.
+        """
+        seen = {}
+        real_hub = train.Hub
+
+        def spy_hub(*a, **kw):
+            hub = real_hub(*a, **kw)
+            seen.setdefault("tip", hub.tip_push_url)
+            seen.setdefault("code_push", hub.code_push_url)
+            return hub
+
+        with mock.patch.object(train, "Hub", spy_hub):
+            train.run_train(
+                str(self.repos.state), self.tmp,
+                gate_fn=lambda c, l: "PASS", epoch="e", dry_run=True,
+                hub_workdir=self.tmp / "tw",
+                code_url=str(self.repos.code),
+                tip_push_url="git@example.invalid:code.git",
+            )
+        self.assertEqual(seen["tip"], "git@example.invalid:code.git")
+        self.assertEqual(seen["code_push"], str(self.repos.code))
+
+
+class TestTrainCliRoutesTheTwoPushUrls(HermeticCase):
+    """`--tip-push` / `FLEET_TIP_PUSH_URL` (R3), and the warning for the
+    configuration the split exists to retire."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("FLEET_HUB_URL", "FLEET_CODE_URL", "FLEET_CODE_PUSH_URL",
+                    "FLEET_TIP_PUSH_URL"):
+            self.addCleanup(_restore_env, key, os.environ.get(key))
+            os.environ.pop(key, None)
+
+    @staticmethod
+    def _parsed(argv):
+        """What `main` would compute, without running a train: the three
+        URL resolutions live in `main`, so this re-runs its parser and the
+        two defaulting lines against the same argv."""
+        seen = {}
+
+        def fake_run_train(*a, **kw):
+            seen.update(kw)
+            return train.RunResult(outcome="empty")
+
+        with mock.patch.object(train, "run_train", fake_run_train):
+            rc = train.main(argv + ["--dry-run"])
+        return rc, seen
+
+    def test_tip_push_defaults_to_code_push_which_defaults_to_code(self):
+        rc, kw = self._parsed(["--hub", "/s.git", "--code", "/c.git"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(kw["code_url"], "/c.git")
+        self.assertEqual(kw["code_push_url"], "/c.git")
+        self.assertEqual(kw["tip_push_url"], "/c.git")
+
+    def test_tip_push_is_settable_without_moving_the_other_three(self):
+        rc, kw = self._parsed(["--hub", "/s.git", "--code", "https://h/c.git",
+                               "--tip-push", "git@h:c.git"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(kw["code_push_url"], "https://h/c.git")
+        self.assertEqual(kw["tip_push_url"], "git@h:c.git")
+
+    def test_the_environment_variable_is_read(self):
+        os.environ["FLEET_TIP_PUSH_URL"] = "git@h:env.git"
+        rc, kw = self._parsed(["--hub", "/s.git", "--code", "https://h/c.git"])
+        self.assertEqual(kw["tip_push_url"], "git@h:env.git")
+        self.assertEqual(kw["code_push_url"], "https://h/c.git")
+
+    def test_an_ssh_code_push_url_is_warned_about(self):
+        """The pre-R3 rollout shape: `--code-push` at ssh so the deploy key
+        could reach the tip, which silently put the other three pushes on
+        an ambient identity. It still WORKS (nothing routes on the warning)
+        but it no longer passes unremarked."""
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc, kw = self._parsed(["--hub", "/s.git", "--code", "https://h/c.git",
+                                   "--code-push", "git@h:c.git",
+                                   "--tip-push", "git@h:c-tip.git"])
+        self.assertEqual(rc, 0)
+        self.assertIn("--code-push is an ssh URL", err.getvalue())
+        self.assertIn("ambient ssh identity", err.getvalue())
+
+    def test_no_warning_on_the_supported_shape(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self._parsed(["--hub", "/s.git", "--code", "https://h/c.git",
+                          "--tip-push", "git@h:c.git"])
+        self.assertNotIn("--code-push is an ssh URL", err.getvalue())
+
+
+def _restore_env(key, value):
+    if value is None:
+        os.environ.pop(key, None)
+    else:
+        os.environ[key] = value
+
+
+# --------------------------------------------------------------------- #
+# S2 -- agentworker clones CODE, never the state repo
+# --------------------------------------------------------------------- #
+
+
+class _StopAfterAgentClone(Exception):
+    pass
+
+
+class TestAgentworkerClonesCode(_FixtureCase):
+    def setUp(self):
+        super().setUp()
+        self._saved_cli = os.environ.get("FLEET_AGENT_CLI_OVERRIDE")
+        os.environ["FLEET_AGENT_CLI_OVERRIDE"] = "/usr/bin/true"
+        self.addCleanup(self._restore_cli)
+        # R7 (review finding): agentworker.run() hardcodes
+        # `Path.home() / ".fleetd" / "agentcache"` as its Hub workdir, so
+        # every test in this class was writing into the REAL
+        # ~/.fleetd/agentcache on whatever machine ran the suite. HOME is
+        # redirected into the fixture's tempdir by `_FixtureCase.setUp`
+        # (the same mechanism covers `train.run_train`'s traincache and
+        # the R2 default token path), so nothing more is needed here.
+
+    def _restore_cli(self):
+        if self._saved_cli is None:
+            os.environ.pop("FLEET_AGENT_CLI_OVERRIDE", None)
+        else:
+            os.environ["FLEET_AGENT_CLI_OVERRIDE"] = self._saved_cli
+
+    def _clone_src(self, **kw) -> list:
+        seen: list = []
+        real = agentworker.subprocess.run
+
+        def fake_run(args, **kwargs):
+            if len(args) > 2 and args[0] == "git" and args[1] == "clone":
+                seen.append(args[3])
+                raise _StopAfterAgentClone()
+            return real(args, **kwargs)
+
+        with mock.patch.object(agentworker.subprocess, "run", side_effect=fake_run):
+            with self.assertRaises(_StopAfterAgentClone):
+                agentworker.run("staging/alpha", str(self.repos.state), "t", **kw)
+        return seen
+
+    def test_clone_targets_the_code_repo_not_the_state_repo(self):
+        self.assertEqual(self._clone_src(code_url=str(self.repos.code)),
+                         [str(self.repos.code)])
+
+    def test_code_url_defaults_to_the_hub_so_a_hub_only_spawn_still_works(self):
+        """`fleetd.start_agent` passes `--hub` alone until its one-line
+        `--code` addition lands. Defaulting keeps that spawn working
+        against a single-repo topology instead of failing every agent."""
+        seen: list = []
+        real = agentworker.subprocess.run
+
+        def fake_run(args, **kwargs):
+            if len(args) > 2 and args[0] == "git" and args[1] == "clone":
+                seen.append(args[3])
+                raise _StopAfterAgentClone()
+            return real(args, **kwargs)
+
+        with mock.patch.object(agentworker.subprocess, "run", side_effect=fake_run):
+            with self.assertRaises(_StopAfterAgentClone):
+                agentworker.main(["--branch", "staging/alpha",
+                                  "--hub", str(self.repos.code), "--host", "t"])
+        self.assertEqual(seen, [str(self.repos.code)])
+
+    def _ls_remotes(self, calls) -> list:
+        """`(url, ref)` for every `git ls-remote` fleetlib issued."""
+        out = []
+        for c in calls:
+            argv = c["argv"]
+            if len(argv) >= 5 and argv[0] == "git" and "ls-remote" in argv:
+                i = argv.index("ls-remote")
+                out.append((argv[i + 1], argv[i + 2]))
+        return out
+
+    def test_branch_and_tip_probes_read_the_code_repo(self):
+        """Before the clone, `run()` probes the tip and the branch.
+
+        THE ASSERTION IS THE URL, NOT THE EXIT CODE (R7). This test used
+        to run the worker against the state repo and assert `rc == 5` --
+        which the PRE-FIX code produced too, for a different reason (it
+        also probed the state repo, from `hub.sha`), so the test was green
+        against the bug it was written to catch. Exit 5 means "the tip or
+        the branch was not found"; it says nothing about WHERE they were
+        looked for, and "where" is the entire content of the fix. So the
+        instrument is now the `ls-remote` argv itself: which remote the
+        `refs/heads/*` probes named.
+        """
+        spy = self._spy_stopping_at_clone()
+        with mock.patch.object(fleetlib.subprocess, "run", spy):
+            with self.assertRaises(_StopAfterAgentClone):
+                agentworker.run("staging/alpha", str(self.repos.state), "t",
+                                code_url=str(self.repos.code))
+
+        head_probes = [(url, ref) for url, ref in self._ls_remotes(spy.fleetlib_calls)
+                       if ref.startswith("refs/heads/")]
+        self.assertTrue(head_probes, "no refs/heads/* probe was issued at all")
+        self.assertIn((str(self.repos.code), TIP_REF), head_probes)
+        self.assertIn((str(self.repos.code), "refs/heads/staging/alpha"), head_probes)
+        for url, ref in head_probes:
+            self.assertEqual(url, str(self.repos.code),
+                             msg=f"{ref} was probed on the wrong remote")
+
+    def test_the_probes_follow_code_url_when_it_is_the_state_repo(self):
+        """The negative control for the assertion above: point `code_url`
+        at the state repo and the SAME probes name it, answer None, and
+        exit 5. That is what the old `rc == 5` assertion was actually
+        observing -- true both before and after the fix.
+        """
+        spy = _SubprocessSpy()
+        with mock.patch.object(fleetlib.subprocess, "run", spy):
+            rc = agentworker.run("staging/alpha", str(self.repos.state), "t")
+        self.assertEqual(rc, 5)
+        head_probes = [(url, ref) for url, ref in self._ls_remotes(spy.fleetlib_calls)
+                       if ref.startswith("refs/heads/")]
+        self.assertTrue(head_probes)
+        for url, _ref in head_probes:
+            self.assertEqual(url, str(self.repos.state))
+
+    @staticmethod
+    def _spy_stopping_at_clone() -> _SubprocessSpy:
+        """One spy that both RECORDS and stops the run at the clone.
+
+        Two stacked `mock.patch.object`s would not work here and the
+        reason is worth naming: `fleetlib.subprocess` and
+        `agentworker.subprocess` are the same module object, so the inner
+        patch replaces the outer one outright and the spy records nothing.
+        """
+        spy = _SubprocessSpy()
+
+        def stop_at_clone(record):
+            argv = record["argv"]
+            if len(argv) > 2 and argv[0] == "git" and argv[1] == "clone":
+                raise _StopAfterAgentClone()
+
+        spy.on_call = stop_at_clone
+        return spy
+
+
+if __name__ == "__main__":
+    unittest.main()

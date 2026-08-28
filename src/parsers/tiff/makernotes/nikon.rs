@@ -595,7 +595,40 @@ impl MakerNoteParser for NikonParser {
             }
             return Ok(());
         }
-        self.parse_with_model_and_values(ctx.window(), byte_order, model, tags, value_forms)
+        // `Nikon::PreviewIFD`'s 0x201 `PreviewImageStart` is `IsOffset`
+        // (Nikon.pm:5414-5421), so ExifTool prints it with its directory's
+        // base added. For the `Nikon\0\x02` note that base is the embedded
+        // TIFF header, ten bytes into the value:
+        //
+        // ```text
+        // MakerNotes.pm:51-58   Name => 'MakerNoteNikon',
+        //                       Condition => '$$valPt=~/^Nikon\x00\x02/',
+        //                       SubDirectory => {
+        //                           Start => '$valuePtr + 18',
+        //                           Base  => '$start - 8',
+        // ```
+        //
+        // `$start - 8` with `$start = $valuePtr + 18` is `$valuePtr + 10`,
+        // which is [`MakerNoteContext::payload_base`] plus ten. Verified on
+        // the corpus: `NikonCoolpix3200.jpg` stores 13843 with its payload at
+        // file offset 1068, and 13843 + 1068 + 10 = 14921, the value the
+        // pinned 13.59 oracle prints.
+        //
+        // A detached context has no known file position, so no base exists and
+        // `parse_preview_ifd` withholds the tag rather than printing a
+        // MakerNote-relative number under an absolute-offset name.
+        let preview_ifd_base = ctx
+            .is_located()
+            .then(|| ctx.payload_base().checked_add(10))
+            .flatten();
+        self.parse_with_preview_ifd_base(
+            ctx.window(),
+            byte_order,
+            model,
+            tags,
+            value_forms,
+            preview_ifd_base,
+        )
     }
 
     fn parse_with_model_and_values(
@@ -2075,6 +2108,115 @@ mod tests {
         assert_eq!(
             metadata.get_string("MakerNotes:PreviewImage"),
             Some("(Binary data 26 bytes, use -b option to extract)")
+        );
+    }
+
+    /// One little-endian IFD entry.
+    fn le_entry(tag: u16, field_type: u16, count: u32, value: u32) -> Vec<u8> {
+        let mut v = Vec::with_capacity(12);
+        v.extend_from_slice(&tag.to_le_bytes());
+        v.extend_from_slice(&field_type.to_le_bytes());
+        v.extend_from_slice(&count.to_le_bytes());
+        v.extend_from_slice(&value.to_le_bytes());
+        v
+    }
+
+    /// A `Nikon\0\x02` MakerNote carrying a PreviewIFD, laid inside an
+    /// enclosing TIFF block at `value_offset`.
+    ///
+    /// Returns the block. The embedded TIFF header sits at
+    /// `value_offset + 10`; the Main IFD at embedded-relative 8 holds the
+    /// 0x0011 PreviewIFD pointer, and the PreviewIFD at embedded-relative 40
+    /// holds `PreviewImageStart` = 0x1000 and `PreviewImageLength` = 0x20.
+    fn nikon_type3_block(value_offset: usize, block_len: usize) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"Nikon\0\x02\x00\x00\x00");
+        payload.extend_from_slice(b"II\x2a\x00");
+        payload.extend_from_slice(&8u32.to_le_bytes()); // Main IFD at +8
+
+        // Main IFD: one entry, the PreviewIFD pointer.
+        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend(le_entry(0x0011, 4, 1, 40));
+        payload.extend_from_slice(&0u32.to_le_bytes()); // next-IFD = 0
+
+        // Pad to embedded-relative 40 (payload index 50).
+        payload.resize(10 + 40, 0);
+        payload.extend_from_slice(&2u16.to_le_bytes());
+        payload.extend(le_entry(0x0201, 4, 1, 0x1000));
+        payload.extend(le_entry(0x0202, 4, 1, 0x20));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut tiff = vec![0u8; block_len];
+        tiff[value_offset..value_offset + payload.len()].copy_from_slice(&payload);
+        tiff
+    }
+
+    /// `PreviewImageStart` is `IsOffset` against the embedded TIFF header,
+    /// which `MakerNoteNikon`'s `Base => '$start - 8'` with
+    /// `Start => '$valuePtr + 18'` (MakerNotes.pm:51-58) puts at the
+    /// MakerNote value's own first byte plus ten. So the printed value is
+    /// stored + tiff_base + payload_offset + 10.
+    #[test]
+    fn located_type3_makernote_absolutises_preview_image_start() {
+        use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
+
+        let (value_offset, tiff_base) = (100usize, 12u64);
+        let tiff = nikon_type3_block(value_offset, 1024);
+        let ctx = MakerNoteContext::in_tiff(&tiff, value_offset, 200, tiff_base);
+
+        let mut tags = HashMap::new();
+        NikonParser
+            .parse_with_context(&ctx, ByteOrder::LittleEndian, None, &mut tags)
+            .expect("parse located Nikon MakerNote");
+
+        // 0x1000 + 12 + 100 + 10.
+        assert_eq!(tags.get("Nikon:PreviewImageStart").unwrap(), "4218");
+        // The length half is not an offset and is reported unchanged.
+        assert_eq!(tags.get("Nikon:PreviewImageLength").unwrap(), "32");
+    }
+
+    /// A detached context knows no file position, so there is no base to add
+    /// and the MakerNote-relative number must not be printed under an
+    /// absolute-offset name.
+    #[test]
+    fn detached_makernote_still_withholds_preview_image_start() {
+        use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
+
+        let tiff = nikon_type3_block(0, 200);
+        let ctx = MakerNoteContext::detached(&tiff);
+
+        let mut tags = HashMap::new();
+        NikonParser
+            .parse_with_context(&ctx, ByteOrder::LittleEndian, None, &mut tags)
+            .expect("parse detached Nikon MakerNote");
+
+        assert!(!tags.contains_key("Nikon:PreviewImageStart"));
+        assert_eq!(tags.get("Nikon:PreviewImageLength").unwrap(), "32");
+    }
+
+    /// The corpus case this closes, pinned against the 13.59 oracle's own
+    /// numbers: `exiftool -a -G1 -s Nikon/NikonCoolpix3200.jpg` prints
+    /// `[PreviewIFD] PreviewImageStart : 14921` and
+    /// `[PreviewIFD] PreviewImageLength : 19346`. The MakerNote payload
+    /// begins at file offset 1068, and 13843 + 1068 + 10 = 14921.
+    #[test]
+    fn pinned_coolpix3200_preview_image_start_is_the_absolute_file_offset() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let path = std::path::Path::new(
+            "/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonCoolpix3200.jpg",
+        );
+        let Ok(metadata) = crate::core::operations::read_metadata(path) else {
+            return;
+        };
+        assert_eq!(
+            metadata.get_string("Nikon:PreviewImageStart"),
+            Some("14921")
+        );
+        assert_eq!(
+            metadata.get_string("Nikon:PreviewImageLength"),
+            Some("19346")
         );
     }
 }

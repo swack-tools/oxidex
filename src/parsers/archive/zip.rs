@@ -4,9 +4,7 @@ use crate::core::{
     FileFormat, FileReader, FormatParser, Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue,
 };
 use crate::error::{ExifToolError, Result};
-use crate::parsers::raw::{RawFormat, parse_raw_metadata};
-use crate::tag_db::lookup_tag_name;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 use zip::ZipArchive;
 
 const ZIP_SIGNATURE: &[u8] = b"PK";
@@ -30,13 +28,6 @@ const ZIP_CENTRAL_DIR_HEADER_SIZE: usize = 46;
 /// The record's trailing archive comment is a 16-bit length, so the fixed
 /// part begins at most `ZIP_EOCD_SIZE + 65535` bytes from the end.
 const ZIP_EOCD_SEARCH_LIMIT: usize = ZIP_EOCD_SIZE + u16::MAX as usize;
-/// Ceiling for an embedded EIP raw member's uncompressed size.
-///
-/// The declared size comes straight from the attacker-controlled central
-/// directory, so it must never drive an allocation. Real Phase One IIQ
-/// members top out in the low hundreds of megabytes; 1 GiB leaves ample
-/// headroom while keeping a hostile declaration from forcing a huge read.
-const EIP_RAW_MEMBER_MAX_SIZE: u64 = 1 << 30;
 
 /// The eight stored central-directory fields ExifTool's `HandleMember` reads
 /// (`ZIP.pm:496-503`), before any conversion.
@@ -343,60 +334,6 @@ impl ZipParser {
         }
     }
 
-    /// Parse the Phase One raw member carried by an EIP archive.
-    ///
-    /// EIP is a ZIP container whose `manifest.xml` names an embedded IIQ file.
-    /// Feeding that member through the existing IIQ/TIFF parser keeps all TIFF
-    /// byte-order and offset handling in the normal RAW metadata emitter.
-    fn read_eip_raw_metadata(
-        archive: &mut ZipArchive<Cursor<&[u8]>>,
-    ) -> Result<Option<MetadataMap>> {
-        let has_manifest = archive
-            .file_names()
-            .any(|name| name.eq_ignore_ascii_case("manifest.xml"));
-        if !has_manifest {
-            return Ok(None);
-        }
-
-        let raw_name = archive
-            .file_names()
-            .find(|name| {
-                name.rsplit_once('.')
-                    .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("iiq"))
-            })
-            .map(str::to_owned);
-        let Some(raw_name) = raw_name else {
-            return Ok(None);
-        };
-
-        let raw_file = archive.by_name(&raw_name).map_err(|error| {
-            ExifToolError::parse_error(format!("Failed to read EIP raw member: {error}"))
-        })?;
-        // The declared uncompressed size is attacker-controlled central
-        // directory data: reject absurd declarations up front and bound the
-        // read with `take` instead of pre-allocating from the header. Reading
-        // one byte past the declared size keeps the original mismatch checks:
-        // a stream shorter *or* longer than declared still errors below.
-        let declared_size = raw_file.size();
-        if declared_size > EIP_RAW_MEMBER_MAX_SIZE {
-            return Err(ExifToolError::parse_error("EIP raw member is too large"));
-        }
-        let mut raw_data = Vec::new();
-        raw_file
-            .take(declared_size + 1)
-            .read_to_end(&mut raw_data)
-            .map_err(|error| {
-                ExifToolError::parse_error(format!("Failed to extract EIP raw member: {error}"))
-            })?;
-        if raw_data.len() as u64 != declared_size {
-            return Err(ExifToolError::parse_error(
-                "EIP raw member is shorter than its declared size",
-            ));
-        }
-
-        parse_raw_metadata(&raw_data, RawFormat::PhaseOneIIQ).map(Some)
-    }
-
     /// Converts DOS DateTime to ISO 8601 format string
     ///
     /// DOS datetime format:
@@ -472,43 +409,11 @@ impl FormatParser for ZipParser {
         let mut archive = ZipArchive::new(cursor)
             .map_err(|e| ExifToolError::parse_error(format!("Failed to read ZIP: {}", e)))?;
 
-        // RAW parsing preserves physical IFD contexts in its keys. ExifTool's
-        // EIP reader promotes only these embedded-IIQ fields to EXIF. Resolve
-        // both names through the tag database rather than assuming prefixes,
-        // and do not merge the RAW parser's Composite or other IIQ tags.
-        if let Some(raw_metadata) = Self::read_eip_raw_metadata(&mut archive)? {
-            const EIP_TAGS: &[(u16, &str)] = &[
-                (0x0102, "IFD0"),    // BitsPerSample
-                (0x9102, "ExifIFD"), // CompressedBitsPerPixel
-                (0x0103, "IFD0"),    // Compression
-                (0x9004, "ExifIFD"), // CreateDate
-                (0x9003, "ExifIFD"), // DateTimeOriginal
-                (0xA003, "ExifIFD"), // ExifImageHeight
-            ];
-
-            for (tag_id, source_ifd) in EIP_TAGS {
-                let source_name = lookup_tag_name(*tag_id, source_ifd);
-                let Some(source_value) = raw_metadata.get(&source_name) else {
-                    continue;
-                };
-
-                // Compression's PrintConv is the standard EXIF compression
-                // table. The RAW parser keeps this IFD0 SHORT as an integer.
-                let value = if *tag_id == 0x0103 {
-                    source_value
-                        .as_integer()
-                        .and_then(|raw| {
-                            crate::parsers::tiff::tiff_enums::tiff_enum_to_string(*tag_id, raw)
-                        })
-                        .map(TagValue::new_string)
-                        .unwrap_or_else(|| source_value.clone())
-                } else {
-                    source_value.clone()
-                };
-
-                metadata.insert(lookup_tag_name(*tag_id, "EXIF"), value);
-            }
-        }
+        // No EIP handling here: an archive with a `CaptureOne/*.cos` member
+        // is routed to `FileFormat::EIP` by content in `detect_zip_variant`
+        // before this parser ever runs, mirroring ExifTool's `ProcessZIP`
+        // hand-off to `CaptureOne::ProcessEIP` (`ZIP.pm:619-623`). See
+        // `crate::parsers::archive::captureone`.
 
         // Archive-level metadata
         let file_count = archive.len();

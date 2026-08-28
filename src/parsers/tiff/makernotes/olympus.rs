@@ -423,7 +423,7 @@ impl MakerNoteParser for OlympusParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_located(data, byte_order, model, None, tags)?;
+        self.parse_located(data, byte_order, model, None, tags, &mut HashMap::new())?;
         // The payload alone: no enclosing block, so no file base, so no
         // reportable `PreviewImageStart`.
         absolutise_preview_image_start(None, tags);
@@ -437,6 +437,22 @@ impl MakerNoteParser for OlympusParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        self.parse_with_context_and_values(ctx, byte_order, model, tags, &mut HashMap::new())
+    }
+
+    /// `Olympus::FocusInfo` 0x305 `FocusDistance` carries a `ValueConv` whose
+    /// result differs from its printed form (`0` vs `inf`, and an unrounded
+    /// metre count vs `"N m"`), and `Composite:DOF`/`Composite:FOV` read the
+    /// ValueConv side. That channel is this override; every other Olympus tag
+    /// still reaches metadata through `tags` alone.
+    fn parse_with_context_and_values(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
         // `window()` starts on the same byte as `payload()` but reaches to the
         // end of the enclosing TIFF block, which is where the older `OLYMP\0`
         // MakerNotes keep their values -- OlympusD450Z.jpg declares 406 bytes
@@ -447,6 +463,7 @@ impl MakerNoteParser for OlympusParser {
             model,
             ctx.payload_tiff_offset(),
             tags,
+            value_forms,
         )?;
         absolutise_preview_image_start(preview_image_start_base(ctx), tags);
         Ok(())
@@ -580,6 +597,7 @@ impl OlympusParser {
         model: Option<&str>,
         data_base: Option<u32>,
         tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
@@ -669,6 +687,15 @@ impl OlympusParser {
                     effective_byte_order,
                     model,
                     tags,
+                );
+                parse_focus_info_model_conditional(
+                    data,
+                    start,
+                    base,
+                    effective_byte_order,
+                    model,
+                    tags,
+                    value_forms,
                 );
             }
         }
@@ -1090,6 +1117,331 @@ fn parse_focus_info_sensor_temperature(
         format!("{:.1} C", 84.0 - 3.0 * n as f64 / 26.0)
     };
     tags.insert("Olympus:SensorTemperature".to_string(), printed);
+}
+
+// ============================================================================
+// Olympus::FocusInfo 0x305 / 0x308 / 0x31b -- model-conditional
+// ============================================================================
+//
+// These three cannot live in `tables::FOCUS_INFO`: a `TagDef` carries one
+// conversion, and each of these picks its conversion from `$$self{Model}` at
+// read time. ExifTool spells that as a `Condition` list, tried in order:
+//
+// ```text
+// Olympus.pm:3359   0x308 => [ # NEED A BETTER WAY TO DETERMINE WHICH MODELS USE WHICH ENCODING!
+// Olympus.pm:3361       Name => 'AFPoint',
+// Olympus.pm:3362       Condition => '$$self{Model} =~ /E-(3|5|30)\b/',
+// Olympus.pm:3407   },{ #PH (models with 7-point AF)
+// Olympus.pm:3409       Condition => '$$self{Model} =~ /E-(520|600|620)\b/',
+// Olympus.pm:3442   },{ #herb all camera model except E-Mxxx and OM-x
+// Olympus.pm:3444       Condition => '$$self{Model} !~ /^(E-M|OM-)/  ',
+// Olympus.pm:3456   },{ #herb all newer models E-Mxxx and OM-x; we do not know details
+// Olympus.pm:3458       Writable => 'int16u',
+// ```
+//
+// Perl's `/E-(3|5|30)\b/` backtracks into the alternation at one start
+// position, so it is exactly "E-3\b or E-5\b or E-30\b" -- `E-30` matches
+// (the `3` branch fails the boundary, the `30` branch succeeds) and `E-300`
+// matches neither. `model_word_matches` is that `\b`.
+
+/// PrintHex miss format: ExifTool's `PrintConv` fallback for a tag carrying
+/// `PrintHex => 1` is `Unknown (0x%x)`, not the decimal `Unknown (%d)` that
+/// [`ifd::lookup_or_unknown`] produces. Verified against the oracle:
+/// `OlympusE-520.jpg` prints `AFPoint: Unknown (0x1); Single Target` and
+/// `OlympusE-M5.jpg` prints an `Unknown (0x5)` in its `AFPointDetails` list.
+fn lookup_hex_or_unknown(map: &[(i64, &str)], v: i64) -> String {
+    map.iter()
+        .find(|(k, _)| *k == v)
+        .map(|(_, s)| (*s).to_string())
+        .unwrap_or_else(|| format!("Unknown (0x{v:x})"))
+}
+
+/// `Olympus.pm:3373-3399` -- the E-3/E-5/E-30 AF point names (low 5 bits).
+static AF_POINT_E3: &[(i64, &str)] = &[
+    (0x00, "(none)"),
+    (0x01, "Top-left (horizontal)"),
+    (0x02, "Top-center (horizontal)"),
+    (0x03, "Top-right (horizontal)"),
+    (0x04, "Left (horizontal)"),
+    (0x05, "Mid-left (horizontal)"),
+    (0x06, "Center (horizontal)"),
+    (0x07, "Mid-right (horizontal)"),
+    (0x08, "Right (horizontal)"),
+    (0x09, "Bottom-left (horizontal)"),
+    (0x0a, "Bottom-center (horizontal)"),
+    (0x0b, "Bottom-right (horizontal)"),
+    (0x0c, "Top-left (vertical)"),
+    (0x0d, "Top-center (vertical)"),
+    (0x0e, "Top-right (vertical)"),
+    (0x0f, "Left (vertical)"),
+    (0x10, "Mid-left (vertical)"),
+    (0x11, "Center (vertical)"),
+    (0x12, "Mid-right (vertical)"),
+    (0x13, "Right (vertical)"),
+    (0x14, "Bottom-left (vertical)"),
+    (0x15, "Bottom-center (vertical)"),
+    (0x16, "Bottom-right (vertical)"),
+    (0x1f, "n/a"),
+];
+
+/// `Olympus.pm:3400-3405` -- the E-3/E-5/E-30 AF target selection mode (upper bits).
+static AF_POINT_E3_MODE: &[(i64, &str)] = &[
+    (0x00, "Single Target"),
+    (0x40, "All Target"),
+    (0x80, "Dynamic Single Target"),
+    (0xe0, "n/a"),
+];
+
+/// `Olympus.pm:3417-3436` -- the 7-point (E-520/E-600/E-620) AF point names.
+/// 0x01 is deliberately absent: ExifTool leaves it commented out
+/// ("need to fill this in..."), and `OlympusE-520.jpg` accordingly prints
+/// `Unknown (0x1)`. Inventing a name for it is exactly the approximation the
+/// generator refuses to make.
+static AF_POINT_7PT: &[(i64, &str)] = &[
+    (0x00, "(none)"),
+    (0x02, "Top-center (horizontal)"),
+    (0x04, "Right (horizontal)"),
+    (0x05, "Mid-right (horizontal)"),
+    (0x06, "Center (horizontal)"),
+    (0x07, "Mid-left (horizontal)"),
+    (0x08, "Left (horizontal)"),
+    (0x0a, "Bottom-center (horizontal)"),
+    (0x0c, "Top-center (vertical)"),
+    (0x0f, "Right (vertical)"),
+    (0x10, "Mid-right (vertical)"),
+    (0x11, "Center (vertical)"),
+    (0x12, "Mid-left (vertical)"),
+    (0x13, "Left (vertical)"),
+    (0x15, "Bottom-center (vertical)"),
+];
+
+/// `Olympus.pm:3437-3440` -- the 7-point AF target selection mode.
+static AF_POINT_7PT_MODE: &[(i64, &str)] = &[(0x00, "Single Target"), (0x40, "All Target")];
+
+/// `Olympus.pm:3448-3455` -- every model except E-Mxxx and OM-x. This variant
+/// carries no `PrintHex`, so a miss prints decimal `Unknown (N)`.
+static AF_POINT_OTHER: &[(i64, &str)] = &[
+    (0, "Left (or n/a)"),
+    (1, "Center (horizontal)"),
+    (2, "Right"),
+    (3, "Center (vertical)"),
+    (255, "None"),
+];
+
+/// The nine `PrintConv` hashes of `AFPointDetails` for E-Mxxx / OM-x bodies,
+/// in ValueConv element order (`Olympus.pm:3478-3517`).
+static AF_POINT_DETAILS_MAPS: [&[(i64, &str)]; 9] = [
+    // (($val >> 13) & 0x7) -- subject detect
+    &[
+        (0, "No Subject Detection"),
+        (1, "Motorsports"),
+        (2, "Airplanes"),
+        (3, "Trains"),
+        (4, "Birds"),
+        (5, "Dogs & Cats"),
+        (6, "Human"),
+    ],
+    // (($val >> 12) & 0x1) -- face and eye
+    &[(0, "Face Priority"), (1, "Target Priority")],
+    // (($val >> 11) & 0x1) -- half press
+    &[(0, "Normal AF"), (1, "AF on Half Press")],
+    // (($val >> 8) & 0x3) -- eye AF
+    &[
+        (0, "No Eye-AF"),
+        (1, "Right Eye Priority"),
+        (2, "Left Eye Priority"),
+        (3, "Both Eyes Priority"),
+    ],
+    // (($val >> 7) & 0x1) -- face detect
+    &[(0, "No Face Detection"), (1, "Face Detection")],
+    // (($val >> 5) & 0x1) -- x-AF with MF
+    &[(0, "No MF"), (1, "With MF")],
+    // (($val >> 4) & 0x1) -- release
+    &[(0, "AF Priority"), (1, "Release Priority")],
+    // (($val >> 3) & 0x1) -- object found
+    &[(0, "No Object found"), (1, "Object found")],
+    // ($val & 0x7) -- MF/S-AF/C-AF
+    &[(0, "MF"), (1, "S-AF"), (2, "C-AF"), (6, "C-AF + TR")],
+];
+
+/// `$$self{Model} =~ /^(E-M|OM-)/`.
+fn is_em_or_om_model(model: &str) -> bool {
+    model.starts_with("E-M") || model.starts_with("OM-")
+}
+
+/// `Olympus::FocusInfo` 0x305 `FocusDistance`.
+///
+/// ```text
+/// Olympus.pm:3338   0x305 => { #4
+/// Olympus.pm:3339       Name => 'FocusDistance',
+/// Olympus.pm:3340       Writable => 'rational64u',
+/// Olympus.pm:3344       Format => 'int32u',
+/// Olympus.pm:3345       Count => 2,
+/// Olympus.pm:3346       ValueConv => q{
+/// Olympus.pm:3347           my ($a,$b) = split ' ',$val;
+/// Olympus.pm:3348           return 0 if $a == 0xffffffff;
+/// Olympus.pm:3349           return $a / 1000;
+/// Olympus.pm:3350       },
+/// Olympus.pm:3356       PrintConv => '$val ? "$val m" : "inf"',
+/// ```
+///
+/// Returns `(ValueConv form, PrintConv form)`. The ValueConv form is what the
+/// `Composite:DOF` and `Composite:FOV` calculations read (`Exif.pm` DOF
+/// `Desire => { 3 => 'FocusDistance' }`), and it matters that the infinity
+/// case reaches them as `0` rather than as the string `inf`: ExifTool's DOF
+/// substitutes 1e10 for a *zero* focus distance, which is how
+/// `OlympusE-PL1.jpg` gets `DOF: inf (15.69 m - inf)`. An `inf` string would
+/// parse as no number at all and silently fall through to `SubjectDistance`.
+fn focus_distance_forms(val: &ifd::OlyVal) -> Option<(String, String)> {
+    let a = *val.ints()?.first()?;
+    // `$a` is an int32u, so `$a == 0xffffffff` is the sentinel, and the
+    // `$val ? ... : 'inf'` PrintConv catches both it and a natural zero.
+    if a == 0xffff_ffff || a == 0 {
+        return Some(("0".to_string(), "inf".to_string()));
+    }
+    let value = ifd::fmt_g15(a as f64 / 1000.0);
+    let print = format!("{value} m");
+    Some((value, print))
+}
+
+/// `Olympus::FocusInfo` 0x308 `AFPoint` -- returns `(ValueConv, PrintConv)`,
+/// or `None` when ExifTool drops the tag.
+fn af_point_forms(v: i64, model: &str) -> Option<(String, String)> {
+    if model_word_matches(model, "E-3")
+        || model_word_matches(model, "E-5")
+        || model_word_matches(model, "E-30")
+    {
+        // Olympus.pm:3370  ValueConv => '($val & 0x1f) . " " . ($val & 0xffe0)'
+        let (point, mode) = (v & 0x1f, v & 0xffe0);
+        return Some((
+            format!("{point} {mode}"),
+            format!(
+                "{}; {}",
+                lookup_hex_or_unknown(AF_POINT_E3, point),
+                lookup_hex_or_unknown(AF_POINT_E3_MODE, mode)
+            ),
+        ));
+    }
+    if model_word_matches(model, "E-520")
+        || model_word_matches(model, "E-600")
+        || model_word_matches(model, "E-620")
+    {
+        let (point, mode) = (v & 0x1f, v & 0xffe0);
+        return Some((
+            format!("{point} {mode}"),
+            format!(
+                "{}; {}",
+                lookup_hex_or_unknown(AF_POINT_7PT, point),
+                lookup_hex_or_unknown(AF_POINT_7PT_MODE, mode)
+            ),
+        ));
+    }
+    if !is_em_or_om_model(model) {
+        // Olympus.pm:3447  RawConv => '($val or $$self{Model} ne "E-P1") ? $val : undef',
+        // (the E-P1 always writes 0, so a zero there is meaningless)
+        if v == 0 && model == "E-P1" {
+            return None;
+        }
+        return Some((v.to_string(), ifd::lookup_or_unknown(AF_POINT_OTHER, v)));
+    }
+    // Olympus.pm:3456-3459 -- E-Mxxx and OM-x: no conversion is known, so the
+    // number is printed unchanged.
+    Some((v.to_string(), v.to_string()))
+}
+
+/// `Olympus::FocusInfo` 0x31b `AFPointDetails` -- returns
+/// `(ValueConv, PrintConv)`.
+///
+/// ```text
+/// Olympus.pm:3463   0x31b => [ #herb, based on investigations of abgestumpft
+/// Olympus.pm:3466       Name => 'AFPointDetails',
+/// Olympus.pm:3467       Condition => '$$self{Model} =~ m/^E-M|^OM-/ ',
+/// Olympus.pm:3470       PrintHex => 1,
+/// Olympus.pm:3471       ValueConv => '(($val >> 13) & 0x7) . " " . (($val >> 12) & 0x1) . ...
+/// Olympus.pm:3518   },{ # for older models
+/// Olympus.pm:3519       Name => 'AFPointDetails',
+/// Olympus.pm:3520       Writable => 'int16u',
+/// ```
+fn af_point_details_forms(v: i64, model: &str) -> (String, String) {
+    if !is_em_or_om_model(model) {
+        return (v.to_string(), v.to_string());
+    }
+    let parts: [i64; 9] = [
+        (v >> 13) & 0x7,
+        (v >> 12) & 0x1,
+        (v >> 11) & 0x1,
+        (v >> 8) & 0x3,
+        (v >> 7) & 0x1,
+        (v >> 5) & 0x1,
+        (v >> 4) & 0x1,
+        (v >> 3) & 0x1,
+        v & 0x7,
+    ];
+    let value = parts
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let print = parts
+        .iter()
+        .zip(AF_POINT_DETAILS_MAPS.iter())
+        .map(|(p, map)| lookup_hex_or_unknown(map, *p))
+        .collect::<Vec<_>>()
+        .join("; ");
+    (value, print)
+}
+
+/// Reads the three model-conditional `Olympus::FocusInfo` entries.
+fn parse_focus_info_model_conditional(
+    data: &[u8],
+    ifd_start: usize,
+    base: Option<i64>,
+    order: ByteOrder,
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) {
+    let Some(entries) = ifd::read_ifd(data, ifd_start, order) else {
+        return;
+    };
+    let model = model.unwrap_or("").trim();
+
+    let mut emit = |name: &str, forms: (String, String)| {
+        tags.insert(format!("Olympus:{name}"), forms.1);
+        value_forms.insert(format!("Olympus:{name}"), forms.0);
+    };
+
+    for entry in &entries {
+        match entry.tag_id {
+            // `Format => 'int32u'` over the stored rational64u: the same eight
+            // bytes, read as the numerator and denominator ExifTool splits.
+            0x0305 => {
+                if let Some(forms) =
+                    ifd::decode_entry(data, entry, base, order, Some(ifd::ftype::TIFF_LONG))
+                        .as_ref()
+                        .and_then(focus_distance_forms)
+                {
+                    emit("FocusDistance", forms);
+                }
+            }
+            0x0308 => {
+                if let Some(forms) = ifd::decode_entry(data, entry, base, order, None)
+                    .and_then(|v| v.first_int())
+                    .and_then(|v| af_point_forms(v, model))
+                {
+                    emit("AFPoint", forms);
+                }
+            }
+            0x031B => {
+                if let Some(v) =
+                    ifd::decode_entry(data, entry, base, order, None).and_then(|v| v.first_int())
+                {
+                    emit("AFPointDetails", af_point_details_forms(v, model));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 // ============================================================================
@@ -1887,6 +2239,297 @@ mod olympus_preview_image_tests {
         assert_eq!(
             preview_image_start_base(&MakerNoteContext::detached(&payload)),
             None
+        );
+    }
+}
+
+/// Every expectation here is a verbatim `exiftool -G1 -s` / `exiftool -n -s3`
+/// pair read off a real corpus file under the pinned ExifTool 13.59
+/// (`/tmp/oxidex-exiftool-cache/exiftool-pinned.sh`, both probes PASS:
+/// `-ver` -> `13.59`, `-s3 -FileType t/images/OOXML.docx` -> `DOCX`). The
+/// printed column is the PrintConv form, the `-n` column the ValueConv form,
+/// so each case pins both halves of the conversion at once.
+#[cfg(test)]
+mod focus_info_model_conditional_tests {
+    use super::*;
+
+    /// `OlympusE-30.jpg`  Model `E-30`
+    ///   `AFPoint : Center (vertical); Single Target`   `-n` -> `17 0`
+    /// `OlympusE-5.jpg`   Model `E-5`
+    ///   `AFPoint : Center (vertical); All Target`      `-n` -> `17 64`
+    /// `OlympusE-3.jpg`   Model `E-3`
+    ///   `AFPoint : Left (horizontal); Single Target`   `-n` -> `4 0`
+    #[test]
+    fn af_point_e3_e5_e30_variant() {
+        assert_eq!(
+            af_point_forms(17, "E-30"),
+            Some((
+                "17 0".to_string(),
+                "Center (vertical); Single Target".to_string()
+            ))
+        );
+        assert_eq!(
+            af_point_forms(17 | 64, "E-5"),
+            Some((
+                "17 64".to_string(),
+                "Center (vertical); All Target".to_string()
+            ))
+        );
+        assert_eq!(
+            af_point_forms(4, "E-3"),
+            Some((
+                "4 0".to_string(),
+                "Left (horizontal); Single Target".to_string()
+            ))
+        );
+    }
+
+    /// `OlympusE-620.jpg` Model `E-620`
+    ///   `AFPoint : Center (horizontal); Single Target` `-n` -> `6 0`
+    /// `OlympusE-600.jpg` Model `E-600`
+    ///   `AFPoint : Top-center (horizontal); All Target` `-n` -> `2 64`
+    /// `OlympusE-520.jpg` Model `E-520`
+    ///   `AFPoint : Unknown (0x1); Single Target`       `-n` -> `1 0`
+    ///
+    /// The last one is the PrintHex miss: `Olympus.pm:3418-3420` leaves 0x01
+    /// commented out ("need to fill this in..."), so ExifTool prints the hex
+    /// number rather than a name -- and so does this.
+    #[test]
+    fn af_point_seven_point_variant() {
+        assert_eq!(
+            af_point_forms(6, "E-620"),
+            Some((
+                "6 0".to_string(),
+                "Center (horizontal); Single Target".to_string()
+            ))
+        );
+        assert_eq!(
+            af_point_forms(2 | 64, "E-600"),
+            Some((
+                "2 64".to_string(),
+                "Top-center (horizontal); All Target".to_string()
+            ))
+        );
+        assert_eq!(
+            af_point_forms(1, "E-520"),
+            Some((
+                "1 0".to_string(),
+                "Unknown (0x1); Single Target".to_string()
+            ))
+        );
+    }
+
+    /// `OlympusE-410.jpg`  `E-410`   `AFPoint : Center (vertical)`  `-n` -> `3`
+    /// `OlympusE-400.jpg`  `E-400`   `AFPoint : Center (horizontal)` `-n` -> `1`
+    /// `OlympusE1.jpg`     `E-1`     `AFPoint : None`               `-n` -> `255`
+    /// `OlympusPEN-F.jpg`  `PEN-F`   `AFPoint : Left (or n/a)`      `-n` -> `0`
+    #[test]
+    fn af_point_other_models_variant() {
+        for (model, raw, printed) in [
+            ("E-410", 3, "Center (vertical)"),
+            ("E-400", 1, "Center (horizontal)"),
+            ("E-1", 255, "None"),
+            ("PEN-F", 0, "Left (or n/a)"),
+        ] {
+            assert_eq!(
+                af_point_forms(raw, model),
+                Some((raw.to_string(), printed.to_string())),
+                "{model}"
+            );
+        }
+    }
+
+    /// `OlympusE-P1.jpg` reports `AFPointDetails : 8` and **no** `AFPoint` at
+    /// all, because `Olympus.pm:3447`'s RawConv drops a zero on that one body.
+    /// A non-zero value on an E-P1 would still be kept.
+    #[test]
+    fn af_point_e_p1_drops_zero_only() {
+        assert_eq!(af_point_forms(0, "E-P1"), None);
+        assert_eq!(
+            af_point_forms(3, "E-P1"),
+            Some(("3".to_string(), "Center (vertical)".to_string()))
+        );
+        // The same zero on any other body is a real value.
+        assert_eq!(
+            af_point_forms(0, "E-P2"),
+            Some(("0".to_string(), "Left (or n/a)".to_string()))
+        );
+    }
+
+    /// `OlympusOM-3.jpg`  `AFPoint : 12740`  `-n` -> `12740`
+    /// `OlympusE-M1X.jpg` `AFPoint : 305`    `-n` -> `305`
+    /// E-Mxxx / OM-x get no conversion at all (`Olympus.pm:3456-3459`).
+    #[test]
+    fn af_point_em_om_models_print_raw() {
+        assert_eq!(
+            af_point_forms(12740, "OM-3"),
+            Some(("12740".to_string(), "12740".to_string()))
+        );
+        assert_eq!(
+            af_point_forms(305, "E-M1X"),
+            Some(("305".to_string(), "305".to_string()))
+        );
+    }
+
+    /// `/E-(3|5|30)\b/` must not swallow `E-300`, `E-500` or `E-M5`, all of
+    /// which are in the corpus and all of which ExifTool routes to the
+    /// *other* variants: `OlympusE-300.jpg` prints `Center (horizontal)`
+    /// (`-n` -> `1`), and `OlympusE-M5.jpg` prints its `AFPoint` raw.
+    #[test]
+    fn af_point_word_boundary_is_not_a_prefix_match() {
+        assert_eq!(
+            af_point_forms(1, "E-300"),
+            Some(("1".to_string(), "Center (horizontal)".to_string()))
+        );
+        assert_eq!(
+            af_point_forms(1, "E-500"),
+            Some(("1".to_string(), "Center (horizontal)".to_string()))
+        );
+        assert_eq!(
+            af_point_forms(0, "E-M5"),
+            Some(("0".to_string(), "0".to_string()))
+        );
+    }
+
+    /// `OlympusOM-3.jpg` Model `OM-3`:
+    ///   `AFPointDetails : Human; Face Priority; AF on Half Press; No Eye-AF;
+    ///    Face Detection; No MF; Release Priority; Object found; C-AF`
+    ///   `-n` -> `6 0 1 0 1 0 1 1 2`
+    #[test]
+    fn af_point_details_om3_bit_decomposition() {
+        // 6<<13 | 1<<11 | 1<<7 | 1<<4 | 1<<3 | 2
+        let raw = (6 << 13) | (1 << 11) | (1 << 7) | (1 << 4) | (1 << 3) | 2;
+        assert_eq!(raw, 51354);
+        assert_eq!(
+            af_point_details_forms(raw, "OM-3"),
+            (
+                "6 0 1 0 1 0 1 1 2".to_string(),
+                "Human; Face Priority; AF on Half Press; No Eye-AF; Face Detection; \
+                 No MF; Release Priority; Object found; C-AF"
+                    .to_string()
+            )
+        );
+    }
+
+    /// `OlympusOM-1.jpg` Model `OM-1`, `-n` -> `0 0 0 0 0 0 0 0 0`:
+    ///   `AFPointDetails : No Subject Detection; Face Priority; Normal AF;
+    ///    No Eye-AF; No Face Detection; No MF; AF Priority; No Object found; MF`
+    #[test]
+    fn af_point_details_all_zero() {
+        assert_eq!(
+            af_point_details_forms(0, "OM-1").1,
+            "No Subject Detection; Face Priority; Normal AF; No Eye-AF; \
+             No Face Detection; No MF; AF Priority; No Object found; MF"
+        );
+    }
+
+    /// `OlympusE-M5.jpg` Model `E-M5`, `-n` -> `0 0 0 0 0 0 0 0 5`: the last
+    /// element has no name in `Olympus.pm:3511-3516`, and `PrintHex => 1` makes the
+    /// miss `Unknown (0x5)`, not `Unknown (5)`.
+    #[test]
+    fn af_point_details_unknown_prints_hex() {
+        assert_eq!(
+            af_point_details_forms(5, "E-M5"),
+            (
+                "0 0 0 0 0 0 0 0 5".to_string(),
+                "No Subject Detection; Face Priority; Normal AF; No Eye-AF; \
+                 No Face Detection; No MF; AF Priority; No Object found; Unknown (0x5)"
+                    .to_string()
+            )
+        );
+    }
+
+    /// `OlympusE-M10MarkIV.jpg` `-n` -> `0 0 0 3 1 0 0 0 1`, and
+    /// `OlympusOM-1MarkII.jpg` `-n` -> `5 0 1 0 1 0 0 1 1` -- the two corpus
+    /// files that exercise the 2-bit eye-AF field and the subject-detect map
+    /// beyond zero.
+    #[test]
+    fn af_point_details_multi_bit_fields() {
+        let e_m10_mk4 = (3 << 8) | (1 << 7) | 1;
+        assert_eq!(
+            af_point_details_forms(e_m10_mk4, "E-M10MarkIV"),
+            (
+                "0 0 0 3 1 0 0 0 1".to_string(),
+                "No Subject Detection; Face Priority; Normal AF; Both Eyes Priority; \
+                 Face Detection; No MF; AF Priority; No Object found; S-AF"
+                    .to_string()
+            )
+        );
+        let om1_mk2 = (5 << 13) | (1 << 11) | (1 << 7) | (1 << 3) | 1;
+        assert_eq!(
+            af_point_details_forms(om1_mk2, "OM-1MarkII").1,
+            "Dogs & Cats; Face Priority; AF on Half Press; No Eye-AF; Face Detection; \
+             No MF; AF Priority; Object found; S-AF"
+        );
+    }
+
+    /// Older bodies get no decomposition at all: `OlympusE-P7.jpg` prints
+    /// `AFPointDetails : 897` and `OlympusE-3.jpg` prints `256`.
+    #[test]
+    fn af_point_details_older_models_print_raw() {
+        assert_eq!(
+            af_point_details_forms(897, "E-P7"),
+            ("897".to_string(), "897".to_string())
+        );
+        assert_eq!(
+            af_point_details_forms(256, "E-3"),
+            ("256".to_string(), "256".to_string())
+        );
+    }
+
+    fn dist(numerator: i64) -> Option<(String, String)> {
+        focus_distance_forms(&ifd::OlyVal::Int(vec![numerator, 1]))
+    }
+
+    /// Printed / `-n` pairs off the corpus:
+    ///   `OlympusE-30.jpg`   `0.595 m`   `OlympusOM-1.jpg`  `1.055 m`
+    ///   `OlympusE-M5MarkII.jpg` `17.5 m`  `OlympusStylus710.jpg` `18.08 m`
+    ///   `Olympus_u795SW.jpg` `56.4 m`
+    #[test]
+    fn focus_distance_millimetres_to_metres() {
+        assert_eq!(
+            dist(595),
+            Some(("0.595".to_string(), "0.595 m".to_string()))
+        );
+        assert_eq!(
+            dist(1055),
+            Some(("1.055".to_string(), "1.055 m".to_string()))
+        );
+        assert_eq!(
+            dist(17500),
+            Some(("17.5".to_string(), "17.5 m".to_string()))
+        );
+        assert_eq!(
+            dist(18080),
+            Some(("18.08".to_string(), "18.08 m".to_string()))
+        );
+        assert_eq!(
+            dist(56400),
+            Some(("56.4".to_string(), "56.4 m".to_string()))
+        );
+    }
+
+    /// Seven corpus files carry `4294967286` (0xfffffff6) and ExifTool prints
+    /// `4294967.286 m` for them -- it is *not* the 0xffffffff sentinel, so it
+    /// must not collapse to `inf`.
+    #[test]
+    fn focus_distance_near_sentinel_is_not_infinity() {
+        assert_eq!(
+            dist(4_294_967_286),
+            Some(("4294967.286".to_string(), "4294967.286 m".to_string()))
+        );
+    }
+
+    /// Eight corpus files print `FocusDistance : inf`, e.g. `OlympusE-PL1.jpg`
+    /// (`DOF : inf (15.69 m - inf)`). The ValueConv form must be `0`, because
+    /// `Composite:DOF` substitutes 1e10 for a zero focus distance -- an `inf`
+    /// string would parse as no number and fall through to `SubjectDistance`.
+    #[test]
+    fn focus_distance_infinity_keeps_a_zero_value_form() {
+        assert_eq!(dist(0), Some(("0".to_string(), "inf".to_string())));
+        assert_eq!(
+            dist(0xffff_ffff),
+            Some(("0".to_string(), "inf".to_string()))
         );
     }
 }

@@ -31,13 +31,19 @@ use crate::core::formatters::{
 use crate::core::tag_conversion::apply_tile_offsets_value_conv;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::exiftool_tables::{decode_binary_table, find_table, find_unemitted_table};
+use crate::exiftool_tables::{
+    Acknowledged, PerlCitation, RawAccess, decode_binary_table, find_table,
+};
 use crate::io::ByteOrder as TableByteOrder;
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::icc::parse_icc_profile_data as parse_icc;
 use crate::parsers::raw::{RawFormat, raf_parser};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
+use crate::parsers::tiff::makernotes::canon::{
+    canon_makernote_id_for_ciff_record, decode_canon_model_id, format_canon_file_number,
+    parse_canon_ciff_records,
+};
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use crate::tag_db::lookup_tag_name;
 
@@ -6610,6 +6616,11 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     Ok(metadata)
 }
 
+/// Read a little-endian `int16u` out of a CIFF structure.
+///
+/// CIFF is little-endian in Canon's CRW files -- `ProcessCRW` calls
+/// `SetByteOrder` on the file's first two bytes (CanonRaw.pm:820) and
+/// [`parse_canon_crw`] only accepts `II`.
 fn read_ciff_u16(data: &[u8], offset: usize) -> Option<u16> {
     let end = offset.checked_add(2)?;
     let bytes: [u8; 2] = data.get(offset..end)?.try_into().ok()?;
@@ -6622,146 +6633,110 @@ fn read_ciff_u32(data: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes))
 }
 
-/// Group-qualify a CRW tag against the ExifTool table the CIFF record maps to.
+/// One value-bearing entry of a CIFF directory, decomposed the way
+/// `ProcessCanonRaw` decomposes it (CanonRaw.pm:645-660).
 ///
-/// Two kinds of table arrive here and they need opposite handling, which the
-/// previous `find_table("Canon", table_name).or_else(|| find_table("Canon",
-/// "ShotInfo"))` chain collapsed into one:
+/// A CIFF entry's 16-bit `tag` packs three things, and reading it as a plain
+/// tag id conflates them:
 ///
-/// * `ShotInfo` is emitted, so it is the authority on its own field names. A
-///   name it does not declare is a typo or a stale transcription, and emitting
-///   it anyway would put an invented tag under a real ExifTool group -- the
-///   failure AGENTS.md's "never approximate a conversion" rule is about. It
-///   now returns `None` instead.
-/// * `AFInfo` is *never* emitted and never will be under the current generator
-///   (`ProcessSerialData`; see [`crate::exiftool_tables::UNEMITTED_TABLES`]). Its lookup returned
-///   `None` on every CRW ever read, and the `or_else` then borrowed
-///   `ShotInfo`'s `group0` -- which produced the right answer only because the
-///   two tables happen to agree on `MakerNotes` (Canon.pm:6437 vs
-///   Canon.pm:2778). A coincidence, not a derivation: the moment they
-///   disagreed, every AF tag would have been filed under the wrong group with
-///   nothing to notice. The group now comes from the registry, transcribed
-///   from `%Canon::AFInfo`'s own `GROUPS`.
+/// ```text
+///     my $tagID      = $tag & 0x3fff;        # CanonRaw.pm:656
+///     my $tagType    = ($tag >> 8) & 0x38;   # CanonRaw.pm:657
+///     my $valueInDir = ($tag & 0x4000);      # CanonRaw.pm:658
+/// ```
 ///
-/// Field names for a registered-unemitted table are passed through
-/// unvalidated, because there is no table to validate them against. That is
-/// the cost of the generator's refusal, and it is stated here rather than
-/// hidden: the decode above is hand-written against Canon.pm:6433-6500 and the
-/// names it passes are pinned by
-/// `canon_crw_af_names_match_the_pinned_perl` below.
-fn canon_crw_tag_key(table_name: &str, field_name: &str) -> Option<String> {
-    if let Some(unemitted) = find_unemitted_table("Canon", table_name) {
-        return Some(format!("{}:{field_name}", unemitted.group0));
-    }
-    let table = find_table("Canon", table_name)?;
-    let field = table.fields.iter().find(|field| field.name == field_name)?;
-    Some(format!("{}:{}", table.group0, field.name))
+/// `tag_type` is the storage class, and `%crwTagFormat` (CanonRaw.pm:35-43)
+/// turns it into the format a tag with no `Format` of its own is read with:
+/// `0x00 => int8u`, `0x08 => string`, `0x10 => int16u`, `0x18 => int32u`, with
+/// `0x20`/`0x28`/`0x30` deliberately left undefined. `dir_name` is the
+/// enclosing directory's `Name`, which one `Condition` in the table keys off.
+struct CiffEntry<'a> {
+    id: u16,
+    tag_type: u16,
+    dir_name: &'static str,
+    value: &'a [u8],
 }
 
-fn insert_canon_crw_tag(
-    metadata: &mut MetadataMap,
-    table_name: &str,
-    field_name: &str,
-    value: TagValue,
-) {
-    if let Some(key) = canon_crw_tag_key(table_name, field_name) {
-        metadata.insert(key, value);
-    }
-}
-
-fn canon_ev(raw: i16) -> f64 {
-    let sign = if raw < 0 { -1.0 } else { 1.0 };
-    let value = i32::from(raw).unsigned_abs();
-    let fraction = value & 0x1f;
-    let whole = value - fraction;
-    let fraction = match fraction {
-        0x0c => 32.0 / 3.0,
-        0x14 => 64.0 / 3.0,
-        other => f64::from(other),
-    };
-    sign * (f64::from(whole) + fraction) / 32.0
-}
-
-fn parse_ciff_record(tag: u16, record: &[u8], metadata: &mut MetadataMap) {
-    match tag {
-        // CanonRaw.pm tag 0x102a -> Canon::ShotInfo. The generated table
-        // identifies AEBBracketValue as int16 index 17.
-        0x102A => {
-            if let Some(raw) = read_ciff_u16(record, 17 * 2).map(|value| value as i16) {
-                insert_canon_crw_tag(
-                    metadata,
-                    "ShotInfo",
-                    "AEBBracketValue",
-                    TagValue::new_string(print_fraction(canon_ev(raw))),
-                );
-            }
+impl CiffEntry<'_> {
+    /// `%crwTagFormat{$tagType}` as a byte width, for the four defined types
+    /// (CanonRaw.pm:35-43). `None` for the three ExifTool leaves undefined --
+    /// those tags carry their own `Format` or are subdirectories.
+    const fn type_width(&self) -> Option<usize> {
+        match self.tag_type {
+            0x00 => Some(1),
+            0x08 => Some(1),
+            0x10 => Some(2),
+            0x18 => Some(4),
+            _ => None,
         }
-        // CanonRaw.pm tag 0x1038 -> Canon::AFInfo. This serial record has no
-        // leading length word; NumAFPoints at index zero controls both arrays.
-        // The table's default FORMAT is int16u (Canon.pm 13.59), so scalar
-        // entries decode unsigned; only the per-entry int16s[$val{0}] arrays
-        // (AFAreaXPositions/AFAreaYPositions) are signed.
-        0x1038 => {
-            let values = record
-                .chunks_exact(2)
-                .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
-                .collect::<Vec<_>>();
+    }
 
-            for (index, name) in [
-                (5usize, "AFImageHeight"),
-                (6, "AFAreaWidth"),
-                (7, "AFAreaHeight"),
-            ] {
-                if let Some(&value) = values.get(index) {
-                    insert_canon_crw_tag(
-                        metadata,
-                        "AFInfo",
-                        name,
-                        TagValue::new_integer(i64::from(value)),
-                    );
-                }
-            }
+    /// The value as an unsigned integer read at the entry's own `tagType`
+    /// width. `None` when the type is one `%crwTagFormat` does not define, or
+    /// the record is short.
+    fn unsigned(&self) -> Option<u64> {
+        Some(match self.type_width()? {
+            1 => u64::from(*self.value.first()?),
+            2 => u64::from(read_ciff_u16(self.value, 0)?),
+            _ => u64::from(read_ciff_u32(self.value, 0)?),
+        })
+    }
 
-            let Some(&point_count) = values.first() else {
-                return;
-            };
-            if point_count == 0 {
-                return;
-            }
-            let point_count = usize::from(point_count);
-            let x_start = 8usize;
-            let Some(y_start) = x_start.checked_add(point_count) else {
-                return;
-            };
-            let Some(end) = y_start.checked_add(point_count) else {
-                return;
-            };
+    /// The value as ExifTool's `string`: the bytes up to the first NUL.
+    ///
+    /// `ReadValue` truncates there for this format and no other --
+    /// `$vals[0] =~ s/\0.*//s if $format eq 'string'` (ExifTool.pm:6311) --
+    /// which is what makes a `string[32]` slot holding `"USA\0\0..."` report
+    /// `USA` rather than a NUL-padded 32-byte blob.
+    fn string(&self) -> Option<String> {
+        let end = self
+            .value
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(self.value.len());
+        let text = String::from_utf8_lossy(&self.value[..end]).into_owned();
+        (!text.is_empty() || self.value.first() == Some(&0)).then_some(text)
+    }
 
-            for (name, range) in [
-                ("AFAreaXPositions", x_start..y_start),
-                ("AFAreaYPositions", y_start..end),
-            ] {
-                if let Some(positions) = values.get(range) {
-                    let display = positions
-                        .iter()
-                        .map(|&value| (value as i16).to_string())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    insert_canon_crw_tag(metadata, "AFInfo", name, TagValue::new_string(display));
-                }
-            }
-        }
-        _ => {}
+    /// The value as an IEEE `float`, for the two tags whose `Format => 'float'`
+    /// overrides `%crwTagFormat` (CanonRaw.pm:242-247, :292-302).
+    fn float(&self) -> Option<f64> {
+        let bytes: [u8; 4] = self.value.get(..4)?.try_into().ok()?;
+        Some(f64::from(f32::from_le_bytes(bytes)))
     }
 }
 
-fn parse_ciff_directory(
-    data: &[u8],
+/// Walk one CIFF directory, appending every value-bearing entry to `out` and
+/// recursing into subdirectories.
+///
+/// This mirrors `ProcessCanonRaw`'s loop (CanonRaw.pm:636-700) rather than
+/// paraphrasing it:
+///
+/// * the directory offset is the last four bytes of the block, relative to the
+///   block start (CanonRaw.pm:637-641);
+/// * `$tag & 0x8000` is a corrupt entry and abandons the whole directory
+///   (`$et->Warn('Bad CRW directory entry'); return 1;`, CanonRaw.pm:652-655);
+/// * a `tagType` of `0x28` or `0x30` with the value *not* in the directory is a
+///   subdirectory, recursed into with the enclosing tag's `Name`
+///   (CanonRaw.pm:659-682);
+/// * otherwise `valueInDir` decides where the bytes are: set means the value
+///   occupies the entry's own eight `size`/`ptr` bytes, clear means it sits at
+///   `ptr` for `size` bytes (CanonRaw.pm:692-700).
+///
+/// The previous implementation tested `tag & 0x3800 == 0x3000`, which is the
+/// `0x30` half of the subdirectory rule only. `0x2804 ImageDescription` and
+/// `0x2807 CameraObject` are `0x28` (CanonRaw.pm:364-373) and were never
+/// entered, so `CanonFileDescription`, `CanonImageType`, `OwnerName`,
+/// `CanonRawMakeModel` and everything under `CameraSpecification` were
+/// unreachable on every CRW.
+fn walk_ciff_directory<'a>(
+    data: &'a [u8],
     container_start: usize,
     container_end: usize,
     directory_offset: usize,
-    metadata: &mut MetadataMap,
+    dir_name: &'static str,
     depth: usize,
+    out: &mut Vec<CiffEntry<'a>>,
 ) {
     if depth > 16 {
         return;
@@ -6792,6 +6767,15 @@ fn parse_ciff_directory(
         let Some(tag) = read_ciff_u16(data, entry_offset) else {
             continue;
         };
+        // CanonRaw.pm:652 -- a set high bit is a corrupt directory, and
+        // ExifTool stops reading it rather than skipping the one entry.
+        if tag & 0x8000 != 0 {
+            return;
+        }
+        let id = tag & 0x3fff;
+        let tag_type = (tag >> 8) & 0x38;
+        let value_in_dir = tag & 0x4000 != 0;
+
         let Some(size) = read_ciff_u32(data, entry_offset + 2).map(|value| value as usize) else {
             continue;
         };
@@ -6799,58 +6783,596 @@ fn parse_ciff_directory(
         else {
             continue;
         };
-        let Some(value_start) = container_start.checked_add(relative) else {
-            continue;
-        };
-        let Some(value_end) = value_start.checked_add(size) else {
-            continue;
-        };
-        let Some(value) = data.get(value_start..value_end) else {
-            continue;
-        };
 
-        parse_ciff_record(tag, value, metadata);
-
-        if tag & 0x3800 == 0x3000 && value.len() >= 4 {
-            let Some(relative_directory) =
-                read_ciff_u32(value, value.len() - 4).map(|value| value as usize)
+        if matches!(tag_type, 0x28 | 0x30) && !value_in_dir {
+            let Some(block_start) = container_start.checked_add(relative) else {
+                continue;
+            };
+            let Some(block_end) = block_start.checked_add(size) else {
+                continue;
+            };
+            if block_end > data.len() || size < 4 {
+                continue;
+            }
+            let Some(nested_relative) = read_ciff_u32(data, block_end - 4).map(|v| v as usize)
             else {
                 continue;
             };
-            let Some(nested_directory) = value_start.checked_add(relative_directory) else {
+            let Some(nested_directory) = block_start.checked_add(nested_relative) else {
                 continue;
             };
-            parse_ciff_directory(
+            walk_ciff_directory(
                 data,
-                value_start,
-                value_end,
+                block_start,
+                block_end,
                 nested_directory,
-                metadata,
+                ciff_subdirectory_name(id),
                 depth + 1,
+                out,
+            );
+            continue;
+        }
+
+        let value = if value_in_dir {
+            // CanonRaw.pm:693-695 -- "this type of tag stores the value in the
+            // 'size' and 'ptr' fields", i.e. the eight bytes after the tag.
+            let Some(bytes) = data.get(entry_offset + 2..entry_offset + 10) else {
+                continue;
+            };
+            bytes
+        } else {
+            let Some(value_start) = container_start.checked_add(relative) else {
+                continue;
+            };
+            let Some(value_end) = value_start.checked_add(size) else {
+                continue;
+            };
+            let Some(bytes) = data.get(value_start..value_end) else {
+                continue;
+            };
+            bytes
+        };
+
+        out.push(CiffEntry {
+            id,
+            tag_type,
+            dir_name,
+            value,
+        });
+    }
+}
+
+/// The `Name` of a CIFF subdirectory tag, which becomes `$$self{DIR_NAME}` for
+/// everything inside it.
+///
+/// Only one entry in `%CanonRaw::Main` conditions on it -- tag `0x0805` is
+/// `CanonFileDescription` inside `ImageDescription` and `UserComment`
+/// everywhere else (CanonRaw.pm:62-71) -- but naming all seven keeps that
+/// condition readable against the Perl instead of hiding a single magic
+/// constant. Names are CanonRaw.pm:364-397.
+const fn ciff_subdirectory_name(id: u16) -> &'static str {
+    match id {
+        0x2804 => "ImageDescription",
+        0x2807 => "CameraObject",
+        0x3002 => "ShootingRecord",
+        0x3003 => "MeasuredInfo",
+        0x3004 => "CameraSpecification",
+        0x300a => "ImageProps",
+        0x300b => "ExifInformation",
+        _ => "CIFF",
+    }
+}
+
+/// Emit one CIFF record through a generated `%Image::ExifTool::CanonRaw::*`
+/// table.
+///
+/// These are the eight `ProcessBinaryData` tables CanonRaw.pm declares
+/// (:427-590), all of them transcribed, so the byte layout, the per-field
+/// `Format` overrides and the `PrintConv` hashes come from the generator rather
+/// than from a second hand-written copy. Fields the generator refused are
+/// withheld by [`DecodedField::emit`] and handled by name at the call site.
+fn emit_canonraw_table(metadata: &mut MetadataMap, table_name: &str, record: &[u8]) {
+    let Some(table) = find_table("CanonRaw", table_name) else {
+        return;
+    };
+    let decode = decode_binary_table(table, record, TableByteOrder::Little);
+    for field in decode.fields() {
+        if let Some(value) = field.emit() {
+            metadata.insert(
+                format!("{}:{}", table.group1, field.field.name),
+                join_binary_table_list(value),
             );
         }
     }
 }
 
-/// Parse Canon CRW format
+/// Render a multi-element `Format => 'x[N]'` field the way ExifTool renders it.
 ///
-/// CRW is Canon's older proprietary raw format used before CR2.
-/// This function is a stub for future implementation.
+/// `ReadValue` returns the elements space-joined when there is more than one --
+/// `return join(' ', @vals) if @vals > 1;` (ExifTool.pm:6329) -- so
+/// `int16s[4]` prints `1740 832 831 931`. [`TagValue::Array`] is rendered by
+/// this crate's CLI with `", "` between elements, which is a different string
+/// under the same real tag name, so the join is done here where the table's
+/// `count` is known rather than left to the formatter.
+fn join_binary_table_list(value: TagValue) -> TagValue {
+    let TagValue::Array(elements) = &value else {
+        return value;
+    };
+    if elements.len() < 2 {
+        return value;
+    }
+    let joined = elements
+        .iter()
+        .map(|element| match element {
+            TagValue::Integer(number) => number.to_string(),
+            TagValue::Float(number) => crate::exiftool_tables::exprs::perl_num(*number),
+            TagValue::String(text) => text.clone(),
+            other => format!("{other:?}"),
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    TagValue::new_string(joined)
+}
+
+/// `CanonRaw::TimeStamp` key 0, whose `ValueConv` the generator refused.
 ///
-/// # Arguments
+/// ```text
+///     0 => {
+///         Name => 'DateTimeOriginal',
+///         Shift => 'Time',
+///         ValueConv => 'ConvertUnixTime($val)',
+///         PrintConv => '$self->ConvertDateTime($val)',
+///     },
+/// ```
 ///
-/// * `data` - Complete file data
-/// * `format` - CRW format variant
+/// (CanonRaw.pm:435-443.) `ConvertUnixTime($val)` is called with no `$isLocal`
+/// argument, so it formats with `gmtime`, not `localtime`
+/// (ExifTool.pm's `sub ConvertUnixTime($;$$)`: `my @tm = $isLocal ?
+/// localtime($time) : gmtime($time);`) -- reading it as local time shifts every
+/// CRW capture by the reader's own UTC offset, which is a wrong value under a
+/// real tag name rather than a missing one.
+static CANONRAW_DATE_TIME_ORIGINAL: PerlCitation = PerlCitation {
+    module: "CanonRaw",
+    table: "TimeStamp",
+    tag: "DateTimeOriginal",
+    lines: "435-443",
+};
+
+/// Days-from-civil, Howard Hinnant's algorithm, inverted to civil-from-days.
+/// Used only by [`emit_canonraw_timestamp`]; the crate has no date type to
+/// borrow here and `gmtime` is not reachable from safe Rust.
+fn civil_from_unix(seconds: i64) -> (i64, u32, u32, u32, u32, u32) {
+    let days = seconds.div_euclid(86_400);
+    let rem = seconds.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = if month <= 2 { year + 1 } else { year };
+    (
+        year,
+        month,
+        day,
+        (rem / 3600) as u32,
+        ((rem % 3600) / 60) as u32,
+        (rem % 60) as u32,
+    )
+}
+
+/// Emit `CanonRaw::TimeStamp`, including the `DateTimeOriginal` the generated
+/// table withholds.
+fn emit_canonraw_timestamp(metadata: &mut MetadataMap, record: &[u8]) {
+    let Some(table) = find_table("CanonRaw", "TimeStamp") else {
+        return;
+    };
+    let decode = decode_binary_table(table, record, TableByteOrder::Little);
+    for field in decode.fields() {
+        if field.field.name == "DateTimeOriginal" {
+            let Some(access) = RawAccess::new(
+                field,
+                Acknowledged::VALUE_CONV,
+                &CANONRAW_DATE_TIME_ORIGINAL,
+            ) else {
+                continue;
+            };
+            let Some(seconds) = access.raw().as_integer() else {
+                continue;
+            };
+            let (year, month, day, hour, minute, second) = civil_from_unix(seconds);
+            metadata.insert(
+                format!("{}:DateTimeOriginal", table.group1),
+                TagValue::new_string(format!(
+                    "{year:04}:{month:02}:{day:02} {hour:02}:{minute:02}:{second:02}"
+                )),
+            );
+            continue;
+        }
+        if let Some(value) = field.emit() {
+            metadata.insert(format!("{}:{}", table.group1, field.field.name), value);
+        }
+    }
+}
+
+/// `%Canon::ColorBalance` key 29 is a `Condition` list the generator does not
+/// emit, so the transcribed table jumps from key 25 to key 33.
 ///
-/// # Returns
+/// ```text
+///     29 => [{
+///         Name => 'WB_RGGBLevelsCustom',
+///         Notes => 'black levels for the D60',
+///         Condition => '$$self{Model} !~ /EOS D60\b/',
+///         Format => 'int16s[4]',
+///     },{ # (black levels for D60, ref IB)
+///         Name => 'BlackLevels',
+///         Format => 'int16s[4]',
+///     }],
+/// ```
 ///
-/// Minimal metadata with file type information.
-/// Full CRW parsing to be implemented in future iteration.
+/// (Canon.pm:7282-7290.) Both arms are four `int16s` at the same offset; only
+/// the name differs, on a model test this parser can answer because
+/// `CanonRawMakeModel` is read before any record is emitted.
+fn emit_canon_color_balance(metadata: &mut MetadataMap, record: &[u8], model: &str) {
+    let Some(table) = find_table("Canon", "ColorBalance") else {
+        return;
+    };
+    for field in decode_binary_table(table, record, TableByteOrder::Little).fields() {
+        if let Some(value) = field.emit() {
+            metadata.insert(
+                format!("{}:{}", table.group1, field.field.name),
+                join_binary_table_list(value),
+            );
+        }
+    }
+
+    // Key 29, hand-placed: `int16s[4]` at `29 * 2` bytes, the same
+    // `index * increment` the generated fields use.
+    let mut levels = Vec::with_capacity(4);
+    for slot in 0..4usize {
+        let Some(raw) = read_ciff_u16(record, (29 + slot) * 2) else {
+            return;
+        };
+        levels.push((raw as i16).to_string());
+    }
+    let name = if has_word_boundary(model, "EOS D60") {
+        "BlackLevels"
+    } else {
+        "WB_RGGBLevelsCustom"
+    };
+    metadata.insert(
+        format!("{}:{name}", table.group1),
+        TagValue::new_string(levels.join(" ")),
+    );
+}
+
+/// Perl's `\b`-anchored model test, for the one `Condition` above that needs it.
 ///
-/// # TODO
+/// `$$self{Model} !~ /EOS D60\b/` must not fire on an "EOS D60X"; a plain
+/// `contains` would.
+fn has_word_boundary(haystack: &str, needle: &str) -> bool {
+    haystack.match_indices(needle).any(|(at, _)| {
+        haystack[at + needle.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+    })
+}
+
+/// `%CanonRaw::MakeModel` (CanonRaw.pm:402-424) -- the one CanonRaw binary
+/// table the generator does not emit, and why it is decoded here by hand.
 ///
-/// - Implement CRW format parser
-/// - Extract Canon-specific metadata from CRW structure
+/// ```text
+/// %Image::ExifTool::CanonRaw::MakeModel = (
+///     FORMAT => 'string',
+///     # (can't specify a first entry because this isn't
+///     # a simple binary table with fixed offsets)
+///     0 => { Name => 'Make',  Format => 'string[6]', ... },   # "Canon\0"
+///     6 => { Name => 'Model', Format => 'string', ... },      # to end of data
+/// );
+/// ```
+///
+/// It has no `FIRST_ENTRY`, and `Model`'s `Format => 'string'` carries no
+/// length -- "no size = to the end of the data" -- so it is not the fixed
+/// `index * increment` layout the generated schema describes. The layout is
+/// still exact: six bytes of `Make`, then `Model` to the first NUL after it.
+fn emit_canonraw_make_model(metadata: &mut MetadataMap, record: &[u8]) -> Option<String> {
+    let make = record.get(..6)?;
+    let end = make.iter().position(|&b| b == 0).unwrap_or(make.len());
+    metadata.insert(
+        "CanonRaw:Make".to_string(),
+        TagValue::new_string(String::from_utf8_lossy(&make[..end]).into_owned()),
+    );
+
+    let rest = record.get(6..)?;
+    let end = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
+    let model = String::from_utf8_lossy(&rest[..end]).into_owned();
+    metadata.insert(
+        "CanonRaw:Model".to_string(),
+        TagValue::new_string(model.clone()),
+    );
+    Some(model)
+}
+
+/// Emit the `%CanonRaw::Main` entries that are plain values rather than
+/// subdirectories.
+///
+/// Every arm names the CanonRaw.pm line its format, `PrintConv` and any
+/// `ValueConv` come from. Tags whose conversion this parser cannot reproduce
+/// exactly are absent rather than approximated, and listed in the module note
+/// above [`parse_canon_crw`].
+fn emit_ciff_main_tag(metadata: &mut MetadataMap, entry: &CiffEntry<'_>, model: &str) {
+    /// Every `%CanonRaw::Main` tag lands in group 1 `CanonRaw` -- the module's
+    /// own name, which is what ExifTool's `-G1` prints for all of them.
+    const GROUP: &str = "CanonRaw";
+
+    let mut put = |name: &str, value: TagValue| {
+        metadata.insert(format!("{GROUP}:{name}"), value);
+    };
+
+    match entry.id {
+        // CanonRaw.pm:62-71 -- one tag id, two names, chosen by the enclosing
+        // directory: `Condition => '$self->{DIR_NAME} eq "ImageDescription"'`.
+        0x0805 => {
+            if let Some(text) = entry.string() {
+                let name = if entry.dir_name == "ImageDescription" {
+                    "CanonFileDescription"
+                } else {
+                    "UserComment"
+                };
+                put(name, TagValue::new_string(text));
+            }
+        }
+        // CanonRaw.pm:79-85 -- plain `string[N]` slots.
+        0x080b | 0x080c | 0x080d | 0x0810 | 0x0815 | 0x0816 | 0x0817 => {
+            let name = match entry.id {
+                0x080b => "CanonFirmwareVersion",
+                0x080c => "ComponentVersion",
+                0x080d => "ROMOperationMode",
+                0x0810 => "OwnerName",
+                0x0815 => "CanonImageType",
+                0x0816 => "OriginalFileName",
+                _ => "ThumbnailFileName",
+            };
+            if let Some(text) = entry.string() {
+                put(name, TagValue::new_string(text));
+            }
+        }
+        // CanonRaw.pm:86-93.
+        0x100a => {
+            if let Some(raw) = entry.unsigned() {
+                put(
+                    "TargetImageType",
+                    TagValue::new_string(match raw {
+                        0 => "Real-world Subject".to_string(),
+                        1 => "Written Document".to_string(),
+                        other => format!("Unknown ({other})"),
+                    }),
+                );
+            }
+        }
+        // CanonRaw.pm:94-101.
+        0x1010 => {
+            if let Some(raw) = entry.unsigned() {
+                put(
+                    "ShutterReleaseMethod",
+                    TagValue::new_string(match raw {
+                        0 => "Single Shot".to_string(),
+                        2 => "Continuous Shooting".to_string(),
+                        other => format!("Unknown ({other})"),
+                    }),
+                );
+            }
+        }
+        // CanonRaw.pm:102-109.
+        0x1011 => {
+            if let Some(raw) = entry.unsigned() {
+                put(
+                    "ShutterReleaseTiming",
+                    TagValue::new_string(match raw {
+                        0 => "Priority on shutter".to_string(),
+                        1 => "Priority on focus".to_string(),
+                        other => format!("Unknown ({other})"),
+                    }),
+                );
+            }
+        }
+        // CanonRaw.pm:110-111, :215-218 -- bare `int16u`, no conversion.
+        0x1016 | 0x101c | 0x10ae => {
+            let name = match entry.id {
+                0x1016 => "ReleaseSetting",
+                0x101c => "BaseISO",
+                _ => "ColorTemperature",
+            };
+            if let Some(raw) = entry.unsigned() {
+                put(name, TagValue::new_integer(raw as i64));
+            }
+        }
+        // CanonRaw.pm:219-227.
+        0x10b4 => {
+            if let Some(raw) = entry.unsigned() {
+                put(
+                    "ColorSpace",
+                    TagValue::new_string(match raw {
+                        1 => "sRGB".to_string(),
+                        2 => "Adobe RGB".to_string(),
+                        0xffff => "Uncalibrated".to_string(),
+                        other => format!("Unknown ({other})"),
+                    }),
+                );
+            }
+        }
+        // CanonRaw.pm:233 -- `int32u`, no conversion.
+        0x1804 => {
+            if let Some(raw) = entry.unsigned() {
+                put("RecordID", TagValue::new_integer(raw as i64));
+            }
+        }
+        // CanonRaw.pm:234-241 -- `ValueConv => '$val / 1000'`,
+        // `PrintConv => '"$val s"'`.
+        0x1806 => {
+            if let Some(raw) = entry.unsigned() {
+                put(
+                    "SelfTimerTime",
+                    TagValue::new_string(format!(
+                        "{} s",
+                        crate::exiftool_tables::exprs::perl_num(raw as f64 / 1000.0)
+                    )),
+                );
+            }
+        }
+        // CanonRaw.pm:242-247 -- `Format => 'float'`, `PrintConv => '"$val mm"'`.
+        0x1807 => {
+            if let Some(value) = entry.float() {
+                put(
+                    "TargetDistanceSetting",
+                    TagValue::new_string(format!(
+                        "{} mm",
+                        crate::exiftool_tables::exprs::perl_num(value)
+                    )),
+                );
+            }
+        }
+        // CanonRaw.pm:248-270 -- three `Condition` arms on `$$self{Model}`.
+        // The D30 renders `sprintf("%x-%.5d",$val>>16,$val&0xffff)`, every other
+        // EOS `sprintf("%.10d",$val)`, and a PowerShot's value is not a serial
+        // number at all (`UnknownNumber`, `Unknown => 1`, so ExifTool does not
+        // report it without `-u`).
+        0x180b => {
+            let Some(raw) = entry.unsigned() else {
+                return;
+            };
+            let raw = raw as u32;
+            if has_word_boundary(model, "EOS D30") {
+                put(
+                    "SerialNumber",
+                    TagValue::new_string(format!("{:x}-{:05}", raw >> 16, raw & 0xffff)),
+                );
+            } else if model.contains("EOS") {
+                put("SerialNumber", TagValue::new_string(format!("{raw:010}")));
+            }
+        }
+        // CanonRaw.pm:292-302 -- `Format => 'float'`, `ValueConv => '$val + 5'`,
+        // no PrintConv, so the number is printed as Perl stringifies it.
+        0x1814 => {
+            if let Some(value) = entry.float() {
+                put(
+                    "MeasuredEV",
+                    TagValue::new_string(crate::exiftool_tables::exprs::perl_num(value + 5.0)),
+                );
+            }
+        }
+        // CanonRaw.pm:303-309 -- `PrintConv => '$_=$val;s/(\d+)(\d{4})/$1-$2/;$_'`,
+        // the same conversion Canon MakerNote tag 0x0008 uses.
+        0x1817 => {
+            if let Some(raw) = entry.unsigned() {
+                put(
+                    "FileNumber",
+                    TagValue::new_string(format_canon_file_number(raw as u32)),
+                );
+            }
+        }
+        // CanonRaw.pm:316-326 -- `PrintConv => \%Image::ExifTool::Canon::canonModelID`.
+        0x1834 => {
+            if let Some(raw) = entry.unsigned() {
+                put(
+                    "CanonModelID",
+                    TagValue::new_string(decode_canon_model_id(raw as u32)),
+                );
+            }
+        }
+        // CanonRaw.pm:332-341 -- `PrintHex`, so an unlisted value prints as hex.
+        0x183b => {
+            if let Some(raw) = entry.unsigned() {
+                put(
+                    "SerialNumberFormat",
+                    TagValue::new_string(match raw {
+                        0x9000_0000 => "Format 1".to_string(),
+                        0xa000_0000 => "Format 2".to_string(),
+                        other => format!("Unknown (0x{other:x})"),
+                    }),
+                );
+            }
+        }
+        // CanonRaw.pm:342-362 -- binary payloads ExifTool reports as a
+        // "(Binary data N bytes...)" placeholder unless `-b` is given.
+        0x2005 | 0x2007 | 0x2008 => {
+            let name = match entry.id {
+                0x2005 => "RawData",
+                0x2007 => "JpgFromRaw",
+                _ => "ThumbnailImage",
+            };
+            put(name, TagValue::Binary(entry.value.to_vec()));
+        }
+        _ => {}
+    }
+}
+
+/// Parse a Canon CRW (CIFF) file.
+///
+/// # Shape of the format
+///
+/// A CRW is not TIFF. `ProcessCRW` (CanonRaw.pm:811-864) reads a 2-byte byte
+/// order, a 4-byte header length and an 8-byte `HEAP(CCDR|JPGM)` signature,
+/// then treats everything from the header length to EOF as one CIFF block whose
+/// last four bytes point at its directory. Directories nest, and a tag's *type
+/// bits* -- not its id -- say whether an entry is a value or another directory.
+/// [`walk_ciff_directory`] follows that structure entry for entry.
+///
+/// # Where the values come from
+///
+/// Nothing here re-derives a record ExifTool already declares:
+///
+/// * the eight `%CanonRaw::*` `ProcessBinaryData` tables are transcribed, and
+///   are read through [`decode_binary_table`] ([`emit_canonraw_table`]);
+/// * the `%Canon::*` records CIFF shares with the Canon MakerNote are handed to
+///   this crate's MakerNote decoders, which already implement their
+///   conversions, via [`parse_canon_ciff_records`];
+/// * `%Canon::ColorBalance` is decoded from its generated table here, because
+///   the MakerNote side has no decoder for it ([`emit_canon_color_balance`]);
+/// * `%CanonRaw::Main`'s scalar entries -- the part of the format that is a tag
+///   *dictionary* rather than a binary record, and so is not in the generated
+///   schema at all -- are the only hand-written decode
+///   ([`emit_ciff_main_tag`]), each arm carrying its CanonRaw.pm citation.
+///
+/// # Deliberately omitted
+///
+/// Tags whose conversion cannot be reproduced exactly here are left out rather
+/// than guessed:
+///
+/// * `0x1033 CustomFunctions10D` / `CustomFunctionsD30` / `CustomFunctionsD60`
+///   (CanonRaw.pm:152-190) -- four model-conditional `CanonCustom::Functions*`
+///   tables; this parser has no CIFF route into `CanonCustom` yet.
+/// * `0x1030 WhiteSample` (CanonRaw.pm:141-148) -- transcribed as
+///   `CANONRAW_WHITESAMPLE` and wired up, but absent from the sample corpus, so
+///   nothing here has been byte-verified against the oracle.
+/// * `0x180b` on a PowerShot body (CanonRaw.pm:265-269) -- ExifTool's third arm
+///   is `UnknownNumber` with `Unknown => 1`, which it does not report without
+///   `-u`; emitting it as `SerialNumber` would be a wrong value under a real
+///   name.
+/// * `0x0032 CanonColorInfo1` and `0x102c CanonColorInfo2` (CanonRaw.pm:61,
+///   :128-135) -- ExifTool declares no layout for either; the second's comment
+///   documents three S30 offsets and stops.
+///
+/// # Not a CIFF gap
+///
+/// `CanonRaw.crw`'s two remaining missing tags, `XMPToolkit` and
+/// `Description`, are not in the CIFF at all. `ProcessCRW` runs
+/// `IdentifyTrailer`/`ProcessTrailers` after the directory walk
+/// (CanonRaw.pm:858-861), and the pinned oracle's own `-v2` trace places them
+/// in a trailer rather than the heap:
+///
+/// ```text
+/// CanonVRD trailer (560 bytes at offset 0x1870):
+///   CanonVRD block 0xffff00f6 (460 bytes at offset 0x1894)
+///   + [XMP directory, 460 bytes]
+/// ```
+///
+/// Reaching them means implementing `CanonVRD.pm`'s block reader -- a
+/// different format that sits after this one, not a record this walker skipped.
 fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     metadata.insert(
@@ -6887,14 +7409,66 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         return Ok(metadata);
     }
 
-    parse_ciff_directory(
+    let mut entries = Vec::new();
+    walk_ciff_directory(
         data,
         heap_start,
         data.len(),
         root_directory,
-        &mut metadata,
+        "CRW",
         0,
+        &mut entries,
     );
+
+    // `$$self{Model}` gates three `%CanonRaw::Main` conditions and several
+    // `%Canon::*` ones, so it is resolved before anything is emitted rather
+    // than depending on the order records happen to appear in.
+    let mut model = String::new();
+    for entry in &entries {
+        if entry.id == 0x080a
+            && let Some(resolved) = emit_canonraw_make_model(&mut metadata, entry.value)
+        {
+            model = resolved;
+        }
+    }
+
+    let mut canon_records: Vec<(u16, &[u8])> = Vec::new();
+    for entry in &entries {
+        match entry.id {
+            0x080a => {}
+            // The eight transcribed `%CanonRaw::*` binary records
+            // (CanonRaw.pm:427-590), reached from Main at the cited lines.
+            0x1803 => emit_canonraw_table(&mut metadata, "ImageFormat", entry.value),
+            0x1810 => emit_canonraw_table(&mut metadata, "ImageInfo", entry.value),
+            0x1813 => emit_canonraw_table(&mut metadata, "FlashInfo", entry.value),
+            0x1818 => emit_canonraw_table(&mut metadata, "ExposureInfo", entry.value),
+            0x1835 => emit_canonraw_table(&mut metadata, "DecoderTable", entry.value),
+            0x10b5 => emit_canonraw_table(&mut metadata, "RawJpgInfo", entry.value),
+            0x1030 => emit_canonraw_table(&mut metadata, "WhiteSample", entry.value),
+            0x180e => emit_canonraw_timestamp(&mut metadata, entry.value),
+            0x10a9 => emit_canon_color_balance(&mut metadata, entry.value, &model),
+            other if canon_makernote_id_for_ciff_record(other).is_some() => {
+                canon_records.push((other, entry.value));
+            }
+            _ => emit_ciff_main_tag(&mut metadata, entry, &model),
+        }
+    }
+
+    let model_for_canon = (!model.is_empty()).then_some(model.as_str());
+    let mut canon_value_forms = std::collections::HashMap::new();
+    for (name, value) in
+        parse_canon_ciff_records(&canon_records, model_for_canon, &mut canon_value_forms)
+    {
+        metadata.insert(name, TagValue::new_string(value));
+    }
+    // The unrounded ValueConv forms ride the same channel the JPEG MakerNote
+    // route uses (`set_value_form`), so `Composite:Aperture` and
+    // `Composite:ScaleFactor35efl` -- and through them DOF and
+    // HyperfocalDistance -- do their arithmetic on ExifTool's numbers, not on
+    // this file's print-rounded strings. See `parse_canon_ciff_records`.
+    for (name, value) in canon_value_forms {
+        metadata.set_value_form(name, value);
+    }
 
     Ok(metadata)
 }
@@ -10525,67 +11099,363 @@ mod rational_array_tests {
         assert_eq!(map_x3f_property_name("LENSMODEL"), "SigmaRaw:LensType");
     }
 
-    /// The `AFInfo` branch is reached because the table is *registered* absent,
-    /// not because a lookup happened to miss.
+    /// Build a one-level CIFF file around `entries`, each `(tag, value)`.
     ///
-    /// This is the contract the dead `find_table("Canon", "AFInfo")` used to
-    /// fake. It returned `None` on every CRW, an `or_else` borrowed
-    /// `ShotInfo`'s group, and the output was right by coincidence -- so no
-    /// test could tell the working path from the broken one. Pinning the group
-    /// to `%Canon::AFInfo`'s own `GROUPS` (Canon.pm:6437) makes the two
-    /// distinguishable: this assertion now fails if the registry entry is
-    /// dropped, where before it passed either way.
-    #[test]
-    fn canon_crw_af_tags_take_their_group_from_the_unemitted_registry() {
-        assert!(
-            crate::exiftool_tables::find_table("Canon", "AFInfo").is_none(),
-            "Canon::AFInfo is ProcessSerialData (Canon.pm:6434); codegen refuses it"
-        );
-        assert_eq!(
-            canon_crw_tag_key("AFInfo", "AFAreaXPositions").as_deref(),
-            Some("MakerNotes:AFAreaXPositions"),
-        );
-    }
+    /// Layout per `ProcessCRW`/`ProcessCanonRaw` (CanonRaw.pm:811-864, :636-700):
+    /// `II`, a 4-byte heap start, `HEAPCCDR`, then the heap, then the directory,
+    /// then a 4-byte pointer to the directory relative to the heap start.
+    fn build_ciff(entries: &[(u16, Vec<u8>)]) -> Vec<u8> {
+        let heap_start = 14usize;
+        let mut file = Vec::new();
+        file.extend_from_slice(b"II");
+        file.extend_from_slice(&(heap_start as u32).to_le_bytes());
+        file.extend_from_slice(b"HEAPCCDR");
 
-    /// Every name the CRW 0x1038 decode emits is a real `%Canon::AFInfo` key.
-    ///
-    /// Nothing else checks these. For an emitted table `canon_crw_tag_key`
-    /// validates the name against the table and now returns `None` when it
-    /// does not match; for `AFInfo` there is no table, so the names are
-    /// unvalidated at runtime by construction and this list is the only thing
-    /// standing between a typo and an invented tag under a real ExifTool group.
-    /// Keys per Canon.pm:6433-6500.
-    #[test]
-    fn canon_crw_af_names_match_the_pinned_perl() {
-        for name in [
-            "AFImageHeight",    // key 5
-            "AFAreaWidth",      // key 6
-            "AFAreaHeight",     // key 7
-            "AFAreaXPositions", // key 8
-            "AFAreaYPositions", // key 9
-        ] {
-            assert_eq!(
-                canon_crw_tag_key("AFInfo", name).as_deref(),
-                Some(format!("MakerNotes:{name}").as_str()),
-            );
+        let mut values = Vec::new();
+        let mut placed = Vec::new();
+        for (tag, value) in entries {
+            // A `valueInDir` entry keeps its bytes in the directory; everything
+            // else is appended to the heap and pointed at.
+            if tag & 0x4000 == 0 {
+                placed.push((*tag, values.len() as u32, value.len() as u32));
+                values.extend_from_slice(value);
+            } else {
+                placed.push((*tag, 0, 0));
+            }
         }
+        file.extend_from_slice(&values);
+
+        let directory_relative = (file.len() - heap_start) as u32;
+        file.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (index, (tag, offset, size)) in placed.iter().enumerate() {
+            file.extend_from_slice(&tag.to_le_bytes());
+            if tag & 0x4000 == 0 {
+                file.extend_from_slice(&size.to_le_bytes());
+                file.extend_from_slice(&offset.to_le_bytes());
+            } else {
+                let mut inline = entries[index].1.clone();
+                inline.resize(8, 0);
+                file.extend_from_slice(&inline);
+            }
+        }
+        file.extend_from_slice(&0u32.to_le_bytes()); // next-directory word
+        file.extend_from_slice(&directory_relative.to_le_bytes());
+        file
     }
 
-    /// An emitted table refuses a field it does not declare.
+    /// A `0x28`-typed subdirectory is entered.
     ///
-    /// The old `unwrap_or(field_name)` passed any string through, so a
-    /// mistyped `ShotInfo` field would have been emitted as
-    /// `MakerNotes:<typo>` -- a tag ExifTool has never heard of, under a group
-    /// that makes it look transcribed. `ShotInfo` really does declare
-    /// `AEBBracketValue`, so the positive case is unchanged.
+    /// `ProcessCanonRaw` recurses on `($tagType==0x28 or $tagType==0x30) and
+    /// not $valueInDir` (CanonRaw.pm:659). The previous walker tested
+    /// `tag & 0x3800 == 0x3000`, which is the `0x30` half alone, so
+    /// `0x2804 ImageDescription` and `0x2807 CameraObject`
+    /// (CanonRaw.pm:364-373) were never opened -- and with them
+    /// `CanonFileDescription`, `CanonImageType`, `OwnerName`,
+    /// `CanonRawMakeModel` and the whole `CameraSpecification` subtree.
+    ///
+    /// The `0x0805` inside also pins the one `DIR_NAME` condition in the table
+    /// (CanonRaw.pm:62-71): inside `ImageDescription` it is
+    /// `CanonFileDescription`, anywhere else `UserComment`.
     #[test]
-    fn canon_crw_emitted_table_validates_its_field_names() {
+    fn ciff_walker_enters_0x28_subdirectories() {
+        // Inner directory: one string tag 0x0805.
+        let inner = build_ciff(&[(0x0805, b"EOS DIGITAL REBEL CMOS RAW\0".to_vec())]);
+        // Everything after the CIFF header is the subdirectory's own block.
+        let block = inner[14..].to_vec();
+        let outer = build_ciff(&[(0x2804, block)]);
+
+        let metadata = parse_canon_crw(&outer, RawFormat::CanonCRW).expect("CRW parse");
         assert_eq!(
-            canon_crw_tag_key("ShotInfo", "AEBBracketValue").as_deref(),
-            Some("MakerNotes:AEBBracketValue"),
+            metadata.get_string("CanonRaw:CanonFileDescription"),
+            Some("EOS DIGITAL REBEL CMOS RAW"),
         );
-        assert_eq!(canon_crw_tag_key("ShotInfo", "NotARealShotInfoField"), None);
-        // A table neither emitted nor registered stays a miss, not a fallback.
-        assert_eq!(canon_crw_tag_key("NoSuchTable", "AEBBracketValue"), None);
+        assert_eq!(metadata.get_string("CanonRaw:UserComment"), None);
+    }
+
+    /// `CanonRaw::TimeStamp` key 0 is formatted with `gmtime`, not `localtime`.
+    ///
+    /// `ValueConv => 'ConvertUnixTime($val)'` (CanonRaw.pm:435-443) passes no
+    /// `$isLocal`, and `ConvertUnixTime` branches
+    /// `$isLocal ? localtime($time) : gmtime($time)`. Reading it as local time
+    /// is a wrong value under a real tag name on every machine whose offset is
+    /// not zero, and one that no amount of re-running on the same host would
+    /// expose -- hence a fixed epoch here.
+    ///
+    /// 1068485966 is `CanonRaw.crw`'s own stamp; the pinned oracle prints
+    /// `[CanonRaw] DateTimeOriginal : 2003:11:10 17:39:26` for it.
+    #[test]
+    fn canonraw_timestamp_is_utc() {
+        let mut record = Vec::new();
+        record.extend_from_slice(&1_068_485_966u32.to_le_bytes());
+        record.extend_from_slice(&0u32.to_le_bytes()); // TimeZoneCode
+        record.extend_from_slice(&0u32.to_le_bytes()); // TimeZoneInfo
+        let file = build_ciff(&[(0x180e, record)]);
+
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(
+            metadata.get_string("CanonRaw:DateTimeOriginal"),
+            Some("2003:11:10 17:39:26"),
+        );
+    }
+
+    /// `%CanonRaw::MakeModel` is decoded by hand because the generator does not
+    /// emit it, so its two offsets are pinned here.
+    ///
+    /// `Make` is `string[6]` at 0 and `Model` is an unsized `string` at 6 --
+    /// "no size = to the end of the data" (CanonRaw.pm:402-424). A table with
+    /// no `FIRST_ENTRY` and a length-less trailing string is not the fixed
+    /// `index * increment` layout the generated schema describes, which is why
+    /// codegen leaves it out.
+    #[test]
+    fn canonraw_make_model_splits_at_six_bytes() {
+        let mut record = b"Canon\0".to_vec();
+        record.extend_from_slice(b"Canon EOS DIGITAL REBEL\0");
+        let file = build_ciff(&[(0x080a, record)]);
+
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(metadata.get_string("CanonRaw:Make"), Some("Canon"));
+        assert_eq!(
+            metadata.get_string("CanonRaw:Model"),
+            Some("Canon EOS DIGITAL REBEL"),
+        );
+    }
+
+    /// `%Canon::ColorBalance` key 29 is a `Condition` list codegen does not
+    /// emit, so both arms are placed here and the model test decides which.
+    ///
+    /// Canon.pm:7282-7290. Non-D60 bodies get `WB_RGGBLevelsCustom`; the D60
+    /// gets `BlackLevels` from the same four `int16s`.
+    #[test]
+    fn canon_color_balance_key_29_follows_the_model_condition() {
+        // FIRST_ENTRY 0, FORMAT int16s: 41 words covers keys 0..40.
+        let mut record = vec![0u8; 41 * 2];
+        let declared = record.len() as u16;
+        record[..2].copy_from_slice(&declared.to_le_bytes());
+        for (slot, value) in [(29usize, 1722i16), (30, 832), (31, 831), (32, 989)] {
+            record[slot * 2..slot * 2 + 2].copy_from_slice(&value.to_le_bytes());
+        }
+
+        let mut rebel = b"Canon\0".to_vec();
+        rebel.extend_from_slice(b"Canon EOS DIGITAL REBEL\0");
+        let file = build_ciff(&[(0x080a, rebel), (0x10a9, record.clone())]);
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(
+            metadata.get_string("Canon:WB_RGGBLevelsCustom"),
+            Some("1722 832 831 989"),
+        );
+        assert_eq!(metadata.get_string("Canon:BlackLevels"), None);
+
+        let mut d60 = b"Canon\0".to_vec();
+        d60.extend_from_slice(b"Canon EOS D60\0");
+        let file = build_ciff(&[(0x080a, d60), (0x10a9, record)]);
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(
+            metadata.get_string("Canon:BlackLevels"),
+            Some("1722 832 831 989"),
+        );
+        assert_eq!(metadata.get_string("Canon:WB_RGGBLevelsCustom"), None);
+    }
+
+    /// A CIFF record routed to a `%Canon::*` table is decoded by this crate's
+    /// Canon MakerNote decoders, reached through the synthetic IFD.
+    ///
+    /// `%Canon::ShotInfo` is one table declared from two dictionaries
+    /// (CanonRaw.pm:123-127 and Canon.pm:1241-1247), so the CIFF record and the
+    /// MakerNote record have one layout. This pins that the bridge actually
+    /// carries the bytes across: `AEBBracketValue` at key 17 renders through
+    /// `%Canon::ShotInfo`'s own conversion, and `ControlMode` at key 18 through
+    /// its `PrintConv` hash.
+    #[test]
+    fn ciff_canon_records_reach_the_makernote_decoders() {
+        // FORMAT int16s, FIRST_ENTRY 1, leading length word.
+        let mut record = vec![0u8; 33 * 2];
+        let declared = record.len() as u16;
+        record[..2].copy_from_slice(&declared.to_le_bytes());
+        for (slot, value) in [(17usize, 32i16), (18, 1)] {
+            record[slot * 2..slot * 2 + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        let file = build_ciff(&[(0x102a, record)]);
+
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(metadata.get_string("Canon:AEBBracketValue"), Some("+1"));
+        assert_eq!(
+            metadata.get_string("Canon:ControlMode"),
+            Some("Camera Local Control"),
+        );
+    }
+
+    /// The CIFF bridge carries the unrounded `ValueConv` forms across, so the
+    /// Composite chain does ExifTool's arithmetic, not arithmetic on
+    /// print-rounded strings.
+    ///
+    /// The numbers are CanonRaw.crw's own, pinned against the oracle
+    /// (`exiftool-pinned.sh -G1 -s -n`, 13.59): ShotInfo key 21 FNumber raw 116
+    /// -> `exp(CanonEv(116)*log(2)/2)` = 2^(11/6) = 3.56359487256136 printed
+    /// "3.6" (Canon.pm:2957-2966), FocalLength keys 2/3 raw 914/610 ->
+    /// 23.2156/15.494 mm printed "23.22 mm"/"15.49 mm" (Canon.pm:2726-2770).
+    /// `CalcScaleFactor35efl` (Exif.pm:5451-5513) then takes the
+    /// FocalPlaneX/YSize branch -- a CRW has no FocalPlane*Resolution -- and
+    /// HyperfocalDistance comes out 8.33911..., printed "8.34 m". Fed the
+    /// printed forms instead, the same chain prints "8.25 m": a wrong value
+    /// under a real ExifTool tag name, which is how this file's first attempt
+    /// was refused.
+    #[test]
+    fn ciff_value_forms_reach_the_composite_chain() {
+        let mut make_model = b"Canon\0".to_vec();
+        make_model.extend_from_slice(b"Canon EOS D60\0");
+
+        // %Canon::ShotInfo: FORMAT int16s, FIRST_ENTRY 1, leading length word.
+        let mut shot_info = vec![0u8; 33 * 2];
+        let declared = shot_info.len() as u16;
+        shot_info[..2].copy_from_slice(&declared.to_le_bytes());
+        shot_info[21 * 2..21 * 2 + 2].copy_from_slice(&116i16.to_le_bytes());
+
+        // %Canon::FocalLength: FORMAT int16u, FIRST_ENTRY 0.
+        let mut focal_length = Vec::new();
+        for word in [2u16, 24, 914, 610] {
+            focal_length.extend_from_slice(&word.to_le_bytes());
+        }
+
+        let file = build_ciff(&[
+            (0x080a, make_model),
+            (0x102a, shot_info),
+            (0x1029, focal_length),
+        ]);
+        let mut metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+
+        // Printed forms stay ExifTool's PrintConv strings...
+        assert_eq!(metadata.get_string("Canon:FNumber"), Some("3.6"));
+        assert_eq!(
+            metadata.get_string("Canon:FocalPlaneXSize"),
+            Some("23.22 mm")
+        );
+        assert_eq!(
+            metadata.get_string("Canon:FocalPlaneYSize"),
+            Some("15.49 mm")
+        );
+
+        // ...while the attached value forms are the ValueConv numbers.
+        let fnumber: f64 = metadata
+            .value_form("Canon:FNumber")
+            .expect("FNumber value form")
+            .parse()
+            .expect("numeric value form");
+        assert!((fnumber - 3.56359487256136).abs() < 1e-12);
+        let xsize: f64 = metadata
+            .value_form("Canon:FocalPlaneXSize")
+            .expect("FocalPlaneXSize value form")
+            .parse()
+            .expect("numeric value form");
+        assert!((xsize - 23.2156).abs() < 1e-12);
+
+        crate::composite::apply(&mut metadata);
+        assert_eq!(
+            metadata.get_string("Composite:ScaleFactor35efl"),
+            Some("1.6"),
+        );
+        assert_eq!(
+            metadata.get_string("Composite:HyperfocalDistance"),
+            Some("8.34 m"),
+        );
+    }
+
+    /// The hand-written `%CanonRaw::Main` scalar arms in [`emit_ciff_main_tag`]
+    /// follow the cited Perl, including the branches `CanonRaw.crw` itself
+    /// never exercises.
+    ///
+    /// The per-file oracle run pins only the one value each tag has in that
+    /// file (an EOS D60), so the model-conditional and unknown-value arms
+    /// would otherwise be unreachable by any check: `0x180b SerialNumber`
+    /// renders `sprintf("%x-%.5d",$val>>16,$val&0xffff)` on a D30,
+    /// `sprintf("%.10d",$val)` on other EOS bodies, and is `UnknownNumber,
+    /// Unknown => 1` -- not reported without `-u` -- on a PowerShot
+    /// (CanonRaw.pm:248-270). `0x1814 MeasuredEV` is `Format => 'float'`,
+    /// `ValueConv => '$val + 5'` with no PrintConv (CanonRaw.pm:292-302);
+    /// `0x1806 SelfTimerTime` is `$val / 1000` printed `"$val s"`
+    /// (CanonRaw.pm:234-241); `0x1807 TargetDistanceSetting` is a float
+    /// printed `"$val mm"` (CanonRaw.pm:242-247); `0x10b4 ColorSpace`'s
+    /// `0xffff => 'Uncalibrated'` and `0x183b SerialNumberFormat`'s
+    /// `PrintHex` unknown arm are CanonRaw.pm:219-227 and :332-341;
+    /// `0x1817 FileNumber` routes through the same `\d{4}` split as Canon
+    /// MakerNote tag 0x0008 (CanonRaw.pm:303-309). Float inputs are chosen
+    /// exactly representable in `f32` so the pinned strings are the
+    /// arithmetic, not accidents of binary rounding.
+    #[test]
+    fn ciff_main_scalar_arms_follow_the_perl() {
+        let scalar_records = |make_model: &[u8]| {
+            vec![
+                (0x080a_u16, make_model.to_vec()),
+                (0x100a, 0u16.to_le_bytes().to_vec()), // TargetImageType
+                (0x1010, 2u16.to_le_bytes().to_vec()), // ShutterReleaseMethod
+                (0x1011, 1u16.to_le_bytes().to_vec()), // ShutterReleaseTiming
+                (0x101c, 200u16.to_le_bytes().to_vec()), // BaseISO
+                (0x10b4, 0xffffu16.to_le_bytes().to_vec()), // ColorSpace
+                (0x1806, 10_000u32.to_le_bytes().to_vec()), // SelfTimerTime
+                (0x1807, 2.5f32.to_le_bytes().to_vec()), // TargetDistanceSetting
+                (0x180b, 0x1234_0042u32.to_le_bytes().to_vec()), // SerialNumber
+                (0x1814, 7.5f32.to_le_bytes().to_vec()), // MeasuredEV
+                (0x1817, 1_601_602u32.to_le_bytes().to_vec()), // FileNumber
+                (0x183b, 0x1234_5678u32.to_le_bytes().to_vec()), // SerialNumberFormat
+            ]
+        };
+
+        let mut d30 = b"Canon\0".to_vec();
+        d30.extend_from_slice(b"Canon EOS D30\0");
+        let file = build_ciff(&scalar_records(&d30));
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(
+            metadata.get_string("CanonRaw:TargetImageType"),
+            Some("Real-world Subject"),
+        );
+        assert_eq!(
+            metadata.get_string("CanonRaw:ShutterReleaseMethod"),
+            Some("Continuous Shooting"),
+        );
+        assert_eq!(
+            metadata.get_string("CanonRaw:ShutterReleaseTiming"),
+            Some("Priority on focus"),
+        );
+        assert_eq!(
+            metadata.get("CanonRaw:BaseISO"),
+            Some(&TagValue::Integer(200)),
+        );
+        assert_eq!(
+            metadata.get_string("CanonRaw:ColorSpace"),
+            Some("Uncalibrated"),
+        );
+        assert_eq!(metadata.get_string("CanonRaw:SelfTimerTime"), Some("10 s"));
+        assert_eq!(
+            metadata.get_string("CanonRaw:TargetDistanceSetting"),
+            Some("2.5 mm"),
+        );
+        assert_eq!(metadata.get_string("CanonRaw:MeasuredEV"), Some("12.5"));
+        assert_eq!(metadata.get_string("CanonRaw:FileNumber"), Some("160-1602"),);
+        assert_eq!(
+            metadata.get_string("CanonRaw:SerialNumberFormat"),
+            Some("Unknown (0x12345678)"),
+        );
+        // D30: `sprintf("%x-%.5d",$val>>16,$val&0xffff)` (CanonRaw.pm:255).
+        assert_eq!(
+            metadata.get_string("CanonRaw:SerialNumber"),
+            Some("1234-00066"),
+        );
+
+        // Any other EOS: `sprintf("%.10d",$val)` (CanonRaw.pm:261).
+        let mut d60 = b"Canon\0".to_vec();
+        d60.extend_from_slice(b"Canon EOS D60\0");
+        let file = build_ciff(&scalar_records(&d60));
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(
+            metadata.get_string("CanonRaw:SerialNumber"),
+            Some("0305397826"),
+        );
+
+        // A PowerShot's value is not a serial number (`UnknownNumber`,
+        // `Unknown => 1`, CanonRaw.pm:265-269): omitted, not approximated.
+        let mut powershot = b"Canon\0".to_vec();
+        powershot.extend_from_slice(b"Canon PowerShot S30\0");
+        let file = build_ciff(&scalar_records(&powershot));
+        let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
+        assert_eq!(metadata.get_string("CanonRaw:SerialNumber"), None);
     }
 }

@@ -4,6 +4,8 @@
     fleet down <host> --reason "..."           disable a host (drain, not kill)
     fleet drain <host>                         finish current work, start nothing
     fleet status                               the whole fleet from hub refs only
+    fleet status --why                         + per-host refused reasons, heartbeat
+                                                age, desired gates/agents
 
 Every subcommand talks ONLY to hub refs -- no ssh fan-out, no per-host
 config. `up/down/drain` are read-modify-CAS-write on `refs/fleet/desired`
@@ -13,7 +15,24 @@ re-read and reapply ours on top (both edits survive).
 `status` renders from `refs/fleet/hosts/*` heartbeats. A heartbeat older
 than HEARTBEAT_STALE renders DOWN -- the ryzen's cron was dead for a full
 day with nothing noticing; this line is why that cannot recur silently.
-"""
+`--why` answers "why is nothing starting" from the same heartbeats' durable
+`refused` field (PLAN Stage 1 task 5) -- no ssh, no re-derivation -- and, since
+T3, the durable `warnings` field beside it: conditions that persist across
+reconciles (a gate whose verdict never reached the hub cache) rather than this
+loop's scheduling answer.
+
+`--code`/`FLEET_CODE_URL` names the CODE repo (docs/AGENT-SERVER-SPEC.md
+§4.4). `status`'s QUEUE line asks `workqueue.Queue` for the live queue,
+and on a split spine that means a `hub.code_sha(TIP_REF)` against the CODE
+repo, not the state repo `--hub`/`FLEET_HUB_URL` names. Leaving `_hub()`
+with no way to learn that URL was not "coordination-only" (§4.4(c) listed
+cli.py that way) -- it made the QUEUE line a permanent
+`error: tip ref ... does not exist on the code repo '<state url>'` on every
+split-spine invocation, `--why` included, because `fleetlib.Hub`'s
+`code_url` defaults to `.url` when unset. `--code`/`FLEET_CODE_URL` mirror
+`fleetd.py`'s own `--hub`/`--code` pair exactly, including the same
+default (unset means "same repo as --hub", the single-repo topology this
+tool predates)."""
 
 from __future__ import annotations
 
@@ -26,7 +45,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import fleetd
 import workqueue
+from claim import is_expired
 from fleetlib import Hub, HubError
 
 DESIRED_REF = "refs/fleet/desired"
@@ -44,7 +65,15 @@ def _hub(args) -> Hub:
     if not url:
         print("fleet: no hub URL (--hub or FLEET_HUB_URL)", file=sys.stderr)
         raise SystemExit(2)
-    return Hub(url, workdir=Path.home() / ".fleetd" / "clicache")
+    # R1: `code_url` is `fleetlib.Hub`'s own constructor argument (the same
+    # one `fleetd.py --code`/`FLEET_CODE_URL` resolves, PLAN Stage 1 task
+    # 4) -- left `None` here it defaults to `url`, which is exactly the
+    # single-repo topology this tool predates and every existing (non-split)
+    # invocation still gets unchanged. On a split spine, giving `status` a
+    # way to be told the code repo is what turns its QUEUE line from a
+    # permanent `queue-unavailable`-shaped error into the real count.
+    code = getattr(args, "code", None) or os.environ.get("FLEET_CODE_URL")
+    return Hub(url, workdir=Path.home() / ".fleetd" / "clicache", code_url=code)
 
 
 def _edit_desired(hub: Hub, mutate) -> dict:
@@ -124,12 +153,128 @@ def _age_seconds(ts: str) -> float:
         return float("inf")
 
 
+def _claims_by_host(hub: Hub) -> dict:
+    """{holder_host: [work_key, ...]} for every LIVE (unexpired) claim on
+    the hub -- ARCH-FIX R4's WORK column. Reads the same `holder_host` /
+    `work_key` fields claim.py writes and workqueue.py's exclusion check
+    matches against, so this renders exactly what a second host's queue
+    computation would see as "already spoken for", not an independent
+    guess at it."""
+    out: dict = {}
+    now = datetime.now(timezone.utc)
+    for ref in hub.list(CLAIMS_PREFIX):
+        payload = hub.read(ref)
+        if payload is None or is_expired(payload, now=now):
+            continue
+        holder = payload.get("holder_host")
+        work_key = payload.get("work_key")
+        if holder and work_key:
+            out.setdefault(holder, []).append(work_key)
+    return out
+
+
+def _work_column(work_keys: list, limit: int = 2, max_len: int = 40) -> str:
+    """Truncated summary of a host's live work_keys for the WORK column:
+    the first `limit` keys, a "+N" tail for the rest, then a hard
+    character cap so one very long branch name can't blow out the table.
+    """
+    if not work_keys:
+        return "-"
+    shown = list(work_keys[:limit])
+    text = ",".join(shown)
+    extra = len(work_keys) - len(shown)
+    if extra > 0:
+        text += f"+{extra}"
+    if len(text) > max_len:
+        text = text[: max_len - 1] + "…"
+    return text
+
+
+def _parked_rows(host: str, hb: dict) -> list:
+    """`(host, state, branch, sha, source)` for every branch this host's
+    last reconcile parked -- ARCH-FIX R4's shared-cache clause.
+
+    The AWAITING/NEEDS_AUTH columns are counts, and a count cannot tell an
+    operator whether a parked branch is still the branch that was judged.
+    A verdict is about the SHA it was measured at, so fleetd records that
+    sha alongside the name; this renders it. A `needs_author` row whose sha
+    no longer matches `git ls-remote` is a branch whose author has already
+    acted -- it should clear on the next loop, and if it does not, that is
+    the bug to chase. Heartbeats written by an older fleetd carry bare
+    names with no sha; those render "-" rather than being dropped.
+    """
+    out = []
+    for state, key in (("AWAITING", "awaiting_train"), ("NEEDS_AUTH", "needs_author")):
+        for entry in hb.get(key) or ():
+            if isinstance(entry, dict):
+                name, sha, source = entry.get("branch"), entry.get("sha"), entry.get("source")
+            else:
+                name, sha, source = str(entry), None, None
+            if not name:
+                continue
+            out.append((host, state, name, (sha or "-")[:12], source or "-"))
+    return out
+
+
+def _refused_list(hb: dict) -> list:
+    """[(reason, detail)] from a heartbeat's `refused` field (PLAN Stage 1
+    task 5 / SPEC L121, L278: `ReconcileResult.refused` carried verbatim
+    into `fleetd.write_heartbeat`'s payload).
+
+    `write_heartbeat` JSON-round-trips each `(reason, detail)` tuple as a
+    2-element array, so that is the shape read back here; a dict shape is
+    also accepted for forward compatibility, and a heartbeat written by an
+    older fleetd with no `refused` key at all yields `[]` rather than
+    raising -- absence means "not yet reported", not "nothing refused".
+    """
+    out = []
+    for entry in hb.get("refused") or ():
+        if isinstance(entry, dict):
+            reason, detail = entry.get("reason"), entry.get("detail")
+        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+            reason, detail = entry
+        else:
+            reason, detail = entry, None
+        out.append((str(reason), "" if detail in (None, "") else str(detail)))
+    return out
+
+
+def _warnings_list(hb: dict) -> list:
+    """[(reason, detail)] from a heartbeat's `warnings` field (T3).
+
+    Same wire shape as `refused` -- JSON round-trips each `(reason,
+    detail)` tuple as a 2-element array -- and the same tolerance: a
+    heartbeat written by an older fleetd with no `warnings` key yields
+    `[]` rather than raising.
+
+    A SEPARATE field from `refused` on purpose. `refused` answers "why did
+    this loop start nothing" and is per-loop; `warnings` answers "what is
+    wrong with this host right now" and persists for as long as the
+    condition does. Folding the two together would make a durable fault
+    look like a scheduling decision, which is how a verdict-store failure
+    stayed invisible for a 15-second window and then vanished.
+    """
+    out = []
+    for entry in hb.get("warnings") or ():
+        if isinstance(entry, dict):
+            reason, detail = entry.get("reason"), entry.get("detail")
+        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+            reason, detail = entry
+        else:
+            reason, detail = entry, None
+        out.append((str(reason), "" if detail in (None, "") else str(detail)))
+    return out
+
+
 def cmd_status(args) -> int:
     hub = _hub(args)
     desired = hub.read(DESIRED_REF) or {}
     want = desired.get("hosts") or {}
+    claims_by_host = _claims_by_host(hub)
 
     rows = []
+    parked = []
+    why_rows = []  # (host, state, age_s, want_gates, want_agents, refused[], warnings[])
     for ref in sorted(hub.list(HOSTS_PREFIX)):
         host = ref[len(HOSTS_PREFIX):]
         hb = hub.read(ref) or {}
@@ -142,11 +287,25 @@ def cmd_status(args) -> int:
         else:
             state = "up"
         oracle = hb.get("oracle_ok")
+        # ARCH-FIX R4: branch states this host's last reconcile surfaced,
+        # and T1's lost-lease kill count for that same loop -- both come
+        # straight from the heartbeat fleetd already writes (fleetd.py's
+        # reconcile_once), nothing re-derived here.
+        awaiting_train = len(fleetd.branch_names(hb.get("awaiting_train")))
+        needs_author = len(fleetd.branch_names(hb.get("needs_author")))
+        killed = hb.get("killed_this_loop")
+        parked.extend(_parked_rows(host, hb))
+        why_rows.append((host, state, age, w.get("gates"), w.get("agents"),
+                          _refused_list(hb), _warnings_list(hb)))
         rows.append((
             host,
             state,
             f"{hb.get('gates_running', '?')}/{w.get('gates', '?')}",
             f"{hb.get('agents_running', '?')}/{w.get('agents', '?')}",
+            _work_column(claims_by_host.get(host) or []),
+            str(awaiting_train),
+            str(needs_author),
+            str(killed) if killed is not None else "-",
             f"{hb.get('free_gb', '?')}G",
             "✓" if oracle else ("?" if oracle is None else "✗"),
             hb.get("owning_user", "?"),
@@ -154,7 +313,10 @@ def cmd_status(args) -> int:
             (w.get("reason") or "")[:40],
         ))
 
-    hdr = ("HOST", "STATE", "GATES", "AGENTS", "FREE", "ORACLE", "USER", "HEARTBEAT", "NOTE")
+    hdr = (
+        "HOST", "STATE", "GATES", "AGENTS", "WORK", "AWAITING", "NEEDS_AUTH", "KILLED",
+        "FREE", "ORACLE", "USER", "HEARTBEAT", "NOTE",
+    )
     widths = [max(len(str(r[i])) for r in rows + [hdr]) for i in range(len(hdr))]
     for r in [hdr] + rows:
         print("  ".join(str(c).ljust(w) for c, w in zip(r, widths)).rstrip())
@@ -168,12 +330,60 @@ def cmd_status(args) -> int:
     claims = len(hub.list(CLAIMS_PREFIX))
     gen = desired.get("generation", "-")
     print(f"\nQUEUE {qn}   CLAIMS {claims}   DESIRED gen {gen}")
+
+    # Printed AFTER the QUEUE line on purpose: everything above it is the
+    # per-host table, and this is a per-BRANCH one. Keeping the two apart
+    # is also what lets a table parser stop at "QUEUE" and still be right.
+    if parked:
+        phdr = ("HOST", "STATE", "BRANCH", "DECIDED_AT", "SOURCE")
+        pwidths = [max(len(str(r[i])) for r in parked + [phdr]) for i in range(len(phdr))]
+        print("\nPARKED (verdict already known; not offered as gate work)")
+        for r in [phdr] + parked:
+            print("  " + "  ".join(str(c).ljust(w) for c, w in zip(r, pwidths)).rstrip())
+
+    # PLAN Stage 1 task 5: "the human's question 'why is nothing starting'
+    # has an answer from the laptop" -- per host, the last reconcile's
+    # refused reasons plus the two numbers an operator checks first
+    # (heartbeat freshness, desired targets), all from the durable
+    # heartbeat + `desired` refs already read above. Behind a flag so the
+    # default table (and `_parse_table`'s "stop at QUEUE" convention)
+    # stay exactly as they were.
+    if getattr(args, "why", False):
+        print("\nWHY (last reconcile's refused[] from refs/fleet/hosts/*)")
+        for host, state, age, want_gates, want_agents, refused, warnings in why_rows:
+            age_s = f"{int(age)}s" if age != float("inf") else "never"
+            gates = want_gates if want_gates is not None else "-"
+            agents = want_agents if want_agents is not None else "-"
+            print(f"  {host}  {state}  heartbeat age {age_s}  "
+                  f"desired gates={gates} agents={agents}")
+            if refused:
+                for reason, detail in refused:
+                    print(f"      refused: {reason}" + (f" ({detail})" if detail else ""))
+            else:
+                print("      (no refused reasons on file)")
+            # T3: printed AFTER the refused lines and under its own label,
+            # because it answers a different question and lasts a different
+            # length of time -- see `_warnings_list`. Silent when there are
+            # none: an absent line reads as "nothing wrong", which is true,
+            # whereas a "(no warnings)" line on every host in the fleet is
+            # noise on the one command an operator runs when something IS
+            # wrong.
+            for reason, detail in warnings:
+                print(f"      warning: {reason}" + (f" ({detail})" if detail else ""))
+        if not why_rows:
+            print("  (no host heartbeats yet -- has fleetd been installed anywhere?)")
     return 0
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="fleet", description=__doc__.splitlines()[0])
     ap.add_argument("--hub", default=None, help="hub git URL (or FLEET_HUB_URL)")
+    # R1: mirrors fleetd.py's own --code/FLEET_CODE_URL (PLAN Stage 1 task
+    # 4) -- unset means "same repo as --hub", so a single-repo fleet is
+    # unaffected. `status`'s QUEUE line is the one thing in this file that
+    # needs it (workqueue.Queue asks `hub.code_sha(TIP_REF)`).
+    ap.add_argument("--code", default=None,
+                    help="code repo git URL (or FLEET_CODE_URL; default: same as --hub)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("up", help="raise a host's worker targets")
@@ -192,6 +402,9 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_drain)
 
     p = sub.add_parser("status", help="render the fleet from hub refs")
+    p.add_argument("--why", action="store_true",
+                    help="per host: last reconcile's refused reasons, "
+                         "heartbeat age, and desired gates/agents")
     p.set_defaults(fn=cmd_status)
 
     args = ap.parse_args(argv)

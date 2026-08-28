@@ -27,7 +27,7 @@ Run with:
 
 from __future__ import annotations
 
-import multiprocessing
+import os
 import shutil
 import subprocess
 import sys
@@ -35,19 +35,6 @@ import tempfile
 import unittest
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-
-# See test_claim.py's own comment on this exact issue: `tools/fleet/queue.py`
-# (a sibling module on other fleet branches, not present on this one, but
-# worth pinning defensively anyway) can shadow the stdlib `queue` module for
-# a `spawn`-started child that re-derives `sys.path`. `fork` instead
-# duplicates this already-running interpreter's `sys.modules`, so no fresh
-# "queue" import ever happens in the child. Harmless if "fork" is already
-# the default; only meaningfully protective on platforms where it isn't.
-try:
-    multiprocessing.set_start_method("fork", force=True)
-except (RuntimeError, ValueError):
-    pass
-_MP_CONTEXT = multiprocessing.get_context("fork")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -62,6 +49,14 @@ from intent import (  # noqa: E402
     register,
     withdraw,
 )
+from _env import HermeticCase  # noqa: E402
+from _fixtures import hub_spec, make_hub  # noqa: E402
+from _mp import pool_context  # noqa: E402
+
+# This module's own pools name their start method here, at their own call
+# sites, and NOTHING here touches the process-global default -- see
+# `tests/_mp.py` for why that distinction is the whole point.
+_MP_CONTEXT = pool_context()
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -76,6 +71,68 @@ def _oracle_available() -> bool:
 
 def _corpus_available() -> bool:
     return ledger.CORPUS_DIR.is_dir()
+
+
+# --------------------------------------------------------------------- #
+# Hermetic mode (ARCH-FIX-SPEC.md R7, gate.sh's new fleet-tests stage)
+# --------------------------------------------------------------------- #
+#
+# See test_ledger.py's copy of this same guard for the full rationale:
+# `gate.sh` runs this suite as a hard-FAIL stage before the ratchet, and
+# `TestCapabilityLedgerCheck`/`TestAcceptance` below build a release
+# oxidex binary and shell to the real pinned oracle over the real
+# combined-samples corpus -- 50-125s dominated by an uncached `cargo
+# build --release` that gate.sh has no business paying twice (it already
+# builds that binary a few lines before this stage runs).
+HERMETIC_ENV = "FLEET_TESTS_HERMETIC"
+
+
+def _hermetic() -> bool:
+    return os.environ.get(HERMETIC_ENV) == "1"
+
+
+def _not_hermetic() -> bool:
+    return not _hermetic()
+
+
+# --------------------------------------------------------------------- #
+# Exemplar guard (ARCH-FIX-SPEC.md R7/T7 fixture refresh, 2026-08-15)
+# --------------------------------------------------------------------- #
+#
+# `test_uncovered_format_is_not_a_hit` used to hard-code MRC as an
+# "obviously still uncovered" format. 83bf5265 closed MRC's gap (MISSING
+# 60->0) and the test kept asserting the opposite of measured reality --
+# the suite was red at tip until this refresh, and nothing caught it
+# because MRC was never re-measured, only assumed.
+#
+# See test_ledger.py's copy of this same guard (duplicated rather than
+# imported, matching this file's existing convention of duplicating
+# `_oracle_available`/`_corpus_available`/`_ensure_binary_built` rather
+# than sharing a module between the two suites) for the measurement that
+# picked DICOM: measured with `tools/fleet/ledger.py` against a release
+# build of THIS tree on 2026-08-15 -- DICOM MISSING 92/101, MIFF MISSING
+# 78/90, EIP MISSING 74/91; DICOM chosen for the largest margin.
+EXEMPLAR_FORMAT = "DICOM"
+EXEMPLAR_MISSING_THRESHOLD = 10  # generous margin under the measured 92
+
+
+def _require_uncovered_exemplar():
+    """Re-measure EXEMPLAR_FORMAT right now and skip loudly if it has been
+    closed since this fixture was written, instead of asserting a premise
+    that measured reality no longer supports (the exact MRC failure mode
+    this refresh exists to fix).
+    """
+    binary = _ensure_binary_built()
+    result = ledger.measure_format(REPO_ROOT, binary, ledger.ORACLE_SCRIPT, EXEMPLAR_FORMAT)
+    if result.missing <= EXEMPLAR_MISSING_THRESHOLD:
+        raise unittest.SkipTest(
+            f"exemplar closed -- repoint me: {EXEMPLAR_FORMAT} now measures "
+            f"MISSING={result.missing} (<= threshold {EXEMPLAR_MISSING_THRESHOLD}) under "
+            f"tools/fleet/ledger.py against a release build. Pick a new still-uncovered "
+            f"format (`python3 tools/fleet/ledger.py --repo . --format <X>`) and update "
+            f"EXEMPLAR_FORMAT here."
+        )
+    return result
 
 
 def _ensure_binary_built(timeout: int = 420):
@@ -93,13 +150,14 @@ def _ensure_binary_built(timeout: int = 420):
     return candidate
 
 
-class IntentTestCase(unittest.TestCase):
+class IntentTestCase(HermeticCase):
     """Base fixture: a throwaway bare repo standing in for the hub, exactly
     like `test_fleetlib.py`'s fixture (this file does not redefine it --
     T1.4 must build on `fleetlib`, not reinvent its test discipline).
     """
 
     def setUp(self):
+        super().setUp()
         self._tmp_root = tempfile.mkdtemp(prefix="intent-test-")
         self.hub_path = str(Path(self._tmp_root) / "hub.git")
         self.workdir = str(Path(self._tmp_root) / "cache")
@@ -115,7 +173,7 @@ class IntentTestCase(unittest.TestCase):
         )
         self.assertNotIn("work2.oxidex.net", resolved)
 
-        self.hub = Hub(url=self.hub_path, workdir=self.workdir)
+        self.hub = make_hub(self, self.hub_path, workdir=self.workdir)
 
     def tearDown(self):
         shutil.rmtree(self._tmp_root, ignore_errors=True)
@@ -197,7 +255,7 @@ class TestOpenIntentOverlap(IntentTestCase):
 # --------------------------------------------------------------------- #
 
 
-class TestHistory(unittest.TestCase):
+class TestHistory(HermeticCase):
     def test_5cef5b3d_is_found_by_history_grep(self):
         # 5cef5b3d's commit body literally says "KyoceraRaw.raw" and
         # "SWF, PICT, PPM, RA" -- history is a cheap dedup signal and
@@ -217,11 +275,16 @@ class TestHistory(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
+# HERMETIC SKIP: setUpClass builds the release oxidex binary and every
+# test method shells to the real pinned oracle over the real corpus
+# (via check_capability_ledger -> ledger.check_scope).
+@unittest.skipUnless(_not_hermetic(), f"{HERMETIC_ENV}=1: skips real-binary/real-oracle/real-corpus tests")
 @unittest.skipUnless(_oracle_available(), "pinned ExifTool oracle not usable in this environment")
 @unittest.skipUnless(_corpus_available(), "combined-samples corpus not present in this environment")
-class TestCapabilityLedgerCheck(unittest.TestCase):
+class TestCapabilityLedgerCheck(HermeticCase):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         _ensure_binary_built()
 
     def test_empty_scope_is_not_a_hit(self):
@@ -234,7 +297,14 @@ class TestCapabilityLedgerCheck(unittest.TestCase):
         self.assertIn("MISSING 0", result.detail)
 
     def test_uncovered_format_is_not_a_hit(self):
-        result = check_capability_ledger(REPO_ROOT, {"formats": ["MRC"], "tags": []})
+        # Re-pointed from MRC (ARCH-FIX T7 fixture refresh, 2026-08-15):
+        # 83bf5265 closed MRC's gap (MISSING 60->0) and this assertion went
+        # stale, asserting the opposite of measured reality. See
+        # _require_uncovered_exemplar above -- it re-measures DICOM now and
+        # SKIPS loudly if it closes too, rather than repeating the same
+        # failure with a new hard-coded name.
+        _require_uncovered_exemplar()
+        result = check_capability_ledger(REPO_ROOT, {"formats": [EXEMPLAR_FORMAT], "tags": []})
         self.assertFalse(result.hit)
 
     def test_broken_oracle_fails_closed_as_a_hit(self):
@@ -253,11 +323,17 @@ class TestCapabilityLedgerCheck(unittest.TestCase):
 # --------------------------------------------------------------------- #
 
 
+# HERMETIC SKIP: same reason as TestCapabilityLedgerCheck above -- THE
+# non-negotiable acceptance test itself shells to the real oracle/binary
+# via register() -> check_capability_ledger() for all five acceptance
+# formats, plus a real `cargo build --release` in setUpClass.
+@unittest.skipUnless(_not_hermetic(), f"{HERMETIC_ENV}=1: skips real-binary/real-oracle/real-corpus tests")
 @unittest.skipUnless(_oracle_available(), "pinned ExifTool oracle not usable in this environment")
 @unittest.skipUnless(_corpus_available(), "combined-samples corpus not present in this environment")
 class TestAcceptance(IntentTestCase):
     @classmethod
     def setUpClass(cls):
+        super().setUpClass()
         _ensure_binary_built()
 
     def test_solo_ryzen5_intent_is_refused_by_capability_ledger(self):
@@ -311,6 +387,32 @@ class TestAcceptance(IntentTestCase):
         self.assertIsNone(self.hub.sha(intent_ref("route-legacy-formats")))
 
     def test_genuinely_new_format_registers_fine(self):
+        # THE SAME GUARD AS `_require_uncovered_exemplar`, applied to this
+        # test's own format. This test hard-codes ZISRAW rather than using
+        # EXEMPLAR_FORMAT because it needs a format that is BOTH an open
+        # gap AND unmentioned in tip history (see the comment below), and
+        # DICOM -- the exemplar -- fails the second half now that
+        # staging/cov2-dicom has landed. Hard-coding it re-created the exact
+        # MRC failure mode the refresh above exists to fix: the coverage
+        # line closed ZISRAW (src/parsers/image/czi.rs, 146 -> 480 lines via
+        # staging/cov-wave-3) while this fixture went on asserting the gap
+        # was open, and the two only met at integration -- neither branch is
+        # red alone. Re-measure and skip loudly rather than assert a premise
+        # measured reality no longer supports.
+        _open_gap = ledger.measure_format(
+            REPO_ROOT, _ensure_binary_built(), ledger.ORACLE_SCRIPT, "ZISRAW")
+        if _open_gap.missing <= EXEMPLAR_MISSING_THRESHOLD:
+            raise unittest.SkipTest(
+                f"ZISRAW is no longer an open gap -- repoint me: it now measures "
+                f"MISSING={_open_gap.missing} (<= threshold "
+                f"{EXEMPLAR_MISSING_THRESHOLD}) under tools/fleet/ledger.py against a "
+                f"release build. This test needs a format that is BOTH still "
+                f"uncovered AND unmentioned in tip commit history (so check_history "
+                f"stays clean and the ledger is isolated); find one with "
+                f"`python3 tools/fleet/ledger.py --repo . --format <X>` and replace "
+                f"ZISRAW throughout this test."
+            )
+
         # ZISRAW is a REAL, currently-open gap: 31 of 34 comparable tags
         # are MISSING against the pinned oracle on ZISRAW.czi (verified by
         # hand while building this suite -- see the T1.4 report), and no
@@ -341,19 +443,27 @@ class TestAcceptance(IntentTestCase):
 # --------------------------------------------------------------------- #
 
 
-def _race_worker(hub_path: str, workdir: str, repo_root: str, slug: str, claimed_by: str) -> bool:
-    """Runs in a forked child process (see `_MP_CONTEXT` above). Uses a
-    scope with no formats/tags -- files-only -- so this test isolates the
-    property under test (the hub ref's create-only CAS) from needing a
-    live oracle/binary in every worker, while still exercising the SAME
-    `register()` code path the acceptance test uses, including all three
-    real checks.
+def _race_worker(spec: dict, workdir: str, repo_root: str, slug: str, claimed_by: str) -> bool:
+    """Runs in a child process started with `_MP_CONTEXT` (`tests/_mp.py`).
+
+    Uses a scope with no formats/tags -- files-only -- so this test
+    isolates the property under test (the hub ref's create-only CAS) from
+    needing a live oracle/binary in every worker, while still exercising
+    the SAME `register()` code path the acceptance test uses, including
+    all three real checks.
+
+    `spec` comes from `_fixtures.hub_spec`, so each racer builds the hub
+    shape the parent's fixture mode dictates: a plain `Hub` in bare mode,
+    `FallbackHub(ServerHub, Hub)` through the fixture keel-server under
+    `FLEET_TEST_HUB=server` -- the race then contends on the server's CAS,
+    not around it.
     """
     sys.path.insert(0, str(Path(repo_root) / "tools" / "fleet"))
-    from fleetlib import Hub as _Hub  # local import: see child-process sys.path note above
+    sys.path.insert(0, str(Path(repo_root) / "tools" / "fleet" / "tests"))
+    from _fixtures import hub_from_spec as _hub_from_spec  # local import: see note above
     from intent import register as _register
 
-    hub = _Hub(url=hub_path, workdir=workdir)
+    hub = _hub_from_spec(spec, workdir)
     result = _register(
         hub,
         Path(repo_root),
@@ -368,9 +478,10 @@ def _race_worker(hub_path: str, workdir: str, repo_root: str, slug: str, claimed
 class TestConcurrentRegistration(IntentTestCase):
     def test_two_racers_same_slug_exactly_one_wins(self):
         n = 6
+        spec = hub_spec(self.hub, self.hub_path)
         with ProcessPoolExecutor(max_workers=n, mp_context=_MP_CONTEXT) as pool:
             futures = [
-                pool.submit(_race_worker, self.hub_path, tempfile.mkdtemp(prefix=f"race-cache-{i}-"), str(REPO_ROOT), "race-slug", f"host-{i}")
+                pool.submit(_race_worker, spec, tempfile.mkdtemp(prefix=f"race-cache-{i}-"), str(REPO_ROOT), "race-slug", f"host-{i}")
                 for i in range(n)
             ]
             outcomes = [f.result(timeout=60) for f in as_completed(futures)]
@@ -380,11 +491,12 @@ class TestConcurrentRegistration(IntentTestCase):
 
     def test_two_racers_different_slugs_both_win(self):
         n = 4
+        spec = hub_spec(self.hub, self.hub_path)
         with ProcessPoolExecutor(max_workers=n, mp_context=_MP_CONTEXT) as pool:
             futures = [
                 pool.submit(
                     _race_worker,
-                    self.hub_path,
+                    spec,
                     tempfile.mkdtemp(prefix=f"race-cache-distinct-{i}-"),
                     str(REPO_ROOT),
                     f"distinct-slug-{i}",

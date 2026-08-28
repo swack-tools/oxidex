@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+#
+# Hub-side `update` hook -- second, independent layer of R1's tip
+# protection (T3 / R1 in ARCH-FIX-SPEC.md), covering exactly the one check
+# this hook type CAN make without push-option access: unconditional
+# denial of protected-ref deletion.
+#
+# WHY THIS HOOK DOES NOT CHECK THE train-token:
+#   Git does not export GIT_PUSH_OPTION_COUNT / GIT_PUSH_OPTION_<n> to the
+#   per-ref `update` hook -- only to `pre-receive` and `post-receive`.
+#   Verified empirically against git 2.54.0 (Apple Git-157): a fixture
+#   bare repo with `receive.advertisePushOptions=true` and an `update`
+#   hook that dumps its own environment shows `GIT_PUSH_OPTION_COUNT`
+#   UNSET on every invocation, while the identical push shows it set to
+#   `1` inside both `pre-receive` and `post-receive` for that same push.
+#   This matches `git help githooks`, which documents push-option env
+#   export for pre-receive/post-receive only.
+#
+#   The real token check therefore lives in
+#   `tools/fleet/hooks/pre-receive` (installed as `pre-receive.fleet`),
+#   which runs BEFORE any ref is written and DOES see the push options.
+#   Do not "fix" this file to parse GIT_PUSH_OPTION_* -- it will read as
+#   unset on every real push and silently make the check here a no-op
+#   that always denies (or, if written the other way, always allows) --
+#   either failure mode is worse than this file's current honesty about
+#   what it can and cannot verify.
+#
+# What this hook still buys as a second, independent layer: it denies
+# deletion of the two protected refs even if the pre-receive half were
+# ever bypassed, misconfigured, or missing -- this check needs only argv
+# (refname oldrev newrev), no push options, so duplicating it here costs
+# nothing and narrows the blast radius of a single hook misconfiguration.
+#
+# It also denies a non-fast-forward UPDATE (as opposed to outright
+# deletion) of either protected ref, unconditionally -- a `--force` push
+# that carries a valid train-token still rewrites history instead of
+# fast-forwarding it, which is the same tip-integrity failure R1 exists to
+# prevent, just via a different newrev than 0000...0. This used to be
+# enforced repo-wide via `receive.denyNonFastForwards=true` in
+# install_hook.sh, but that setting applies to every ref on the hub, not
+# just the two protected ones -- it also denied legitimate force-pushes to
+# staging/* and rescued/* refs, which R1's non-interference clause
+# requires this mechanism NOT to affect (see proof_dnff_scope.sh and
+# proof_dnff_breaks_leases.py). Scoping the check to PROTECTED_REFS here,
+# with only argv and no repo-wide config, gets the same tip guarantee
+# without the collateral denial.
+#
+# argv: $1=refname $2=oldrev $3=newrev -- git's documented `update` hook
+# calling convention: one invocation per ref in the push, run after
+# pre-receive has already accepted the whole batch, before the ref itself
+# is written.
+#
+# Chainable: never clobbers a pre-existing update hook. See
+# tools/fleet/rollout/install_hook.sh, which preserves any prior hook as
+# `update.legacy` and runs it alongside this file (installed as
+# `update.fleet`), propagating either half's rejection -- an update
+# hook's exit code decides that one ref, so both halves must genuinely be
+# allowed to deny it.
+#
+# Requires only bash on the hub -- no python3, no network calls, matching
+# the "Python 3, standard library only" rule for tools/fleet/ (this file
+# needs neither).
+#
+# Install (run ON THE HUB, as the account that owns the bare repo):
+#   tools/fleet/rollout/install_hook.sh <bare-repo-path> --execute
+
+set -u
+
+refname="${1:-}"
+oldrev="${2:-}"
+newrev="${3:-}"
+
+PROTECTED_REFS=(
+    "refs/heads/main"
+    "refs/heads/refactor/tag-machinery"
+)
+
+is_protected=0
+for p in "${PROTECTED_REFS[@]}"; do
+    if [[ "$refname" == "$p" ]]; then
+        is_protected=1
+        break
+    fi
+done
+
+if [[ "$is_protected" -eq 1 ]] && [[ "$newrev" =~ ^0+$ ]]; then
+    echo "tip-guard: DENY ref=$refname" >&2
+    echo "tip-guard: reason=deletion of a protected ref is never permitted" >&2
+    echo "tip-guard: remedy=do not delete this ref; if you meant to reset it, push a replacement commit instead" >&2
+    exit 1
+fi
+
+# Non-fast-forward UPDATE of a protected ref (oldrev exists and newrev is
+# not a descendant of it) -- denied unconditionally, even with a valid
+# train-token: see the header comment above. Scoped to PROTECTED_REFS
+# only, so staging/* and rescued/* force-pushes are untouched.
+if [[ "$is_protected" -eq 1 ]] && [[ ! "$oldrev" =~ ^0+$ ]]; then
+    if ! git merge-base --is-ancestor "$oldrev" "$newrev" 2>/dev/null; then
+        echo "tip-guard: DENY ref=$refname" >&2
+        echo "tip-guard: reason=non-fast-forward update of a protected ref is never permitted, even with a valid train-token" >&2
+        echo "tip-guard: remedy=push a fast-forward (a new commit built on the current tip) instead of rewriting history" >&2
+        exit 1
+    fi
+fi
+
+exit 0

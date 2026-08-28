@@ -1,21 +1,60 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- launchd agent for fleetd (macOS hosts: M4 oldair, m5).
-     Install: cp com.oxidex.fleetd.plist ~/Library/LaunchAgents/
+<!-- launchd agent for keel-runner (macOS hosts: M4 oldair, m5). PLAN
+     Stage 3 task 7: re-pointed from fleetd.py at keel/runner.py (SPEC
+     SS2 C7); every comment below that still says "fleetd" is describing
+     the CLI/env contract the runner keeps unchanged, not a stale
+     reference.
+     Install: mkdir -p ~/.keel/log
+              cp com.oxidex.fleetd.plist ~/Library/LaunchAgents/
               launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.oxidex.fleetd.plist -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>com.oxidex.fleetd</string>
   <key>ProgramArguments</key><array>
     <string>/opt/homebrew/bin/python3</string>
-    <string>/Users/allen/fleet-checkout/tools/fleet/fleetd.py</string>
+    <string>/Users/allen/fleet-checkout/tools/fleet/keel/runner.py</string>
   </array>
+  <!-- PLAN Stage 1 task 4: the hub (verdict/state) and the code repo
+       (staging/* + refactor/tag-machinery) are now two distinct GitHub
+       remotes: the private state repo and the public code repo, rather
+       than one host-specific ssh URL. The runner reads both from the
+       environment; FLEET_CODE_URL falls back to FLEET_HUB_URL when
+       unset. These (and KEEL_SERVER_URL/KEEL_TOKEN_FILE, below) are
+       also settable via ~/.keel/runner.toml (keel/runner_toml.py) -- an
+       env var set here always wins over the toml file. -->
+  <!-- B5: both remotes above are private/public HTTPS GitHub repos, so
+       every git op the runner makes needs a token --
+       tools/fleet/keel/git-credential-file reads it from this file.
+       Create it with tools/fleet/rollout/install_secrets.sh, which also
+       verifies it (0600, non-empty, a real `git ls-remote` against the
+       state repo) without ever printing it. launchd's EnvironmentVariables
+       values are literal strings, NOT shell-expanded (unlike the cron
+       line below, or systemd's `%h`) -- exactly like ProgramArguments'
+       /Users/allen/... path above, this is the maintainer's actual home
+       directory, substituted by hand at install time, not $HOME. -->
+  <!-- PLAN Stage 3 task 7: KEEL_SERVER_URL/KEEL_TOKEN_FILE (SPEC SS4.3's
+       optional keel-server route) are deliberately absent here -- a
+       host that should route through a keel-server sets them via
+       ~/.keel/runner.toml instead of editing this plist, so leaving
+       this file untouched keeps "direct to the hub" the default. -->
   <key>EnvironmentVariables</key><dict>
     <key>FLEET_HUB_URL</key>
-    <string>ssh://allen@work2.oxidex.net:2244/home/allen/git/oxidex.git</string>
+    <string>https://github.com/swack-tools/oxidex-fleet-state.git</string>
+    <key>FLEET_CODE_URL</key>
+    <string>https://github.com/swack-tools/oxidex.git</string>
+    <key>FLEET_GIT_TOKEN_FILE</key>
+    <string>/Users/allen/.keel/secrets/git-token</string>
     <key>PATH</key>
     <string>/Users/allen/.cargo/bin:/Users/allen/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
   </dict>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/tmp/fleetd.log</string>
-  <key>StandardErrorPath</key><string>/tmp/fleetd.log</string>
+  <!-- PLAN Stage 3 task 7: logs under ~/.keel/log, not /tmp -- macOS
+       purges /tmp (AGENTS.md), which is exactly why the OLD
+       /tmp/fleetd.log path here was wrong even before the rename; fixed
+       in the same pass as the ProgramArguments re-point rather than
+       left as a separate, easy-to-forget follow-up. Literal path, like
+       ProgramArguments above: launchd does not expand $HOME/~ in a
+       plist string. -->
+  <key>StandardOutPath</key><string>/Users/allen/.keel/log/runner.log</string>
+  <key>StandardErrorPath</key><string>/Users/allen/.keel/log/runner.log</string>
 </dict></plist>

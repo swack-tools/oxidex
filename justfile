@@ -691,6 +691,33 @@ duplicate-loss-scan *args:
     uv run tools/exiftool-tables/duplicate_loss_scan.py "$CORPUS" \
         --oxidex ./target/debug/oxidex {{args}}
 
+# PROJECTION 2 of the same instrument: the occurrence-parity fixtures.
+#
+# KNOWN FAILING BY DESIGN, and deliberately NOT part of `just ci`, `ci-standard`
+# or `pre-commit` -- it is red on purpose until the three product defects named
+# in docs/TAG_MACHINERY_LEDGER_PLAN.md Stage 2B are fixed (tag_sink.rs:205,
+# tag_resolution.rs:511, quicktime/metadata_extractor.rs:1072). It exits 1 while
+# red, 3 if a control fails or the oracle disagrees with itself, and 0 only once
+# all three defects are closed -- so it can never be ratcheted into normality by
+# being wired somewhere that only checks for a zero exit.
+#
+# It also refuses to run without FLEET_EXPECT_OCCURRENCE_FAILURES=1, printing
+# what it would measure and exiting 64. This recipe sets it, because asking for
+# the recipe by name IS the opt-in.
+#
+# Does not run projection 1 (the corpus duplicate-loss scan above) and does not
+# touch conformance.py's winner/display baseline.
+#
+# Occurrence-parity fixtures (PROJECTION 2) -- KNOWN FAILING until Stage 2B lands
+duplicate-loss-fixtures *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Building oxidex (release: these fixtures assert on CLI output)..."
+    cargo build --release --bin oxidex
+    FLEET_EXPECT_OCCURRENCE_FAILURES=1 \
+    uv run tools/exiftool-tables/duplicate_loss_scan.py --fixtures \
+        --oxidex ./target/release/oxidex {{args}}
+
 # ExifTool Comparison
 # -------------------
 
@@ -1327,6 +1354,18 @@ check-staleness version="":
         [[ -n "$VERSION" ]] || { echo "❌ .exiftool-version is empty" >&2; exit 1; }
     fi
 
+    # Stage 0, before any download: the committed artifacts under
+    # tools/exiftool-tables/ that grade THEMSELVES rather than the pin --
+    # expr_oracle_ledger.json (must load under the committed codegen.py; it
+    # sat at schema 1, refused on every host, with nothing in CI or the
+    # justfile mentioning it) and triage_bump.py's derived generator-less
+    # list. Needs neither ExifTool nor a dump, so it runs first and fails
+    # in under a second.
+    echo "=========================================================="
+    echo ">> committed tool artifacts (tools/exiftool-tables unit tests)"
+    echo "=========================================================="
+    (cd tools/exiftool-tables && python3 -m unittest discover -p 'test_*.py' -v)
+
     CACHE="${OXIDEX_ET_CACHE:-target/exiftool-src}"
     ROOT="$CACHE/exiftool-$VERSION"
     LIB="$ROOT/lib"
@@ -1359,7 +1398,7 @@ check-staleness version="":
     fi
 
     echo "=========================================================="
-    echo ">> coarse enum-fingerprint drift (six generator-less files + canon.rs)"
+    echo ">> coarse enum-fingerprint drift (six bespoke-DSL files + canon.rs)"
     echo "=========================================================="
     python3 tools/exiftool-tables/check_hand_enum_drift.py \
         --dump "$DUMP" \
@@ -1392,6 +1431,31 @@ gate branch tag:
 # phantom-missing SWF tags from a one-day-old binary).
 fleet-test: build-bin-release
     cd tools/fleet && python3 -m unittest discover -s tests -v
+
+# The non-seam fleet suite, twice: once against a plain bare-repo Hub, once
+# through a real fixture keel-server (FLEET_TEST_HUB=bare|server,
+# tests/_fixtures.py, PLAN Stage 2 task 7) -- every module in tests/ whose
+# name matches test_*.py except test_seams.py, which gets its own bare/
+# server treatment as test_seams_keel.py (SPEC SS11), not this recipe.
+# Runs both unconditionally so a maintainer sees both outcomes in one
+# invocation, then fails (non-zero exit) if either run failed -- a
+# server-only regression cannot hide behind a green bare run.
+fleet-tests-both: build-bin-release
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cd tools/fleet/tests
+    mods=$(ls test_*.py | grep -v '^test_seams\.py$' | sed 's/\.py$//')
+    status=0
+    for hub in bare server; do
+        echo "=========================================================="
+        echo ">> fleet suite (non-seam), FLEET_TEST_HUB=$hub"
+        echo "=========================================================="
+        if ! FLEET_TESTS_HERMETIC=1 FLEET_TEST_HUB=$hub python3 -m unittest $mods; then
+            echo ">> FLEET_TEST_HUB=$hub: FAILED"
+            status=1
+        fi
+    done
+    exit $status
 
 # Host health: toolchain id, oracle capability probe, corpus count, disk.
 fleet-doctor host:
