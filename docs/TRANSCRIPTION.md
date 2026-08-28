@@ -313,9 +313,61 @@ registry grows. Protect that property.
 
 ## Honest limits
 
-- `verify.py` checks field names and enum maps. It does **not** verify
-  translated expressions — that is the unverified surface, and it is where the
-  identifier-collision bug hid.
+- `verify.py` checks field names and enum maps, and does **not** verify
+  translated expressions — that is still true of `verify.py`, and it is where
+  the identifier-collision bug hid. It has **not** been true of the repo since
+  Step 15: `tools/exiftool-tables/verify_exprs.py` is a differential oracle
+  that evaluates each expression under the pinned ExifTool Perl and under the
+  shipped Rust translation (`exprs.py`'s emitted source plus the hand-written
+  helpers in `src/exiftool_tables/exprs.rs`, built as a throwaway
+  `expr_oracle_harness` bin) over the same probe battery, and diffs the two.
+  Its verdict is committed as `tools/exiftool-tables/expr_oracle_ledger.json`,
+  and `codegen.py` will not emit an oracle-gated ValueConv/PrintConv whose
+  normalized text is not in that ledger — `load_oracle_ledger` (`codegen.py:158`)
+  aborts loudly rather than silently refusing everything.
+
+  Measured, instrument named: `python3 tools/exiftool-tables/verify_exprs.py
+  <13.59 dump> --perl /usr/bin/perl --et-lib <pinned 13.59 lib>
+  --ledger-out …` on the i7 (Perl v5.38.2, capability-probed) →
+  **probe-level PASS 12999 / FAIL 0 / SKIP 10, expression-level 486/486,
+  RESULT: PASS**, writing schema 2 with `tables_sha256 6b6bd4f8…`. The same
+  script on this Mac (Perl 5.34.1) reports PASS 12975 / FAIL 0, 485/485. The
+  negative control is real: monkeypatching `TRANSLATIONS['$val / 10']` to
+  `{v} / 100.0` exits 1 with per-probe divergences.
+
+  So the honest remaining limits are these, not "expressions are unverified":
+
+  1. **The oracle grades what the translator claims, not the whole census.**
+     `python3 tools/exiftool-tables/expr_coverage.py <13.59 dump>` (which now
+     prints an instrument header of its own): translated **4654/6993 uses =
+     66.6%**, 478/1529 distinct = 31.3%. The other **2339 uses / 1051 distinct**
+     are refused by the closed grammar and therefore never reach the oracle at
+     all — omitted and counted, per "refuse rather than approximate", but a
+     PASS says nothing about them. Ranked by uses the refusals are headed by
+     named helper subs not yet ported (`ConvertDuration($val)` 73,
+     `Image::ExifTool::ConvertUnixTime($val + 631065600, 1)` 46,
+     `ConvertBitrate($val)` 36, `Image::ExifTool::Exif::PrintFraction($val)`
+     35), `%g` sprintf (`sprintf("%.2g",$val)` 30), and split/unpack/regex
+     shapes (`unpack("H*",$val)` 26, `$val || undef` 25).
+  2. **Composite-domain expressions are outside the oracle by name.**
+     `verify_exprs.py` skips any translation whose emitted code carries
+     `compile_composite`'s `{vN}` placeholders — ExifTool's `@val`/`$val[N]`
+     array domain, a different probe shape that `build_rust_harness` cannot
+     even compile (`{v0}` survives into the Rust as an undefined variable and
+     `cargo run` exits 101). It skips them *by name and with a count*, which
+     is the right behaviour; but on the pinned 13.59 dump that count is
+     **0**, because the scalar census never walks the Composite tables in the
+     first place. Read correctly, that zero means `compile_composite` /
+     `codegen_composite.py` output is **not covered by this oracle**, not that
+     it passed one.
+  3. **The ledger is bound to one Perl.** Its `tables_sha256` digests the
+     `dump_tables.pl` output byte for byte, and Perl 5.34.1 and 5.38.2 emit
+     genuinely different bytes for the same ExifTool 13.59 (`79412ee8…` vs
+     `6b6bd4f8…`, both measured). A ledger is therefore only loadable on a
+     host whose Perl matches its recorded `perl_version`; `regen.sh` refreshes
+     it before `codegen.py` reads it, and `test_load_oracle_ledger.py`'s
+     `CommittedLedgerTests` grades every host-independent field of the
+     committed artifact so a dead one cannot sit there unnoticed again.
 - File identification deliberately under-claims. A JPEG named `.dat`, or a file
   with no extension, is not identified, because OxiDex cannot run ExifTool's
   confirming parse.
@@ -409,8 +461,10 @@ registry grows. Protect that property.
   `tools/exiftool-tables/bump-exiftool.sh`) makes this explicit at bump time
   too, not just in CI. `tools/exiftool-tables/triage_bump.py` classifies
   every JSON-to-JSON delta between two pinned releases as AUTO/EXPR/COND/
-  HAND, and unconditionally lists these same six files as standing HAND
-  items on every run — regardless of whether the release being bumped
+  HAND, and unconditionally lists the still-generator-less members of this
+  same set as standing HAND items on every run (six at Step 17; four since
+  Step 18, though the list itself only caught up at Step 30 — see below)
+  — regardless of whether the release being bumped
   touched Sony/Nikon/Minolta at all — because "nothing changed here" is not
   the same claim as "this is covered". See
   `docs/reference/bump-reports/13.58-to-13.59.md` for a worked example.
@@ -450,6 +504,41 @@ registry grows. Protect that property.
   human attention on `main_extra_tables.rs`/`minolta_a100_tables.rs` even
   though `regen-all.sh` can now refresh them unattended -- but it is next
   in line to tighten, not a correctness bug.
+
+  **Step 30 update:** that residual gap is closed on the `triage_bump.py`
+  side, and closed by *derivation* rather than by editing a second literal.
+  `GENERATOR_LESS_FILES` is now computed by `generator_less_files()`, which
+  keeps the six-file candidate list (that half really is a judgement about
+  how the Rust was written, and nothing on disk records it) but decides
+  per file whether any committed regen script names its path **outside a
+  comment**. Comment-stripping is load-bearing, not tidiness:
+  `regen-all.sh`'s tier-2d banner names all four unreconstructed files in
+  prose, and counting that sentence is precisely the `ricoh.rs:215` failure
+  `reachability.py`'s docstring records. Result: 4, not 6, pinned by
+  `test_triage_bump.py`'s `GeneratorLessDerivationTests` (which also asserts
+  every candidate file exists, that the two excluded ones are excluded
+  because a script really names them, and that an unreadable regen script is
+  a loud refusal rather than an empty list). `check_hand_enum_drift.py`
+  deliberately keeps all seven targets: it fingerprints the enum literals
+  *present in the file*, which is a question about the committed bytes, not
+  about who wrote them.
+
+  Separately, and not one of the six: the four Macintosh CJK charset tables
+  (`src/parsers/font/mac_charset/mac_{japanese,chinese_tw,korean,chinese_cn}.rs`)
+  had a committed generator all along —
+  `src/parsers/font/mac_charset/generate_tables.py`, transcribing
+  `Image/ExifTool/Charset/Mac*.pm` — and it was named by **nothing**: not
+  `regen.sh`, not `regen-all.sh`, not the justfile, not `ci.yml`. They are
+  live code (`mac_charset.rs:25-28` declares the modules,
+  `for_mac_encoding` at :76-79 dispatches Mac encoding IDs 1/2/3/25 into
+  them for `ttf.rs:353`), so a bump would have frozen ExifTool's own
+  MacJapanese/MacChineseTW/MacKorean/MacChineseCN tables at whichever
+  release they were transcribed from while every neighbour moved. They are
+  now `regen-all.sh` tier 2e and are in CI's rerun-and-diff list; measured
+  before wiring, the generator reproduces all four **byte-identically** from
+  the pinned 13.59 tree once `rustfmt --edition 2021` has run (the only
+  pre-rustfmt difference is the wrapping of the `_LEADS` array literal), so
+  the wiring adds a gate without changing a byte.
 
 ## Relationship to the AI harness
 

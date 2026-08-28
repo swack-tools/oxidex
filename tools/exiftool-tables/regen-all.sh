@@ -7,9 +7,10 @@
 # filetype tables, Composite definitions and FITS keywords. Tier 2 is
 # everything downstream of it that regen.sh never touched: the MakerNote
 # sub-directory tables (codegen_subdirs.py), the Nikon AF-point name grids
-# (dump_af_points.pl + codegen_af_points.py), and the six one-off
+# (dump_af_points.pl + codegen_af_points.py), the six one-off
 # `scripts/gen_*.pl` transcriptions (Leica lens types, Canon custom
-# functions, InfiRay/Qualcomm APPn tables, Samsung and Olympus lookups).
+# functions, InfiRay/Qualcomm APPn tables, Samsung and Olympus lookups) and
+# the four Macintosh CJK charset tables (tier 2e).
 #
 # Before this script existed, a bump only ever ran tier 1 -- `just
 # regen-tables` calls regen.sh directly, and nothing called the tier-2
@@ -232,6 +233,29 @@ python3 "$HERE/gen_minolta_a100_tables.py" "$JSON" \
     -o "$ROOT/src/parsers/tiff/makernotes/minolta_a100_tables.rs"
 
 echo "=========================================================="
+echo ">> TIER 2e: Macintosh CJK charset tables (TrueType name records)"
+echo "=========================================================="
+# The four `src/parsers/font/mac_charset/mac_*.rs` tables had a committed
+# generator all along -- and it was named by nothing. Not regen.sh, not this
+# script, not the justfile, not ci.yml (found by the tag-machinery
+# reconciliation, docs/TAG_MACHINERY_RECONCILIATION.md defect 5). They are
+# live code, not dead output: `src/parsers/font/mac_charset.rs:25-28`
+# declares all four as modules and `for_mac_encoding` (:76-79) dispatches
+# Mac platform encoding IDs 1/2/3/25 into them for `ttf.rs:353`. So a bump
+# would have left ExifTool's own MacJapanese/MacChineseTW/MacKorean/
+# MacChineseCN tables frozen at whatever release they were transcribed from,
+# silently, while every neighbouring table moved -- exactly the tier-2 skew
+# this script exists to end.
+#
+# The generator reads the `.pm` files directly (they are Perl hash literals,
+# not runtime tables, so there is no dump to route through) and writes
+# beside itself; its output is byte-identical to what is committed once
+# rustfmt has run, which is why it is in the cargo fmt list below and why
+# CI's rerun-and-diff step can gate it.
+python3 "$ROOT/src/parsers/font/mac_charset/generate_tables.py" \
+    "$LIB/Image/ExifTool/Charset"
+
+echo "=========================================================="
 echo ">> formatting tier-2 output"
 echo "=========================================================="
 cd "$ROOT"
@@ -248,6 +272,10 @@ cargo fmt -- \
     src/parsers/tiff/makernotes/samsung/lookups.rs \
     src/parsers/tiff/makernotes/olympus/lookups.rs \
     src/parsers/tiff/makernotes/lens_data.rs \
+    src/parsers/font/mac_charset/mac_japanese.rs \
+    src/parsers/font/mac_charset/mac_chinese_tw.rs \
+    src/parsers/font/mac_charset/mac_korean.rs \
+    src/parsers/font/mac_charset/mac_chinese_cn.rs \
     2>/dev/null || echo "   (rustfmt unavailable; output left unformatted)"
 
 echo

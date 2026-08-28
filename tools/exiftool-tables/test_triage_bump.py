@@ -128,5 +128,78 @@ class DiffTagVariantsIntegrationTests(unittest.TestCase):
         self.assertIn("standalone Condition", deltas[0].note)
 
 
+class GeneratorLessDerivationTests(unittest.TestCase):
+    """Pin the standing-HAND list against the filesystem it describes.
+
+    The defect these replace: `GENERATOR_LESS_FILES` was a literal listing
+    all six bespoke-DSL files, and stayed that way after `regen-all.sh`
+    tier 2d started generating two of them, so every bump report over-stated
+    standing HAND work by 2.
+    """
+
+    REPO_ROOT = MODULE_PATH.resolve().parents[2]
+
+    WIRED = {
+        "src/parsers/tiff/makernotes/sony/main_extra_tables.rs",
+        "src/parsers/tiff/makernotes/minolta_a100_tables.rs",
+    }
+    STILL_GENERATOR_LESS = {
+        "src/parsers/tiff/makernotes/sony/enciphered_tables.rs",
+        "src/parsers/tiff/makernotes/sony/plain_tables.rs",
+        "src/parsers/tiff/makernotes/nikon/encrypted_tables.rs",
+        "src/parsers/tiff/makernotes/nikon/settings_tables.rs",
+    }
+
+    def test_every_candidate_file_exists_on_disk(self):
+        # The candidate half IS a literal (it encodes "hand-translated
+        # through a per-file DSL", which nothing on disk records), so it
+        # gets the check a literal needs: a renamed or deleted file must
+        # fail here rather than silently drop out of every bump report.
+        for _module, path, _source in triage_bump.BESPOKE_DSL_FILES:
+            with self.subTest(path=path):
+                self.assertTrue((self.REPO_ROOT / path).is_file(),
+                                f"{path} named by BESPOKE_DSL_FILES does not exist")
+
+    def test_derived_list_is_exactly_the_four_without_a_generator(self):
+        derived = {path for _m, path, _s in triage_bump.generator_less_files()}
+        self.assertEqual(derived, self.STILL_GENERATOR_LESS)
+
+    def test_files_a_regen_script_generates_are_excluded(self):
+        derived = {path for _m, path, _s in triage_bump.generator_less_files()}
+        for path in self.WIRED:
+            with self.subTest(path=path):
+                self.assertNotIn(path, derived)
+                # ...and for the right reason: a regen script really does
+                # name it outside a comment.
+                named = any(
+                    path in triage_bump._strip_shell_comments(
+                        (self.REPO_ROOT / rel).read_text(encoding="utf-8"))
+                    for rel in triage_bump.REGEN_SCRIPTS
+                )
+                self.assertTrue(named, f"{path} is excluded but no regen script names it")
+
+    def test_a_comment_naming_a_file_does_not_count_as_a_generator(self):
+        # regen-all.sh's tier-2d banner names the four unreconstructed files
+        # in prose. Counting that sentence is the `ricoh.rs:215` failure
+        # (reachability.py's docstring; docs/reference/corpus-synthesis.md),
+        # so the derivation strips comments first. Negative control: a
+        # script whose ONLY mention of a path is inside a comment must leave
+        # that path on the list.
+        script = (
+            '#!/usr/bin/env bash\n'
+            '# note: src/parsers/tiff/makernotes/sony/main_extra_tables.rs '
+            'is deliberately not generated here\n'
+            'echo "unrelated # not a comment"\n'
+        )
+        stripped = triage_bump._strip_shell_comments(script)
+        self.assertNotIn("main_extra_tables.rs", stripped)
+        self.assertIn('echo "unrelated # not a comment"', stripped)
+
+    def test_unreadable_regen_script_is_a_loud_refusal_not_an_empty_list(self):
+        with self.assertRaises(SystemExit) as cm:
+            triage_bump.generator_less_files(Path("/nonexistent-oxidex-root"))
+        self.assertIn("refusing to guess", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
