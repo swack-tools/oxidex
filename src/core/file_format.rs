@@ -403,6 +403,14 @@ pub enum FileFormat {
     /// RealMedia audio/video container (.rm, .rv, .rmvb)
     RealMedia,
 
+    /// Mac OS resource fork, either a bare resource file (.rsrc) or a
+    /// data-fork font suitcase (.dfont) -- the parser reports DFONT when a
+    /// font resource is present, matching ExifTool's RSRC.pm override
+    RSRC,
+
+    /// Adobe Font Metrics text file (.afm; also its ACFM/AMFM siblings)
+    AFM,
+
     /// Audible audiobook (.aa)
     AA,
 
@@ -576,6 +584,8 @@ impl FileFormat {
             FileFormat::XISF => "XISF",
             FileFormat::WTV => "WTV",
             FileFormat::RealMedia => "RM",
+            FileFormat::RSRC => "RSRC",
+            FileFormat::AFM => "AFM",
             FileFormat::AA => "AA",
             FileFormat::PICT => "PICT",
             FileFormat::PPM => "PPM",
@@ -729,6 +739,8 @@ impl FileFormat {
             // extensions to the same `Real` module (`ExifTool.pm`); `rm` is
             // the canonical one it reports as `FileTypeExtension`.
             FileFormat::RealMedia => &["rm", "rv", "rmvb"],
+            FileFormat::RSRC => &["rsrc", "dfont"],
+            FileFormat::AFM => &["afm", "acfm", "amfm"],
             FileFormat::AA => &["aa"],
             FileFormat::PICT => &["pict", "pct"],
             FileFormat::PPM => &["ppm", "pgm", "pbm"],
