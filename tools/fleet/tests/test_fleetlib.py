@@ -59,6 +59,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fleetlib  # noqa: E402
 from _env import HermeticCase, scrub_env  # noqa: E402
 from _fixtures import bare_only, hub_from_spec, hub_spec, make_hub, within_sweep  # noqa: E402
+from _mp import pool_context  # noqa: E402
+
+# Explicit, per-call-site start method; nothing here touches the
+# process-global default. See `tests/_mp.py`.
+_MP_CONTEXT = pool_context()
 from fleetlib import (  # noqa: E402
     Hub,
     HubError,
@@ -370,7 +375,7 @@ class TestConcurrentCreate(FleetlibTestCase):
         ref = self.ref(f"race{n}")
 
         spec = hub_spec(self.hub, self.hub_url)
-        with ProcessPoolExecutor(max_workers=n) as pool:
+        with ProcessPoolExecutor(max_workers=n, mp_context=_MP_CONTEXT) as pool:
             futures = [pool.submit(_attempt_create, spec, ref, i) for i in range(n)]
             results = [f.result() for f in as_completed(futures)]
 

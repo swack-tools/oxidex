@@ -89,6 +89,7 @@ from __future__ import annotations
 
 import errno
 import http.client
+import pickle
 import socket
 import ssl
 import sys
@@ -201,6 +202,71 @@ class AmbiguousWriteError(HubUnreachableError):
         self.op = op
         self.ref = ref
         self.cause = cause
+
+    def __reduce__(self):
+        """Make this exception survive a process boundary.
+
+        `BaseException.__reduce__` returns `(cls, self.args)`, and
+        `self.args` here is the ONE formatted message string `__init__`
+        passed up -- so the default reconstruction calls
+        `AmbiguousWriteError(<message>)` and dies with `TypeError: missing
+        2 required positional arguments: 'ref' and 'cause'`. A
+        `multiprocessing` consumer -- a `ProcessPoolExecutor` racer, a
+        runner's worker -- whose child hit an ambiguous write therefore
+        saw `BrokenProcessPool` (an unpickling failure in the result
+        channel) rather than the typed error r2 exists to deliver, and
+        `except HubUnreachableError` on the parent side never fired.
+
+        Reconstructed from the already-formatted message rather than from
+        `(op, ref, cause)`, so `str(exc)` is byte-identical across the
+        boundary even when the cause below is substituted; `op`/`ref`/
+        `cause` come back through the state dict pickle applies after.
+
+        An unpicklable CAUSE would just move the failure one level down --
+        and the realistic cause is exactly that shape (`hubstore.
+        WriteOutcomeUnknownError(op, ref, exc)` has this same signature).
+        So a cause that cannot make the trip is replaced by a `RuntimeError`
+        carrying its type name and text: the diagnosis survives verbatim
+        inside the message, and the error the parent catches is still an
+        `AmbiguousWriteError`, which is the fact r2's callers switch on.
+        """
+        state = dict(self.__dict__)
+        cause = state.get("cause")
+        if cause is not None and not _is_picklable(cause):
+            state["cause"] = RuntimeError(f"{type(cause).__name__}: {cause}")
+        return (_rebuild_ambiguous_write_error, (str(self),), state)
+
+
+def _rebuild_ambiguous_write_error(message: str) -> "AmbiguousWriteError":
+    """Rebuild an `AmbiguousWriteError` from its formatted message alone.
+
+    `__init__` is bypassed on purpose -- it would re-derive the message
+    from `(op, ref, cause)`, and the cause may have been substituted. The
+    `op`/`ref`/`cause` attributes are restored by pickle from the state
+    dict, immediately after this returns.
+    """
+    exc = AmbiguousWriteError.__new__(AmbiguousWriteError)
+    exc.args = (message,)
+    return exc
+
+
+def _is_picklable(obj: object) -> bool:
+    """Can `obj` make a round trip through `pickle`?
+
+    Both halves, deliberately: this whole defect is an object that
+    `dumps` cleanly and then raises on `loads`, so a `dumps`-only probe
+    would have called the broken exception picklable.
+
+    The `loads` here is safe by construction and is NOT a deserialization
+    of untrusted input: the only bytes it ever sees are the ones `dumps`
+    produced from an in-process exception object one expression earlier.
+    Nothing from the wire reaches it.
+    """
+    try:
+        pickle.loads(pickle.dumps(obj))
+    except Exception:
+        return False
+    return True
 
 
 def _exception_chain(exc: BaseException, limit: int = 8):

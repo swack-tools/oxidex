@@ -210,7 +210,25 @@ class TestExecuteIdempotency(SeedDesiredTestCase):
     def test_execute_is_idempotent_across_repeated_calls(self):
         rc1, _out, _err = self.run_main(["--hub", self.hub_path, "--execute"])
         self.assertEqual(rc1, 0)
-        sha1 = self.hub.sha(DESIRED_REF)
+        # `run_main` seeds through its OWN hub against `self.hub_path`, so
+        # under FLEET_TEST_HUB=server this is an out-of-band write that the
+        # fixture server sees only after its next sweep -- exactly what the
+        # two tests above already use `within_sweep` for, and what this one
+        # was missing. `CachedHub.sha` (cachedhub.py L383-393) answers from
+        # the index WITHOUT a live read whenever the index serves that ref,
+        # and a hit that is simply absent is answered `None`; so the closer
+        # the index is to warm, the more reliably this read is a hard miss
+        # on a ref that certainly exists.
+        #
+        # Observed as `'0dba8960ebe0...' != None` on a full
+        # `FLEET_TEST_HUB=server` run under load, and reproduced on demand
+        # by setting `_fixtures._SWEEP_INTERVAL_S = 0.02` (a permanently
+        # warm index): without the `within_sweep` below that run fails with
+        # the identical `'<sha>' != None`, with it the same run is green.
+        # Note the direction -- SLOWING the sweep hides the bug, because a
+        # cold index falls through to the live read.
+        sha1 = within_sweep(lambda: self.hub.sha(DESIRED_REF), lambda v: v is not None)
+        self.assertIsNotNone(sha1, "the first --execute must have left a desired ref")
         payload1 = self.hub.read(DESIRED_REF)
 
         for _ in range(3):

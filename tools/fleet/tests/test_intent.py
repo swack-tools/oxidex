@@ -27,7 +27,6 @@ Run with:
 
 from __future__ import annotations
 
-import multiprocessing
 import os
 import shutil
 import subprocess
@@ -36,19 +35,6 @@ import tempfile
 import unittest
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-
-# See test_claim.py's own comment on this exact issue: `tools/fleet/queue.py`
-# (a sibling module on other fleet branches, not present on this one, but
-# worth pinning defensively anyway) can shadow the stdlib `queue` module for
-# a `spawn`-started child that re-derives `sys.path`. `fork` instead
-# duplicates this already-running interpreter's `sys.modules`, so no fresh
-# "queue" import ever happens in the child. Harmless if "fork" is already
-# the default; only meaningfully protective on platforms where it isn't.
-try:
-    multiprocessing.set_start_method("fork", force=True)
-except (RuntimeError, ValueError):
-    pass
-_MP_CONTEXT = multiprocessing.get_context("fork")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -65,6 +51,12 @@ from intent import (  # noqa: E402
 )
 from _env import HermeticCase  # noqa: E402
 from _fixtures import hub_spec, make_hub  # noqa: E402
+from _mp import pool_context  # noqa: E402
+
+# This module's own pools name their start method here, at their own call
+# sites, and NOTHING here touches the process-global default -- see
+# `tests/_mp.py` for why that distinction is the whole point.
+_MP_CONTEXT = pool_context()
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -426,12 +418,13 @@ class TestAcceptance(IntentTestCase):
 
 
 def _race_worker(spec: dict, workdir: str, repo_root: str, slug: str, claimed_by: str) -> bool:
-    """Runs in a forked child process (see `_MP_CONTEXT` above). Uses a
-    scope with no formats/tags -- files-only -- so this test isolates the
-    property under test (the hub ref's create-only CAS) from needing a
-    live oracle/binary in every worker, while still exercising the SAME
-    `register()` code path the acceptance test uses, including all three
-    real checks.
+    """Runs in a child process started with `_MP_CONTEXT` (`tests/_mp.py`).
+
+    Uses a scope with no formats/tags -- files-only -- so this test
+    isolates the property under test (the hub ref's create-only CAS) from
+    needing a live oracle/binary in every worker, while still exercising
+    the SAME `register()` code path the acceptance test uses, including
+    all three real checks.
 
     `spec` comes from `_fixtures.hub_spec`, so each racer builds the hub
     shape the parent's fixture mode dictates: a plain `Hub` in bare mode,
