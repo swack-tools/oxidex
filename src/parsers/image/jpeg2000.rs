@@ -105,6 +105,18 @@ const GROUP: &str = "Jpeg2000";
 /// `ihdr` and a 1x1 GeoTIFF stub, and the oracle reports `16x16`.
 const EMBEDDED_TIFF_PRIORITY: u8 = 0;
 
+/// Priority for `File:ExifByteOrder` from an embedded TIFF.
+///
+/// Unlike the directory tags above, ExifByteOrder is not minted from a
+/// directory at all: `ProcessTIFF` itself calls
+/// `FoundTag('ExifByteOrder', $byteOrder)` (ExifTool.pm:8702), and on a
+/// duplicate the tag gets the normal default priority 1 (ExifTool.pm:9562-
+/// 9563), so `$priority >= $oldPriority` (:9564) lets each later TIFF-bearing
+/// `uuid` box replace the value. `t/images/Jpeg2000.jp2` pins it: the
+/// little-endian GeoJP2 stub (offset 77) precedes the big-endian UUID-EXIF
+/// box (offset 1914), and the oracle prints `Big-endian (Motorola, MM)`.
+const EXIF_BYTE_ORDER_PRIORITY: u8 = 1;
+
 const MINOR_VERSION: PerlCitation = PerlCitation {
     module: "Jpeg2000",
     table: "FileType",
@@ -522,10 +534,18 @@ fn uuid_box(payload: &[u8], metadata: &mut MetadataMap) {
         let group1 = key
             .rsplit_once(':')
             .map_or(String::new(), |(group, _)| group.to_string());
+        // ExifByteOrder is FoundTag'd by ProcessTIFF itself, not from a
+        // directory, so it carries the normal priority and the last
+        // TIFF-bearing uuid box wins -- see EXIF_BYTE_ORDER_PRIORITY.
+        let priority = if bare == "ExifByteOrder" {
+            EXIF_BYTE_ORDER_PRIORITY
+        } else {
+            EMBEDDED_TIFF_PRIORITY
+        };
         metadata.insert_occurrence(
             key.clone(),
             value.clone(),
-            EMBEDDED_TIFF_PRIORITY,
+            priority,
             &group1,
             Instance::default(),
         );
@@ -535,6 +555,56 @@ fn uuid_box(payload: &[u8], metadata: &mut MetadataMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal one-entry TIFF (ImageWidth = 1) behind `prefix`, as the
+    /// payload of a TIFF-bearing `uuid` box.
+    fn uuid_tiff_payload(prefix: &[u8], big_endian: bool) -> Vec<u8> {
+        let mut p = prefix.to_vec();
+        if big_endian {
+            p.extend_from_slice(b"MM\x00\x2a\x00\x00\x00\x08"); // header, IFD at 8
+            p.extend_from_slice(b"\x00\x01"); // 1 entry
+            p.extend_from_slice(b"\x01\x00\x00\x03\x00\x00\x00\x01\x00\x01\x00\x00");
+            p.extend_from_slice(b"\x00\x00\x00\x00"); // no next IFD
+        } else {
+            p.extend_from_slice(b"II\x2a\x00\x08\x00\x00\x00");
+            p.extend_from_slice(b"\x01\x00");
+            p.extend_from_slice(b"\x00\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00");
+            p.extend_from_slice(b"\x00\x00\x00\x00");
+        }
+        p
+    }
+
+    /// ExifByteOrder comes from `ProcessTIFF` itself, at normal priority
+    /// (ExifTool.pm:8702, :9562-9564), so with two TIFF-bearing uuid boxes
+    /// the LAST one's byte order is displayed. `t/images/Jpeg2000.jp2` is the
+    /// real-file pin (GeoJP2 `II` at offset 77, UUID-EXIF `MM` at 1914,
+    /// oracle prints `Big-endian (Motorola, MM)`); this exercises both
+    /// orders. Directory tags keep priority 0, so the first box still wins
+    /// those (the 1x1 GeoTIFF stub must not beat `ihdr` -- see
+    /// EMBEDDED_TIFF_PRIORITY).
+    #[test]
+    fn last_uuid_box_wins_exif_byte_order() {
+        let geojp2 = uuid_tiff_payload(UUID_GEOJP2, false); // II
+        let exif = uuid_tiff_payload(UUID_EXIF, true); // MM
+
+        let mut metadata = MetadataMap::new();
+        uuid_box(&geojp2, &mut metadata);
+        uuid_box(&exif, &mut metadata);
+        assert_eq!(
+            metadata.get_string("File:ExifByteOrder"),
+            Some("Big-endian (Motorola, MM)"),
+            "file order GeoJP2(II) then EXIF(MM): the later box must win"
+        );
+
+        let mut metadata = MetadataMap::new();
+        uuid_box(&exif, &mut metadata);
+        uuid_box(&geojp2, &mut metadata);
+        assert_eq!(
+            metadata.get_string("File:ExifByteOrder"),
+            Some("Little-endian (Intel, II)"),
+            "file order EXIF(MM) then GeoJP2(II): the later box must win"
+        );
+    }
 
     #[test]
     fn bits_per_component_splits_sign_from_width() {
