@@ -6,6 +6,7 @@
 use super::{FileFormat, FileReader, MetadataMap, ReadOptions};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::archive::ar::parse_ar_metadata;
+use crate::parsers::archive::captureone::parse_eip_metadata;
 use crate::parsers::archive::gz::parse_gz_metadata;
 use crate::parsers::archive::iso::parse_iso_metadata;
 use crate::parsers::archive::ole::parse_ole_metadata;
@@ -191,6 +192,7 @@ pub fn dispatch_format_parser(
         FileFormat::RA => convert_string_error(parse_real_audio_metadata(reader), "RA"),
         FileFormat::DSS => convert_string_error(parse_dss_metadata(reader), "DSS"),
         FileFormat::ZIP => convert_string_error(parse_zip_metadata(reader), "ZIP"),
+        FileFormat::EIP => convert_string_error(parse_eip_metadata(reader), "EIP"),
         FileFormat::DOCX => convert_string_error(parse_docx_metadata(reader), "DOCX"),
         FileFormat::XLSX => convert_string_error(parse_xlsx_metadata(reader), "XLSX"),
         FileFormat::PPTX => convert_string_error(parse_pptx_metadata(reader), "PPTX"),
