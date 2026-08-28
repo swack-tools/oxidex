@@ -691,6 +691,33 @@ duplicate-loss-scan *args:
     uv run tools/exiftool-tables/duplicate_loss_scan.py "$CORPUS" \
         --oxidex ./target/debug/oxidex {{args}}
 
+# PROJECTION 2 of the same instrument: the occurrence-parity fixtures.
+#
+# KNOWN FAILING BY DESIGN, and deliberately NOT part of `just ci`, `ci-standard`
+# or `pre-commit` -- it is red on purpose until the three product defects named
+# in docs/TAG_MACHINERY_LEDGER_PLAN.md Stage 2B are fixed (tag_sink.rs:205,
+# tag_resolution.rs:511, quicktime/metadata_extractor.rs:1072). It exits 1 while
+# red, 3 if a control fails or the oracle disagrees with itself, and 0 only once
+# all three defects are closed -- so it can never be ratcheted into normality by
+# being wired somewhere that only checks for a zero exit.
+#
+# It also refuses to run without FLEET_EXPECT_OCCURRENCE_FAILURES=1, printing
+# what it would measure and exiting 64. This recipe sets it, because asking for
+# the recipe by name IS the opt-in.
+#
+# Does not run projection 1 (the corpus duplicate-loss scan above) and does not
+# touch conformance.py's winner/display baseline.
+#
+# Occurrence-parity fixtures (PROJECTION 2) -- KNOWN FAILING until Stage 2B lands
+duplicate-loss-fixtures *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Building oxidex (release: these fixtures assert on CLI output)..."
+    cargo build --release --bin oxidex
+    FLEET_EXPECT_OCCURRENCE_FAILURES=1 \
+    uv run tools/exiftool-tables/duplicate_loss_scan.py --fixtures \
+        --oxidex ./target/release/oxidex {{args}}
+
 # ExifTool Comparison
 # -------------------
 
