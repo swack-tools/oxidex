@@ -41,21 +41,24 @@
 #      updated after one -- see classify_failure() and the cache
 #      lookup/store calls below.
 set -u
-# GATE_VERSION bumped 4 -> 9: this pass changes gate BEHAVIOUR (the cache-hit
-# branch below now exits 1 on a cached non-PASS instead of exiting 0
+# GATE_VERSION bumped 4 -> "tip-5": this pass changes gate BEHAVIOUR (the
+# cache-hit branch below now exits 1 on a cached non-PASS instead of exiting 0
 # unconditionally), so verdicts written under the old semantics must not be
 # served under the new ones. gate_version is part of the verdict-cache key
 # precisely so that never happens; tools/fleet/gate_version.txt carries the
 # same value for the Python consumers (verdict.py, claim.py, fleetd.py).
 #
-# Why 9 and not 5: this file exists on two lines that share one verdict cache.
-# The Keel line (staging/agent-server) already consumed 5, 6, 7 and sits at 8
-# for unrelated semantics (the fleet-tests stage, then its 1800s budget). Bumping
-# this line to 5 would mint a key whose number already means something else on
-# the other line -- a silent cross-line cache hit with different gate semantics,
-# which is the exact failure the key is designed to prevent. 9 is the first
-# value unused by either line.
-GATE_VERSION="9"
+# WHY IT IS NAMESPACED, not just a bigger integer. This file exists on two
+# branches that share one verdict cache. A bare integer only avoids collision
+# by inspecting what the other line has already used -- a HISTORICAL check
+# that cannot stop the other line picking the same number tomorrow. The cache
+# key is a free-form string (verdict.py `verdict_ref` validates only non-empty,
+# no "/", not "." or ".."), so a per-line prefix makes a cross-line collision
+# STRUCTURALLY impossible instead of merely unobserved. This is the tip line
+# (refactor/tag-machinery); staging/agent-server keeps its own sequence and
+# should adopt its own prefix at its convenience. Within the namespace the
+# counter is just the successor to 4.
+GATE_VERSION="tip-5"
 BRANCH="$1"; TAG="$2"
 START_TS=$(date +%s)
 HOST=$(hostname)
