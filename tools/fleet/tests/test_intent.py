@@ -387,6 +387,32 @@ class TestAcceptance(IntentTestCase):
         self.assertIsNone(self.hub.sha(intent_ref("route-legacy-formats")))
 
     def test_genuinely_new_format_registers_fine(self):
+        # THE SAME GUARD AS `_require_uncovered_exemplar`, applied to this
+        # test's own format. This test hard-codes ZISRAW rather than using
+        # EXEMPLAR_FORMAT because it needs a format that is BOTH an open
+        # gap AND unmentioned in tip history (see the comment below), and
+        # DICOM -- the exemplar -- fails the second half now that
+        # staging/cov2-dicom has landed. Hard-coding it re-created the exact
+        # MRC failure mode the refresh above exists to fix: the coverage
+        # line closed ZISRAW (src/parsers/image/czi.rs, 146 -> 480 lines via
+        # staging/cov-wave-3) while this fixture went on asserting the gap
+        # was open, and the two only met at integration -- neither branch is
+        # red alone. Re-measure and skip loudly rather than assert a premise
+        # measured reality no longer supports.
+        _open_gap = ledger.measure_format(
+            REPO_ROOT, _ensure_binary_built(), ledger.ORACLE_SCRIPT, "ZISRAW")
+        if _open_gap.missing <= EXEMPLAR_MISSING_THRESHOLD:
+            raise unittest.SkipTest(
+                f"ZISRAW is no longer an open gap -- repoint me: it now measures "
+                f"MISSING={_open_gap.missing} (<= threshold "
+                f"{EXEMPLAR_MISSING_THRESHOLD}) under tools/fleet/ledger.py against a "
+                f"release build. This test needs a format that is BOTH still "
+                f"uncovered AND unmentioned in tip commit history (so check_history "
+                f"stays clean and the ledger is isolated); find one with "
+                f"`python3 tools/fleet/ledger.py --repo . --format <X>` and replace "
+                f"ZISRAW throughout this test."
+            )
+
         # ZISRAW is a REAL, currently-open gap: 31 of 34 comparable tags
         # are MISSING against the pinned oracle on ZISRAW.czi (verified by
         # hand while building this suite -- see the T1.4 report), and no
