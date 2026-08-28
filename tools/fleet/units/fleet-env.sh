@@ -47,3 +47,14 @@ export EXIFTOOL_CACHE_DIR
 # against config.verdict_store_failed_marker().
 : "${FLEET_VERDICT_STORE_FAILED_SUFFIX:=.verdict-store-failed}"
 export FLEET_VERDICT_STORE_FAILED_SUFFIX
+
+# PLAN Stage 3 task 7: the wrapper supervisor's own log path, shared by
+# fleetd-wrapper.sh (writer) and restart-fleetd.sh (reads it back to
+# report where to look) -- exactly the class of "two files, one literal"
+# duplication the rest of this file exists to close off, so it is
+# spelled here once instead of a third time. ~/.keel/log, not
+# ~/gatelogs -- SPEC SS2 C7: "logs go under ~/.keel/log/, never /tmp"
+# (that row is about the launchd plist, but the same directory is used
+# fleet-wide for the runner's own logs, including this wrapper's).
+: "${FLEETD_WRAPPER_LOG:=$HOME/.keel/log/runner-wrapper.log}"
+export FLEETD_WRAPPER_LOG

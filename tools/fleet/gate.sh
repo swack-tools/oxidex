@@ -303,6 +303,27 @@ RUSTC_ID=$(printf '%s\n' "$RUSTC_VV" | grep -v '^host:' | _sha256)
 HUB_URL="${FLEET_HUB_URL:-}"
 VERDICT_WORKDIR="${FLEET_VERDICT_CACHE_DIR:-$HOME/.cache/oxidex-fleet-verdict-cache}"
 
+# PLAN Stage 3 task 7: an OPTIONAL keel-server route for the verdict
+# cache -- "a gate can store its verdict through the server, falling
+# back to direct" (docs/AGENT-SERVER-SPEC.md SS4.3). Unset/empty (the
+# default on every host until a runner sets it) means "talk to the hub
+# directly", byte-for-byte the gate's behaviour before this flag existed
+# -- verdict.py's own `build_hub()` applies the identical
+# KEEL_SERVER_URL/KEEL_TOKEN_FILE env-var fallback, so a hand-run
+# `verdict.py` invocation and this script agree without gate.sh having
+# to duplicate that resolution logic. Does not change GATE_VERSION: the
+# checks that run, their order, and the verdict's own content are
+# unchanged -- only the transport a verdict travels over can differ.
+KEEL_SERVER_URL="${KEEL_SERVER_URL:-}"
+KEEL_TOKEN_FILE="${KEEL_TOKEN_FILE:-}"
+VERDICT_SERVER_ARGS=()
+if [ -n "$KEEL_SERVER_URL" ]; then
+  VERDICT_SERVER_ARGS+=(--server-url "$KEEL_SERVER_URL")
+  if [ -n "$KEEL_TOKEN_FILE" ]; then
+    VERDICT_SERVER_ARGS+=(--token-file "$KEEL_TOKEN_FILE")
+  fi
+fi
+
 TREE_SHA=""
 BASE_TIP=""
 WRITE_SET=""
@@ -383,6 +404,7 @@ store_verdict() {
   rm -f "$SV"
   if ! python3 "$SELF_DIR/verdict.py" store \
     --hub-url "$HUB_URL" --workdir "$VERDICT_WORKDIR" --json-file "$J" \
+    "${VERDICT_SERVER_ARGS[@]+"${VERDICT_SERVER_ARGS[@]}"}" \
     >> "$L" 2>&1; then
     echo "GATE: VERDICT STORE FAILED -- verdict.py could not push to $HUB_URL (non-fatal to this gate's own PASS/FAIL; see the output just above)" >> "$L"
     : > "$SV"
@@ -532,7 +554,8 @@ TREE_SHA=$(git rev-parse HEAD^{tree} 2>/dev/null || echo "")
 # re-run rather than being cached as a settled non-answer.
 CACHED_JSON=$(python3 "$SELF_DIR/verdict.py" lookup \
   --hub-url "$HUB_URL" --workdir "$VERDICT_WORKDIR" \
-  --tree-sha "$TREE_SHA" --gate-version "$GATE_VERSION" --platform-id "$PLATFORM_ID" 2>>"$L")
+  --tree-sha "$TREE_SHA" --gate-version "$GATE_VERSION" --platform-id "$PLATFORM_ID" \
+  "${VERDICT_SERVER_ARGS[@]+"${VERDICT_SERVER_ARGS[@]}"}" 2>>"$L")
 CACHE_STATUS=$?
 if [ "$CACHE_STATUS" -eq 0 ] && [ -n "$CACHED_JSON" ]; then
   CACHED_RESULT=$(printf '%s' "$CACHED_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result",""))' 2>/dev/null)

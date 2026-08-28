@@ -1,7 +1,11 @@
 # Cron backstop: starts fleetd-wrapper.sh (the persistent supervisor,
 # tools/fleet/units/fleetd-wrapper.sh) if it is not already running,
 # checked via the wrapper's own pid-file (~/.fleetd/wrapper.pid) --
-# NOT `fleetd --once`.
+# NOT `fleetd --once`. PLAN Stage 3 task 7: the wrapper itself now
+# launches keel/runner.py rather than fleetd.py (SPEC SS2 C7) and its
+# log moved from ~/gatelogs to ~/.keel/log -- this file's own cron line
+# is updated to match; the pid-file/backstop mechanics below are
+# unchanged.
 #
 # Why the change (T7, ARCH-FIX-SPEC.md R8). The OLD line below ran
 # `fleetd.py --once` unconditionally every 5 minutes:
@@ -60,4 +64,4 @@
 # equivalent value must be a literal, hand-substituted path.
 #
 # Add via `crontab -e`:
-*/5 * * * * pidfile="$HOME/.fleetd/wrapper.pid"; kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || (FLEET_HUB_URL=https://github.com/swack-tools/oxidex-fleet-state.git FLEET_CODE_URL=https://github.com/swack-tools/oxidex.git FLEET_GIT_TOKEN_FILE=$HOME/.keel/secrets/git-token nohup $HOME/fleet-checkout/tools/fleet/units/fleetd-wrapper.sh >> $HOME/gatelogs/fleetd-wrapper-cron.log 2>&1 &)
+*/5 * * * * pidfile="$HOME/.fleetd/wrapper.pid"; kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null || (mkdir -p "$HOME/.keel/log"; FLEET_HUB_URL=https://github.com/swack-tools/oxidex-fleet-state.git FLEET_CODE_URL=https://github.com/swack-tools/oxidex.git FLEET_GIT_TOKEN_FILE=$HOME/.keel/secrets/git-token nohup $HOME/fleet-checkout/tools/fleet/units/fleetd-wrapper.sh >> $HOME/.keel/log/runner-wrapper-cron.log 2>&1 &)

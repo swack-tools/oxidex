@@ -1,5 +1,8 @@
 #!/bin/bash
-# restart-fleetd.sh -- sanctioned, host-appropriate restart of fleetd.
+# restart-fleetd.sh -- sanctioned, host-appropriate restart of
+# keel-runner. PLAN Stage 3 task 7: fleetd.py -> keel/runner.py (SPEC
+# SS2 C7); the mechanism-selection logic and safety guarantees below are
+# unchanged -- only the process being restarted was renamed.
 #
 # Picks the right mechanism for THIS host rather than assuming one:
 #   - systemd --user unit installed (i7 `server`, and any other Linux
@@ -22,8 +25,14 @@
 set -u
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# PLAN Stage 3 task 7: FLEETD_WRAPPER_LOG's default lives in
+# fleet-env.sh, the ONE place shared with fleetd-wrapper.sh -- this
+# script only ever READS the wrapper's log location to report it, never
+# writes there itself, so a drift between two hand-kept defaults would
+# make this script's own messages point at the wrong file.
+. "$SELF_DIR/fleet-env.sh"
 PIDFILE="${FLEETD_WRAPPER_PIDFILE:-$HOME/.fleetd/wrapper.pid}"
-LOG="${FLEETD_WRAPPER_LOG:-$HOME/gatelogs/fleetd-wrapper.log}"
+LOG="$FLEETD_WRAPPER_LOG"
 STOP_TIMEOUT_S="${FLEETD_RESTART_STOP_TIMEOUT_S:-30}"
 
 has_systemd_unit() {

@@ -1,6 +1,11 @@
 #!/bin/bash
-# fleetd-wrapper.sh -- persistent supervisor for fleetd (ARCH-FIX-SPEC.md
-# R8), for hosts with NO systemd/launchd to restart it. (Historically the
+# fleetd-wrapper.sh -- persistent supervisor for keel-runner
+# (ARCH-FIX-SPEC.md R8), for hosts with NO systemd/launchd to restart it.
+# PLAN Stage 3 task 7: re-pointed from fleetd.py at keel/runner.py (SPEC
+# SS2 C7); every "fleetd" below still names the CLI/env/exit-code
+# contract the runner keeps unchanged (rc==0 graceful stop, "drain,
+# don't kill" live workers, etc.), not a stale reference -- only the
+# script path launched and the default log location changed. (Historically the
 # work2 pod: a k8s container with neither `systemctl --user` nor
 # `launchctl` and a generated `work2box-<hash>` hostname -- see
 # fleetd.py's `host_identity()` comment; removed from the fleet
@@ -42,10 +47,16 @@ set -u
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLEET_DIR="$(cd "$SELF_DIR/.." && pwd)"
+# PLAN Stage 3 task 7: FLEETD_WRAPPER_LOG's default (~/.keel/log/
+# runner-wrapper.log, not the old ~/gatelogs) lives in fleet-env.sh, the
+# ONE place shared with restart-fleetd.sh -- see that file's own comment.
+. "$SELF_DIR/fleet-env.sh"
 PIDFILE="${FLEETD_WRAPPER_PIDFILE:-$HOME/.fleetd/wrapper.pid}"
-LOG="${FLEETD_WRAPPER_LOG:-$HOME/gatelogs/fleetd-wrapper.log}"
+LOG="$FLEETD_WRAPPER_LOG"
 RETRY_SLEEP_S="${FLEETD_WRAPPER_RETRY_S:-5}"
 PYTHON="${FLEETD_WRAPPER_PYTHON:-python3}"
+# PLAN Stage 3 task 7: keel/runner.py, not fleetd.py -- SPEC SS2 C7.
+RUNNER_SCRIPT="$FLEET_DIR/keel/runner.py"
 
 mkdir -p "$(dirname "$PIDFILE")" "$(dirname "$LOG")"
 
@@ -90,7 +101,7 @@ trap forward_term TERM INT
 
 log "starting (hub=${FLEET_HUB_URL:-<unset>}, pid=$$)"
 while true; do
-  "$PYTHON" "$FLEET_DIR/fleetd.py" "$@" &
+  "$PYTHON" "$RUNNER_SCRIPT" "$@" &
   CHILD_PID=$!
   # `wait` on a specific pid returns EARLY, with the trapped signal's own
   # 128+signum status (143 for SIGTERM), the instant forward_term's trap
