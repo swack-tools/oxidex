@@ -3285,6 +3285,22 @@ fn is_powershot_ixus_ixy(model: &str) -> bool {
         .any(|needle| model.contains(needle))
 }
 
+/// Perl `$$self{Model} =~ /EOS-1DS?$/` — the two original EOS-1D bodies, and only
+/// those.
+///
+/// This is the exclusion half of `%Canon::ShotInfo` key 12's `CameraTemperature`
+/// Condition (Canon.pm:2868, `/EOS/ and !~ /EOS-1DS?$/`). The trailing `$` is
+/// load-bearing and is what separates the two bodies whose slot 12 is junk
+/// ("Canon EOS-1D", "Canon EOS-1Ds") from the nine later ones that share the
+/// "EOS-1D" prefix and do write a temperature there ("Canon EOS-1D X Mark II",
+/// "Canon EOS-1D C", "Canon EOS-1Ds Mark III", ...). The two excluded bodies spell
+/// themselves "Canon EOS-1D" and "Canon EOS-1DS" in IFD0 Model, which is the
+/// capitalisation `S?` is written for; ExifTool's own note on the key says
+/// "exceptions: 1D, 1DS".
+fn is_eos_1d_or_1ds_suffix(model: &str) -> bool {
+    model.ends_with("EOS-1D") || model.ends_with("EOS-1DS")
+}
+
 /// Formats a focal length value with units.
 ///
 /// Takes a raw focal length value and the focal units per mm,
@@ -3559,12 +3575,25 @@ fn camera_iso(value: i16) -> Option<String> {
 
 /// True for the bodies whose `%Canon::FileInfo` key 1 is a 20D/350D-style `FileNumber`.
 ///
-/// ExifTool Canon.pm:6850 — `Condition => '$$self{Model} =~ /\b(20D|350D|REBEL XT|Kiss
+/// ExifTool Canon.pm:6852 — `Condition => '$$self{Model} =~ /\b(20D|350D|REBEL XT|Kiss
 /// Digital N)\b/'`. The same set selects `%Canon::ShotInfo` key 22's first `ExposureTime`
-/// variant (Canon.pm:2968) and excludes `%Canon::Processing` key 2's `Sharpness`
-/// (Canon.pm:7217).
+/// variant (Canon.pm:2972) and excludes `%Canon::Processing` key 2's `Sharpness`
+/// (Canon.pm:7219). Key 1's *other* FileNumber branch is [`is_30d_or_400d`].
 fn is_20d_or_350d(model: &str) -> bool {
     ["20D", "350D", "REBEL XT", "Kiss Digital N"]
+        .iter()
+        .any(|needle| has_word(model, needle))
+}
+
+/// True for the bodies whose `%Canon::FileInfo` key 1 is a 30D/400D-style `FileNumber`.
+///
+/// ExifTool Canon.pm:6878 — `Condition => '$$self{Model} =~ /\b(30D|400D|REBEL
+/// XTi|Kiss Digital X|K236)\b/'`, the second of key 1's two FileNumber branches. The
+/// needle set is deliberately disjoint from [`is_20d_or_350d`]'s, and the trailing
+/// `\b` is what keeps "REBEL XTi" from being read as "REBEL XT" (and vice versa) —
+/// the two bodies use different bit layouts for the same 32 bits.
+fn is_30d_or_400d(model: &str) -> bool {
+    ["30D", "400D", "REBEL XTi", "Kiss Digital X", "K236"]
         .iter()
         .any(|needle| has_word(model, needle))
 }
@@ -5301,11 +5330,12 @@ fn parse_canon_makernote_impl_located_with_values(
     let base = canon_makernote_base(data, declared, byte_order, &config, dir_tiff_offset);
 
     // Several `%Canon` keys are model-conditional (`%Canon::FileInfo` key 1,
-    // `%Canon::ShotInfo` key 22, `%Canon::Processing` key 2, `%Canon::FocalLength` keys
-    // 2-3, and the `CustomFunctions*` table selection). ExifTool reads `$$self{Model}`
-    // from IFD0, which the MakerNote dispatcher does not pass down; CanonImageType
-    // (MakerNote tag 0x0006) carries the same body name, so resolve it up front rather
-    // than relying on the order entries happen to arrive in.
+    // `%Canon::ShotInfo` keys 5/12/22/33, `%Canon::Processing` key 2,
+    // `%Canon::FocalLength` keys 2-3, and the `CustomFunctions*` table selection).
+    // ExifTool reads `$$self{Model}`, the IFD0 DataMember (Exif.pm:595). CanonImageType
+    // (MakerNote tag 0x0006) is only a *fallback* for entry points that never receive
+    // it -- it is a different string, not a synonym (see `self_model` below) -- and is
+    // resolved here up front rather than relying on the order entries arrive in.
     let mut model = String::new();
     // `%Canon::CameraSettings` key 22 is ExifTool's `LensType` DATAMEMBER, which
     // `%Canon::CameraInfo*` MacroMagnification conditions on. It is read in the
@@ -5334,7 +5364,19 @@ fn parse_canon_makernote_impl_located_with_values(
     });
     let model = model;
     let camera_settings_lens_type = camera_settings_lens_type;
-    let camera_info_model = exif_model.filter(|m| !m.is_empty()).unwrap_or(&model);
+    // Stands in for ExifTool's `$$self{Model}` everywhere a `%Canon::*` Condition
+    // reads it. The IFD0 Model the dispatcher resolved is the real thing; the
+    // CanonImageType fallback exists only for the entry points that have no Model at
+    // all (`MakerNoteParser::parse`, reached from `tiff::file_parser`), where dropping
+    // to an empty string would silently lose every positively-gated key.
+    //
+    // The two strings are NOT interchangeable, which is the whole point of preferring
+    // the Model: CanonImageType is "IMG:<body> JPEG" on the compacts and the older
+    // EOS bodies (14 of the 131 EOS files in `combined-samples` differ from their
+    // Model), so any Condition anchored with `$` or matching the head of the string
+    // selects differently on the two. `%Canon::FocalLength` keys 2-3 were the
+    // measured case -- /\b(...|10D|...)$/ can never match a string ending "JPEG".
+    let self_model = exif_model.filter(|m| !m.is_empty()).unwrap_or(&model);
 
     // `%Canon::CameraInfo*` is PRIORITY => 0, so its values are collected apart
     // and only fill names no other Canon table produced. See `merge_priority0`.
@@ -5390,9 +5432,14 @@ fn parse_canon_makernote_impl_located_with_values(
             // ```
             CANON_SERIAL_NUMBER => {
                 let serial = entry.value_offset;
-                let rendered = if has_word(&model, "EOS D30") {
+                // Both Conditions read `$$self{Model}` (Canon.pm:1286/1295), so they
+                // take `self_model` rather than CanonImageType. Neither is anchored --
+                // `/EOS D30\b/` and `/EOS-1D/` are plain substrings that both string
+                // forms embed -- so this is a no-op on every `combined-samples` file;
+                // it is switched for correctness, not for a measured gain.
+                let rendered = if has_word(self_model, "EOS D30") {
                     format!("{:04x}{:05}", serial >> 16, serial & 0xffff)
-                } else if model.contains("EOS-1D") {
+                } else if self_model.contains("EOS-1D") {
                     format!("{:06}", serial)
                 } else {
                     format!("{:010}", serial)
@@ -5966,9 +6013,18 @@ fn parse_canon_makernote_impl_located_with_values(
                     // and ($val or $$self{Model}=~/(EOS|PowerShot|IXUS|IXY)/))? $val :
                     // undef'` (Canon.pm:2822) -- omit for the sentinel < -1000, and for
                     // a literal 0 unless the model is one that actually writes this key.
+                    //
+                    // `$$self{Model}`, so `self_model`. The two strings do select
+                    // differently here: `CanonDIGITAL_IXUS.jpg`, `CanonIXY_DIGITAL.jpg`
+                    // and `CanonPowerShotS100.jpg` write CanonImageType "IMG:JPEG file"
+                    // and `CanonPowerShotA50.jpg` writes "AUT:Full automatic mode" --
+                    // none of which contains PowerShot/IXUS/IXY, while all four Models
+                    // do. All four happen to carry a non-zero slot 5, so the `$val or`
+                    // arm already passed and the printed value is unchanged: the gate
+                    // was wrong, the output was not.
                     if let Some(&target_shutter) = array.get(SHOT_INFO_TARGET_EXPOSURE_TIME)
                         && target_shutter > -1000
-                        && (target_shutter != 0 || is_eos_powershot_ixus_ixy(&model))
+                        && (target_shutter != 0 || is_eos_powershot_ixus_ixy(self_model))
                     {
                         tags.insert(
                             "Canon:TargetExposureTime".to_string(),
@@ -6022,13 +6078,24 @@ fn parse_canon_makernote_impl_located_with_values(
                         );
                     }
 
-                    // CameraTemperature (index 12). Canon.pm emits it only
-                    // for EOS bodies other than EOS-1D/1DS, suppresses a raw
-                    // zero, then converts the stored offset temperature.
+                    // CameraTemperature (index 12). ExifTool Canon.pm:2868:
+                    // `Condition => '$$self{Model} =~ /EOS/ and $$self{Model} !~
+                    // /EOS-1DS?$/'`, then `RawConv => '$val ? $val : undef'` and
+                    // `ValueConv => '$val - 128'`.
+                    //
+                    // The exclusion is anchored to the END of the model name, and
+                    // reading it as a bare substring is what suppressed this tag on the
+                    // whole 1D *line*: only the original "Canon EOS-1D" and
+                    // "Canon EOS-1Ds" are excluded, while "Canon EOS-1D X Mark II",
+                    // "Canon EOS-1D X Mark III" and "Canon EOS-1D C" all continue past
+                    // "EOS-1D" and so match ExifTool's Condition. Those three lost their
+                    // `Canon:CameraTemperature` entirely under the unanchored test (the
+                    // other 1D bodies in the corpus happen to source the same tag from
+                    // a `%Canon::CameraInfo*` record instead, which masked it).
                     if let Some(&raw_temperature) = array.get(SHOT_INFO_CAMERA_TEMPERATURE)
                         && raw_temperature != 0
-                        && model.contains("EOS")
-                        && !model.contains("EOS-1D")
+                        && self_model.contains("EOS")
+                        && !is_eos_1d_or_1ds_suffix(self_model)
                     {
                         tags.insert(
                             "Canon:CameraTemperature".to_string(),
@@ -6137,11 +6204,17 @@ fn parse_canon_makernote_impl_located_with_values(
 
                     // ExposureTime (index 22). ExifTool has two variants of this key: the
                     // 20D/350D encoding carries an extra *1000/32 factor (Canon.pm:2965).
+                    //
+                    // `$$self{Model}`, so `self_model`. All eight corpus bodies matching
+                    // `/\b(20D|350D|REBEL XT|Kiss Digital N)\b/` write their Model
+                    // verbatim into CanonImageType, so the switch is a no-op here today;
+                    // it is made because the two strings are not the same string, not
+                    // because a file changes.
                     if let Some(&exposure_time) = array.get(SHOT_INFO_EXPOSURE_TIME)
                         && exposure_time != 0
                     {
                         let base = (-canon_ev(exposure_time as i32) * std::f64::consts::LN_2).exp();
-                        let seconds = if is_20d_or_350d(&model) {
+                        let seconds = if is_20d_or_350d(self_model) {
                             base * 1000.0 / 32.0
                         } else {
                             base
@@ -6222,7 +6295,7 @@ fn parse_canon_makernote_impl_located_with_values(
                     // 0x0004 before 0x4001; the same order falls out here from IFD entry
                     // order, since Canon writes its directory sorted by tag id.
                     if let Some(&flash_output) = array.get(SHOT_INFO_FLASH_OUTPUT)
-                        && (flash_output != 0 || is_powershot_ixus_ixy(camera_info_model))
+                        && (flash_output != 0 || is_powershot_ixus_ixy(self_model))
                     {
                         tags.insert("Canon:FlashOutput".to_string(), flash_output.to_string());
                     }
@@ -6364,25 +6437,60 @@ fn parse_canon_makernote_impl_located_with_values(
                     extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
                         .map(realign_length_prefixed_record)
                 {
-                    // FileNumber (Perl key 1) is an int32u spanning int16 slots 1-2 on the
-                    // 20D/350D family, with the bit layout documented at Canon.pm:6862:
-                    //
-                    // ```text
-                    //   31....24 23....16 15.....8 7......0
-                    //   00000000 ffffffff DDDDDDDD ddFFFFFF
-                    // ```
-                    let file_number_is_known = is_20d_or_350d(&model);
-                    if file_number_is_known
-                        && let (Some(&low), Some(&high)) = (array.get(1), array.get(2))
-                    {
+                    // FileNumber (Perl key 1) is an int32u spanning int16 slots 1-2, and
+                    // Canon.pm:6849 makes it a two-branch Condition list on
+                    // `$$self{Model}` -- two different bit layouts, neither of which is
+                    // a fallback for the other. Both read `self_model`, not
+                    // CanonImageType.
+                    let file_number_is_known =
+                        is_20d_or_350d(self_model) || is_30d_or_400d(self_model);
+                    if let (Some(&low), Some(&high)) = (array.get(1), array.get(2)) {
                         let raw = ((high as u16 as u32) << 16) | (low as u16 as u32);
-                        let value = ((raw & 0xffc0) >> 6) * 10000
-                            + ((raw >> 16) & 0xff)
-                            + ((raw & 0x3f) << 8);
-                        tags.insert(
-                            "Canon:FileNumber".to_string(),
-                            format_canon_file_number(value),
-                        );
+                        // Branch 1 (Canon.pm:6852), `/\b(20D|350D|REBEL XT|Kiss Digital
+                        // N)\b/`, bit layout at Canon.pm:6860:
+                        //
+                        // ```text
+                        //   31....24 23....16 15.....8 7......0
+                        //   00000000 ffffffff DDDDDDDD ddFFFFFF
+                        // ```
+                        let value = if is_20d_or_350d(self_model) {
+                            Some(
+                                ((raw & 0xffc0) >> 6) * 10000
+                                    + ((raw >> 16) & 0xff)
+                                    + ((raw & 0x3f) << 8),
+                            )
+                        } else if is_30d_or_400d(self_model) {
+                            // Branch 2 (Canon.pm:6878), `/\b(30D|400D|REBEL XTi|Kiss
+                            // Digital X|K236)\b/`, layout at Canon.pm:6890:
+                            //
+                            // ```text
+                            //   31....24 23....16 15.....8 7......0
+                            //   00000000 ffff0000 ddddddFF FFFFFFFF
+                            // ```
+                            //
+                            // The directory number's top 4 bits are not in the record at
+                            // all, so ExifTool repairs what it can rather than reporting
+                            // the truncated number: `$d += 0x40 while $d < 100`
+                            // (Canon.pm:6898), which is exact below 164 and wrong above
+                            // it -- its own Notes say so. This mirrors the Perl rather
+                            // than improving on it.
+                            let mut directory = (raw & 0xffc00) >> 10;
+                            while directory < 100 {
+                                directory += 0x40;
+                            }
+                            Some(directory * 10000 + ((raw & 0x3ff) << 4) + ((raw >> 20) & 0x0f))
+                        } else {
+                            // Every other body falls through to key 1's remaining
+                            // branches, which are `ShutterCount`, not FileNumber
+                            // (Canon.pm:6909-6924) -- omitted rather than guessed.
+                            None
+                        };
+                        if let Some(value) = value {
+                            tags.insert(
+                                "Canon:FileNumber".to_string(),
+                                format_canon_file_number(value),
+                            );
+                        }
                     }
 
                     // BracketMode (Perl key 3)
@@ -6501,6 +6609,11 @@ fn parse_canon_makernote_impl_located_with_values(
 
                     // Legacy ShutterCount heuristic: slots 2-3 have no counterpart in
                     // %Canon::FileInfo, so only keep it where key 1 is not a FileNumber.
+                    // "Not a FileNumber" means neither of key 1's two FileNumber
+                    // branches matched -- reading only the 20D/350D one left the 30D/
+                    // 400D/REBEL XTi/Kiss Digital X/K236 bodies emitting a ShutterCount
+                    // of 128 or 240 that ExifTool does not report at all, on top of the
+                    // FileNumber they were missing.
                     if !file_number_is_known
                         && let (Some(&low), Some(&high)) = (
                             array.get(FILE_INFO_SHUTTER_COUNT_LOW),
@@ -6696,7 +6809,7 @@ fn parse_canon_makernote_impl_located_with_values(
                         entry.field_type,
                         entry.value_count,
                         byte_order,
-                        camera_info_model,
+                        self_model,
                         camera_settings_lens_type,
                     );
                 }
@@ -6937,7 +7050,7 @@ fn parse_canon_makernote_impl_located_with_values(
                         // cameras)" comment at Canon.pm:6496 means: an EOS body reaches
                         // key 11, matches neither branch, and the record ends. Both
                         // branches require `$$self{Model} !~ /EOS/`.
-                        if !camera_info_model.contains("EOS") {
+                        if !self_model.contains("EOS") {
                             let after_focus = focus_start + focus_words;
                             if af_info_count == AF_INFO_COUNT_WITH_UNKNOWN_TAIL {
                                 // Branch 2 (Canon.pm:6489-6495): `Canon_AFInfo_0x000b`,
@@ -7066,7 +7179,7 @@ fn parse_canon_makernote_impl_located_with_values(
                             );
                         }
                         let selected_start = focus_start + focus_words;
-                        if camera_info_model.contains("EOS") {
+                        if self_model.contains("EOS") {
                             if array.len() >= selected_start + focus_words {
                                 tags.insert(
                                     "Canon:AFPointsSelected".to_string(),
@@ -7127,11 +7240,11 @@ fn parse_canon_makernote_impl_located_with_values(
             // `EOS-1D` condition is Canon.pm:1502's alternative path, not the one real
             // files use.
             CANON_CUSTOM_FUNCTIONS => {
-                let table = select_canon_custom_functions_table(camera_info_model);
+                let table = select_canon_custom_functions_table(self_model);
                 if let Some(array) =
                     extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
                 {
-                    apply_canon_custom_functions(table, &array, camera_info_model, &mut tags);
+                    apply_canon_custom_functions(table, &array, self_model, &mut tags);
                 }
             }
 
@@ -7146,7 +7259,7 @@ fn parse_canon_makernote_impl_located_with_values(
                     apply_canon_custom_functions(
                         CanonCustomFunctionsTable::OneD,
                         &array,
-                        camera_info_model,
+                        self_model,
                         &mut tags,
                     );
                 }
@@ -7157,10 +7270,7 @@ fn parse_canon_makernote_impl_located_with_values(
             CANON_CUSTOM_FUNCTIONS2 => {
                 if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base) {
                     custom_functions2::parse_custom_functions2(
-                        bytes,
-                        byte_order,
-                        camera_info_model,
-                        &mut tags,
+                        bytes, byte_order, self_model, &mut tags,
                     );
                 }
             }
@@ -8420,6 +8530,234 @@ mod tests {
         // %Canon::FileInfo defines neither of these - they must not be invented.
         assert_eq!(result.get("Canon:LensType"), None);
         assert_eq!(result.get("Canon:ShutterCount"), None);
+    }
+
+    /// Wraps a `CanonImageType` string (MakerNote tag 0x0006) and one SHORT-array
+    /// record in a two-entry Canon MakerNote, so a test can make the two candidate
+    /// sources of ExifTool's `$$self{Model}` — the IFD0 Model the dispatcher passes
+    /// down, and tag 0x0006 — disagree on purpose.
+    fn canon_makernote_with_image_type_and_record(
+        image_type: &str,
+        tag: u16,
+        values: &[i16],
+    ) -> Vec<u8> {
+        // 5 signature + 2 entry count + 2 * 12 entry + 4 next-IFD.
+        const HEADER: u32 = 35;
+        let mut string_bytes = image_type.as_bytes().to_vec();
+        string_bytes.push(0);
+        if string_bytes.len() % 2 == 1 {
+            string_bytes.push(0);
+        }
+
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Canon");
+        data.extend_from_slice(&[0x02, 0x00]); // 2 entries
+        data.extend_from_slice(&CANON_IMAGE_TYPE.to_le_bytes());
+        data.extend_from_slice(&[0x02, 0x00]); // Type: ASCII
+        data.extend_from_slice(&(string_bytes.len() as u32).to_le_bytes());
+        data.extend_from_slice(&HEADER.to_le_bytes());
+        data.extend_from_slice(&tag.to_le_bytes());
+        data.extend_from_slice(&[0x03, 0x00]); // Type: SHORT
+        data.extend_from_slice(&(values.len() as u32).to_le_bytes());
+        data.extend_from_slice(&(HEADER + string_bytes.len() as u32).to_le_bytes());
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next IFD
+        data.extend_from_slice(&string_bytes);
+        for value in values {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data
+    }
+
+    /// A `%Canon::ShotInfo` record long enough to reach key 12, carrying `raw` there.
+    fn shot_info_with_camera_temperature(raw: i16) -> Vec<i16> {
+        let mut values = vec![0i16; 27];
+        values[0] = (values.len() * 2) as i16; // the record's own declared byte length
+        values[SHOT_INFO_CAMERA_TEMPERATURE] = raw;
+        values
+    }
+
+    /// `%Canon::ShotInfo` key 12's Condition (Canon.pm:2868) is
+    /// `$$self{Model} =~ /EOS/ and $$self{Model} !~ /EOS-1DS?$/`, and the trailing `$`
+    /// decides the whole 1D line.
+    ///
+    /// Reading the exclusion as a bare `contains("EOS-1D")` suppresses
+    /// `Canon:CameraTemperature` on every body whose name merely *starts* "EOS-1D",
+    /// which is all of them except the two the Perl actually excludes. Measured against
+    /// the pinned 13.59 oracle
+    /// (`/tmp/oxidex-exiftool-cache/exiftool-pinned.sh -s3 -Canon:CameraTemperature`),
+    /// three `combined-samples` files lost the tag outright:
+    /// `Canon/CanonEOS-1D_XMarkII.jpg` (29 C), `Canon/CanonEOS-1D_XMarkIII.jpg` (24 C)
+    /// and `Canon/CanonEOS-1D_C.jpg` (31 C).
+    #[test]
+    fn test_camera_temperature_1d_exclusion_is_end_anchored() {
+        // Raw 152 -> ValueConv 152 - 128 -> PrintConv "24 C".
+        let record = shot_info_with_camera_temperature(152);
+        let data =
+            canon_makernote_with_image_type_and_record("IMG:ignored", CANON_SHOT_INFO, &record);
+
+        // The only two bodies /EOS-1DS?$/ matches, spelled as they appear in IFD0
+        // Model on Canon/CanonEOS-1D.jpg and Canon/CanonEOS-1DS.jpg.
+        for excluded in ["Canon EOS-1D", "Canon EOS-1DS"] {
+            let result = parse_canon_makernote_impl_with_model(
+                &data,
+                ByteOrder::LittleEndian,
+                Some(excluded),
+            )
+            .unwrap();
+            assert_eq!(
+                result.get("Canon:CameraTemperature"),
+                None,
+                "{excluded} is excluded by /EOS-1DS?$/"
+            );
+        }
+
+        // Everything else on the 1D line continues past "EOS-1D", so the anchored
+        // exclusion does not reach it.
+        for admitted in [
+            "Canon EOS-1D X Mark II",
+            "Canon EOS-1D X Mark III",
+            "Canon EOS-1D C",
+            "Canon EOS-1D Mark IV",
+            "Canon EOS-1Ds Mark III",
+            "Canon EOS 5D Mark IV",
+        ] {
+            let result = parse_canon_makernote_impl_with_model(
+                &data,
+                ByteOrder::LittleEndian,
+                Some(admitted),
+            )
+            .unwrap();
+            assert_eq!(
+                result.get("Canon:CameraTemperature"),
+                Some(&"24 C".to_string()),
+                "{admitted} matches /EOS/ and is not excluded by /EOS-1DS?$/"
+            );
+        }
+
+        // A non-EOS body fails the positive half and reports nothing.
+        let result = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon PowerShot S100"),
+        )
+        .unwrap();
+        assert_eq!(result.get("Canon:CameraTemperature"), None);
+    }
+
+    /// Byte-for-byte the `CanonFileInfo` record of
+    /// `/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS30D.jpg`, as dumped by
+    /// the pinned `exiftool -v3`:
+    ///
+    /// ```text
+    ///   | | |     - Tag 0x0093 (32 bytes, int16u[16] read as undef[32]):
+    ///   | | |         0958: 20 00 7c 9c 80 00 00 00 00 00 00 00 ff ff ff ff
+    ///   | | |         0968: 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    /// ```
+    ///
+    /// `%Canon::FileInfo` key 1 is a two-branch Condition list, and this body takes the
+    /// second branch (Canon.pm:6878, `/\b(30D|400D|REBEL XTi|Kiss Digital X|K236)\b/`) —
+    /// a different bit layout from the 20D/350D one, not a variant of it. Only the first
+    /// branch was implemented, so five `combined-samples` files reported no FileNumber at
+    /// all (30D, 400D, K236, Kiss Digital X, DIGITAL REBEL XTi) while four of them
+    /// reported a `Canon:ShutterCount` from the legacy slot-2/3 heuristic that ExifTool
+    /// does not emit.
+    #[test]
+    fn test_file_number_30d_variant() {
+        #[rustfmt::skip]
+        let record: Vec<i16> = [
+            0x0020u16, 0x9c7c, 0x0080, 0x0000, 0x0000, 0x0000, 0xffff, 0xffff,
+            0x0004, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        ]
+        .iter()
+        .map(|&word| word as i16)
+        .collect();
+        let data =
+            canon_makernote_with_image_type_and_record("IMG:ignored", CANON_FILE_INFO, &record);
+
+        let result = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon EOS 30D"),
+        )
+        .unwrap();
+        // Exactly what the pinned oracle prints for this file.
+        assert_eq!(
+            result.get("Canon:FileNumber"),
+            Some(&"103-1992".to_string())
+        );
+        // ExifTool reports no ShutterCount here: key 1 consumed slots 1-2 as the
+        // FileNumber, and %Canon::FileInfo key 3 is BracketMode.
+        assert_eq!(result.get("Canon:ShutterCount"), None);
+
+        // A body in neither branch keeps the legacy heuristic and gets no FileNumber.
+        let other = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon EOS 5D Mark IV"),
+        )
+        .unwrap();
+        assert_eq!(other.get("Canon:FileNumber"), None);
+    }
+
+    /// Every `%Canon::*` Condition spelled `$$self{Model}` reads the IFD0 Model
+    /// DataMember (Exif.pm:595), never MakerNote tag 0x0006 `CanonImageType`.
+    ///
+    /// The two are different strings: `Canon/CanonDIGITAL_IXUS.jpg`,
+    /// `Canon/CanonIXY_DIGITAL.jpg` and `Canon/CanonPowerShotS100.jpg` all write
+    /// `CanonImageType` as the bare "IMG:JPEG file", carrying no body name whatsoever,
+    /// while their Model names the camera. Gating on 0x0006 therefore fails *every*
+    /// positively-anchored Condition on such a file. The dispatcher-supplied Model is
+    /// what decides; 0x0006 stays the fallback for the entry points that receive none.
+    #[test]
+    fn test_model_conditional_gates_read_ifd0_model_not_image_type() {
+        let file_info: Vec<i16> = {
+            let mut values = vec![0i16; 16];
+            values[0] = 32;
+            values[1] = 0x9c7cu16 as i16;
+            values[2] = 0x0080;
+            values
+        };
+        let data = canon_makernote_with_image_type_and_record(
+            "IMG:JPEG file",
+            CANON_FILE_INFO,
+            &file_info,
+        );
+
+        // With the Model, key 1's 30D branch matches and the FileNumber appears.
+        let with_model = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon EOS 30D"),
+        )
+        .unwrap();
+        assert_eq!(
+            with_model.get("Canon:FileNumber"),
+            Some(&"103-1992".to_string())
+        );
+
+        // Without one, the CanonImageType fallback names no body, so no branch
+        // matches -- which is the pre-fix behaviour for *every* caller, Model or not.
+        let without_model =
+            parse_canon_makernote_impl_with_model(&data, ByteOrder::LittleEndian, None).unwrap();
+        assert_eq!(without_model.get("Canon:FileNumber"), None);
+
+        // Same split for %Canon::ShotInfo key 12's positive /EOS/ half.
+        let shot_info = shot_info_with_camera_temperature(152);
+        let data = canon_makernote_with_image_type_and_record(
+            "IMG:JPEG file",
+            CANON_SHOT_INFO,
+            &shot_info,
+        );
+        let with_model = parse_canon_makernote_impl_with_model(
+            &data,
+            ByteOrder::LittleEndian,
+            Some("Canon EOS 30D"),
+        )
+        .unwrap();
+        assert_eq!(
+            with_model.get("Canon:CameraTemperature"),
+            Some(&"24 C".to_string())
+        );
     }
 
     /// Wraps a single Canon MakerNote IFD entry holding a SHORT array.
