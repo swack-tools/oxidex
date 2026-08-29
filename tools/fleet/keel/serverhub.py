@@ -7,7 +7,12 @@ contract as `fleetlib.Hub` (SPEC §4.1: `sha, read, read_with_sha, create,
 update, delete, push_ref, list` -- plus `fetch_namespace`, which
 `fleetlib.Hub` also carries), over HTTP to a `keel-server`, so that
 `FallbackHub(primary=ServerHub, github=fleetlib.Hub)` can present the two
-routes as one hub. The server answers every write by executing the
+routes as one hub. That contract has NOT grown: `health`, `events` and
+`register` are server-only extras with no `fleetlib.Hub` counterpart and
+no `FallbackHub` counterpart -- a caller reaches them by asking for
+`FallbackHub.primary` (`keel.runner.server_client`), never through the
+fallback surface, precisely so the fallback surface keeps governing
+exactly the CAS writes it governs today (SPEC §4.3 r2). The server answers every write by executing the
 identical `Hub.create/update/delete` against the state repo and returning
 the sha GitHub produced, so a sha obtained via either route is valid on
 the other. Return-value semantics are `fleetlib.Hub`'s, byte for byte:
@@ -400,6 +405,40 @@ class ServerHub:
                 request_sent=True, status=status,
             )
         self._unexpected("GET", "/v1/health", status, body)
+
+    def register(self, runner_id: str, body: dict) -> dict:
+        """`POST /v1/runners/{id}/register` (SPEC §5.3 step 1) -- the
+        runner protocol's one outbound announcement. Returns the server's
+        reply dict, which today is `{boot_id, settle_until,
+        lease_expires_at}` (`server.handle_runner_register`); the
+        `capabilities`/`live_workers[]` we send are accepted and ignored
+        until the server half lands, and the CLIENT's use for the reply is
+        `boot_id` as the reconnect trigger.
+
+        NOT A CAS WRITE, and deliberately not reachable through
+        `FallbackHub`. There is no GitHub-side equivalent to fall back TO,
+        and routing an announcement that is idempotent by `{id}` through
+        `FallbackHub._write` would enlist it in the fail-closed ambiguous
+        classifier -- where any bounded retry around it becomes a re-issue
+        after an ambiguous outcome, which is exactly what SPEC §4.3 r2
+        forbids. Hence no `_require_expect_sha` call either: there is no
+        CAS witness here to require, and inventing one would be the first
+        step down that road.
+        """
+        path = f"/v1/runners/{urllib.parse.quote(str(runner_id), safe='')}/register"
+        status, resp = self._request("POST", path, body=body)
+        if status == 200 and isinstance(resp, dict):
+            return resp
+        if status == 200:
+            # Same guard `health` carries: a 200 whose body is not an
+            # object cannot answer the question that was asked, and
+            # returning it would hand the caller a `None` `boot_id` that
+            # reads as "the server rebooted" on the very next compare.
+            raise PrimaryFailure(
+                f"POST {path}: server answered 200 with a non-object body",
+                request_sent=True, status=status,
+            )
+        self._unexpected("POST", path, status, resp)
 
     def events(
         self, since: int = 0, *, follow: bool = False, timeout: Optional[float] = None,

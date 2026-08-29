@@ -1625,6 +1625,232 @@ def build_hub(
 
 
 # --------------------------------------------------------------------- #
+# Runner registration (SPEC SS5.3 step 1) -- OUTBOUND ONLY
+#
+# Three small functions and one rule: registration is best-effort, never
+# load-bearing. A runner whose registration never lands must still gate,
+# because gating is what a runner is for; the registration exists so the
+# server can stop believing itself unreachable (`election.note_registration`
+# is the only inbound proof that averts `demote_unreachable`) and, later,
+# so it can see this host's capabilities and live work.
+#
+# It travels on `ServerHub` ONLY, reached via `FallbackHub.primary`. It is
+# not a ref write and must never become one -- see `ServerHub.register`'s
+# docstring for why (SPEC SS4.3 r2), and `write_heartbeat` above for the one
+# write loop in this tree that is allowed to survive an ambiguous outcome,
+# which this must not be conflated with or attached to.
+# --------------------------------------------------------------------- #
+
+
+def server_client(hub) -> Optional[ServerHub]:
+    """The `ServerHub` inside `hub`, or `None` when no server is
+    configured.
+
+    THE ONE place that knows the hub chain's shape. `run_daemon`'s `hub`
+    parameter is duck-typed on purpose -- everything downstream of it
+    works against the eight-method coordination contract and must keep
+    working against a plain `fleetlib.Hub` -- so the knowledge that a
+    server-configured runner is holding a `FallbackHub` whose `.primary`
+    is a `ServerHub` lives here and nowhere else. `None` is the normal
+    answer on a hubless Stage-1 runner, not an error.
+    """
+    if isinstance(hub, FallbackHub) and isinstance(hub.primary, ServerHub):
+        return hub.primary
+    return None
+
+
+def live_workers_payload(workers: Sequence["Worker"]) -> list:
+    """`live_workers[]` (SPEC SS5.3, SS9's liveness join) built from the
+    IN-MEMORY `workers` list -- the join of claims x live pgids that
+    `adopt_workers` already computed and that `reconcile_once` keeps
+    current, and which costs nothing to read.
+
+    Deliberately NOT built from a hub claim listing. `CachedHub.list()`
+    and `fetch_namespace()` over `refs/fleet/claims/` are index-served
+    with no freshness test at all (cachedhub.py `list`/`fetch_namespace`);
+    the fresh-claims invariant covers `sha`/`read`/`read_with_sha` only.
+    That is safe for a consumer that then CASes against a live-read sha --
+    the CAS catches the staleness -- and it is NOT safe here, where the
+    listing would be the input to a liveness verdict with no CAS behind it
+    to catch the error.
+
+    `claim_sha`/`started_at` come off the `Claim` object's own recorded
+    state, the same two privates `election.status_fields` reads for the
+    same reason: they are the lease as this process holds it, and half of
+    them (`started_at`) is half the ownership token, compared downstream
+    as literal text.
+    """
+    out = []
+    for w in workers:
+        c = getattr(w, "claim", None)
+        started = getattr(c, "_started_at", None) if c is not None else None
+        out.append({
+            "claim_ref": getattr(c, "ref", None),
+            "claim_sha": getattr(c, "_sha", None),
+            "pgid": w.pgid,
+            "tag": w.tag,
+            "kind": w.kind,
+            "started_at": claim_mod._iso(started) if started is not None else None,
+        })
+    return out
+
+
+def registration_payload(host: str, workers: Sequence["Worker"], repo_root: Path,
+                         scope_token: str) -> dict:
+    """The body of `POST /v1/runners/{id}/register`: what this host is
+    (`capabilities`) and what it is running (`live_workers[]`, top level,
+    per SPEC SS5.3's shape).
+
+    NAME COLLISION, on purpose and worth knowing: `doctor.py` already has
+    a `registration_payload`, whose docstring says it exists so "a runner's
+    `register` call has both the summary numbers and the reasoning behind
+    each one". This is NOT that function and does not call it. `doctor`'s
+    takes a list of already-run `Check`s, one of which is an NTP round
+    trip, and this one is called from inside the reconcile loop, where a
+    network probe is a latency source the loop's whole reason for
+    existing (reap + lost-lease kill on a 15 s cadence) cannot afford. If
+    the two ever need to be the same numbers, the fix is for `doctor` to
+    call this, not the reverse.
+
+    WHAT IS DELIBERATELY ABSENT: the GATE's `platform_id`/`rustc_id` as
+    `gate_toolchain_ids` computes them. `check_toolchain_agreement` has
+    already compared them against this process's own ids at startup and
+    refused to start on a mismatch (`TOOLCHAIN_MISMATCH_RC`) unless
+    `FLEET_ALLOW_TOOLCHAIN_MISMATCH=1`, in which case the disagreement is
+    already durable in `HostWarnings` and therefore already in every
+    heartbeat. So on any runner that reaches this call the gate's ids are
+    either equal to the ones below or already reported elsewhere, and
+    re-deriving them here would spend a `bash` + `rustc -vV` (30 s
+    timeout) per registration inside that same loop to learn nothing new.
+    Omitted and said so rather than approximated.
+    """
+    mem = free_mem_gb()
+    return {
+        "id": host,
+        "capabilities": {
+            "owning_user": owning_user(),
+            # `claim`'s copies, not `toolchain`'s directly and not
+            # `verdict.compute_ids` -- the same two functions `fleetd`'s
+            # heartbeat payload calls, so this host's registered number and
+            # its heartbeat number are computed by literally one code path.
+            "platform_id": claim_mod.compute_platform_id(),
+            "rustc_id": claim_mod.compute_rustc_id(),
+            "cores": os.cpu_count(),
+            "free_disk_gb": round(free_disk_gb(), 1),
+            # -1.0 is `free_mem_gb`'s "unknowable" answer (macOS without
+            # psutil); it must not be reported as a real measurement.
+            "free_mem_gb": round(mem, 1) if mem >= 0 else None,
+            "oracle_ok": _oracle_ok(),
+            "gate_version": _gate_version(repo_root),
+            "scope_token": scope_token,
+        },
+        "live_workers": live_workers_payload(workers),
+    }
+
+
+def register_once(client, runner_id: str, payload: dict,
+                  log: Callable[[str], None]) -> Optional[dict]:
+    """ONE registration attempt. Returns the server's reply dict, or
+    `None` on any failure -- and NEVER raises into the caller.
+
+    Non-fatal is the entire contract. The retry policy is the reconcile
+    loop's own 15 s cadence and nothing else: no second retry ladder, no
+    second thread. The runner already has one bounded-failure counter with
+    a supervisor-visible exit (`RECONCILE_HUB_FAILURE_LIMIT`), and a
+    second, independent ladder around a call that is not load-bearing is a
+    second thing that can wedge.
+
+    The `except` is broader than this file's usual policy (the loop below
+    catches `HubError` only, so a bug in this tree takes the process down
+    loudly rather than being retried forever). That asymmetry is
+    deliberate and bounded to here: a defect in an ANNOUNCEMENT must not
+    stop a healthy host from gating. It is loud in the log, with the
+    exception type named, so it cannot pass for a quiet server outage.
+    """
+    try:
+        reply = client.register(runner_id, payload)
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        log(f"REGISTER failed ({type(exc).__name__}: {exc}) -- "
+            f"continuing unregistered; gating is unaffected")
+        return None
+    if not isinstance(reply, dict):
+        log(f"REGISTER answered a {type(reply).__name__}, not an object -- ignoring")
+        return None
+    return reply
+
+
+def _boot_id_changed(health: object, session: dict) -> bool:
+    """True when the server's advertised `boot_id` differs from the one
+    our last registration was answered with -- i.e. the process we are
+    talking to is not the process that holds our registration, so the
+    registration is gone and must be re-sent.
+
+    Its own named function for one reason: `tests/test_runner_register.py`
+    disables exactly this comparison as a negative control and requires
+    the reconnect test to go RED. A reconnect test that cannot fail proves
+    nothing.
+
+    A non-dict `health` answers False -- `ServerHub.health` already raises
+    on a 200 that is not an object, so reaching here with one would mean a
+    different client entirely, and guessing "the server rebooted" from an
+    unreadable answer would produce a re-register storm rather than a
+    reconnection.
+    """
+    if not isinstance(health, dict):
+        return False
+    return health.get("boot_id") != session.get("boot_id")
+
+
+def register_cycle(client, runner_id: str, session: dict,
+                   build_payload: Callable[[], dict],
+                   log: Callable[[str], None]) -> Optional[str]:
+    """One loop iteration's worth of registration. Mutates `session` in
+    place on success and returns why it registered (`"first"` or
+    `"reconnect"`), or `None` when it did not register or could not.
+
+    NEVER RAISES, and never touches the reconcile result. It runs AFTER
+    the reconcile step precisely so that a hung server -- `ServerHub`'s
+    budget is a 5 s connect plus a 20 s read, per call -- delays the NEXT
+    cycle rather than sitting between adoption and the first reap, where
+    `run_daemon` already argues (see `check_toolchain_agreement`'s call
+    site) that a second of avoidable latency is a live gate reported as an
+    orphan and killed.
+
+    `build_payload` is a callable, not a payload, so nothing is measured
+    on the cycles where no registration is sent -- which is nearly all of
+    them.
+    """
+    if client is None:
+        return None
+    reason = "first"
+    if session:
+        try:
+            health = client.health()
+        except Exception as exc:  # noqa: BLE001 -- best-effort, see docstring
+            log(f"REGISTER health probe failed ({type(exc).__name__}: {exc}) -- "
+                f"keeping the existing registration")
+            return None
+        if not _boot_id_changed(health, session):
+            return None
+        reason = "reconnect"
+    try:
+        payload = build_payload()
+    except Exception as exc:  # noqa: BLE001 -- an announcement must not stop gating
+        log(f"REGISTER payload build failed ({type(exc).__name__}: {exc})")
+        return None
+    reply = register_once(client, runner_id, payload, log)
+    if reply is None:
+        return None
+    session.clear()
+    session.update(reply)
+    log(f"REGISTERED ({reason}) boot_id={reply.get('boot_id')} "
+        f"settle_until={reply.get('settle_until')} "
+        f"lease_expires_at={reply.get('lease_expires_at')} "
+        f"live_workers={len(payload.get('live_workers') or [])}")
+    return reason
+
+
+# --------------------------------------------------------------------- #
 # Daemon shell: singleton + adoption + the bounded-failure loop
 # (verbatim from fleetd.main's body; fleetd.main now delegates here)
 # --------------------------------------------------------------------- #
@@ -1767,6 +1993,29 @@ def run_daemon(
 
     stop = {"flag": False}
 
+    # SPEC SS5.3 step 1. `server_client` is None on a hubless Stage-1
+    # runner, which is the normal case and not an error; everything below
+    # is then a no-op and this runner behaves exactly as it did before.
+    #
+    # DEFERRED BY CHOICE: the first attempt is made inside the loop, after
+    # the first reconcile, not here between the toolchain gate and the
+    # loop. `ServerHub`'s per-call budget is a 5 s connect plus a 20 s
+    # read, and this point in `run_daemon` is the one the comment above
+    # `check_toolchain_agreement` argues hardest about -- adoption has
+    # just raced a predecessor's claims against their TTL and the first
+    # reap has not happened yet, so up to 25 s spent here is a live gate
+    # reported as an orphan and killed. Registration is idempotent by
+    # `{id}` and its retry policy is this loop's own cadence, so one
+    # cycle's delay costs nothing that a failed first attempt would not
+    # have cost anyway. Building the state here (not in the loop) keeps
+    # the loop body free of setup.
+    reg_client = server_client(hub)
+    reg_session: dict = {}
+    reg_scope_token = fleet_scope_token(hub.url)
+
+    def _reg_log(msg: str) -> None:
+        print(f"{label}[{host}] {msg}", file=sys.stderr, flush=True)
+
     def _sigterm(_sig, _frm):
         stop["flag"] = True
 
@@ -1813,6 +2062,20 @@ def run_daemon(
                     file=sys.stderr,
                     flush=True,
                 )
+
+            # Registration rides this loop and nothing else -- after both
+            # log lines above, so a DEGRADED cycle re-registers too (a
+            # server that just came back is exactly the cycle we most want
+            # to announce ourselves on). `register_cycle` never raises and
+            # never touches `res`, `degraded` or `hub_failures`: the
+            # reconcile verdict for this step is already decided and
+            # printed above, and an announcement must not be able to
+            # change it.
+            register_cycle(
+                reg_client, host, reg_session,
+                lambda: registration_payload(host, workers, repo_root, reg_scope_token),
+                _reg_log,
+            )
 
             if singleton.lost:
                 # Our host lease is gone, so another daemon may already be

@@ -151,6 +151,7 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     kill_process_group,
     kill_worker,
     live_pgids,
+    live_workers_payload,
     owning_user,
     reap_dead_same_host_singleton,
     session_of,
@@ -161,6 +162,7 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     write_heartbeat,
 )
 import keel.runner as keel_runner  # noqa: E402
+from keel.fallbackhub import FallbackHub  # noqa: E402 -- heartbeat `fallback` block
 
 # --------------------------------------------------------------------- #
 # Constants (FLEET_PLAN.md "Shared contracts" is the authority)
@@ -1133,8 +1135,24 @@ def reconcile_once(
         # never spawned (`train.real_gate`, a hand-run `gate.sh`) surface
         # here too -- they surfaced NOWHERE before.
         "warnings": res.warnings,
+        # Keel 3R-1 step 8: the live-work join and the transport's own
+        # health, carried in the ref heartbeat that already exists.
+        #
+        # `live_workers` is built from the IN-MEMORY `workers` list, never
+        # from a hub claim listing -- see `keel.runner.live_workers_payload`
+        # for why an index-served listing is not admissible as the input to
+        # a liveness verdict.
+        "live_workers": live_workers_payload(workers),
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    if isinstance(hub, FallbackHub):
+        # `FallbackHub.status()`'s own docstring calls it "heartbeat-shaped";
+        # nothing had ever put it in a heartbeat. route, degraded_since (ISO
+        # or None), primary_failures, fallback_reads, fallback_writes,
+        # ambiguous_writes, last_primary_error. Absent entirely on a hubless
+        # runner rather than present-and-null: there is no fallback to report
+        # on, and a null would read as "healthy primary".
+        hb["fallback"] = hub.status()
     if any(isinstance(err, HubUnreachableError) for _, err in hub_failures):
         # The transport is already known to be down. `write_heartbeat`'s
         # ladder would spend PUSH_RETRIES * PUSH_BACKOFF_S (~24s) finding
