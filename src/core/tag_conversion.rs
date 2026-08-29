@@ -690,9 +690,36 @@ fn handle_rational_type(
     // downstream turns into "undef"; only a representable-quotient overflow is
     // intercepted here.)
     if denominator != 0 && (numerator > i32::MAX as u32 || denominator > i32::MAX as u32) {
-        return TagValue::new_string(exiftool_rational_number(
-            numerator as f64 / denominator as f64,
-        ));
+        let quotient = numerator as f64 / denominator as f64;
+        // Rendering the quotient to text here is only safe for a tag whose
+        // stored value *is* its ValueConv result. ApertureValue (Exif.pm:2327)
+        // and MaxApertureValue (Exif.pm:2350) are not such tags: both carry
+        // `ValueConv => '2 ** ($val / 2)'`, and a string never reaches
+        // [`crate::core::exiftool_compat::apex_value_conv`], which matches on
+        // the numeric variants. So the overflow guard was silently *skipping
+        // the APEX exponential* for exactly the values large enough to need
+        // it. Both reproduce against the pinned 13.59 oracle:
+        // `Samsung/SamsungDigimax210SE.jpg` stores ApertureValue as
+        // 4294967295/4294967295 and ExifTool prints `1.4` (2**0.5) where the
+        // stringified quotient printed `1`; `Canon/CanonEOS20Da.jpg` stores
+        // 2147483648/1 and ExifTool prints `Inf` where it printed
+        // `2147483648`, which then propagated a finite, plausible, wrong
+        // number through Composite:Aperture, HyperfocalDistance and
+        // LightValue.
+        //
+        // Keeping the number as a `Float` is what ExifTool does anyway --
+        // `GetRational64u` returns an NV and lets ValueConv/PrintConv run
+        // afterwards. It is done only for these two tags rather than for
+        // every overflowing rational because the string form above is load-
+        // bearing for the tags that have no ValueConv (OlympusOM-1.jpg's
+        // 0/4294967295 Acceleration and Pressure); widening it is a separate
+        // change with its own measurement.
+        const APERTURE_VALUE: u16 = 0x9202;
+        const MAX_APERTURE_VALUE: u16 = 0x9205;
+        if matches!(tag_id, APERTURE_VALUE | MAX_APERTURE_VALUE) {
+            return TagValue::Float(quotient);
+        }
+        return TagValue::new_string(exiftool_rational_number(quotient));
     }
 
     TagValue::new_rational(numerator as i32, denominator as i32)
@@ -1248,6 +1275,52 @@ fn format_gps_numeric_value(value: f64) -> String {
 mod tests {
     use super::*;
     use crate::parsers::tiff::ifd_parser::ByteOrder;
+
+    /// An APEX rational too large for `TagValue::Rational`'s i32 pair must
+    /// still reach `apex_value_conv` as a number.
+    ///
+    /// Both byte patterns are transcribed from the pinned 13.59 oracle's
+    /// `-v3` dump of the two corpus files that carry them. Stringifying the
+    /// quotient here -- what the generic overflow guard did -- skipped
+    /// `ValueConv => '2 ** ($val / 2)'` (Exif.pm:2327, 2350) entirely,
+    /// because `apex_value_conv` matches on the numeric variants.
+    #[test]
+    fn overflowed_apex_rational_survives_as_a_number() {
+        use crate::core::exiftool_compat::{apex_value_conv, format_tag_value};
+
+        // Canon/CanonEOS20Da.jpg, ExifIFD tag 0x9202: `2147483648/1`.
+        // `exiftool -G1 -s` prints `ApertureValue : Inf`.
+        let canon = [0x00, 0x00, 0x00, 0x80, 0x01, 0x00, 0x00, 0x00];
+        let stored = handle_rational_type(&canon, 1, 0x9202, ByteOrder::LittleEndian);
+        assert_eq!(stored, TagValue::Float(2147483648.0));
+        assert_eq!(
+            apex_value_conv("ApertureValue", &stored),
+            Some(TagValue::Float(f64::INFINITY))
+        );
+        assert_eq!(
+            format_tag_value("ExifIFD:ApertureValue", &stored),
+            TagValue::String("Inf".to_string())
+        );
+
+        // Samsung/SamsungDigimax210SE.jpg: `4294967295/4294967295`, an APEX
+        // 1 whose f-number is 2**0.5. `exiftool -G1 -s` prints `1.4`; the
+        // stringified quotient printed the APEX number itself, `1`.
+        let samsung = [0xff; 8];
+        let stored = handle_rational_type(&samsung, 1, 0x9202, ByteOrder::LittleEndian);
+        assert_eq!(stored, TagValue::Float(1.0));
+        assert_eq!(
+            format_tag_value("ExifIFD:ApertureValue", &stored),
+            TagValue::String("1.4".to_string())
+        );
+
+        // A tag with no ValueConv keeps the GetRational64u string form:
+        // OlympusOM-1.jpg's Pressure (Exif.pm:2544) is `0/4294967295`.
+        let pressure = [0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff];
+        assert_eq!(
+            handle_rational_type(&pressure, 1, 0x9402, ByteOrder::LittleEndian),
+            TagValue::String("0".to_string())
+        );
+    }
 
     #[test]
     fn samsung_galaxy_a55_timezone_offset_matches_pinned_exiftool() {

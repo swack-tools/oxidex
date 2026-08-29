@@ -566,6 +566,41 @@ pub fn perl_number(v: f64) -> String {
     perl_g(v, PERL_SIG_DIGITS)
 }
 
+/// Renders a float as C's `sprintf "%.<decimals>f"`, spelled the way Perl
+/// spells it.
+///
+/// `%f` on an infinity or a NaN is implementation-defined in C, and Perl and
+/// Rust made opposite choices of case: `sprintf("%.1f", 9**9**9)` is `Inf`
+/// where Rust's `format!("{:.1}", f64::INFINITY)` is `inf`. Every ExifTool
+/// `PrintConv` written as `sprintf("%.Nf", ...)` therefore needs this rather
+/// than a bare `{:.N}` on any path an infinity can reach -- an overflowed
+/// APEX `ApertureValue` puts one through `Composite:Aperture`,
+/// `Composite:HyperfocalDistance` and the `ApertureValue` PrintConv itself.
+///
+/// Perl prints no digits after the point for these three values, so the
+/// `decimals` argument is deliberately ignored for them; [`perl_g`] already
+/// uses the same three spellings.
+///
+/// # Examples
+///
+/// ```
+/// use oxidex::core::formatters::numeric_precision::perl_f;
+///
+/// assert_eq!(perl_f(2.8, 1), "2.8");
+/// assert_eq!(perl_f(f64::INFINITY, 1), "Inf");
+/// assert_eq!(perl_f(f64::NEG_INFINITY, 2), "-Inf");
+/// assert_eq!(perl_f(f64::NAN, 2), "NaN");
+/// ```
+pub fn perl_f(v: f64, decimals: usize) -> String {
+    if v.is_nan() {
+        return "NaN".to_string();
+    }
+    if v.is_infinite() {
+        return if v.is_sign_negative() { "-Inf" } else { "Inf" }.to_string();
+    }
+    format!("{v:.decimals$}")
+}
+
 /// Renders a float as C's `sprintf "%.<sig_digits>g"`.
 ///
 /// `perl_number` is this with Perl's default of 15 digits. ExifTool also
