@@ -210,10 +210,16 @@ class TestResolveEnvOverrides(RunnerTomlTestCase):
         self.assertEqual(cfg.max_gates, 3)
         self.assertIsNone(cfg.code_url)
 
-    def test_all_seven_env_vars_are_wired(self):
+    def test_every_env_var_is_wired(self):
         """One assertion per `ENV_VARS` entry -- a field added to
         `RunnerConfig` without a matching env override would silently
-        never be overridable, and this is the fence against that."""
+        never be overridable, and this is the fence against that.
+
+        Renamed from `test_all_seven_env_vars_are_wired` in Keel 3R-2:
+        the count was in the NAME, so growing the schema to ten meant the
+        fence's own title became false while it still passed. The
+        `set(env) == set(ENV_VARS.values())` assertion is the real fence
+        and does not need a number in front of it."""
         env = {
             "FLEET_HUB_URL": "https://env/hub.git",
             "FLEET_CODE_URL": "https://env/code.git",
@@ -222,6 +228,9 @@ class TestResolveEnvOverrides(RunnerTomlTestCase):
             "KEEL_TOKEN_FILE": "/env/server-token",
             "KEEL_MAX_GATES": "7",
             "KEEL_MAX_AGENTS": "9",
+            "KEEL_AUTONOMOUS_WHEN_SERVERLESS": "true",
+            "KEEL_RANK": "2",
+            "KEEL_SERVER_ELIGIBLE": "off",
         }
         self.assertEqual(set(env), set(runner_toml.ENV_VARS.values()))
         cfg = runner_toml.resolve(Path(self._tmp) / "does-not-exist.toml", env=env)
@@ -232,6 +241,66 @@ class TestResolveEnvOverrides(RunnerTomlTestCase):
         self.assertEqual(cfg.server_token_file, "/env/server-token")
         self.assertEqual(cfg.max_gates, 7)
         self.assertEqual(cfg.max_agents, 9)
+        self.assertIs(cfg.autonomous_when_serverless, True)
+        self.assertEqual(cfg.rank, 2)
+        self.assertIs(cfg.server_eligible, False)
+
+    def test_a_bool_env_var_refuses_a_value_nobody_can_read(self):
+        """`KEEL_AUTONOMOUS_WHEN_SERVERLESS=0` MUST NOT enable autonomy.
+
+        Under a truthiness test (`bool(os.environ.get(...))`) the string
+        "0" is True, so the one spelling an operator reaches for to turn
+        the feature off is the one that turns it on -- silently, on a host
+        that then schedules unilaterally. `_env_bool` parses the closed
+        set and raises on anything outside it.
+        """
+        missing = Path(self._tmp) / "does-not-exist.toml"
+        for raw, expected in (("0", False), ("false", False), ("off", False),
+                              ("no", False), ("1", True), ("TRUE", True),
+                              ("Yes", True), ("on", True)):
+            cfg = runner_toml.resolve(
+                missing, env={"KEEL_AUTONOMOUS_WHEN_SERVERLESS": raw})
+            self.assertIs(cfg.autonomous_when_serverless, expected,
+                          f"{raw!r} must parse as {expected}")
+        with self.assertRaises(runner_toml.RunnerTomlError) as ctx:
+            runner_toml.resolve(
+                missing, env={"KEEL_AUTONOMOUS_WHEN_SERVERLESS": "maybe"})
+        self.assertIn("is not a boolean", str(ctx.exception))
+
+    def test_the_new_tables_parse_and_an_old_file_still_parses(self):
+        """`[autonomy]`/`[server]` read, and a file that predates them is
+        unchanged -- `_from_toml` ignores unknown tables, so the
+        compatibility runs in BOTH directions and both are asserted."""
+        p = Path(self._tmp) / "new.toml"
+        p.write_text(
+            "[hub]\nurl = \"https://file/state.git\"\n"
+            "[autonomy]\nwhen_serverless = true\n"
+            "[server]\nurl = \"http://s:8470\"\nrank = 1\neligible = false\n"
+        )
+        cfg = runner_toml.load(p)
+        self.assertIs(cfg.autonomous_when_serverless, True)
+        self.assertEqual(cfg.rank, 1)
+        self.assertIs(cfg.server_eligible, False)
+        self.assertEqual(cfg.server_url, "http://s:8470")
+
+        old = Path(self._tmp) / "old.toml"
+        old.write_text("[hub]\nurl = \"https://file/state.git\"\n"
+                       "[limits]\nmax_gates = 1\n")
+        cfg_old = runner_toml.load(old)
+        self.assertEqual(cfg_old.max_gates, 1)
+        self.assertIsNone(cfg_old.autonomous_when_serverless,
+                          "an unset key is None -- 'not configured', never False")
+        self.assertIsNone(cfg_old.rank)
+        self.assertIsNone(cfg_old.server_eligible)
+
+    def test_a_toml_bool_field_refuses_an_integer(self):
+        """TOML has a real boolean type, so `when_serverless = 1` is a
+        mistake worth surfacing rather than silently reading as true."""
+        p = Path(self._tmp) / "int-bool.toml"
+        p.write_text("[autonomy]\nwhen_serverless = 1\n")
+        with self.assertRaises(runner_toml.RunnerTomlError) as ctx:
+            runner_toml.load(p)
+        self.assertIn("must be a boolean", str(ctx.exception))
 
     def test_env_token_file_is_also_tilde_expanded(self):
         cfg = runner_toml.resolve(

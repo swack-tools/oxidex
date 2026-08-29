@@ -36,6 +36,7 @@ them: all three tests looked like they were pinning something.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -44,6 +45,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -52,6 +54,8 @@ sys.path.insert(0, str(FLEET_DIR))
 
 import claim as claim_mod  # noqa: E402
 import fleetd  # noqa: E402
+import keel.runner as runner  # noqa: E402
+import workqueue  # noqa: E402
 from fleetlib import HubError  # noqa: E402
 from keel import journal as jr  # noqa: E402
 from _env import HermeticCase, scrub_env  # noqa: E402
@@ -63,6 +67,7 @@ GIT_ENV = {
 }
 HOST = "journalhost"
 OTHER_HOST = "some-other-host"
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Long enough that no renewer declares a lease lost in the middle of a
 # case that is not about that; the two cases that ARE about it set their
@@ -173,11 +178,11 @@ class JournalCase(HermeticCase):
         return ref
 
     def seed_claim_on_hub(self, hub, ref, *, host, pgid, started_at,
-                          expires_in=TTL):
+                          expires_in=TTL, work_key="staging/one"):
         now = datetime.now(timezone.utc)
         self.assertTrue(hub.create(ref, {
             "holder_host": host, "pid": pgid, "pgid": pgid,
-            "work_kind": "gate", "work_key": "staging/one",
+            "work_kind": "gate", "work_key": work_key,
             "started_at": started_at,
             "expires_at": iso(now + timedelta(seconds=expires_in)),
             "gate_version": "8", "rustc_id": "r", "platform_id": "p",
@@ -1029,6 +1034,436 @@ class TestAdoptAtStartup(JournalCase):
         self.assertEqual(res.journal_result.adopted, [])
         self.assertEqual(len(res.journal_result.to_release), 1)
         self.assertIsNone(orphan.poll(), "the offline runner sweeps nothing")
+
+
+# --------------------------------------------------------------------- #
+# Keel 3R-2 steps 2-7, 11-12: the wiring, driven through `run_daemon`
+#
+# Everything above this line exercises `keel/journal.py` directly. What
+# follows is about the thing that was MISSING at 612e7fbf: the module had
+# landed, was tested, and its own docstring called `adopt_at_startup`
+# "what `keel/runner.py` calls in place of" `adopt_workers(...)` /
+# `except HubError: return 5` -- and `keel/runner.py` never called it.
+# `rg adopt_at_startup tools/fleet` at that commit returned four hits, all
+# in `keel/journal.py` and `tests/test_journal.py`, and none in a caller.
+# --------------------------------------------------------------------- #
+
+
+class _StoreDownExceptSingleton:
+    """A hub proxy that models the window `rc 5` actually guarded.
+
+    THE MAP WAS WRONG ABOUT THIS AND IT IS WORTH BEING PRECISE. The
+    implementation map says an offline start "still returns rc 5". It does
+    not, and never did: `run_daemon` acquires the host singleton BEFORE
+    adoption, `Claim.acquire_or_reap` opens with `hub.sha(self.ref)`, and
+    the only exception `run_daemon` catches there is `ClaimHeldError` -- so
+    with BOTH routes down from the first instant, `run_daemon` raises
+    `HubUnreachableError` out of the singleton acquire and the adoption
+    block is never reached at all. Measured, not read: a probe calling
+    `runner.run_daemon` against an all-raising hub at 612e7fbf printed
+    `run_daemon RAISED HubUnreachableError`, not `returned rc=5`, and
+    `test_a_wholly_unreachable_store_still_raises_from_the_singleton`
+    below pins that this is still true and is NOT what this stage fixed.
+
+    So the reachable rc-5 window is: the store answers the host singleton
+    and is gone by the time adoption reads the claims namespace -- a store
+    that dies during startup, which is the ordinary shape of a store going
+    away. This proxy is exactly that window, and it is also what lets the
+    test drive the far more interesting half: the store COMING BACK, where
+    a runner holding journal-adopted workers must release what it owes
+    before it is allowed to spawn again.
+    """
+
+    def __init__(self, inner, singleton_ref: str):
+        self._inner = inner
+        self._singleton_ref = singleton_ref
+        self.down = True
+        self.url = inner.url
+        self.code_url = getattr(inner, "code_url", inner.url)
+
+    def _guard(self, name, ref=None):
+        if self.down and ref != self._singleton_ref:
+            raise HubError(f"simulated: store away during {name}({ref})")
+
+    def __getattr__(self, name):
+        inner_attr = getattr(self._inner, name)
+        if not callable(inner_attr):
+            return inner_attr
+
+        def proxied(*args, **kwargs):
+            ref = args[0] if args and isinstance(args[0], str) else None
+            self._guard(name, ref)
+            return inner_attr(*args, **kwargs)
+
+        return proxied
+
+
+@contextlib.contextmanager
+def spawn_allowed_short_circuit_disabled():
+    """NEGATIVE CONTROL (Keel 3R-2 step 12a). Disable EXACTLY the one
+    thing step 4 added: `reconcile_once` honouring `spawn_allowed`.
+
+    The wrapper forces `spawn_allowed=True` on every call and changes
+    nothing else -- same reap, same kill, same reads, same selection. An
+    offline runner that spawns IS the duplicate-gate bug (its claim cannot
+    be CAS-arbitrated, so it cannot know whether another host already
+    holds the branch), so the offline test MUST go red under this, and
+    must go red on the SPAWN assertion rather than on some incidental
+    difference. The test matches the assertion text to prove which.
+    """
+    real = fleetd.reconcile_once
+
+    def ignoring_spawn_allowed(*args, **kwargs):
+        kwargs["spawn_allowed"] = True
+        return real(*args, **kwargs)
+
+    with mock.patch.object(fleetd, "reconcile_once", ignoring_spawn_allowed):
+        yield
+
+
+class TestOfflineStartThroughRunDaemon(JournalCase):
+    """`run_daemon` end to end with the store away at startup.
+
+    Four properties, all through the production entry point rather than
+    against `adopt_at_startup` directly:
+
+      1. rc is NOT 5. The refusal-to-start is gone.
+      2. The live, identity-verified journaled group is ADOPTED -- it is in
+         `workers` with its real pgid, and its claim is a rebuilt, renewing
+         `Claim`, not a stub.
+      3. Nothing is swept and nothing is spawned while offline, even on a
+         cycle where the store has answered again but the owed releases
+         have not yet been settled.
+      4. On reconnect the owed CAS-delete is performed with
+         `release_pending`'s full re-verification, and only THEN do starts
+         resume.
+
+    The negative control for (3) is `spawn_allowed_short_circuit_disabled`.
+    """
+
+    #: The tip the queue measures against -- `workqueue.TIP_REF`, imported
+    #: rather than re-spelled so a rename cannot leave this fixture quietly
+    #: seeding a branch nothing reads.
+    TIP_REF = workqueue.TIP_REF
+
+    def seed_code_repo(self):
+        """A tip commit plus one staging branch, so `workqueue.compute`
+        has something to answer with. Without this the queue refuses with
+        `queue-unavailable` and NOTHING in this class can ever observe a
+        spawn -- which would make the negative control below pass for the
+        wrong reason (no gate started because no gate could start, rather
+        than because the short-circuit held)."""
+        work = self.tmp / "seed"
+        env = scrub_env(**GIT_ENV)
+        subprocess.run(["git", "init", "-q", str(work)], check=True, env=env)
+        (work / "f.txt").write_text("tip\n")
+        subprocess.run(["git", "-C", str(work), "add", "."], check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "commit", "-qm", "tip"],
+                       check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "push", "-q", str(self.bare),
+                        f"HEAD:{self.TIP_REF}"], check=True, env=env)
+        (work / "g.txt").write_text("branch\n")
+        subprocess.run(["git", "-C", str(work), "add", "."], check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "commit", "-qm", "branch work"],
+                       check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "push", "-q", str(self.bare),
+                        "HEAD:refs/heads/staging/one"], check=True, env=env)
+        (work / "h.txt").write_text("branch two\n")
+        subprocess.run(["git", "-C", str(work), "add", "."], check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "commit", "-qm", "branch two"],
+                       check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "push", "-q", str(self.bare),
+                        "HEAD:refs/heads/staging/two"], check=True, env=env)
+        # A THIRD branch, claimed by nobody, purely so the negative control
+        # has something it CAN spawn. Without it step 1's queue is empty by
+        # construction -- `staging/one` is held by the adopted worker and
+        # `staging/two` by the not-yet-released claim -- and disabling the
+        # short-circuit would change nothing observable, which is the
+        # blind-instrument failure the control exists to avoid.
+        (work / "i.txt").write_text("branch three\n")
+        subprocess.run(["git", "-C", str(work), "add", "."], check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "commit", "-qm", "branch three"],
+                       check=True, env=env)
+        subprocess.run(["git", "-C", str(work), "push", "-q", str(self.bare),
+                        "HEAD:refs/heads/staging/three"], check=True, env=env)
+
+    def setUp(self):
+        super().setUp()
+        # THE DEFAULT ROOT, not `JournalCase`'s explicit one. Every test
+        # above this class hands `Journal(root)` to the code under test;
+        # these drive `run_daemon`, which constructs its own `Journal()`
+        # with no argument -- so the fixture has to write where the
+        # PRODUCTION default resolves, or adoption reads an empty
+        # directory and the class silently tests nothing. That default is
+        # `$KEEL_HOME/journal`, and `HermeticEnvMixin.setUp` has already
+        # pointed `KEEL_HOME` at this test's own tempdir.
+        self.root = jr.default_root()
+        self.j = jr.Journal()
+        self.assertEqual(self.j.root, self.keel_home / "journal")
+        # `run_daemon` calls `adopt_at_startup` with NO markers argument,
+        # so the identity probe runs against the PRODUCTION
+        # `WORKER_MARKERS` -- which no stub in a tempdir can match. Every
+        # other class here passes `markers=[self.marker]` and never meets
+        # this; these tests cannot, because the whole point is to exercise
+        # the production call. `FLEET_WORKER_MARKERS` is the knob
+        # `worker_markers()` already reads, so the fixture declares its
+        # stub shape through the same door an operator would, rather than
+        # monkeypatching the constant.
+        os.environ["FLEET_WORKER_MARKERS"] = self.marker
+        # The bare repo is SEEDED BEFORE the hub is built, not after.
+        # `make_hub` fetches into a local object cache at construction, so
+        # a branch pushed afterwards is invisible to that cache and
+        # `workqueue.compute` answers an empty queue -- which would make
+        # the negative control below green for the wrong reason.
+        self.bare = build_bare(self.tmp)
+        self.seed_code_repo()
+        self.real_hub = make_hub(self, str(self.bare), workdir=self.tmp / "cache")
+        self.token = fleetd.fleet_scope_token(self.real_hub.url)
+        self.host = HOST
+        self.singleton_ref = claim_mod.claim_ref("host", self.host)
+        self.hub = _StoreDownExceptSingleton(self.real_hub, self.singleton_ref)
+        self.log_dir = self.tmp / "logs"
+        self.gate_stub = self.tmp / "stub-gate.sh"
+        self.gate_stub.write_text(
+            "#!/bin/bash\n"
+            f"STOP={self.tmp}/stop-$2\n"
+            f"ALL={self.tmp}/stop-all\n"
+            # The second condition is the tearDown escape hatch: a gate
+            # started by the NEGATIVE CONTROL is abandoned when the control
+            # assertion raises out of the loop, and nothing knows its tag
+            # to write the per-gate stop file for. One global file collects
+            # every stray, so a failing control cannot leave a parked
+            # process behind on the developer's machine.
+            'while [ ! -f "$STOP" ] && [ ! -f "$ALL" ]; do sleep 0.2; done\n'
+            "exit 0\n"
+        )
+        self.gate_stub.chmod(0o755)
+        self._old_term = signal.getsignal(signal.SIGTERM)
+        self._old_int = signal.getsignal(signal.SIGINT)
+        self.addCleanup(signal.signal, signal.SIGTERM, self._old_term)
+        self.addCleanup(signal.signal, signal.SIGINT, self._old_int)
+
+    def tearDown(self):
+        try:
+            (self.tmp / "stop-all").write_text("")
+        except OSError:
+            pass
+        super().tearDown()
+
+    # -- fixture helpers --------------------------------------------- #
+
+    def seed_desired(self, gates=1):
+        doc = {"hosts": {self.host: {"enabled": True, "gates": gates, "agents": 0}}}
+        ref = fleetd.DESIRED_REF
+        if self.real_hub.sha(ref) is None:
+            self.assertTrue(self.real_hub.create(ref, doc))
+        else:
+            self.assertTrue(self.real_hub.update(ref, doc, self.real_hub.sha(ref)))
+
+    def run_offline_daemon(self, scripted):
+        return runner.run_daemon(
+            self.hub, self.host,
+            gate_command=[str(self.gate_stub)],
+            log_dir=self.log_dir,
+            repo_root=REPO_ROOT,
+            interval=0,
+            reconcile=scripted,
+        )
+
+    # -- the properties ---------------------------------------------- #
+
+    def test_the_journal_root_follows_KEEL_HOME(self):
+        """Keel 3R-2 step 1, and the reason the rest of this class is
+        allowed to exist: `Journal()` with no argument must land inside
+        this test's redirected `KEEL_HOME`, not in the developer's real
+        `~/.keel/journal`. Every fixture in this suite that reaches
+        `start_gate` now writes records, and they must not be real ones."""
+        self.assertEqual(jr.default_root(), self.keel_home / "journal")
+        self.assertEqual(jr.Journal().root, self.keel_home / "journal")
+
+    def test_a_wholly_unreachable_store_still_raises_from_the_singleton(self):
+        """WHAT THIS STAGE DID NOT FIX, pinned so nobody reads the class
+        above as a claim that it did.
+
+        SPEC SS5.3 asks for "both routes unreachable at start" to end in an
+        adoption rather than a refusal. Wiring `adopt_at_startup` is
+        necessary for that and is not sufficient: `run_daemon` still has to
+        take the host singleton first, that is still a CAS against the
+        store, and a store that answers nothing raises there -- before any
+        of this stage's code runs. Making the singleton survive an
+        unreachable store is a separate change with its own argument to
+        make (holding it is what entitles adoption to touch this host's
+        claims at all, and an offline runner cannot prove by CAS that it is
+        the only one), so it is deliberately NOT attempted here.
+        """
+        dead = _StoreDownExceptSingleton(self.real_hub, "refs/nothing/matches/this")
+        with self.assertRaises(HubError):
+            runner.run_daemon(
+                dead, self.host, gate_command=[str(self.gate_stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, interval=0, once=True)
+
+    def test_offline_start_adopts_from_the_journal_and_does_not_return_5(self):
+        live = self.spawn_stub()
+        orphan = self.spawn_stub()          # journaled by nobody: must survive
+        dead = self.spawn_stub()
+        dead_pgid = dead.pid
+        self.kill_stub(dead)
+
+        started_at = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        live_ref = self.journal_job("gate-staging-one", pgid=live.pid,
+                                    work_key="staging/one", started_at=started_at)
+        dead_ref = self.journal_job("gate-staging-two", pgid=dead_pgid,
+                                    work_key="staging/two", started_at=started_at)
+        # The dead job's claim is really on the store, held by US, over
+        # `staging/two`: this is what `release_pending` must CAS-delete
+        # once a route answers. Until it does, `workqueue.compute` treats
+        # `staging/two` as somebody's live work and refuses to offer it --
+        # which is what makes step 2's spawn PROOF that the release
+        # landed, rather than proof that a gate can start at all.
+        self.seed_claim_on_hub(self.real_hub, dead_ref, host=self.host,
+                               pgid=dead_pgid, started_at=started_at,
+                               work_key="staging/two")
+        self.seed_desired(gates=2)
+
+        seen: list = []
+        results: list = []
+        adopted_pgids: list = []
+
+        def scripted(hub, host, workers, gate_command, log_dir, repo_root, **kw):
+            seen.append(dict(kw))
+            step = len(seen)
+            if step == 1:
+                # `workers` at the top of the first step is exactly what
+                # adoption produced -- the loop has not run yet.
+                adopted_pgids.extend(w.pgid for w in workers)
+            if step == 1:
+                # THE STORE COMES BACK, at the top of the first step. This
+                # is the cycle the short-circuit exists for: the reads
+                # below all succeed and `desired` asks for a gate, so
+                # nothing except `spawn_allowed=False` is standing between
+                # this runner and a spawn it cannot arbitrate.
+                self.hub.down = False
+            res = fleetd.reconcile_once(
+                hub, host, workers, gate_command, log_dir, repo_root,
+                disk_probe=lambda: 100.0, mem_probe=lambda: 32.0, **kw)
+            results.append(res)
+            if step == 1:
+                self.assertFalse(
+                    kw.get("spawn_allowed", True),
+                    "the first cycle after an offline start must run with "
+                    "spawn_allowed=False")
+                self.assertEqual(
+                    res.started, [],
+                    "OFFLINE SPAWN: a runner whose workers were adopted from the "
+                    "local journal started a gate before the store had confirmed "
+                    "anything -- its claim cannot be CAS-arbitrated, which is the "
+                    "duplicate-gate hazard leases exist to prevent")
+                self.assertIn(
+                    "offline-no-spawn", [r for r, _ in res.refused],
+                    f"the refusal must be named, not silent: {res.refused}")
+            elif step == 2:
+                self.assertTrue(kw.get("spawn_allowed"),
+                                "a completed reconcile step re-arms spawning")
+                self.assertEqual(len(res.started), 1,
+                                 f"the second cycle must gate: {res.refused}")
+                for w in workers:
+                    if w.popen is not None:
+                        self.procs.append(w.popen)
+                os.kill(os.getpid(), signal.SIGTERM)  # supervisor-style stop
+            return res
+
+        released: list = []
+        real_release = jr.release_pending
+
+        def recording_release(*a, **kw):
+            out = real_release(*a, **kw)
+            released.extend(out)
+            return out
+
+        with mock.patch.object(jr, "release_pending", recording_release):
+            rc = self.run_offline_daemon(scripted)
+
+        # (1) rc is not 5, and the daemon ran a normal life.
+        self.assertNotEqual(rc, 5, "the refusal-to-start path is gone")
+        self.assertEqual(rc, 0)
+
+        # (2) the live, identity-verified group was adopted from the journal.
+        self.assertIn(live.pid, adopted_pgids,
+                      f"the live journaled group must be adopted: {adopted_pgids}")
+        self.assertNotIn(dead_pgid, adopted_pgids,
+                         "a dead process group is released, never adopted")
+
+        # (3) nothing was swept: the unjournaled orphan is untouched.
+        self.assertIsNone(orphan.poll(),
+                          "the offline startup pass sweeps nothing -- not one process")
+
+        # (4) the owed release was performed, with re-verification, on
+        #     reconnect: the dead job's claim is gone from the store, and
+        #     the LIVE job's claim was never touched.
+        self.assertIsNone(self.real_hub.sha(dead_ref),
+                          "the owed CAS-delete must land once a route answers")
+        self.assertIn((dead_ref, "released"), released,
+                      f"the dead job's claim must be released by name: {released}")
+        self.assertNotIn(live_ref, [r for r, _ in released],
+                         "the ADOPTED job is not owed a release and must never "
+                         "be handed to release_pending at all")
+
+    def test_an_owed_release_is_refused_when_this_host_re_acquired_the_branch(self):
+        """Keel 3R-2 step 7, the half that must NOT be shortcut.
+
+        `release_pending` re-reads each ref and requires BOTH halves of
+        `claim._owns`' ownership token -- `holder_host` is us AND
+        `started_at` matches the journaled text. The `holder_host` half
+        alone is not enough and the failure is not hypothetical: between
+        the crash that left the release owed and the reconnect that
+        settles it, THIS host can legitimately have taken the branch again
+        (its own next runner reaping an expired claim, an autonomous
+        gate). That claim carries our `holder_host` and a different
+        acquisition, and deleting it drops a live gate's lease.
+
+        The instrument is the store itself: the ref is seeded with our
+        host and a DIFFERENT `started_at`, and it must still be there
+        afterwards.
+        """
+        dead = self.spawn_stub()
+        dead_pgid = dead.pid
+        self.kill_stub(dead)
+        journaled_started = iso(datetime.now(timezone.utc) - timedelta(seconds=300))
+        ref = self.journal_job("gate-staging-two", pgid=dead_pgid,
+                               work_key="staging/two",
+                               started_at=journaled_started)
+        # OUR host, a DIFFERENT acquisition -- the re-acquired case.
+        reacquired_started = iso(datetime.now(timezone.utc) - timedelta(seconds=5))
+        self.seed_claim_on_hub(self.real_hub, ref, host=self.host,
+                               pgid=999999, started_at=reacquired_started)
+
+        adoption = jr.adopt_from_journal(self.j, self.host, [], hub=self.real_hub,
+                                         scope_token=self.token,
+                                         markers=[self.marker])
+        self.assertEqual([o.claim_ref for o in adoption.to_release], [ref])
+
+        out = jr.release_pending(self.real_hub, self.host, adoption, journal=self.j)
+
+        self.assertIsNotNone(
+            self.real_hub.sha(ref),
+            "RE-ACQUIRED CLAIM DELETED: release_pending matched on holder_host "
+            "alone and dropped a lease this host had legitimately re-taken -- "
+            "half the ownership token is not enough")
+        self.assertEqual(len(out), 1)
+        self.assertIn("re-acquired", out[0][1])
+
+    def test_negative_control_without_the_short_circuit_the_offline_runner_spawns(self):
+        """Keel 3R-2 step 12a. Same fixture, same store, one line of step 4
+        disabled -- and the failure must be the SPAWN assertion, matched by
+        its text. A control that merely fails proves nothing."""
+        with spawn_allowed_short_circuit_disabled():
+            with self.assertRaises(AssertionError) as ctx:
+                self.test_offline_start_adopts_from_the_journal_and_does_not_return_5()
+        message = str(ctx.exception)
+        self.assertIn(
+            "OFFLINE SPAWN", message,
+            f"the offline test failed, but not because the runner spawned -- the "
+            f"control proves nothing unless the spawn is what broke. Got: {message}")
 
 
 if __name__ == "__main__":

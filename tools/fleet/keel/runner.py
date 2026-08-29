@@ -120,7 +120,21 @@ from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
 # alongside what every other file imports qualified.
 from keel.fallbackhub import FallbackHub  # noqa: E402
 from keel.serverhub import ServerHub  # noqa: E402
+# `keel.journal` is safe to import at THIS module's top level and `fleetd`
+# is not: `fleetd` imports `keel.runner` at its own import time, so a
+# top-level `import fleetd` here is a cycle (see `reconcile_once`).
+# `journal` imports only `claim` and `fleetlib` at module level and defers
+# its own `fleetd` import into function bodies for exactly that reason.
+from keel import journal as journal_mod  # noqa: E402
 from keel import runner_toml  # noqa: E402
+# The server lease ref, imported rather than re-spelled. `keel.election`
+# owns `refs/fleet/claims/server/singleton`; a second spelling of it here
+# is the "named in more than one place" failure `config.py`'s docstring
+# exists to prevent, and this one would be silent -- a runner watching the
+# wrong ref sees a lease that is absent forever and goes autonomous on a
+# perfectly healthy fleet. `keel.election` imports only `claim` and
+# `fleetlib` at module level, so this costs nothing and cannot cycle.
+from keel.election import SERVER_LEASE_REF  # noqa: E402
 
 # --------------------------------------------------------------------- #
 # Constants (moved from fleetd.py; FLEET_PLAN.md "Shared contracts" is
@@ -285,6 +299,13 @@ class Worker:
     claim: Claim
     popen: Optional[subprocess.Popen] = None
     kind: str = "gate"
+    #: This job's `keel.journal` file identity (`journal_job_key`), so the
+    #: reap step can close the job without re-deriving it. `None` on a
+    #: worker built before the journal existed, or by a test that does not
+    #: care -- `fleetd`'s reap treats `None` as "nothing to close", never
+    #: as an error, because a missing journal record must not cost a
+    #: correct reap.
+    job_key: Optional[str] = None
 
     def alive(self, pgids: Optional[set] = None) -> bool:
         # For workers we spawned, poll() is the truth AND reaps the child:
@@ -775,6 +796,61 @@ def _spawn_env(hub: Hub) -> dict:
     return env
 
 
+def journal_job_key(kind: str, claim_key: str) -> str:
+    """The journal's identity for one job: `<kind>-<claim key>`.
+
+    NOT the bare claim key, which is what `journal.file_stem`'s docstring
+    assumes ("claim keys are already filesystem-shaped"). The claim key
+    alone is NOT injective across kinds: `start_gate` builds it as
+    `branch.replace("/", "-")` and `start_agent` as
+    `branch.replace("/", "-").replace(":", "-")`, so a gate and an agent
+    on `staging/one` produce the same key `staging-one` under two
+    DIFFERENT claim refs (`refs/fleet/claims/gate/staging-one` and
+    `.../agent/staging-one`). One journal file per job is the module's
+    whole file layout, and folding two live jobs' records into one file
+    would hand adoption a single JobState carrying the second job's pgid
+    against the first job's claim ref -- an adoption that renews the
+    wrong lease.
+
+    The prefix keeps the two namespaces disjoint by construction: no
+    `gate-...` string is ever an `agent-...` string, whatever the branch
+    is called.
+    """
+    return f"{kind}-{claim_key}"
+
+
+def journal_claim_record(jn, job_key: str, c: Claim, *, kind: str,
+                         work_key: str) -> None:
+    """The `claim` record for a lease just acquired, written from the
+    Claim object's OWN state -- never re-derived.
+
+    `c.handle()` is the public accessor for the ownership token, and it
+    formats `started_at`/`expires_at` through `claim._iso`, which is the
+    exact spelling `claim._owns` compares as literal text and the exact
+    one `journal.rebuild_claim` re-checks for round-tripping. Re-deriving
+    the timestamp here with a second formatter -- `keel/cli.py`'s
+    `strftime("%Y-%m-%dT%H:%M:%SZ")`, say -- would produce a claim record
+    a rebuilt claim cannot recognize as its own.
+
+    `_resolved_rustc_id()`/`_resolved_platform_id()` are MEMO HITS at this
+    point, not measurements: `acquire_or_reap` has already built the
+    payload once, which resolves both. They are recorded because
+    `rebuild_claim` restores them into the rebuilt claim rather than
+    re-measuring them under the runner's PATH instead of the gate's
+    (invariant I15).
+    """
+    h = c.handle()
+    if h is None:  # pragma: no cover -- acquire_or_reap succeeded above
+        raise journal_mod.JournalWriteError(
+            f"{job_key}: the claim reports no ownership token after acquire")
+    jn.claim(job_key=job_key, claim_ref=h.ref, claim_sha=h.sha,
+             holder_host=c.holder_host, started_at=h.started_at,
+             expires_at=h.expires_at, kind=kind, work_key=work_key,
+             gate_version=c.gate_version,
+             rustc_id=c._resolved_rustc_id(),
+             platform_id=c._resolved_platform_id())
+
+
 def start_gate(
     hub: Hub,
     branch: str,
@@ -782,6 +858,7 @@ def start_gate(
     gate_command: list,
     host: str,
     log_dir: Path,
+    journal: Optional["journal_mod.Journal"] = None,
 ) -> Optional[Worker]:
     """Claim the branch, then launch the gate in its OWN process group
     (os.setsid via start_new_session -- portable to macOS, which has no
@@ -800,13 +877,56 @@ def start_gate(
     # matched nothing.
     c = Claim(hub, kind="gate", key=branch.replace("/", "-"), work_kind="gate",
               work_key=branch, holder_host=host)
+    # Keel 3R-2 step 5 -- WRITE BEFORE SPAWN (SPEC SS5.3). The order is
+    # offer -> acquire_or_reap -> claim -> Popen -> spawn, and every one
+    # of those arrows is load-bearing:
+    #
+    #   * `offer` precedes the CAS because the runner can die between
+    #     taking the lease and recording it, and a lease with no local
+    #     record is a claim nothing will ever release offline.
+    #   * `spawn` follows `Popen` immediately and precedes the post-spawn
+    #     `renew` that persists the real pgid into the payload, so the
+    #     window in which a process exists that nothing has written down
+    #     is one `write()+fsync` wide.
+    #
+    # A `JournalWriteError` is therefore FATAL to this start and is not
+    # caught here: `JournalWriteError`'s own docstring states the rule --
+    # "THE CALLER MUST NOT SPAWN" -- because a process this runner cannot
+    # journal is a process it can never adopt, which after a restart is a
+    # live group with no local record and no pgid in the payload yet, the
+    # exact shape the orphan sweep kills. `reconcile_once` turns the raise
+    # into a `spawn-failed` refusal for this branch and keeps gating.
+    jn = journal if journal is not None else journal_mod.Journal()
+    job_key = journal_job_key("gate", c.key)
+    jn.offer(job_key=job_key, kind="gate", work_key=branch, tag=tag,
+             claim_ref=c.ref)
     try:
         # acquire_or_reap: an EXPIRED claim (crashed holder, TTL passed)
         # must not block the branch forever -- reap it CAS'd and proceed.
         # A live claim still refuses, which is the double-gate guard.
         c.acquire_or_reap()
     except claim_mod.ClaimHeldError:
+        # CLOSE the job. An `offer` left open with no `claim` and no
+        # `spawn` is read by `adopt_from_journal` as "never spawned" and,
+        # because the offer carries a `claim_ref`, is recorded as an OWED
+        # RELEASE -- a deferred CAS-delete of a ref we never held. Against
+        # a claim held by another host `release_pending` re-verifies and
+        # leaves it alone, but against one held by THIS host (an adopted
+        # worker, an `autonomous_when_serverless` gate) the journaled
+        # `started_at` is None, so the started_at re-check is skipped and
+        # the delete would drop a live gate's lease. The exit record makes
+        # the job closed: never adopted, never released, never swept.
+        jn.exit(job_key=job_key, outcome="claimed-elsewhere")
         return None
+    try:
+        journal_claim_record(jn, job_key, c, kind="gate", work_key=branch)
+    except journal_mod.JournalError:
+        # The lease is held and the record that would make it recoverable
+        # cannot be written. Give the lease back rather than leave the
+        # branch blocked for a full TTL by a job that will never start,
+        # then re-raise for `reconcile_once` to record as `spawn-failed`.
+        c.release()
+        raise
     log_dir.mkdir(parents=True, exist_ok=True)
     log = open(log_dir / f"fleetd-gate-{tag}.launch.log", "ab")
     try:
@@ -824,10 +944,27 @@ def start_gate(
         )
     except OSError:
         c.release()
+        jn.exit(job_key=job_key, outcome="spawn-failed")
         raise
     finally:
         log.close()
-    worker = Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c, popen=popen)
+    try:
+        jn.spawn(job_key=job_key, pid=popen.pid, pgid=popen.pid,
+                 scope_token=fleet_scope_token(hub.url), argv0=str(gate_command[0]))
+    except journal_mod.JournalError:
+        # A process exists that this runner cannot write down. Compare the
+        # two directions of being wrong, the way the lost-lease kill does:
+        # killing it costs one retryable gate run, while letting it live
+        # leaves a group holding a claim that no future startup pass can
+        # adopt -- it has no journal record, and until the post-spawn
+        # `renew` below lands it has no pgid in the payload either, which
+        # is exactly the shape the orphan sweep kills, later, with no
+        # verdict and no trace. Kill the group and give the lease back.
+        kill_process_group(popen.pid)
+        c.release()
+        raise
+    worker = Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c, popen=popen,
+                    job_key=job_key)
     # Persist the real pgid into the claim payload: renew() rewrites the
     # payload from the object's fields, so setting the attribute and
     # renewing once records it durably (claim-before-launch means the
@@ -839,7 +976,8 @@ def start_gate(
 
 
 def start_agent(
-    hub: Hub, branch: str, tag: str, host: str, log_dir: Path, repo_root: Path
+    hub: Hub, branch: str, tag: str, host: str, log_dir: Path, repo_root: Path,
+    journal: Optional["journal_mod.Journal"] = None,
 ) -> Optional[Worker]:
     """Claim the branch for an agent and launch agentworker.py in its own
     process group. Same discipline as gates: claim-before-launch, pgid
@@ -848,10 +986,23 @@ def start_agent(
     # holder_host=host: see the identical comment in start_gate above.
     c = Claim(hub, kind="agent", key=branch.replace("/", "-").replace(":", "-"),
               work_kind="agent", work_key=branch, holder_host=host)  # see start_gate
+    # Write-before-spawn, identical discipline to `start_gate` -- see the
+    # long comment there for why each arrow in offer -> acquire -> claim
+    # -> Popen -> spawn points the way it does.
+    jn = journal if journal is not None else journal_mod.Journal()
+    job_key = journal_job_key("agent", c.key)
+    jn.offer(job_key=job_key, kind="agent", work_key=branch, tag=tag,
+             claim_ref=c.ref)
     try:
         c.acquire_or_reap()
     except claim_mod.ClaimHeldError:
+        jn.exit(job_key=job_key, outcome="claimed-elsewhere")
         return None
+    try:
+        journal_claim_record(jn, job_key, c, kind="agent", work_key=branch)
+    except journal_mod.JournalError:
+        c.release()  # see the identical comment in `start_gate`
+        raise
     log_dir.mkdir(parents=True, exist_ok=True)
     log = open(log_dir / f"fleetd-agent-{tag}.log", "ab")
     mode_args = (["--intent", intent_slug] if intent_slug else ["--branch", branch])
@@ -876,10 +1027,19 @@ def start_agent(
         )
     except OSError:
         c.release()
+        jn.exit(job_key=job_key, outcome="spawn-failed")
         raise
     finally:
         log.close()
-    w = Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c, popen=popen, kind="agent")
+    try:
+        jn.spawn(job_key=job_key, pid=popen.pid, pgid=popen.pid,
+                 scope_token=fleet_scope_token(hub.url), argv0=sys.executable)
+    except journal_mod.JournalError:
+        kill_process_group(popen.pid)  # see the identical comment in `start_gate`
+        c.release()
+        raise
+    w = Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c, popen=popen, kind="agent",
+               job_key=job_key)
     c.pid = popen.pid
     c.pgid = popen.pid
     c.renew()
@@ -1412,6 +1572,14 @@ def adopt_workers(
                     claim=c,
                     popen=None,  # not our child: `alive()` falls back to pgids
                     kind=payload.get("work_kind") or kind,
+                    # DERIVED, not read: `journal_job_key` is a pure
+                    # function of (kind, claim key), and `start_gate`/
+                    # `start_agent` built this job's key from the same two
+                    # values, so a hub-adopted worker closes the very file
+                    # its own predecessor opened. `kind` here is the CLAIM
+                    # kind (the ref namespace), never `payload["work_kind"]`
+                    # -- the ref is what the key was built from.
+                    job_key=journal_job_key(kind, c.key),
                 )
             )
             adopted_pgids.add(pgid)
@@ -1997,6 +2165,143 @@ def register_cycle(client, runner_id: str, session: dict,
 
 
 # --------------------------------------------------------------------- #
+# autonomous_when_serverless (Keel 3R-2 steps 9-10; SPEC SS12 "never less
+# capable than today's hubless Stage 1")
+# --------------------------------------------------------------------- #
+
+#: SPEC SS12's entry gate: the server lease absent or expired for longer
+#: than this, CONTINUOUSLY, is what makes a host autonomous.
+AUTONOMY_ENTER_AFTER_S = 60.0
+
+#: The exit hysteresis, in OBSERVATIONS rather than seconds. Two: the
+#: observation that ends the absence, and the one a full loop later. SPEC
+#: gives no exit condition at all, and "exit on the first live lease" is
+#: the wrong one -- a lease that flaps (a server settling, an election
+#: handing over, a 5 s network blip) would then toggle this host between
+#: two scheduling regimes every cycle, and each toggle changes both the
+#: dispatch set and the loop interval.
+AUTONOMY_EXIT_LIVE_OBSERVATIONS = 2
+
+#: The loop interval while autonomous. SPEC SS12 asks for one minute
+#: rather than `LOOP_SECONDS`: there is no server to answer to, the work
+#: is gates only, and a 15 s cadence spends four times the git traffic on
+#: a store that is by hypothesis the only route left.
+AUTONOMOUS_INTERVAL_S = 60.0
+
+
+class AutonomyGate:
+    """Whether this host should schedule for itself, with no server.
+
+    THE TRIGGER IS THE LEASE REF, NOT `FallbackHub.degraded_since`. That
+    field (`fallbackhub.FallbackHub.degraded_since`) is the convenient
+    signal and the wrong one, for three independent reasons: it is
+    in-memory, so it resets to `None` on every runner restart because
+    `build_hub` constructs a fresh `FallbackHub`; it goes non-`None` for
+    a five-second blip, which is four orders of magnitude short of
+    SPEC's minute; and it describes THIS PROCESS's luck with a transport
+    rather than the fleet's actual state. `refs/fleet/claims/server/
+    singleton` is durable, shared, and is the thing SPEC names. Use
+    `degraded_since` for the heartbeat and nothing else.
+
+    THREE observations, not two. A lease that is present and unexpired is
+    LIVE. A lease that is absent, or present and expired, is DOWN and
+    starts (or continues) the clock. A lease that could not be READ is
+    NEITHER: the state repo is unreachable, which is not evidence about
+    the server and must not be counted as absence. An unreadable lease
+    therefore freezes this gate exactly where it was -- it neither starts
+    the clock nor resets it -- because both alternatives are wrong in a
+    way that matters. Counting it as absence makes a host go autonomous
+    because ITS OWN git route broke, which is the one condition under
+    which it can least afford to schedule unilaterally; counting it as
+    liveness would drag a genuinely serverless host back out of autonomy
+    on a read failure.
+
+    `now` is a MONOTONIC clock (`time.monotonic` by default), never wall
+    time: the entry gate measures a duration this process observed, and a
+    host whose clock steps (ntp correction, a laptop waking) must not
+    thereby enter or leave autonomy.
+    """
+
+    def __init__(self, hub, *, enabled: bool,
+                 enter_after_s: Optional[float] = None,
+                 exit_after_live: Optional[int] = None,
+                 clock: Callable[[], float] = time.monotonic,
+                 log: Callable[[str], None] = lambda msg: None):
+        # LATE-BOUND from the module constants rather than defaulted to
+        # them in the signature, and the difference is not stylistic:
+        # Python evaluates a default once, at `def` time, so
+        # `exit_after_live=AUTONOMY_EXIT_LIVE_OBSERVATIONS` would freeze
+        # the value at import and `mock.patch` on the constant would
+        # change nothing. `tests/test_runner_autonomy.py` disables the
+        # hysteresis by patching exactly that constant, as its mandatory
+        # negative control, and a control that cannot take effect proves
+        # nothing.
+        self.hub = hub
+        self.enabled = bool(enabled)
+        self.enter_after_s = float(
+            AUTONOMY_ENTER_AFTER_S if enter_after_s is None else enter_after_s)
+        self.exit_after_live = int(
+            AUTONOMY_EXIT_LIVE_OBSERVATIONS if exit_after_live is None else exit_after_live)
+        self._clock = clock
+        self._log = log
+        self.autonomous = False
+        #: Monotonic instant the current run of DOWN observations began.
+        self.down_since: Optional[float] = None
+        #: Consecutive LIVE observations, for the exit hysteresis.
+        self.live_streak = 0
+        #: The last observation's verdict: "live", "down", "unreadable"
+        #: or None before the first one. Reported, never re-derived.
+        self.last_observation: Optional[str] = None
+
+    def read_lease(self) -> str:
+        """One observation of the server lease: `"live"`, `"down"` or
+        `"unreadable"`. Separated from `observe` so a test can drive the
+        state machine without a store."""
+        try:
+            payload = self.hub.read(SERVER_LEASE_REF)
+        except HubError:
+            return "unreadable"
+        if not payload:
+            return "down"
+        return "down" if claim_mod.is_expired(payload) else "live"
+
+    def observe(self, verdict: Optional[str] = None) -> bool:
+        """Fold one observation in and return whether this host is
+        autonomous. A no-op returning False while `enabled` is False --
+        SPEC SS12 makes this config, default false, enabled on the i7
+        only, so a runner that has not opted in never even reads the
+        lease ref."""
+        if not self.enabled:
+            return False
+        verdict = self.read_lease() if verdict is None else verdict
+        self.last_observation = verdict
+        now = self._clock()
+        if verdict == "unreadable":
+            return self.autonomous  # frozen -- see the class docstring
+        if verdict == "live":
+            self.down_since = None
+            self.live_streak += 1
+            if self.autonomous and self.live_streak >= self.exit_after_live:
+                self.autonomous = False
+                self._log(
+                    f"AUTONOMY OFF: {SERVER_LEASE_REF} live for "
+                    f"{self.live_streak} consecutive observations -- resuming "
+                    f"agent dispatch and the {LOOP_SECONDS}s loop")
+            return self.autonomous
+        # DOWN.
+        self.live_streak = 0
+        if self.down_since is None:
+            self.down_since = now
+        elif not self.autonomous and (now - self.down_since) > self.enter_after_s:
+            self.autonomous = True
+            self._log(
+                f"AUTONOMY ON: {SERVER_LEASE_REF} absent or expired for "
+                f"{now - self.down_since:.0f}s (> {self.enter_after_s:.0f}s) -- "
+                f"gates only, no agent dispatch, {AUTONOMOUS_INTERVAL_S:.0f}s loop")
+        return self.autonomous
+
+
+# --------------------------------------------------------------------- #
 # Daemon shell: singleton + adoption + the bounded-failure loop
 # (verbatim from fleetd.main's body; fleetd.main now delegates here)
 # --------------------------------------------------------------------- #
@@ -2013,6 +2318,8 @@ def run_daemon(
     once: bool = False,
     reconcile: Optional[Callable] = None,
     label: str = "keel-runner",
+    autonomous_when_serverless: bool = False,
+    autonomous_interval: float = AUTONOMOUS_INTERVAL_S,
 ) -> int:
     """Everything `fleetd.main` did after parsing argv and building its
     `Hub`, unchanged: acquire the host singleton (reaping a provably-dead
@@ -2023,6 +2330,27 @@ def run_daemon(
     on SIGTERM/SIGINT/`once` (rc 0), a lost host lease (rc 4, draining
     -- never killing -- live workers), a startup adoption failure
     (rc 5), or a persistently unusable hub (rc 6).
+
+    KEEL 3R-2 NARROWED rc 5 and did not remove it. Adoption is now
+    `journal.adopt_at_startup`, which falls back to the local job journal
+    when the store answers neither route instead of refusing to start, so
+    the ordinary "both routes down" case no longer produces rc 5 at all --
+    it produces an offline runner that adopts what it journaled, sweeps
+    nothing, and starts nothing until a reconcile step completes. rc 5
+    remains for the case where that call ITSELF fails.
+
+    NOT FIXED HERE, and worth knowing before reading the above as more
+    than it is: `run_daemon` takes the host singleton BEFORE adoption, and
+    that is a CAS against the store. A store that answers NOTHING raises
+    `HubUnreachableError` out of `Claim.acquire_or_reap` -- an exception,
+    not one of the codes above -- before any of the adoption path runs. So
+    SPEC SS5.3's "both routes unreachable at start" is only partly served
+    by this stage. Making the singleton survive an unreachable store is a
+    separate change with its own argument to settle, because holding it is
+    what entitles adoption to touch this host's claims at all and an
+    offline runner cannot establish that by CAS.
+    `tests/test_journal.py::TestOfflineStartThroughRunDaemon` pins both
+    halves: the narrowed rc 5, and the singleton raise that still stands.
 
     One addition to fleetd's original body, between adoption and the
     loop: L1's `check_toolchain_agreement`. It exits **rc 7** when this
@@ -2089,17 +2417,61 @@ def run_daemon(
     # to be after the singleton (only one daemon per host may adopt) and
     # before reconcile_once (which would otherwise see zero workers, think
     # every slot free, and start a duplicate of everything still running).
+    #
+    # Keel 3R-2 step 2. This used to be `adopt_workers(hub, host, workers)`
+    # under `except HubError: singleton.release(); return 5`, and rc 5 was
+    # "both routes are down, so refuse to start rather than run with an
+    # empty worker list". The reasoning was right and the dichotomy was
+    # false: "run with an empty worker list" was only ever the alternative
+    # because the store was the only place this runner had written down
+    # what it launched. `journal.adopt_at_startup` is the same call with
+    # the local journal as the second route -- the store is still truth
+    # whenever it answers (`mode == "store"`, the hub claim wins and the
+    # journal contributes nothing), and only a `HubError` from the hub
+    # pass -- which through a `FallbackHub` means BOTH routes failed --
+    # makes the journal decisive.
+    #
+    # rc 5 SURVIVES, narrowed to its honest case: `adopt_at_startup`
+    # itself raising. It handles `HubError` internally, so anything that
+    # still escapes is a different failure from "the store is away" and
+    # the old refusal is the right answer to it.
+    #
+    # `markers`/`scope_token`/`ttl`/`renew_interval` are deliberately NOT
+    # passed: `adopt_at_startup` forwards them only when given, and both
+    # halves derive the same production defaults themselves
+    # (`worker_markers()`, `fleet_scope_token(hub.url)`). Passing them
+    # would add a second place for the derivation to drift.
     try:
-        adoption = adopt_workers(hub, host, workers)
+        adoption = journal_mod.adopt_at_startup(hub, host, workers)
         print(f"{label}[{host}] adoption: {adoption.summary()}", flush=True)
-    except HubError as e:
-        # An unreachable hub at startup is not a reason to run with an
-        # empty worker list -- that is the state that starts duplicate
-        # gates. Refuse to start; the supervisor will retry.
-        print(f"{label}[{host}]: cannot rebuild worker state from the hub ({e}); "
-              f"refusing to start rather than risk duplicate work", file=sys.stderr)
+    except (HubError, journal_mod.JournalError) as e:
+        print(f"{label}[{host}]: cannot rebuild worker state from the hub or the "
+              f"journal ({type(e).__name__}: {e}); refusing to start rather than "
+              f"risk duplicate work", file=sys.stderr)
         singleton.release()
         return 5
+
+    # Keel 3R-2 step 3. `spawn_allowed` is False for exactly as long as
+    # this runner has never had an answer from the store -- see
+    # `StartupAdoption.spawn_allowed`, which is False whenever
+    # `mode == "journal"`. Starting work whose claim cannot be
+    # CAS-arbitrated is the duplicate-gate hazard leases exist to prevent:
+    # an offline runner cannot ask whether another host already holds the
+    # branch, so every start it makes is a coin flip it is not entitled to
+    # toss. It is a LOOP variable, not a constant, because the store
+    # coming back is exactly what re-entitles it -- see the reconnect
+    # block below.
+    spawn_allowed = adoption.spawn_allowed
+    # The owed CAS-deletes `adopt_from_journal` recorded but had no route
+    # to perform. Carried so the reconnect block can hand it to
+    # `journal.release_pending`, which re-verifies each one against the
+    # store before deleting. None on the store path: there is nothing owed
+    # when the store answered.
+    owed_releases = adoption.journal_result
+    if not spawn_allowed:
+        print(f"{label}[{host}] OFFLINE START: the store answered neither route; "
+              f"adopted {len(workers)} worker(s) from the local journal and will "
+              f"start nothing until it answers again", file=sys.stderr, flush=True)
 
     # T3: one warning store for the daemon's whole lifetime, so a warning
     # survives every reconcile until its marker file is gone. Owned by
@@ -2166,6 +2538,14 @@ def run_daemon(
     def _reg_log(msg: str) -> None:
         print(f"{label}[{host}] {msg}", file=sys.stderr, flush=True)
 
+    # Keel 3R-2 steps 9-10. Constructed unconditionally so the loop body
+    # has no `if` around it, but INERT unless the operator opted in:
+    # `AutonomyGate.observe` returns False without reading anything while
+    # `enabled` is False, so a runner that has not set
+    # `autonomous_when_serverless` behaves exactly as it did before this
+    # stage -- no extra ref read, no interval change, no dispatch change.
+    autonomy = AutonomyGate(hub, enabled=autonomous_when_serverless, log=_reg_log)
+
     def _sigterm(_sig, _frm):
         stop["flag"] = True
 
@@ -2182,18 +2562,78 @@ def run_daemon(
             # or a MemoryError must still take the process down loudly
             # rather than be retried fifteen seconds later forever.
             degraded: Optional[HubError] = None
+            # The autonomy observation is taken BEFORE the step it governs,
+            # so this cycle's dispatch set is decided by this cycle's view
+            # of the lease rather than the previous one's. It never raises:
+            # `read_lease` turns a `HubError` into the "unreadable" verdict,
+            # which freezes the gate rather than moving it.
+            autonomous = autonomy.observe()
             try:
                 res = reconcile(hub, host, workers, gate_command, log_dir,
-                                repo_root, warnings=host_warnings)
+                                repo_root, warnings=host_warnings,
+                                # Keel 3R-2 steps 4 and 10. Two SEPARATE
+                                # permissions, deliberately not collapsed:
+                                # `spawn_allowed` is "can any start of mine
+                                # be CAS-arbitrated at all", and
+                                # `agents_allowed` is "may this host spend
+                                # money on an agent while nothing is
+                                # coordinating the fleet". An autonomous
+                                # host still gates (SPEC SS12: never less
+                                # capable than hubless Stage 1); it just
+                                # never dispatches.
+                                spawn_allowed=spawn_allowed,
+                                agents_allowed=not autonomous)
             except HubError as exc:
                 degraded = exc
                 hub_failures += 1
             else:
                 hub_failures = 0
+                # Keel 3R-2 step 7. A step that completed without a
+                # `HubError` is the only proof this runner gets that a route
+                # to the store is back, so it is where the owed CAS-deletes
+                # are attempted -- EVERY such step while anything is still
+                # owed, not just the first. `release_pending` turns a store
+                # that is still away into an outcome string and leaves the
+                # entry owed "for the next attempt"; a caller that attempts
+                # exactly once makes that promise vacuous, and the entry
+                # would then sit until its TTL with nothing ever retrying.
+                #
+                # Do NOT shortcut the re-verification inside it. It re-reads
+                # each ref and requires BOTH halves of `claim._owns`'
+                # ownership token -- `holder_host` is us AND `started_at`
+                # matches the journaled text -- before deleting, precisely
+                # because this host may have legitimately re-acquired the
+                # branch in the interval (its own next runner reaping an
+                # expired claim, an autonomous gate). Half the token is not
+                # enough and the cost of getting it wrong is deleting a live
+                # gate's lease.
+                if owed_releases is not None and owed_releases.to_release:
+                    for ref, outcome in journal_mod.release_pending(
+                            hub, host, owed_releases):
+                        print(f"{label}[{host}] OWED RELEASE {ref}: {outcome}",
+                              file=sys.stderr, flush=True)
+                if not spawn_allowed:
+                    # THE STORE JUST ANSWERED, so the reason `spawn_allowed`
+                    # was False no longer holds: every start from here is
+                    # CAS-arbitrated again.
+                    #
+                    # Re-arming does not WAIT for the releases above to have
+                    # all landed. An entry that stays owed blocks exactly one
+                    # branch until its TTL expires; it does not make a start
+                    # on any OTHER branch unsafe, because with the store up
+                    # every start goes through `acquire_or_reap`. Conflating
+                    # the two would let one undeletable ref stop this host
+                    # gating forever, which is a strictly worse failure than
+                    # one branch waiting out a lease.
+                    spawn_allowed = True
+                    print(f"{label}[{host}] STORE BACK: a reconcile step completed "
+                          f"against {hub.url}; starts are CAS-arbitrated again",
+                          file=sys.stderr, flush=True)
                 line = (
                     f"{label}[{host}] gates={len(workers)} started={res.started} "
                     f"finished={res.finished} killed={res.killed} refused={res.refused} "
                     + (f"warnings={res.warnings} " if res.warnings else "")
+                    + (f"autonomous=1 " if autonomous else "")
                     + f"hb={res.heartbeat_written}"
                 )
                 print(line, flush=True)
@@ -2270,7 +2710,14 @@ def run_daemon(
                 if degraded is not None:
                     rc = 6
                 break
-            time.sleep(interval)
+            # Keel 3R-2 step 10: the autonomous cadence is a MINUTE, not
+            # `LOOP_SECONDS`. It is a PARAMETER rather than a computation
+            # over `interval` -- `max(interval, 60)` would make the suite's
+            # `interval=0` sleep a full minute, and `min` would leave the
+            # production default at 15 s and change nothing at all. There
+            # is no arithmetic that means both; the two cadences are two
+            # numbers, so they are two arguments.
+            time.sleep(autonomous_interval if autonomous else interval)
     finally:
         # Drain, don't kill: leave live gates running; their claims expire
         # and any host's reaper collects them if they die unowned.
@@ -2341,6 +2788,12 @@ def main(argv: Optional[list] = None) -> int:
         repo_root=repo_root,
         interval=args.interval,
         once=args.once,
+        # SPEC SS12: config, DEFAULT FALSE. `cfg.autonomous_when_serverless`
+        # is `None` when nothing configured it, and `bool(None)` is the
+        # production default rather than a coincidence -- the loader keeps
+        # "unset" and "false" distinct precisely so this line can be the
+        # one place that collapses them, and say so.
+        autonomous_when_serverless=bool(cfg.autonomous_when_serverless),
     )
 
 

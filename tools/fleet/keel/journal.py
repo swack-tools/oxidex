@@ -135,7 +135,39 @@ from fleetlib import HubError  # noqa: E402
 _iso = claim_mod._iso
 _parse_iso = claim_mod._parse_iso
 
-DEFAULT_ROOT = Path.home() / ".keel" / "journal"
+def _keel_home() -> Path:
+    """`$KEEL_HOME`, or `~/.keel`. The SAME resolution
+    `election._keel_home` and `server._keel_home` already perform.
+
+    Keel 3R-2 step 1. This module was the only `~/.keel` consumer in the
+    tree that ignored `KEEL_HOME`: `election.py` and `server.py` both
+    honour it, so a relocated deployment (or a hermetic harness that
+    points `KEEL_HOME` at a tempdir) moved the lease store and the auth
+    file and left the journal writing into the real `~/.keel/journal`.
+    That is worse than a cosmetic inconsistency here: the journal is
+    consulted at startup to decide what this host is already running,
+    and a test harness whose journal is the DEVELOPER's journal would
+    adopt from -- or refuse over -- entries no fixture wrote.
+
+    Read at construction, not at import: a caller that sets `KEEL_HOME`
+    after importing this module (every fixture does) must still get the
+    redirected root.
+    """
+    override = os.environ.get("KEEL_HOME")
+    if override:
+        return Path(override)
+    return Path.home() / ".keel"
+
+
+def default_root() -> Path:
+    return _keel_home() / "journal"
+
+
+#: Backward-compatible module constant: the root as it resolves AT
+#: IMPORT. `Journal()` calls `default_root()` instead, so a `KEEL_HOME`
+#: set after import is still honoured; this name is kept because it is
+#: part of the module's published surface.
+DEFAULT_ROOT = default_root()
 
 #: Bumped whenever the meaning of an existing field changes or a new
 #: EVENT is added. A record whose `v` is greater than this makes its file
@@ -323,7 +355,7 @@ class Journal:
     """Append-only per-job records under `root` (`~/.keel/journal`)."""
 
     def __init__(self, root: "str | os.PathLike[str] | None" = None):
-        self.root = Path(root) if root is not None else DEFAULT_ROOT
+        self.root = Path(root) if root is not None else default_root()
 
     # -- writing -------------------------------------------------------- #
 
@@ -829,6 +861,12 @@ def _default_worker_factory(*, job: JobState, claim: Claim):
         claim=claim,
         popen=None,  # not our child: `alive()` falls back to the pgid listing
         kind=job.kind or "gate",
+        # The job's OWN key, verbatim off the record -- never re-derived.
+        # This is the one construction site that has the true key in hand,
+        # and `fleetd`'s reap needs it to write the `exit` record that
+        # closes the file (without which the job stays in `open_jobs`
+        # forever and `prune` never collects it).
+        job_key=job.job_key,
     )
 
 

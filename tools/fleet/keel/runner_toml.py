@@ -30,6 +30,25 @@ overwrites any field whose environment variable is SET (non-empty) --
     server_token_file   [token]  server_file  KEEL_TOKEN_FILE
     max_gates           [limits] max_gates    KEEL_MAX_GATES
     max_agents          [limits] max_agents   KEEL_MAX_AGENTS
+    autonomous_when_serverless
+                        [autonomy] when_serverless
+                                              KEEL_AUTONOMOUS_WHEN_SERVERLESS
+    rank                [server] rank         KEEL_RANK
+    server_eligible     [server] eligible     KEEL_SERVER_ELIGIBLE
+
+The three keel-3R fields all default to `None`, and the consumer's own
+production default for `autonomous_when_serverless` is FALSE (SPEC SS12:
+"config, default false; enabled on the i7 only"). `_from_toml` reads
+named tables and silently ignores unknown ones, so `[autonomy]` and the
+two new `[server]` keys are backward-compatible with every deployed file
+-- a host whose `runner.toml` predates them parses exactly as before.
+
+The BOOLEAN env vars parse `1/true/yes/on` and `0/false/no/off`,
+case-insensitively, and RAISE on anything else. That is deliberate and
+is the opposite of a truthiness test: `KEEL_AUTONOMOUS_WHEN_SERVERLESS=0`
+under `bool(os.environ.get(...))` is TRUE, so the one spelling an
+operator would reach for to turn the feature off would turn it on. A
+loud parse error is the only safe answer to a value nobody can read.
 
 `hub_url`/`code_url`/`git_token_file` reuse the EXACT env var names
 `fleetlib`/`config`/`gate.sh`/`cli.py` already read (`FLEET_HUB_URL`,
@@ -87,9 +106,18 @@ ENV_VARS: Dict[str, str] = {
     "server_token_file": "KEEL_TOKEN_FILE",
     "max_gates": "KEEL_MAX_GATES",
     "max_agents": "KEEL_MAX_AGENTS",
+    "autonomous_when_serverless": "KEEL_AUTONOMOUS_WHEN_SERVERLESS",
+    "rank": "KEEL_RANK",
+    "server_eligible": "KEEL_SERVER_ELIGIBLE",
 }
 
-_INT_FIELDS = frozenset({"max_gates", "max_agents"})
+_INT_FIELDS = frozenset({"max_gates", "max_agents", "rank"})
+_BOOL_FIELDS = frozenset({"autonomous_when_serverless", "server_eligible"})
+
+#: The exact accepted spellings. Anything else raises -- see the module
+#: docstring on why a truthiness test is unsafe here.
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
 
 
 @dataclass(frozen=True)
@@ -108,6 +136,16 @@ class RunnerConfig:
     server_token_file: Optional[str] = None
     max_gates: Optional[int] = None
     max_agents: Optional[int] = None
+    #: SPEC SS12. `None` means "not configured", and the consumer
+    #: (`runner.main`) applies FALSE as the production default -- never
+    #: conflated, because "the operator has not decided" and "the operator
+    #: turned it off" are different facts even where they act the same.
+    autonomous_when_serverless: Optional[bool] = None
+    #: Server-election rank and eligibility (`keel.election`). Parsed here
+    #: so one file describes the host; this loader neither elects nor
+    #: validates against the fleet.
+    rank: Optional[int] = None
+    server_eligible: Optional[bool] = None
 
 
 class RunnerTomlError(ValueError):
@@ -172,12 +210,42 @@ def _optional_int(value: Any, *, where: str) -> Optional[int]:
     return value
 
 
+def _optional_bool(value: Any, *, where: str) -> Optional[bool]:
+    """A TOML `true`/`false`, and nothing else.
+
+    `isinstance(value, bool)` is checked FIRST and exclusively: TOML has a
+    real boolean type, so an operator who wrote `when_serverless = 1`
+    meant something this loader should refuse rather than silently read as
+    true. (Note the mirror of `_optional_int`'s `isinstance(value, bool)`
+    guard, which exists because `bool` is a subclass of `int` in Python
+    and `max_gates = true` would otherwise parse as 1.)
+    """
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise RunnerTomlError(
+            f"{where} must be a boolean (true/false), got {type(value).__name__}: {value!r}")
+    return value
+
+
+def _env_bool(var: str, raw: str) -> bool:
+    text = raw.strip().lower()
+    if text in _TRUE:
+        return True
+    if text in _FALSE:
+        return False
+    raise RunnerTomlError(
+        f"{var}={raw!r} is not a boolean; use one of "
+        f"{sorted(_TRUE)} or {sorted(_FALSE)}")
+
+
 def _from_toml(data: Dict[str, Any], path: Path) -> RunnerConfig:
     hub = _table(data, "hub", path)
     code = _table(data, "code", path)
     server = _table(data, "server", path)
     token = _table(data, "token", path)
     limits = _table(data, "limits", path)
+    autonomy = _table(data, "autonomy", path)
     return RunnerConfig(
         hub_url=_optional_str(hub.get("url"), where=f"{path}: [hub].url"),
         code_url=_optional_str(code.get("url"), where=f"{path}: [code].url"),
@@ -186,6 +254,11 @@ def _from_toml(data: Dict[str, Any], path: Path) -> RunnerConfig:
         server_token_file=_optional_path_str(token.get("server_file"), where=f"{path}: [token].server_file"),
         max_gates=_optional_int(limits.get("max_gates"), where=f"{path}: [limits].max_gates"),
         max_agents=_optional_int(limits.get("max_agents"), where=f"{path}: [limits].max_agents"),
+        autonomous_when_serverless=_optional_bool(
+            autonomy.get("when_serverless"), where=f"{path}: [autonomy].when_serverless"),
+        rank=_optional_int(server.get("rank"), where=f"{path}: [server].rank"),
+        server_eligible=_optional_bool(
+            server.get("eligible"), where=f"{path}: [server].eligible"),
     )
 
 
@@ -238,7 +311,9 @@ def resolve(path: "str | Path | None" = None, env: Optional[Dict[str, str]] = No
         raw = src.get(var)
         if raw is None or raw == "":
             continue
-        if field_name in _INT_FIELDS:
+        if field_name in _BOOL_FIELDS:
+            values[field_name] = _env_bool(var, raw)
+        elif field_name in _INT_FIELDS:
             try:
                 parsed = int(raw)
             except ValueError as exc:

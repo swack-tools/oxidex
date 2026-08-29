@@ -56,7 +56,10 @@ red under a deliberately poisoned environment and requires green.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Dict, Iterable, Mapping, Optional
 
 # Variables the fleet's ENTRY POINTS default their configuration from
@@ -92,6 +95,29 @@ GIT_IDENTITY: Dict[str, str] = {
     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
 }
 
+#: The throwaway `KEEL_HOME` the CURRENT scrub installed, or None outside
+#: one. Module state rather than test state on purpose: the scrub has two
+#: entry points and this has to hold for both.
+#:
+#: WHY IT IS NEEDED. `keel/journal.py` resolves its root as
+#: `$KEEL_HOME/journal`, falling back to `~/.keel/journal`. `KEEL_HOME`
+#: starts with `KEEL_`, so the scrub removes it -- and then every fixture
+#: that reaches `start_gate` appends `offer`/`claim`/`spawn` records to the
+#: DEVELOPER's own journal. That is not hypothetical: before this,
+#: `test_adoption.TestRestartAdoption.start_fleetd` -- which spawns a REAL
+#: `fleetd.py` with `env=scrub_env(...)` -- left a 16 KB
+#: `~/.keel/journal/gate-staging-one.jsonl` full of `holder_host:
+#: "adoptionhost"` records on the machine that ran the suite, and that
+#: machine is a fleet host whose real runner reads that directory at
+#: startup to decide what it is already running.
+#:
+#: Putting the redirect in `scrub_env` rather than only in the mixin is the
+#: whole point: a fixture that calls the module-level `scrub_env` directly
+#: (test_adoption, test_journal, test_runner_core, and others do) gets it
+#: too, and so does every subprocess they spawn. One place, per this
+#: module's own thesis (AGENTS.md incident 7).
+_FIXTURE_KEEL_HOME: Optional[str] = None
+
 
 def is_scrubbed(name: str) -> bool:
     """True if `name` is removed by `scrub_env` (before `extra` is applied)."""
@@ -121,6 +147,12 @@ def scrub_env(base: Optional[Mapping[str, str]] = None, **extra: str) -> Dict[st
     src = os.environ if base is None else base
     out = {k: v for k, v in src.items() if not is_scrubbed(k)}
     out.update(GIT_IDENTITY)
+    if _FIXTURE_KEEL_HOME is not None:
+        # Re-added AFTER the scrub dropped it: a subprocess that does not
+        # inherit the redirect writes its journal to the real `~/.keel`.
+        # An explicit `extra` still wins (below), so a fixture that wants
+        # its own `KEEL_HOME` keeps it.
+        out["KEEL_HOME"] = _FIXTURE_KEEL_HOME
     out.update({k: str(v) for k, v in extra.items()})
     return out
 
@@ -132,12 +164,25 @@ def apply_to_os_environ() -> "callable":
     For fixtures that cannot inherit `HermeticEnvMixin` (module-level
     setup, a `setUpClass`). Test classes should use the mixin instead.
     """
+    global _FIXTURE_KEEL_HOME
     saved = dict(os.environ)
+    saved_home = _FIXTURE_KEEL_HOME
     for name in scrubbed_keys():
         os.environ.pop(name, None)
     os.environ.update(GIT_IDENTITY)
+    # A throwaway `$KEEL_HOME` for the duration, so the journal (and any
+    # other `~/.keel` consumer) lands in a tempdir. See
+    # `_FIXTURE_KEEL_HOME`. Nested application (`setUpClass` then `setUp`)
+    # is fine: each level saves and restores the previous value, and the
+    # inner one wins while it is in force.
+    keel_home = tempfile.mkdtemp(prefix="keel-home-")
+    os.environ["KEEL_HOME"] = keel_home
+    _FIXTURE_KEEL_HOME = keel_home
 
     def restore() -> None:
+        global _FIXTURE_KEEL_HOME
+        _FIXTURE_KEEL_HOME = saved_home
+        shutil.rmtree(keel_home, ignore_errors=True)
         os.environ.clear()
         os.environ.update(saved)
 
@@ -175,13 +220,18 @@ class HermeticEnvMixin:
 
     def setUp(self) -> None:  # noqa: N802 -- unittest's spelling
         self.addCleanup(apply_to_os_environ())
+        # `apply_to_os_environ` installed the throwaway `$KEEL_HOME`
+        # (see `_FIXTURE_KEEL_HOME`); this only names it for the fixture.
+        self.keel_home = Path(os.environ["KEEL_HOME"])
         super().setUp()
 
     def hermetic_env(self, **extra: str) -> Dict[str, str]:
         """`scrub_env(**extra)` -- the env for any subprocess this test
         spawns. Taken from the CURRENT `os.environ`, so the fixture's own
         HOME redirection and `FLEET_*` choices made after `setUp` are in
-        it; only an invoker's leak is not."""
+        it; only an invoker's leak is not. `scrub_env` carries the
+        throwaway `KEEL_HOME` through, so a spawned runner journals into
+        the tempdir rather than the developer's `~/.keel`."""
         return scrub_env(**extra)
 
     def assertEnvHermetic(self, env: Optional[Mapping[str, str]] = None,  # noqa: N802
@@ -190,6 +240,14 @@ class HermeticEnvMixin:
         name other than those in `allow` -- the fixture's own deliberate
         settings."""
         allowed = set(allow)
+        src = os.environ if env is None else env
+        if (_FIXTURE_KEEL_HOME is not None
+                and src.get("KEEL_HOME") == _FIXTURE_KEEL_HOME):
+            # THE SCRUB's own redirect, not an invoker's leak -- exactly the
+            # "fixture's own deliberate settings" this method already
+            # excuses through `allow`. Matched by VALUE, so a `KEEL_HOME`
+            # that is not the one the scrub installed is still reported.
+            allowed.add("KEEL_HOME")
         leaked = [k for k in scrubbed_keys(env) if k not in allowed]
         if leaked:
             raise AssertionError(

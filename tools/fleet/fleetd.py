@@ -162,6 +162,7 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     write_heartbeat,
 )
 import keel.runner as keel_runner  # noqa: E402
+from keel import journal as journal_mod  # noqa: E402 -- 3R-2 step 6, the reap's `exit` record
 from keel.fallbackhub import FallbackHub  # noqa: E402 -- heartbeat `fallback` block
 
 # --------------------------------------------------------------------- #
@@ -580,6 +581,7 @@ def dispatch_agents(
     log_dir: Path,
     repo_root: Path,
     res: "ReconcileResult",
+    journal: Optional["journal_mod.Journal"] = None,
 ) -> None:
     """Fill up to `slots` agent slots, buying nothing that cannot pay off
     (ARCH-FIX-SPEC.md R5). Appends started workers to `workers` in place.
@@ -693,8 +695,9 @@ def dispatch_agents(
         w = None
         spawn_failed = False
         try:
-            w = start_agent(hub, branch, tag, host, log_dir, repo_root)
-        except OSError as e:
+            w = start_agent(hub, branch, tag, host, log_dir, repo_root,
+                            journal=journal)
+        except (OSError, journal_mod.JournalError) as e:  # see start_gate's note
             spawn_failed = True
             res.refused.append(("agent-spawn-failed", f"{branch}: {e}"))
         if w is None:
@@ -740,6 +743,40 @@ _AGENT_RC_OUTCOMES = {
 }
 
 
+def _journal_close(jn, w, *, rc: Optional[int], outcome: Optional[str],
+                   host: str) -> None:
+    """Close `w`'s journal job at reap (Keel 3R-2 step 6).
+
+    WHY THIS IS NOT OPTIONAL. Without the `exit` record the job stays in
+    `JournalScan.open_jobs` forever, so every subsequent startup pass
+    re-reads a finished gate as live work: its pgid is gone, which makes
+    it an OWED RELEASE on every offline start until the file is removed,
+    and `Journal.prune` -- which collects CLOSED jobs after seven days --
+    never collects it, so the directory grows without bound. The record
+    is what turns "this job existed" into "this job is over".
+
+    WHY A FAILURE HERE IS NOT FATAL, unlike at spawn. `JournalWriteError`
+    at spawn time means a process would exist that nothing wrote down, so
+    the caller must not spawn. Here the process is already GONE and its
+    claim has already been released against the store; an unwritable
+    journal cannot un-reap it, and raising would take the rest of this
+    loop -- including other workers' lost-lease kills -- down with it.
+    Loud and continue is the only defensible direction.
+
+    A worker with no `job_key` is simply not journaled (one built before
+    this stage, or by a test that does not care) and is skipped.
+    """
+    if jn is None or getattr(w, "job_key", None) is None:
+        return
+    try:
+        jn.exit(job_key=w.job_key, rc=rc, outcome=outcome)
+    except journal_mod.JournalError as exc:
+        print(f"fleetd[{host}] journal exit record failed for {w.tag} "
+              f"({type(exc).__name__}: {exc}); the reap itself stands, but this "
+              f"job stays open in the journal and will be re-read as owed work",
+              file=sys.stderr, flush=True)
+
+
 def reconcile_once(
     hub: Hub,
     host: str,
@@ -751,6 +788,9 @@ def reconcile_once(
     mem_probe: Callable[[], float] = free_mem_gb,
     pgid_probe: Callable[[], set] = live_pgids,
     warnings: Optional["HostWarnings"] = None,
+    spawn_allowed: bool = True,
+    agents_allowed: bool = True,
+    journal: Optional["journal_mod.Journal"] = None,
 ) -> ReconcileResult:
     """One reconcile step. Mutates `workers` in place (removing finished
     and killed ones) and returns what changed. Over-target and disabled
@@ -765,6 +805,21 @@ def reconcile_once(
          in front of it.
       2. HUB READS, each guarded on its own.
       3. STARTS, which need (2) to have succeeded to mean anything.
+
+    `spawn_allowed=False` (Keel 3R-2 step 4) short-circuits step 3 ONLY.
+    Steps 1 and 2 run in full, and that is the whole point: the caller
+    passes False when the store never answered at startup and this
+    runner's workers were adopted from the local journal, which is
+    precisely the state in which the lost-lease kill matters MOST -- a
+    journal-rebuilt claim whose renewer cannot reach the store will mark
+    itself lost, and the kill that follows is the only thing standing
+    between this host and a duplicate gate. Disarming step 1 alongside
+    step 3 would turn a conservative "start nothing" into "start nothing
+    and stop nothing", which is strictly worse than the rc-5 refusal this
+    replaced. `agents_allowed=False` suppresses only the agent half
+    (SPEC SS12's autonomous host gates but never dispatches); gates still
+    start, because an autonomous host that cannot gate is less capable
+    than today's hubless Stage 1, which SPEC forbids.
 
     Steps 1 and 2 used to be the other way round, and the inversion was
     the bug. `hub.read(DESIRED_REF)` and `hub.read(TIP_SIGNAL_REF)` sat
@@ -792,6 +847,11 @@ def reconcile_once(
     survives the raise.
     """
     res = ReconcileResult()
+    # One journal for the whole step, so `start_gate`/`start_agent`/the
+    # reap all address the same root. `Journal()` resolves `$KEEL_HOME`
+    # at construction (see `journal.default_root`), which is what lets a
+    # hermetic fixture redirect it.
+    jn = journal if journal is not None else journal_mod.Journal()
 
     # ---- (1) LOCAL FIRST. No hub call precedes this loop. ------------ #
     # Reap finished/dead workers, and kill any worker whose lease is lost.
@@ -812,6 +872,12 @@ def reconcile_once(
                       f"{w.tag} (expires on TTL): {e}", file=sys.stderr, flush=True)
             workers.remove(w)
             res.finished.append(w.tag)
+            # The rc this runner can honestly report. An ADOPTED worker
+            # (hub- or journal-adopted) is not our child, so there is no
+            # `Popen` and no exit status: `None` is recorded rather than a
+            # guess, exactly as the agent-outcome block below already does
+            # with "unknown-adopted".
+            reaped_rc = w.popen.returncode if w.popen is not None else None
             if w.kind == "gate":
                 # R4: gate.sh's `store_verdict()` swallows a hub-push
                 # failure so its own PASS/FAIL is never wrong because the
@@ -831,6 +897,21 @@ def reconcile_once(
                         f"{w.tag}: gate.sh could not push its verdict to the hub cache "
                         f"(see gate-{w.tag}.log); the gate's own PASS/FAIL is unaffected",
                     ))
+                # NO `journal.verdict` RECORD IS WRITTEN FOR A GATE, and the
+                # omission is deliberate. `journal.verdict` records what the
+                # GATE stored -- `outcome`/`tree`/`rc` -- and at this point
+                # in the step this runner does not know any of the three.
+                # `gate.sh` writes its own verdict to the shared cache; the
+                # only thing fleetd ever reads it back through is
+                # `classify_branch`, keyed by BRANCH and tip sha in the
+                # selection phase, not by the worker being reaped here.
+                # Deriving a PASS/FAIL from `rc` alone would be an
+                # approximation under a real field name -- and a
+                # plausible-but-wrong `outcome` in an evidence file is worse
+                # than no field at all, because nothing downstream could
+                # tell. The `exit` record below carries the rc, which IS
+                # known, and stops there.
+            reaped_outcome: Optional[str] = None
             if w.kind == "agent":
                 # Close the ledger entry this run opened. An ADOPTED worker
                 # has no Popen and therefore no exit status -- its outcome
@@ -838,7 +919,7 @@ def reconcile_once(
                 # which leaves the count where the dispatch put it (the
                 # conservative direction: an unknown run is not evidence of
                 # progress).
-                rc = w.popen.returncode if w.popen is not None else None
+                rc = reaped_rc
                 if rc is None:
                     outcome = "unknown-adopted"
                 elif rc == 0:
@@ -846,7 +927,27 @@ def reconcile_once(
                                else "converged")
                 else:
                     outcome = _AGENT_RC_OUTCOMES.get(rc, f"exit-{rc}")
+                # An agent IS a case where the outcome becomes known right
+                # here -- it is computed on the line above and written to
+                # the durable ledger on the line below -- so the journal
+                # gets a `verdict` record as well as the `exit` that closes
+                # the job. `_journal_close` explains why neither can raise
+                # out of the reap.
+                if jn is not None and getattr(w, "job_key", None) is not None:
+                    try:
+                        jn.verdict(job_key=w.job_key, outcome=outcome, rc=rc)
+                    except journal_mod.JournalError as exc:
+                        print(f"fleetd[{host}] journal verdict record failed for "
+                              f"{w.tag} ({type(exc).__name__}: {exc})",
+                              file=sys.stderr, flush=True)
+                reaped_outcome = outcome
                 _record_outcome(hub, w.branch, host, outcome)
+            # EXACTLY ONE `exit` record per reaped worker, outside both
+            # kind branches. Inside them it would be written twice for a
+            # worker that is somehow both, and NOT AT ALL for one whose
+            # `kind` is neither -- and a job with no exit record is one
+            # that stays open in the journal forever.
+            _journal_close(jn, w, rc=reaped_rc, outcome=reaped_outcome, host=host)
             continue
 
         if w.claim.lost:
@@ -882,6 +983,15 @@ def reconcile_once(
             outcome = kill_worker(w)
             workers.remove(w)
             res.killed.append((w.tag, reason))
+            # A killed job is over as surely as a reaped one, and needs the
+            # same `exit` record for the same reason: without it the job
+            # stays in `open_jobs`, and the next startup pass reads a
+            # process group we deliberately SIGKILLed as work owed a
+            # release. `rc` is None -- the group was signalled, so there is
+            # no exit status this runner observed -- and the outcome names
+            # the kill rather than guessing at what the gate would have
+            # decided.
+            _journal_close(jn, w, rc=None, outcome="killed-lost-lease", host=host)
             print(
                 f"fleetd[{host}] LOST LEASE {w.claim.ref} kind={w.kind} "
                 f"branch={w.branch} tag={w.tag} pgid={w.pgid}: {reason} "
@@ -949,7 +1059,19 @@ def reconcile_once(
 
     running = len([w for w in workers if w.kind == "gate"])
 
-    if not desired_readable:
+    if not spawn_allowed:
+        # Keel 3R-2 step 4. Everything above this line has already run:
+        # the reap, the lost-lease kill, and both guarded hub reads. Only
+        # the STARTS are refused, and named so `fleet status --why` says
+        # which of the refusal reasons this is instead of leaving silence.
+        res.refused.append((
+            "offline-no-spawn",
+            "the store answered neither route at startup, so this runner's workers "
+            "were adopted from the local journal; a start whose claim cannot be "
+            "CAS-arbitrated is the duplicate-gate hazard leases exist to prevent. "
+            "Starts resume on the first reconcile step that completes.",
+        ))
+    elif not desired_readable:
         pass  # already recorded as hub-unreadable; nothing to start
     elif unknown_host:
         # L2: names the actual defect and the actual fix, because the
@@ -1052,8 +1174,17 @@ def reconcile_once(
                         branch = _branch(q[slug])
                         tag = f"{host}-{slug}-{int(time.time()) % 100000}"
                         try:
-                            w = start_gate(hub, branch, tag, gate_command, host, log_dir)
-                        except OSError as e:
+                            w = start_gate(hub, branch, tag, gate_command, host, log_dir,
+                                           journal=jn)
+                        # `JournalError` joins `OSError` because
+                        # `JournalWriteError`'s contract is "the caller must
+                        # not spawn", and the caller's way of not spawning is
+                        # a named refusal for THIS branch -- not an exception
+                        # out of `reconcile_once`, which `run_daemon` does not
+                        # catch (it catches `HubError` only) and which would
+                        # therefore take the whole daemon down over one
+                        # unwritable file.
+                        except (OSError, journal_mod.JournalError) as e:
                             res.refused.append(("spawn-failed", f"{branch}: {e}"))
                             continue
                         if w is None:
@@ -1065,7 +1196,19 @@ def reconcile_once(
     want_agents = int(my_desired.get("agents") or 0)
     agent_workers = [w for w in workers if w.kind == "agent"]
     slots = want_agents - len(agent_workers)
-    if enabled and want_gates <= 0 and want_agents <= 0:
+    if not spawn_allowed:
+        pass  # already refused above, for gates and agents alike
+    elif not agents_allowed:
+        # SPEC SS12: an autonomous host runs GATES ONLY. Named separately
+        # from `offline-no-spawn` because the two are different facts with
+        # different fixes -- this host is gating fine, it is declining to
+        # spend an agent run while nothing is coordinating the fleet.
+        res.refused.append((
+            "autonomous-no-agents",
+            "no live server lease; this host is scheduling autonomously and "
+            "dispatches gates only",
+        ))
+    elif enabled and want_gates <= 0 and want_agents <= 0:
         # S1 (Stage 1 integration review): the exact silent case flagged --
         # an enabled host with both targets at zero fell through the gates
         # block (deficit <= 0, nothing recorded) and the agents block below
@@ -1074,7 +1217,7 @@ def reconcile_once(
         # host that is idle entirely by desired-state design. `target-zero`
         # names that design choice so it reads as intentional, not broken.
         res.refused.append(("target-zero", f"gates {want_gates} / agents {want_agents}"))
-    if enabled and slots > 0:
+    if enabled and slots > 0 and spawn_allowed and agents_allowed:
         try:
             import agentworker as _aw
             has_cli = bool(_aw.available_clis())
@@ -1083,7 +1226,8 @@ def reconcile_once(
         if not has_cli:
             res.refused.append(("no-agent-cli", "neither claude nor codex on this host"))
         else:
-            dispatch_agents(hub, host, workers, slots, log_dir, repo_root, res)
+            dispatch_agents(hub, host, workers, slots, log_dir, repo_root, res,
+                            journal=jn)
 
     # T3: durable warnings, swept from the log directory rather than from
     # `workers` -- see `HostWarnings`. A caller that passes no store gets a
