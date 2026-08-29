@@ -1642,6 +1642,59 @@ def build_hub(
 # --------------------------------------------------------------------- #
 
 
+# Registration's OWN latency budget, and why it is not the hub's.
+#
+# `ServerHub`'s default 5 s connect / 20 s read (SPEC §4.2) is a CAS
+# write's budget: a write cut off mid-flight is an AMBIGUOUS outcome that
+# `FallbackHub` refuses to paper over, so the wait is bought deliberately.
+# An announcement has no such property -- its failure mode is "we stay
+# unregistered until the next cycle" -- and `register_cycle` runs on the
+# reconcile loop's own thread, between the step and `time.sleep(interval)`.
+# A server that ACCEPTS the connection and then answers nothing (a
+# half-open tailnet path, a wedged accept loop, a SIGSTOPped process --
+# NOT a closed port, which fails in ~1 ms) therefore charged the whole
+# 20 s read to the loop's cadence, every cycle, forever: at
+# LOOP_SECONDS=15 the loop's real period became 35 s. Measured with a
+# black-hole listener: 20.15 s and 20.16 s between consecutive reconcile
+# steps at `interval=0`.
+#
+# So registration gets a budget sized to itself. Kept above a loopback/
+# tailnet round trip by a wide margin -- this is a stall detector, not a
+# latency SLO -- and far below LOOP_SECONDS so a worst-case cycle still
+# costs a fraction of the cadence rather than doubling it.
+REGISTER_CONNECT_TIMEOUT_S = 2.0
+REGISTER_READ_TIMEOUT_S = 3.0
+
+# ...and a backoff, because a bounded per-cycle cost is still a per-cycle
+# cost. A server that is down stays down for minutes, not milliseconds,
+# and paying 5 s of the loop's 15 s to re-learn that on every pass is a
+# third of the scheduler spent on an announcement.
+#
+# The ceiling is 60 s from two directions that agree. SPEC §5.3 already
+# names it -- "Reconnect: long-poll 30 s, connect 5 s, backoff 1->60 s
+# with jitter" -- and `election.DEMOTION_S` (180 s) independently forbids
+# anything much larger: a server that comes back must be registered with
+# before it demotes itself unreachable, and `election.note_registration`
+# is the only inbound signal that averts `demote_unreachable`. MAX + one
+# cycle is the worst-case detection delay, so 60 s leaves that window a
+# factor of ~2.4 of headroom.
+#
+# NO JITTER, deliberately and with the omission stated rather than
+# approximated. §5.3's jitter belongs to the long-poll reconnect loop
+# that sentence is about, which is not built yet; this ladder rides the
+# reconcile loop, whose phase is already unsynchronised across hosts, and
+# adding a random source here would only make the ladder untestable
+# without an injected RNG. When the reconnect loop lands, the jitter
+# belongs there.
+#
+# The first failure waits nothing at all -- one blip must still be retried
+# on the very next cycle, which is the retry policy `register_once`'s
+# docstring names -- and only a SECOND consecutive failure starts the
+# ladder.
+REGISTER_BACKOFF_BASE_S = 15.0
+REGISTER_BACKOFF_MAX_S = 60.0
+
+
 def server_client(hub) -> Optional[ServerHub]:
     """The `ServerHub` inside `hub`, or `None` when no server is
     configured.
@@ -1655,7 +1708,20 @@ def server_client(hub) -> Optional[ServerHub]:
     answer on a hubless Stage-1 runner, not an error.
     """
     if isinstance(hub, FallbackHub) and isinstance(hub.primary, ServerHub):
-        return hub.primary
+        # A CLONE with registration's own budget, not `hub.primary`
+        # itself. Handing back the primary hands back the CAS write
+        # path's 20 s read timeout, and this client is used from the
+        # reconcile loop's own thread -- see `REGISTER_READ_TIMEOUT_S`
+        # for the stall that buys. It is also emphatically NOT the
+        # object `FallbackHub` damps: `_primary_worth_trying`'s 30 s
+        # sticky window (`fallbackhub.STICKY_S`) applies to calls made
+        # THROUGH the FallbackHub, and `register` is deliberately not one
+        # of them (SPEC §4.3 r2), so registration has to carry its own
+        # damping. That is `register_cycle`'s `backoff`.
+        return hub.primary.with_timeouts(
+            connect_timeout_s=REGISTER_CONNECT_TIMEOUT_S,
+            read_timeout_s=REGISTER_READ_TIMEOUT_S,
+        )
     return None
 
 
@@ -1801,26 +1867,96 @@ def _boot_id_changed(health: object, session: dict) -> bool:
     return health.get("boot_id") != session.get("boot_id")
 
 
+def _register_backoff_wait_s(fails: int) -> float:
+    """Seconds to wait before the next attempt after `fails` consecutive
+    failed registration attempts. `fails <= 1` waits nothing: a single
+    blip is retried on the very next cycle, unchanged.
+
+    Its own named function so the ladder can be asserted directly, and so
+    the DEMOTION_S headroom argument above is checked against one
+    expression rather than re-derived from an inline shift.
+    """
+    if fails <= 1:
+        return 0.0
+    return min(REGISTER_BACKOFF_BASE_S * (2 ** (fails - 2)), REGISTER_BACKOFF_MAX_S)
+
+
+def _register_backoff_skip(backoff: Optional[dict], now: float) -> bool:
+    """True when this cycle is inside the backoff window and must not
+    make the call. `None` disables backoff entirely -- which is what a
+    direct caller (and every pre-existing test) gets."""
+    if backoff is None:
+        return False
+    return now < backoff.get("not_before", 0.0)
+
+
+def _register_backoff_note(backoff: Optional[dict], now: float, ok: bool,
+                           log: Callable[[str], None]) -> None:
+    """Record one attempt's outcome. Success clears the ladder; failure
+    advances it and logs the wait, because a silent gap between
+    registrations is indistinguishable from a runner that stopped trying.
+    """
+    if backoff is None:
+        return
+    if ok:
+        backoff["fails"] = 0
+        backoff["not_before"] = 0.0
+        return
+    fails = int(backoff.get("fails", 0)) + 1
+    wait = _register_backoff_wait_s(fails)
+    backoff["fails"] = fails
+    backoff["not_before"] = now + wait
+    if wait:
+        log(f"REGISTER backing off {wait:.0f}s after {fails} consecutive "
+            f"failed attempts -- gating is unaffected")
+
+
 def register_cycle(client, runner_id: str, session: dict,
                    build_payload: Callable[[], dict],
-                   log: Callable[[str], None]) -> Optional[str]:
+                   log: Callable[[str], None],
+                   backoff: Optional[dict] = None,
+                   clock: Callable[[], float] = time.monotonic) -> Optional[str]:
     """One loop iteration's worth of registration. Mutates `session` in
     place on success and returns why it registered (`"first"` or
     `"reconnect"`), or `None` when it did not register or could not.
 
     NEVER RAISES, and never touches the reconcile result. It runs AFTER
-    the reconcile step precisely so that a hung server -- `ServerHub`'s
-    budget is a 5 s connect plus a 20 s read, per call -- delays the NEXT
-    cycle rather than sitting between adoption and the first reap, where
-    `run_daemon` already argues (see `check_toolchain_agreement`'s call
-    site) that a second of avoidable latency is a live gate reported as an
-    orphan and killed.
+    the reconcile step so that a slow server delays the NEXT cycle rather
+    than sitting between adoption and the first reap, where `run_daemon`
+    already argues (see `check_toolchain_agreement`'s call site) that a
+    second of avoidable latency is a live gate reported as an orphan and
+    killed.
+
+    BUT "delays the next cycle" is only tolerable because the delay is
+    BOUNDED, and it was not. This call ran on the loop's own thread with
+    the CAS write path's 5 s + 20 s budget and no damping of any kind, so
+    a server that accepted TCP and answered nothing cost 20 s on EVERY
+    cycle, in either steady state (`health()` when registered,
+    `register_once` when not) and forever. Two things bound it now, and
+    both are needed:
+
+      * `server_client` hands this function a client with
+        `REGISTER_CONNECT_TIMEOUT_S` / `REGISTER_READ_TIMEOUT_S`, so ONE
+        cycle's worst case is ~5 s rather than ~25 s; and
+      * `backoff` -- a caller-owned dict, mutated in place -- makes the
+        SECOND and later consecutive failures skip cycles entirely, so a
+        server that is down costs one attempt per `REGISTER_BACKOFF_MAX_S`
+        instead of one per cycle.
+
+    `backoff=None` (the default, and what every direct caller in the tests
+    passes) disables the ladder and preserves the retry-on-the-very-next-
+    cycle behaviour exactly. A payload-build failure is NOT counted into
+    it: that is a local defect, it costs no wall-clock on the loop, and
+    backing off from it would only delay noticing that the server is fine.
 
     `build_payload` is a callable, not a payload, so nothing is measured
     on the cycles where no registration is sent -- which is nearly all of
     them.
     """
     if client is None:
+        return None
+    now = clock()
+    if _register_backoff_skip(backoff, now):
         return None
     reason = "first"
     if session:
@@ -1829,8 +1965,16 @@ def register_cycle(client, runner_id: str, session: dict,
         except Exception as exc:  # noqa: BLE001 -- best-effort, see docstring
             log(f"REGISTER health probe failed ({type(exc).__name__}: {exc}) -- "
                 f"keeping the existing registration")
+            _register_backoff_note(backoff, now, False, log)
             return None
         if not _boot_id_changed(health, session):
+            # The steady state, and the ONLY place a successful health
+            # probe clears the ladder. Clearing it on the probe alone
+            # would defeat the backoff in the one case that still costs
+            # wall-clock: a server that answers `/v1/health` quickly but
+            # black-holes `register` would reset `fails` to 0 on every
+            # cycle and pay a full read timeout on every cycle forever.
+            _register_backoff_note(backoff, now, True, log)
             return None
         reason = "reconnect"
     try:
@@ -1840,7 +1984,9 @@ def register_cycle(client, runner_id: str, session: dict,
         return None
     reply = register_once(client, runner_id, payload, log)
     if reply is None:
+        _register_backoff_note(backoff, now, False, log)
         return None
+    _register_backoff_note(backoff, now, True, log)
     session.clear()
     session.update(reply)
     log(f"REGISTERED ({reason}) boot_id={reply.get('boot_id')} "
@@ -2011,6 +2157,10 @@ def run_daemon(
     # the loop body free of setup.
     reg_client = server_client(hub)
     reg_session: dict = {}
+    # The registration ladder's state, owned by this loop and by nothing
+    # else. A dict rather than a nonlocal so `register_cycle` stays a
+    # plain function that a test can drive one cycle at a time.
+    reg_backoff: dict = {}
     reg_scope_token = fleet_scope_token(hub.url)
 
     def _reg_log(msg: str) -> None:
@@ -2075,6 +2225,7 @@ def run_daemon(
                 reg_client, host, reg_session,
                 lambda: registration_payload(host, workers, repo_root, reg_scope_token),
                 _reg_log,
+                reg_backoff,
             )
 
             if singleton.lost:

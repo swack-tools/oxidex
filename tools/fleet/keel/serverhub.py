@@ -176,6 +176,36 @@ class ServerHub:
     def __repr__(self) -> str:  # no token, ever
         return f"ServerHub({self.base_url!r})"
 
+    def with_timeouts(self, *, connect_timeout_s: Optional[float] = None,
+                      read_timeout_s: Optional[float] = None) -> "ServerHub":
+        """A second client for the SAME server and the SAME token, with a
+        different latency budget.
+
+        SPEC §4.2's 5 s connect / 20 s read is a CAS write's budget: a
+        write that is cut off mid-flight is an ambiguous outcome, and
+        `FallbackHub` pays for that ambiguity by refusing to fall back
+        (`classify_primary_failure`), so the budget is set generously on
+        purpose. Nothing about that reasoning applies to a call whose
+        failure mode is "we stay unregistered until the next cycle" --
+        and a caller that runs such a call on a loop that must keep its
+        cadence needs a budget it chooses itself, not the write path's.
+
+        A clone rather than a mutator: the CAS client and the announcement
+        client are used concurrently (the reconcile step and
+        `register_cycle` are on the same thread today, but the renewer
+        threads are not), and re-pointing one object's timeouts would
+        change the other caller's budget underneath it. `token` is copied
+        straight across without ever being read out into a caller's hands.
+        """
+        return ServerHub(
+            self.base_url,
+            token=self._token,
+            connect_timeout_s=(self.connect_timeout_s if connect_timeout_s is None
+                               else connect_timeout_s),
+            read_timeout_s=(self.read_timeout_s if read_timeout_s is None
+                            else read_timeout_s),
+        )
+
     # ---------------------------------------------------------------- #
     # Reads
     # ---------------------------------------------------------------- #
