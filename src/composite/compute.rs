@@ -13,7 +13,7 @@
 //! why this layer is worth building before chasing per-format gaps.
 use crate::core::formatters::duration::convert_duration;
 use crate::core::formatters::exif_print_conv::print_exposure_time;
-use crate::core::formatters::numeric_precision::perl_number;
+use crate::core::formatters::numeric_precision::{perl_f, perl_number};
 use crate::parsers::tiff::makernotes::panasonic::SHOOTING_MODE;
 
 /// Inputs to a composite: `require` values followed by `desire` values, in the
@@ -91,11 +91,87 @@ fn perl_join(values: &[f64]) -> (String, Vec<f64>) {
     (rendered.join(" "), reparsed)
 }
 
+/// Length of the leading run of `s` that ExifTool's `ToFloat` would accept.
+///
+/// `Image::ExifTool::ToFloat` (ExifTool.pm:5969-5978) extracts the first
+/// substring matching
+///
+/// ```text
+/// ((?:[+-]?)(?=\d|\.\d)\d*(?:\.\d*)?(?:[Ee](?:[+-]?\d+))?)
+/// ```
+///
+/// and sets the scalar to `undef` when nothing matches. Two clauses of that
+/// regex are load-bearing here and were both missing:
+///
+/// * `[Ee][+-]?\d+` -- an exponent. Without it the scan stopped at the `e`
+///   and kept only the mantissa, so `Olympus:FocalPlaneDiagonal` of
+///   `1.733823728e-07 mm` on `Olympus/OlympusFE-120.jpg` read as 1.733823728
+///   -- eight orders of magnitude out. `Composite:ScaleFactor35efl` then came
+///   out 25.0 against the pinned 13.59 oracle's 249544487.2, and every tag
+///   downstream of it (CircleOfConfusion, FocalLength35efl,
+///   HyperfocalDistance, FOV) was confidently wrong rather than absent.
+/// * `\d+` *after* the `[Ee]`, not `\d*`. The exponent is taken only when
+///   digits actually follow, so `"1.5e"` is 1.5 and a unit suffix that
+///   happens to start with `e` (`"5 exposures"`) is 5 -- not a parse failure
+///   and not a misread.
+///
+/// The scan stays anchored at the start of the string, where ExifTool's is
+/// unanchored: `ToFloat("f/2.8")` is 2.8 and this is `None`. That is the
+/// omit-rather-than-approximate side of the divergence and it is deliberate;
+/// widening it is a separate change with its own measurement.
+fn to_float_run_end(s: &str) -> usize {
+    let b = s.as_bytes();
+    let mut i = 0;
+    if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+        i += 1;
+    }
+    // `(?=\d|\.\d)`: a bare sign, a lone `.`, or `.e5` never starts a number.
+    let starts_number = matches!(b.get(i), Some(c) if c.is_ascii_digit())
+        || (b.get(i) == Some(&b'.') && matches!(b.get(i + 1), Some(c) if c.is_ascii_digit()));
+    if !starts_number {
+        return 0;
+    }
+    while matches!(b.get(i), Some(c) if c.is_ascii_digit()) {
+        i += 1;
+    }
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        while matches!(b.get(i), Some(c) if c.is_ascii_digit()) {
+            i += 1;
+        }
+    }
+    // `(?:[Ee](?:[+-]?\d+))?` -- consumed only if at least one digit follows.
+    let mut j = i;
+    if matches!(b.get(j), Some(b'e' | b'E')) {
+        j += 1;
+        if matches!(b.get(j), Some(b'+' | b'-')) {
+            j += 1;
+        }
+        if matches!(b.get(j), Some(c) if c.is_ascii_digit()) {
+            while matches!(b.get(j), Some(c) if c.is_ascii_digit()) {
+                j += 1;
+            }
+            i = j;
+        }
+    }
+    i
+}
+
 /// Parse a value ExifTool would have fed to `ToFloat`.
 ///
 /// Handles the rational forms that reach composites unconverted (`1/200`) and
 /// trailing units (`50.0 mm`), because the inputs are print-formatted values
-/// rather than raw ones.
+/// rather than raw ones. The numeric run itself is [`to_float_run_end`].
+///
+/// `"inf"` returns `None`, and that is not an oversight: ExifTool's `ToFloat`
+/// regex requires a digit, so an infinite scalar is nulled there too. Every
+/// ValueConv that opens with `ToFloat(@val)` therefore sees `undef`, and its
+/// own `unless $val[N]` guard -- not a live infinity -- is what produces the
+/// output. `Composite:HyperfocalDistance` is the worked example: with an
+/// infinite Aperture ExifTool prints `Inf m` from its `return 'inf' unless
+/// $val[1]` branch, *not* the 0 that dividing by a live infinity would give.
+/// The arms whose ExifTool ValueConv does not call `ToFloat` -- and so do see
+/// the number -- use [`f_scalar`] instead.
 // `pub(super)`, not private: `generated_compute.rs` (the auto-derived
 // $val[N]-expression sibling of this file, codegen_composite.py's output)
 // reuses this exact parser rather than duplicating it, so a rational-input
@@ -110,11 +186,29 @@ pub(super) fn f(v: Option<&str>) -> Option<f64> {
         let (n, d) = (n.trim().parse::<f64>().ok()?, d.trim().parse::<f64>().ok()?);
         return if d == 0.0 { None } else { Some(n / d) };
     }
-    // Take the leading numeric run so "50.0 mm" and "2.8" both work.
-    let end = s
-        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
-        .unwrap_or(s.len());
-    s[..end].parse::<f64>().ok()
+    s[..to_float_run_end(s)].parse::<f64>().ok()
+}
+
+/// [`f`], plus the infinities that ExifTool's `ToFloat` nulls.
+///
+/// ExifTool hands a Composite ValueConv live Perl scalars, so an infinite
+/// upstream ValueConv arrives in `$val[N]` as a number and stays one unless
+/// `ToFloat` is called on it. oxidex hands its arms *strings*, so the same
+/// scalar arrives as the text `inf` -- Rust's rendering of `f64::INFINITY` --
+/// and [`f`] correctly refuses it. Use this instead in the arms whose ExifTool
+/// ValueConv has no `ToFloat(@val)` line, so the number survives the round
+/// trip through text that oxidex, not ExifTool, introduced.
+///
+/// `Composite:Aperture` (`ValueConv => '$val[0] || $val[1]'`, Exif.pm:4788) is
+/// the case that forced this: an overflowed APEX `ApertureValue` converts to
+/// an infinite f-number, which ExifTool prints as `Inf` on
+/// `Canon/CanonEOS20Da.jpg`.
+pub(super) fn f_scalar(v: Option<&str>) -> Option<f64> {
+    f(v).or_else(|| match v?.trim() {
+        "inf" | "Inf" | "infinity" | "Infinity" => Some(f64::INFINITY),
+        "-inf" | "-Inf" | "-infinity" | "-Infinity" => Some(f64::NEG_INFINITY),
+        _ => None,
+    })
 }
 
 pub(super) fn get<'a>(i: Inputs<'a>, n: usize) -> Option<&'a str> {
@@ -874,13 +968,32 @@ fn fmt_megapixels(v: f64) -> String {
     format!("{v:.p$}", p = p)
 }
 
-/// ExifTool: `Image::ExifTool::Exif::PrintFNumber`
+/// ExifTool: `Image::ExifTool::Exif::PrintFNumber` (Exif.pm:5715-5723)
 ///
 /// ```text
-/// sprintf("%.1f", $val)  # (or %.2f below 1.0)
+/// my $val = shift;
+/// if (Image::ExifTool::IsFloat($val) and $val > 0) {
+///     $val = sprintf(($val<1 ? "%.2f" : "%.1f"), $val);
+/// }
+/// return $val;
 /// ```
+///
+/// The `IsFloat($val) and $val > 0` gate is not decoration: anything it
+/// rejects is returned *unformatted*, as Perl stringifies it. `IsFloat`
+/// (ExifTool.pm:5947) is the anchored numeric regex, so an infinite f-number
+/// fails it and prints `Inf` -- capitalised, and with no `.0`. Rust's
+/// `format!("{:.1}")` renders the same value `inf`, and the old body applied
+/// `%.1f` unconditionally, so `Canon/CanonEOS20Da.jpg`'s overflowed
+/// `ApertureValue` had no spelling of `Composite:Aperture` that could match
+/// the oracle. A non-positive f-number is the same story in the other
+/// direction: ExifTool prints a stored 0 as `0`, not `0.0`.
 fn print_fnumber(v: f64) -> String {
-    if v > 0.0 && v < 1.0 {
+    if !(v.is_finite() && v > 0.0) {
+        // `perl_number` is Perl's own scalar stringification -- `Inf`,
+        // `-Inf`, `NaN`, `0` -- which is exactly what `return $val` yields.
+        return perl_number(v);
+    }
+    if v < 1.0 {
         format!("{v:.2}")
     } else {
         format!("{v:.1}")
@@ -1170,10 +1283,15 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
 
         // desire: FNumber, ApertureValue
         // ValueConv: `$val[0] || $val[1]`
+        //
+        // `f_scalar`, not `f`: this ValueConv has no `ToFloat(@val)` line
+        // (Exif.pm:4782-4790), so an infinite `ApertureValue` -- what an APEX
+        // value past `2 ** (i32::MAX / 2)` converts to -- stays a live number
+        // here and reaches `PrintFNumber` as `Inf`.
         ("Exif", "Aperture") => {
-            let v = f(get(i, 0))
+            let v = f_scalar(get(i, 0))
                 .filter(|v| *v != 0.0)
-                .or_else(|| f(get(i, 1)))?;
+                .or_else(|| f_scalar(get(i, 1)))?;
             Computed::new(v.to_string(), print_fnumber(v))
         }
 
@@ -1234,13 +1352,27 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         // shows ExifTool adds no stringification of its own. Adding the round
         // trip here would manufacture the divergence, not remove it.
         ("Exif", "HyperfocalDistance") => {
-            let fl = f(get(i, 0))?;
-            let (ap, coc) = (f(get(i, 1))?, f(get(i, 2))?);
-            if ap == 0.0 || coc == 0.0 {
-                return Computed::same("inf");
-            }
+            // `ToFloat(@val)` runs first and nulls every scalar its numeric
+            // regex refuses -- an infinite Aperture included (see [`f`]) --
+            // and `unless $val[1] and $val[2]` then reads that undef exactly
+            // as it reads a zero. Bailing on an unparseable input instead
+            // would drop the tag ExifTool emits: on
+            // `Canon/CanonEOS20Da.jpg`, whose ApertureValue overflows to
+            // infinity, the oracle prints `Inf m` here.
+            let Some((ap, coc)) = f(get(i, 1))
+                .filter(|v| *v != 0.0)
+                .zip(f(get(i, 2)).filter(|v| *v != 0.0))
+            else {
+                // The `inf` string is the ValueConv result; the PrintConv
+                // `sprintf("%.2f m", 'inf')` numifies it, and Perl's `%f`
+                // spells an infinity `Inf`.
+                return Computed::new("inf", "Inf m");
+            };
+            // Perl reads an undef `$val[0]` as 0 in the product below rather
+            // than refusing the whole conversion.
+            let fl = f(get(i, 0)).unwrap_or(0.0);
             let hd = fl * fl / (ap * coc * 1000.0);
-            Computed::new(hd.to_string(), format!("{hd:.2} m"))
+            Computed::new(hd.to_string(), format!("{} m", perl_f(hd, 2)))
         }
 
         // require: FocalLength, Aperture, CircleOfConfusion
@@ -2154,6 +2286,106 @@ mod tests {
     /// Print form, with a manufacturer in scope.
     fn cm(name: &str, v: &[Option<&str>], make: &str) -> Option<String> {
         compute("Exif", name, v, Some(make)).map(|c| c.print)
+    }
+
+    /// The exponent clause of ExifTool's `ToFloat` regex (ExifTool.pm:5975).
+    ///
+    /// `Olympus/OlympusFE-120.jpg` carries
+    /// `Olympus:FocalPlaneDiagonal = 1.733823728e-07 mm`. Truncating that to
+    /// its mantissa made `Composite:ScaleFactor35efl` 43.266615/1.733823728 =
+    /// 25.0 where the pinned 13.59 oracle prints 249544487.2, and dragged
+    /// CircleOfConfusion, FocalLength35efl, HyperfocalDistance and FOV
+    /// (`6.4 deg` against the oracle's `0.0 deg`) wrong with it.
+    #[test]
+    fn to_float_reads_an_exponent() {
+        assert_eq!(f(Some("1.733823728e-07 mm")), Some(1.733823728e-07));
+        assert_eq!(f(Some("1.5E+3")), Some(1500.0));
+        assert_eq!(f(Some("-2e2")), Some(-200.0));
+        // `Composite:ScaleFactor35efl` on that file, to the digit ExifTool
+        // prints: 43.266615.. / 1.733823728e-07.
+        let sf = (24.0f64 * 24.0 + 36.0 * 36.0).sqrt() / f(Some("1.733823728e-07 mm")).unwrap();
+        assert_eq!(format!("{sf:.1}"), "249544487.2");
+    }
+
+    /// The regex takes the exponent only when digits actually follow the
+    /// `e`, so neither a truncated exponent nor a unit that starts with `e`
+    /// is misread -- and the pre-existing suffix and rational forms are
+    /// unchanged by the wider scan.
+    #[test]
+    fn to_float_run_stops_where_exiftool_stops() {
+        assert_eq!(f(Some("1.5e")), Some(1.5));
+        assert_eq!(f(Some("5 exposures")), Some(5.0));
+        assert_eq!(f(Some("2e")), Some(2.0));
+        assert_eq!(f(Some("2e+")), Some(2.0));
+        assert_eq!(f(Some("50.0 mm")), Some(50.0));
+        assert_eq!(f(Some("1/250")), Some(1.0 / 250.0));
+        assert_eq!(f(Some("2.8")), Some(2.8));
+        // `(?=\d|\.\d)` -- a bare sign or a lone point is not a number.
+        assert_eq!(f(Some("-")), None);
+        assert_eq!(f(Some(".")), None);
+        assert_eq!(f(Some("inf")), None);
+        assert_eq!(f(Some("-inf")), None);
+    }
+
+    /// An infinity survives only where ExifTool's own ValueConv lets it.
+    ///
+    /// `ToFloat` nulls an infinite scalar, so [`f`] must too; the arms whose
+    /// ValueConv has no `ToFloat(@val)` line read it with [`f_scalar`].
+    #[test]
+    fn infinity_survives_exactly_where_exiftool_keeps_it() {
+        assert_eq!(f_scalar(Some("inf")), Some(f64::INFINITY));
+        assert_eq!(f_scalar(Some("-inf")), Some(f64::NEG_INFINITY));
+        assert_eq!(f_scalar(Some("2.8")), Some(2.8));
+        assert_eq!(f_scalar(Some("informal")), None);
+
+        // Exif.pm:5715 PrintFNumber returns anything `IsFloat` rejects
+        // unchanged, and Perl stringifies an infinity `Inf`, not `inf`.
+        assert_eq!(print_fnumber(f64::INFINITY), "Inf");
+        assert_eq!(print_fnumber(f64::NEG_INFINITY), "-Inf");
+        assert_eq!(print_fnumber(2.8), "2.8");
+        assert_eq!(print_fnumber(0.95), "0.95");
+        // `$val > 0` fails, so a stored zero prints as Perl spells it.
+        assert_eq!(print_fnumber(0.0), "0");
+    }
+
+    /// `Canon/CanonEOS20Da.jpg` end to end, in the two composites its
+    /// overflowed APEX `ApertureValue` reaches. The oracle prints
+    /// `Composite:Aperture = Inf` and `Composite:HyperfocalDistance = Inf m`
+    /// (FocalLength there is 0.0 mm, ScaleFactor35efl 1.6).
+    #[test]
+    fn overflowed_apex_aperture_prints_as_perl_infinity() {
+        // ValueConv `$val[0] || $val[1]`: FNumber 0 is falsy, so the
+        // infinite ApertureValue wins.
+        assert_eq!(
+            c("Aperture", &[Some("0"), Some("inf")]).as_deref(),
+            Some("Inf")
+        );
+        // `return 'inf' unless $val[1] and $val[2]` -- ToFloat has already
+        // nulled the infinite Aperture -- then `sprintf("%.2f m", 'inf')`.
+        assert_eq!(
+            c(
+                "HyperfocalDistance",
+                &[Some("0"), Some("inf"), Some("0.018779")]
+            )
+            .as_deref(),
+            Some("Inf m")
+        );
+        // A finite aperture still takes the arithmetic branch unchanged.
+        assert_eq!(
+            c(
+                "HyperfocalDistance",
+                &[Some("13"), Some("4"), Some("0.018779")]
+            )
+            .as_deref(),
+            Some("2.25 m")
+        );
+        // Exif.pm:5425 CalculateLV runs the same digit-requiring regex and
+        // returns undef when it fails, so LightValue is omitted rather than
+        // computed from an infinite aperture.
+        assert_eq!(
+            c("LightValue", &[Some("inf"), Some("30"), Some("800")]),
+            None
+        );
     }
 
     #[test]

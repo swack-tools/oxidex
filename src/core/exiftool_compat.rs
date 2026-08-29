@@ -1147,17 +1147,26 @@ fn format_tag_value_rules(tag_name: &str, value: &TagValue) -> TagValue {
 /// value. It must not receive a formatted reciprocal or rounded f-number:
 /// ExifTool's Composite table reads post-ValueConv values before PrintConv.
 pub(crate) fn apex_value_conv(base_name: &str, value: &TagValue) -> Option<TagValue> {
-    let TagValue::Rational {
-        numerator,
-        denominator,
-    } = value
-    else {
-        return None;
+    // `Float` as well as `Rational`: a rational whose numerator or denominator
+    // exceeds `i32::MAX` cannot be held in `TagValue::Rational`'s two i32s, so
+    // `core::tag_conversion::handle_rational_type` hands the APEX tags the
+    // GetRational64u quotient as a float instead. Matching only on `Rational`
+    // is what made that overflow skip the exponential below entirely --
+    // `Canon/CanonEOS20Da.jpg`'s 2147483648/1 printed as the stored APEX
+    // number rather than the oracle's `Inf`.
+    let apex = match value {
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } => {
+            if *denominator == 0 {
+                return None;
+            }
+            f64::from(*numerator) / f64::from(*denominator)
+        }
+        TagValue::Float(v) => *v,
+        _ => return None,
     };
-    if *denominator == 0 {
-        return None;
-    }
-    let apex = f64::from(*numerator) / f64::from(*denominator);
 
     if matches!(base_name, "ApertureValue" | "MaxApertureValue") {
         return Some(TagValue::Float(2f64.powf(apex / 2.0)));
@@ -1182,7 +1191,12 @@ fn apex_print_conv(base_name: &str, value: &TagValue) -> Option<TagValue> {
         return None;
     };
     match base_name {
-        "ApertureValue" | "MaxApertureValue" => Some(TagValue::String(format!("{converted:.1}"))),
+        // `sprintf("%.1f",$val)` through [`perl_f`], not `{:.1}`: `2 ** ($val
+        // / 2)` overflows to an infinity for a stored APEX value above ~2046,
+        // and Perl spells that `Inf` where Rust spells it `inf`.
+        "ApertureValue" | "MaxApertureValue" => Some(TagValue::String(
+            crate::core::formatters::perl_f(converted, 1),
+        )),
         "ShutterSpeedValue" => Some(TagValue::String(print_exposure_time(converted))),
         _ => None,
     }

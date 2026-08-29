@@ -52,7 +52,7 @@ pub use interop_version::decode_version_bytes;
 pub use numeric_precision::{
     exiftool_rational_number, format_exif_rational, format_icc_value,
     format_integer_precision_values, format_three_decimal_values, is_icc_matrix_tag,
-    is_integer_precision_tag, is_three_decimal_tag, perl_number,
+    is_integer_precision_tag, is_three_decimal_tag, perl_f, perl_number,
 };
 pub use picture_type::picture_type_name;
 pub use scene_type::decode_scene_type;
