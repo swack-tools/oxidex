@@ -110,6 +110,7 @@ from fleetlib import Hub, HubError, HubUnreachableError
 # Stage 4 moves it into `keel/scheduler.py` -- keel/runner.py's own
 # module docstring carries the full moved-vs-shared inventory.
 from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
+    ALLOW_TOOLCHAIN_MISMATCH_ENV,
     DAEMON_MARKERS,
     FLEETD_MARKER,
     FLEET_SCOPE_PREFIX,
@@ -120,6 +121,9 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     PUSH_RETRIES,
     RECONCILE_HUB_FAILURE_LIMIT,
     RUNNER_MARKER,
+    TOOLCHAIN_MISMATCH_RC,
+    TOOLCHAIN_MISMATCH_WARNING,
+    TOOLCHAIN_UNVERIFIED_WARNING,
     WORKER_MARKERS,
     AdoptionResult,
     HostWarnings,
@@ -135,12 +139,14 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     _spawn_env,
     _verdict_store_failed_marker,
     adopt_workers,
+    check_toolchain_agreement,
     default_gate_command,
     fleet_scope_token,
     fleet_worker_pgids,
     fleetd_marker_in_group,
     free_disk_gb,
     free_mem_gb,
+    gate_toolchain_ids,
     host_identity,
     kill_process_group,
     kill_worker,
@@ -906,10 +912,26 @@ def reconcile_once(
         desired_readable = False
         desired_doc = {}
         res.refused.append(("hub-unreadable", f"{DESIRED_REF}: {e}"))
-    my_desired = (desired_doc.get("hosts") or {}).get(host) or {}
+    desired_hosts = desired_doc.get("hosts") or {}
+    my_desired = desired_hosts.get(host) or {}
     limits = desired_doc.get("limits") or {}
     want_gates = int(my_desired.get("gates") or 0)
     enabled = bool(my_desired.get("enabled", False))
+    # L2 (Keel Stage 1 LIVE, 2026-08-27/28): "this host is not in the
+    # desired state at all" is a DIFFERENT fact from "an operator turned
+    # this host off", and collapsing them is how the m5 spent the live run
+    # reporting `refused: disabled ()` -- the reason `disabled` with an
+    # EMPTY detail, because `my_desired` was `{}` and `{}.get("reason")`
+    # is None. `fleet status --why` then showed a row named `Allens-Air`
+    # (this machine's `hostname -s`) and no `m5` row at all, while
+    # `rollout/seed_desired.py` had seeded the host as `m5` and no unit
+    # file set `FLEET_HOST`. The operator's read of that screen is "the
+    # laptop is deliberately down", which is the opposite of the truth:
+    # it was running, enabled, and answering to the wrong name.
+    #
+    # Same doctrine as `desired_readable` above -- an unread target and a
+    # deliberate stand-down must never render as the same line.
+    unknown_host = desired_readable and host not in desired_hosts
 
     try:
         tip_sig = hub.read(TIP_SIGNAL_REF) or {}
@@ -927,6 +949,17 @@ def reconcile_once(
 
     if not desired_readable:
         pass  # already recorded as hub-unreadable; nothing to start
+    elif unknown_host:
+        # L2: names the actual defect and the actual fix, because the
+        # operator cannot see either from a `disabled` line. The detail
+        # carries the name this daemon is using, which is the one thing
+        # that has to change.
+        known = ", ".join(sorted(desired_hosts)) or "<none>"
+        res.refused.append((
+            "unknown-host",
+            f"{host} not in {DESIRED_REF} (known: {known}); set FLEET_HOST to this "
+            f"machine's fleet name, or add {host} to the desired state",
+        ))
     elif not enabled:
         if running == 0:
             pass  # fully drained
@@ -1171,7 +1204,10 @@ def main(argv: Optional[list] = None) -> int:
     # PLAN Stage 3 task 1: everything below argparse + Hub construction --
     # the host singleton (with the provably-dead same-host reap), the
     # adoption rebuild, the signal handlers, the bounded-failure loop and
-    # every exit code (0/3/4/5/6) -- MOVED VERBATIM to
+    # every exit code (0/3/4/5/6, plus L1's own rc 7 for a toolchain-id
+    # mismatch -- deliberately NOT 6, which is the hub-unusable code a
+    # supervisor should retry; see keel.runner.TOOLCHAIN_MISMATCH_RC)
+    # -- MOVED VERBATIM to
     # `keel.runner.run_daemon` (SPEC §2 C7). fleetd.py is still the
     # deployed entry point, so it delegates rather than duplicates.
     #

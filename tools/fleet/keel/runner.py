@@ -8,7 +8,14 @@ and exit-code contract byte-for-byte -- rc 0 deliberate stop, rc 3
 singleton refused, rc 4 host lease lost, rc 5 cannot rebuild worker
 state, rc 6 hub unusable -- and its behaviour with NO server configured
 is exactly fleetd's today: singleton, adoption, reconcile, drain-never-
-kill, lost-lease kill by process group. That offline default is the
+kill, lost-lease kill by process group.
+
+ONE code is ADDED to that contract rather than changed: rc 7, the L1
+toolchain check below, when this runner's `platform_id` differs from
+the one its own gate command computes. It is deliberately not 6 --
+`TOOLCHAIN_MISMATCH_RC` carries the argument -- because a supervisor
+should retry a hub outage and must not hot-loop a mis-installed
+toolchain, and rc 6 already meant the first. That offline default is the
 property this stage must preserve (PLAN Stage 3: "a runner works with
 no server at all"), and `tests/test_runner_core.py` pins it.
 
@@ -84,6 +91,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shlex
 import shutil
 import signal
 import socket
@@ -102,6 +110,7 @@ for _p in (_FLEET_DIR, _KEEL_DIR):
 
 import claim as claim_mod  # noqa: E402
 import config  # noqa: E402
+import toolchain  # noqa: E402  -- L1: the ONE rustc resolver + id formula
 from claim import Claim  # noqa: E402
 from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
 
@@ -970,8 +979,179 @@ class HostWarnings:
         self.entries.update(seen)
         return self.current()
 
+    def note(self, key: str, reason: str, detail: str) -> None:
+        """Record a warning that is NOT backed by a marker file.
+
+        `scan` only owns the `verdict-store-failed` reason and leaves
+        every other entry alone (see its final block), so an entry noted
+        here persists for the daemon's life -- which is right for a
+        condition like L1's toolchain disagreement: it is a property of
+        how this host is installed, and it does not clear because fifteen
+        seconds passed. `key` namespaces the entry the way a marker path
+        does, so re-noting the same condition cannot accumulate copies.
+        """
+        self.entries[key] = (reason, detail)
+
     def current(self) -> list:
         return [self.entries[k] for k in sorted(self.entries)]
+
+
+# --------------------------------------------------------------------- #
+# L1 -- the scheduler and the gate it spawns must derive the same key
+# --------------------------------------------------------------------- #
+#
+# THE INCIDENT (Keel Stage 1 LIVE, 2026-08-27/28). On the i7, fleetd's
+# host claim recorded `platform_id b2bdf493...` while the gate fleetd had
+# itself just spawned wrote its verdict under `b6613b19...` -- same host,
+# same minute, same compiler. `platform_id` is one third of the verdict
+# cache key, so `verdict.lookup` under fleetd's key returned None for a
+# tree whose PASS was already published under the gate's key.
+# `classify_branch` therefore never returned AWAITING_TRAIN and this host
+# re-gated the identical merge tree forever, ~21 minutes a pass, while
+# the answer it was paying for sat unread on the state repo.
+#
+# WHAT MADE IT INVISIBLE, and what this check fixes. Nothing anywhere
+# compared the two sides. Stage 1's acceptance bullet asserted only that
+# `git ls-remote` listed A verdict with A platform_id -- true in the
+# broken state, because the GATE's key was perfectly well formed. An
+# assertion that a value exists cannot catch two components disagreeing
+# about the value; only an assertion that the two AGREE can.
+#
+# So the runner now derives the id BOTH ways at startup -- its own
+# (`toolchain.compute_platform_id`) and its gate command's (by running
+# the gate's own `units/fleet-toolchain.sh` in a shell, not by
+# re-deriving the formula here, which would only add a fourth
+# implementation) -- and refuses to start when they differ.
+#
+# The check itself lives HERE rather than in fleetd.py because it is a
+# property of the process this host runs and of the gate command that
+# process spawns -- both runner concerns under SPEC S9's split. fleetd.py
+# re-exports the three names below, so `fleetd.check_toolchain_agreement`
+# and friends resolve exactly as the original fix spelled them.
+
+TOOLCHAIN_MISMATCH_WARNING = "toolchain-id-mismatch"
+TOOLCHAIN_UNVERIFIED_WARNING = "toolchain-id-unverified"
+
+# Escape hatch. A mismatch means every gate this host runs writes to a
+# cache slot this host cannot read, so refusing is right -- but an
+# operator who is mid-migration and knows it should be able to run
+# degraded rather than have a supervisor respawn a refusing daemon every
+# ten seconds. Downgrades the refusal to a durable warning; it never
+# suppresses the warning itself.
+ALLOW_TOOLCHAIN_MISMATCH_ENV = "FLEET_ALLOW_TOOLCHAIN_MISMATCH"
+
+# BLOCKER 2 (this port, not the original fix). The original wrote this
+# refusal as `return 6` -- the code `run_daemon` ALREADY used for "a
+# persistently unusable hub", which `tests/test_fleetd.py` asserts in two
+# places and `units/fleetd-wrapper.sh` restarts on. Two conditions under
+# one code is not cosmetic: a wedged hub may come back, so restarting it
+# is correct, while a toolchain-id mismatch is a property of how this
+# host is installed and cannot resolve without a human, so restarting it
+# is a hot loop. Nothing pinned the refusal to 6 (the seam test asserts
+# no rc at all), which is exactly how the collision could be written
+# silently -- so it gets its own code, and
+# `test_toolchain_seam.TestTheRefusalCodeIsItsOwn` asserts the two
+# conditions never share one again.
+TOOLCHAIN_MISMATCH_RC = 7
+
+
+def gate_toolchain_ids(gate_command: list, timeout: int = 30,
+                       env: Optional[dict] = None) -> "tuple[dict, Optional[str]]":
+    """`{"rustc_id", "platform_id"}` as THE GATE COMMAND would compute
+    them, plus an error string when they could not be obtained.
+
+    Runs the gate's own `units/fleet-toolchain.sh` -- the file `gate.sh`
+    sources -- resolved relative to the gate script the runner would
+    actually spawn, so a runner pointed at some other checkout measures
+    THAT checkout's resolver rather than this process's sibling
+    directory. Deliberately not a re-implementation: a fourth spelling of
+    the formula is the disease, not the cure.
+
+    `env` is the environment the shell side is measured under, and it
+    MUST be the same dict the Python side is measured under -- comparing
+    two ids derived under two environments would answer a question
+    nobody asked.
+    """
+    if not gate_command:
+        return {}, "no gate command configured"
+    gate_path = Path(gate_command[0])
+    helper = gate_path.parent / "units" / "fleet-toolchain.sh"
+    if not helper.is_file():
+        return {}, f"gate toolchain resolver not found at {helper}"
+    script = "\n".join((
+        f"SELF_DIR={shlex.quote(str(gate_path.parent))}",
+        f". {shlex.quote(str(helper))}",
+        'if ! fleet_toolchain_ids; then',
+        '  printf "ERROR=%s\\n" "$FLEET_TOOLCHAIN_ERROR"',
+        '  exit 1',
+        'fi',
+        'printf "RUSTC_ID=%s\\nPLATFORM_ID=%s\\n" "$RUSTC_ID" "$PLATFORM_ID"',
+        "",
+    ))
+    try:
+        out = subprocess.run(  # nosec B603 -- list argv, our own script text
+            ["bash", "-c", script], capture_output=True, text=True, timeout=timeout,
+            env=dict(os.environ if env is None else env),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {}, f"could not run {helper}: {exc}"
+    parsed = {}
+    for line in out.stdout.splitlines():
+        key, _, value = line.partition("=")
+        if key in ("RUSTC_ID", "PLATFORM_ID"):
+            parsed[key.lower()] = value
+    if out.returncode != 0 or not parsed.get("platform_id"):
+        detail = (out.stdout + out.stderr).strip().replace("\n", "; ")[:400]
+        return {}, f"{helper} exited {out.returncode}: {detail or 'no ids produced'}"
+    return parsed, None
+
+
+def check_toolchain_agreement(gate_command: list, host: str,
+                              warnings: "HostWarnings",
+                              env: Optional[dict] = None) -> "tuple[bool, str]":
+    """`(may_start, message)` -- L1's loud mismatch check.
+
+    THREE OUTCOMES, kept distinct on purpose (the same doctrine as
+    `desired_readable` vs `enabled` in `reconcile_once`: "we could not
+    ask" is not "the answer is no"):
+
+      * AGREE     -- `(True, "")`, no warning.
+      * DISAGREE  -- `(False, ...)` and a durable warning. Every verdict
+                     this host's gates write lands in a slot this host
+                     cannot read; there is no useful work it can do.
+                     `FLEET_ALLOW_TOOLCHAIN_MISMATCH=1` turns this into
+                     `(True, ...)` with the warning intact.
+      * UNVERIFIED -- `(True, ...)` and a durable warning. The gate's
+                     resolver could not be run at all (no bash, no
+                     checkout, a fixture whose "gate" is a stub script).
+                     Not being able to compare is not evidence of a
+                     mismatch, and taking a host down for it would turn
+                     one silent bug into a different one.
+    """
+    src = os.environ if env is None else env
+    mine = toolchain.compute_platform_id(env=src)
+    theirs, err = gate_toolchain_ids(gate_command, env=src)
+    if err is not None:
+        detail = (
+            f"could not compute the gate's platform_id to compare against this "
+            f"scheduler's {mine[:12]}...: {err}. Until this is resolved, nothing "
+            f"proves the runner and gate.sh address the same verdict-cache slot"
+        )
+        warnings.note(f"toolchain:{host}", TOOLCHAIN_UNVERIFIED_WARNING, detail)
+        return True, detail
+    if theirs.get("platform_id") == mine:
+        return True, ""
+    detail = (
+        f"fleetd computes platform_id {mine} but its own gate command "
+        f"({gate_command[0]}) computes {theirs.get('platform_id')}. The verdict "
+        f"cache is keyed by (tree, gate_version, platform_id), so every PASS "
+        f"this host's gates publish would be unreadable by the scheduler that "
+        f"paid for it, and this host would re-gate the same merge tree forever. "
+        f"Set {ALLOW_TOOLCHAIN_MISMATCH_ENV}=1 to run degraded anyway"
+    )
+    warnings.note(f"toolchain:{host}", TOOLCHAIN_MISMATCH_WARNING, detail)
+    allowed = (src.get(ALLOW_TOOLCHAIN_MISMATCH_ENV) or "").strip() not in ("", "0", "false")
+    return allowed, detail
 
 
 def _limits_ok(limits: dict, disk_gb: float, mem_gb: float) -> Optional[str]:
@@ -1472,6 +1652,14 @@ def run_daemon(
     -- never killing -- live workers), a startup adoption failure
     (rc 5), or a persistently unusable hub (rc 6).
 
+    One addition to fleetd's original body, between adoption and the
+    loop: L1's `check_toolchain_agreement`. It exits **rc 7** when this
+    runner's `platform_id` differs from the one its own gate command
+    computes -- a code of its own, never 6, because the two conditions
+    need opposite supervisor behaviour (a hub comes back; a mismatched
+    toolchain install does not until a human fixes it). See
+    `TOOLCHAIN_MISMATCH_RC`.
+
     `reconcile` defaults to this module's `reconcile_once` (the shared
     step in fleetd.py); `fleetd.main` passes its own module global so
     `mock.patch.object(fleetd, "reconcile_once", ...)` keeps working.
@@ -1541,6 +1729,42 @@ def run_daemon(
         singleton.release()
         return 5
 
+    # T3: one warning store for the daemon's whole lifetime, so a warning
+    # survives every reconcile until its marker file is gone. Owned by
+    # `run_daemon` rather than module-global so two daemons in one process
+    # (the test suite) cannot bleed into each other. Built HERE, ahead of
+    # the L1 check, so a toolchain condition noted before the first
+    # reconcile is carried into every heartbeat afterwards.
+    host_warnings = HostWarnings()
+
+    # L1 (Keel Stage 1 LIVE, 2026-08-27/28): refuse to schedule work whose
+    # results this scheduler could not read. See `check_toolchain_agreement`
+    # for the incident and for why "could not verify" is a warning rather
+    # than a refusal.
+    #
+    # AFTER adoption, not before, and the ordering is load-bearing in the
+    # other direction from the singleton's. This check spawns `rustc -vV`
+    # and a shell; adoption is racing a predecessor's gate claims against
+    # their TTL, and a second of avoidable startup latency there is a live
+    # gate reported as an orphan and killed. Nothing this check protects
+    # against is urgent enough to pay for that: a mismatched host has been
+    # writing unreadable verdicts for however long it took to notice, so
+    # one more reconcile's worth is free. Refusing here still costs the
+    # host lease, exactly like the adoption failure above -- a host that
+    # will not run must not hold the lease that stops a fixed peer from
+    # taking over.
+    may_start, toolchain_msg = check_toolchain_agreement(gate_command, host, host_warnings)
+    if toolchain_msg:
+        print(f"{label}[{host}] TOOLCHAIN: {toolchain_msg}", file=sys.stderr, flush=True)
+    if not may_start:
+        # NOT rc 6 -- see TOOLCHAIN_MISMATCH_RC. rc 6 is "the hub is
+        # unusable", which a supervisor should retry; this one cannot
+        # clear without a human touching the install.
+        print(f"{label}[{host}]: refusing to start on a toolchain-id mismatch",
+              file=sys.stderr, flush=True)
+        singleton.release()
+        return TOOLCHAIN_MISMATCH_RC
+
     stop = {"flag": False}
 
     def _sigterm(_sig, _frm):
@@ -1551,11 +1775,6 @@ def run_daemon(
 
     rc = 0
     hub_failures = 0
-    # T3: one store for the daemon's whole lifetime, so a warning survives
-    # every reconcile until its marker file is gone. Owned here rather than
-    # module-global so two daemons in one process (the test suite) cannot
-    # bleed into each other.
-    host_warnings = HostWarnings()
     try:
         while True:
             # A hub failure degrades THIS ITERATION, never the daemon --

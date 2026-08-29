@@ -44,8 +44,30 @@
     <string>https://github.com/swack-tools/oxidex.git</string>
     <key>FLEET_GIT_TOKEN_FILE</key>
     <string>/Users/allen/.keel/secrets/git-token</string>
+    <!-- L1 (Keel Stage 1 LIVE, 2026-08-27/28): the first two segments
+         must stay in step with tools/fleet/toolchain.py's
+         TOOLCHAIN_PATH_PREFIX_REL and units/fleet-toolchain.sh's
+         FLEET_TOOLCHAIN_PATH_PREFIX default. The equivalent line was
+         MISSING from units/fleetd.service until L1 -- i.e. the fix was
+         applied to the laptops' unit and never to the only gate host's,
+         which is how the i7's scheduler and the gate it spawned came to
+         hash two different descriptions of the same compiler. -->
     <key>PATH</key>
     <string>/Users/allen/.cargo/bin:/Users/allen/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <!-- L2 (same run): `hostname -s` on this machine is `Allens-Air`
+         while tools/fleet/rollout/seed_desired.py seeds it as `m5`. With
+         FLEET_HOST unset, the runner reported under `Allens-Air` -- a
+         name refs/fleet/desired has never heard of -- which rendered as
+         `refused: disabled ()`, an EMPTY reason, with no `m5` row in
+         `fleet status --why` at all. Setting it yields the expected
+         `target-zero (gates 0 / agents 0)` line instead. Like the
+         /Users/allen paths above, launchd does not shell-expand this,
+         and THIS VALUE IS PER HOST: it must match the key under `hosts`
+         in seed_desired.py -- the other macOS host installs this file
+         with `oldair` here. The runner now refuses with `unknown-host`
+         rather than `disabled` when it does not match. -->
+    <key>FLEET_HOST</key>
+    <string>m5</string>
   </dict>
   <key>KeepAlive</key><true/>
   <!-- PLAN Stage 3 task 7: logs under ~/.keel/log, not /tmp -- macOS
