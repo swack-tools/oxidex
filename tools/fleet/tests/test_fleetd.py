@@ -17,6 +17,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _env import HermeticCase, scrub_env  # noqa: E402
@@ -25,6 +26,11 @@ from _fixtures import break_hub, make_hub, within_sweep  # noqa: E402
 import cli
 import claim as claim_mod
 import fleetd
+# The module `live_pgids` and `ProcessListingUnavailable` actually LIVE in.
+# `fleetd` re-exports both, but `TestLivePgidsRefusesToGuess` patches
+# `subprocess.run` in the defining module's namespace, which is the only
+# one the probe itself resolves.
+import keel.runner as runner_mod
 from fleetlib import Hub
 
 HUB_TIP_REF = "refs/heads/refactor/tag-machinery"
@@ -207,7 +213,11 @@ class FleetdBase(WaitsForProcesses, HermeticCase):
                      f"reaping); workers={self.worker_states()}"),
         )
 
-    def reconcile(self, disk=100.0, mem=32.0):
+    def reconcile(self, disk=100.0, mem=32.0, pgid_probe=None):
+        """`pgid_probe` is forwarded ONLY when given, so every existing
+        caller still exercises the production `live_pgids`. The tests that
+        pass one are about what this step does when the `ps` listing is
+        unavailable or lying -- see `TestUnavailableProcessListing`."""
         return fleetd.reconcile_once(
             self.hub, self.host, self.workers,
             gate_command=[str(self.stub)],
@@ -216,6 +226,7 @@ class FleetdBase(WaitsForProcesses, HermeticCase):
             disk_probe=lambda: disk,
             mem_probe=lambda: mem,
             warnings=self.host_warnings,
+            **({"pgid_probe": pgid_probe} if pgid_probe is not None else {}),
         )
 
     def set_desired(self, gates, enabled=True, reason=None, limits=None):
@@ -1632,3 +1643,218 @@ class TestSingletonTTLWiredIntoMain(FleetdBase):
             observed["ttl"], 37.0, delta=0.5,
             msg="main() did not construct the singleton Claim with singleton_ttl_s()",
         )
+
+
+# --------------------------------------------------------------------- #
+# An UNAVAILABLE process listing is not an EMPTY one
+# --------------------------------------------------------------------- #
+
+
+class TestLivePgidsRefusesToGuess(HermeticCase):
+    """`live_pgids` must never hand a caller a listing it cannot vouch for.
+
+    It used to answer a failed `ps` with `set()`:
+
+        except (OSError, subprocess.TimeoutExpired):
+            return set()
+
+    and every consumer reads absence from that set as death -- the reap in
+    `reconcile_once`, the release in `journal.adopt_from_journal`, the
+    orphan verdict in `adopt_workers`. `TestUnavailableProcessListing`
+    below pins what that cost; these four pin the probe itself.
+    """
+
+    def _ps_raises(self, exc):
+        """Make only the `ps` child fail, leaving every other subprocess
+        this module runs alone."""
+        real = subprocess.run
+
+        def fake(argv, *a, **kw):
+            if isinstance(argv, (list, tuple)) and argv and argv[0] == "ps":
+                raise exc
+            return real(argv, *a, **kw)
+
+        return mock.patch.object(runner_mod.subprocess, "run", fake)
+
+    def test_a_working_ps_lists_this_runners_own_group(self):
+        """The positive control for the three refusals below: without it,
+        a `live_pgids` that raised unconditionally would pass them all."""
+        pgids = runner_mod.live_pgids()
+        self.assertIn(os.getpgrp(), pgids,
+                      "a truthful listing always contains the caller's own group")
+
+    def test_an_unspawnable_ps_raises_instead_of_reporting_an_empty_host(self):
+        with self._ps_raises(OSError(35, "Resource temporarily unavailable")):
+            with self.assertRaises(runner_mod.ProcessListingUnavailable):
+                runner_mod.live_pgids()
+
+    def test_a_timed_out_ps_raises(self):
+        with self._ps_raises(subprocess.TimeoutExpired(cmd="ps", timeout=10)):
+            with self.assertRaises(runner_mod.ProcessListingUnavailable):
+                runner_mod.live_pgids()
+
+    def test_a_nonzero_ps_raises_rather_than_parsing_its_empty_stdout(self):
+        """`subprocess.run` without `check=True` reports a `ps` killed by a
+        signal only in `returncode`, so this case used to parse as an
+        empty -- i.e. universally fatal -- listing."""
+        real = subprocess.run
+
+        def fake(argv, *a, **kw):
+            if isinstance(argv, (list, tuple)) and argv and argv[0] == "ps":
+                return subprocess.CompletedProcess(argv, 1, "", "ps: fatal")
+            return real(argv, *a, **kw)
+
+        with mock.patch.object(runner_mod.subprocess, "run", fake):
+            with self.assertRaises(runner_mod.ProcessListingUnavailable):
+                runner_mod.live_pgids()
+
+
+class TestUnavailableProcessListing(FleetdBase):
+    """One failed `ps` must not reap a live gate and start a second one.
+
+    THE DEFECT, measured at 2c7716a7 before the fix by injecting a single
+    empty listing into the second `reconcile_once` of
+    `test_journal.TestOfflineStartThroughRunDaemon`: the adopted worker for
+    `staging/one` was reaped (`finished=['journal-gate-gate-staging-one']`)
+    while its process group was still alive in a real `ps`, its CAS'd lease
+    was released, and -- the branch now unclaimed and the deficit grown by
+    exactly the worker just discarded -- the SAME step started
+    `journalhost-one-...` beside the gate that was still running. Two gates
+    on one branch, reached without a single lease ever going lost.
+
+    `test_the_bug_present_shape_...` is the in-suite control: it restores
+    the old `set()` answer and requires the duplicate, so the two tests
+    below are evidence that the guard is what prevents it rather than a
+    fixture that could never have produced it.
+    """
+
+    def unavailable(self):
+        def probe():
+            raise fleetd.ProcessListingUnavailable("ps could not be run: injected")
+        return probe
+
+    def start_one_gate(self):
+        """A live gate in the shape ADOPTION produces: real process group,
+        real CAS'd claim, and `popen=None`.
+
+        The shape is load-bearing, not incidental. `Worker.alive` answers
+        from `popen.poll()` whenever this daemon forked the worker itself
+        and only falls through to the pgid listing when it did not -- so
+        the listing can only destroy workers that were ADOPTED, which is
+        exactly the population a restarted or offline runner has, and
+        exactly the one in the reported failure (a journal-adopted gate).
+        Asserting any of this against a `popen`-backed worker would pass
+        with the guard removed: the listing would never be consulted.
+        """
+        self.set_desired(gates=2)
+        res = self.reconcile()
+        self.assertEqual(len(res.started), 1, f"fixture must start a gate: {res.refused}")
+        spawned = self.workers[0]
+        self.assertTrue(spawned.alive(), "the fixture gate must be parked and alive")
+        adopted = fleetd.Worker(
+            branch=spawned.branch, tag=spawned.tag, pgid=spawned.pgid,
+            claim=spawned.claim, popen=None, kind=spawned.kind,
+            job_key=spawned.job_key,
+        )
+        self.workers[0] = adopted
+        # `tearDown` stops the stub by tag and waits on `alive()`, which for
+        # the adopted shape is the real `ps`; this only reaps the Popen so
+        # the finished child cannot linger as a zombie.
+        self.addCleanup(self._wait_quietly, spawned.popen)
+        self.assertTrue(adopted.alive(),
+                        "the adopted-shape worker must read alive through the ps "
+                        "listing, or nothing below is evidence")
+        return adopted
+
+    @staticmethod
+    def _wait_quietly(popen):
+        try:
+            popen.wait(timeout=WAIT_BUDGET_S)
+        except Exception:  # noqa: BLE001 -- cleanup must never mask a result
+            pass
+
+    def test_a_live_worker_is_not_reaped_when_ps_cannot_answer(self):
+        w = self.start_one_gate()
+        res = self.reconcile(pgid_probe=self.unavailable())
+        self.assertEqual(res.finished, [],
+                         f"an unreadable `ps` is not evidence of death: "
+                         f"{self.reap_report(w.tag, res)}")
+        self.assertIn(w, self.workers,
+                      "the worker must keep its slot, its claim and its renewer")
+        self.assertTrue(w.alive(), "and must not have been killed")
+        self.assertEqual(len(self.hub.list("refs/fleet/claims/gate/")), 1,
+                         "the live worker's CAS'd lease must not be released")
+
+    def test_the_refusal_is_named_rather_than_a_silently_idle_step(self):
+        self.start_one_gate()
+        res = self.reconcile(pgid_probe=self.unavailable())
+        self.assertIn("process-listing-unavailable", [r for r, _ in res.refused],
+                      f"`fleet status --why` must be able to say why: {res.refused}")
+
+    def test_no_second_gate_is_started_on_the_branch_the_live_one_holds(self):
+        w = self.start_one_gate()
+        res = self.reconcile(pgid_probe=self.unavailable())
+        self.assertNotIn(w.branch, [x.branch for x in self.workers if x is not w],
+                         f"DUPLICATE GATE: a second worker took {w.branch} while the "
+                         f"first was still running; started={res.started}")
+        self.assertEqual(
+            len([x for x in self.workers if x.branch == w.branch]), 1,
+            f"exactly one worker may hold {w.branch}; workers={self.worker_states()}")
+
+    def test_end_to_end_a_failing_ps_neither_reaps_nor_duplicates(self):
+        """THE WHOLE DEFECT, through the production probe.
+
+        No `pgid_probe` is injected: `reconcile_once` calls the real
+        `live_pgids`, and only the `ps` CHILD is made to fail -- the shape
+        a loaded host produces (EAGAIN under process pressure, EMFILE, a
+        timeout). Deliberately free of any reference to
+        `ProcessListingUnavailable`, so it runs unchanged against
+        2c7716a7 and fails there on BEHAVIOUR rather than on a missing
+        symbol. Measured at that commit: `finished=['testhost-one-...']`
+        for a worker still alive, and a second gate started on its branch.
+        """
+        w = self.start_one_gate()
+        real = subprocess.run
+
+        def ps_fails(argv, *a, **kw):
+            if isinstance(argv, (list, tuple)) and argv and argv[0] == "ps":
+                raise OSError(35, "Resource temporarily unavailable")
+            return real(argv, *a, **kw)
+
+        with mock.patch.object(runner_mod.subprocess, "run", ps_fails):
+            res = self.reconcile()
+
+        self.assertTrue(w.alive(), "the fixture worker must still be running, or "
+                                   "this test is measuring a genuine exit")
+        self.assertEqual(res.finished, [],
+                         f"a `ps` that could not run is not evidence that a worker "
+                         f"died: {self.reap_report(w.tag, res)}")
+        self.assertIn(w, self.workers, "the live worker must keep its slot")
+        self.assertEqual(
+            len([x for x in self.workers if x.branch == w.branch]), 1,
+            f"DUPLICATE GATE: {w.branch} is held by a live gate and was started "
+            f"again; started={res.started} workers={self.worker_states()}")
+        self.assertEqual(len(self.hub.list("refs/fleet/claims/gate/")), 1,
+                         "the live worker's CAS'd lease must still be on the hub")
+
+    def test_the_bug_present_shape_reaps_the_live_worker_and_duplicates_it(self):
+        """NEGATIVE CONTROL. `pgid_probe` returning `set()` is precisely what
+        the old `live_pgids` handed this step when `ps` failed. The reap
+        must fire, the lease must be released, and the branch must be taken
+        a second time -- if any of that stops being true, the three tests
+        above stop being evidence about anything."""
+        w = self.start_one_gate()
+        res = self.reconcile(pgid_probe=lambda: set())
+        self.assertIn(w.tag, res.finished,
+                      f"the control must reproduce the reap: "
+                      f"{self.reap_report(w.tag, res)}")
+        self.assertTrue(w.alive(),
+                        "and the reaped worker must still be RUNNING -- that is what "
+                        "makes the duplicate below a duplicate rather than a restart")
+        self.assertIn(w.branch, [x.branch for x in self.workers],
+                      f"the control must reproduce the duplicate gate on {w.branch}: "
+                      f"started={res.started} workers={self.worker_states()}")
+        # The reap dropped `w` from `self.workers`, so `tearDown` no longer
+        # knows to stop it. Put it back, or this control leaves a parked
+        # stub behind for as long as the machine is up.
+        self.workers.append(w)

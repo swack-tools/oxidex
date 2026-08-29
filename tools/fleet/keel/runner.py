@@ -266,21 +266,83 @@ def free_mem_gb() -> float:
     return -1.0
 
 
+class ProcessListingUnavailable(RuntimeError):
+    """`ps` could not be made to answer, so this host's process listing is
+    UNKNOWN this pass.
+
+    Emphatically not the same fact as "no process groups are alive", and
+    the difference is the whole reason this exception exists. `live_pgids`
+    used to answer both with `set()`:
+
+        except (OSError, subprocess.TimeoutExpired):
+            return set()
+
+    Every consumer of that listing reads absence as death. One failed
+    `ps` therefore made `reconcile_once`'s reap declare EVERY worker
+    finished, release each one's CAS'd lease, and -- with the branches now
+    unclaimed -- start a second gate on a branch whose first gate was
+    still running. Measured at 2c7716a7 by injecting a single empty
+    listing into `reconcile_once`: the adopted worker for `staging/one`
+    was reaped while its process group was demonstrably alive, and the
+    same step started `journalhost-one-...` beside it. That is the
+    duplicate-merge hazard argued at `reconcile_once`'s KILL comment,
+    reached without a single lost lease -- two gates on one branch, two
+    verdicts for one (tree, gate_version, platform) pair, and not
+    detectable after the fact.
+
+    The failure is silent by construction: `ps` failing is a fork away
+    from an ordinary run (EAGAIN under process pressure, EMFILE, a
+    timeout on a loaded host), and nothing downstream can tell a phantom
+    empty listing from a genuinely idle machine. So the probe refuses to
+    hand anyone a listing it cannot vouch for, and each caller decides
+    what "unknown" means for ITS decision -- which is never "kill it".
+    """
+
+
 def live_pgids() -> set:
     """Process groups alive on this host, by listing -- the instrument is
-    `ps -eo pgid=`, never pgrep."""
+    `ps -eo pgid=`, never pgrep.
+
+    Raises `ProcessListingUnavailable` rather than returning a listing
+    this function cannot vouch for. Three ways it cannot:
+
+      * `ps` could not be spawned or did not finish (`OSError`,
+        `TimeoutExpired`) -- the case that used to return `set()`.
+      * `ps` exited non-zero. `subprocess.run` without `check=True`
+        reports that only in `returncode`, so a `ps` killed by a signal
+        previously parsed as an empty -- i.e. universally fatal -- listing.
+      * the listing does not name THIS process's own group. That is the
+        floor assertion (AGENTS.md: "a degraded run does not crash, it
+        reports a confident, precisely-formatted, completely wrong
+        number"): the caller is itself a live, non-zombie process, so a
+        truthful listing always contains its pgid. An answer that omits
+        it is malfunctioning however plausible it looks.
+    """
     try:
-        out = subprocess.run(
+        proc = subprocess.run(
             ["ps", "-eo", "pgid=,stat="], capture_output=True, text=True, errors="replace", timeout=10
-        ).stdout
-        pgids = set()
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) >= 2 and parts[0].isdigit() and not parts[1].startswith("Z"):
-                pgids.add(int(parts[0]))
-        return pgids
-    except (OSError, subprocess.TimeoutExpired):
-        return set()
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ProcessListingUnavailable(f"ps could not be run: {exc!r}") from exc
+    if proc.returncode != 0:
+        raise ProcessListingUnavailable(
+            f"ps exited {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
+    pgids = set()
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].isdigit() and not parts[1].startswith("Z"):
+            pgids.add(int(parts[0]))
+    try:
+        own = os.getpgrp()
+    except (AttributeError, OSError):
+        own = None
+    if own is not None and own not in pgids:
+        raise ProcessListingUnavailable(
+            f"ps listed {len(pgids)} process group(s) and not this runner's own "
+            f"({own}); the listing is not trustworthy")
+    if own is None and not pgids:
+        raise ProcessListingUnavailable("ps listed no process groups at all")
+    return pgids
 
 # --------------------------------------------------------------------- #
 # Gate workers
@@ -415,13 +477,31 @@ def _scoped_worker_in_group(pgid: int, markers: Optional[Sequence[str]],
         return None
     markers = tuple(markers) if markers else worker_markers()
     try:
-        out = subprocess.run(
+        proc = subprocess.run(
             ["ps", "-wweo", "pgid=,uid=,command="],
             capture_output=True, text=True, errors="replace", timeout=10,
             env=_ps_env(),
-        ).stdout
+        )
+        out = proc.stdout if proc.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        out = None
+    if out is None:
+        # NOT None-the-answer. `None` here means "no live member of this
+        # group is a scoped fleet worker", and both adoption paths spend
+        # that answer on a RELEASE: `journal.adopt_from_journal` records
+        # the claim as owed a CAS-delete, `adopt_workers` treats the group
+        # as an orphan. Handing them that verdict because `ps` would not
+        # run frees a branch whose gate is still running, which is the
+        # duplicate-gate hazard leases exist to prevent.
+        #
+        # So a failed listing fails CLOSED, exactly as
+        # `fleetd_marker_in_group` below already does and for the reason
+        # its docstring gives: a truthy sentinel reads as "a member
+        # matched", the group is adopted rather than released, and the
+        # next pass with a working `ps` reaps it if it really is dead.
+        # That direction costs at most one branch held to its TTL; the
+        # other is not retryable.
+        return f"<ps listing unavailable -- refusing to declare pgid {pgid} unscoped>"
     try:
         uid = os.getuid()
     except AttributeError:
@@ -688,6 +768,24 @@ def _pgid_alive(pgid: int) -> bool:
         return False
 
 
+def _assume_alive_if_unlisted(probe: Callable[[], bool]) -> bool:
+    """`probe()`, with `ProcessListingUnavailable` answered as ALIVE.
+
+    ONLY for verifying a kill that has already been decided on. There,
+    "assume alive" escalates SIGTERM to SIGKILL -- the direction that
+    finishes the job -- whereas "assume gone" would end the grace loop
+    early and leave the group running. It is the opposite of the answer
+    the same exception must get in `reconcile_once`'s reap, where the
+    decision is whether to kill at all, and that asymmetry is the point:
+    an unknown listing is not a verdict, so each site spends it on
+    whichever direction is retryable.
+    """
+    try:
+        return probe()
+    except ProcessListingUnavailable:
+        return True
+
+
 def kill_process_group(
     pgid: int,
     grace: Optional[float] = None,
@@ -750,7 +848,9 @@ def kill_worker(w: "Worker", grace: Optional[float] = None) -> str:
     An undeleted claim is self-correcting -- it expires on its TTL and any
     host reaps it (`claim.reap_expired`); a stranded worker entry is not.
     """
-    outcome = kill_process_group(w.pgid, grace=grace, alive_probe=lambda _p: w.alive())
+    outcome = kill_process_group(
+        w.pgid, grace=grace,
+        alive_probe=lambda _p: _assume_alive_if_unlisted(w.alive))
     if w.popen is not None:
         try:
             w.popen.wait(timeout=5)  # reap, so it cannot linger as a zombie
@@ -1684,7 +1784,9 @@ def adopt_workers(
         # SIGKILL a corpse (EPERM). `live_pgids()` filters `Z` state, which
         # is exactly why `kill_process_group`'s own docstring names the ps
         # listing as the instrument for verifying a kill.
-        outcome = killer(pgid, alive_probe=lambda p: p in pgid_probe())
+        outcome = killer(
+            pgid,
+            alive_probe=lambda p: _assume_alive_if_unlisted(lambda: p in pgid_probe()))
         res.orphans_killed.append((pgid, outcome))
         print(
             f"fleetd[{host}] ORPHAN process group {pgid} ({command[:80]}) has no "
@@ -2542,7 +2644,16 @@ def run_daemon(
     try:
         adoption = journal_mod.adopt_at_startup(hub, host, workers, journal=jn)
         print(f"{label}[{host}] adoption: {adoption.summary()}", flush=True)
-    except (HubError, journal_mod.JournalError) as e:
+    # `ProcessListingUnavailable` joins the two store/journal failures for
+    # the reason the message below already gives. Adoption's whole job is
+    # to decide which of this host's process groups are still running
+    # work; with `ps` refusing to answer there is no evidence for that
+    # decision at all, and the alternatives are to adopt nothing (a
+    # duplicate of everything still running, once the first reconcile sees
+    # empty slots) or to sweep on a guess. rc 5 -- refuse to start, drop
+    # the host lease, let the supervisor retry -- is exactly the answer
+    # this clause was written for, and `ps` failures are transient.
+    except (HubError, journal_mod.JournalError, ProcessListingUnavailable) as e:
         print(f"{label}[{host}]: cannot rebuild worker state from the hub or the "
               f"journal ({type(e).__name__}: {e}); refusing to start rather than "
               f"risk duplicate work", file=sys.stderr)

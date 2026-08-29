@@ -1412,6 +1412,7 @@ class TestOfflineStartThroughRunDaemon(JournalCase):
         self.gate_stub = self.tmp / "stub-gate.sh"
         self.gate_stub.write_text(
             "#!/bin/bash\n"
+            f"DIR={self.tmp}\n"
             f"STOP={self.tmp}/stop-$2\n"
             f"ALL={self.tmp}/stop-all\n"
             # The second condition is the tearDown escape hatch: a gate
@@ -1420,7 +1421,22 @@ class TestOfflineStartThroughRunDaemon(JournalCase):
             # to write the per-gate stop file for. One global file collects
             # every stray, so a failing control cannot leave a parked
             # process behind on the developer's machine.
-            'while [ ! -f "$STOP" ] && [ ! -f "$ALL" ]; do sleep 0.2; done\n'
+            #
+            # `-d "$DIR"` is the third condition, and it is the one that
+            # was missing. Both file tests read FALSE once the tempdir is
+            # gone, so the loop's exit condition became unreachable the
+            # instant `JournalCase.tearDown` ran `self.tmpdir.cleanup()` --
+            # which it does within milliseconds of writing `stop-all`,
+            # while this loop only looks every 0.2s. The stub then polled
+            # a deleted directory for ever. MEASURED on the machine that
+            # debugged this: 87 immortal `stub-gate.sh` processes, 78 of
+            # them `journalhost`, the oldest 4h21m old, growing by ~6 per
+            # `just fleet-tests-both`. Each one wakes 5x a second to fork
+            # a `sleep`, so the leak is not merely untidy: it is a slow
+            # rise in this host's fork pressure, and `live_pgids` is one
+            # `ps` fork away from every worker on the host reading as
+            # dead (see `TestUnavailableProcessListing` in test_fleetd).
+            'while [ -d "$DIR" ] && [ ! -f "$STOP" ] && [ ! -f "$ALL" ]; do sleep 0.2; done\n'
             "exit 0\n"
         )
         self.gate_stub.chmod(0o755)
@@ -1533,6 +1549,18 @@ class TestOfflineStartThroughRunDaemon(JournalCase):
                 hub, host, workers, gate_command, log_dir, repo_root,
                 disk_probe=lambda: 100.0, mem_probe=lambda: 32.0, **kw)
             results.append(res)
+            # EVERY gate this daemon spawned, tracked the moment it exists
+            # rather than on the one path that reaches the end of step 2.
+            # `JournalCase.tearDown` SIGKILLs `self.procs` by process
+            # GROUP, which is the only thing that stops these reliably;
+            # the `stop-all` file races the tempdir's own removal and
+            # usually loses. Until this ran only inside step 2's happy
+            # path, the negative control -- which raises out of step 1 by
+            # construction -- leaked its gate on every single run, and so
+            # did any failure of the assertions below.
+            for w in workers:
+                if w.popen is not None and w.popen not in self.procs:
+                    self.procs.append(w.popen)
             if step == 1:
                 self.assertFalse(
                     kw.get("spawn_allowed", True),
@@ -1552,9 +1580,6 @@ class TestOfflineStartThroughRunDaemon(JournalCase):
                                 "a completed reconcile step re-arms spawning")
                 self.assertEqual(len(res.started), 1,
                                  f"the second cycle must gate: {res.refused}")
-                for w in workers:
-                    if w.popen is not None:
-                        self.procs.append(w.popen)
                 os.kill(os.getpid(), signal.SIGTERM)  # supervisor-style stop
             return res
 

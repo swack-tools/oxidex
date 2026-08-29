@@ -393,8 +393,17 @@ class TestAutonomousDispatch(HermeticCase):
         self.stub = self.tmp / "stub-gate.sh"
         self.stub.write_text(
             "#!/bin/bash\n"
+            f"DIR={self.tmp}\n"
             f"ALL={self.tmp}/stop-all\n"
-            'while [ ! -f "$ALL" ]; do sleep 0.2; done\n'
+            # `-d "$DIR"` because `! -f "$ALL"` stays TRUE for ever once the
+            # tempdir is gone, and `_stop_all` only waits on the gates a
+            # test remembered to put in `started_procs` -- a gate the
+            # daemon started and the test never captured then polls a
+            # deleted directory until the machine is rebooted. Measured on
+            # the machine that debugged this: 7 immortal `autonomyhost`
+            # stubs, alongside 78 from the identical hole in
+            # `test_journal.py`, each waking 5x a second to fork a `sleep`.
+            'while [ -d "$DIR" ] && [ ! -f "$ALL" ]; do sleep 0.2; done\n'
             "exit 0\n"
         )
         self.stub.chmod(0o755)

@@ -127,6 +127,7 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     WORKER_MARKERS,
     AdoptionResult,
     HostWarnings,
+    ProcessListingUnavailable,
     Worker,
     _exiftool_cache_dir,
     _gate_version,
@@ -858,9 +859,51 @@ def reconcile_once(
     # A worker whose process group is gone releases its claim here; a
     # crashed fleetd's claims expire on their own (LEASE_TTL) and are
     # reaped by any host via claim.reap_expired.
-    pgids = pgid_probe()
+    # An UNAVAILABLE listing is not an empty one. `live_pgids` used to
+    # answer a failed `ps` with `set()`, and every worker below then read
+    # as finished: each one's CAS'd lease released, each one dropped from
+    # `workers`, and -- because the branches were now unclaimed and the
+    # deficit had grown by exactly the number of workers just discarded --
+    # the STARTS block at the bottom of this same step spawned a second
+    # gate on a branch whose first gate was still running. Measured at
+    # 2c7716a7 by injecting one empty listing: `finished=
+    # ['journal-gate-gate-staging-one']` while that process group was
+    # alive in a real `ps`, and `started=['journalhost-one-...',
+    # 'journalhost-three-...']` in the same step. Two gates on one branch
+    # is the duplicate-merge hazard argued at the KILL comment below, and
+    # this route reaches it without a single lease ever going lost.
+    #
+    # So the REAP is skipped for the pass, not fed a guess: nothing is
+    # reaped, every worker keeps its claim and its renewer, and the
+    # refusal is named so `fleet status --why` shows it instead of a
+    # silently idle step. `ps` failing is transient by nature (EAGAIN
+    # under process pressure, EMFILE, a timeout on a loaded host), so the
+    # next step reaps whatever really did finish.
+    #
+    # THE LOST-LEASE KILL BELOW STILL RUNS, and the loop is therefore
+    # entered either way. Its input is `w.claim.lost` -- an in-memory flag
+    # the renewer thread set -- not this listing, and this function's
+    # docstring argues at length that disarming stop-work alongside
+    # start-work turns a conservative "start nothing" into "start nothing
+    # and stop nothing", which is strictly worse. Only the one branch that
+    # actually consumes the listing is guarded.
+    #
+    # The hub reads and starts below are untouched: they are arbitrated by
+    # CAS against the store and do not depend on this listing.
+    try:
+        pgids = pgid_probe()
+    except ProcessListingUnavailable as exc:
+        pgids = None
+        res.refused.append((
+            "process-listing-unavailable",
+            f"{exc}; skipping this step's reap (the lost-lease kill still runs) "
+            f"rather than reading an unreadable `ps` as 'every worker died'",
+        ))
+        print(f"fleetd[{host}] PROCESS LISTING UNAVAILABLE: {exc} -- "
+              f"{len(workers)} worker(s) left running and still renewing",
+              file=sys.stderr, flush=True)
     for w in list(workers):
-        if not w.alive(pgids):
+        if pgids is not None and not w.alive(pgids):
             # Best-effort: an undeleted claim expires on its TTL, but a
             # worker left in `workers` because the release raised would
             # hold a slot until restart -- and would take the rest of this
