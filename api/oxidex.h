@@ -4133,12 +4133,25 @@ typedef struct Acknowledged Acknowledged;
 typedef struct Omitted Omitted;
 
 /*
+ A tag's own group overrides, per family (0, 1, 2).
+
+ `None` in a family means "this tag does not override it", NOT "this tag
+ has no group" -- the value then comes from the table
+ ([`BinaryTable::effective_groups`], ExifTool.pm:9236-9244).
+ */
+typedef struct TagGroups TagGroups;
+
+/*
  Opaque handle type for C API.
  C code receives a pointer to this type but cannot access its contents.
  */
 typedef struct ExifToolHandle {
     uint8_t _private[0];
 } ExifToolHandle;
+
+
+
+
 
 
 
