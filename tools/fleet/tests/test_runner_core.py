@@ -491,6 +491,83 @@ class TestReconcileOrder(RunnerFixture):
 
 
 # --------------------------------------------------------------------- #
+# 2b. spawn_allowed disarms the STARTS and nothing else
+# --------------------------------------------------------------------- #
+
+
+class TestSpawnAllowedDisarmsStartsOnly(RunnerFixture):
+    """Keel 3R-2 step 4's load-bearing half, and the one nothing tested.
+
+    `reconcile_once`'s docstring argues it at length: "`spawn_allowed=
+    False` short-circuits step 3 ONLY. Steps 1 and 2 run in full, and that
+    is the whole point [...] Disarming step 1 alongside step 3 would turn
+    a conservative 'start nothing' into 'start nothing and stop nothing',
+    which is strictly worse than the rc-5 refusal this replaced."
+
+    That was prose. MEASURED at 578141ed in a detached worktree: inserting
+    `if not spawn_allowed: return res` immediately after
+    `res = ReconcileResult()` in `fleetd.reconcile_once` -- skipping the
+    reap AND the lost-lease kill along with the starts -- left
+    `test_journal.TestOfflineStartThroughRunDaemon` at 5 tests, OK. No
+    test in the suite drove a reapable or a lease-lost worker through a
+    `spawn_allowed=False` cycle, so the whole offline test class was blind
+    to the strictly-worse direction while pinning the conservative one.
+
+    This is that cycle: one worker whose process group has already exited
+    (must be REAPED) and one whose lease is lost (must be KILLED), through
+    a single `spawn_allowed=False` step.
+    """
+
+    def test_spawn_allowed_false_still_reaps_and_still_kills(self):
+        self.set_desired(gates=2)
+        finished = runner.start_gate(self.hub, "staging/one", "reap-me",
+                                     [str(self.stub)], self.host, self.log_dir)
+        lost = runner.start_gate(self.hub, "staging/two", "kill-me",
+                                 [str(self.stub)], self.host, self.log_dir)
+        self.assertIsNotNone(finished, "setup: staging/one must be claimable")
+        self.assertIsNotNone(lost, "setup: staging/two must be claimable")
+        self.workers.extend([finished, lost])
+
+        # (a) a worker whose process group is already gone.
+        (self.tmp / f"stop-{finished.tag}").write_text("")
+        deadline = time.time() + 20
+        while time.time() < deadline and finished.alive():
+            time.sleep(0.1)
+        self.assertFalse(finished.alive(), "setup: the finished gate must exit")
+        # (b) a worker whose lease went LOST while its group still runs.
+        self.assertTrue(lost.alive(), "setup: the second gate must still be parked")
+        lost.claim._mark_lost("hub no longer records us as the holder")
+
+        workers = [finished, lost]
+        res = runner.reconcile_once(
+            self.hub, self.host, workers,
+            gate_command=[str(self.stub)], log_dir=self.log_dir,
+            repo_root=REPO_ROOT, disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+            spawn_allowed=False)
+
+        self.assertEqual(
+            res.finished, [finished.tag],
+            f"REAP DISARMED ALONGSIDE THE STARTS: a spawn_allowed=False cycle "
+            f"stopped reaping finished work -- {res}")
+        self.assertEqual(
+            [t for t, _ in res.killed], [lost.tag],
+            f"LOST-LEASE KILL DISARMED ALONGSIDE THE STARTS: an unleased gate "
+            f"survived a spawn_allowed=False cycle, which is the duplicate-gate "
+            f"hazard the kill exists to prevent -- {res}")
+        self.assertEqual(workers, [], "both workers must leave the list")
+        deadline = time.time() + 15
+        while time.time() < deadline and lost.alive():
+            time.sleep(0.2)
+        self.assertFalse(lost.alive(), "the unleased gate's group must be gone")
+
+        # And the starts ARE refused -- the conservative half, so this test
+        # cannot pass by `spawn_allowed` having stopped working entirely.
+        self.assertEqual(res.started, [], "spawn_allowed=False must start nothing")
+        self.assertIn("offline-no-spawn", [r for r, _ in res.refused],
+                      f"the refusal must be named: {res.refused}")
+
+
+# --------------------------------------------------------------------- #
 # 3. Daemon markers: both entry points are recognized as live schedulers
 # --------------------------------------------------------------------- #
 

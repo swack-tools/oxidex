@@ -215,10 +215,13 @@ class JournalWriteError(JournalError):
 
 @dataclass(frozen=True)
 class JobState:
-    """One job, folded from its file's records in order.
+    """One job's CURRENT run, folded from that run's records in order.
 
-    Every field is "what the last record that mentioned it said". A job
-    is OPEN until an `exit` record closes it.
+    Every field is "what the last record of THIS RUN that mentioned it
+    said". A run is OPEN until an `exit` record closes it, and a record
+    appended after that `exit` starts a new run in the same file -- see
+    `_runs` for why one file holds several and why the fold takes only
+    the last.
     """
 
     job_key: str
@@ -252,6 +255,11 @@ class JobState:
     #: The file's final line was incomplete (no terminating newline) and
     #: was dropped. Tolerated, but it disarms the sweep -- see `JournalScan`.
     torn: bool = False
+    #: How many COMPLETED runs precede this one in the same file. Reported
+    #: rather than folded in: the fields above describe the current run
+    #: only, and a reader that wants to know the branch has run here
+    #: before should be told so rather than infer it from a stale `rc`.
+    prior_runs: int = 0
 
     @property
     def open(self) -> bool:
@@ -624,11 +632,65 @@ _FOLD_FIELDS = (
 )
 
 
+def _runs(records: Sequence[dict]) -> List[List[dict]]:
+    """`records` split into RUNS: every `exit` ends the run it closes.
+
+    A job key is a function of (kind, claim key) and nothing else --
+    `runner.journal_job_key` -- so one file accumulates every run this
+    host has ever made on that branch, and `Journal.append` only ever
+    appends. Folding the whole file as one job made the FIRST `exit`
+    permanently decisive: `closed` was `EXIT in events`, so run 2's
+    offer/claim/spawn landed in a file that read back CLOSED, and
+    `adopt_from_journal` -- which iterates `scan.open_jobs` -- skipped
+    a LIVE gate entirely. Not adopted, not released, not even refused:
+    it vanished from `adoption.summary()`, its rebuilt claim was never
+    renewed, and the lease it still held expired for another host to
+    reap and gate the same branch beside it. That is the duplicate-gate
+    hazard, reached through the adoption half.
+
+    Segmenting here rather than making the key per-run is deliberate.
+    `journal_job_key`'s signature is load-bearing in a second place:
+    `fleetd.adopt_workers` DERIVES the same key for a hub-adopted worker
+    from (kind, claim key) alone -- it has no tag and no `started_at` at
+    `offer` time -- and the two derivations must stay identical or a
+    hub-adopted worker closes a file its predecessor never opened. One
+    file per branch also keeps the directory `ls`-readable and keeps the
+    history `keel why` reads.
+
+    Folding per run is what makes the segmentation correct rather than
+    cosmetic: `closed = EXIT in events` was only half the defect. The
+    accumulator carried run 1's `rc`, `outcome`, `claim_sha` and
+    `started_at` across the exit boundary, so even a `closed` redefined
+    as "the last record is an exit" would have handed the live run its
+    predecessor's ownership token -- and `started_at` is half of
+    `claim._owns`.
+    """
+    runs: List[List[dict]] = []
+    cur: List[dict] = []
+    for rec in records:
+        cur.append(rec)
+        if rec.get("event") == EXIT:
+            runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+    return runs
+
+
 def _fold(records: Sequence[dict], *, path: Path, torn: bool) -> JobState:
+    """The file's CURRENT run, folded field by field.
+
+    The trailing run only -- see `_runs`. Everything before the last
+    `exit` describes work that is over; carrying any of it forward is
+    how a finished run's verdict comes to stand against a live one's
+    process group.
+    """
+    runs = _runs(records)
+    seg = runs[-1]
     values: Dict[str, object] = {}
     events: List[str] = []
-    job_key = records[-1].get("job_key") or path.stem
-    for rec in records:
+    job_key = seg[-1].get("job_key") or path.stem
+    for rec in seg:
         events.append(str(rec.get("event")))
         for name in _FOLD_FIELDS:
             if name in rec and rec[name] is not None:
@@ -640,11 +702,15 @@ def _fold(records: Sequence[dict], *, path: Path, torn: bool) -> JobState:
     return JobState(
         job_key=str(job_key),
         path=str(path),
-        closed=EXIT in events,
+        # The LAST record of the current run, never "an exit is somewhere
+        # in this file". By construction of `_runs` only the final record
+        # of a run can be an `exit`, so this reads "the current run ended".
+        closed=seg[-1].get("event") == EXIT,
         events=tuple(events),
-        first_ts=records[0].get("ts"),
-        last_ts=records[-1].get("ts"),
+        first_ts=seg[0].get("ts"),
+        last_ts=seg[-1].get("ts"),
         torn=torn,
+        prior_runs=len(runs) - 1,
         **kwargs,  # type: ignore[arg-type]
     )
 
@@ -1022,7 +1088,10 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
     `started_at` matches the journal's token -- because the journal is
     evidence and the store is authority, and between the crash and now
     the claim may have been legitimately reaped and re-taken by somebody
-    else. A mismatch leaves the ref completely alone.
+    else. A mismatch leaves the ref completely alone, and so does a
+    MISSING journaled `started_at`: BOTH halves of `claim._owns`' token
+    must be present and equal, because an owed release whose token was
+    never recorded is precisely the one we cannot prove is ours.
 
     Returns `(claim_ref, outcome)` per attempt; never raises for a store
     that is still away (`HubError` becomes an outcome string, and the
@@ -1052,7 +1121,33 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
             if journal is not None:
                 _close(journal, job_key, "claim is another host's now")
             continue
-        if started_at is not None and payload.get("started_at") != started_at:
+        if started_at is None:
+            # NO TOKEN AT ALL. An `offer` with a `claim_ref` and no
+            # `claim` record -- the runner died between the two, or
+            # `acquire_or_reap` raised something other than
+            # `ClaimHeldError` -- is owed a release for a lease we never
+            # wrote down taking. The guard below cannot run, because the
+            # evidence it compares was never recorded.
+            #
+            # This used to fall THROUGH to the delete on `holder_host`
+            # alone, and that is the same hazard as the branch below,
+            # arrived at with strictly less evidence: this host holds
+            # `ref` right now under some acquisition, and with no
+            # journaled `started_at` there is nothing to prove it is the
+            # one we owe. Deleting it makes the holding gate's next
+            # renewal fail its CAS, `Claim._mark_lost` fires, and
+            # fleetd's lost-lease path SIGKILLs a healthy gate.
+            #
+            # Refusing costs at most one branch waiting out LEASE_TTL:
+            # if the ref really was our orphan, it has no renewer and
+            # expires, and the next `acquire_or_reap` reaps it. That is
+            # the retryable direction; the delete is not.
+            done.append((ref, f"held by {host!r} but no ownership token was "
+                              f"journaled (offer with no claim record); left alone"))
+            if journal is not None:
+                _close(journal, job_key, "no ownership token to prove the claim is ours")
+            continue
+        if payload.get("started_at") != started_at:
             # OUR host, but not OUR acquisition -- this host took the
             # branch again in the interval (our own next runner reaping
             # it, an `autonomous_when_serverless` gate). Deleting it

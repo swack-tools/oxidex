@@ -117,6 +117,7 @@ import hubstore  # noqa: E402
 import server as keel_server  # noqa: E402
 from _env import HermeticCase  # noqa: E402
 from claim import claim_ref, is_expired  # noqa: E402
+from claim import _iso as claim_iso  # noqa: E402 -- the ONE lease spelling
 from fleetlib import Hub  # noqa: E402
 from keel.cachedhub import CachedHub  # noqa: E402
 from keel.serverhub import ServerHub  # noqa: E402
@@ -639,6 +640,55 @@ class TestServer(_KeelCliCase):
         result = self.run_cli("server", "rehost", "--direct")
         self.assertEqual(result.returncode, 3, result.stdout)
         self.assertIn("other-host", result.stderr)
+
+    def test_the_lease_rehost_writes_parses_on_the_supported_python_floor(self):
+        """ONE SPELLING for a lease deadline, across every writer.
+
+        `cmd_server_rehost` wrote `started_at`/`expires_at` with
+        `strftime('%Y-%m-%dT%H:%M:%SZ')` while `Claim._payload` and
+        `election.ServerClaim` write `claim._iso` (a `+00:00` offset).
+        Every reader parses with `datetime.fromisoformat`, which accepts a
+        trailing `Z` only from Python 3.11 -- and docs/AGENT-SERVER-SPEC.md
+        sets the floor at py >=3.10. MEASURED on /usr/bin/python3 (3.9.6,
+        the same pre-3.11 semantics): `'2026-08-29T11:00:00Z'` raises
+        `ValueError: Invalid isoformat string`; the `+00:00` form parses.
+
+        `claim.is_expired` then fails OPEN on the value it cannot parse
+        ("absence of a deadline is not itself a deadline"), so on a 3.10
+        host an EXPIRED rehost-written lease read as LIVE for ever. That
+        was cosmetic until Keel 3R-2 made this ref a scheduling input:
+        `runner.AutonomyGate` watches it, and a lease stuck at LIVE means
+        `autonomous_when_serverless` can never engage on the one host
+        SPEC SS12 built it for.
+
+        The instrument is a parser that rejects a trailing `Z` the way
+        pre-3.11 `fromisoformat` does, applied to what the CLI actually
+        wrote.
+        """
+        result = self.run_cli("server", "rehost", "--direct")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _sha, payload = self.direct_hub.read_with_sha(SERVER_CLAIM_REF)
+
+        def parse_like_py310(raw: str):
+            # `datetime.fromisoformat` before 3.11: no trailing `Z`.
+            if raw.endswith("Z"):
+                raise ValueError(f"Invalid isoformat string: {raw!r}")
+            return datetime.fromisoformat(raw)
+
+        for field in ("started_at", "expires_at"):
+            with self.subTest(field):
+                raw = payload[field]
+                try:
+                    parse_like_py310(raw)
+                except ValueError as exc:
+                    self.fail(
+                        f"REHOST WROTE AN UNPARSEABLE DEADLINE: {field}={raw!r} "
+                        f"cannot be read by `datetime.fromisoformat` on the "
+                        f"py>=3.10 floor ({exc}); `claim.is_expired` then fails "
+                        f"open and the lease reads LIVE for ever")
+        # And byte-for-byte the shape every other writer of this ref uses.
+        self.assertEqual(payload["expires_at"],
+                         claim_iso(datetime.fromisoformat(payload["expires_at"])))
 
     def test_rehost_reacquires_an_expired_lease(self):
         self.write_server_claim(expires_in_s=-600, holder="long-gone-host")

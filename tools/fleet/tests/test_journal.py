@@ -350,6 +350,65 @@ class TestJournalScan(JournalCase):
         self.assertEqual(scan.open_jobs, ())
         self.assertTrue(scan.job("staging-one").closed)
 
+    def test_a_second_run_on_the_same_branch_reopens_the_job(self):
+        """ONE FILE, MANY RUNS. `runner.journal_job_key` is a pure function
+        of (kind, claim key) -- no tag, no `started_at`, no counter -- and
+        `Journal.append` never rotates, so every run this host makes on a
+        branch lands in the same file. Folding that file as ONE job made
+        the first `exit` permanently decisive: run 2's offer/claim/spawn
+        read back CLOSED, `open_jobs` dropped it, and `adopt_from_journal`
+        (which iterates `open_jobs`) skipped a LIVE gate without adopting
+        it, releasing it, or even refusing it.
+
+        MEASURED before the fix at 578141ed, a probe driving the real
+        `Journal` and `journal_job_key`: `events=('offer','claim','spawn',
+        'exit','offer','claim','spawn')`, `closed=True`, `open_jobs=[]`,
+        and the live pgid 222 in none of `adopted`/`to_release`/`refused`.
+        """
+        self.journal_job("gate-staging-one", pgid=111, closed=True)
+        second = iso(datetime.now(timezone.utc))
+        self.journal_job("gate-staging-one", pgid=222, started_at=second)
+
+        scan = self.j.scan()
+        job = scan.job("gate-staging-one")
+        self.assertTrue(
+            job.open,
+            f"A SECOND RUN ON A BRANCH THIS HOST HAS GATED IS INVISIBLE: the "
+            f"file still folds closed from run 1's exit (events={job.events})")
+        self.assertIn("gate-staging-one", [j.job_key for j in scan.open_jobs])
+        self.assertEqual(job.pgid, 222, "the CURRENT run's process group")
+        self.assertEqual(job.started_at, second,
+                         "the CURRENT run's half of the ownership token")
+        self.assertEqual(job.prior_runs, 1, "one completed run precedes it")
+
+    def test_a_second_run_never_inherits_the_first_runs_verdict(self):
+        """Redefining `closed` alone would not have been enough. The fold
+        accumulated across the `exit` boundary too, so run 1's `rc`,
+        `outcome` and `claim_sha` stood against run 2's process group --
+        and `started_at` is half of `claim._owns`' ownership token, which
+        `release_pending` compares as literal text before deleting a ref.
+        A live run wearing a finished run's token is how a healthy gate's
+        lease gets CAS-deleted."""
+        self.journal_job("gate-staging-one", pgid=111, closed=True)  # rc=0, PASS
+        self.journal_job("gate-staging-one", pgid=222)
+
+        job = self.j.scan().job("gate-staging-one")
+        self.assertIsNone(job.rc, f"run 1's rc bled into run 2: {job}")
+        self.assertIsNone(job.outcome, f"run 1's outcome bled into run 2: {job}")
+
+    def test_a_run_that_is_over_still_reads_closed(self):
+        """The control for the two above: segmenting must not make a
+        finished job look live again, or `prune` never collects anything
+        and every startup pass re-reads work that is over."""
+        self.journal_job("gate-staging-one", pgid=111, closed=True)
+        self.journal_job("gate-staging-one", pgid=222, closed=True)
+        scan = self.j.scan()
+        job = scan.job("gate-staging-one")
+        self.assertTrue(job.closed)
+        self.assertEqual(scan.open_jobs, ())
+        self.assertEqual(job.pgid, 222)
+        self.assertEqual(job.prior_runs, 1)
+
     def test_an_absent_journal_is_readable_and_armed(self):
         """A host that has never run a job has no journal. Treating that
         as corruption would disarm every fresh host's first sweep, for
@@ -741,6 +800,34 @@ class TestAdoptFromJournal(JournalCase):
         self.assertEqual(res.to_release, [])
         self.assertEqual(res.refused, [])
 
+    def test_a_live_rerun_of_a_branch_gated_here_before_is_still_adopted(self):
+        """The case `test_a_closed_job_is_never_looked_at_again` sits one
+        inch away from, and the common one: this host gated the branch,
+        the gate finished and was closed, and now a NEW gate is running on
+        the same branch under the same journal key. It must be adopted.
+
+        Before the fold was segmented per run, the earlier `exit` made
+        this file closed for ever, so offline adoption skipped the live
+        group silently -- no `Worker`, no rebuilt claim, no renewer. Its
+        lease then expired at TTL and another host's `acquire_or_reap`
+        was free to reap it and gate the same branch beside it, which is
+        the duplicate-gate hazard leases exist to prevent."""
+        self.journal_job("staging-one", pgid=999999, closed=True)
+        p = self.spawn_stub()
+        self.journal_job("staging-one", pgid=p.pid,
+                         started_at=iso(datetime.now(timezone.utc)))
+
+        res = self.adopt()
+
+        self.assertEqual(
+            [k for k, _ in res.adopted], ["staging-one"],
+            f"LIVE GATE INVISIBLE AT ADOPTION: a rerun on a branch this host "
+            f"has already gated was neither adopted nor released nor refused "
+            f"-- {res.summary()}")
+        self.assertEqual([w.pgid for w in self.workers], [p.pid])
+        self.assertEqual(res.to_release, [])
+        self.assertEqual(res.refused, [])
+
     def test_an_unreadable_journal_adopts_nothing(self):
         """The task statement's fail-closed rule: adopt nothing, sweep
         nothing. Note the live, adoptable worker that is deliberately NOT
@@ -846,6 +933,50 @@ class TestReleasePending(JournalCase):
         self.assertIsNotNone(self.hub.sha(ref), "a live re-acquisition must survive")
         self.assertIn("re-acquired", out[0][1])
 
+    def test_an_owed_release_with_no_ownership_token_is_left_alone(self):
+        """HALF A TOKEN IS NOT ENOUGH -- AND NONE OF IT IS LESS.
+
+        An `offer` carrying a `claim_ref` with no `claim` record after it
+        (the runner died between the two, or `acquire_or_reap` raised
+        something that is not `ClaimHeldError`) becomes an
+        `OwedRelease(started_at=None)`. The re-acquisition guard used to
+        be written `if started_at is not None and payload[...] != ...`,
+        so a None token SKIPPED the check and the CAS-delete proceeded on
+        `holder_host` alone -- deleting a ref this host holds right now
+        under a different, live acquisition. That is exactly the case the
+        guard beside it says must be left alone, reached with strictly
+        less evidence.
+
+        MEASURED before the fix at 578141ed (probe over the real
+        `adopt_from_journal`/`release_pending` and an in-memory CAS hub):
+        outcome `released`, and the ref -- `holder_host=h1`,
+        `started_at=2026-08-29T12:00:00+00:00`, `pgid=4242` -- gone from
+        the store.
+        """
+        ref = claim_mod.claim_ref("gate", "staging-one")
+        self.seed_claim_on_hub(
+            self.hub, ref, host=HOST, pgid=999999,
+            started_at=iso(datetime.now(timezone.utc) - timedelta(seconds=5)))
+        self.j.offer(job_key="staging-one", kind="gate", work_key="staging/one",
+                     tag="offer-only", claim_ref=ref)
+
+        res = jr.adopt_from_journal(self.j, HOST, self.workers, hub=self.hub,
+                                    markers=[self.marker], scope_token=self.token,
+                                    ttl=TTL, renew_interval=RENEW)
+        self.assertEqual([o.started_at for o in res.to_release], [None],
+                         "setup: the owed release must carry no token")
+
+        out = jr.release_pending(self.hub, HOST, res, journal=self.j)
+
+        self.assertIsNotNone(
+            self.hub.sha(ref),
+            "TOKENLESS DELETE: release_pending CAS-deleted a claim it had no "
+            "journaled `started_at` to prove was ours -- an owed release whose "
+            "token was never recorded is precisely the one we cannot prove")
+        self.assertIn("no ownership token", out[0][1])
+        self.assertTrue(self.j.read_job("staging-one").closed,
+                        "and the job is closed rather than re-read for ever")
+
     def test_a_store_still_away_leaves_the_debt_owed(self):
         ref, res = self.owed()
         break_hub(self.hub, str(self.tmp / "not-a-repo"))
@@ -860,6 +991,61 @@ class TestReleasePending(JournalCase):
         out = jr.release_pending(self.hub, HOST, res, journal=self.j)
         self.assertEqual(out, [(ref, "already gone")])
         self.assertEqual(res.to_release, [])
+
+
+# --------------------------------------------------------------------- #
+# The producer side: an offer whose acquire never completed
+# --------------------------------------------------------------------- #
+
+
+class TestOfferClosedWhenTheAcquireFails(JournalCase):
+    """`start_gate`/`start_agent` write the `offer` BEFORE the CAS and
+    caught only `ClaimHeldError`. Any other failure out of
+    `acquire_or_reap` -- `HubUnreachableError`, an ambiguous write --
+    propagates through `reconcile_once` (which catches `OSError` and
+    `JournalError` only) and left the job OPEN with a `claim_ref` and no
+    `claim` record. `release_pending` now refuses such an entry outright,
+    so this is hygiene rather than safety; but a job nothing will ever act
+    on must not sit in `open_jobs`, because `prune` collects CLOSED jobs
+    only and the file would never be collected at all."""
+
+    def setUp(self):
+        super().setUp()
+        self.hub = self.make_hub_for()
+
+    def test_a_hub_failure_during_the_cas_closes_the_offer(self):
+        boom = HubError("simulated: store away during the CAS")
+        with mock.patch.object(claim_mod.Claim, "acquire_or_reap",
+                               side_effect=boom):
+            with self.assertRaises(HubError):
+                runner.start_gate(self.hub, "staging/one", "cas-fails",
+                                  ["/bin/true"], HOST, self.tmp / "logs",
+                                  journal=self.j)
+
+        job = self.j.scan().job("gate-staging-one")
+        self.assertIsNotNone(job, "the offer must still be on the record")
+        self.assertTrue(
+            job.closed,
+            f"OFFER LEFT OPEN BY A FAILED CAS: the job has a claim_ref and no "
+            f"claim record, so every later startup pass re-reads it as owed "
+            f"work and `prune` never collects the file -- {job.events}")
+        self.assertEqual(job.outcome, "claim-failed")
+        self.assertEqual(self.j.scan().open_jobs, ())
+
+    def test_a_claim_held_by_someone_else_is_still_the_named_outcome(self):
+        """The control: the ordinary CAS loss must keep its own outcome
+        rather than be folded into the new one -- `claimed-elsewhere` is a
+        routine multi-host event and `claim-failed` is a store failure,
+        and `keel why` reads the difference."""
+        with mock.patch.object(claim_mod.Claim, "acquire_or_reap",
+                               side_effect=claim_mod.ClaimHeldError("held")):
+            w = runner.start_gate(self.hub, "staging/one", "held",
+                                  ["/bin/true"], HOST, self.tmp / "logs",
+                                  journal=self.j)
+        self.assertIsNone(w, "a held claim yields no worker")
+        job = self.j.scan().job("gate-staging-one")
+        self.assertTrue(job.closed)
+        self.assertEqual(job.outcome, "claimed-elsewhere")
 
 
 # --------------------------------------------------------------------- #
@@ -1407,6 +1593,21 @@ class TestOfflineStartThroughRunDaemon(JournalCase):
         self.assertNotIn(live_ref, [r for r, _ in released],
                          "the ADOPTED job is not owed a release and must never "
                          "be handed to release_pending at all")
+
+        # (5) and the released job is CLOSED in the journal. `_close` --
+        #     the `exit` record that ends the job -- sits behind
+        #     `if journal is not None` inside `release_pending`, whose
+        #     `journal=` parameter defaults to None. `run_daemon` called
+        #     it positionally and without one, so the ref was released on
+        #     the store while the job stayed in `open_jobs` for ever: read
+        #     as owed work by every later startup pass, and never
+        #     collected by `prune`, which is the failure
+        #     `fleetd._journal_close`'s docstring argues must not happen.
+        self.assertTrue(
+            self.j.read_job("gate-staging-two").closed,
+            "RELEASED BUT STILL OPEN: run_daemon settled the owed release "
+            "without handing release_pending a journal, so nothing wrote the "
+            "`exit` that ends the job")
 
     def test_an_owed_release_is_refused_when_this_host_re_acquired_the_branch(self):
         """Keel 3R-2 step 7, the half that must NOT be shortcut.

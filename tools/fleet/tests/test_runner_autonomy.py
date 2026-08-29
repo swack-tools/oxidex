@@ -41,6 +41,7 @@ import signal as signal_mod
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -188,6 +189,55 @@ class TestAutonomyTrigger(HermeticCase):
         self.assertEqual(g.last_observation, "down")
         clock.advance(61)
         self.assertTrue(g.observe())
+
+    def test_a_lease_whose_deadline_cannot_be_read_is_never_counted_as_live(self):
+        """`claim.is_expired` fails OPEN by contract -- "a payload with no
+        (or unparseable) `expires_at` is treated as *not* expired" -- and
+        its docstring says callers needing a well-formed payload must
+        validate separately. `read_lease` did not, so a payload whose
+        deadline it could not evaluate came back LIVE, permanently.
+
+        That is not a hypothetical encoding. `datetime.fromisoformat`
+        accepts a trailing `Z` only from Python 3.11, and
+        docs/AGENT-SERVER-SPEC.md's floor is py >=3.10; `keel server
+        rehost` wrote this very ref with
+        `strftime('%Y-%m-%dT%H:%M:%SZ')`. MEASURED on /usr/bin/python3
+        (3.9.6, the same pre-3.11 semantics):
+        `'2026-08-29T11:00:00Z'` -> ValueError,
+        `'2026-08-29T11:00:00+00:00'` -> parsed. So on a supported
+        runtime an EXPIRED rehost-written lease read live for ever and
+        `autonomous_when_serverless` could never engage -- silently, on
+        the one host SPEC SS12 built it for.
+
+        "Cannot evaluate" takes the same disposition as "cannot read":
+        UNREADABLE, which freezes the gate. It is not evidence about the
+        server either way.
+        """
+        for label, payload in (
+            ("an unparseable deadline",
+             {"holder_host": "someserver", "expires_at": "not-a-timestamp"}),
+            ("no deadline at all", {"holder_host": "someserver"}),
+        ):
+            with self.subTest(label):
+                gate = runner.AutonomyGate(_LeaseHub(payload), enabled=True)
+                self.assertEqual(
+                    gate.read_lease(), "unreadable",
+                    f"FAIL-OPEN LEASE ({label}): a payload this gate cannot "
+                    f"evaluate was reported LIVE, which is the one answer that "
+                    f"can never be right about it")
+
+    def test_a_well_formed_deadline_is_still_decided_normally(self):
+        """The control for the case above: validating the deadline must
+        not turn every real lease into `unreadable`."""
+        hub = _LeaseHub()
+        gate = runner.AutonomyGate(hub, enabled=True)
+        hub.live()
+        self.assertEqual(gate.read_lease(), "live")
+        hub.expired()
+        self.assertEqual(gate.read_lease(), "down")
+        hub.absent()
+        self.assertEqual(gate.read_lease(), "down",
+                         "an ABSENT lease is evidence of absence, not of doubt")
 
     def test_an_unreadable_lease_freezes_the_gate_rather_than_moving_it(self):
         """The third observation. A state repo this runner cannot reach is
@@ -406,13 +456,19 @@ class TestAutonomousDispatch(HermeticCase):
         count -- an agent run is a PAID claude/codex invocation, and
         "no agent worker appeared" is a weaker statement than "the
         dispatcher was never called"."""
-        # DRAINED for the first cycle, so nothing starts before autonomy
-        # has engaged. The entry gate needs two observations (one to start
-        # the absence clock, one to find it has elapsed), so cycle 1 is by
-        # construction NOT autonomous -- and asserting over the whole run
-        # would then be asserting about a cycle the property does not
-        # cover. The target is raised between the cycles, so the gate that
-        # starts is one an AUTONOMOUS runner started.
+        # DRAINED until autonomy has engaged, so nothing starts before it
+        # and the gate that does start is one an AUTONOMOUS runner
+        # started. THREE cycles, not two, and the third one is the
+        # autonomous one. Two things add up to that: the entry gate needs
+        # two observations (one to start the absence clock, one to find it
+        # has elapsed), and the observation is taken at the END of the loop
+        # body rather than the top -- `autonomy.observe()` reads the lease
+        # ref off the store, and `reconcile_once`'s step (1), the reap and
+        # the lost-lease kill, is documented as running with no hub call in
+        # front of it. So observations land at the end of cycles 1 and 2,
+        # and cycle 3 is the first to ACT on the second one. The lag is
+        # immaterial against the feature's own 60 s entry gate; being
+        # behind a 30-55 s hub timeout on every lost-lease kill was not.
         self._desired(gates=0, agents=3)
         seen: list = []
         results: list = []
@@ -429,9 +485,12 @@ class TestAutonomousDispatch(HermeticCase):
                     disk_probe=lambda: 100.0, mem_probe=lambda: 32.0, **kw)
                 results.append(res)
                 dispatch_calls_during.append(dispatcher.call_count - before)
-                if len(results) == 1:
+                if len(results) == 2:
+                    # Raised only once autonomy has engaged (the second
+                    # observation landed at the end of THIS cycle), so the
+                    # gate below is started by the autonomous cycle 3.
                     self._desired(gates=1, agents=3)
-                else:
+                elif len(results) >= 3:
                     self.started_procs.extend(
                         w.popen for w in workers if w.popen is not None)
                     os.kill(os.getpid(), signal_mod.SIGTERM)
@@ -447,30 +506,129 @@ class TestAutonomousDispatch(HermeticCase):
             )
 
         self.assertEqual(rc, 0)
-        self.assertEqual(len(results), 2, "two cycles, the second autonomous")
+        self.assertEqual(len(results), 3, "three cycles, the third autonomous")
         # There is no server lease on this fixture store at all, so every
         # observation is DOWN and the (patched-to-zero) entry gate engages
-        # on the second one.
+        # on the second one -- which the third cycle is the first to act on.
         self.assertTrue(seen[0]["agents_allowed"],
                         "cycle 1 is not yet autonomous")
-        self.assertIs(seen[1]["agents_allowed"], False,
+        self.assertTrue(seen[1]["agents_allowed"],
+                        "cycle 2 acts on the first observation, still not "
+                        "autonomous")
+        self.assertIs(seen[2]["agents_allowed"], False,
                       f"an autonomous runner must not be allowed agents: {seen}")
         # GATES: the autonomous cycle started one.
         self.assertEqual(
-            len(results[1].started), 1,
+            len(results[2].started), 1,
             f"AUTONOMOUS RUNNER DID NOT GATE -- SPEC SS12 requires it to stay at "
-            f"least as capable as hubless Stage 1: {results[1].refused}")
+            f"least as capable as hubless Stage 1: {results[2].refused}")
         # AGENTS: and dispatched none, watched at the dispatcher itself. An
         # agent run is a PAID claude/codex invocation, so "the dispatcher
         # was never called" is the statement worth making; "no agent worker
         # appeared" would also be true on a host with no agent CLI.
         self.assertEqual(
-            dispatch_calls_during[1], 0,
+            dispatch_calls_during[2], 0,
             f"AUTONOMOUS AGENT DISPATCH: an autonomous host called "
-            f"dispatch_agents {dispatch_calls_during[1]} time(s)")
+            f"dispatch_agents {dispatch_calls_during[2]} time(s)")
         self.assertIn("autonomous-no-agents",
-                      [r for r, _ in results[1].refused],
-                      f"the refusal must be named: {results[1].refused}")
+                      [r for r, _ in results[2].refused],
+                      f"the refusal must be named: {results[2].refused}")
+
+    def test_the_lease_read_never_stands_in_front_of_the_lost_lease_kill(self):
+        """SPEC I5 / fleetd.py's "(1) LOCAL FIRST. No hub call precedes
+        this loop", extended to the loop body that CALLS reconcile.
+
+        `autonomy.observe()` performs a blocking `hub.read(
+        SERVER_LEASE_REF)`. Taken at the top of the loop it put that read
+        ahead of the local reap and the lost-lease kill -- bounded by
+        `run_git`'s 30 s timeout, and by a further 5 s connect + 20 s read
+        through a `FallbackHub`'s primary -- on EVERY cycle, under exactly
+        the store outage that arms `autonomous_when_serverless`. A process
+        group whose lease another host may already have taken keeps
+        running for that whole window. `reconcile_once`'s docstring makes
+        the argument in full: "Steps 1 and 2 used to be the other way
+        round, and the inversion was the bug", because a lease goes LOST
+        for the same reason a read fails.
+
+        THE INSTRUMENT is the lease read itself, armed to raise a
+        non-`HubError` (which `read_lease` does NOT swallow) on its SECOND
+        call, so the daemon dies AT that read. Both orderings reach two
+        lease reads by cycle 2; only the ordering under test has already
+        performed the kill by then. Green = the parked gate is dead when
+        the daemon unwinds. A timing measurement would have been the wrong
+        instrument here -- it would report a duration, and the property is
+        an order.
+        """
+        self._desired(gates=1, agents=0)
+
+        class _LeaseProbeFired(Exception):
+            """Not a HubError, so `read_lease` cannot swallow it."""
+
+        class _ArmedLeaseRead:
+            def __init__(self, inner):
+                self._inner = inner
+                self.url = inner.url
+                self.code_url = getattr(inner, "code_url", inner.url)
+                self.lease_reads = 0
+                self.fire_on = None
+
+            def read(self, ref):
+                if ref == SERVER_LEASE_REF:
+                    self.lease_reads += 1
+                    if self.fire_on is not None and self.lease_reads >= self.fire_on:
+                        raise _LeaseProbeFired(
+                            f"lease read #{self.lease_reads}")
+                return self._inner.read(ref)
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        watcher = _ArmedLeaseRead(self.hub)
+        watcher.fire_on = 2
+        victim: list = []
+        results: list = []
+
+        def scripted(hub, host, workers, gate_command, log_dir, repo_root, **kw):
+            res = fleetd.reconcile_once(
+                hub, host, workers, gate_command, log_dir, repo_root,
+                disk_probe=lambda: 100.0, mem_probe=lambda: 32.0, **kw)
+            results.append(res)
+            if len(results) == 1:
+                self.assertEqual(
+                    len(workers), 1,
+                    f"setup: cycle 1 must have started a gate: {res.refused}")
+                w = workers[0]
+                victim.append(w)
+                self.started_procs.append(w.popen)
+                # Its lease is gone: fleetd's step (1) must SIGKILL the
+                # group on the very next cycle, before anything else.
+                w.claim._mark_lost("hub no longer records us as the holder")
+            return res
+
+        with mock.patch.object(runner, "AUTONOMY_ENTER_AFTER_S", 0.0):
+            with self.assertRaises(_LeaseProbeFired):
+                runner.run_daemon(
+                    watcher, HOST, gate_command=[str(self.stub)],
+                    log_dir=self.log_dir, repo_root=REPO_ROOT,
+                    interval=0, reconcile=scripted,
+                    autonomous_when_serverless=True, autonomous_interval=0)
+
+        self.assertEqual(watcher.lease_reads, 2,
+                         "instrument: the probe must have fired on the second "
+                         "lease read, not earlier or later")
+        self.assertTrue(victim, "instrument: no gate was ever started")
+        w = victim[0]
+        deadline = time.time() + 15
+        while time.time() < deadline and w.alive():
+            time.sleep(0.2)
+        self.assertFalse(
+            w.alive(),
+            "A SERVER-LEASE READ STOOD IN FRONT OF THE LOST-LEASE KILL: the "
+            "daemon reached its second lease read with the unleased gate still "
+            "running, so the observation is being taken ahead of reconcile's "
+            "local phase (instrument: lease read armed to raise on call 2)")
+        self.assertNotIn(w.pgid, runner.live_pgids(),
+                         "the process GROUP must be gone (M8)")
 
     def test_a_live_server_lease_leaves_agent_dispatch_alone(self):
         """The in-suite control for the case above: same fixture, same

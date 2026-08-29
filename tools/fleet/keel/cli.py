@@ -78,6 +78,7 @@ for _p in (_FLEET_DIR, _KEEL_DIR):
 
 import workqueue  # noqa: E402
 from claim import CLAIMS_PREFIX, claim_ref, is_expired  # noqa: E402
+from claim import _iso as claim_iso  # noqa: E402 -- ONE lease-timestamp spelling
 from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
 
 # Qualified `keel.<name>` imports, not bare ones -- see serverhub.py's
@@ -612,8 +613,20 @@ def cmd_server_rehost(args: argparse.Namespace) -> int:
     payload = {
         "holder_host": socket.gethostname(),
         "pid": os.getpid(),
-        "started_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "expires_at": (now + timedelta(seconds=SERVER_CLAIM_TTL_S)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # `claim._iso`, NOT `strftime("%Y-%m-%dT%H:%M:%SZ")`. Every other
+        # writer of a lease payload uses `_iso` (`Claim._payload`,
+        # `ServerClaim`), and every reader parses with
+        # `datetime.fromisoformat` -- which only accepts a trailing `Z`
+        # from Python 3.11, while docs/AGENT-SERVER-SPEC.md's floor is
+        # py >=3.10. So a rehost-written lease was unparseable on a
+        # supported runtime, and `claim.is_expired` fails OPEN on an
+        # unparseable deadline: an EXPIRED rehost lease read LIVE for
+        # ever. That was cosmetic until 3R-2 made this ref a scheduling
+        # input -- `AutonomyGate` watches it, and a lease stuck at LIVE
+        # means `autonomous_when_serverless` can never engage on the one
+        # host it exists for. Two writers, one spelling.
+        "started_at": claim_iso(now),
+        "expires_at": claim_iso(now + timedelta(seconds=SERVER_CLAIM_TTL_S)),
         "advertise_urls": [],
         "boot_id": uuid.uuid4().hex,
         "keel_version": KEEL_VERSION,

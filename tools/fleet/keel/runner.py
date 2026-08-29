@@ -815,8 +815,44 @@ def journal_job_key(kind: str, claim_key: str) -> str:
     The prefix keeps the two namespaces disjoint by construction: no
     `gate-...` string is ever an `agent-...` string, whatever the branch
     is called.
+
+    IT IDENTIFIES A BRANCH, NOT A RUN, and it stays that way on purpose:
+    `fleetd.adopt_workers` DERIVES this same key for a hub-adopted worker
+    from (kind, claim key) alone -- it has neither the tag nor, at
+    `offer` time, a `started_at` -- so folding either into the key would
+    make the two derivations disagree and a hub-adopted worker would
+    close a file its predecessor never opened. One file therefore
+    accumulates every run this host makes on a branch, and it is
+    `journal._runs`/`_fold` that separate them: the fold takes the
+    trailing run only, so a completed run's `exit` neither closes the
+    file for ever nor lends its `rc`/`outcome`/`started_at` to the live
+    run that follows it.
     """
     return f"{kind}-{claim_key}"
+
+
+def _close_failed_offer(jn, job_key: str, outcome: str) -> None:
+    """Close an `offer` whose acquire did not complete, without raising.
+
+    `start_gate`/`start_agent` write the `offer` BEFORE the CAS, and used
+    to catch only `ClaimHeldError`. Any other failure out of
+    `acquire_or_reap` -- `HubUnreachableError`, an ambiguous write --
+    propagates through `reconcile_once` (which catches `OSError` and
+    `JournalError` only) and left the job OPEN with a `claim_ref` and no
+    `claim` record: an owed release forever, re-read by every later
+    startup pass. `release_pending` now REFUSES such an entry (it has no
+    ownership token to prove with), so this is hygiene rather than
+    safety -- but a job that can never be acted on must not stay in
+    `open_jobs`, or `prune` never collects the file.
+
+    Swallows `JournalError` deliberately: the caller is already on its
+    way out with a real failure, and replacing that exception with a
+    journal one would hide the reason the start failed.
+    """
+    try:
+        jn.exit(job_key=job_key, outcome=outcome)
+    except journal_mod.JournalError:
+        pass
 
 
 def journal_claim_record(jn, job_key: str, c: Claim, *, kind: str,
@@ -918,6 +954,12 @@ def start_gate(
         # the job closed: never adopted, never released, never swept.
         jn.exit(job_key=job_key, outcome="claimed-elsewhere")
         return None
+    except Exception:
+        # Not "someone else holds it" -- the CAS itself failed (the store
+        # went away, the write was ambiguous). No lease is recorded here
+        # either way, so close the offer before the exception leaves.
+        _close_failed_offer(jn, job_key, "claim-failed")
+        raise
     try:
         journal_claim_record(jn, job_key, c, kind="gate", work_key=branch)
     except journal_mod.JournalError:
@@ -998,6 +1040,9 @@ def start_agent(
     except claim_mod.ClaimHeldError:
         jn.exit(job_key=job_key, outcome="claimed-elsewhere")
         return None
+    except Exception:
+        _close_failed_offer(jn, job_key, "claim-failed")  # see `start_gate`
+        raise
     try:
         journal_claim_record(jn, job_key, c, kind="agent", work_key=branch)
     except journal_mod.JournalError:
@@ -2256,13 +2301,53 @@ class AutonomyGate:
     def read_lease(self) -> str:
         """One observation of the server lease: `"live"`, `"down"` or
         `"unreadable"`. Separated from `observe` so a test can drive the
-        state machine without a store."""
+        state machine without a store.
+
+        `expires_at` IS PARSED HERE rather than delegated to
+        `claim.is_expired`, and the difference is the third verdict.
+        `is_expired` fails OPEN by contract -- "a payload with no (or
+        unparseable) `expires_at` is treated as *not* expired", and its
+        docstring says in as many words that "callers that require a
+        well-formed claim payload should validate that separately". This
+        is such a caller: through `is_expired` a lease whose deadline
+        cannot be read came back LIVE, permanently, which is the one
+        answer that can never be right about a payload this gate could
+        not evaluate. It is not evidence of a live server; it is a
+        payload we do not understand, so it takes the SAME disposition as
+        a lease we could not read at all -- freeze, per the class
+        docstring's "THREE observations, not two".
+
+        The concrete way this bit: `datetime.fromisoformat` only accepts
+        a trailing `Z` from Python 3.11, and the SPEC floor is py >=3.10
+        (docs/AGENT-SERVER-SPEC.md). `keel server rehost` wrote this very
+        ref with `strftime('%Y-%m-%dT%H:%M:%SZ')` until the same commit
+        as this comment, so on a 3.10 host an expired rehost-written
+        lease read LIVE for ever and `autonomous_when_serverless` could
+        never engage -- silently, on exactly the host SPEC SS12 built the
+        feature for. Both halves are fixed: `cli.cmd_server_rehost` now
+        writes `claim._iso` like every other writer of a lease payload,
+        and this reader no longer treats "cannot evaluate" as "live".
+        """
         try:
             payload = self.hub.read(SERVER_LEASE_REF)
         except HubError:
             return "unreadable"
         if not payload:
+            # ABSENT is evidence, and it is evidence of absence: SPEC's
+            # "no server lease" is the DOWN case, not the unknown one.
             return "down"
+        raw = payload.get("expires_at")
+        if not raw:
+            return "unreadable"
+        try:
+            # VALIDATE ONLY. The live/expired comparison stays in
+            # `is_expired`, which owns it -- re-deriving `now` here would
+            # be a second clock for one decision. `claim._parse_iso` is
+            # the exact parser `is_expired` uses, so "this parses" here
+            # and "this parsed" there cannot disagree.
+            claim_mod._parse_iso(raw)
+        except (ValueError, TypeError):
+            return "unreadable"
         return "down" if claim_mod.is_expired(payload) else "live"
 
     def observe(self, verdict: Optional[str] = None) -> bool:
@@ -2441,8 +2526,21 @@ def run_daemon(
     # halves derive the same production defaults themselves
     # (`worker_markers()`, `fleet_scope_token(hub.url)`). Passing them
     # would add a second place for the derivation to drift.
+    #
+    # ONE `Journal` object for this daemon, built here and handed to both
+    # halves. `adopt_at_startup` and `release_pending` address the same
+    # root either way (`Journal()` resolves `$KEEL_HOME` at construction),
+    # but `release_pending` only writes the `exit` that CLOSES a released
+    # job when it is given a journal at all -- its `journal=` parameter
+    # defaults to None, and the whole `_close` path sits behind
+    # `if journal is not None`. Calling it without one released the ref on
+    # the store and left the job in `open_jobs` forever: re-read as owed
+    # work by every later startup pass, and never collected by `prune`,
+    # which is the exact failure `fleetd._journal_close`'s docstring
+    # argues must not happen.
+    jn = journal_mod.Journal()
     try:
-        adoption = journal_mod.adopt_at_startup(hub, host, workers)
+        adoption = journal_mod.adopt_at_startup(hub, host, workers, journal=jn)
         print(f"{label}[{host}] adoption: {adoption.summary()}", flush=True)
     except (HubError, journal_mod.JournalError) as e:
         print(f"{label}[{host}]: cannot rebuild worker state from the hub or the "
@@ -2562,12 +2660,28 @@ def run_daemon(
             # or a MemoryError must still take the process down loudly
             # rather than be retried fifteen seconds later forever.
             degraded: Optional[HubError] = None
-            # The autonomy observation is taken BEFORE the step it governs,
-            # so this cycle's dispatch set is decided by this cycle's view
-            # of the lease rather than the previous one's. It never raises:
-            # `read_lease` turns a `HubError` into the "unreadable" verdict,
-            # which freezes the gate rather than moving it.
-            autonomous = autonomy.observe()
+            # THE VERDICT THIS CYCLE ACTS ON IS THE ONE ALREADY OBSERVED,
+            # and the observation for the next cycle is taken AFTER the
+            # reconcile step, below. `autonomy.observe()` reads
+            # `SERVER_LEASE_REF` off the store, and `reconcile_once`'s step
+            # (1) -- the reap and the lost-lease kill -- is documented as
+            # running with "no hub call before it" for a reason its own
+            # docstring spells out: a lease goes LOST because its renewal
+            # push failed, and renewals fail for the same reason reads do.
+            # Taking the observation first put up to a full `run_git`
+            # timeout (30 s, and 5 s connect + 20 s read more through a
+            # `FallbackHub`'s primary) in front of the kill, EVERY cycle,
+            # under exactly the store outage that arms the feature.
+            #
+            # The cost is one cycle of lag in the dispatch verdict, and it
+            # is immaterial against the gate's own hysteresis:
+            # `AUTONOMY_ENTER_AFTER_S` requires 60 s of consecutive DOWN
+            # observations before autonomy turns on and
+            # `AUTONOMY_EXIT_LIVE_OBSERVATIONS` several LIVE ones before it
+            # turns off, so a 15 s cycle's lag cannot change which side of
+            # either threshold this host is on. `register_cycle` is
+            # deferred one cycle for the same reason and says so.
+            autonomous = autonomy.autonomous
             try:
                 res = reconcile(hub, host, workers, gate_command, log_dir,
                                 repo_root, warnings=host_warnings,
@@ -2609,7 +2723,7 @@ def run_daemon(
                 # gate's lease.
                 if owed_releases is not None and owed_releases.to_release:
                     for ref, outcome in journal_mod.release_pending(
-                            hub, host, owed_releases):
+                            hub, host, owed_releases, journal=jn):
                         print(f"{label}[{host}] OWED RELEASE {ref}: {outcome}",
                               file=sys.stderr, flush=True)
                 if not spawn_allowed:
@@ -2637,6 +2751,14 @@ def run_daemon(
                     + f"hb={res.heartbeat_written}"
                 )
                 print(line, flush=True)
+
+            # The observation for the NEXT cycle, taken here rather than at
+            # the top of the loop -- see the note above `autonomous =
+            # autonomy.autonomous`. It never raises: `read_lease` turns a
+            # `HubError` into the "unreadable" verdict, which freezes the
+            # gate rather than moving it. Inert (no ref read at all) unless
+            # the operator set `autonomous_when_serverless`.
+            autonomy.observe()
 
             if degraded is not None:
                 # Loud, and counted. A skipped step means: nothing started,
