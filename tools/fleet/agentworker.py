@@ -64,6 +64,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config
 import dispatch
 import fleetlib
+import toolchain  # L1: the ONE toolchain PATH prefix
 from fleetlib import Hub, HubError
 
 AGENT_TIMEOUT_S = int(os.environ.get("FLEET_AGENT_TIMEOUT_S", "3600"))
@@ -134,15 +135,23 @@ def _is_auth_failure(stderr: str) -> bool:
     low = (stderr or "").lower()
     return any(hint in low for hint in _AUTH_FAILURE_HINTS)
 
-# The PATH gate.sh uses, mirrored here: fleetd under systemd/launchd
-# inherits a minimal PATH that misses ~/.local/bin (claude) and the nvm
-# bin (codex) -- found live on the i7, where both CLIs existed but
-# neither was visible to a daemon-spawned which().
+# The PATH gate.sh uses: fleetd under systemd/launchd inherits a minimal
+# PATH that misses ~/.local/bin (claude) and the nvm bin (codex) -- found
+# live on the i7, where both CLIs existed but neither was visible to a
+# daemon-spawned which().
+#
+# L1 (Keel Stage 1 LIVE, 2026-08-27/28): the toolchain segments were
+# spelled out here too, under a comment that said "mirrored here" -- a
+# fourth copy of a prefix three other files also carried. Copies drift,
+# and the drift cost this fleet a day of re-gating one merge tree. They
+# come from `toolchain.toolchain_path_prefix()` now, the same string
+# `gate.sh` builds its PATH from via `units/fleet-toolchain.sh`. The
+# nvm/homebrew segments stay local: they are about finding a CLI, not
+# about identifying a compiler.
 _HOME = str(Path.home())
 FLEET_PATH = os.pathsep.join([
     f"{_HOME}/.nvm/versions/node/v24.13.1/bin",
-    f"{_HOME}/.cargo/bin",
-    f"{_HOME}/.local/bin",
+    toolchain.toolchain_path_prefix(),
     "/opt/homebrew/bin",
     "/usr/local/bin",
     os.environ.get("PATH", "/usr/bin:/bin"),

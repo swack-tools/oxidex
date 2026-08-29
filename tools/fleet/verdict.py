@@ -35,7 +35,6 @@ not redefined here) is the only thing that ever talks to a remote.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -44,6 +43,7 @@ from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import toolchain  # noqa: E402  -- L1: the ONE rustc resolver + id formula
 from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
 
 # Qualified `keel.<name>` imports, not bare ones -- keel/cli.py's own
@@ -113,20 +113,25 @@ _REQUIRED_VERDICT_FIELDS = (
 def compute_ids(rustc_vv_text: str) -> "tuple[str, str]":
     """(rustc_id, platform_id) from the text of `rustc -vV`.
 
-    `platform_id` hashes the text verbatim. `rustc_id` hashes it with any
-    line starting with `host:` removed first -- mirrors `gate.sh`'s
-    `grep -v '^host:'`. Kept here as the portable reference implementation
-    so any other Python fleet tool (doctor, ledger, train) that needs a
-    toolchain identity computes it the same way `gate.sh` does, rather than
-    reinventing the stripping rule a third time.
+    L1 (Keel Stage 1 LIVE, 2026-08-27/28): this was written as "the
+    portable reference implementation so any other Python fleet tool
+    computes it the same way `gate.sh` does" -- and it did not. It hashed
+    the text VERBATIM for `platform_id`, while `gate.sh` hashes what
+    `$(rustc -vV)` yields, which has the trailing newline stripped. Three
+    implementations existed and no two agreed on both fields:
+
+                   platform_id   rustc_id
+        gate.sh    b6613b19      b5d14336
+        claim.py   b2bdf493      12562484
+        verdict.py b2bdf493      b5d14336   <- this one
+
+    A prose promise that two files agree is not a mechanism. The formula
+    lives in `toolchain.compute_ids` now, and `gate.sh` reaches the same
+    function through `units/fleet-toolchain.sh`, so there is ONE
+    implementation rather than a reference one and some copies. Kept as a
+    re-export because callers and tests name it here.
     """
-    platform_id = hashlib.sha256(rustc_vv_text.encode("utf-8")).hexdigest()
-    stripped_lines = [line for line in rustc_vv_text.splitlines() if not line.startswith("host:")]
-    stripped_text = "\n".join(stripped_lines)
-    if rustc_vv_text.endswith("\n") and stripped_text:
-        stripped_text += "\n"
-    rustc_id = hashlib.sha256(stripped_text.encode("utf-8")).hexdigest()
-    return rustc_id, platform_id
+    return toolchain.compute_ids(rustc_vv_text)
 
 
 # --------------------------------------------------------------------- #

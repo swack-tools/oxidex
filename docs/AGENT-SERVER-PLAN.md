@@ -133,7 +133,17 @@ the human a `fleet status` that says *why* nothing is starting.
   deploy-key delete → rc≠0. (Instrument: captured `git push` rc + stderr per case.)
 - One real gate on the i7 of a real `staging/*` branch: `~/gatelogs/gate-<tag>.verdict` = PASS and
   `git ls-remote <state> 'refs/fleet/verdicts/*'` lists `(tree,7,<i7 platform_id>)` (instrument:
-  both commands' output).
+  both commands' output) — **and that `platform_id` must equal the one the i7's own fleetd
+  computes.** L1, 2026-08-27/28: as originally written this bullet asserted only that A
+  `platform_id` was present, which was true throughout the defect, because the GATE's key was
+  perfectly well formed. fleetd stored `b2bdf493…` and the gate it had itself just spawned stored
+  `b6613b19…`; `verdict.lookup` under the scheduler's key returned `None` for a tree whose PASS was
+  already on the state repo, so `classify_branch` never returned `AWAITING_TRAIN` and the host
+  re-gated the same merge tree every ~21 minutes forever. An assertion that a value EXISTS cannot
+  catch two components disagreeing about the value. Check it with
+  `python3 tools/fleet/toolchain.py ids --format sh` on the host and compare `PLATFORM_ID` to the
+  ref's last path segment; `fleetd` now refuses to start on a mismatch and
+  `tools/fleet/tests/test_toolchain_seam.py` pins the two sides against each other hermetically.
 - `fleet status --why` from m5 shows i7 `up` with heartbeat age < 60 s and m5 `refused:
   target-zero (gates 0 / agents 0)` (instrument: the command output; `disabled (<reason>)` is the
   line only for a host an operator took down with `fleet down`, and m5 is seeded ENABLED at 0/0).
@@ -145,8 +155,28 @@ the human a `fleet status` that says *why* nothing is starting.
   simulation `tools/fleet/tests/test_bringup_split.py` pins the `target-zero` line end to end
   (real `seed_desired.py`, real `fleetd.py --hub <state> --code <code>`, real `cli.py status
   --why`, two local bare repos).
-- `rg -n "work2.oxidex.net|/home/allen/git/oxidex.git|/tmp/oxidex-exiftool-cache" tools/fleet
-  units` returns only comments in the incident history (instrument: that ripgrep).
+  **L2, 2026-08-27/28: the host names in this plan and in `FLEET_SPEC.md` are the keys under
+  `hosts` in `tools/fleet/rollout/seed_desired.py` (`server`, `oldair`, `m5`) — they are NOT
+  `hostname -s`.** `fleetd.host_identity()` falls back to the hostname when `FLEET_HOST` is unset,
+  and no committed unit set it, so the live run's m5 reported as `Allens-Air` and rendered
+  `refused: disabled ()` — an empty reason — with no `m5` row at all, which reads as a deliberate
+  stand-down and was the opposite of the truth. Both units and `cron-backstop.txt` now set
+  `FLEET_HOST` explicitly (per host, hand-substituted like the other launchd literals), and a host
+  absent from `refs/fleet/desired` now refuses with `unknown-host (<name> not in
+  refs/fleet/desired …; set FLEET_HOST …)` instead of `disabled`.
+- `rg -n "work2.oxidex.net|/home/allen/git/oxidex.git|/tmp/oxidex-exiftool-cache" tools/fleet`
+  (instrument: that ripgrep). **L3, 2026-08-28:** this line used to end `tools/fleet units`, two
+  paths, and `units` is not one — there is no top-level `units/` directory, it is
+  `tools/fleet/units/`. Ripgrep printed `units: No such file or directory (os error 2)` and exited
+  **2**, so as written the check could never be the green it was recorded as; the single path
+  above already covers `tools/fleet/units/`. Corrected, its hits are (a) incident-history prose in
+  comments and docstrings, (b) tests that ASSERT ABSENCE — every
+  `assertNotIn("work2.oxidex.net", resolved)` in the fixtures, plus `test_no_hardcoded_hosts.py`'s
+  own sample-bad strings, which have to contain the literals in order to fence them — and (c) the
+  two sanctioned mirrored defaults, `config.py`'s `DEFAULT_EXIFTOOL_CACHE_DIR` and
+  `units/fleet-env.sh`'s `${EXIFTOOL_CACHE_DIR:=...}`, which that same test pins against each
+  other. None of the three is a hardcoded runtime host; a reader seeing ~50 hits should not be
+  alarmed by the count.
 - Full suite green under `gate.sh` fleet-tests stage (instrument: the gate verdict JSON).
 
 **What the human sees.** `fleet status --why` works from the laptop with the ryzen dark; the i7

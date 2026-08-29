@@ -31,6 +31,32 @@
 # lease NOT lost); every other exit is either a startup precondition
 # failure or something to retry.
 #
+# THE RC CONTRACT, in full (keel/runner.py's `run_daemon` is the
+# authority; every code below is also documented in its docstring):
+#
+#   rc=0  deliberate stop (SIGTERM/SIGINT, or --once completing). The
+#         wrapper EXITS -- see above.
+#   rc=3  another instance holds refs/fleet/claims/host/<host>.
+#   rc=4  host lease lost mid-run; live workers drained, not killed.
+#   rc=5  could not rebuild worker state from the hub at startup.
+#   rc=6  hub persistently unusable (RECONCILE_HUB_FAILURE_LIMIT
+#         consecutive failed reconcile steps, or a failed --once step).
+#         RETRYABLE: the hub can come back, which is why this wrapper
+#         restarting on it is right.
+#   rc=7  L1 toolchain-id mismatch -- this runner's platform_id differs
+#         from the one its own gate command computes, so every verdict
+#         its gates publish lands in a cache slot it cannot read.
+#         NOT retryable by a supervisor: it is a property of how this
+#         host is installed and cannot clear until a human fixes the
+#         install (or sets FLEET_ALLOW_TOOLCHAIN_MISMATCH=1 to run
+#         degraded). It has its own code precisely so a supervisor CAN
+#         tell it from rc=6 -- as first written, the L1 refusal reused
+#         6, which meant "restart me, the hub may recover" and
+#         "restarting me is a hot loop" were one value. This wrapper
+#         still restarts on rc=7 today; changing that policy is a
+#         separate decision, and the distinct code is what makes it
+#         possible to make.
+#
 # NEVER TOUCHES RUNNING GATES. This script only ever signals the fleetd
 # PROCESS it started (SIGTERM to ask it to stop; nothing else). It holds
 # no claim, greps no process list, and kills nothing beyond that one

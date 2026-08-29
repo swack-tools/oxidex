@@ -304,8 +304,13 @@ Without it the reconciler will double-start work it cannot see.
 login shell resolves Homebrew's rustc from `/opt/homebrew/bin`, while the gate
 prepends `$HOME/.cargo/bin` and gets rustup's. The two disagreed for most of a
 day, and the discrepancy is invisible unless the probe replicates the gate's
-exact `PATH`. `doctor.py` does this; anything else that reports a toolchain
-must too.
+exact `PATH`. As of 2026-08-28 exactly one place decides this:
+`tools/fleet/toolchain.py` (the PATH prefix, the `rustc -vV` capture, and both
+digests), reached from shell by sourcing `units/fleet-toolchain.sh` — which is
+what `gate.sh` now does; `doctor.py`, `claim.py` and `verdict.py` all delegate
+to it. **"Replicated here" is not a mechanism.** Each of those files used to
+carry its own copy of the rule, with prose promising they agreed; see the entry
+below for what that cost.
 
 **Still open: macOS gate viability.** `tests/ffi_c_integration.rs` fails in
 `--release` on the M4 under rustc 1.90.0, 1.95.0 and 1.97.1 alike, with
@@ -318,7 +323,7 @@ treat macOS gate slots as unproven rather than merely degraded.
 **Two tasks computed `toolchain_id` differently, and both were right.** T0.1's
 `doctor.py` hashes `rustc -vV` with the `host:` line **stripped**, giving all
 four hosts one canonical id (`b5d14336…`). T0.3's `gate.sh` hashes it
-**unstripped**, giving the i7 `b2bdf493…`. Keying verdict admissibility on
+**unstripped**, giving the i7 `b6613b19…`. Keying verdict admissibility on
 either alone is wrong, because they answer different questions:
 
 - *Is this host on the canonical compiler?* — needs the host line stripped, so
@@ -331,6 +336,18 @@ Carry both: `rustc_id` (stripped, for `doctor.py` and desired-state health) and
 `platform_id` (unstripped, part of the verdict cache key). Collapsing them would
 let a Linux PASS silently satisfy a macOS host, which is precisely the
 cross-platform skew that cost a day here.
+
+**And carry them from ONE implementation.** This section previously recorded
+the i7's `platform_id` as `b2bdf493…`; that was never what `gate.sh` wrote. It
+is what `claim.py` wrote — `subprocess.run(...).stdout` keeps the trailing
+newline that `RUSTC_VV=$(rustc -vV)` strips, so the same compiler hashed to two
+values and even the doctrine page blessed the wrong one. On 2026-08-27/28 that
+one character meant `fleetd` looked up `refs/fleet/verdicts/<tree>/8/b2bdf493…`
+while its own gate published to `…/b6613b19…`: `classify_branch` never returned
+AWAITING_TRAIN and the i7 re-gated the same merge tree every ~21 minutes with a
+correct PASS sitting unread. Every gate host now derives both ids from
+`toolchain.compute_ids`, and `fleetd` refuses to start if the id it computes
+differs from the one its own gate command computes.
 
 **`regen.sh` has a hidden host dependency.** The committed oracle ledger's
 digest must match the `tables.json` that a host's *Perl* produces, and only the

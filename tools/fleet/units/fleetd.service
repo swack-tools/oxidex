@@ -43,6 +43,26 @@ Environment=FLEET_CODE_URL=https://github.com/swack-tools/oxidex.git
 # non-empty, a real `git ls-remote` against the state repo) without ever
 # printing it. `%h` is systemd specifier syntax for this unit's HOME.
 Environment=FLEET_GIT_TOKEN_FILE=%h/.keel/secrets/git-token
+# L1 (Keel Stage 1 LIVE, 2026-08-27/28): a systemd --user service inherits
+# systemd's own PATH, which carries no ~/.cargo/bin, while `gate.sh`
+# prepends the fleet toolchain prefix before it resolves anything. The
+# launchd plist for the macOS hosts already set a PATH for exactly this
+# reason; this file -- the unit for the fleet's ONLY gate host -- never
+# got the same treatment. `%h` is systemd's specifier for this unit's
+# HOME. The first two segments must stay in step with
+# tools/fleet/toolchain.py's TOOLCHAIN_PATH_PREFIX_REL and
+# units/fleet-toolchain.sh's FLEET_TOOLCHAIN_PATH_PREFIX default.
+Environment=PATH=%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# L2 (same run): `hostname -s` is not the fleet name. The runner falls
+# back to it when FLEET_HOST is unset, so a host whose seeded name differs
+# reports under a name `refs/fleet/desired` has never heard of -- on the
+# m5 that rendered as `refused: disabled ()`, an empty reason, plus an
+# `Allens-Air` row in `fleet status --why` and no `m5` row at all. The
+# identity is explicit here now. THIS VALUE IS PER HOST: it must match
+# the key under `hosts` in tools/fleet/rollout/seed_desired.py (the i7 is
+# seeded as `server`). If it is ever wrong, the runner now says
+# `unknown-host` instead of `disabled`.
+Environment=FLEET_HOST=server
 # PLAN Stage 3 task 7: the optional keel-server route (SPEC SS4.3) --
 # unset here on purpose. A host that should route its verdict cache and
 # claim traffic through a keel-server sets KEEL_SERVER_URL (and, if the
