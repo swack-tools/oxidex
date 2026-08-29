@@ -30,8 +30,10 @@
 //! (`-G0:1 -Make` -> `[MakerNotes:CIFF]`): `cli::tag_resolution::resolve_family0`
 //! maps this same `"CIFF"` group0 to family-0 `"MakerNotes"` on request.
 
-use crate::core::{MetadataMap, TagValue};
+use crate::core::{Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue};
 use crate::parsers::jpeg::segment_parser::Segment;
+use crate::parsers::tiff::makernotes::canon::parse_canon_ciff_records;
+use std::collections::HashMap;
 
 /// JPEG APP0 marker (0xFFE0). CIFF containers embedded this way arrive as
 /// the payload of an APP0 segment, same as JFIF/JFXX/OCAD.
@@ -39,6 +41,10 @@ const APP0_MARKER: u16 = 0xFFE0;
 
 /// CIFF's `CanonRawMakeModel` tag (`CanonRaw.pm:74-78`).
 const CANON_RAW_MAKE_MODEL: u16 = 0x080A;
+
+/// CIFF's `CanonFocalLength` tag (`CanonRaw.pm:118-122`), a `SubDirectory`
+/// onto `%Image::ExifTool::Canon::FocalLength`.
+const CANON_RAW_FOCAL_LENGTH: u16 = 0x1029;
 
 /// `ProcessCanonRaw`'s own three-way split of a raw 16-bit directory-entry
 /// tag word (`CanonRaw.pm:648-655`):
@@ -62,8 +68,14 @@ fn ciff_tag_id(tag: u16) -> u16 {
 
 fn ciff_is_subdirectory(tag: u16) -> bool {
     let tag_type = (tag >> 8) & 0x38;
-    let value_in_dir = tag & 0x4000 != 0;
-    (tag_type == 0x28 || tag_type == 0x30) && !value_in_dir
+    (tag_type == 0x28 || tag_type == 0x30) && !ciff_value_in_dir(tag)
+}
+
+/// `CanonRaw.pm:655`'s `my $valueInDir = ($tag & 0x4000);` -- the entry's
+/// eight bytes after the tag word are the value itself rather than a
+/// size/pointer pair.
+fn ciff_value_in_dir(tag: u16) -> bool {
+    tag & 0x4000 != 0
 }
 
 fn read_ciff_u16(data: &[u8], offset: usize) -> Option<u16> {
@@ -78,16 +90,25 @@ fn read_ciff_u32(data: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes))
 }
 
-/// Recursively walks a CIFF directory looking only for tag `0x080a`. Mirrors
+/// Recursively walks a CIFF directory looking only for tags `0x080a`
+/// (`CanonRawMakeModel`, decoded inline) and `0x1029` (`CanonFocalLength`,
+/// whose bytes are handed back to the caller). Mirrors
 /// `raw::metadata::parse_ciff_directory`'s traversal (bounds checks, depth
-/// guard, entry layout) but calls back only for the one tag this module
-/// cares about, rather than every tag `parse_ciff_record` recognizes.
-fn walk_for_make_model(
-    data: &[u8],
+/// guard, entry layout) but calls back only for the tags this module cares
+/// about, rather than every tag `parse_ciff_record` recognizes.
+///
+/// `focal_length_record` is an out-parameter rather than an inline decode
+/// because `%Canon::FocalLength`'s own `Condition` reads the `Model`
+/// DataMember, and a CIFF directory does not guarantee `0x080a` is walked
+/// before `0x1029`. The caller decodes once the whole walk is done and the
+/// Model is known.
+fn walk_ciff_directory<'a>(
+    data: &'a [u8],
     container_start: usize,
     container_end: usize,
     directory_offset: usize,
     metadata: &mut MetadataMap,
+    focal_length_record: &mut Option<&'a [u8]>,
     depth: usize,
 ) {
     if depth > 16 {
@@ -126,21 +147,45 @@ fn walk_for_make_model(
         else {
             continue;
         };
-        let Some(value_start) = container_start.checked_add(relative) else {
-            continue;
-        };
-        let Some(value_end) = value_start.checked_add(size) else {
-            continue;
-        };
-        let Some(value) = data.get(value_start..value_end) else {
-            continue;
+        // `CanonRaw.pm:693-695`: "this type of tag stores the value in the
+        // 'size' and 'ptr' fields" -- when `valueInDir` is set the eight bytes
+        // that would otherwise be a size and a pointer *are* the value, and
+        // `size`/`relative` above are not offsets at all.
+        //
+        // Missing this silently dropped every inline-value entry in the whole
+        // container, because the misread pointer almost always lands out of
+        // bounds and the entry falls out through one of the `continue`s above:
+        // `t/images/ExifTool.jpg`'s CIFF walked 21 entries where the pinned
+        // oracle's `-v3` dump lists 26, and `CanonFocalLength` (`0x5029`, i.e.
+        // `0x1029 | 0x4000`) was one of the five lost. `parse_ciff_directory`
+        // in `raw::metadata` -- the standalone-`.CRW` twin of this walker --
+        // has always had this branch; only the APP0 path lacked it.
+        let value = if ciff_value_in_dir(tag) {
+            let Some(bytes) = data.get(entry_offset + 2..entry_offset + 10) else {
+                continue;
+            };
+            bytes
+        } else {
+            let Some(value_start) = container_start.checked_add(relative) else {
+                continue;
+            };
+            let Some(value_end) = value_start.checked_add(size) else {
+                continue;
+            };
+            let Some(bytes) = data.get(value_start..value_end) else {
+                continue;
+            };
+            bytes
         };
 
-        if !ciff_is_subdirectory(tag) && ciff_tag_id(tag) == CANON_RAW_MAKE_MODEL {
-            insert_make_model(value, metadata);
-        }
-
-        if ciff_is_subdirectory(tag) && value.len() >= 4 {
+        if ciff_is_subdirectory(tag) {
+            if value.len() < 4 {
+                continue;
+            }
+            // Only reachable when `valueInDir` is clear (`ciff_is_subdirectory`
+            // requires it), so the value block really is at `relative`.
+            let value_start = container_start + relative;
+            let value_end = value_start + size;
             let Some(relative_directory) =
                 read_ciff_u32(value, value.len() - 4).map(|value| value as usize)
             else {
@@ -149,14 +194,22 @@ fn walk_for_make_model(
             let Some(nested_directory) = value_start.checked_add(relative_directory) else {
                 continue;
             };
-            walk_for_make_model(
+            walk_ciff_directory(
                 data,
                 value_start,
                 value_end,
                 nested_directory,
                 metadata,
+                focal_length_record,
                 depth + 1,
             );
+            continue;
+        }
+
+        match ciff_tag_id(tag) {
+            CANON_RAW_MAKE_MODEL => insert_make_model(value, metadata),
+            CANON_RAW_FOCAL_LENGTH => *focal_length_record = Some(value),
+            _ => {}
         }
     }
 }
@@ -191,6 +244,84 @@ fn insert_make_model(record: &[u8], metadata: &mut MetadataMap) {
                 "CIFF:Model".to_string(),
                 TagValue::new_string(model.into_owned()),
             );
+        }
+    }
+}
+
+/// Decodes `%Canon::FocalLength`'s `FocalPlaneXSize`/`FocalPlaneYSize`
+/// (`Canon.pm:2726-2770`, keys 2 and 3) out of CIFF record `0x1029`
+/// (`CanonRaw.pm:118-122`).
+///
+/// # Why these two and not the whole record
+///
+/// The same record's key 1 `FocalLength` has
+/// `ValueConv => '$val / ($$self{FocalUnits} || 1)'`, and `FocalUnits` is a
+/// DataMember of `%Canon::CameraSettings` -- a record this APP0 path does not
+/// parse. Emitting a focal length divided by an assumed unit would be a
+/// plausible-but-wrong value under a real ExifTool tag name, which AGENTS.md's
+/// "never approximate a conversion" rule forbids; it is omitted instead. Key 0
+/// `FocalType` is omitted for scope, not correctness. The two sizes have no
+/// such dependency: `$val * 25.4 / 1000` from the record alone, gated by the
+/// `Model` condition and the `$val < 40 ? undef : $val` plausibility guard,
+/// both of which [`parse_canon_ciff_records`] already applies.
+///
+/// # Why it goes through the MakerNote decoder
+///
+/// Same reason `raw::metadata::parse_canon_crw` does (see
+/// [`parse_canon_ciff_records`]' own doc comment): there is one transcription
+/// of `%Canon::FocalLength`, and a second copy written against CIFF bytes
+/// would be a second chance to get the conversion -- and the unrounded
+/// `ValueConv` form the Composite chain consumes -- subtly wrong. The decoder
+/// keys its output `Canon:`; the embedded-CIFF-in-JPEG case is family-1
+/// `CIFF` (confirmed against the pinned 13.59 oracle: `-a -G1 -s` on
+/// `t/images/ExifTool.jpg` prints `[CIFF] FocalPlaneXSize : 5.05 mm`), and
+/// `cli::tag_resolution::resolve_family0` maps that `CIFF` label back to
+/// family-0 `MakerNotes` on request, exactly as it already does for
+/// `CIFF:Make`.
+///
+/// # What this unblocks
+///
+/// `CalcScaleFactor35efl` (Exif.pm) takes the FocalPlaneX/YSize branch
+/// whenever the aspect ratio looks like 4:3 or 3:2, ahead of the
+/// resolution-derived fallback. Without these two, ExifTool.jpg's chain fell
+/// through to that fallback, derived a 0.42 mm sensor diagonal from
+/// ExifImageWidth/Height and the focal-plane resolutions, rejected it as
+/// implausible and produced no `Composite:ScaleFactor35efl` at all -- so
+/// `Composite:FocalLength35efl` was stuck at the un-refined `6.0 mm` where
+/// the oracle says `6.0 mm (35 mm equivalent: 41.4 mm)`.
+fn insert_focal_plane_sizes(record: &[u8], metadata: &mut MetadataMap) {
+    let model = metadata.get_string("CIFF:Model").map(str::to_string);
+    let mut value_forms: HashMap<String, String> = HashMap::new();
+    let decoded = parse_canon_ciff_records(
+        &[(CANON_RAW_FOCAL_LENGTH, record)],
+        model.as_deref(),
+        &mut value_forms,
+    );
+
+    for name in ["FocalPlaneXSize", "FocalPlaneYSize"] {
+        let makernote_key = format!("Canon:{name}");
+        let Some(display) = decoded.get(&makernote_key) else {
+            continue;
+        };
+        let ciff_key = format!("CIFF:{name}");
+        // The unrounded `$val * 25.4 / 1000` form rides along the same channel
+        // the CRW route uses, because `CalcScaleFactor35efl` squares these
+        // numbers and the "%.2f" print (5.05 for 5.0546) is a different number
+        // than the one ExifTool's arithmetic sees.
+        match value_forms.get(&makernote_key) {
+            Some(value_form) => {
+                metadata.insert_occurrence_with_raw(
+                    ciff_key,
+                    TagValue::new_string(display.clone()),
+                    TagValue::new_string(value_form.clone()),
+                    SHIM_DEFAULT_PRIORITY,
+                    "",
+                    Instance::default(),
+                );
+            }
+            None => {
+                metadata.insert(ciff_key, TagValue::new_string(display.clone()));
+            }
         }
     }
 }
@@ -239,7 +370,19 @@ pub(crate) fn process_ciff_app0_segments(segments: &[Segment<'_>], metadata: &mu
         if root_directory >= data.len() {
             continue;
         }
-        walk_for_make_model(data, heap_start, data.len(), root_directory, metadata, 0);
+        let mut focal_length_record = None;
+        walk_ciff_directory(
+            data,
+            heap_start,
+            data.len(),
+            root_directory,
+            metadata,
+            &mut focal_length_record,
+            0,
+        );
+        if let Some(record) = focal_length_record {
+            insert_focal_plane_sizes(record, metadata);
+        }
     }
 }
 

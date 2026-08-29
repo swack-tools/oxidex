@@ -42,6 +42,11 @@ pub struct TagSink {
     /// Every occurrence ever recorded, in file order. Index `i` was recorded
     /// at `order == i` (as a `u32`).
     occurrences: Vec<TagOccurrence>,
+    /// Tombstone flags, parallel to `occurrences`: `tombstoned[i]` is true
+    /// once [`TagSink::remove`] has retired occurrence `i`. See that method
+    /// and [`TagSink::occurrences`] for why removal marks rather than
+    /// physically deletes.
+    tombstoned: Vec<bool>,
     /// Winner projection: lookup key -> index into `occurrences` of the
     /// occurrence that currently wins that key.
     winners: HashMap<String, usize>,
@@ -51,6 +56,7 @@ impl TagSink {
     pub fn new() -> Self {
         Self {
             occurrences: Vec::new(),
+            tombstoned: Vec::new(),
             winners: HashMap::new(),
         }
     }
@@ -58,6 +64,7 @@ impl TagSink {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             occurrences: Vec::with_capacity(capacity),
+            tombstoned: Vec::with_capacity(capacity),
             winners: HashMap::with_capacity(capacity),
         }
     }
@@ -119,6 +126,7 @@ impl TagSink {
         let new_priority = occurrence.priority;
         let new_instance = occurrence.instance;
         self.occurrences.push(occurrence);
+        self.tombstoned.push(false);
         match self.winners.entry(key) {
             Entry::Occupied(mut e) => {
                 let existing_idx = *e.get();
@@ -202,12 +210,42 @@ impl TagSink {
         }
     }
 
-    /// Removes `key` from the winner projection. The occurrence itself stays
-    /// physically in `occurrences` (it is simply no longer anyone's winner)
-    /// so that other occurrences' indices remain valid.
+    /// Removes `key` from the winner projection **and retires the occurrence
+    /// that held it**, so a removed algorithmic state can never be observed
+    /// again through any projection.
+    ///
+    /// The occurrence stays physically in `occurrences` -- every other index
+    /// (`winners`' values, and the `order`/`next_order` sequence, which is
+    /// this vector's own length) must remain valid -- but it is marked in
+    /// `tombstoned` and every reader below skips it. Physically deleting it
+    /// would be the other half of the same invariant and is deliberately not
+    /// what happens here: `Vec::remove` shifts every later index, invalidating
+    /// the winner map, and `next_order()` would then hand out an `order` a
+    /// live occurrence already carries.
+    ///
+    /// Before this, `remove` dropped only the winner *index*. The occurrence
+    /// survived in `occurrences`, and every reader that walks all of them --
+    /// `MetadataMap::all_occurrences`, and through it the CLI's `-a` output
+    /// (`cli::tag_resolution::resolve_requested_tags`), `-a -G*`'s unfiltered
+    /// listing, `tag_normalization::normalize_metadata_map`'s replay and the
+    /// Composite layer's own dependency lookup -- still saw it. That made
+    /// `src/composite/mod.rs`'s deliberate remove-then-reinsert refinement
+    /// (see its own comment: removing the key is what lets a composite refine
+    /// its *own* earlier guess past `record`'s priority-0 promotion rule)
+    /// accumulate one visible occurrence per pass: `Composite:FocalLength35efl`
+    /// on `t/images/ExifTool.jpg` reported three, where the pinned 13.59
+    /// oracle reports one, and an intermediate state could win a `-TAG`
+    /// request's arbitration outright.
     pub fn remove(&mut self, key: &str) -> Option<TagValue> {
         let idx = self.winners.remove(key)?;
+        self.tombstoned[idx] = true;
         Some(self.occurrences[idx].raw.clone())
+    }
+
+    /// Whether occurrence `idx` is still active (never retired by
+    /// [`TagSink::remove`]).
+    fn is_active(&self, idx: usize) -> bool {
+        !self.tombstoned[idx]
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
@@ -224,6 +262,7 @@ impl TagSink {
 
     pub fn clear(&mut self) {
         self.occurrences.clear();
+        self.tombstoned.clear();
         self.winners.clear();
     }
 
@@ -251,6 +290,7 @@ impl TagSink {
         let TagSink {
             mut occurrences,
             winners,
+            ..
         } = self;
         let mut out = HashMap::with_capacity(winners.len());
         for (key, idx) in winners {
@@ -263,16 +303,24 @@ impl TagSink {
         out
     }
 
-    /// Every occurrence recorded so far, winners and losers alike, in file
-    /// order. Nothing in Phase A reads a loser through this -- it exists for
-    /// the `FoundTag`-parity unit tests and for Step 19's real
-    /// duplicate-retention work to build on.
-    pub fn occurrences(&self) -> &[TagOccurrence] {
-        &self.occurrences
+    /// Every **active** occurrence recorded so far, winners and losers
+    /// alike, in file order. Occurrences retired by [`TagSink::remove`] are
+    /// skipped: a removed state is not a loser, it is gone, and the whole
+    /// point of the tombstone is that no projection can resurrect it.
+    ///
+    /// Losers -- occurrences that merely failed to win their key -- are still
+    /// yielded here; that is Step 19's duplicate retention and is what the
+    /// CLI's `-a` output is built from.
+    pub fn occurrences(&self) -> impl Iterator<Item = &TagOccurrence> {
+        self.occurrences
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| self.is_active(*idx))
+            .map(|(_, occurrence)| occurrence)
     }
 
-    /// Consumes the sink, returning every occurrence ever recorded --
-    /// winners and losers alike -- in file order.
+    /// Consumes the sink, returning every **active** occurrence ever
+    /// recorded -- winners and losers alike -- in file order.
     ///
     /// Unlike [`TagSink::into_winner_map`], nothing is dropped and nothing
     /// is flattened to a bare value: each occurrence keeps its own
@@ -283,7 +331,16 @@ impl TagSink {
     /// `SHIM_DEFAULT_PRIORITY` winner -- exactly the shape every multi-stage
     /// parser (JPEG's segment pipeline, in particular) uses.
     pub fn into_occurrences(self) -> Vec<TagOccurrence> {
-        self.occurrences
+        let TagSink {
+            occurrences,
+            tombstoned,
+            ..
+        } = self;
+        occurrences
+            .into_iter()
+            .zip(tombstoned)
+            .filter_map(|(occurrence, retired)| (!retired).then_some(occurrence))
+            .collect()
     }
 
     /// Re-records `occurrence` into this sink under its own
@@ -365,7 +422,7 @@ mod tests {
         sink.record("EXIF:Make".to_string(), occ("first", 1, 0));
         sink.record("EXIF:Make".to_string(), occ("second", 1, 1));
         assert_eq!(
-            sink.occurrences().len(),
+            sink.occurrences().count(),
             2,
             "both occurrences kept in file order"
         );
@@ -385,7 +442,7 @@ mod tests {
             sink.get("File:Comment"),
             Some(&TagValue::new_string("first comment"))
         );
-        assert_eq!(sink.occurrences().len(), 2, "the loser is still retained");
+        assert_eq!(sink.occurrences().count(), 2, "the loser is still retained");
     }
 
     #[test]
@@ -433,7 +490,11 @@ mod tests {
             Some(&TagValue::new_string("1")),
             "Track1 keeps the bare key no matter how many later tracks arrive"
         );
-        assert_eq!(sink.occurrences().len(), 3, "every track is still retained");
+        assert_eq!(
+            sink.occurrences().count(),
+            3,
+            "every track is still retained"
+        );
     }
 
     #[test]
