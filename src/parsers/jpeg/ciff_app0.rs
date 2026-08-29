@@ -443,6 +443,97 @@ mod tests {
         );
     }
 
+    /// The same container plus a second, `valueInDir` entry carrying
+    /// `CanonFocalLength` (`0x1029 | 0x4000` == `0x5029`).
+    ///
+    /// The eight record bytes are `t/images/ExifTool.jpg`'s own, read straight
+    /// out of the pinned 13.59 oracle's `-v3` dump of that file's third APP0
+    /// segment (`0252: 01 00 05 00 c7 00 92 00`, decoded there as
+    /// `FocalType = 1`, `FocalLength = 5`, `FocalPlaneXSize = 199`,
+    /// `FocalPlaneYSize = 146`), not invented for this test.
+    fn build_ciff_app0_with_focal_length() -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        let heap_start_pos = data.len();
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(b"HEAPCCDR");
+        let heap_start = data.len() as u32;
+        data[heap_start_pos..heap_start_pos + 4].copy_from_slice(&heap_start.to_le_bytes());
+
+        let record: [u8; 25] = *b"Canon\0Canon PowerShot A5\0";
+        data.extend_from_slice(&record);
+
+        let directory_offset_in_heap = data.len() as u32 - heap_start;
+        data.extend_from_slice(&2u16.to_le_bytes()); // entry_count
+
+        // Entry 0: MakeModel, value out in the heap at relative offset 0.
+        data.extend_from_slice(&CANON_RAW_MAKE_MODEL.to_le_bytes());
+        data.extend_from_slice(&(record.len() as u32).to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+
+        // Entry 1: CanonFocalLength with CanonRaw.pm's `valueInDir` bit set --
+        // the eight bytes that would be `size` and `ptr` are the record.
+        data.extend_from_slice(&(CANON_RAW_FOCAL_LENGTH | 0x4000).to_le_bytes());
+        data.extend_from_slice(&[0x01, 0x00, 0x05, 0x00, 0xc7, 0x00, 0x92, 0x00]);
+
+        data.extend_from_slice(&directory_offset_in_heap.to_le_bytes());
+        data
+    }
+
+    /// A `valueInDir` entry is read from the directory, and
+    /// `%Canon::FocalLength` keys 2/3 come out with ExifTool's own
+    /// `sprintf("%.2f mm", $val * 25.4 / 1000)` print forms.
+    ///
+    /// Before the `valueInDir` branch existed this walker read the entry's
+    /// inline value bytes as a size and a pointer, landed out of bounds and
+    /// dropped the record silently -- along with every other inline-value
+    /// entry in the container.
+    #[test]
+    fn decodes_focal_plane_sizes_from_a_value_in_dir_entry() {
+        let payload = build_ciff_app0_with_focal_length();
+        let segments = vec![Segment::new(APP0_MARKER, 0, &payload)];
+        let mut metadata = MetadataMap::new();
+
+        process_ciff_app0_segments(&segments, &mut metadata);
+
+        assert_eq!(metadata.get_string("CIFF:Make"), Some("Canon"));
+        assert_eq!(metadata.get_string("CIFF:FocalPlaneXSize"), Some("5.05 mm"));
+        assert_eq!(metadata.get_string("CIFF:FocalPlaneYSize"), Some("3.71 mm"));
+    }
+
+    /// The unrounded `ValueConv` form rides along, because
+    /// `CalcScaleFactor35efl` squares these numbers and 5.05 is a different
+    /// number than 5.0546.
+    #[test]
+    fn focal_plane_sizes_carry_the_unrounded_value_form() {
+        let payload = build_ciff_app0_with_focal_length();
+        let segments = vec![Segment::new(APP0_MARKER, 0, &payload)];
+        let mut metadata = MetadataMap::new();
+
+        process_ciff_app0_segments(&segments, &mut metadata);
+
+        let x: f64 = metadata
+            .value_form("CIFF:FocalPlaneXSize")
+            .expect("FocalPlaneXSize value form")
+            .parse()
+            .expect("numeric value form");
+        assert!((x - 199.0 * 25.4 / 1000.0).abs() < 1e-12);
+    }
+
+    /// `FocalLength` (key 1) is deliberately absent: its ValueConv divides by
+    /// the `FocalUnits` DataMember of `%Canon::CameraSettings`, a record this
+    /// path does not parse, so emitting one would be a guess.
+    #[test]
+    fn focal_length_itself_is_omitted_rather_than_guessed() {
+        let payload = build_ciff_app0_with_focal_length();
+        let segments = vec![Segment::new(APP0_MARKER, 0, &payload)];
+        let mut metadata = MetadataMap::new();
+
+        process_ciff_app0_segments(&segments, &mut metadata);
+
+        assert!(metadata.get_string("CIFF:FocalLength").is_none());
+    }
+
     #[test]
     fn ignores_app0_segments_without_the_ciff_signature() {
         let mut metadata = MetadataMap::new();

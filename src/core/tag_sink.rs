@@ -430,6 +430,49 @@ mod tests {
     }
 
     #[test]
+    fn remove_retires_the_occurrence_it_removed() {
+        // `remove` used to drop only the winner index, leaving the occurrence
+        // itself reachable through every all-occurrences reader. That is what
+        // let `src/composite/mod.rs`'s remove-then-reinsert refinement stack
+        // up one visible `Composite:FocalLength35efl` per pass.
+        let mut sink = TagSink::new();
+        sink.record("Composite:X".to_string(), occ("first guess", 0, 0));
+        assert_eq!(sink.occurrences().count(), 1);
+
+        sink.remove("Composite:X");
+        assert_eq!(sink.get("Composite:X"), None);
+        assert_eq!(
+            sink.occurrences().count(),
+            0,
+            "a removed occurrence must not survive in the occurrence list"
+        );
+
+        // The re-insertion lands in the vacant branch and is the only thing
+        // left standing, which is the whole point of the remove.
+        sink.record("Composite:X".to_string(), occ("refined", 0, 1));
+        assert_eq!(sink.occurrences().count(), 1);
+        assert_eq!(
+            sink.get("Composite:X"),
+            Some(&TagValue::new_string("refined"))
+        );
+    }
+
+    #[test]
+    fn a_removed_occurrence_does_not_cross_a_consuming_boundary() {
+        // `into_occurrences` is what `MetadataMap::merge` replays, so a
+        // tombstone that leaked through it would resurrect the removed state
+        // one merge later.
+        let mut sink = TagSink::new();
+        sink.record("EXIF:Make".to_string(), occ("kept", 1, 0));
+        sink.record("File:Comment".to_string(), occ("dropped", 1, 1));
+        sink.remove("File:Comment");
+
+        let survivors = sink.into_occurrences();
+        assert_eq!(survivors.len(), 1);
+        assert_eq!(survivors[0].raw, TagValue::new_string("kept"));
+    }
+
+    #[test]
     fn two_priority_zero_arrivals_tie_in_favor_of_the_first() {
         // ExifTool.pm:9541-9551: an existing 0-priority winner is promoted
         // to 1 before the comparison, so a second 0-priority arrival's
