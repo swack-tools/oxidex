@@ -729,20 +729,20 @@ fn extract_movie_header(
     let create_date_str = render_quicktime_datetime(creation_time, is_cr3);
     let modify_date_str = render_quicktime_datetime(modification_time, is_cr3);
 
+    // `%QuickTime::MovieHeader` (QuickTime.pm) declares exactly `CreateDate`
+    // and `ModifyDate` at index 1/2 -- there is no movie-level
+    // `MediaCreateDate`/`MediaModifyDate` in ExifTool at all. Those two names
+    // belong to `%QuickTime::MediaHeader`, which is `GROUPS => { 1 =>
+    // 'Track#' }` and is reached only from a track's `mdhd`
+    // (`extract_media_header`). Emitting them here too fabricated a fifth,
+    // group-less `MediaCreateDate` on `CanonRaw.cr3`, where the pinned 13.59
+    // oracle reports four, one per track.
     metadata.insert(
         "QuickTime:CreateDate".to_string(),
-        TagValue::String(create_date_str.clone()),
-    );
-    metadata.insert(
-        "QuickTime:MediaCreateDate".to_string(),
         TagValue::String(create_date_str),
     );
     metadata.insert(
         "QuickTime:ModifyDate".to_string(),
-        TagValue::String(modify_date_str.clone()),
-    );
-    metadata.insert(
-        "QuickTime:MediaModifyDate".to_string(),
         TagValue::String(modify_date_str),
     );
     metadata.insert(
@@ -1066,16 +1066,46 @@ fn extract_media_header(
 
     // Media timestamps. mdhd's CreateDate/ModifyDate reuse %timeInfo too
     // (QuickTime.pm:1358), so they get the same CR3-only local-time rendering.
+    //
+    // These two go through `insert_occurrence` rather than the `_N`
+    // name-suffix shim the rest of this function still uses, because
+    // `%QuickTime::MediaHeader` is `GROUPS => { 1 => 'Track#' }`: each is a
+    // real `MediaCreateDate`/`MediaModifyDate` occurrence belonging to
+    // family-1 group `Track<n>`, not a distinct tag called
+    // `MediaCreateDate_2`. The suffix shim destroyed that identity twice
+    // over -- it flattened four per-track occurrences onto one `QuickTime`
+    // group, and it emitted three of them under names ExifTool does not
+    // have, so `-MediaCreateDate` could not reach them at all. This is the
+    // same `group1`/`Instance` pair `extract_track_header` already uses for
+    // `TrackID`/`TrackCreateDate` (measured: those come out correctly
+    // grouped `Track1..Track4` against the pinned 13.59 oracle), so this
+    // routes through machinery already proven on this exact file rather than
+    // adding any.
+    //
+    // The remaining `track_suffix` keys below are deliberately left alone:
+    // `extract_video_frame_rate` and `src/bin/tag-comparison`'s oxidex
+    // extractor both still read `QuickTime:MediaTimeScale{_N}` back out of
+    // the map by its suffixed key, which a single winner-per-key view cannot
+    // serve for tracks 2+ without threading the value through the call --
+    // the same scoping note `extract_track_header`'s doc comment records.
     let create_date_str = render_quicktime_datetime(creation_time, is_cr3);
     let modify_date_str = render_quicktime_datetime(modification_time, is_cr3);
 
-    metadata.insert(
-        format!("QuickTime:MediaCreateDate{}", track_suffix),
+    let group1 = format!("Track{}", track_index + 1);
+    let instance = Instance((track_index + 1) as u32);
+    metadata.insert_occurrence(
+        "QuickTime:MediaCreateDate",
         TagValue::String(create_date_str),
+        SHIM_DEFAULT_PRIORITY,
+        &group1,
+        instance,
     );
-    metadata.insert(
-        format!("QuickTime:MediaModifyDate{}", track_suffix),
+    metadata.insert_occurrence(
+        "QuickTime:MediaModifyDate",
         TagValue::String(modify_date_str),
+        SHIM_DEFAULT_PRIORITY,
+        &group1,
+        instance,
     );
 
     // Media timescale

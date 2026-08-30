@@ -478,15 +478,28 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     // survives `ReadOptions::strip_extended_only`'s filter instead of a
     // name-requested subset.
     let options = ReadOptions::new(&[], args.extended_output);
-    if let Some(families) = &args.group_display {
-        // `strip_extended_only` only needs to decide which *keys* survive;
-        // running it against `MetadataMap::iter()`'s winner-only view and
-        // reading back its key set (rather than its flattened values) is
-        // what lets the occurrences walked below keep their real `group1` --
-        // `strip_extended_only`'s own output re-derives `group0` from the
-        // literal key via the plain `insert()` shim and would flatten it
-        // right back out otherwise.
-        let surviving = options.strip_extended_only(raw_metadata);
+
+    // `strip_extended_only` only needs to decide which *keys* survive;
+    // running it against `MetadataMap::iter()`'s winner-only view and
+    // reading back its key set (rather than its flattened values) is
+    // what lets the occurrences walked below keep their real `group1` --
+    // `strip_extended_only`'s own output re-derives `group0` from the
+    // literal key via the plain `insert()` shim and would flatten it
+    // right back out otherwise.
+    //
+    // `-a` and `-G*` are independent axes, and this is where that stopped
+    // being true before this fix: the occurrence walk below used to live
+    // inside the `-G*` branch, so `args.all_tags` was consulted only when a
+    // group display was also requested. An ungrouped `oxidex -a -s` (or
+    // `-a -j`) fell through to the winner-only projection at the bottom and
+    // silently dropped every retained duplicate that shares a lookup key --
+    // `File:Comment` on `t/images/ExifTool.jpg` printed one of its two JPEG
+    // COM segments where the pinned 13.59 oracle prints both. The same tag
+    // under an *explicit* `-Comment` request already returned two, because
+    // that path has always gone through `resolve_requested_tags`; only the
+    // unfiltered listing was affected.
+    let surviving = options.strip_extended_only(raw_metadata);
+    if args.group_display.is_some() || args.all_tags {
         let surviving_keys: HashSet<&str> = surviving.keys().map(String::as_str).collect();
         let mut resolved: Vec<ResolvedOccurrence> = if args.all_tags {
             raw_metadata
@@ -509,20 +522,37 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         };
         resolved.sort_by_key(|entry| entry.occurrence.order);
 
-        if !args.json && !args.csv {
-            let lines =
-                render_group_display_lines(&resolved, families, no_print_conv, args.short_format);
-            return ResolvedFileOutput::Lines(lines);
+        if let Some(families) = &args.group_display {
+            if !args.json && !args.csv {
+                let lines = render_group_display_lines(
+                    &resolved,
+                    families,
+                    no_print_conv,
+                    args.short_format,
+                );
+                return ResolvedFileOutput::Lines(lines);
+            }
+            let metadata = build_display_map(&resolved, Some(families), no_print_conv, !args.json);
+            return ResolvedFileOutput::Metadata(metadata);
         }
-        let metadata = build_display_map(&resolved, Some(families), no_print_conv, !args.json);
+
+        // Ungrouped `-a`: the same occurrence set, keyed by each occurrence's
+        // own literal `lookup_key`. `build_display_map`'s `dedupe_key` gives
+        // occurrences that share one key the `" (N)"` suffix `FoundTag` itself
+        // uses (`ExifTool.pm:9532`), so two `File:Comment`s survive into the
+        // synthesized map instead of overwriting each other. Values go through
+        // `resolved_display_value`, which is `format_for_exiftool`'s own
+        // per-key `format_tag_value` applied one occurrence at a time -- the
+        // whole-map transform below is purely per-key, so the winner's
+        // rendering is unchanged either way.
+        let metadata = build_display_map(&resolved, None, no_print_conv, !args.json);
         return ResolvedFileOutput::Metadata(metadata);
     }
 
-    let filtered = options.strip_extended_only(raw_metadata);
     let metadata = if no_print_conv {
-        filtered.without_print_conv()
+        surviving.without_print_conv()
     } else {
-        format_for_exiftool(&filtered)
+        format_for_exiftool(&surviving)
     };
     ResolvedFileOutput::Metadata(metadata)
 }
