@@ -19,7 +19,38 @@
 //! - Single character strings: "N", "S", "E", "W"
 //! - ASCII byte values as strings: "78" (0x4E = 'N'), "83" (0x53 = 'S'), etc.
 //!
-//! Unknown or invalid values are returned unchanged.
+//! A value the table does not name is wrapped in ExifTool's `Unknown (...)`
+//! form rather than passed through, because that is what ExifTool prints.
+//!
+//! # Why `Unknown (...)`
+//!
+//! `GPSLatitudeRef` and `GPSDestLatitudeRef` are `PrintConv => \%printConvLatRef`
+//! (`GPS.pm:74` and `GPS.pm:245`); `GPSLongitudeRef`/`GPSDestLongitudeRef` are
+//! `PrintConv => \%printConvLonRef` (`GPS.pm:91` and `GPS.pm:258`). Those two
+//! hashes (`GPS.pm:23-49`) hold `N => 'North'` / `S => 'South'` (resp.
+//! `E => 'East'` / `W => 'West'`) plus an `OTHER` sub that opens with
+//! `return undef unless $inv` -- i.e. it only ever fires on the *write* side.
+//!
+//! A HASH `PrintConv` that misses is resolved by `ExifTool.pm:3614-3635`:
+//!
+//! ```text
+//! if (ref $conv eq 'HASH') {
+//!     if (not defined($value = $$conv{$val})) {
+//!         ...
+//!         if ($$conv{OTHER}) { $value = &{$$conv{OTHER}}($val, undef, $conv); }
+//!         if (not defined $value) {
+//!             if ($$tagInfo{PrintHex} and ...) { $value = sprintf('Unknown (0x%x)',$val); }
+//!             else                             { $value = "Unknown ($val)"; }
+//!         }
+//! ```
+//!
+//! `OTHER` is handed `$inv = undef` on read, so it returns undef, and neither
+//! ref tag sets `PrintHex` -- the miss lands on `"Unknown ($val)"`, with the
+//! raw value uninterpolated and *untrimmed*. Verified on the corpus with
+//! ExifTool 13.59: 28 of the combined-samples files carry an empty or
+//! whitespace `GPSLatitudeRef`/`GPSLongitudeRef` pair, and ExifTool prints
+//! `Unknown ()` for the 27 empty ones and `Unknown ( )` for
+//! `Samsung/SamsungSGH_G810.jpg`, whose value is a single space.
 //!
 //! # Examples
 //!
@@ -32,8 +63,9 @@
 //! assert_eq!(format_gps_lon_ref("E"), "East");
 //! assert_eq!(format_gps_lon_ref("W"), "West");
 //!
-//! // Unknown values pass through unchanged
-//! assert_eq!(format_gps_lat_ref("X"), "X");
+//! // A value the PrintConv hash does not name takes ExifTool's miss form
+//! assert_eq!(format_gps_lat_ref("X"), "Unknown (X)");
+//! assert_eq!(format_gps_lat_ref(""), "Unknown ()");
 //! ```
 
 // -----------------------------------------------------------------------------
@@ -54,6 +86,42 @@ const ASCII_E: u8 = 0x45; // 69 decimal
 /// ASCII code for 'W' (West) - 0x57 in hexadecimal
 const ASCII_W: u8 = 0x57; // 87 decimal
 
+/// The four strings `%printConvLatRef` and `%printConvLonRef` produce.
+///
+/// ExifTool applies a `PrintConv` exactly once, at the point it prints. OxiDex
+/// does not: two producers store the *already print-converted* text as the
+/// occurrence's display value, and `resolved_display_value`
+/// (`src/cli/tag_resolution.rs:294`) then hands that text straight back to
+/// `exiftool_compat::format_tag_value`, which routes it here a second time:
+///
+/// * Composites. `src/composite/mod.rs:447-454` inserts `Computed::print` as
+///   the display value (`xmp_gps_ref`, `src/composite/compute.rs:875-900`,
+///   returns `Computed::new("N", "North")`), so `Composite:GPSLatitudeRef`
+///   arrives as `North`. Seen on
+///   `combined-samples/Samsung/SamsungGalaxyA55_5G.jpg`.
+/// * The FLIR parser, `src/parsers/jpeg/flir_parser.rs:1294`, which expands
+///   `FLIR.pm:629-637`'s `{ N => 'North', S => 'South' }` itself. Seen on
+///   `combined-samples/DJI/DJI_XT2.jpg`.
+///
+/// Both files are correct today only because the miss branch used to be a
+/// pass-through; wrapping unconditionally turned them into
+/// `Unknown (North)` / `Unknown (East)` / `Unknown (West)`, verified by
+/// building this change without the guard and running `oxidex -j` on both.
+/// The double application is the real defect and it lives in those two
+/// producers, not here -- this guard only keeps the miss form from making it
+/// visible. It costs fidelity in exactly one place: a file whose *raw*
+/// GPSLatitudeRef literally spelled `North` would print `North` where
+/// ExifTool prints `Unknown (North)`. EXIF gives these tags `Count => 2`
+/// (`GPS.pm:73`, `:86`), so such a value is malformed by construction and
+/// appears nowhere in the corpus, whereas the two producers above are real
+/// and measured.
+const ALREADY_CONVERTED: [&str; 4] = ["North", "South", "East", "West"];
+
+/// Whether `value` is one of this module's own outputs coming back around.
+fn is_already_converted(value: &str) -> bool {
+    ALREADY_CONVERTED.contains(&value)
+}
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
@@ -73,7 +141,7 @@ const ASCII_W: u8 = 0x57; // 87 decimal
 ///
 /// - `"North"` for "N" or 0x4E (78)
 /// - `"South"` for "S" or 0x53 (83)
-/// - The original value unchanged for any other input
+/// - `"Unknown (<value>)"` for anything else, per `ExifTool.pm:3633`
 ///
 /// # Examples
 ///
@@ -87,9 +155,10 @@ const ASCII_W: u8 = 0x57; // 87 decimal
 /// // Handles whitespace trimming
 /// assert_eq!(format_gps_lat_ref(" N "), "North");
 ///
-/// // Unknown values are returned unchanged
-/// assert_eq!(format_gps_lat_ref("E"), "E");
-/// assert_eq!(format_gps_lat_ref("unknown"), "unknown");
+/// // A miss takes ExifTool's `Unknown (...)` form, interpolating the raw
+/// // value untouched (`ExifTool.pm:3633`, `$value = "Unknown ($val)"`).
+/// assert_eq!(format_gps_lat_ref("E"), "Unknown (E)");
+/// assert_eq!(format_gps_lat_ref("unknown"), "Unknown (unknown)");
 /// ```
 pub fn format_gps_lat_ref(value: &str) -> String {
     let trimmed = value.trim();
@@ -122,8 +191,21 @@ pub fn format_gps_lat_ref(value: &str) -> String {
         }
     }
 
-    // Unknown value - return the original unchanged
-    value.to_string()
+    // Already-converted input is returned as-is rather than wrapped. See
+    // `ALREADY_CONVERTED` for why this layer sees its own output back.
+    if is_already_converted(trimmed) {
+        return trimmed.to_string();
+    }
+
+    // A HASH PrintConv that misses falls through to `"Unknown ($val)"`
+    // (`ExifTool.pm:3627-3634`) -- `%printConvLatRef`'s `OTHER` sub returns
+    // undef on the read side (`GPS.pm:28`, `return undef unless $inv`) and
+    // GPSLatitudeRef/GPSDestLatitudeRef set no `PrintHex`, so neither the
+    // OTHER branch nor the `Unknown (0x%x)` branch can fire here. `$val` is
+    // interpolated verbatim: ExifTool 13.59 prints `Unknown ( )`, not
+    // `Unknown ()`, for Samsung/SamsungSGH_G810.jpg's single-space value, so
+    // wrap the caller's string rather than the trimmed one.
+    format!("Unknown ({value})")
 }
 
 /// Formats a GPS longitude reference value to a human-readable direction.
@@ -141,7 +223,7 @@ pub fn format_gps_lat_ref(value: &str) -> String {
 ///
 /// - `"East"` for "E" or 0x45 (69)
 /// - `"West"` for "W" or 0x57 (87)
-/// - The original value unchanged for any other input
+/// - `"Unknown (<value>)"` for anything else, per `ExifTool.pm:3633`
 ///
 /// # Examples
 ///
@@ -155,9 +237,10 @@ pub fn format_gps_lat_ref(value: &str) -> String {
 /// // Handles whitespace trimming
 /// assert_eq!(format_gps_lon_ref(" W "), "West");
 ///
-/// // Unknown values are returned unchanged
-/// assert_eq!(format_gps_lon_ref("N"), "N");
-/// assert_eq!(format_gps_lon_ref("unknown"), "unknown");
+/// // A miss takes ExifTool's `Unknown (...)` form, interpolating the raw
+/// // value untouched (`ExifTool.pm:3633`, `$value = "Unknown ($val)"`).
+/// assert_eq!(format_gps_lon_ref("N"), "Unknown (N)");
+/// assert_eq!(format_gps_lon_ref("unknown"), "Unknown (unknown)");
 /// ```
 pub fn format_gps_lon_ref(value: &str) -> String {
     let trimmed = value.trim();
@@ -190,8 +273,14 @@ pub fn format_gps_lon_ref(value: &str) -> String {
         }
     }
 
-    // Unknown value - return the original unchanged
-    value.to_string()
+    // Idempotence guard, as on the latitude side.
+    if is_already_converted(trimmed) {
+        return trimmed.to_string();
+    }
+
+    // Same miss path as the latitude ref: `%printConvLonRef`'s `OTHER`
+    // (`GPS.pm:42`) is write-only, so `ExifTool.pm:3633` supplies the value.
+    format!("Unknown ({value})")
 }
 
 // -----------------------------------------------------------------------------
@@ -240,22 +329,33 @@ mod tests {
 
     #[test]
     fn test_format_gps_lat_ref_unknown_value() {
-        // Unknown values should be returned unchanged
-        assert_eq!(format_gps_lat_ref("E"), "E");
-        assert_eq!(format_gps_lat_ref("W"), "W");
-        assert_eq!(format_gps_lat_ref("X"), "X");
-        assert_eq!(format_gps_lat_ref("unknown"), "unknown");
-        assert_eq!(format_gps_lat_ref("North"), "North"); // Already expanded
-        assert_eq!(format_gps_lat_ref(""), "");
+        // `%printConvLatRef` (GPS.pm:23-35) names only N and S, and its OTHER
+        // sub is write-only, so every other value lands on ExifTool.pm:3633's
+        // `"Unknown ($val)"`.
+        assert_eq!(format_gps_lat_ref("E"), "Unknown (E)");
+        assert_eq!(format_gps_lat_ref("W"), "Unknown (W)");
+        assert_eq!(format_gps_lat_ref("X"), "Unknown (X)");
+        assert_eq!(format_gps_lat_ref("unknown"), "Unknown (unknown)");
+    }
+
+    /// The two shapes this actually takes on the corpus, both read back from
+    /// `exiftool-pinned.sh -json -G1 -GPSLatitudeRef` at 13.59: 27 of the
+    /// combined-samples files hold an empty value and print `Unknown ()`,
+    /// and Samsung/SamsungSGH_G810.jpg holds a single space and prints
+    /// `Unknown ( )` -- ExifTool does not trim before interpolating.
+    #[test]
+    fn test_format_gps_lat_ref_empty_and_space_are_not_trimmed() {
+        assert_eq!(format_gps_lat_ref(""), "Unknown ()");
+        assert_eq!(format_gps_lat_ref(" "), "Unknown ( )");
     }
 
     #[test]
     fn test_format_gps_lat_ref_invalid_numeric() {
-        // Invalid or out-of-range numeric values should pass through
-        assert_eq!(format_gps_lat_ref("0"), "0");
-        assert_eq!(format_gps_lat_ref("255"), "255");
-        assert_eq!(format_gps_lat_ref("999"), "999"); // Too large for u8
-        assert_eq!(format_gps_lat_ref("-1"), "-1");
+        // Numbers outside the ASCII codes for N/S are misses like any other.
+        assert_eq!(format_gps_lat_ref("0"), "Unknown (0)");
+        assert_eq!(format_gps_lat_ref("255"), "Unknown (255)");
+        assert_eq!(format_gps_lat_ref("999"), "Unknown (999)"); // Too large for u8
+        assert_eq!(format_gps_lat_ref("-1"), "Unknown (-1)");
     }
 
     // -------------------------------------------------------------------------
@@ -296,43 +396,66 @@ mod tests {
 
     #[test]
     fn test_format_gps_lon_ref_unknown_value() {
-        // Unknown values should be returned unchanged
-        assert_eq!(format_gps_lon_ref("N"), "N");
-        assert_eq!(format_gps_lon_ref("S"), "S");
-        assert_eq!(format_gps_lon_ref("X"), "X");
-        assert_eq!(format_gps_lon_ref("unknown"), "unknown");
-        assert_eq!(format_gps_lon_ref("East"), "East"); // Already expanded
-        assert_eq!(format_gps_lon_ref(""), "");
+        // `%printConvLonRef` (GPS.pm:37-49) is the E/W twin of the latitude
+        // hash, with the same write-only OTHER, so misses take the same form.
+        assert_eq!(format_gps_lon_ref("N"), "Unknown (N)");
+        assert_eq!(format_gps_lon_ref("S"), "Unknown (S)");
+        assert_eq!(format_gps_lon_ref("X"), "Unknown (X)");
+        assert_eq!(format_gps_lon_ref("unknown"), "Unknown (unknown)");
+    }
+
+    /// Longitude half of the corpus evidence: the same 27 files print
+    /// `Unknown ()` for GPSLongitudeRef and SamsungSGH_G810.jpg prints
+    /// `Unknown ( )`, under ExifTool 13.59.
+    #[test]
+    fn test_format_gps_lon_ref_empty_and_space_are_not_trimmed() {
+        assert_eq!(format_gps_lon_ref(""), "Unknown ()");
+        assert_eq!(format_gps_lon_ref(" "), "Unknown ( )");
     }
 
     #[test]
     fn test_format_gps_lon_ref_invalid_numeric() {
-        // Invalid or out-of-range numeric values should pass through
-        assert_eq!(format_gps_lon_ref("0"), "0");
-        assert_eq!(format_gps_lon_ref("255"), "255");
-        assert_eq!(format_gps_lon_ref("999"), "999"); // Too large for u8
-        assert_eq!(format_gps_lon_ref("-1"), "-1");
+        // Numbers outside the ASCII codes for E/W are misses like any other.
+        assert_eq!(format_gps_lon_ref("0"), "Unknown (0)");
+        assert_eq!(format_gps_lon_ref("255"), "Unknown (255)");
+        assert_eq!(format_gps_lon_ref("999"), "Unknown (999)"); // Too large for u8
+        assert_eq!(format_gps_lon_ref("-1"), "Unknown (-1)");
     }
 
     // -------------------------------------------------------------------------
     // Edge Cases and Boundary Conditions
     // -------------------------------------------------------------------------
 
+    /// Composites (`src/composite/mod.rs:447-454`) and the FLIR parser
+    /// (`src/parsers/jpeg/flir_parser.rs:1294`) store the print form as the
+    /// display value, so this function is handed its own output a second
+    /// time. Wrapping that would turn two corpus files that match ExifTool
+    /// today -- Samsung/SamsungGalaxyA55_5G.jpg's `Composite:GPSLatitudeRef`
+    /// (`North`) and DJI/DJI_XT2.jpg's `FLIR:GPSLongitudeRef` (`West`) --
+    /// into `Unknown (North)` / `Unknown (West)`.
+    #[test]
+    fn test_already_converted_values_are_idempotent() {
+        assert_eq!(format_gps_lat_ref("North"), "North");
+        assert_eq!(format_gps_lat_ref("South"), "South");
+        assert_eq!(format_gps_lon_ref("East"), "East");
+        assert_eq!(format_gps_lon_ref("West"), "West");
+    }
+
     #[test]
     fn test_case_sensitivity() {
-        // The functions should be case-sensitive (matching ExifTool behavior)
-        // Lowercase letters should NOT be converted
-        assert_eq!(format_gps_lat_ref("n"), "n");
-        assert_eq!(format_gps_lat_ref("s"), "s");
-        assert_eq!(format_gps_lon_ref("e"), "e");
-        assert_eq!(format_gps_lon_ref("w"), "w");
+        // Perl hash keys are case-sensitive, so a lowercase letter is a miss.
+        assert_eq!(format_gps_lat_ref("n"), "Unknown (n)");
+        assert_eq!(format_gps_lat_ref("s"), "Unknown (s)");
+        assert_eq!(format_gps_lon_ref("e"), "Unknown (e)");
+        assert_eq!(format_gps_lon_ref("w"), "Unknown (w)");
     }
 
     #[test]
     fn test_preserves_original_whitespace_on_unknown() {
-        // Unknown values should preserve original input including whitespace
-        assert_eq!(format_gps_lat_ref(" unknown "), " unknown ");
-        assert_eq!(format_gps_lon_ref(" unknown "), " unknown ");
+        // ExifTool.pm:3633 interpolates `$val` with no trim, so the wrapped
+        // text is the caller's string verbatim -- whitespace included.
+        assert_eq!(format_gps_lat_ref(" unknown "), "Unknown ( unknown )");
+        assert_eq!(format_gps_lon_ref(" unknown "), "Unknown ( unknown )");
     }
 
     #[test]

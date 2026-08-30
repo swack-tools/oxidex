@@ -259,7 +259,6 @@ impl MetadataMap {
     pub(crate) fn occurrences_for(&self, key: &str) -> Vec<&TagOccurrence> {
         self.sink
             .occurrences()
-            .iter()
             .filter(|o| o.lookup_key() == key)
             .collect()
     }
@@ -276,7 +275,7 @@ impl MetadataMap {
     /// `SHIM_DEFAULT_PRIORITY`, the same failure mode `merge()` had before
     /// Step 19 fixed it.
     pub(crate) fn all_occurrences(&self) -> impl Iterator<Item = (String, &TagOccurrence)> {
-        self.sink.occurrences().iter().map(|o| (o.lookup_key(), o))
+        self.sink.occurrences().map(|o| (o.lookup_key(), o))
     }
 
     /// Attaches a full-precision value form to an existing visible tag.

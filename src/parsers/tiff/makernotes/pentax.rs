@@ -46,7 +46,7 @@ use super::pentax_lens_database::lookup_lens_type_pair;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_u16_array, extract_u32_array};
 use super::shared::binary_subdir::{self, BinaryTable, Cond, ModelPat};
-use super::shared::generic_decoders::ON_OFF;
+use super::shared::generic_decoders::{ON_OFF, SimpleValueDecoder};
 use super::shared::tag_priority::insert_low_priority_retained;
 use subdir_tables::{
     PENTAX_AFINFO, PENTAX_AWBINFO, PENTAX_BATTERYINFO, PENTAX_CAMERASETTINGS, PENTAX_CONV6,
@@ -233,34 +233,98 @@ const_decoder!(pub QUALITY,
 );
 
 // Picture mode decoder - maps values to shooting scene modes
+// PictureMode (0x000b), the position-0 hash of `%Pentax::Main`'s
+// `PrintConv => [{...}]` list (Pentax.pm:1068-1129), transcribed key for key.
+//
+// What was here before was none of ExifTool's Pentax tables: it read
+// `1 => 'Shutter Priority', 2 => 'Aperture Priority', 4 => 'Portrait',
+// 6 => 'Macro', 7 => 'Sport'` where 0x000b actually declares
+// `1 => 'Shutter Speed Priority', 2 => 'Program AE', 5 => 'Portrait',
+// 8 => 'Sport', 15 => 'Macro'`. Every mismatched key printed a real
+// ExifTool mode name for the wrong mode -- PentaxOptioMX.jpg's `2` printed
+// "Aperture Priority" where the camera recorded "Program AE" -- which is the
+// failure mode that does not crash and that nothing downstream can detect.
+//
+// The `.1` keys (0.1 => 'Av', 1.1 => 'M', 2.1 => 'Tv', 3.1 => 'USER') are
+// deliberately absent: they are reachable only through the tag's
+// `ValueConv => '(IsInt($val) and $val < 4 and $$self{Model} =~ /Optio 555\b/)
+// ? $val + 0.1 : $val'` (Pentax.pm:1065), which is applied at the call site.
 const_decoder!(pub PICTURE_MODE,
     i32,
     [
         (0, "Program"),
-        (1, "Shutter Priority"),
-        (2, "Aperture Priority"),
+        (1, "Shutter Speed Priority"),
+        (2, "Program AE"),
         (3, "Manual"),
-        (4, "Portrait"),
-        (5, "Landscape"),
-        (6, "Macro"),
-        (7, "Sport"),
-        (8, "Night Scene Portrait"),
-        (9, "No Flash"),
-        (10, "Night Scene"),
-        (11, "Surf & Snow"),
-        (12, "Text"),
-        (13, "Sunset"),
-        (14, "Kids"),
-        (15, "Pet"),
-        (16, "Candlelight"),
-        (17, "Museum"),
-        (18, "Food"),
-        (19, "Stage Lighting"),
-        (20, "Night Snap"),
-        (21, "Blue Sky"),
-        (22, "Forest"),
+        (5, "Portrait"),
+        (6, "Landscape"),
+        (8, "Sport"),
+        (9, "Night Scene"),
+        (11, "Soft"),
+        (12, "Surf & Snow"),
+        (13, "Candlelight"),
+        (14, "Autumn"),
+        (15, "Macro"),
+        (17, "Fireworks"),
+        (18, "Text"),
+        (19, "Panorama"),
+        (20, "3-D"),
+        (21, "Black & White"),
+        (22, "Sepia"),
+        (23, "Red"),
+        (24, "Pink"),
+        (25, "Purple"),
+        (26, "Blue"),
+        (27, "Green"),
+        (28, "Yellow"),
+        (30, "Self Portrait"),
+        (31, "Illustrations"),
+        (33, "Digital Filter"),
+        (35, "Night Scene Portrait"),
+        (37, "Museum"),
+        (38, "Food"),
+        (39, "Underwater"),
+        (40, "Green Mode"),
+        (49, "Light Pet"),
+        (50, "Dark Pet"),
+        (51, "Medium Pet"),
+        (53, "Underwater"),
+        (54, "Candlelight"),
+        (55, "Natural Skin Tone"),
+        (56, "Synchro Sound Record"),
+        (58, "Frame Composite"),
+        (59, "Report"),
+        (60, "Kids"),
+        (61, "Blur Reduction"),
+        (63, "Panorama 2"),
+        (65, "Half-length Portrait"),
+        (66, "Portrait 2"),
+        (74, "Digital Microscope"),
+        (75, "Blue Sky"),
+        (80, "Miniature"),
+        (81, "HDR"),
+        (83, "Fisheye"),
+        (85, "Digital Filter 4"),
+        (221, "P"),
+        (255, "PICT"),
     ]
 );
+
+/// The four Optio-555-only `PictureMode` names, reachable only through tag
+/// 0x000b's `ValueConv` (Pentax.pm:1065): a single-component integer value
+/// below 4 on an `Optio 555` becomes `$val + 0.1`, which then selects the
+/// `0.1`/`1.1`/`2.1`/`3.1` keys of the same PrintConv hash
+/// (Pentax.pm:1070/1072/1074/1076). `IsInt($val)` is false for a
+/// space-joined multi-component value, so this never applies to those.
+fn optio555_picture_mode(value: i64) -> Option<&'static str> {
+    match value {
+        0 => Some("Av"),
+        1 => Some("M"),
+        2 => Some("Tv"),
+        3 => Some("USER"),
+        _ => None,
+    }
+}
 
 // Flash mode decoder -- FlashMode (0x000c), Pentax.pm:1131-1163. `PrintConv`
 // is a *list* of two hashes: position 0 (the "internal" flash-mode word) and
@@ -473,6 +537,8 @@ const_decoder!(pub SATURATION,
         (6, "+3 (very high)"),
         (7, "-4 (minimum)"),
         (8, "+4 (maximum)"),
+        // Pentax.pm:1788 -- `65535 => 'None'` (Monochrome).
+        (65535, "None"),
     ]
 );
 
@@ -490,6 +556,8 @@ const_decoder!(pub CONTRAST,
         (6, "+3 (very high)"),
         (7, "-4 (minimum)"),
         (8, "+4 (maximum)"),
+        // Pentax.pm:1807 -- `65535 => 'n/a'` (Backlight Silhouette, Q).
+        (65535, "n/a"),
     ]
 );
 
@@ -677,9 +745,29 @@ const_decoder!(pub IMAGE_TONE, i32, [
 const_decoder!(pub NOISE_REDUCTION, i32, [(0, "Off"), (1, "On"),]);
 
 // High ISO noise reduction decoder
+// HighISONoiseReduction (0x0071), Pentax.pm:2444-2466. `Format => 'int8u'`
+// with a THREE-hash list `PrintConv`, one per component: the level, whether
+// NR is active, and (K-x) the ISO threshold it starts at.
+//
+// The single flat map this replaces was wrong in both directions at once. It
+// mis-keyed the level names -- ExifTool's `3 => 'Strong'` / `4 => 'Medium'`
+// were transposed and its `255 => 'Auto'` was written as `6` -- and it fed
+// the whole packed word to the lookup, so the K-5's `4 4` came out as
+// "Unknown (1028)" where the pinned oracle says "Medium; Active (Medium)".
 const_decoder!(pub HIGH_ISO_NOISE_REDUCTION, i32, [
-    (0, "Off"), (1, "Weakest"), (2, "Weak"), (3, "Medium"),
-    (4, "Strong"), (5, "Strongest"), (6, "Auto"),
+    (0, "Off"), (1, "Weakest"), (2, "Weak"), (3, "Strong"),
+    (4, "Medium"), (255, "Auto"),
+]);
+
+// Pentax.pm:2454-2459, the second `HighISONoiseReduction` hash.
+const_decoder!(pub HIGH_ISO_NR_ACTIVE, i32, [
+    (0, "Inactive"), (1, "Active"), (2, "Active (Weak)"),
+    (3, "Active (Strong)"), (4, "Active (Medium)"),
+]);
+
+// Pentax.pm:2460-2464, the third: the ISO level NR starts at (K-x).
+const_decoder!(pub HIGH_ISO_NR_START, i32, [
+    (48, "ISO>400"), (56, "ISO>800"), (64, "ISO>1600"), (72, "ISO>3200"),
 ]);
 
 // AE Lock decoder
@@ -689,25 +777,69 @@ const_decoder!(pub AE_LOCK, i32, [(0, "Off"), (1, "On"),]);
 const_decoder!(pub DYNAMIC_RANGE_EXPANSION, i32, [(0, "Off"), (1, "On"), (2, "Auto"),]);
 
 // HDR decoder
+// HDR (0x0085), Pentax.pm:2636-2661: `Format => 'int8u', Count => 4` with a
+// three-hash list `PrintConv`; the fourth component has no converter and is
+// printed raw ("(4th number is always 0)", Pentax.pm:2659).
+// `5` is ExifTool's 'HDR Advanced', not "Advanced HDR".
 const_decoder!(pub HDR, i32, [
     (0, "Off"), (1, "HDR Auto"), (2, "HDR 1"), (3, "HDR 2"),
-    (4, "HDR 3"), (5, "Advanced HDR"),
+    (4, "HDR 3"), (5, "HDR Advanced"),
+]);
+
+// Pentax.pm:2647-2649, the second `HDR` hash (K-01 auto-align).
+const_decoder!(pub HDR_AUTO_ALIGN, i32, [
+    (0, "Auto-align Off"), (1, "Auto-align On"),
+]);
+
+// Pentax.pm:2650-2658, the third: the exposure bracket value.
+const_decoder!(pub HDR_EXPOSURE_BRACKET, i32, [
+    (0, "n/a"), (4, "1 EV"), (8, "2 EV"), (12, "3 EV"),
 ]);
 
 // Shadow correction decoder
-const_decoder!(pub SHADOW_CORRECTION, i32, [
-    (0, "Off"), (1, "On (Weak)"), (2, "On"), (3, "On (Strong)"), (4, "Auto"),
-]);
+// ShadowCorrection (0x0079), Pentax.pm:2529-2545: `Writable => 'int8u',
+// Count => -1` with a *scalar* hash `PrintConv`. A scalar hash is not split
+// per component -- ExifTool looks up the whole space-joined string
+// (ExifTool.pm:3614-3616) -- which is why the table carries both one-value
+// keys and two-value keys, and why they mean different things: `1` alone is
+// "On" but `1 1` is "Weak". The flat integer map this replaces invented
+// "On (Weak)"/"On (Strong)" names that appear nowhere in Pentax.pm and,
+// reading the packed word, answered "Unknown (1026)" for the Q7's `2 4`.
+const SHADOW_CORRECTION_MAP: &[(&str, &str)] = &[
+    ("0", "Off"),
+    ("1", "On"),
+    ("2", "Auto 2"),
+    ("0 0", "Off"),
+    ("1 1", "Weak"),
+    ("1 2", "Normal"),
+    ("1 3", "Strong"),
+    ("2 4", "Auto"),
+];
 
 // Fine sharpness decoder
+// FineSharpness (0x0070), Pentax.pm:2432-2443: `Writable => 'int8u',
+// Count => -1` ("1 for K20/K200, 2 for K-5") with a two-hash list PrintConv.
 const_decoder!(pub FINE_SHARPNESS, i32, [(0, "Off"), (1, "On"),]);
+
+// Pentax.pm:2439-2442, the second `FineSharpness` hash.
+const_decoder!(pub FINE_SHARPNESS_DEGREE, i32, [(0, "Normal"), (2, "Extra fine"),]);
 
 // Shutter type decoder
 // ShutterType (0x0087), Pentax.pm:2649-2655: value 0 is "Normal".
 const_decoder!(pub SHUTTER_TYPE, i32, [(0, "Normal"), (1, "Electronic"),]);
 
 // Neutral density filter decoder
-const_decoder!(pub NEUTRAL_DENSITY_FILTER, i32, [(0, "Off"), (1, "On"),]);
+// NeutralDensityFilter (0x0088), Pentax.pm:2672-2684: `Count => -1` with the
+// same whole-string scalar-hash lookup as ShadowCorrection above, carrying
+// the GR III's two-value keys alongside the one-value ones.
+const NEUTRAL_DENSITY_FILTER_MAP: &[(&str, &str)] = &[
+    ("0", "Off"),
+    ("1", "On"),
+    ("0 0", "Off (Off)"),
+    ("1 1", "On (On)"),
+    ("0 2", "Off (Auto)"),
+    ("1 2", "On (Auto)"),
+];
 
 // MonochromeFilterEffect (0x0073), Pentax.pm:2456-2469. The old table was
 // off by one -- 1 was "Yellow" here and "Green" in ExifTool, and so on down
@@ -740,7 +872,12 @@ const_decoder!(pub MONOCHROME_TONING, i32, [
 ]);
 
 // Face detect decoder
-const_decoder!(pub FACE_DETECT, i32, [(0, "Off"), (1, "On"), (256, "On (Smile/Blink)"),]);
+// FaceDetect (0x0076), Pentax.pm:2504-2520: `Writable => 'int8u',
+// Count => 2` whose `PrintConv` is a list of two *expressions*, not hashes:
+// `'$val ? "On ($val faces max)" : "Off"'` and `'"$val faces detected"'`
+// (see `print_face_detect`). There is no enum here to be right or wrong
+// about -- the flat map this replaces had a `256 => 'On (Smile/Blink)'` key
+// that appears nowhere in Pentax.pm.
 
 // Cross process decoder
 const_decoder!(pub CROSS_PROCESS, i32, [
@@ -1124,9 +1261,29 @@ impl PentaxParser {
                     tags.insert("Pentax:Quality".to_string(), QUALITY.decode(value));
                 }
 
+                // PictureMode (0x000b), Pentax.pm:1057-1130: `Writable =>
+                // 'int16u', Count => -1` ("1 or 2 values") with a *list*
+                // `PrintConv` holding exactly one hash. ExifTool converts
+                // component 0 through that hash, passes every later component
+                // through raw for want of a converter, and joins with "; "
+                // (ExifTool.pm:3550-3576, :3684-3698) -- so the Optio A10's
+                // two components print as `Program; 0`, not `Program`.
                 PENTAX_PICTURE_MODE => {
-                    let value = extract_value_as_i32(&entry, byte_order);
-                    tags.insert("Pentax:PictureMode".to_string(), PICTURE_MODE.decode(value));
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
+                        // `ValueConv` (Pentax.pm:1065) only fires for a
+                        // single-component value: `IsInt($val)` is false once
+                        // $val is the space-joined "0 0".
+                        let optio555 = values.len() == 1
+                            && values[0] < 4
+                            && model.is_some_and(|m| m.contains("Optio 555"));
+                        let decoded = print_conv_list(&values, |i, v| match i {
+                            0 if optio555 => optio555_picture_mode(v).map(str::to_string),
+                            0 => Some(PICTURE_MODE.decode(v as i32)),
+                            _ => None,
+                        });
+                        tags.insert("Pentax:PictureMode".to_string(), decoded);
+                    }
                 }
 
                 // `Writable => 'int16u', Count => -1, PrintHex => 1, PrintConv
@@ -1188,19 +1345,37 @@ impl PentaxParser {
                     );
                 }
 
+                // Saturation/Contrast/Sharpness (0x001f/0x0020/0x0021),
+                // Pentax.pm:1772-1827. All three are `Writable => 'int16u',
+                // Count => -1` with a one-hash list `PrintConv` and the note
+                // "1 or 2 values" -- the *istD writes pairs. Component 0 goes
+                // through the hash, later components print raw, joined "; ".
                 PENTAX_SATURATION => {
-                    let value = extract_value_as_i32(&entry, byte_order);
-                    tags.insert("Pentax:Saturation".to_string(), SATURATION.decode(value));
+                    if let Some(v) = decode_first_component_list(
+                        &entry,
+                        data,
+                        value_base,
+                        byte_order,
+                        &SATURATION,
+                    ) {
+                        tags.insert("Pentax:Saturation".to_string(), v);
+                    }
                 }
 
                 PENTAX_CONTRAST => {
-                    let value = extract_value_as_i32(&entry, byte_order);
-                    tags.insert("Pentax:Contrast".to_string(), CONTRAST.decode(value));
+                    if let Some(v) =
+                        decode_first_component_list(&entry, data, value_base, byte_order, &CONTRAST)
+                    {
+                        tags.insert("Pentax:Contrast".to_string(), v);
+                    }
                 }
 
                 PENTAX_SHARPNESS => {
-                    let value = extract_value_as_i32(&entry, byte_order);
-                    tags.insert("Pentax:Sharpness".to_string(), SHARPNESS.decode(value));
+                    if let Some(v) = decode_first_component_list(
+                        &entry, data, value_base, byte_order, &SHARPNESS,
+                    ) {
+                        tags.insert("Pentax:Sharpness".to_string(), v);
+                    }
                 }
 
                 PENTAX_DRIVE_MODE => {
@@ -1228,47 +1403,21 @@ impl PentaxParser {
                     tags.insert("Pentax:ImageSize".to_string(), IMAGE_SIZE.decode(value));
                 }
 
+                // AutoBracketing (0x0018), Pentax.pm:1626-1666: `Writable =>
+                // 'int16u', Count => -1` -- "1 or 2 values". The one-value
+                // case is not a different tag, it is the same PrintConv `sub`
+                // with `$v[1]` undefined: `if ($v[1])` and
+                // `elsif (defined $v[1])` both fall through, and
+                // `join(' EV, ', @v)` over a single element emits the step
+                // alone with no " EV," at all. The `AUTO_BRACKETING` enum this
+                // replaces answered "Off" for the 31 single-value files in the
+                // corpus where the pinned oracle answers "0".
                 PENTAX_AUTO_BRACKETING => {
-                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
-                    if raw.len() >= 4 {
-                        let read = |bytes: &[u8]| match byte_order {
-                            ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
-                            ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
-                        };
-                        let step = read(&raw[..2]);
-                        let extended = read(&raw[2..4]);
-                        let step = match step {
-                            0 => "0".to_string(),
-                            value if value < 10 => format!("{:.1}", value as f64 / 3.0),
-                            value if value < 20 => format!("{:.1}", value as f64 - 9.5),
-                            value if value & 0x1000 != 0 => format!("{}/2", value - 0x1000),
-                            value if value & 0x2000 != 0 => format!("{}/3", value - 0x2000),
-                            value => value.to_string(),
-                        };
-                        let extended = if extended == 0 {
-                            "No Extended Bracket".to_string()
-                        } else {
-                            let kind = match extended >> 8 {
-                                1 => "WB-BA".to_string(),
-                                2 => "WB-GM".to_string(),
-                                3 => "Saturation".to_string(),
-                                4 => "Sharpness".to_string(),
-                                5 => "Contrast".to_string(),
-                                6 => "Hue".to_string(),
-                                7 => "HighLowKey".to_string(),
-                                other => format!("Unknown({other})"),
-                            };
-                            format!("{kind}+{}", extended & 0xff)
-                        };
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
                         tags.insert(
                             "Pentax:AutoBracketing".to_string(),
-                            format!("{step} EV, {extended}"),
-                        );
-                    } else {
-                        let value = extract_value_as_i32(&entry, byte_order);
-                        tags.insert(
-                            "Pentax:AutoBracketing".to_string(),
-                            AUTO_BRACKETING.decode(value),
+                            print_auto_bracketing(&values),
                         );
                     }
                 }
@@ -1297,12 +1446,28 @@ impl PentaxParser {
                 // (which takes the "other models" branch, Pentax.pm:1375-
                 // 1408) reports `Center` for that same 6.
                 PENTAX_AF_POINT_SELECTED => {
-                    let value = extract_value_as_i32(&entry, byte_order);
-                    if (0..=65535).contains(&value) {
-                        tags.insert(
-                            "Pentax:AFPointSelected".to_string(),
-                            decode_af_point_selected(model, value as u16),
-                        );
+                    // All three model branches (Pentax.pm:1219-1408) carry a
+                    // *two*-hash list PrintConv: the point, then the AF area
+                    // mode. Reading the entry as one scalar lost the second
+                    // component and, on a big-endian two-component `int16u`,
+                    // read the wrong half of the first: the K-5II's `6 0`
+                    // masked down to 0 and printed "None" where the pinned
+                    // oracle says "Center; Single Point".
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    // The pre-existing `(0..=65535)` guard, kept as-is: a
+                    // `field_type` 8 (SSHORT) entry sign-extends 0xffff to -1,
+                    // which is not an AF point code in any of the three
+                    // branches, so the tag is omitted rather than reported
+                    // with a nonsensical negative. See
+                    // `af_point_selected_negative_sign_extension_is_omitted`.
+                    if let Some(point) = values.first().copied().and_then(|v| u16::try_from(v).ok())
+                    {
+                        let decoded = print_conv_list(&values, |i, v| match i {
+                            0 => Some(decode_af_point_selected(model, point)),
+                            1 => Some(decode_af_area_mode(model, v)),
+                            _ => None,
+                        });
+                        tags.insert("Pentax:AFPointSelected".to_string(), decoded);
                     }
                 }
 
@@ -1343,21 +1508,52 @@ impl PentaxParser {
                     );
                 }
 
+                // FocalLength (0x001d), Pentax.pm:1739-1765: a two-branch
+                // `Condition` on the model. Eight early Optios record tenths
+                // of a millimetre (`ValueConv => '$val / 10'`,
+                // Pentax.pm:1744-1747); everything else records hundredths
+                // (`$val / 100`, Pentax.pm:1760). Dividing by 100 throughout
+                // printed "0.6 mm" for PentaxOptio30.jpg's 58, against the
+                // oracle's "5.8 mm".
+                //
+                // The arithmetic is `f64`, not `f32`: `sprintf("%.1f", ...)`
+                // is applied to a Perl double, and `595/100` is 5.9500000...2
+                // as an `f64` (rounds to "6.0") but 5.9499998 as an `f32`
+                // (rounds to "5.9"). PentaxOptioS5n.jpg is exactly that file.
                 PENTAX_FOCAL_LENGTH => {
-                    let value = entry.value_offset;
+                    let value = entry_components(&entry, data, value_base, byte_order)
+                        .first()
+                        .copied()
+                        .unwrap_or_else(|| i64::from(entry.value_offset));
+                    let divisor = if focal_length_in_tenths(model) {
+                        10.0
+                    } else {
+                        100.0
+                    };
                     tags.insert(
                         "Pentax:FocalLength".to_string(),
-                        format!("{:.1} mm", value as f32 / 100.0),
+                        format!("{:.1} mm", value as f64 / divisor),
                     );
                 }
 
+                // DigitalZoom (0x001e), Pentax.pm:1766-1771. The tag carries a
+                // `ValueConv => '$val / 100'` and **no PrintConv**, so ExifTool
+                // prints the bare quotient through Perl's own number
+                // stringification: `1`, `1.5`, `2.36` -- never a unit suffix
+                // and never a fixed two decimals. The `format!("{:.2}x", ...)`
+                // this replaces invented an "x" that appears nowhere in
+                // Pentax.pm and turned every `1` into `1.00x`. The `> 0` guard
+                // also dropped the tag entirely on the 20 corpus files whose
+                // zoom is 1.0x-off, where ExifTool emits `DigitalZoom: 0`.
                 PENTAX_DIGITAL_ZOOM => {
-                    let value = entry.value_offset;
-                    if value > 0 {
-                        tags.insert(
-                            "Pentax:DigitalZoom".to_string(),
-                            format!("{:.2}x", value as f32 / 100.0),
-                        );
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
+                        let decoded = values
+                            .iter()
+                            .map(|&v| crate::exiftool_tables::exprs::perl_num(v as f64 / 100.0))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        tags.insert("Pentax:DigitalZoom".to_string(), decoded);
                     }
                 }
 
@@ -1529,11 +1725,20 @@ impl PentaxParser {
                         format!("{:.1}", value as f32 / 10.0),
                     );
                 }
+                // LightReading (0x0015), Pentax.pm:1583-1592: `Format =>
+                // 'int16s'` over a 2-byte `int16u[1]` entry. `entry.value_offset`
+                // is the whole 4-byte value field including its padding, so
+                // PentaxOptioE50.jpg's `10 00` (16) printed as -2147483632
+                // once the padding bytes happened to be `00 80`.
                 PENTAX_LIGHT_READING => {
-                    tags.insert(
-                        "Pentax:LightReading".to_string(),
-                        (entry.value_offset as i32).to_string(),
-                    );
+                    let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
+                    if raw.len() >= 2 {
+                        let v = match byte_order {
+                            ByteOrder::LittleEndian => i16::from_le_bytes([raw[0], raw[1]]),
+                            ByteOrder::BigEndian => i16::from_be_bytes([raw[0], raw[1]]),
+                        };
+                        tags.insert("Pentax:LightReading".to_string(), v.to_string());
+                    }
                 }
                 PENTAX_EXPOSURE_COMPENSATION => {
                     let raw = extract_value_as_i32(&entry, byte_order);
@@ -1632,11 +1837,24 @@ impl PentaxParser {
                         tags.insert("Pentax:ImageEditing".to_string(), value);
                     }
                 }
+                // SensorSize (0x0035), Pentax.pm:2064-2077: `Format =>
+                // 'int16u', Count => 2`, `ValueConv` divides each component by
+                // 500 and `PrintConv => 'sprintf("%.3f x %.3f mm", split(" ",
+                // $val))'`. The bare `entry.value_offset` this replaces printed
+                // the packed word -- 790437684 where the pinned oracle says
+                // "24.122 x 15.976 mm".
                 PENTAX_SENSOR_SIZE => {
-                    tags.insert(
-                        "Pentax:SensorSize".to_string(),
-                        entry.value_offset.to_string(),
-                    );
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if values.len() >= 2 {
+                        tags.insert(
+                            "Pentax:SensorSize".to_string(),
+                            format!(
+                                "{:.3} x {:.3} mm",
+                                values[0] as f64 / 500.0,
+                                values[1] as f64 / 500.0
+                            ),
+                        );
+                    }
                 }
                 PENTAX_IMAGE_AREA_OFFSET => {
                     tags.insert(
@@ -1748,21 +1966,32 @@ impl PentaxParser {
                 // 256/6) and always appended " EV", so Pentax.jpg's raw 0
                 // printed "+0.0 EV" instead of "0".
                 PENTAX_FLASH_EXPOSURE_COMP => {
-                    let comp = if entry.value_count == 1 {
-                        Some(extract_value_as_i32(&entry, byte_order) as f64 / 256.0)
-                    } else if entry.value_count == 2 {
-                        let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
-                        (!raw.is_empty()).then(|| raw[0] as i8 as f64 / 6.0)
-                    } else {
-                        None
-                    };
-                    if let Some(value) = comp {
-                        let formatted = if value != 0.0 {
-                            format!("{:+.1}", value)
-                        } else {
+                    // The `$count == 2` branch (Pentax.pm:2190-2197) is a
+                    // *list* `ValueConv`/`PrintConv` with one element each, so
+                    // only byte 0 is divided by 6 and formatted -- byte 1 has
+                    // no converter and prints raw, joined with "; ". The
+                    // pinned oracle reports `0; 0` for both Pentax645Z.jpg and
+                    // PentaxK-3.jpg (`int8s[2]` = `00 00`); dropping the
+                    // second component printed a bare `0`.
+                    let print = |v: f64| {
+                        if v == 0.0 {
                             "0".to_string()
-                        };
-                        tags.insert("Pentax:FlashExposureComp".to_string(), formatted);
+                        } else {
+                            format!("{v:+.1}")
+                        }
+                    };
+                    if entry.value_count == 1 {
+                        let value = f64::from(extract_value_as_i32(&entry, byte_order)) / 256.0;
+                        tags.insert("Pentax:FlashExposureComp".to_string(), print(value));
+                    } else if entry.value_count == 2 {
+                        let values = entry_components(&entry, data, value_base, byte_order);
+                        if values.len() == 2 {
+                            let first = print(values[0] as f64 / 6.0);
+                            tags.insert(
+                                "Pentax:FlashExposureComp".to_string(),
+                                format!("{first}; {}", values[1]),
+                            );
+                        }
                     }
                 }
                 PENTAX_IMAGE_TONE => {
@@ -1934,17 +2163,32 @@ impl PentaxParser {
                 }
 
                 // Advanced Features
+                // FineSharpness (0x0070), Pentax.pm:2432-2443 -- two-hash list
+                // PrintConv over `int8u Count => -1`.
                 PENTAX_FINE_SHARPNESS => {
-                    tags.insert(
-                        "Pentax:FineSharpness".to_string(),
-                        FINE_SHARPNESS.decode(entry.value_offset as i32),
-                    );
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
+                        let decoded = print_conv_list(&values, |i, v| match i {
+                            0 => Some(FINE_SHARPNESS.decode(v as i32)),
+                            1 => Some(FINE_SHARPNESS_DEGREE.decode(v as i32)),
+                            _ => None,
+                        });
+                        tags.insert("Pentax:FineSharpness".to_string(), decoded);
+                    }
                 }
+                // HighISONoiseReduction (0x0071), Pentax.pm:2444-2466 --
+                // three-hash list PrintConv over `Format => 'int8u'`.
                 PENTAX_HIGH_ISO_NOISE_REDUCTION => {
-                    tags.insert(
-                        "Pentax:HighISONoiseReduction".to_string(),
-                        HIGH_ISO_NOISE_REDUCTION.decode(entry.value_offset as i32),
-                    );
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
+                        let decoded = print_conv_list(&values, |i, v| match i {
+                            0 => Some(HIGH_ISO_NOISE_REDUCTION.decode(v as i32)),
+                            1 => Some(HIGH_ISO_NR_ACTIVE.decode(v as i32)),
+                            2 => Some(HIGH_ISO_NR_START.decode(v as i32)),
+                            _ => None,
+                        });
+                        tags.insert("Pentax:HighISONoiseReduction".to_string(), decoded);
+                    }
                 }
                 PENTAX_AF_ADJUSTMENT => {
                     tags.insert(
@@ -1970,23 +2214,43 @@ impl PentaxParser {
                     };
                     tags.insert("Pentax:MonochromeToning".to_string(), decoded);
                 }
+                // FaceDetect (0x0076), Pentax.pm:2504-2520.
                 PENTAX_FACE_DETECT => {
-                    tags.insert(
-                        "Pentax:FaceDetect".to_string(),
-                        FACE_DETECT.decode(entry.value_offset as i32),
-                    );
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
+                        tags.insert(
+                            "Pentax:FaceDetect".to_string(),
+                            print_conv_list(&values, print_face_detect),
+                        );
+                    }
                 }
+                // FaceDetectFrameSize (0x0077), Pentax.pm:2521-2527:
+                // `Writable => 'int16u', Count => 2` and no conversion at all
+                // -- ExifTool prints the two components space-separated. The
+                // bare `entry.value_offset` this replaces printed the packed
+                // 4-byte word, which is `a * 65536 + b` on a big-endian
+                // MakerNote and `b * 65536 + a` on a little-endian one: the
+                // K-5's `720 480` came out as `47186160` and the Q7's identical
+                // `720 480` as `31457760`.
                 PENTAX_FACE_DETECT_FRAME_SIZE => {
-                    tags.insert(
-                        "Pentax:FaceDetectFrameSize".to_string(),
-                        entry.value_offset.to_string(),
-                    );
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
+                        tags.insert(
+                            "Pentax:FaceDetectFrameSize".to_string(),
+                            joined_components(&values),
+                        );
+                    }
                 }
+                // ShadowCorrection (0x0079), Pentax.pm:2529-2545 -- scalar
+                // hash keyed on the whole space-joined value.
                 PENTAX_SHADOW_CORRECTION => {
-                    tags.insert(
-                        "Pentax:ShadowCorrection".to_string(),
-                        SHADOW_CORRECTION.decode(entry.value_offset as i32),
-                    );
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
+                        tags.insert(
+                            "Pentax:ShadowCorrection".to_string(),
+                            lookup_joined(SHADOW_CORRECTION_MAP, &values),
+                        );
+                    }
                 }
                 PENTAX_ISO_AUTO_PARAMETERS => {
                     tags.insert(
@@ -2028,11 +2292,20 @@ impl PentaxParser {
                         ASPECT_RATIO.decode(entry.value_offset as i32),
                     );
                 }
+                // HDR (0x0085), Pentax.pm:2636-2661 -- three-hash list
+                // PrintConv over `int8u Count => 4`; the always-zero fourth
+                // component has no converter and prints raw.
                 PENTAX_HDR => {
-                    tags.insert(
-                        "Pentax:HDR".to_string(),
-                        HDR.decode(entry.value_offset as i32),
-                    );
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
+                        let decoded = print_conv_list(&values, |i, v| match i {
+                            0 => Some(HDR.decode(v as i32)),
+                            1 => Some(HDR_AUTO_ALIGN.decode(v as i32)),
+                            2 => Some(HDR_EXPOSURE_BRACKET.decode(v as i32)),
+                            _ => None,
+                        });
+                        tags.insert("Pentax:HDR".to_string(), decoded);
+                    }
                 }
                 PENTAX_SHUTTER_TYPE => {
                     tags.insert(
@@ -2040,20 +2313,38 @@ impl PentaxParser {
                         SHUTTER_TYPE.decode(entry.value_offset as i32),
                     );
                 }
+                // NeutralDensityFilter (0x0088), Pentax.pm:2672-2684 --
+                // scalar hash keyed on the whole space-joined value.
                 PENTAX_NEUTRAL_DENSITY_FILTER => {
-                    tags.insert(
-                        "Pentax:NeutralDensityFilter".to_string(),
-                        NEUTRAL_DENSITY_FILTER.decode(entry.value_offset as i32),
-                    );
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
+                        tags.insert(
+                            "Pentax:NeutralDensityFilter".to_string(),
+                            lookup_joined(NEUTRAL_DENSITY_FILTER_MAP, &values),
+                        );
+                    }
                 }
                 PENTAX_ISO2 => {
                     tags.insert("Pentax:ISO2".to_string(), entry.value_offset.to_string());
                 }
+                // IntervalShooting (0x0092), Pentax.pm:2690-2707:
+                // `Writable => 'int16u', Count => 2` ("1. Shot number
+                // 2. Total number of shots"), a scalar-hash PrintConv with the
+                // single key `'0 0' => 'Off'` and an `OTHER` sub that rewrites
+                // any other pair as `Shot $1 of $2`.
                 PENTAX_INTERVAL_SHOOTING => {
-                    tags.insert(
-                        "Pentax:IntervalShooting".to_string(),
-                        entry.value_offset.to_string(),
-                    );
+                    let values = entry_components(&entry, data, value_base, byte_order);
+                    if !values.is_empty() {
+                        let joined = joined_components(&values);
+                        let decoded = if joined == "0 0" {
+                            "Off".to_string()
+                        } else if values.len() == 2 {
+                            format!("Shot {} of {}", values[0], values[1])
+                        } else {
+                            joined
+                        };
+                        tags.insert("Pentax:IntervalShooting".to_string(), decoded);
+                    }
                 }
                 PENTAX_SKIN_TONE_CORRECTION => {
                     tags.insert(
@@ -2253,78 +2544,49 @@ impl PentaxParser {
                     }
                 }
 
-                // 0x0207 "LensInfo"/"LensInfo2" + nested "LensData" binary
-                // subdirectories. Only the LensInfo2 (K10D/K20D-style, 17-byte
-                // LensData) layout used by most DSLRs is decoded.
+                // 0x0207 LensInfo, Pentax.pm:2821-2850. This is a *five-way*
+                // `Condition` chain, not one layout: `%Pentax::LensInfo`
+                // (Pentax.pm:4218-4237), `LensInfo2` (:4240-4273), `LensInfo3`
+                // (:4276-4309), `LensInfo4` (:4312-4346) and `LensInfo5`
+                // (:4349-4382) put the LensType field and the nested
+                // `%Pentax::LensData` subdirectory at *different byte offsets*,
+                // and `$count == 168` (Ricoh GR III) selects no table at all.
+                //
+                // Decoding every model at the LensInfo2 offsets, as this used
+                // to, does not fail loudly: the nine LensData tags still print,
+                // just read 8-11 bytes off from where the record actually
+                // starts. Pentax645Z.jpg's MaxAperture came out "1.0" against
+                // the oracle's (absent), the K-5's "1.0" against 2.8. That is
+                // the "plausible-but-wrong under a real tag name" failure --
+                // see AGENTS.md, "Never approximate a conversion".
                 PENTAX_LENS_INFO_207 => {
                     let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
-                    if raw.len() >= 4 {
-                        let series = raw[0] & 0x0f;
-                        let sub_id = (raw[2] as u16) * 256 + raw[3] as u16;
-                        if let Some(name) = lookup_lens_type_pair(series, sub_id) {
-                            // `Priority => 0` in every `%Pentax::LensInfo*`
-                            // (Pentax.pm:4226, :4248, :4284, :4320, :4357): the
-                            // 0x003f copy read earlier is the one that prints.
-                            // PentaxK100D.jpg carries `0 0 0 0` here, which
-                            // decodes to a real lens name ("M-42 or No Lens")
-                            // and so overwrote the correct one silently.
-                            insert_low_priority_retained(tags, "Pentax:LensType".to_string(), name);
+                    if let Some(layout) = lens_info_layout(model, entry.value_count as usize, &raw)
+                    {
+                        if let Some((series, sub_id)) = layout.lens_type(&raw) {
+                            if let Some(name) = lookup_lens_type_pair(series, sub_id) {
+                                // `Priority => 0` in every `%Pentax::LensInfo*`
+                                // (Pentax.pm:4226, :4248, :4284, :4320, :4357):
+                                // the 0x003f copy read earlier is the one that
+                                // prints. PentaxK100D.jpg carries `0 0 0 0`
+                                // here, which decodes to a real lens name
+                                // ("M-42 or No Lens") and so overwrote the
+                                // correct one silently.
+                                insert_low_priority_retained(
+                                    tags,
+                                    "Pentax:LensType".to_string(),
+                                    name,
+                                );
+                            }
                         }
-                    }
-                    if raw.len() >= 4 + 17 {
-                        let ld = &raw[4..4 + 17];
-                        tags.insert(
-                            "Pentax:AutoAperture".to_string(),
-                            if ld[0] & 0x01 == 0 { "On" } else { "Off" }.to_string(),
-                        );
-                        tags.insert(
-                            "Pentax:MinAperture".to_string(),
-                            decode_min_aperture_index((ld[0] & 0x06) >> 1).to_string(),
-                        );
-                        // LensFStops, `LensData` field 0.3, Mask 0x70,
-                        // `ValueConv => '5 + ($val ^ 0x07) / 2'`
-                        // (Pentax.pm:4414-4421). Perl's `/` is always
-                        // floating-point division, so an odd `$val ^ 0x07`
-                        // (every case except 0x07 itself) yields a `.5`
-                        // fraction -- Pentax.jpg's `ld[0]=0` masks to 0,
-                        // `0 ^ 0x07 = 7`, `5 + 7/2 = 8.5`. The previous code
-                        // used `i32` division, which truncates `7/2` to `3`
-                        // and printed the wrong whole number `8`.
-                        let fstops_masked = ((ld[0] & 0x70) >> 4) as i32;
-                        let fstops = 5.0 + ((fstops_masked ^ 0x07) as f64) / 2.0;
-                        tags.insert("Pentax:LensFStops".to_string(), fstops.to_string());
-                        tags.insert(
-                            "Pentax:MinFocusDistance".to_string(),
-                            decode_min_focus_distance((ld[3] & 0xf8) >> 3),
-                        );
-                        tags.insert(
-                            "Pentax:FocusRangeIndex".to_string(),
-                            decode_focus_range_index(ld[3] & 0x07),
-                        );
-                        let focal_raw = ld[9] as i32;
-                        let focal =
-                            10.0 * (focal_raw >> 2) as f64 * 4f64.powi((focal_raw & 0x03) - 2);
-                        // `%Pentax::LensData` key 9 is `Priority => 0`
-                        // (Pentax.pm:4506).
-                        insert_low_priority_retained(
-                            tags,
-                            "Pentax:LensFocalLength".to_string(),
-                            format!("{:.1} mm", focal),
-                        );
-                        let nominal_max = 2f64.powf(((ld[10] & 0xf0) >> 4) as f64 / 4.0);
-                        tags.insert(
-                            "Pentax:NominalMaxAperture".to_string(),
-                            format!("{:.1}", nominal_max),
-                        );
-                        let nominal_min = 2f64.powf(((ld[10] & 0x0f) as f64 + 10.0) / 4.0);
-                        tags.insert(
-                            "Pentax:NominalMinAperture".to_string(),
-                            format!("{:.0}", nominal_min),
-                        );
-                        let max_ap_raw = ld[14] & 0x7f;
-                        if max_ap_raw > 1 {
-                            let max_ap = 2f64.powf((max_ap_raw as f64 - 1.0) / 32.0);
-                            tags.insert("Pentax:MaxAperture".to_string(), format!("{:.1}", max_ap));
+                        let end = layout.lens_data_at + layout.lens_data_len;
+                        if raw.len() >= end {
+                            decode_lens_data(
+                                &raw[layout.lens_data_at..end],
+                                layout.new_lens_data,
+                                model,
+                                tags,
+                            );
                         }
                     }
                 }
@@ -2743,6 +3005,62 @@ fn decode_af_point_selected(model: Option<&str>, value: u16) -> String {
     } else {
         af_point_selected_other(value)
     }
+}
+
+/// The *second* hash of `AFPointSelected`'s list `PrintConv` -- the AF area
+/// mode -- which differs across the same three model branches: K-1/645Z
+/// (Pentax.pm:1288-1293), K-3/KP (:1369-1374) and other models (:1400-1407).
+/// The K-1 and K-3 tables agree except for `5`, which is a 33-point expansion
+/// on the K-1 and a 27-point one on the K-3.
+fn decode_af_area_mode(model: Option<&str>, value: i64) -> String {
+    let name = if AF_POINT_SELECTED_K1_645Z.holds(model) {
+        match value {
+            0 => Some("Single Point"),
+            1 => Some("Expanded Area 9-point (S)"),
+            3 => Some("Expanded Area 25-point (M)"),
+            5 => Some("Expanded Area 33-point (L)"),
+            _ => None,
+        }
+    } else if AF_POINT_SELECTED_K3_KP.holds(model) {
+        match value {
+            0 => Some("Single Point"),
+            1 => Some("Expanded Area 9-point (S)"),
+            3 => Some("Expanded Area 25-point (M)"),
+            5 => Some("Expanded Area 27-point (L)"),
+            _ => None,
+        }
+    } else {
+        match value {
+            0 => Some("Single Point"),
+            1 => Some("Expanded Area"),
+            _ => None,
+        }
+    };
+    name.map_or_else(|| format!("Unknown ({value})"), str::to_string)
+}
+
+/// `Condition => '$self->{Model} =~ /^PENTAX Optio (30|33WR|43WR|450|550|555|
+/// 750Z|X)\b/'` (Pentax.pm:1744), the eight bodies that record `FocalLength`
+/// in tenths of a millimetre rather than hundredths.
+///
+/// Spelled out rather than routed through `Cond::Model` because this pattern
+/// is `^`-anchored and `Cond::Model`'s `pat_matches` is an unanchored
+/// substring search -- close enough to look right and wrong on a model name
+/// that merely contains one of these.
+fn focal_length_in_tenths(model: Option<&str>) -> bool {
+    const ALTS: [&str; 8] = ["30", "33WR", "43WR", "450", "550", "555", "750Z", "X"];
+    let Some(rest) = model.and_then(|m| m.strip_prefix("PENTAX Optio ")) else {
+        return false;
+    };
+    ALTS.iter().any(|alt| {
+        rest.strip_prefix(alt).is_some_and(|tail| {
+            // Perl's `\b` after a `\w`-final alternative: the next byte, if
+            // any, must not itself be a word character.
+            tail.as_bytes()
+                .first()
+                .is_none_or(|b| !(b.is_ascii_alphanumeric() || *b == b'_'))
+        })
+    })
 }
 
 /// Pentax.pm:1225-1287, K-1/645Z `AFPointSelected` position-0 `PrintConv`.
@@ -3747,6 +4065,28 @@ mod tests {
     /// (`Base => '$start - 10'`), so a value at index 64 of the returned buffer
     /// is addressed as 64.
     #[cfg(test)]
+    /// `pentax_block`'s little-endian twin. `parse_located` reads the
+    /// byte-order marker out of the block itself (see its "MM"/"II" handling),
+    /// so the two helpers differ in the marker *and* in how every field of the
+    /// IFD is encoded -- which is the whole point for the `Count => 2` tags
+    /// below, whose two components land in opposite halves of the value word.
+    fn pentax_block_le(entries: &[(u16, u16, u32, u32)], trailer: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(PENTAX_HEADER_PENTAX); // 0..8
+        out.extend_from_slice(b"II"); // 8..10
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes()); // 10..12
+        for &(tag, ftype, count, value) in entries {
+            out.extend_from_slice(&tag.to_le_bytes());
+            out.extend_from_slice(&ftype.to_le_bytes());
+            out.extend_from_slice(&count.to_le_bytes());
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out.extend_from_slice(&0u32.to_le_bytes()); // next-IFD pointer
+        out.resize(64, 0);
+        out.extend_from_slice(trailer);
+        out
+    }
+
     fn pentax_block(entries: &[(u16, u16, u32, u32)], trailer: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(PENTAX_HEADER_PENTAX); // 0..8
@@ -3851,12 +4191,19 @@ mod tests {
         assert_eq!(QUALITY.decode(6), "RAW + JPEG");
     }
 
+    /// Every id below is one the previous table disagreed with ExifTool
+    /// about while still printing a real ExifTool mode name, so restoring it
+    /// fails here rather than silently mislabelling a mode:
+    /// Pentax.pm:1071 (`1`), :1073 (`2`), :1077 (`5`), :1086 (`15`).
     #[test]
     fn test_decode_picture_mode() {
         assert_eq!(PICTURE_MODE.decode(0), "Program");
-        assert_eq!(PICTURE_MODE.decode(2), "Aperture Priority");
+        assert_eq!(PICTURE_MODE.decode(1), "Shutter Speed Priority");
+        assert_eq!(PICTURE_MODE.decode(2), "Program AE");
         assert_eq!(PICTURE_MODE.decode(3), "Manual");
-        assert_eq!(PICTURE_MODE.decode(5), "Landscape");
+        assert_eq!(PICTURE_MODE.decode(5), "Portrait");
+        assert_eq!(PICTURE_MODE.decode(15), "Macro");
+        assert_eq!(PICTURE_MODE.decode(221), "P");
     }
 
     // ========================================================================
@@ -4134,10 +4481,15 @@ mod tests {
     }
 
     /// K-3-and-later `$count == 2` branch (Pentax.pm:2190-2197): `int8s`,
-    /// `ValueConv => ['$val / 6']` -- only the *first* of the two bytes is
-    /// converted. First byte 3 -> 3/6 = 0.5 -> "+0.5".
+    /// `ValueConv => ['$val / 6']` and `PrintConv => ['$val ? sprintf("%+.1f",
+    /// $val) : 0']` are both one-element *lists*, so only the first of the two
+    /// bytes is converted -- and the second, having no converter, prints raw
+    /// and is joined with "; " rather than dropped (ExifTool.pm:3684-3698).
+    /// The pinned oracle reports `0; 0` for Pentax645Z.jpg and PentaxK-3.jpg,
+    /// whose `int8s[2]` is `00 00`; this test uses `03 00` so the two halves
+    /// are distinguishable.
     #[test]
-    fn flash_exposure_comp_count_two_divides_the_first_byte_by_six() {
+    fn flash_exposure_comp_count_two_converts_only_the_first_byte() {
         let data = pentax_block(&[(0x004D, 6, 2, 0x0300_0000)], &[]);
         let mut tags = HashMap::new();
         PentaxParser::default()
@@ -4145,7 +4497,22 @@ mod tests {
             .expect("Pentax MakerNote should parse");
         assert_eq!(
             tags.get("Pentax:FlashExposureComp").map(String::as_str),
-            Some("+0.5")
+            Some("+0.5; 0")
+        );
+    }
+
+    /// The two-component zero case the oracle actually reports on
+    /// Pentax645Z.jpg and PentaxK-3.jpg.
+    #[test]
+    fn flash_exposure_comp_count_two_zero_pair_keeps_both_components() {
+        let data = pentax_block(&[(0x004D, 6, 2, 0x0000_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:FlashExposureComp").map(String::as_str),
+            Some("0; 0")
         );
     }
 
@@ -4185,6 +4552,709 @@ mod tests {
             tags.get("Pentax:LensFStops").map(String::as_str),
             Some("8.5")
         );
+    }
+
+    // ========================================================================
+    // The Pentax value-decode cluster: `Count => -1` / `Count => 2`
+    // multi-component decoding (P1/P2), the five `%Pentax::LensInfo*` layouts
+    // (P3) and DigitalZoom's invented suffix (P4).
+    //
+    // Every raw byte constant below is transcribed verbatim from
+    // `exiftool -v3 <file>` under the pinned oracle (13.59, capability-probed
+    // with `-s3 -FileType t/images/OOXML.docx` -> DOCX), and every expected
+    // string is that same oracle's `-s -MakerNotes:<Tag>` output for the same
+    // file. Neither was re-derived from this file's previous behaviour.
+    // ========================================================================
+
+    /// PictureMode (0x000b), Pentax.pm:1057-1130. `PentaxOptioA10.jpg` writes
+    /// `int16u[2]` = `00 00 00 00`. The one-hash PrintConv list converts
+    /// component 0 and leaves component 1 without a converter, so ExifTool
+    /// prints it raw and joins with "; " (ExifTool.pm:3684-3698).
+    #[test]
+    fn picture_mode_second_component_prints_raw_and_joins_with_semicolon() {
+        let data = pentax_block(&[(0x000B, 3, 2, 0x0000_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:PictureMode").map(String::as_str),
+            Some("Program; 0")
+        );
+    }
+
+    /// `PentaxOptioMX.jpg` writes `int16u[1]` = `00 02`. Pentax.pm:1073 maps
+    /// `2 => 'Program AE'`; the table this replaced said "Aperture Priority",
+    /// which is a real ExifTool mode name for a different mode.
+    #[test]
+    fn picture_mode_uses_the_0x000b_hash_not_a_camera_settings_table() {
+        let data = pentax_block(&[(0x000B, 3, 1, 0x0002_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:PictureMode").map(String::as_str),
+            Some("Program AE")
+        );
+    }
+
+    /// `ValueConv` (Pentax.pm:1065) adds 0.1 to a single-component value below
+    /// 4 on an Optio 555 only, selecting the `.1` keys of the same hash --
+    /// `2` is "Program AE" everywhere else and "Tv" here.
+    #[test]
+    fn picture_mode_optio_555_value_conv_selects_the_fractional_keys() {
+        let data = pentax_block(&[(0x000B, 3, 1, 0x0002_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX Optio 555"),
+                &mut tags,
+            )
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:PictureMode").map(String::as_str),
+            Some("Tv")
+        );
+    }
+
+    /// AutoBracketing (0x0018), Pentax.pm:1626-1666. `PentaxK-5.jpg` writes
+    /// `int16u[2]` = `00 00 00 00`: the PrintConv `sub` leaves a falsy step as
+    /// the bare string "0" (no `sprintf('%.1f')`), turns a zero second
+    /// component into "No Extended Bracket", and joins with " EV, ".
+    #[test]
+    fn auto_bracketing_two_components_join_with_ev_comma() {
+        let data = pentax_block(&[(0x0018, 3, 2, 0x0000_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:AutoBracketing").map(String::as_str),
+            Some("0 EV, No Extended Bracket")
+        );
+    }
+
+    /// The `Count => -1` one-value case: with `$v[1]` undefined neither the
+    /// `if` nor the `elsif` in the PrintConv sub fires and `join(' EV, ')`
+    /// over one element emits the step alone. 31 corpus files take this path;
+    /// the enum this replaced answered "Off".
+    #[test]
+    fn auto_bracketing_single_component_is_the_bare_step() {
+        let data = pentax_block(&[(0x0018, 3, 1, 0x0000_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:AutoBracketing").map(String::as_str),
+            Some("0")
+        );
+    }
+
+    /// `PentaxQ7.jpg` writes `01 20 00 00` little-endian = `8193 0`. The
+    /// `0x2000` bit selects the third-EV fraction form (Pentax.pm:1643), whose
+    /// `/` suppresses the `sprintf('%.1f')` at Pentax.pm:1656.
+    #[test]
+    fn auto_bracketing_third_ev_step_keeps_its_fraction() {
+        let data = pentax_block_le(&[(0x0018, 3, 2, 0x0000_2001)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:AutoBracketing").map(String::as_str),
+            Some("1/3 EV, No Extended Bracket")
+        );
+    }
+
+    /// FineSharpness (0x0070), Pentax.pm:2432-2443. `PentaxK-5IIs.jpg` writes
+    /// `int8u[2]` = `01 02`, decoded through the two hashes of the list.
+    #[test]
+    fn fine_sharpness_uses_both_hashes_of_its_print_conv_list() {
+        let data = pentax_block(&[(0x0070, 1, 2, 0x0102_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:FineSharpness").map(String::as_str),
+            Some("On; Extra fine")
+        );
+    }
+
+    /// HighISONoiseReduction (0x0071), Pentax.pm:2444-2466. `PentaxK-5.jpg`
+    /// writes `int8u[2]` = `04 04`: Pentax.pm:2452 `4 => 'Medium'` for the
+    /// level and :2459 `4 => 'Active (Medium)'` for the state. Reading the
+    /// packed word instead gave "Unknown (1028)".
+    #[test]
+    fn high_iso_noise_reduction_level_and_state_are_separate_components() {
+        let data = pentax_block(&[(0x0071, 1, 2, 0x0404_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:HighISONoiseReduction").map(String::as_str),
+            Some("Medium; Active (Medium)")
+        );
+    }
+
+    /// The K-x writes a third component -- `int8u[3]` = `04 00 38` -- for the
+    /// ISO threshold hash at Pentax.pm:2460-2464 (`56 => 'ISO>800'`).
+    #[test]
+    fn high_iso_noise_reduction_third_component_is_the_iso_threshold() {
+        let data = pentax_block(&[(0x0071, 1, 3, 0x0400_3800)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:HighISONoiseReduction").map(String::as_str),
+            Some("Medium; Inactive; ISO>800")
+        );
+    }
+
+    /// FaceDetect (0x0076), Pentax.pm:2504-2520: a list of two *expressions*.
+    /// `PentaxK-5.jpg` writes `int8u[2]` = `10 00`.
+    #[test]
+    fn face_detect_print_conv_list_is_expressions_not_an_enum() {
+        let data = pentax_block(&[(0x0076, 1, 2, 0x1000_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:FaceDetect").map(String::as_str),
+            Some("On (16 faces max); 0 faces detected")
+        );
+    }
+
+    /// `Pentax645Z.jpg` writes a *third* component -- `int8u[3]` = `05 00 00`
+    /// -- which the two-element convList has no converter for, so ExifTool
+    /// prints it raw rather than dropping it (ExifTool.pm:3684-3691).
+    #[test]
+    fn face_detect_third_component_passes_through_raw() {
+        let data = pentax_block(&[(0x0076, 1, 3, 0x0500_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:FaceDetect").map(String::as_str),
+            Some("On (5 faces max); 0 faces detected; 0")
+        );
+    }
+
+    /// ShadowCorrection (0x0079), Pentax.pm:2529-2545: a *scalar* hash, so the
+    /// key is the whole space-joined value. `PentaxQ7.jpg`'s `02 04` is the
+    /// `'2 4' => 'Auto'` entry -- not two independent lookups, and certainly
+    /// not the packed 1026 the old code searched for.
+    #[test]
+    fn shadow_correction_scalar_hash_is_keyed_on_the_joined_string() {
+        let data = pentax_block(&[(0x0079, 1, 2, 0x0204_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:ShadowCorrection").map(String::as_str),
+            Some("Auto")
+        );
+    }
+
+    /// The same table's one-value keys mean something different from its
+    /// two-value ones: `PentaxK-m.jpg`'s single `01` is "On" (Pentax.pm:2537)
+    /// while `1 1` would be "Weak" (:2540). The flat integer map this
+    /// replaced answered "On (Weak)", a name absent from Pentax.pm.
+    #[test]
+    fn shadow_correction_single_component_takes_the_scalar_key() {
+        let data = pentax_block(&[(0x0079, 1, 1, 0x0100_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:ShadowCorrection").map(String::as_str),
+            Some("On")
+        );
+    }
+
+    /// HDR (0x0085), Pentax.pm:2636-2661: `int8u Count => 4` with three
+    /// hashes, so the always-zero fourth component prints raw.
+    /// `PentaxQ7.jpg` writes `00 00 00 00`.
+    #[test]
+    fn hdr_fourth_component_has_no_converter_and_prints_raw() {
+        let data = pentax_block(&[(0x0085, 1, 4, 0x0000_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:HDR").map(String::as_str),
+            Some("Off; Auto-align Off; n/a; 0")
+        );
+    }
+
+    /// IntervalShooting (0x0092), Pentax.pm:2690-2707: `'0 0' => 'Off'` is a
+    /// joined-string key, and any other pair goes through the `OTHER` sub's
+    /// `s/(\d+) (\d+)/Shot $1 of $2/`.
+    #[test]
+    fn interval_shooting_off_is_the_joined_zero_pair() {
+        let data = pentax_block(&[(0x0092, 3, 2, 0x0000_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:IntervalShooting").map(String::as_str),
+            Some("Off")
+        );
+    }
+
+    /// FaceDetectFrameSize (0x0077), Pentax.pm:2521-2527: `int16u Count => 2`
+    /// with no conversion at all. `PentaxK-5.jpg` writes `02 d0 01 e0`
+    /// big-endian.
+    #[test]
+    fn face_detect_frame_size_splits_the_int16u_pair_big_endian() {
+        let data = pentax_block(&[(0x0077, 3, 2, 0x02D0_01E0)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:FaceDetectFrameSize").map(String::as_str),
+            Some("720 480")
+        );
+    }
+
+    /// `PentaxQ7.jpg` records the identical `720 480` as `d0 02 e0 01`
+    /// little-endian. Printing the packed value word gave `47186160` for the
+    /// first file and `31457760` for this one -- the defect is byte-order
+    /// dependent, which is why both orders are pinned.
+    #[test]
+    fn face_detect_frame_size_splits_the_int16u_pair_little_endian() {
+        let data = pentax_block_le(&[(0x0077, 3, 2, 0x01E0_02D0)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:FaceDetectFrameSize").map(String::as_str),
+            Some("720 480")
+        );
+    }
+
+    /// SensorSize (0x0035), Pentax.pm:2064-2077. `PentaxK-5.jpg` writes
+    /// `2f 1d 1f 34` = `12061 7988`; `ValueConv` divides each by 500 and
+    /// `PrintConv` formats both to three decimals.
+    #[test]
+    fn sensor_size_divides_each_component_by_500() {
+        let data = pentax_block(&[(0x0035, 3, 2, 0x2F1D_1F34)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::BigEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:SensorSize").map(String::as_str),
+            Some("24.122 x 15.976 mm")
+        );
+    }
+
+    /// DigitalZoom (0x001e), Pentax.pm:1766-1771: `ValueConv => '$val / 100'`
+    /// and no PrintConv, so ExifTool prints the bare quotient.
+    /// `PentaxOptioA10.jpg` writes `64 00` little-endian = 100 -> `1`,
+    /// where the old code emitted `1.00x`.
+    #[test]
+    fn digital_zoom_has_no_suffix_and_no_fixed_decimals() {
+        let data = pentax_block_le(&[(0x001E, 3, 1, 100)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:DigitalZoom").map(String::as_str),
+            Some("1")
+        );
+    }
+
+    /// A zero DigitalZoom is a value ExifTool reports, not an absent tag: the
+    /// `> 0` guard the old code used dropped it on 20 corpus files.
+    #[test]
+    fn digital_zoom_zero_is_reported_not_dropped() {
+        let data = pentax_block_le(&[(0x001E, 3, 1, 0)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:DigitalZoom").map(String::as_str),
+            Some("0")
+        );
+    }
+
+    /// FocalLength (0x001d), Pentax.pm:1739-1765. `PentaxOptio30.jpg` writes
+    /// `int32u` 58 and its model matches the eight-body `Condition` at
+    /// Pentax.pm:1744, so the divisor is 10, not 100.
+    #[test]
+    fn focal_length_divisor_is_model_conditioned() {
+        let data = pentax_block(&[(0x001D, 4, 1, 58)], &[]);
+        let mut tenths = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX Optio 30"),
+                &mut tenths,
+            )
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tenths.get("Pentax:FocalLength").map(String::as_str),
+            Some("5.8 mm")
+        );
+
+        let mut hundredths = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX Optio S5n"),
+                &mut hundredths,
+            )
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            hundredths.get("Pentax:FocalLength").map(String::as_str),
+            Some("0.6 mm")
+        );
+    }
+
+    /// `PentaxOptioS5n.jpg` writes 595, and `595/100` rounds to "6.0" as an
+    /// `f64` (5.95000000000000017...) but to "5.9" as an `f32`
+    /// (5.94999980926...). ExifTool's arithmetic is a Perl double.
+    #[test]
+    fn focal_length_rounds_as_an_f64_not_an_f32() {
+        let data = pentax_block(&[(0x001D, 4, 1, 595)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX Optio S5n"),
+                &mut tags,
+            )
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:FocalLength").map(String::as_str),
+            Some("6.0 mm")
+        );
+    }
+
+    /// LightReading (0x0015), Pentax.pm:1583-1592: `Format => 'int16s'` over a
+    /// 2-byte entry. `PentaxOptioE50.jpg` writes `10 00` little-endian = 16;
+    /// reading the whole padded 4-byte value word printed -2147483632.
+    #[test]
+    fn light_reading_reads_int16s_not_the_padded_value_word() {
+        let data = pentax_block_le(&[(0x0015, 3, 1, 0x8000_0010)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:LightReading").map(String::as_str),
+            Some("16")
+        );
+    }
+
+    /// AFPointSelected (0x000e): every model branch has a two-hash list
+    /// PrintConv (Pentax.pm:1288-1293, :1369-1374, :1400-1407).
+    /// `PentaxK-5II.jpg` writes `int16u[2]` = `00 06 00 00`; masking that to
+    /// one `int16u` yielded 0 -> "None".
+    #[test]
+    fn af_point_selected_second_component_is_the_af_area_mode() {
+        let data = pentax_block(&[(0x000E, 3, 2, 0x0006_0000)], &[]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX K-5 II"),
+                &mut tags,
+            )
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:AFPointSelected").map(String::as_str),
+            Some("Center; Single Point")
+        );
+    }
+
+    /// Builds an 0x0207 block of `count` bytes whose leading bytes are `head`.
+    /// The trailing zeros stand in for the bytes past the LensData record,
+    /// which no field reads -- what the test is pinning is that `count`
+    /// selects the layout, and therefore *where* LensData starts.
+    fn lens_info_block(count: u32, head: &[u8]) -> Vec<u8> {
+        let mut trailer = head.to_vec();
+        trailer.resize(count as usize, 0);
+        pentax_block(&[(0x0207, 7, count, 64)], &trailer)
+    }
+
+    /// `%Pentax::LensInfo5` (Pentax.pm:4349-4382) puts LensData at byte 15,
+    /// selected by `$count == 80 or $count == 128` (Pentax.pm:2845-2848).
+    /// Bytes from `exiftool -v3 Pentax645Z.jpg`. At the LensInfo2 offset the
+    /// old code used (4), `ld[10]` reads a different byte entirely and
+    /// NominalMaxAperture came out 1.0 instead of 4.8.
+    #[test]
+    fn lens_info5_reads_lens_data_at_byte_15() {
+        const HEAD: [u8; 32] = [
+            0x00, 0xed, 0xa0, 0x58, 0x00, 0x14, 0x02, 0xf4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x18, 0x76, 0x2d, 0x00, 0x00, 0x73, 0x05, 0x0c, 0x80, 0x91, 0x68, 0x78,
+            0xa4, 0x00, 0x31, 0x02,
+        ];
+        let data = lens_info_block(128, &HEAD);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX 645Z"),
+                &mut tags,
+            )
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:NominalMaxAperture").map(String::as_str),
+            Some("4.8")
+        );
+        assert_eq!(
+            tags.get("Pentax:NominalMinAperture").map(String::as_str),
+            Some("7")
+        );
+        assert_eq!(
+            tags.get("Pentax:MinFocusDistance").map(String::as_str),
+            Some("0.40-0.45 m")
+        );
+        // `Condition => '$$self{Model} !~ /645Z/'` (Pentax.pm:4507): on a 645Z
+        // index 9 is the `Unknown` lens code LC8, so nothing is emitted.
+        assert!(!tags.contains_key("Pentax:LensFocalLength"));
+        // `RawConv => '$val > 1 ? $val : undef'` (Pentax.pm:4563): ld[14] is 0.
+        assert!(!tags.contains_key("Pentax:MaxAperture"));
+    }
+
+    /// `%Pentax::LensInfo4` (Pentax.pm:4312-4346), selected by `$count == 91`,
+    /// puts LensData at byte 12 *and* sets `NewLensData`, which suppresses
+    /// fields 0.1-0.3 (`Condition => 'not $$self{NewLensData}'`) and shifts
+    /// index 13 onward by one byte (the Hook at Pentax.pm:4548). Bytes from
+    /// `exiftool -v3 PentaxK-5.jpg`; reading MaxAperture unshifted gives
+    /// ld[14] = 0x03 and a confident "1.0" where the oracle says 2.8.
+    #[test]
+    fn lens_info4_sets_new_lens_data_and_shifts_max_aperture() {
+        const HEAD: [u8; 32] = [
+            0x01, 0x28, 0x30, 0x00, 0xf2, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x28,
+            0x56, 0x1d, 0x43, 0x63, 0x01, 0x0f, 0x6c, 0x68, 0x68, 0x79, 0x20, 0x00, 0x03, 0x31,
+            0x08, 0x03, 0xff, 0xff,
+        ];
+        let data = lens_info_block(91, &HEAD);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX K-5"),
+                &mut tags,
+            )
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            tags.get("Pentax:MaxAperture").map(String::as_str),
+            Some("2.8")
+        );
+        assert_eq!(
+            tags.get("Pentax:LensFocalLength").map(String::as_str),
+            Some("16.2 mm")
+        );
+        assert_eq!(
+            tags.get("Pentax:MinFocusDistance").map(String::as_str),
+            Some("0.28-0.30 m")
+        );
+        for suppressed in [
+            "Pentax:AutoAperture",
+            "Pentax:MinAperture",
+            "Pentax:LensFStops",
+        ] {
+            assert!(
+                !tags.contains_key(suppressed),
+                "{suppressed} is 'not valid for the K-r, K-5 or K-5II' (Pentax.pm:4398)"
+            );
+        }
+    }
+
+    /// `%Pentax::LensInfo3` (Pentax.pm:4276-4309), `$count == 90` (645D), puts
+    /// LensData at byte 13. Bytes from `exiftool -v3 Pentax645D.jpg`.
+    #[test]
+    fn lens_info3_reads_lens_data_at_byte_13() {
+        const HEAD: [u8; 32] = [
+            0x01, 0xad, 0x20, 0x00, 0x12, 0x58, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18,
+            0x76, 0x33, 0x00, 0x00, 0x74, 0x05, 0x10, 0x80, 0x59, 0x68, 0x81, 0x00, 0xac, 0x00,
+            0x31, 0x00, 0x00, 0x00,
+        ];
+        let data = lens_info_block(90, &HEAD);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX 645D"),
+                &mut tags,
+            )
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(tags.get("Pentax:LensFStops").map(String::as_str), Some("8"));
+        assert_eq!(
+            tags.get("Pentax:LensFocalLength").map(String::as_str),
+            Some("55.0 mm")
+        );
+        assert_eq!(
+            tags.get("Pentax:NominalMaxAperture").map(String::as_str),
+            Some("2.8")
+        );
+        assert!(!tags.contains_key("Pentax:MaxAperture"));
+    }
+
+    /// `%Pentax::LensInfo` (Pentax.pm:4218-4237) is selected by *model*, not
+    /// count -- `$$self{Model}=~/(\*ist|GX-1[LS])/` (Pentax.pm:2829) -- and
+    /// puts LensData at byte 3 with an unmasked `int8u[2]` LensType. Bytes
+    /// from `exiftool -v3 Pentax_istD.jpg`.
+    #[test]
+    fn lens_info_old_format_is_chosen_by_model_and_reads_byte_3() {
+        const HEAD: [u8; 32] = [
+            0x04, 0x26, 0x00, 0x52, 0x28, 0x94, 0x31, 0xb6, 0x83, 0x05, 0x10, 0x67, 0xb4, 0x78,
+            0x7a, 0x40, 0x02, 0x38, 0x63, 0xfb, 0xff, 0xff, 0xff, 0x26, 0x05, 0x62, 0x06, 0x6b,
+            0x30, 0xba, 0x07, 0x00,
+        ];
+        let data = lens_info_block(36, &HEAD);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX *ist D"),
+                &mut tags,
+            )
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(tags.get("Pentax:LensFStops").map(String::as_str), Some("6"));
+        assert_eq!(
+            tags.get("Pentax:MaxAperture").map(String::as_str),
+            Some("3.3")
+        );
+        assert_eq!(
+            tags.get("Pentax:MinAperture").map(String::as_str),
+            Some("32")
+        );
+    }
+
+    /// The same 36-byte block under a K10D: no model match and `$count` is not
+    /// 90/91/80/128/168, so `%Pentax::LensInfo2` applies and LensData starts
+    /// at byte 4 instead of 3 -- one byte over, and every field changes.
+    #[test]
+    fn lens_info2_is_the_fallthrough_and_reads_byte_4() {
+        const HEAD: [u8; 32] = [
+            0x04, 0x26, 0x00, 0x52, 0x28, 0x94, 0x31, 0xb6, 0x83, 0x05, 0x10, 0x67, 0xb4, 0x78,
+            0x7a, 0x40, 0x02, 0x38, 0x63, 0xfb, 0xff, 0xff, 0xff, 0x26, 0x05, 0x62, 0x06, 0x6b,
+            0x30, 0xba, 0x07, 0x00,
+        ];
+        let data = lens_info_block(36, &HEAD);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX K10D"),
+                &mut tags,
+            )
+            .expect("Pentax MakerNote should parse");
+        // ld[0] is now 0x28: Mask 0x70 -> 2, `5 + (2 ^ 7) / 2` = 7.5.
+        assert_eq!(
+            tags.get("Pentax:LensFStops").map(String::as_str),
+            Some("7.5")
+        );
+    }
+
+    /// The K100D/K110D leg of the first `Condition` (Pentax.pm:2830) is a
+    /// *byte* test, not a model test: `$$valPt=~/^.{20}(\xff|\0\0)/s`.
+    /// PentaxK100D_Super.jpg has 0xff at byte 20 and takes the old format;
+    /// PentaxK100D.jpg has 0x7b there and falls through to LensInfo2.
+    #[test]
+    fn k100d_old_format_test_reads_byte_20_of_the_block() {
+        let mut head = [0u8; 32];
+        head[20] = 0xff;
+        let with_ff = lens_info_block(44, &head);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &with_ff,
+                ByteOrder::BigEndian,
+                None,
+                Some("PENTAX K100D Super"),
+                &mut tags,
+            )
+            .expect("Pentax MakerNote should parse");
+        assert_eq!(
+            lens_info_layout(Some("PENTAX K100D Super"), 44, &head)
+                .expect("a layout applies")
+                .lens_data_at,
+            3
+        );
+
+        head[20] = 0x7b;
+        head[21] = 0x01;
+        assert_eq!(
+            lens_info_layout(Some("PENTAX K100D"), 36, &head)
+                .expect("a layout applies")
+                .lens_data_at,
+            4
+        );
+    }
+
+    /// `$count == 168` is the Ricoh GR III, and Pentax.pm:2850 records it as a
+    /// comment with no table: the `Condition` chain ends unmatched. Omitting
+    /// the nine LensData tags is the correct answer -- decoding them at some
+    /// other table's offsets would emit nine plausible wrong values under real
+    /// ExifTool tag names.
+    #[test]
+    fn lens_info_count_168_selects_no_table() {
+        assert!(lens_info_layout(Some("RICOH GR III"), 168, &[0u8; 32]).is_none());
+        let data = lens_info_block(168, &[0x01; 32]);
+        let mut tags = HashMap::new();
+        PentaxParser::default()
+            .parse_located(
+                &data,
+                ByteOrder::BigEndian,
+                None,
+                Some("RICOH GR III"),
+                &mut tags,
+            )
+            .expect("Pentax MakerNote should parse");
+        for omitted in [
+            "Pentax:AutoAperture",
+            "Pentax:MinAperture",
+            "Pentax:LensFStops",
+            "Pentax:MinFocusDistance",
+            "Pentax:FocusRangeIndex",
+            "Pentax:LensFocalLength",
+            "Pentax:NominalMaxAperture",
+            "Pentax:NominalMinAperture",
+            "Pentax:MaxAperture",
+        ] {
+            assert!(!tags.contains_key(omitted), "{omitted} should be omitted");
+        }
     }
 
     /// Fewer than 4 (LensType) + 17 (LensData) = 21 bytes: the LensData
@@ -5337,6 +6407,427 @@ fn extract_value_as_i32(entry: &IfdEntry, byte_order: ByteOrder) -> i32 {
         8 => extract_u16_value(entry, byte_order) as i16 as i32,
         _ => entry.value_offset as i32,
     }
+}
+
+/// Splits an IFD entry into the individual components ExifTool reads out of
+/// it, one per `value_count`, decoded per `field_type`.
+///
+/// This is the missing half of every `Count => 2` / `Count => -1` Pentax tag.
+/// `entry.value_offset` is the raw 4-byte value field as read off disk, so a
+/// two-component `int16u` entry packs *both* components into one `u32` --
+/// `a * 65536 + b` big-endian, `b * 65536 + a` little-endian. Printing that
+/// word is not a formatting nit; it is a different number every time the byte
+/// order changes, and on `FaceDetectFrameSize` (Pentax.pm:2521-2527,
+/// `int16u Count => 2`) it turned `720 480` into `31457760` on one file and
+/// `47186160` on the next. ExifTool never sees the packed word: `ProcessExif`
+/// reads `$count` components and joins them with a space
+/// (ExifTool.pm's `ReadValue`), and every conversion downstream operates on
+/// that list.
+fn entry_components(
+    entry: &IfdEntry,
+    full_data: &[u8],
+    value_base: i64,
+    byte_order: ByteOrder,
+) -> Vec<i64> {
+    let raw = inline_or_offset_bytes(entry, full_data, value_base, byte_order);
+    let size = tiff_field_type_size(entry.field_type);
+    let be = byte_order == ByteOrder::BigEndian;
+    raw.chunks_exact(size)
+        .map(|c| match entry.field_type {
+            3 => i64::from(if be {
+                u16::from_be_bytes([c[0], c[1]])
+            } else {
+                u16::from_le_bytes([c[0], c[1]])
+            }),
+            8 => i64::from(if be {
+                i16::from_be_bytes([c[0], c[1]])
+            } else {
+                i16::from_le_bytes([c[0], c[1]])
+            }),
+            4 => i64::from(if be {
+                u32::from_be_bytes([c[0], c[1], c[2], c[3]])
+            } else {
+                u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+            }),
+            9 => i64::from(if be {
+                i32::from_be_bytes([c[0], c[1], c[2], c[3]])
+            } else {
+                i32::from_le_bytes([c[0], c[1], c[2], c[3]])
+            }),
+            6 => i64::from(c[0] as i8),
+            // BYTE, ASCII, UNDEF and anything else this module asks for
+            // component-wise all read as unsigned bytes.
+            _ => i64::from(c[0]),
+        })
+        .collect()
+}
+
+/// ExifTool's list-`PrintConv` rule, transcribed from ExifTool.pm:3550-3576
+/// and :3684-3698.
+///
+/// When a tag's `PrintConv` is an ARRAY ref, ExifTool splits the value into
+/// its components, converts component `i` with `$$convList[$i]`, and joins
+/// the results with `'; '`. Two details matter and are both easy to get
+/// wrong:
+///
+/// * When `$$convList[$i]` is undef -- the list is shorter than the value --
+///   `$conv` becomes undef and `$value = $val`, i.e. the component is printed
+///   *raw*. That is why the 645Z's three-component `FaceDetect` prints
+///   `On (5 faces max); 0 faces detected; 0`: the third component has no
+///   converter, so its raw `0` is passed through rather than dropped.
+/// * The join separator is `'; '` for PrintConv (`' '` for ValueConv).
+///
+/// `conv` returns `None` for a position with no converter.
+fn print_conv_list(values: &[i64], conv: impl Fn(usize, i64) -> Option<String>) -> String {
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| conv(i, v).unwrap_or_else(|| v.to_string()))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The space-joined component string ExifTool hands to a *scalar* `PrintConv`
+/// hash on a multi-component tag.
+///
+/// A plain-hash `PrintConv` is not split per component: `$val` arrives as the
+/// whole `"0 0"` / `"2 4"` string and is looked up verbatim, which is exactly
+/// why `%Pentax::Main`'s `ShadowCorrection` (Pentax.pm:2529-2545) and
+/// `NeutralDensityFilter` (Pentax.pm:2672-2684) carry both scalar keys
+/// (`0`, `1`) and multi-word keys (`'0 0'`, `'2 4'`, `'0 2'`).
+/// Where one of the five `%Pentax::LensInfo*` tables puts its two fields
+/// inside the 0x0207 block.
+struct LensInfoLayout {
+    /// Byte offset of the `LensType` field.
+    lens_type_at: usize,
+    /// `Format => 'int8u[N]'` on that field: 2, 4 or 5 -- and each N carries
+    /// its own `ValueConv`, so the count selects the decode, not just a width.
+    lens_type_len: usize,
+    /// Byte offset of the nested `LensData` subdirectory.
+    lens_data_at: usize,
+    /// `Format => 'undef[17]'` everywhere except `LensInfo4`'s `undef[18]`.
+    lens_data_len: usize,
+    /// `LensInfo4` sets `$$self{NewLensData} = 1` (Pentax.pm:4343), which
+    /// suppresses `LensData` 0.1/0.2/0.3 and shifts index 13 onward by a byte.
+    new_lens_data: bool,
+}
+
+impl LensInfoLayout {
+    /// The `($series, $sub_id)` pair `%pentaxLensTypes` is keyed by, applying
+    /// the per-table `ValueConv`.
+    ///
+    /// `%Pentax::LensInfo`'s `int8u[2]` field has *no* `ValueConv`
+    /// (Pentax.pm:4223-4231), so its key is the two raw bytes verbatim --
+    /// `4 38` for `Pentax_istD.jpg`. The `int8u[4]` and `int8u[5]` forms mask
+    /// the first byte with `0x0f` and rebuild the second from a big-endian
+    /// byte pair that sits at a different place in each
+    /// (`$v[2]*256+$v[3]` at Pentax.pm:4252 and :4288/:4324,
+    /// `$v[3]*256+$v[4]` at :4361).
+    fn lens_type(&self, raw: &[u8]) -> Option<(u8, u16)> {
+        let at = self.lens_type_at;
+        if raw.len() < at + self.lens_type_len {
+            return None;
+        }
+        match self.lens_type_len {
+            2 => Some((raw[at], u16::from(raw[at + 1]))),
+            4 => Some((
+                raw[at] & 0x0f,
+                u16::from(raw[at + 2]) * 256 + u16::from(raw[at + 3]),
+            )),
+            5 => Some((
+                raw[at] & 0x0f,
+                u16::from(raw[at + 3]) * 256 + u16::from(raw[at + 4]),
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// The 0x0207 `Condition` chain, Pentax.pm:2821-2850, in ExifTool's own order
+/// (first match wins). `None` means no table applies -- which is the correct
+/// answer for `$count == 168`, the Ricoh GR III, whose block ExifTool
+/// deliberately leaves undecoded (Pentax.pm:2850).
+fn lens_info_layout(model: Option<&str>, count: usize, raw: &[u8]) -> Option<LensInfoLayout> {
+    // Branch 1, Pentax.pm:2823-2832: the *ist series and Samsung GX-1L/GX-1S
+    // always use the old format, and the K100D/K110D use it when byte 20 of
+    // the block is 0xff or bytes 20-21 are both zero
+    // (`$$valPt=~/^.{20}(\\xff|\\0\\0)/s`).
+    let old_format = model.is_some_and(|m| {
+        m.contains("*ist")
+            || m.contains("GX-1L")
+            || m.contains("GX-1S")
+            || ((m.contains("K100D") || m.contains("K110D"))
+                && (raw.get(20) == Some(&0xff)
+                    || (raw.get(20) == Some(&0) && raw.get(21) == Some(&0))))
+    });
+    if old_format {
+        return Some(LensInfoLayout {
+            lens_type_at: 0,
+            lens_type_len: 2,
+            lens_data_at: 3,
+            lens_data_len: 17,
+            new_lens_data: false,
+        });
+    }
+    match count {
+        // LensInfo3 -- 645D (Pentax.pm:2838-2840, :4276-4309).
+        90 => Some(LensInfoLayout {
+            lens_type_at: 1,
+            lens_type_len: 4,
+            lens_data_at: 13,
+            lens_data_len: 17,
+            new_lens_data: false,
+        }),
+        // LensInfo4 -- K-r, K-5, K-5II (Pentax.pm:2841-2844, :4312-4346).
+        91 => Some(LensInfoLayout {
+            lens_type_at: 1,
+            lens_type_len: 4,
+            lens_data_at: 12,
+            lens_data_len: 18,
+            new_lens_data: true,
+        }),
+        // LensInfo5 -- K-01, K-30, K-50, K-500, K-3, K-3II, 645Z
+        // (Pentax.pm:2845-2848, :4349-4382).
+        80 | 128 => Some(LensInfoLayout {
+            lens_type_at: 1,
+            lens_type_len: 5,
+            lens_data_at: 15,
+            lens_data_len: 17,
+            new_lens_data: false,
+        }),
+        // Pentax.pm:2850 -- "($count == 168 - Ricoh GR III)": the chain ends
+        // without a table, so ExifTool decodes nothing here. Omitted rather
+        // than guessed (AGENTS.md, "Never approximate a conversion").
+        168 => None,
+        // LensInfo2 -- everything else (Pentax.pm:2833-2836, :4240-4273).
+        _ => Some(LensInfoLayout {
+            lens_type_at: 0,
+            lens_type_len: 4,
+            lens_data_at: 4,
+            lens_data_len: 17,
+            new_lens_data: false,
+        }),
+    }
+}
+
+/// `%Image::ExifTool::Pentax::LensData`, Pentax.pm:4384-4577.
+///
+/// Only the nine non-`Unknown` fields are emitted; LC0-LC15 (indices 1, 2,
+/// 4-8, 11, 12, 13, 15, 16) carry `%lensCode`'s `Unknown => 1`
+/// (Pentax.pm:800-804) and so are suppressed without `-u`.
+fn decode_lens_data(
+    ld: &[u8],
+    new_lens_data: bool,
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+) {
+    // 0.1/0.2/0.3 all carry `Condition => 'not $$self{NewLensData}'`
+    // (Pentax.pm:4397, :4404, :4416) -- "not valid for the K-r, K-5 or
+    // K-5II". The pinned oracle emits none of the three for those bodies.
+    if !new_lens_data {
+        tags.insert(
+            "Pentax:AutoAperture".to_string(),
+            if ld[0] & 0x01 == 0 { "On" } else { "Off" }.to_string(),
+        );
+        tags.insert(
+            "Pentax:MinAperture".to_string(),
+            decode_min_aperture_index((ld[0] & 0x06) >> 1).to_string(),
+        );
+        // LensFStops, field 0.3, Mask 0x70, `ValueConv => '5 + ($val ^ 0x07)
+        // / 2'` (Pentax.pm:4414-4421). Perl's `/` is always floating-point,
+        // so an odd `$val ^ 0x07` (every case except 0x07 itself) yields a
+        // `.5` fraction -- Pentax.jpg's `ld[0]=0` masks to 0, `0 ^ 0x07 = 7`,
+        // `5 + 7/2 = 8.5`. Integer division truncates that to 8.
+        let fstops_masked = i32::from((ld[0] & 0x70) >> 4);
+        let fstops = 5.0 + f64::from(fstops_masked ^ 0x07) / 2.0;
+        tags.insert(
+            "Pentax:LensFStops".to_string(),
+            crate::exiftool_tables::exprs::perl_num(fstops),
+        );
+    }
+    tags.insert(
+        "Pentax:MinFocusDistance".to_string(),
+        decode_min_focus_distance((ld[3] & 0xf8) >> 3),
+    );
+    tags.insert(
+        "Pentax:FocusRangeIndex".to_string(),
+        decode_focus_range_index(ld[3] & 0x07),
+    );
+    // Index 9 is `LensFocalLength` only when the model is not a 645Z
+    // (Pentax.pm:4503-4519, `Condition => '$$self{Model} !~ /645Z/'`); on the
+    // 645Z the same byte is `LC8`, an `Unknown` lens code, so nothing is
+    // emitted. `%Pentax::LensData` key 9 is also `Priority => 0`
+    // (Pentax.pm:4506).
+    if !model.is_some_and(|m| m.contains("645Z")) {
+        let focal_raw = i32::from(ld[9]);
+        let focal = 10.0 * f64::from(focal_raw >> 2) * 4f64.powi((focal_raw & 0x03) - 2);
+        insert_low_priority_retained(
+            tags,
+            "Pentax:LensFocalLength".to_string(),
+            format!("{focal:.1} mm"),
+        );
+    }
+    let nominal_max = 2f64.powf(f64::from((ld[10] & 0xf0) >> 4) / 4.0);
+    tags.insert(
+        "Pentax:NominalMaxAperture".to_string(),
+        format!("{nominal_max:.1}"),
+    );
+    let nominal_min = 2f64.powf((f64::from(ld[10] & 0x0f) + 10.0) / 4.0);
+    tags.insert(
+        "Pentax:NominalMinAperture".to_string(),
+        format!("{nominal_min:.0}"),
+    );
+    // MaxAperture is field 14.1, but field 12.1's Hook
+    // (`$varSize += 1 if $$self{NewLensData}`, Pentax.pm:4545-4550) shifts
+    // every index from 13 on by a byte for the K-r/K-5/K-5II -- "ID's 13-16
+    // are offset by 1 for the K-r, K-5 and K-5II" (Pentax.pm:4553). Reading
+    // the unshifted byte on PentaxK-5.jpg gives 0x03, which passes the
+    // `RawConv` and prints a confident 1.0 where the oracle says 2.8.
+    let max_ap_index = if new_lens_data { 15 } else { 14 };
+    // `Condition => '$$self{Model} ne "K-5"'` (Pentax.pm:4559). ExifTool's
+    // `$$self{Model}` is the raw EXIF Model string, which for every K-5 in
+    // the corpus is "PENTAX K-5", so this exact-string test does not fire --
+    // the pinned oracle does report MaxAperture for PentaxK-5.jpg. It is
+    // transcribed literally rather than "interpreted" as a family match,
+    // because guessing at ExifTool's intent here would suppress a tag it
+    // emits.
+    if model != Some("K-5") {
+        if let Some(&byte) = ld.get(max_ap_index) {
+            let max_ap_raw = byte & 0x7f;
+            // `RawConv => '$val > 1 ? $val : undef'` (Pentax.pm:4563) -- "a
+            // value of 1 seems to indicate 'n/a'". Both Pentax645D.jpg and
+            // Pentax645Z.jpg carry 0 here and the oracle emits no
+            // MaxAperture for either.
+            if max_ap_raw > 1 {
+                let max_ap = 2f64.powf((f64::from(max_ap_raw) - 1.0) / 32.0);
+                tags.insert("Pentax:MaxAperture".to_string(), format!("{max_ap:.1}"));
+            }
+        }
+    }
+}
+
+/// `FaceDetect` (0x0076), Pentax.pm:2504-2520.
+///
+/// `PrintConv` is a list of two *expressions* rather than hashes:
+/// `'$val ? "On ($val faces max)" : "Off"'` for component 0 and
+/// `'"$val faces detected"'` for component 1. A third component (the 645Z
+/// writes `int8u[3]`) has no converter and prints raw, per
+/// ExifTool.pm:3684-3691.
+fn print_face_detect(position: usize, value: i64) -> Option<String> {
+    match position {
+        0 if value == 0 => Some("Off".to_string()),
+        0 => Some(format!("On ({value} faces max)")),
+        1 => Some(format!("{value} faces detected")),
+        _ => None,
+    }
+}
+
+/// Looks a multi-component value up in a scalar `PrintConv` hash the way
+/// ExifTool.pm:3614-3634 does: the key is the whole space-joined string, and
+/// a miss falls back to `Unknown (<val>)` -- also on the joined string, so an
+/// unmapped pair reads `Unknown (1 4)`, not `Unknown (260)`.
+fn lookup_joined(table: &[(&str, &str)], values: &[i64]) -> String {
+    let key = joined_components(values);
+    table
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map_or_else(|| format!("Unknown ({key})"), |(_, v)| (*v).to_string())
+}
+
+/// `AutoBracketing` (0x0018), Pentax.pm:1626-1666.
+///
+/// Two conversions in sequence, both transcribed literally:
+///
+/// * `ValueConv => [ ... ]` is a *one-element* list, so only component 0 is
+///   converted (`$val/3` below 10, `$val-9.5` below 20, else the `0x1000`
+///   half-EV / `0x2000` third-EV fraction forms); component 1 passes through
+///   raw. ExifTool then joins with `' '` before the PrintConv sees it.
+/// * `PrintConv => sub { ... }` re-splits that string, applies
+///   `sprintf('%.1f')` to element 0 only when it is Perl-truthy and carries
+///   no `/`, rewrites element 1 as `<name>+<step>` or `No Extended Bracket`,
+///   and joins with `' EV, '`.
+///
+/// The single-component case falls out of the same code: with `$v[1]`
+/// undefined neither the `if` nor the `elsif` fires, and joining one element
+/// emits the bare step -- `0`, not `0 EV, No Extended Bracket` and certainly
+/// not the enum name `Off`.
+fn print_auto_bracketing(values: &[i64]) -> String {
+    let mut parts: Vec<String> = values
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| {
+            if i != 0 {
+                return v.to_string();
+            }
+            if v < 10 {
+                crate::exiftool_tables::exprs::perl_num(v as f64 / 3.0)
+            } else if v < 20 {
+                crate::exiftool_tables::exprs::perl_num(v as f64 - 9.5)
+            } else if v & 0x1000 != 0 {
+                format!("{}/2", v - 0x1000)
+            } else if v & 0x2000 != 0 {
+                format!("{}/3", v - 0x2000)
+            } else {
+                v.to_string()
+            }
+        })
+        .collect();
+
+    if let Some(first) = parts.first_mut() {
+        // Perl string truthiness: only "" and "0" are false, so a step of 0
+        // keeps its bare "0" and never becomes "0.0".
+        if !(first.is_empty() || first == "0") && !first.contains('/') {
+            if let Ok(n) = first.parse::<f64>() {
+                *first = format!("{n:.1}");
+            }
+        }
+    }
+    if parts.len() > 1 {
+        let ext = values[1];
+        parts[1] = if ext == 0 {
+            "No Extended Bracket".to_string()
+        } else {
+            let kind = match ext >> 8 {
+                1 => "WB-BA".to_string(),
+                2 => "WB-GM".to_string(),
+                3 => "Saturation".to_string(),
+                4 => "Sharpness".to_string(),
+                5 => "Contrast".to_string(),
+                6 => "Hue".to_string(),
+                7 => "HighLowKey".to_string(),
+                other => format!("Unknown({other})"),
+            };
+            format!("{kind}+{}", ext & 0xff)
+        };
+    }
+    parts.join(" EV, ")
+}
+
+/// The common shape of a Pentax `Count => -1` tag whose `PrintConv` list
+/// holds exactly one hash: convert component 0 through `decoder`, print every
+/// later component raw, join with "; ". Returns `None` for an empty value.
+fn decode_first_component_list(
+    entry: &IfdEntry,
+    full_data: &[u8],
+    value_base: i64,
+    byte_order: ByteOrder,
+    decoder: &SimpleValueDecoder<i32>,
+) -> Option<String> {
+    let values = entry_components(entry, full_data, value_base, byte_order);
+    if values.is_empty() {
+        return None;
+    }
+    Some(print_conv_list(&values, |i, v| {
+        (i == 0).then(|| decoder.decode(v as i32))
+    }))
+}
+
+fn joined_components(values: &[i64]) -> String {
+    values
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[allow(dead_code)]
