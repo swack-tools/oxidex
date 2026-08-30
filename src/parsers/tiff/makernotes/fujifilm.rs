@@ -1118,10 +1118,25 @@ impl MakerNoteParser for FujifilmParser {
                     tags.insert(tag_name, format!("{} px", value));
                 }
 
-                // Digital zoom
+                // Digital zoom. FujiFilm.pm:481-486 declares tag 0x1044 as
+                //   Name => 'DigitalZoom', Writable => 'int32u',
+                //   ValueConv => '$val / 8', ValueConvInv => '$val * 8',
+                // -- a ValueConv and *no* PrintConv, so ExifTool prints the
+                // bare converted number with no unit. This read the raw as a
+                // percentage (`/ 100.0`) and appended an invented `x` suffix,
+                // so combined-samples/FujiFilm/FujiFilmFinePixZ950EXR.jpg's
+                // raw 32 printed as "0.32x" where `exiftool -s3 -DigitalZoom`
+                // (13.59) prints "4", and the 43 corpus files whose raw is 0
+                // printed "0.00x" against ExifTool's "0".
+                //
+                // Perl stringifies the quotient, so an exact integer prints
+                // without a decimal point ("4", not "4.00") -- Rust's `{}` for
+                // f64 does the same. `$val` is int32u, so `$val / 8` lands on
+                // an eighth and is exactly representable in f64; no rounding
+                // is introduced by the cast.
                 FUJI_DIGITAL_ZOOM => {
-                    let value = entry.value_offset as f32 / 100.0; // Stored as percentage
-                    tags.insert("FujiFilm:DigitalZoom".to_string(), format!("{:.2}x", value));
+                    let value = f64::from(entry.value_offset) / 8.0;
+                    tags.insert("FujiFilm:DigitalZoom".to_string(), value.to_string());
                 }
 
                 // Flash exposure compensation: rational64s (8 bytes, read
@@ -2067,6 +2082,78 @@ mod staleness_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal FujiFilm MakerNote carrying exactly one IFD entry:
+    /// "FUJIFILM" + LE u32 IFD offset (12) + LE u16 entry count + the entry.
+    fn fuji_makernote(tag_id: u16, field_type: u16, count: u32, value: u32) -> Vec<u8> {
+        let mut out = Vec::from(*b"FUJIFILM");
+        out.extend_from_slice(&12u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&tag_id.to_le_bytes());
+        out.extend_from_slice(&field_type.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    /// FujiFilm.pm:481-486 gives tag 0x1044 `ValueConv => '$val / 8'` and no
+    /// PrintConv, so ExifTool prints the bare quotient.
+    ///
+    /// Ground truth, ExifTool 13.59 via
+    /// `/tmp/oxidex-exiftool-cache/exiftool-pinned.sh -s3 -DigitalZoom`
+    /// (`-ver` 13.59 and the OOXML.docx capability probe both asserted first):
+    ///
+    ///   combined-samples/FujiFilm/FujiFilmFinePixZ950EXR.jpg -> `4`
+    ///     (`-v3` shows `Tag 0x1044 (4 bytes, int32u[1]): 20 00 00 00`, raw 32)
+    ///   combined-samples/FujiFilm/FujiFilmX-S1.jpg           -> `0`
+    ///
+    /// Before this pin the arm divided by 100 and appended an `x` ExifTool
+    /// never emits, printing "0.32x" and "0.00x" for those two files.
+    #[test]
+    fn fujifilm_digital_zoom_is_raw_over_eight_with_no_unit() {
+        let mut tags = HashMap::new();
+        // int32u = field type 4, count 1.
+        parse_fujifilm_makernotes(
+            &fuji_makernote(FUJI_DIGITAL_ZOOM, 4, 1, 32),
+            ByteOrder::LittleEndian,
+            &mut tags,
+        );
+        assert_eq!(
+            tags.get("FujiFilm:DigitalZoom").map(String::as_str),
+            Some("4")
+        );
+
+        let mut tags = HashMap::new();
+        parse_fujifilm_makernotes(
+            &fuji_makernote(FUJI_DIGITAL_ZOOM, 4, 1, 0),
+            ByteOrder::LittleEndian,
+            &mut tags,
+        );
+        assert_eq!(
+            tags.get("FujiFilm:DigitalZoom").map(String::as_str),
+            Some("0")
+        );
+    }
+
+    /// The quotient is not always an integer: Perl stringifies `$val / 8`, so
+    /// a raw that is not a multiple of 8 prints as a decimal (12/8 -> "1.5",
+    /// 1/8 -> "0.125"), and never with a trailing ".0" or an "x".
+    #[test]
+    fn fujifilm_digital_zoom_prints_fractional_quotients_like_perl() {
+        for (raw, expected) in [(12u32, "1.5"), (1, "0.125"), (4, "0.5"), (7, "0.875")] {
+            let mut tags = HashMap::new();
+            parse_fujifilm_makernotes(
+                &fuji_makernote(FUJI_DIGITAL_ZOOM, 4, 1, raw),
+                ByteOrder::LittleEndian,
+                &mut tags,
+            );
+            assert_eq!(
+                tags.get("FujiFilm:DigitalZoom").map(String::as_str),
+                Some(expected),
+                "raw {raw}"
+            );
+        }
+    }
 
     #[test]
     fn test_fujifilm_tag_ids() {
