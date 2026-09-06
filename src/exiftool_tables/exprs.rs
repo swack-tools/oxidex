@@ -443,6 +443,102 @@ pub fn print_af_points_up_down(row: f64, nrow: f64) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Named helpers that already have a shared port under `crate::core::formatters`.
+//
+// These four are the compiler's entry points for `ConvertDuration($val)`,
+// `ConvertBitrate($val)`, `Image::ExifTool::Exif::PrintFraction($val)` and
+// `Image::ExifTool::Canon::CanonEv($val)`. Three of them delegate to the
+// existing shared formatter rather than carrying a second copy of the logic
+// -- the same arrangement `convert_file_size` has with
+// `core::value_formatter::format_file_size`, and for the same reason: two
+// ports of one Perl sub drift apart, and the drift is silent. The generated
+// tables and `verify_exprs.py`'s harness both reach these functions only by
+// this module's path, so the oracle run that gates every translation is
+// checking the shared port, not a stand-in for it.
+//
+// `canon_ev` is the exception: the pre-existing `canon.rs::canon_ev` took an
+// `i32`, and the Perl keeps the fractional part of a non-integer input
+// (`12.7 & 0x1f` is 12, but `$val -= $frac` leaves 0.7 behind) -- see the
+// function's own doc. So the faithful f64 port lives here and `canon.rs`
+// delegates to it, not the other way round.
+// ---------------------------------------------------------------------------
+
+/// `Image::ExifTool::ConvertDuration($val)` (ExifTool.pm:6877-6895, pinned
+/// 13.59). Delegates to [`crate::core::formatters::duration::convert_duration`],
+/// which carries the Perl and its `$h > 24` (not `>= 24`) note.
+#[must_use]
+pub fn convert_duration(secs: f64) -> String {
+    crate::core::formatters::duration::convert_duration(secs)
+}
+
+/// `Image::ExifTool::ConvertBitrate($val)` (ExifTool.pm:6902-6913, pinned
+/// 13.59). Delegates to [`crate::core::formatters::bitrate::convert_bitrate`].
+///
+/// The `%.3g` inside it is C's, exponent form included: real Perl prints
+/// `ConvertBitrate(-1000)` as `-1e+03 bps` (a negative never scales past
+/// `bps`, and `%.3g` of -1000 switches to `%e` form) and `1e-6` as
+/// `1e-06 bps`. A `%g` that only ever emits fixed notation agrees with the
+/// oracle on every realistic bitrate and disagrees on exactly those probes.
+#[must_use]
+pub fn convert_bitrate(bps: f64) -> String {
+    crate::core::formatters::bitrate::convert_bitrate(bps)
+}
+
+/// `Image::ExifTool::Exif::PrintFraction($val)` (Exif.pm:5516-5535, pinned
+/// 13.59). Delegates to
+/// [`crate::core::formatters::exif_print_conv::print_fraction`].
+#[must_use]
+pub fn print_fraction(val: f64) -> String {
+    crate::core::formatters::exif_print_conv::print_fraction(val)
+}
+
+/// `Image::ExifTool::Canon::CanonEv($val)` (Canon.pm:10650-10670, pinned
+/// 13.59).
+///
+/// ```perl
+/// my $sign;
+/// if ($val < 0) { $val = -$val; $sign = -1; } else { $sign = 1; }
+/// my $frac = $val & 0x1f;
+/// $val -= $frac;      # remove fraction
+/// if ($frac == 0x0c) { $frac = 0x20 / 3; }      # 1/3 stop
+/// elsif ($frac == 0x14) { $frac = 0x40 / 3; }   # 2/3 stop
+/// return $sign * ($val + $frac) / 0x20;
+/// ```
+///
+/// Two Perl details decide the shape of this port:
+///
+/// - `&` converts its operand to an integer first (truncation toward zero),
+///   so `12.7 & 0x1f` is 12 -- but `$val -= $frac` then subtracts that integer
+///   from the *original* NV, which keeps its fraction. So `CanonEv(12.7)` is
+///   `(0.7 + 32/3) / 32 = 0.35520833`, not `CanonEv(12) = 0.33333333`. Every
+///   binary-table field that reaches this is an integer, so the distinction
+///   never shows in real output; it shows on `verify_exprs.py`'s fractional
+///   probes, which is where an `i32` port was caught.
+/// - The sign is stripped before the mask and restored after, so the low five
+///   bits are always read off the magnitude: `CanonEv(-20)` is `-(64/3)/32 =
+///   -0.66666667`, not the two's-complement mask of -20.
+///
+/// The magnitude is truncated `as u64` for the mask. That saturates above
+/// `u64::MAX`, a magnitude no Canon field can encode and none of the
+/// composed call sites (`$val-24`, `$val*4-32`, `$val*4`) can reach from an
+/// integer field; it is stated rather than guarded so the function stays a
+/// pure port of the seven Perl lines above.
+#[must_use]
+pub fn canon_ev(val: f64) -> f64 {
+    let (sign, mag) = if val < 0.0 { (-1.0, -val) } else { (1.0, val) };
+    let raw_frac = ((mag as u64) & 0x1f) as f64;
+    let whole = mag - raw_frac;
+    let frac = if raw_frac == 12.0 {
+        32.0 / 3.0
+    } else if raw_frac == 20.0 {
+        64.0 / 3.0
+    } else {
+        raw_frac
+    };
+    sign * (whole + frac) / 32.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,5 +750,76 @@ mod tests {
     #[test]
     fn tr_translate_leaves_unmatched_characters_alone() {
         assert_eq!(tr_translate("abc", "x", "y", false), "abc");
+    }
+
+    // The four values below each named helper are quoted from the pinned
+    // 13.59 Perl itself (`perl -I<pinned lib> -MImage::ExifTool
+    // -MImage::ExifTool::Exif -MImage::ExifTool::Canon -e ...`), not from a
+    // reading of the sub. verify_exprs.py's oracle run is the authority;
+    // these keep `cargo test` red on a regression when Perl is not to hand.
+
+    /// `ConvertDuration` (ExifTool.pm:6877-6895): the `< 30` decimal branch,
+    /// the `+= 0.5` round-to-nearest-second (59.5 -> 0:01:00), the `$h > 24`
+    /// (not `>= 24`) day split, and the sign.
+    #[test]
+    fn convert_duration_matches_exiftool() {
+        assert_eq!(convert_duration(0.0), "0 s");
+        assert_eq!(convert_duration(29.999), "30.00 s");
+        assert_eq!(convert_duration(30.0), "0:00:30");
+        assert_eq!(convert_duration(59.5), "0:01:00");
+        assert_eq!(convert_duration(3600.0), "1:00:00");
+        assert_eq!(convert_duration(86400.0), "24:00:00");
+        assert_eq!(convert_duration(90000.0), "1 days 1:00:00");
+        assert_eq!(convert_duration(-3600.0), "-1:00:00");
+        assert_eq!(convert_duration(1e-6), "0.00 s");
+        assert_eq!(convert_duration(1e18), "11574074074074 days 1:46:56");
+    }
+
+    /// `ConvertBitrate` (ExifTool.pm:6902-6913), including the two `%.3g`
+    /// exponent-form tails a fixed-notation `%g` gets wrong.
+    #[test]
+    fn convert_bitrate_matches_exiftool() {
+        assert_eq!(convert_bitrate(0.0), "0 bps");
+        assert_eq!(convert_bitrate(999.0), "999 bps");
+        assert_eq!(convert_bitrate(1000.0), "1 kbps");
+        assert_eq!(convert_bitrate(99_999.0), "100 kbps");
+        assert_eq!(convert_bitrate(1e6), "1 Mbps");
+        assert_eq!(convert_bitrate(1e-6), "1e-06 bps");
+        assert_eq!(convert_bitrate(1e18), "1000000000 Gbps");
+        assert_eq!(convert_bitrate(-1000.0), "-1e+03 bps");
+    }
+
+    /// `PrintFraction` (Exif.pm:5516-5535): the four branches, and the
+    /// `%+d` of a huge value -- Perl prints the IV of the `* 1.00001`'d
+    /// double, `+1000010000000000128`, and so does this.
+    #[test]
+    fn print_fraction_matches_exiftool() {
+        assert_eq!(print_fraction(0.0), "0");
+        assert_eq!(print_fraction(0.5), "+1/2");
+        assert_eq!(print_fraction(1.0 / 3.0), "+1/3");
+        assert_eq!(print_fraction(1.0), "+1");
+        assert_eq!(print_fraction(-2.0), "-2");
+        assert_eq!(print_fraction(1.326429536), "+1.33");
+        assert_eq!(print_fraction(-0.7), "-0.7");
+        assert_eq!(print_fraction(1e-6), "+1e-06");
+        assert_eq!(print_fraction(1e18), "+1000010000000000128");
+    }
+
+    /// `CanonEv` (Canon.pm:10650-10670). The 1/3 and 2/3 stop codes, the
+    /// sign, and -- the row that decides the port's type -- a fractional
+    /// input: Perl's `$val -= ($val & 0x1f)` keeps the NV's fraction, so
+    /// `CanonEv(12.7)` is `(0.7 + 32/3) / 32`, not `CanonEv(12)`.
+    #[test]
+    fn canon_ev_matches_exiftool() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        assert_eq!(canon_ev(0.0), 0.0);
+        assert!(close(canon_ev(0x0c as f64), 0.333_333_333_333_333_3));
+        assert!(close(canon_ev(0x14 as f64), 0.666_666_666_666_666_7));
+        assert_eq!(canon_ev(0x20 as f64), 1.0);
+        assert!(close(canon_ev(-(0x14 as f64)), -0.666_666_666_666_666_7));
+        assert_eq!(canon_ev(-32.0), -1.0);
+        assert!(close(canon_ev(44.0), 1.333_333_333_333_333_3));
+        assert!(close(canon_ev(12.7), 0.355_208_333_333_333_3));
+        assert_eq!(canon_ev(200.0), 6.25);
     }
 }
