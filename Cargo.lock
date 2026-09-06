@@ -1160,7 +1160,6 @@ dependencies = [
  "hex",
  "indicatif",
  "lexopt",
- "libc",
  "magika",
  "md5",
  "memchr",

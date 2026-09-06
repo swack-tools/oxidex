@@ -74,6 +74,17 @@ TRANSLATIONS = {
     # why the Rust side returns Option rather than a sentinel.
     "$val ? $val : undef":   ("Option<f64>",
                               "if {v} != 0.0 { Some({v}) } else { None }"),
+    # The same conversion in Perl's other two spellings. `||` and `or` on a
+    # number are the identical truthiness test (`!= 0`), so all three keys map
+    # to one piece of Rust; they are separate entries only because this table
+    # matches text, never meaning. Honest scope note: at the pinned release
+    # every use of these two spellings is a RawConv, and codegen.py does not
+    # emit RawConv (it records `omitted_raw_conv`), so these raise the census
+    # and the oracle coverage but not, yet, the generated tables.
+    "$val || undef":         ("Option<f64>",
+                              "if {v} != 0.0 { Some({v}) } else { None }"),
+    "$val or undef":         ("Option<f64>",
+                              "if {v} != 0.0 { Some({v}) } else { None }"),
     '$val ? sprintf("%+.2f", $val) : 0':
         ("String",
          'if {v} != 0.0 { format!("{:+.2}", {v}) } else { "0".to_string() }'),
@@ -326,7 +337,7 @@ class ExprCompileError(Exception):
 # --- lexer -------------------------------------------------------------
 
 _TOKEN_SPEC = [
-    ("QHELPER", r"Image::ExifTool::(?:Exif::PrintExposureTime|Exif::PrintFNumber|Exif::PrintFraction|Canon::CanonEv|GPS::ToDMS)"),
+    ("QHELPER", r"Image::ExifTool::(?:Exif::PrintExposureTime|Exif::PrintFNumber|Exif::PrintFraction|Canon::CanonEv|Nikon::PrintPC|GPS::ToDMS)"),
     ("SELFCONVERTDATETIME", r"\$self->ConvertDateTime"),
     ("SELFDECODE", r"\$self->Decode"),
     ("SELFTOK", r"\$self"),
@@ -621,6 +632,50 @@ class _Parser:
             if avt not in _NUMERIC_VTYPES:
                 raise ExprCompileError("CanonEv needs a numeric argument")
             return ("f64", f"crate::exiftool_tables::exprs::canon_ev({ac})")
+        if text.endswith("Nikon::PrintPC"):
+            # Nikon.pm:13450-13460 -- PrintPC($val [, $norm [, $fmt [, $div]]]).
+            # A pure function of $val once the trailing arguments are fixed,
+            # and at every pinned call site they are LITERALS: $norm in
+            # {"None", "No Sharpening", undef, absent}, $fmt in {"%.2f", "%d",
+            # absent (= '%+d')}, $div in {4, absent (= 1)}. Only those
+            # literals are accepted -- the PrintAFPointsLeftRight doctrine: a
+            # template with a hole in it could be filled with an argument no
+            # ExifTool table actually passes, so each pinned literal is
+            # spelled out and anything else is refused.
+            arg = self.parse_ternary()
+            norm, fmt, div = "None", "PlusD", "1.0"
+            if self._at("COMMA"):  # $norm
+                self._eat("COMMA")
+                if self._at("IDENT") and self._peek()[1] == "undef":
+                    self._eat("IDENT")
+                else:
+                    _, s = self._eat("STR")
+                    lit = s[1:-1]
+                    if lit not in ("None", "No Sharpening"):
+                        raise ExprCompileError(
+                            f"PrintPC norm literal {lit!r} is not a pinned call site")
+                    norm = f'Some("{lit}")'
+                if self._at("COMMA"):  # $fmt
+                    self._eat("COMMA")
+                    _, s = self._eat("STR")
+                    fmt = {"%.2f": "F2", "%d": "D", "%+d": "PlusD"}.get(s[1:-1])
+                    if fmt is None:
+                        raise ExprCompileError(
+                            f"PrintPC fmt literal {s!r} is not a pinned call site")
+                    if self._at("COMMA"):  # $div
+                        self._eat("COMMA")
+                        _, n = self._eat("NUM")
+                        if n != "4":
+                            raise ExprCompileError(
+                                "only a PrintPC divisor of 4 is a pinned call site")
+                        div = "4.0"
+            self._eat("RPAREN")
+            avt, ac = _as_f64(arg)
+            if avt not in _NUMERIC_VTYPES:
+                raise ExprCompileError("PrintPC needs a numeric argument")
+            return ("string",
+                    f"crate::exiftool_tables::exprs::nikon_print_pc({ac}, {norm}, "
+                    f"crate::exiftool_tables::exprs::PcFmt::{fmt}, {div})")
         # GPS::ToDMS($self, $val, 1, ["N"|"E"])
         self._eat("SELFTOK")
         self._eat("COMMA")
@@ -666,9 +721,15 @@ _SPRINTF_SPEC_RE = re.compile(r"%([-+0]*)(\d*)\.?(\d*)([dfxXg%])")
 def _mk_sprintf(fmt, args):
     """Compile a Perl sprintf() call to a Rust format!() call.
 
-    %g is refused outright: Rust's formatter has no significant-digits mode,
-    and approximating one is exactly the kind of silent-wrong-number risk
-    this module exists to avoid.
+    %g used to be refused outright because Rust's formatter has no
+    significant-digits mode and approximating one is exactly the
+    silent-wrong-number risk this module exists to avoid. It now routes
+    through src/exiftool_tables/exprs.rs::perl_g_spec -- a real C-style %g
+    over core::formatters::numeric_precision::perl_g, exponent form and
+    all -- and verify_exprs.py checks every %g form against the pinned Perl
+    like any other spec. Width and the -/0 flags with %g remain refused: no
+    pinned call site uses them, and an unreproduced flag is refused, not
+    guessed at.
     """
     parts = []
     rust_args = []
@@ -686,13 +747,35 @@ def _mk_sprintf(fmt, args):
             parts.append("%")
             pos = m.end()
             continue
-        if conv == "g":
-            raise ExprCompileError("sprintf %g has no exact Rust equivalent")
         if argi >= len(args):
             raise ExprCompileError("sprintf: not enough arguments")
         raw_arg = args[argi]
         argi += 1
         sign = "+" if "+" in flags else ""
+        if conv == "g":
+            # C's %g: `prec` significant digits, %e form below 1e-4 or at/above
+            # `prec` digits, trailing zeros trimmed. This used to be refused on
+            # the grounds that Rust's formatter has no significant-digits mode
+            # -- true of format!, but exprs.rs::perl_g_spec (over
+            # numeric_precision::perl_g, the crate's general %g) has one, and
+            # verify_exprs.py checks it against the pinned Perl like every
+            # other spec. Width and the -/0 flags stay out of grammar: no
+            # pinned call site uses them with %g, and a flag this module does
+            # not reproduce is refused, not approximated. Emitted as a
+            # pre-rendered String argument behind a bare `{}` placeholder --
+            # the same shape the zero-padded %d branch below uses -- because
+            # the digit selection happens in perl_g_spec, not in format!.
+            if width or "-" in flags or "0" in flags:
+                raise ExprCompileError("sprintf %g with a width or -/0 flag is out of grammar")
+            avt, ac = _as_f64(raw_arg)
+            if avt not in _NUMERIC_VTYPES:
+                raise ExprCompileError("sprintf argument must be numeric")
+            p = int(prec) if prec else 6  # a bare %g is %.6g
+            plus = "true" if "+" in flags else "false"
+            parts.append("{}")
+            rust_args.append(f"crate::exiftool_tables::exprs::perl_g_spec({ac}, {p}, {plus})")
+            pos = m.end()
+            continue
         if conv in ("x", "X"):
             # _as_bits(), not _as_f64(): a %x/%X argument that is already a
             # u64bits chain (e.g. `$val >> 8` in `sprintf("%x.%.2x",

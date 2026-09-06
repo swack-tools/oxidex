@@ -36,19 +36,23 @@
 //! string unchanged, so no further conversion is needed here.
 //!
 //! Two more fields, `FNumber` (:84-90) and `MaxAperture` (:91-96), carry a
-//! `ValueConv` the generator does compile (`2**($val/16)`) but a
-//! `PrintConv => 'sprintf("%.2g",$val)'` it renders as `PrintConv::None` --
-//! so `DecodedField::emit` reports the full-precision `ValueConv` result
-//! (e.g. `11.313708...`) rather than ExifTool's two-significant-figure
-//! `"11"`. This parser leaves that as-is rather than hand-rounding the
-//! display: `Composite:Aperture`/`LightValue` read `KyoceraRaw:FNumber`
-//! back out and recompute from it (`composite/compute.rs`'s `("Exif",
-//! "Aperture")` arm parses the tag's own string value), so rounding the
-//! display to `"11"` would feed the composite a value 0.3 EV off and land a
-//! wrong `LightValue` under a real tag name -- exactly what AGENTS.md's
-//! "never approximate a conversion" rule rules out. A full-precision
-//! `FNumber` display is a citeable PrintConv gap; a wrong `LightValue` is
-//! not.
+//! `ValueConv` (`2**($val/16)`) and a `PrintConv` (`sprintf("%.2g",$val)`)
+//! the generator now compiles in full, so `DecodedField::emit` would render
+//! ExifTool's two-significant-figure `"11"` / `"5.2"`. This parser withholds
+//! that rendering on purpose and reports the full-precision `ValueConv`
+//! number (`11.313708...`) instead: `Composite:Aperture`/`LightValue` read
+//! `KyoceraRaw:FNumber` back out and recompute from it, and
+//! `composite/compute.rs`'s `("Exif", "Aperture")` arm parses the tag's
+//! *display* string rather than its ValueConv form -- ExifTool's composites
+//! run on the ValueConv value (`Image::ExifTool.pm`'s `BuildCompositeTags`
+//! fetches `$val` with the print conversion off), so the display `"11"`
+//! would feed the composite `11` where ExifTool computes from `11.3137`, and
+//! land a wrong `LightValue` under a real tag name -- exactly what
+//! AGENTS.md's "never approximate a conversion" rule rules out. A
+//! full-precision `FNumber` display is a citeable PrintConv gap; a wrong
+//! `LightValue` is not. The lasting fix is for the composite engine to read
+//! a tag's ValueConv form (`MetadataMap::value_form`) instead of its display
+//! string; when it does, these two arms go away and `emit()` takes over.
 //!
 //! The remaining five fields (`ISO`, `ExposureTime`, `WB_RGGBLevels`,
 //! `FocalLength`, `Lens`) carry ValueConvs and PrintConvs the generator does
@@ -62,7 +66,8 @@
 use crate::core::{MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::exiftool_tables::{
-    Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
+    Acknowledged, DecodedField, DecodedValue, PerlCitation, RawAccess, apply_value_conv,
+    decode_binary_table, find_table, to_tag_value,
 };
 use crate::io::ByteOrder;
 
@@ -96,6 +101,8 @@ const FIRMWARE_VERSION: PerlCitation = citation("FirmwareVersion", "KyoceraRaw.p
 const MODEL: PerlCitation = citation("Model", "KyoceraRaw.pm:22,34-38");
 const MAKE: PerlCitation = citation("Make", "KyoceraRaw.pm:22,39-43");
 const DATE_TIME_ORIGINAL: PerlCitation = citation("DateTimeOriginal", "KyoceraRaw.pm:22,44-51");
+const F_NUMBER: PerlCitation = citation("FNumber", "KyoceraRaw.pm:84-90");
+const MAX_APERTURE: PerlCitation = citation("MaxAperture", "KyoceraRaw.pm:91-96");
 
 /// `ReverseString`, `KyoceraRaw.pm:22`:
 /// `pack('C*',reverse unpack('C*',shift))` -- a byte-order reversal, applied
@@ -105,6 +112,19 @@ const DATE_TIME_ORIGINAL: PerlCitation = citation("DateTimeOriginal", "KyoceraRa
 fn reverse_string(value: &str) -> Option<String> {
     let reversed: Vec<u8> = value.bytes().rev().collect();
     String::from_utf8(reversed).ok()
+}
+
+/// The field's generated `ValueConv` result with its generated `PrintConv`
+/// deliberately withheld -- `FNumber`/`MaxAperture`, whose `sprintf("%.2g",
+/// $val)` display the composite engine would parse back into a rounded
+/// number (see the module doc). Nothing is omitted on these fields, so the
+/// [`RawAccess`] here is not an escape past a refusal; `Acknowledged::
+/// PRINT_CONV` names the step this call site takes responsibility for, and
+/// the citation names the Perl whose rendering it declines.
+fn value_conv_only(decoded: &DecodedField, cite: &'static PerlCitation) -> Option<TagValue> {
+    let access = RawAccess::new(decoded, Acknowledged::PRINT_CONV, cite)?;
+    let converted = apply_value_conv(decoded.field.value_conv, access.raw())?;
+    Some(to_tag_value(&converted))
 }
 
 /// Extract Kyocera Contax N Digital RAW metadata using the generated
@@ -189,6 +209,19 @@ pub fn parse_kyocera_raw_metadata(data: &[u8]) -> Result<MetadataMap> {
                     metadata.insert(key, TagValue::new_string(joined));
                 }
             }
+            // Full-precision ValueConv, generated `%.2g` PrintConv withheld:
+            // the composite engine parses this tag's display string (module
+            // doc, "Why the table alone is not enough").
+            "FNumber" => {
+                if let Some(value) = value_conv_only(decoded, &F_NUMBER) {
+                    metadata.insert(key, value);
+                }
+            }
+            "MaxAperture" => {
+                if let Some(value) = value_conv_only(decoded, &MAX_APERTURE) {
+                    metadata.insert(key, value);
+                }
+            }
             _ => {
                 if let Some(value) = decoded.emit() {
                     metadata.insert(key, value);
@@ -268,14 +301,14 @@ mod tests {
             metadata.get("KyoceraRaw:WB_RGGBLevels"),
             Some(&TagValue::new_string("84 64 64 86"))
         );
-        // FNumber/MaxAperture have no compiled PrintConv (KyoceraRaw.pm's
-        // `sprintf("%.2g",$val)` isn't modeled), so these decode through the
-        // generated table's own `ValueConv` at full precision -- the
-        // fixture's raw bytes give `2**(56/16) = 11.3137...` and
-        // `2**(38/16) = 5.1874...` -- rather than ExifTool's rounded
-        // "11"/"5.2" display. Rounding here would feed a less precise value
-        // into `Composite:Aperture`/`LightValue`, which read this same tag
-        // back out (see the module doc).
+        // FNumber/MaxAperture report the generated table's own `ValueConv`
+        // at full precision -- the fixture's raw bytes give `2**(56/16) =
+        // 11.3137...` and `2**(38/16) = 5.1874...` -- with the generated
+        // `sprintf("%.2g",$val)` PrintConv ("11"/"5.2") deliberately
+        // withheld: the composite engine parses this tag's display string,
+        // so the rounded display would feed a less precise value into
+        // `Composite:Aperture`/`LightValue` (see the module doc). Pinned as
+        // numbers, not strings, so a future `emit()` rendering trips here.
         let f_number = metadata
             .get("KyoceraRaw:FNumber")
             .and_then(TagValue::as_float)

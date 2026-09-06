@@ -1857,19 +1857,27 @@ pub fn process_dji_thermal_segments(
             diagnostics.push(diagnostic);
         }
         for decoded in decode.fields() {
-            // Step 15's compiler translates the temperature and distance
-            // PrintConvs (`sprintf("%.1f C",$val)` / `sprintf("%.1f m",$val)`),
-            // so `emit()` hands back the rendered string. These arms used to
-            // re-format the raw float themselves because the generated table
-            // carried `PrintConv::None`; matching on Float now silently drops
-            // the tag. Take the generated rendering, as Emissivity already did.
+            // Step 15's compiler translates every PrintConv this table
+            // declares -- the temperature and distance forms
+            // (`sprintf("%.1f C",$val)` / `sprintf("%.1f m",$val)`) and, since
+            // the expression grammar learned `%g`, the humidity one
+            // (`sprintf("%g %%",$val*100)`, DJI.pm's ThermalParams2) -- so
+            // `emit()` hands back the rendered string. Each of these arms used
+            // to re-format the raw float itself because the generated table
+            // carried `PrintConv::None`; the moment the generator could render
+            // a field, matching on Float silently dropped that tag. Humidity
+            // was the last holdout (its hand `%g` was a `libc::snprintf` port,
+            // correct but now a second implementation), and it went exactly
+            // the way this comment predicted it would. Take the generated
+            // rendering for all of them.
             let value = match (decoded.field.name, decoded.emit()) {
                 (
                     "AmbientTemperature"
                     | "ReflectedTemperature"
                     | "ObjectDistance"
                     | "Emissivity"
-                    | "IDString",
+                    | "IDString"
+                    | "RelativeHumidity",
                     Some(TagValue::String(rendered)),
                 ) => Some(rendered),
                 _ => None,
@@ -1881,53 +1889,9 @@ pub fn process_dji_thermal_segments(
                 );
             }
         }
-
-        let humidity = decode
-            .fields()
-            .iter()
-            .find(|field| field.field.name == "RelativeHumidity")
-            .and_then(|field| match field.emit() {
-                Some(TagValue::Float(value)) => Some(value),
-                _ => None,
-            });
-        if let Some(humidity) = humidity {
-            metadata.insert(
-                "APP4:RelativeHumidity".to_string(),
-                TagValue::String(format!("{} %", perl_sprintf_g(humidity * 100.0))),
-            );
-        }
     }
 }
 
-/// Formats a number with Perl/C `sprintf("%g")` semantics.
-///
-/// ExifTool's conversion uses the platform C formatter, so doing the same is
-/// the exact port: six significant digits by default, C exponent spelling,
-/// and the same rounding behavior. Perl normalizes negative zero when it is
-/// multiplied by positive 100, which is reproduced before calling `snprintf`.
-fn perl_sprintf_g(value: f64) -> String {
-    let value = if value == 0.0 { 0.0 } else { value };
-    // `libc::c_char`, not a literal `i8`: it is signed on x86_64 and UNSIGNED
-    // on aarch64, so hardcoding either side compiles on one architecture and
-    // fails on the other. This was `[0_i8; 32]`, which broke every arm64
-    // build -- caught by the Docker dry run, since arm64 is only built there
-    // and in release.yml.
-    let mut output = [0 as libc::c_char; 32];
-    // SAFETY: `output` is writable for its full reported size, the format is a
-    // static NUL-terminated C string with one `%g`, and `value` has the
-    // required promoted `double` type. A default-precision rendering of any
-    // finite f64, infinity or NaN fits comfortably in 32 bytes.
-    let length =
-        unsafe { libc::snprintf(output.as_mut_ptr(), output.len(), c"%g".as_ptr(), value) };
-    debug_assert!(length >= 0 && (length as usize) < output.len());
-    let length = usize::try_from(length).unwrap_or(0).min(output.len() - 1);
-    let bytes = &output[..length];
-    // `%g` emits ASCII digits, punctuation, exponent markers, or the
-    // implementation's ASCII inf/nan spelling. `as u8` is a no-op where
-    // c_char is already unsigned and a reinterpret where it is signed; both
-    // are correct for ASCII.
-    String::from_utf8(bytes.iter().map(|byte| *byte as u8).collect()).expect("C %g output is ASCII")
-}
 /// Emits `APP3:ImagingData`, the InfiRay IR + thermal + visible payload.
 ///
 /// `JPEG::Main` declares it `Binary => 1` (JPEG.pm:119-123), so ExifTool
