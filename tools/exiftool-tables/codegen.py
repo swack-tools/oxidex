@@ -22,6 +22,7 @@ that a caller can tell the raw value from the reported one.
 import argparse
 import hashlib
 import json
+import os
 import re
 from collections import Counter
 
@@ -153,6 +154,26 @@ def _local_perl_provenance():
         return v or "<perl ran but printed no version>"
     except Exception as exc:  # noqa: BLE001 -- diagnostic-only, must not raise
         return f"<could not determine: {exc}>"
+
+
+def _repo_relative(path):
+    """Spell an input path the way the committed ledgers name it: relative to
+    the repo root, whichever cwd or script produced the run.
+
+    `value_conv_ledger.json` records the `--expr-ledger` argument as its
+    provenance. regen.sh passes it absolute (`$ROOT/tools/...`) while the
+    i7 pipeline scripts pass the repo-relative form, so the committed file
+    flipped between the two spellings on every regen.sh run -- a one-line
+    diff on a tree that was otherwise a byte-identical no-op (2026-09-06).
+    A path outside the repo is kept verbatim: hiding it would be worse than
+    the churn."""
+    if path is None:
+        return None
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    absolute = os.path.abspath(path)
+    if os.path.commonpath([root, absolute]) == root:
+        return os.path.relpath(absolute, root).replace(os.sep, "/")
+    return str(path)
 
 
 def load_oracle_ledger(path, tables_json, version):
@@ -2332,7 +2353,7 @@ def main():
             "schema": 1,
             "exiftool_version": version,
             "instrument": "tools/exiftool-tables/codegen.py --expr-ledger (verify_exprs.py PASS ledger)",
-            "oracle_ledger": args.expr_ledger,
+            "oracle_ledger": _repo_relative(args.expr_ledger),
             "value_conv": {
                 "compiled": stats["value_conv_compiled"],
                 "refused": sum(refused_reasons.values()),
