@@ -168,33 +168,18 @@ pub fn parse_asf_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
     parser.parse(reader).map_err(|e| e.to_string())
 }
 
-/// Format GUID as string (uppercase, with dashes)
+/// Format GUID as string (uppercase, with dashes): ExifTool's
+/// `Image::ExifTool::ASF::GetGUID` (ASF.pm:525-533), whose port now lives in
+/// `exiftool_tables::exprs::asf_get_guid` so the generated ASF tables and the
+/// differential oracle reach the same code this parser does. One behavioural
+/// change rides along: a buffer that is not 16 bytes used to print
+/// `(invalid)` here, where ExifTool returns the input unchanged (`return $val
+/// unless length($val) == 16`). Three call sites slice exactly 16 bytes; the
+/// two that pass a whole GUID-typed record (`value_data.len() >= 16`) now
+/// print such an over-long record's bytes the way ExifTool does instead of
+/// a string ExifTool never prints.
 fn format_guid(guid: &[u8]) -> String {
-    if guid.len() != 16 {
-        return String::from("(invalid)");
-    }
-
-    // ASF GUIDs are stored in mixed-endian format
-    // First 3 components are little-endian, last 2 are big-endian
-    format!(
-        "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-        guid[3],
-        guid[2],
-        guid[1],
-        guid[0],
-        guid[5],
-        guid[4],
-        guid[7],
-        guid[6],
-        guid[8],
-        guid[9],
-        guid[10],
-        guid[11],
-        guid[12],
-        guid[13],
-        guid[14],
-        guid[15]
-    )
+    crate::exiftool_tables::exprs::asf_get_guid(guid)
 }
 
 /// Parse File Properties Object

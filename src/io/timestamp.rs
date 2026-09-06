@@ -253,8 +253,9 @@ fn format_local_datetime(
 
 /// Formats a UTC-offset suffix the way ExifTool's `TimeZoneString`
 /// (ExifTool.pm:6764) does: sign, then `HH:MM`, rounded to the nearest whole
-/// minute.
-fn timezone_string(offset_secs: i32) -> String {
+/// minute. Shared with `exiftool_tables::exprs::convert_unix_time`, the
+/// compiled-expression port of `ConvertUnixTime($val, 1)`.
+pub(crate) fn timezone_string(offset_secs: i32) -> String {
     let sign = if offset_secs < 0 { '-' } else { '+' };
     let offset_min = (offset_secs.unsigned_abs() + 30) / 60;
     format!("{}{:02}:{:02}", sign, offset_min / 60, offset_min % 60)

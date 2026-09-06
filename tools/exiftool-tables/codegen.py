@@ -641,6 +641,40 @@ def mask_for(tag, stats):
     return f"Some(Mask {{ bits: {mask:#x}, shift: {shift} }})"
 
 
+def print_conv_input_domain(tag, input_domain, value_conv_modeled):
+    """The domain a tag's PrintConv reads its `$val` from.
+
+    GetValue queues ValueConv ahead of PrintConv (ExifTool.pm:3524-3525), so
+    a PrintConv's `$val` is the ValueConv's OUTPUT, not the field's raw
+    value -- and the runtime already honours that: `apply_value_conv`
+    (runtime.rs) turns a string-valued ExprId into `DecodedValue::String`,
+    and `render()` dispatches a `PrintConv::Expr` on that value to
+    `apply_str`. Only this generator's domain check was still comparing the
+    PrintConv against the field's FORMAT, so `ConvertUnixTime($val)`
+    (int32u -> String) followed by `$self->ConvertDateTime($val)` (a
+    str-domain identity) was refused as an `expr_refused_input_domain`
+    mismatch on every ASF/QuickTime/Canon timestamp that carries the pair.
+
+    Numeric-valued ValueConvs (`f64`, `f64_int`, `Option<f64>`) hand a
+    number on, so the PrintConv stays numeric even on a bytes-domain field;
+    a ValueConv this generator did not model leaves the field omitted
+    anyway, and the PrintConv keeps the field's own domain for the census.
+    """
+    if not value_conv_modeled:
+        return input_domain
+    vc = tag.get("ValueConv")
+    raw = vc.get("expr") if isinstance(vc, dict) else None
+    compiled = exprs.translate_or_compile_any(raw) if raw else None
+    if not compiled:
+        return input_domain
+    _domain, rust_type, _code = compiled
+    if rust_type == "String":
+        return "str"
+    if rust_type in ("f64", "f64_int", "Option<f64>"):
+        return "num"
+    return input_domain
+
+
 def value_conv_for(tag, stats, input_domain, verified_exprs):
     """Compile one scalar ValueConv only after oracle approval.
 
@@ -943,7 +977,8 @@ def gen_field_literal(
     format_name = f if isinstance(f, str) else default_format
     input_domain = value_domain(format_name, count)
     vc, value_conv_modeled = value_conv_for(tag, stats, input_domain, verified_exprs)
-    pc, pc_refused = conv_for(tag, stats, input_domain, verified_exprs)
+    pc_domain = print_conv_input_domain(tag, input_domain, value_conv_modeled)
+    pc, pc_refused = conv_for(tag, stats, pc_domain, verified_exprs)
     if sub is not None:
         # A fractional key names a slice of the word at int(key); `Mask` is
         # what says which bits. The runtime decodes the ones that declare

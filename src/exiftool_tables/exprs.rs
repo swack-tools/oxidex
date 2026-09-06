@@ -535,6 +535,186 @@ pub fn canon_ev(val: f64) -> f64 {
     sign * (whole + frac) / 32.0
 }
 
+/// What ExifTool prints when Perl's `gmtime`/`localtime` FAILS: the call
+/// returns an empty list, `@tm` is all `undef`, and the `sprintf` at
+/// ExifTool.pm:6808 formats `undef + 1900`, `undef + 1` and `undef` as
+/// `1900`, `01` and `00`. Reproduced, not guessed -- `ConvertUnixTime(1e18)`
+/// prints exactly this on the pinned perl 5.38.2 -- so the two sides agree
+/// on the probe battery's extreme magnitudes instead of the probes being
+/// narrowed around a divergence.
+const GMTIME_OVERFLOW: &str = "1900:01:00 00:00:00";
+
+/// Calendar components of a Unix time as glibc's `gmtime` computes them,
+/// or `None` where glibc fails: `tm_year` is an `int`, and `__offtime`
+/// returns `EOVERFLOW` when `year - 1900` does not fit one. Howard
+/// Hinnant's `civil_from_days` in `i64` throughout, so every year up to
+/// that limit is exact (Perl prints `285428751:11:12 07:36:32` for `2**53`
+/// seconds and `-285424812:02:20 16:23:28` for `-2**53`; both match).
+fn gm_components(itime: i64) -> Option<(i64, u32, u32, u32, u32, u32)> {
+    let days = itime.div_euclid(86_400);
+    let secs = itime.rem_euclid(86_400) as u32;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097); // day of era [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11], March first
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let tm_year = year - 1900;
+    if tm_year > i64::from(i32::MAX) || tm_year < i64::from(i32::MIN) {
+        return None;
+    }
+    Some((year, month, day, secs / 3_600, secs % 3_600 / 60, secs % 60))
+}
+
+/// `Image::ExifTool::ConvertUnixTime($time [, $toLocal])` (ExifTool.pm:
+/// 6784-6810, pinned 13.59), with `$dec` at its default -- every ValueConv
+/// in the tables passes one or two arguments, and `$static_vars{SystemTimeRes}`
+/// is unset outside the file-system tags, so `$dec` is 0.
+///
+/// ```perl
+/// return '0000:00:00 00:00:00' if $time == 0;
+/// my $itime = int($time);
+/// my $frac = $time - $itime;
+/// $frac < 0 and $frac += 1, $itime -= 1;
+/// $dec = sprintf('%.*f', $dec, $frac);
+/// $dec =~ s/^(\d)// and $1 eq '1' and $itime += 1;
+/// @tm = $toLocal ? localtime($itime) : gmtime($itime);
+/// $tz = $toLocal ? TimeZoneString(\@tm, $itime) : '';
+/// sprintf("%4d:%.2d:%.2d %.2d:%.2d:%.2d$dec%s", $tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0], $tz);
+/// ```
+///
+/// Each detail below was pinned against the i7's perl 5.38.2 before it was
+/// written, and `verify_exprs.py` re-checks all of them on every regen:
+///
+/// - The seconds are FLOORED (`int` truncates toward zero, then a negative
+///   fraction borrows one second) and the fraction is rounded by
+///   `sprintf('%.0f')`, which is C's round-half-to-even: `0.5` prints
+///   `1970:01:01 00:00:00`, `0.6` prints `..:01`, `-0.5` prints
+///   `1969:12:31 23:59:59`. Rust's `{:.0}` rounds ties to even as well.
+/// - `%4d` pads the year with SPACES, never zeros: `-62135596800` prints
+///   `   1:01:01 00:00:00`; years past 9999 simply widen.
+/// - `gmtime` computes real calendar years as far as `int tm_year` reaches
+///   (see [`gm_components`]) and fails beyond that, which ExifTool renders
+///   as [`GMTIME_OVERFLOW`]. Perl's own `time64.c` moves that edge by a
+///   few thousand years and saturates rather than failing on the far
+///   negative side; no probe and no 64-bit field lands in that band, and
+///   the port is stated to agree up to `2**55` seconds on either side and
+///   from `2**57` outward, not in between.
+/// - `$toLocal` selects `localtime` plus a `TimeZoneString` suffix
+///   (`+HH:MM`, minutes rounded), which depends on the process time zone
+///   exactly as ExifTool's output does; the oracle pins `TZ=UTC` on both
+///   sides. chrono resolves the zone for years within its ±262143 range;
+///   beyond it there is no zone data to consult, and the UTC components are
+///   rendered with a zero offset -- what Perl prints under `TZ=UTC`, the
+///   only zone the oracle runs in, and unverified under any other.
+#[must_use]
+pub fn convert_unix_time(time: f64, to_local: bool) -> String {
+    // ExifTool.pm:6787.
+    if time == 0.0 {
+        return "0000:00:00 00:00:00".to_string();
+    }
+    let overflow = || {
+        if to_local {
+            format!(
+                "{GMTIME_OVERFLOW}{}",
+                crate::io::timestamp::timezone_string(0)
+            )
+        } else {
+            GMTIME_OVERFLOW.to_string()
+        }
+    };
+    let floor = time.floor();
+    if !floor.is_finite() || floor.abs() >= 9.2e18 {
+        // Past i64: Perl's gmtime fails on the year regardless of the path.
+        return overflow();
+    }
+    let frac = time - floor;
+    let carry = i64::from(format!("{frac:.0}") == "1");
+    let Some(itime) = (floor as i64).checked_add(carry) else {
+        return overflow();
+    };
+    if to_local {
+        use chrono::{Datelike, Offset, Timelike};
+        if let Some(utc) = chrono::DateTime::from_timestamp(itime, 0) {
+            let local = utc.with_timezone(&chrono::Local);
+            let offset = local.offset().fix().local_minus_utc();
+            return format!(
+                "{:>4}:{:02}:{:02} {:02}:{:02}:{:02}{}",
+                local.year(),
+                local.month(),
+                local.day(),
+                local.hour(),
+                local.minute(),
+                local.second(),
+                crate::io::timestamp::timezone_string(offset)
+            );
+        }
+        return match gm_components(itime) {
+            Some((y, mo, d, h, mi, s)) => format!(
+                "{y:>4}:{mo:02}:{d:02} {h:02}:{mi:02}:{s:02}{}",
+                crate::io::timestamp::timezone_string(0)
+            ),
+            None => overflow(),
+        };
+    }
+    match gm_components(itime) {
+        Some((y, mo, d, h, mi, s)) => format!("{y:>4}:{mo:02}:{d:02} {h:02}:{mi:02}:{s:02}"),
+        None => overflow(),
+    }
+}
+
+/// Perl's `unpack("H*", $val)`: every byte as two lowercase hex digits, no
+/// separators, the empty string for no bytes. `hex::encode` is exactly that.
+#[must_use]
+pub fn unpack_hex(bytes: &[u8]) -> String {
+    hex::encode(bytes)
+}
+
+/// `Image::ExifTool::ASF::GetGUID($val)` (ASF.pm:525-533, pinned 13.59):
+///
+/// ```perl
+/// my $val = shift;
+/// return $val unless length($val) == 16;
+/// my $buff = unpack('H*',pack('NnnNN',unpack('VvvNN',$val)));
+/// $buff =~ s/(.{8})(.{4})(.{4})(.{4})/$1-$2-$3-$4-/;
+/// return uc($buff);
+/// ```
+///
+/// The first three fields are stored little-endian and printed big-endian
+/// (`V`/`v` in, `N`/`n` out), the last two are untouched, then dashes after
+/// 8, 4, 4 and 4 hex digits and uppercase. Anything but 16 bytes comes back
+/// unchanged; the bytes are handed on as a string, lossily for non-UTF-8,
+/// which the ASF tables never produce (their GUID fields are `undef[16]` /
+/// `binary[16]`) and the oracle probes with ASCII.
+#[must_use]
+pub fn asf_get_guid(bytes: &[u8]) -> String {
+    if bytes.len() != 16 {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    format!(
+        "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+        bytes[3],
+        bytes[2],
+        bytes[1],
+        bytes[0],
+        bytes[5],
+        bytes[4],
+        bytes[7],
+        bytes[6],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
+}
+
 /// `sprintf("%[+].Ng", $val)` -- C's `%g` at `prec` significant digits, with
 /// the optional `+` flag. `tools/exiftool-tables/exprs.py`'s `_mk_sprintf`
 /// used to refuse every `%g` on the grounds that Rust's formatter has no
@@ -984,5 +1164,119 @@ mod tests {
             nikon_print_pc(-128.0, Some("No Sharpening"), D, 1.0),
             "Auto"
         );
+    }
+
+    /// Every expected string below was printed by the pinned perl 5.38.2
+    /// (`Image::ExifTool::ConvertUnixTime`, 13.59 lib) on the i7 before
+    /// the port was written; `verify_exprs.py` re-checks the same values
+    /// under TZ=UTC on every regen. The local (`$toLocal`) rendering is not
+    /// unit-tested here because it reads the process time zone, which a
+    /// test must not set for the whole process.
+    #[test]
+    fn convert_unix_time_matches_exiftool_gmtime() {
+        // ExifTool.pm:6787 short-circuit.
+        assert_eq!(convert_unix_time(0.0, false), "0000:00:00 00:00:00");
+        assert_eq!(convert_unix_time(0.0, true), "0000:00:00 00:00:00");
+        // `%.0f` on the fraction is round-half-to-even: .5 stays down.
+        assert_eq!(convert_unix_time(0.4, false), "1970:01:01 00:00:00");
+        assert_eq!(convert_unix_time(0.5, false), "1970:01:01 00:00:00");
+        assert_eq!(convert_unix_time(0.6, false), "1970:01:01 00:00:01");
+        assert_eq!(convert_unix_time(1.5, false), "1970:01:01 00:00:01");
+        assert_eq!(convert_unix_time(2.5, false), "1970:01:01 00:00:02");
+        assert_eq!(convert_unix_time(0.999999, false), "1970:01:01 00:00:01");
+        assert_eq!(
+            convert_unix_time(946_684_799.9999, false),
+            "2000:01:01 00:00:00"
+        );
+        // Negative fractions borrow a second first (floor), then round.
+        assert_eq!(convert_unix_time(-0.4, false), "1970:01:01 00:00:00");
+        assert_eq!(convert_unix_time(-0.5, false), "1969:12:31 23:59:59");
+        assert_eq!(convert_unix_time(-1.5, false), "1969:12:31 23:59:58");
+        // Epoch shifts the call sites pass, and the 32-bit edges.
+        assert_eq!(
+            convert_unix_time(631_065_600.0, false),
+            "1989:12:31 00:00:00"
+        );
+        assert_eq!(
+            convert_unix_time(-631_065_600.0, false),
+            "1950:01:02 00:00:00"
+        );
+        assert_eq!(convert_unix_time(1e9 + 0.5, false), "2001:09:09 01:46:40");
+        assert_eq!(
+            convert_unix_time(2_147_483_647.0, false),
+            "2038:01:19 03:14:07"
+        );
+        assert_eq!(
+            convert_unix_time(2_147_483_648.0, false),
+            "2038:01:19 03:14:08"
+        );
+        assert_eq!(
+            convert_unix_time(-2_147_483_648.0, false),
+            "1901:12:13 20:45:52"
+        );
+        assert_eq!(
+            convert_unix_time(4_294_967_295.0, false),
+            "2106:02:07 06:28:15"
+        );
+        // `%4d`: space-padded below 1000, widening above 9999.
+        assert_eq!(
+            convert_unix_time(-62_135_596_800.0, false),
+            "   1:01:01 00:00:00"
+        );
+        assert_eq!(
+            convert_unix_time(253_402_300_800.0, false),
+            "10000:01:01 00:00:00"
+        );
+        assert_eq!(
+            convert_unix_time(32_503_680_000.0, false),
+            "3000:01:01 00:00:00"
+        );
+        assert_eq!(convert_unix_time(1e11, false), "5138:11:16 09:46:40");
+        assert_eq!(convert_unix_time(1e12, false), "33658:09:27 01:46:40");
+        // Real calendar years as far as glibc's `int tm_year` reaches...
+        assert_eq!(
+            convert_unix_time(9_007_199_254_740_992.0, false),
+            "285428751:11:12 07:36:32"
+        );
+        assert_eq!(
+            convert_unix_time(-9_007_199_254_740_992.0, false),
+            "-285424812:02:20 16:23:28"
+        );
+        // ...and Perl's rendering of the failed gmtime beyond it.
+        assert_eq!(convert_unix_time(1e18, false), "1900:01:00 00:00:00");
+        assert_eq!(convert_unix_time(-1e18, false), "1900:01:00 00:00:00");
+        assert_eq!(
+            convert_unix_time(f64::INFINITY, false),
+            "1900:01:00 00:00:00"
+        );
+        assert_eq!(convert_unix_time(f64::NAN, false), "1900:01:00 00:00:00");
+    }
+
+    #[test]
+    fn unpack_hex_is_perls_h_star() {
+        assert_eq!(unpack_hex(b""), "");
+        assert_eq!(unpack_hex(b"\x00"), "00");
+        assert_eq!(unpack_hex(b"\xff\x10A"), "ff1041");
+        assert_eq!(unpack_hex(b"Hello"), "48656c6c6f");
+    }
+
+    /// ASF.pm:525-533. The 16-byte case is the GUID asf.rs's own unit test
+    /// pins (`5F69B0C4-04F7-4B21-9842-46CCA542D8D3`); anything else is the
+    /// input unchanged, per `return $val unless length($val) == 16`.
+    #[test]
+    fn asf_get_guid_matches_exiftool() {
+        let guid = [
+            0xC4, 0xB0, 0x69, 0x5F, 0xF7, 0x04, 0x21, 0x4B, 0x98, 0x42, 0x46, 0xCC, 0xA5, 0x42,
+            0xD8, 0xD3,
+        ];
+        assert_eq!(asf_get_guid(&guid), "5F69B0C4-04F7-4B21-9842-46CCA542D8D3");
+        let ordered: Vec<u8> = (0u8..16).collect();
+        assert_eq!(
+            asf_get_guid(&ordered),
+            "03020100-0504-0706-0809-0A0B0C0D0E0F"
+        );
+        assert_eq!(asf_get_guid(b""), "");
+        assert_eq!(asf_get_guid(b"Hello World!!!!"), "Hello World!!!!");
+        assert_eq!(asf_get_guid(b"Hello World 17 by"), "Hello World 17 by");
     }
 }

@@ -140,6 +140,21 @@ TRANSLATIONS = {
         ("String",
          'if {v} > 0.99 { "Full".to_string() } '
          'else { crate::exiftool_tables::exprs::print_exposure_time({v}) }'),
+    # Perl's list-operator call form (no parentheses): one exact spelling in
+    # the census (CanonVRD::DR4, five PrintConvs). `_parse_sprintf` requires
+    # the parenthesised form, and a one-line entry beats teaching the grammar
+    # a second call syntax for one spelling. A bare `%g` is `%.6g`.
+    'sprintf "%g", $val':
+        ("String", "crate::exiftool_tables::exprs::perl_g_spec({v}, 6, false)"),
+    # Windows FILETIME (100 ns ticks since 1601-01-01) to a local time
+    # (ExifTool's `$val/1e7-11644473600` idiom, ten tables): a FLOAT
+    # division, so the tick remainder survives into ConvertUnixTime's own
+    # half-to-even second rounding, then the 1601->1970 offset. Two
+    # statements, hand-verified, same reason as the entry above.
+    "$val=$val/1e7-11644473600; ConvertUnixTime($val,1)":
+        ("String",
+         "crate::exiftool_tables::exprs::convert_unix_time("
+         "{v} / 1e7 - 11644473600.0, true)"),
 }
 
 
@@ -290,7 +305,7 @@ def coverage(expr_counter):
 # Same doctrine as TRANSLATIONS above, enforced by construction instead of by
 # lookup: a Perl snippet is compiled only if every one of its constructs is
 # one this module recognises and can reproduce exactly. Anything else --
-# an unrecognised function name (`ConvertUnixTime`, `Nikon::PrintPC`, ...), a
+# an unrecognised function name (`GPS::ToDegrees`, `PrintHex`, ...), a
 # `tr///` range, `length($val)`, string equality on $val, a second `$val`
 # interpolation, a `$$self{...}` read -- fails to parse and `compile_any`
 # returns None. There is no partial mode and no fallback rendering: a
@@ -299,9 +314,13 @@ def coverage(expr_counter):
 #
 # Named helpers the grammar DOES know, and how each is typed:
 #   string-valued: Exif::PrintExposureTime, Exif::PrintFNumber,
-#                  Exif::PrintFraction, GPS::ToDMS (fully-qualified, QHELPER),
-#                  ConvertDuration, ConvertBitrate (bare names -- subs of
-#                  package Image::ExifTool, see _parse_ident_call).
+#                  Exif::PrintFraction, GPS::ToDMS, Nikon::PrintPC
+#                  (fully-qualified, QHELPER), ConvertDuration, ConvertBitrate
+#                  (bare names -- subs of package Image::ExifTool, see
+#                  _parse_ident_call), and ConvertUnixTime in both spellings
+#                  (`$toLocal` only as the literal 1; the local rendering
+#                  depends on the process time zone exactly as ExifTool's
+#                  does, and verify_exprs.py pins TZ=UTC on both sides).
 #   number-valued: Canon::CanonEv -- the one helper that returns an f64 and
 #                  therefore composes under exp/log/arithmetic like `$val`.
 # Every one of them compiles to a call into src/exiftool_tables/exprs.rs and
@@ -318,7 +337,8 @@ def coverage(expr_counter):
 #              numeric ExprId enum; verified and reported for the coverage
 #              census, ready for whichever future step gives string-typed
 #              tag values a compiled-expression path.
-#   "bytes" -- $val is raw bytes (Decode-UCS2). Same status as "str".
+#   "bytes" -- $val is raw bytes (Decode-UCS2, unpack("H*"), ASF::GetGUID).
+#              Same status as "str".
 #
 # ConvertDateTime is translated as the identity function deliberately, not as
 # an approximation of the general case: `Image::ExifTool::ConvertDateTime`
@@ -337,7 +357,7 @@ class ExprCompileError(Exception):
 # --- lexer -------------------------------------------------------------
 
 _TOKEN_SPEC = [
-    ("QHELPER", r"Image::ExifTool::(?:Exif::PrintExposureTime|Exif::PrintFNumber|Exif::PrintFraction|Canon::CanonEv|Nikon::PrintPC|GPS::ToDMS)"),
+    ("QHELPER", r"Image::ExifTool::(?:Exif::PrintExposureTime|Exif::PrintFNumber|Exif::PrintFraction|Canon::CanonEv|Nikon::PrintPC|GPS::ToDMS|ConvertUnixTime)"),
     ("SELFCONVERTDATETIME", r"\$self->ConvertDateTime"),
     ("SELFDECODE", r"\$self->Decode"),
     ("SELFTOK", r"\$self"),
@@ -575,6 +595,12 @@ class _Parser:
             return _mk_predicate(text, arg)
         if text == "sprintf":
             return self._parse_sprintf()
+        if text == "ConvertUnixTime":
+            # ExifTool.pm:6784-6810, a sub of package Image::ExifTool like the
+            # two below, so the tables call it bare as well as fully
+            # qualified; both spellings share one argument parser.
+            self._eat("LPAREN")
+            return self._parse_convert_unix_time_args()
         if text in ("ConvertDuration", "ConvertBitrate"):
             # ExifTool.pm:6877-6895 / :6902-6913. Both are subs of package
             # Image::ExifTool, which is why a tag table can call them by bare
@@ -600,6 +626,8 @@ class _Parser:
     def _parse_qhelper(self):
         _, text = self._eat("QHELPER")
         self._eat("LPAREN")
+        if text.endswith("ConvertUnixTime"):
+            return self._parse_convert_unix_time_args()
         if text.endswith("PrintExposureTime") or text.endswith("PrintFNumber"):
             arg = self.parse_ternary()
             self._eat("RPAREN")
@@ -700,6 +728,34 @@ class _Parser:
         ref_rust = "None" if ref is None else f"Some('{ref}')"
         code = f"crate::exiftool_tables::exprs::gps_to_dms({ac}, {ref_rust})"
         return ("string", code)
+
+    def _parse_convert_unix_time_args(self):
+        # ExifTool.pm:6784-6810 -- ConvertUnixTime($time [, $toLocal [, $dec]]).
+        # Reached from both spellings with the LPAREN already consumed. The
+        # first argument is a full numeric expression: `$val + 631065600`
+        # (the Mac/QuickTime epoch shift) at 58 pinned call sites, bare
+        # `$val` at 21, and `$val/1e7-11644473600` behind the FILETIME entry
+        # in TRANSLATIONS. `$toLocal` is accepted only as the literal `1`,
+        # the sole spelling in the pinned tables; `$dec` never appears there.
+        # A non-literal second argument -- `$self->Options("QuickTimeUTC")
+        # || $$self{FileType} eq "CR3"` is the one in the census -- is
+        # refused, not defaulted: it reads option state the generated table
+        # does not have. The local rendering depends on the process time
+        # zone exactly as ExifTool's does; verify_exprs.py pins TZ=UTC on
+        # both sides of the oracle.
+        arg = self.parse_ternary()
+        to_local = "false"
+        if self._at("COMMA"):
+            self._eat("COMMA")
+            _, n = self._eat("NUM")
+            if n != "1":
+                raise ExprCompileError("only ConvertUnixTime(..., 1) is a pinned call site")
+            to_local = "true"
+        self._eat("RPAREN")
+        avt, ac = _as_f64(arg)
+        if avt not in _NUMERIC_VTYPES:
+            raise ExprCompileError("ConvertUnixTime needs a numeric argument")
+        return ("string", f"crate::exiftool_tables::exprs::convert_unix_time({ac}, {to_local})")
 
     def _parse_sprintf(self):
         self._eat("LPAREN")
@@ -1070,6 +1126,14 @@ _DECODE_UCS2_RE = re.compile(r'^\$self->Decode\(\$val,\s*"UCS2",\s*"(II|MM)"\)$'
 _TR_RE = re.compile(
     r"^\$val\s*=~\s*tr/((?:[^/\\]|\\.)*)/((?:[^/\\]|\\.)*)/(d)?\s*;\s*\$val$"
 )
+# Two bytes-domain helpers: Perl's own `unpack("H*", $val)` and
+# `Image::ExifTool::ASF::GetGUID($val)` (ASF.pm:525-533), the latter in both
+# spellings the tables use -- the `require Image::ExifTool::ASF;` prefix is a
+# load directive with no value and is dropped, not modelled.
+_UNPACK_HEX_RE = re.compile(r'^unpack\("H\*",\s*\$val\)$')
+_GETGUID_RE = re.compile(
+    r"^(?:require Image::ExifTool::ASF;\s*)?Image::ExifTool::ASF::GetGUID\(\$val\)$"
+)
 
 
 def _tr_unescape_class(cls):
@@ -1160,6 +1224,18 @@ def _compile_uncached(s):
         le = "true" if m.group(1) == "II" else "false"
         code = f"crate::exiftool_tables::exprs::decode_ucs2({{v}}, {le})"
         return ("bytes", "String", code)
+
+    if _UNPACK_HEX_RE.match(s):
+        # Lowercase hex of every byte, no separators. Bytes domain ONLY:
+        # codegen refuses the domain mismatch on a `string`-format field (a
+        # Rust String's bytes are not the field's raw bytes once a lossy
+        # decode has run), so the census's 18 uses on `string` fields stay
+        # refused until the bytes path reaches them; the undef/undef[N]
+        # uses (Canon LensSerialNumber, ImageUniqueID, ...) compile.
+        return ("bytes", "String", "crate::exiftool_tables::exprs::unpack_hex({v})")
+
+    if _GETGUID_RE.match(s):
+        return ("bytes", "String", "crate::exiftool_tables::exprs::asf_get_guid({v})")
 
     m = _TR_RE.match(s)
     if m:

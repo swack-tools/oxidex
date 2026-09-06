@@ -4,13 +4,13 @@
   "oracle_ledger": "tools/exiftool-tables/expr_oracle_ledger.json",
   "schema": 1,
   "value_conv": {
-    "compiled": 867,
-    "refused": 384,
+    "compiled": 904,
+    "refused": 347,
     "refused_by_reason": {
-      "input_domain": 10,
+      "input_domain": 11,
       "nonexpr": 57,
       "oracle": 9,
-      "shape": 308
+      "shape": 270
     },
     "top_refused_expressions": [
       {
@@ -22,16 +22,8 @@
         "uses": 19
       },
       {
-        "expression": "$val=$val/1e7-11644473600; ConvertUnixTime($val,1)",
-        "uses": 9
-      },
-      {
         "expression": "$val =~ s/[ \\0]+$//; $val",
         "uses": 9
-      },
-      {
-        "expression": "ConvertUnixTime($val,1)",
-        "uses": 8
       },
       {
         "expression": "Image::ExifTool::ID3::ConvertID3v1Text($self,$val)",
@@ -58,16 +50,8 @@
         "uses": 6
       },
       {
-        "expression": "ConvertUnixTime($val)",
-        "uses": 5
-      },
-      {
         "expression": "my @a = split \" \",$val; $_ /= 0x4000 foreach @a; \"@a\"",
         "uses": 5
-      },
-      {
-        "expression": "unpack(\"H*\",$val)",
-        "uses": 4
       },
       {
         "expression": "return undef if $val !~ /[^0\\0 ]/; # ignore if empty if ($val =~ s/(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(.)/$1:$2:$3 $4:$5:$6.$7/s) { $val .= TimeZoneString(unpack('c', $8) * 15); } return $val;",
@@ -75,10 +59,6 @@
       },
       {
         "expression": "Image::ExifTool::GPS::ToDegrees($val, 1)",
-        "uses": 4
-      },
-      {
-        "expression": "Image::ExifTool::ASF::GetGUID($val)",
         "uses": 4
       },
       {
@@ -111,6 +91,26 @@
       },
       {
         "expression": "$$self{FujiLayout} ? ($val / 2) : $val",
+        "uses": 3
+      },
+      {
+        "expression": "$$self{FujiLayout} ? ($val * 2) : $val",
+        "uses": 3
+      },
+      {
+        "expression": "Image::ExifTool::LNK::DOSTime($val)",
+        "uses": 3
+      },
+      {
+        "expression": "$val - ($self->{Model}=~/DiMAGE A2/ ? 5 : 3)",
+        "uses": 3
+      },
+      {
+        "expression": "join(\" \", unpack(\"H2\"x20, $val))",
+        "uses": 3
+      },
+      {
+        "expression": "my @v = split(' ',$val); $v[0] &= 0x0f; $v[1] = $v[2] * 256 + $v[3]; # (always high byte first) return \"$v[0] $v[1]\";",
         "uses": 3
       }
     ]

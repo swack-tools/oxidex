@@ -37,6 +37,7 @@ text IS the tag value a caller sees.
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -47,6 +48,16 @@ import exprs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS_PATH = REPO_ROOT / "src" / "bin" / "expr_oracle_harness.rs"
+
+# Both oracles run with the process time zone pinned to UTC. ExifTool's
+# `ConvertUnixTime($val, 1)` renders LOCAL time plus a `TimeZoneString`
+# suffix (ExifTool.pm:6804-6806), and so does the Rust port (chrono::Local,
+# which reads TZ through libc exactly as Perl's localtime does): under an
+# unpinned zone the two sides would agree only by coincidence of the host,
+# and a run on a different host would fail a probe over a fact about the
+# host. The pin is recorded in the ledger's instrument block.
+ORACLE_TZ = "UTC"
+ORACLE_ENV = {**os.environ, "TZ": ORACLE_TZ}
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import instrument  # noqa: E402 -- git/instrument identity header
 
@@ -260,6 +271,27 @@ _HELPER_BOUNDARY_PROBES = {
         0.0, 1.0, -1.0, 3.0, -3.0, 4.0, -4.0, 6.0, 9.0, 12.0, -12.0, 2.6, -2.6,
         126.0, 127.0, 128.0, -126.0, -127.0, -128.0, -129.0, 1e18,
     ],
+    # ConvertUnixTime (ExifTool.pm:6784): the half-to-even second rounding
+    # on both sides of zero, the epoch shifts the call sites pass (Mac
+    # 631065600, seconds either side), years 1, 1950, 2000, 2038, 2106,
+    # 3000, 10000 (the `%4d` year padding and widening), and the 2**53
+    # magnitudes gmtime still computes calendar years for. NUM_BASE's 1e18
+    # is the glibc gmtime overflow artifact on both sides.
+    "ConvertUnixTime": [
+        0.4, 0.5, 0.6, 1.5, 2.5, -0.4, -0.5, -1.5, 0.999999, 946684799.9999,
+        1e9 + 0.5, 1e9 + 0.49999, 631065600.0, 631065601.0, 631065599.0,
+        -631065600.0, -62135596800.0, 253402300800.0, 32503680000.0,
+        4294967295.0, 2147483648.0, -2147483648.0, 1e11, 1e12, 2.0 ** 53,
+        -(2.0 ** 53),
+    ],
+    # The FILETIME entry in TRANSLATIONS (`$val/1e7-11644473600`): ticks for
+    # 1601-01-01 (the offset itself), 1970-01-01 exactly and half a second
+    # either side of it (the float division must carry the remainder into
+    # the rounding), a 2019 timestamp, and the far end of a 64-bit field.
+    "11644473600": [
+        0.0, 116444736000000000.0, 116444736004999999.0, 116444736005000000.0,
+        116444736005000001.0, 132000000000000000.0, 1.8e19,
+    ],
 }
 
 
@@ -291,6 +323,20 @@ STR_PROBES_CDT = [
     "", "not a date at all",
 ]
 BYTES_PROBES_SRC = ["Hello", "", "abc", "A", "Test String", "cafe"]
+# Raw byte buffers for the bytes-domain shapes that are NOT the UCS2 decode
+# (unpack("H*"), ASF::GetGUID): the empty buffer, one byte, the 16-byte GUID
+# width with every byte distinct, all-0xff, a real ASF GUID (the one asf.rs's
+# own unit test pins), and 15/17/32-byte buffers. The non-16-byte buffers are
+# kept ASCII on purpose: GetGUID returns them UNCHANGED and the Perl side of
+# this harness prints under `binmode STDOUT, ':utf8'`, which would Latin-1
+# upgrade a raw 0x80+ byte where Rust's lossy UTF-8 conversion prints U+FFFD
+# -- a disagreement about the harness's own output encoding, not about the
+# conversion, and the ASF tables never hand GetGUID anything but 16 bytes.
+BYTES_PROBES_RAW = [
+    b"", b"A", b"abc", b"\x00\x01\x02", b"Hello World!!!!", b"Hello World 16 b",
+    b"Hello World 17 by", bytes(range(16)), b"\xff" * 16,
+    bytes.fromhex("c4b0695ff704214b984246cca542d8d3"), bytes(range(32)),
+]
 
 
 def probes_for(domain, raw_expr):
@@ -300,14 +346,16 @@ def probes_for(domain, raw_expr):
         if "ConvertDateTime" in raw_expr:
             return STR_PROBES_CDT
         return STR_PROBES_TR
-    # "bytes": the probe values must already be genuine UCS2 -- 2 bytes per
-    # character, in whichever order (II=little-endian, MM=big-endian) this
-    # specific expression declares -- not raw UTF-8/ASCII text. Encoding
-    # plain-text bytes and calling that a UCS2 buffer was the harness's own
-    # first bug (found by feeding it to both oracles: Perl decoded 5
-    # single-byte ASCII "Hello" bytes as UCS2 pairs and produced mojibake
-    # that happened to differ from Rust's *different* mojibake -- neither
-    # side was wrong, the probe was).
+    if "UCS2" not in raw_expr:
+        return BYTES_PROBES_RAW
+    # "bytes" (UCS2 decode): the probe values must already be genuine UCS2 --
+    # 2 bytes per character, in whichever order (II=little-endian,
+    # MM=big-endian) this specific expression declares -- not raw UTF-8/ASCII
+    # text. Encoding plain-text bytes and calling that a UCS2 buffer was the
+    # harness's own first bug (found by feeding it to both oracles: Perl
+    # decoded 5 single-byte ASCII "Hello" bytes as UCS2 pairs and produced
+    # mojibake that happened to differ from Rust's *different* mojibake --
+    # neither side was wrong, the probe was).
     little_endian = '"II"' in raw_expr
     enc = "utf-16-le" if little_endian else "utf-16-be"
     return [s.encode(enc) for s in BYTES_PROBES_SRC]
@@ -340,6 +388,11 @@ def build_perl_script(jobs, et_lib):
         # but it would read as a translation defect rather than a harness
         # one, which is the wrong bug to send someone chasing.
         "use Image::ExifTool::Canon;",
+        # `Image::ExifTool::ASF::GetGUID` is a bytes-domain fixed shape in
+        # exprs.py. Same failure mode as CanonEv without this line: every
+        # probe dies "Undefined subroutine", scores ERROR, and the
+        # expression can never earn a ledger PASS.
+        "use Image::ExifTool::ASF;",
         "my $self = new Image::ExifTool;",
         "binmode STDOUT, ':utf8';",
         # ExifTool itself runs every ValueConv/PrintConv/RawConv string
@@ -379,7 +432,10 @@ def run_perl(perl_bin, script_text, timeout):
         fh.write(script_text)
         script_path = fh.name
     try:
-        r = subprocess.run([perl_bin, script_path], capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(
+            [perl_bin, script_path],
+            capture_output=True, text=True, timeout=timeout, env=ORACLE_ENV,
+        )
     finally:
         Path(script_path).unlink(missing_ok=True)
     if r.returncode != 0:
@@ -483,6 +539,7 @@ def run_rust(jobs, by_expr, timeout):
         r = subprocess.run(
             ["cargo", "run", "--quiet", "--bin", "expr_oracle_harness"],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout,
+            env=ORACLE_ENV,
         )
         if r.returncode != 0:
             print("RUST HARNESS STDERR:", r.stderr[-6000:], file=sys.stderr)
@@ -677,6 +734,9 @@ def main():
                 "perl_version": perl_version,
                 "et_lib": str(args.et_lib),
                 "rust": "cargo run --quiet --bin expr_oracle_harness",
+                # Both sides ran under this zone (see ORACLE_ENV); a ledger
+                # that does not say so cannot be reproduced on another host.
+                "tz": ORACLE_TZ,
             },
             "probe_counts": {"pass": total_pass, "fail": total_fail, "skip": total_skip},
             "expression_counts": {
