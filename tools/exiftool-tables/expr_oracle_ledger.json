@@ -2,26 +2,27 @@
   "exiftool_version": "13.59",
   "expression_counts": {
     "total": 1537,
-    "translated": 507,
-    "verified": 507
+    "translated": 524,
+    "verified": 524
   },
   "instrument": {
     "et_lib": "/home/allen/git/fx30-regen/target/exiftool-src/exiftool-13.59/lib",
     "perl": "/usr/bin/perl",
     "perl_version": "v5.38.2",
-    "rust": "cargo run --quiet --bin expr_oracle_harness"
+    "rust": "cargo run --quiet --bin expr_oracle_harness",
+    "tz": "UTC"
   },
   "perl_version": "v5.38.2",
   "probe_counts": {
     "fail": 0,
-    "pass": 13775,
+    "pass": 14484,
     "skip": 10
   },
   "schema": 2,
   "tables_sha256": "6b6bd4f85f1b259d6386c7b9770ab0f26ff243adad205c76c3eaed302f6214a6",
   "use_counts": {
     "total": 7039,
-    "verified": 4968
+    "verified": 5124
   },
   "verified_expressions": [
     "\"$val %\"",
@@ -307,6 +308,7 @@
     "$val<0 ? undef : $val",
     "$val<95 ? $val/20-1 : 4",
     "$val<=0 ? undef : $val",
+    "$val=$val/1e7-11644473600; ConvertUnixTime($val,1)",
     "$val==-1 ? undef : $val",
     "$val==0 ? undef : $val",
     "$val==0x7f ? \"n/a\" : $val",
@@ -403,9 +405,20 @@
     "ConvertBitrate($val)",
     "ConvertDuration($val)",
     "ConvertDuration(int($val + 0.5))",
+    "ConvertUnixTime($val + 10957 * 24 * 3600)",
+    "ConvertUnixTime($val - ((66 * 365 + 17) * 24 * 3600))",
+    "ConvertUnixTime($val)",
+    "ConvertUnixTime($val, 1)",
+    "ConvertUnixTime($val,1)",
+    "ConvertUnixTime(($val - (70 * 365 + 17 + 2)) * 24 * 3600)",
+    "ConvertUnixTime(($val-25569)*24*3600)",
+    "Image::ExifTool::ASF::GetGUID($val)",
     "Image::ExifTool::Canon::CanonEv($val)",
     "Image::ExifTool::CanonCustom::ConvertPfn($val)",
     "Image::ExifTool::ConvertFileSize($val)",
+    "Image::ExifTool::ConvertUnixTime($val + 631065600)",
+    "Image::ExifTool::ConvertUnixTime($val + 631065600, 1)",
+    "Image::ExifTool::ConvertUnixTime($val,1)",
     "Image::ExifTool::Exif::PrintExposureTime($val)",
     "Image::ExifTool::Exif::PrintFNumber($val)",
     "Image::ExifTool::Exif::PrintFraction($val)",
@@ -423,6 +436,7 @@
     "Image::ExifTool::Nikon::PrintPC($val,\"None\")",
     "Image::ExifTool::Nikon::PrintPC($val,\"None\",\"%.2f\",4)",
     "Image::ExifTool::Nikon::PrintPC($val,undef,\"%.2f\",4)",
+    "IsFloat($val) ? ConvertUnixTime(($val - 25569) * 24 * 3600) : $val",
     "IsInt($val) ? \"$val C\" : $val",
     "abs($val)",
     "abs($val)<100 ? 1/(2**$val) : 0",
@@ -447,7 +461,9 @@
     "int($val * 1e6 + 0.5) * 1e-6",
     "int($val + 0.5)",
     "log($val) / log(2)",
+    "require Image::ExifTool::ASF; Image::ExifTool::ASF::GetGUID($val)",
     "return 'Full' if $val > 0.99; Image::ExifTool::Exif::PrintExposureTime($val);",
+    "sprintf \"%g\", $val",
     "sprintf(\"%+.1f\", $val)",
     "sprintf(\"%+.1f\",$val)",
     "sprintf(\"%+.2f\", $val)",
@@ -530,6 +546,8 @@
     "sprintf(\"Ver.%.2x.%.3d\",$val>>8,$val&0xff)",
     "sprintf(\"f/%.1f\",$val/100)",
     "sqrt(2) ** $val",
-    "sqrt(24*24+36*36) / ($val * 1440)"
+    "sqrt(24*24+36*36) / ($val * 1440)",
+    "unpack(\"H*\", $val)",
+    "unpack(\"H*\",$val)"
   ]
 }
