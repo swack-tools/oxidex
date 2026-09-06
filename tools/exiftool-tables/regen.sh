@@ -98,7 +98,18 @@ cargo fmt -- "$OUT" "$ROOT/src/composite/tables.rs" "$ROOT/src/filetype/tables.r
 
 echo
 echo ">> verifying generated Rust against ExifTool (independent path)"
-python3 "$HERE/verify.py" "$OUT" "$LIB" --oracle "$HERE/oracle.pl"
+# The tree is dirty by construction at this point -- this script just wrote
+# $OUT and both ledgers -- and verify.py refuses a dirty tree unless told
+# otherwise (scripts/instrument.py, Step 30). That refusal exists so a
+# published NUMBER cannot be attributed to an uncommitted tree; this step is a
+# pre-commit check of the artifact regen just produced, which is exactly the
+# case the override was written for, and verify.py's own header records the
+# override so nothing about the provenance is hidden. Without this variable
+# `just regen-tables` has ended in the refusal text and exit 1 -- not in a
+# verdict -- on every run since the check landed (reproduced 2026-09-06 on the
+# i7). A generator must never commit on the operator's behalf, so the
+# alternative ordering is not available.
+OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/verify.py" "$OUT" "$LIB" --oracle "$HERE/oracle.pl"
 
 echo
 echo ">> done: $OUT"
