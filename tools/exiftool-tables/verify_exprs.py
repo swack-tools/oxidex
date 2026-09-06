@@ -253,6 +253,13 @@ _HELPER_BOUNDARY_PROBES = {
         8.0, 12.0, 16.0, 20.0, 24.0, 32.0, 36.0, 44.0, 52.0, 56.0, 64.0,
         -12.0, -20.0, -32.0, 12.7, 44.9, 200.0,
     ],
+    # Nikon::PrintPC (Nikon.pm:13450): the four sentinel values (0, 0x7f,
+    # -128, -127) with their neighbours on both sides, non-integers on both
+    # sides of zero for the %+d/%d truncation, and the /4 quotient points.
+    "PrintPC": [
+        0.0, 1.0, -1.0, 3.0, -3.0, 4.0, -4.0, 6.0, 9.0, 12.0, -12.0, 2.6, -2.6,
+        126.0, 127.0, 128.0, -126.0, -127.0, -128.0, -129.0, 1e18,
+    ],
 }
 
 

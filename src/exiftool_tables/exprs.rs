@@ -539,6 +539,99 @@ pub fn canon_ev(val: f64) -> f64 {
     sign * (whole + frac) / 32.0
 }
 
+/// `sprintf("%[+].Ng", $val)` -- C's `%g` at `prec` significant digits, with
+/// the optional `+` flag. `tools/exiftool-tables/exprs.py`'s `_mk_sprintf`
+/// used to refuse every `%g` on the grounds that Rust's formatter has no
+/// significant-digits mode. That is true of `format!`, but
+/// [`crate::core::formatters::numeric_precision::perl_g`] is the crate's
+/// general `%g` (exponent form below 1e-4 and at or above `prec` digits,
+/// trailing zeros trimmed, `-0.0` printed as `0`), and `verify_exprs.py` can
+/// check it against the pinned Perl like any other spec. This is the
+/// compiler's entry point to it.
+///
+/// `prec` is the precision the format string states; a bare `%g` is `%.6g`
+/// (C's default), and C treats `%.0g` as `%.1g` -- both normalised here so
+/// the grammar can pass the literal it read. A `+` flag prefixes every
+/// non-negative result, including zero (`sprintf("%+.3g", 0)` is `+0`).
+/// Width and the `-`/`0` flags are refused by the grammar for `%g` (no
+/// pinned call site uses one), so they are not modelled here either.
+#[must_use]
+pub fn perl_g_spec(v: f64, prec: usize, plus: bool) -> String {
+    let prec = prec.max(1);
+    let body = crate::core::formatters::numeric_precision::perl_g(v, prec as i32);
+    if plus && !body.starts_with('-') {
+        format!("+{body}")
+    } else {
+        body
+    }
+}
+
+/// The `$fmt` literal a pinned `PrintPC` call site passes -- exactly the
+/// three that appear in the 13.59 tables, and nothing else. The grammar
+/// refuses any other literal rather than mapping it to "the nearest one".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PcFmt {
+    /// `'%+d'`, the default when `$fmt` is absent.
+    PlusD,
+    /// `"%d"`.
+    D,
+    /// `"%.2f"`.
+    F2,
+}
+
+/// `Image::ExifTool::Nikon::PrintPC($val [, $norm [, $fmt [, $div]]])`
+/// (Nikon.pm:13450-13460, pinned 13.59).
+///
+/// ```perl
+/// my ($val, $norm, $fmt, $div) = @_;
+/// return $norm || 'Normal' if $val == 0;
+/// return 'n/a'             if $val == 0x7f;
+/// return 'Auto'            if $val == -128;
+/// return 'User'            if $val == -127;
+/// return sprintf($fmt || '%+d', $val / ($div || 1));
+/// ```
+///
+/// A pure function of `$val` once the three trailing arguments are fixed,
+/// and at every pinned call site they are literals: `$norm` is `"None"`,
+/// `"No Sharpening"`, `undef` or absent; `$fmt` is `"%.2f"`, `"%d"` or
+/// absent; `$div` is `4` or absent. `norm: None` is both the absent and the
+/// `undef` case (`$norm || 'Normal'`); an empty-string `$norm` would also
+/// fall through to `Normal` in Perl, but no call site passes one, so it is
+/// not a case this port distinguishes.
+///
+/// `%+d`/`%d` of a non-integer quotient truncates toward zero, as Perl's
+/// integer conversion does (`PrintPC(2.6)` is `+2`, `PrintPC(-2.6)` is
+/// `-2`), and the `+` flag applies to zero (`+0`). A quotient beyond `i64`
+/// is not reachable from the `int8s`-shaped fields that carry these tags.
+#[must_use]
+pub fn nikon_print_pc(val: f64, norm: Option<&str>, fmt: PcFmt, div: f64) -> String {
+    if val == 0.0 {
+        return norm.unwrap_or("Normal").to_string();
+    }
+    if val == 127.0 {
+        return "n/a".to_string();
+    }
+    if val == -128.0 {
+        return "Auto".to_string();
+    }
+    if val == -127.0 {
+        return "User".to_string();
+    }
+    let x = val / div;
+    match fmt {
+        PcFmt::PlusD => {
+            let i = x as i64;
+            if i >= 0 {
+                format!("+{i}")
+            } else {
+                format!("{i}")
+            }
+        }
+        PcFmt::D => format!("{}", x as i64),
+        PcFmt::F2 => format!("{x:.2}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -821,5 +914,79 @@ mod tests {
         assert!(close(canon_ev(44.0), 1.333_333_333_333_333_3));
         assert!(close(canon_ev(12.7), 0.355_208_333_333_333_3));
         assert_eq!(canon_ev(200.0), 6.25);
+    }
+
+    /// `%g` at the precisions the 13.59 tables use (2, 7, 8, the bare
+    /// default of 6) and `%+.3g`. Quoted from `perl -e 'sprintf(...)'`.
+    #[test]
+    fn perl_g_spec_matches_perl_sprintf() {
+        // %.2g -- the form that alone keeps 17 Canon tables out of Gate A
+        assert_eq!(perl_g_spec(0.0, 2, false), "0");
+        assert_eq!(perl_g_spec(2.5, 2, false), "2.5");
+        assert_eq!(perl_g_spec(123.456, 2, false), "1.2e+02");
+        assert_eq!(perl_g_spec(99.95, 2, false), "1e+02");
+        assert_eq!(perl_g_spec(1e-5, 2, false), "1e-05");
+        assert_eq!(perl_g_spec(0.0001, 2, false), "0.0001");
+        assert_eq!(perl_g_spec(2147483647.0, 2, false), "2.1e+09");
+        // a bare %g is %.6g
+        assert_eq!(perl_g_spec(123.456, 6, false), "123.456");
+        assert_eq!(perl_g_spec(123456789.0, 6, false), "1.23457e+08");
+        // %.7g / %.8g
+        assert_eq!(perl_g_spec(123456789.0, 7, false), "1.234568e+08");
+        assert_eq!(perl_g_spec(2147483647.0, 8, false), "2.1474836e+09");
+        // %+.3g -- the flag applies to zero, never to a negative
+        assert_eq!(perl_g_spec(0.0, 3, true), "+0");
+        assert_eq!(perl_g_spec(123.456, 3, true), "+123");
+        assert_eq!(perl_g_spec(99.95, 3, true), "+100");
+        assert_eq!(perl_g_spec(-0.5, 3, true), "-0.5");
+        assert_eq!(perl_g_spec(1e18, 3, true), "+1e+18");
+        // C treats %.0g as %.1g
+        assert_eq!(perl_g_spec(2.5, 0, false), "2");
+    }
+
+    /// `PrintPC` over every pinned call shape (Nikon.pm:13450-13460).
+    #[test]
+    fn nikon_print_pc_matches_exiftool() {
+        use PcFmt::*;
+        // PrintPC($val): defaults Normal / %+d / 1
+        assert_eq!(nikon_print_pc(0.0, None, PlusD, 1.0), "Normal");
+        assert_eq!(nikon_print_pc(1.0, None, PlusD, 1.0), "+1");
+        assert_eq!(nikon_print_pc(-4.0, None, PlusD, 1.0), "-4");
+        assert_eq!(nikon_print_pc(127.0, None, PlusD, 1.0), "n/a");
+        assert_eq!(nikon_print_pc(-128.0, None, PlusD, 1.0), "Auto");
+        assert_eq!(nikon_print_pc(-127.0, None, PlusD, 1.0), "User");
+        assert_eq!(nikon_print_pc(2.6, None, PlusD, 1.0), "+2");
+        assert_eq!(nikon_print_pc(-2.6, None, PlusD, 1.0), "-2");
+        assert_eq!(
+            nikon_print_pc(1e18, None, PlusD, 1.0),
+            "+1000000000000000000"
+        );
+        // PrintPC($val,"None","%.2f",4)
+        assert_eq!(nikon_print_pc(0.0, Some("None"), F2, 4.0), "None");
+        assert_eq!(nikon_print_pc(1.0, Some("None"), F2, 4.0), "0.25");
+        assert_eq!(nikon_print_pc(-1.0, Some("None"), F2, 4.0), "-0.25");
+        assert_eq!(nikon_print_pc(4.0, Some("None"), F2, 4.0), "1.00");
+        assert_eq!(nikon_print_pc(6.0, Some("None"), F2, 4.0), "1.50");
+        assert_eq!(nikon_print_pc(127.0, Some("None"), F2, 4.0), "n/a");
+        assert_eq!(
+            nikon_print_pc(1e18, Some("None"), F2, 4.0),
+            "250000000000000000.00"
+        );
+        // PrintPC($val,undef,"%.2f",4): undef norm falls back to Normal
+        assert_eq!(nikon_print_pc(0.0, None, F2, 4.0), "Normal");
+        assert_eq!(nikon_print_pc(3.0, None, F2, 4.0), "0.75");
+        // PrintPC($val,"None")
+        assert_eq!(nikon_print_pc(3.0, Some("None"), PlusD, 1.0), "+3");
+        // PrintPC($val,"No Sharpening","%d")
+        assert_eq!(
+            nikon_print_pc(0.0, Some("No Sharpening"), D, 1.0),
+            "No Sharpening"
+        );
+        assert_eq!(nikon_print_pc(3.0, Some("No Sharpening"), D, 1.0), "3");
+        assert_eq!(nikon_print_pc(-3.0, Some("No Sharpening"), D, 1.0), "-3");
+        assert_eq!(
+            nikon_print_pc(-128.0, Some("No Sharpening"), D, 1.0),
+            "Auto"
+        );
     }
 }
