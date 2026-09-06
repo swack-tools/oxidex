@@ -467,6 +467,11 @@ def build_perl_script(jobs, et_lib):
         # probe dies "Undefined subroutine", scores ERROR, and the
         # expression can never earn a ledger PASS.
         "use Image::ExifTool::ASF;",
+        # `Image::ExifTool::ICC_Profile::HexID` is a list-domain QHELPER;
+        # without this line its every probe died "Undefined subroutine" and
+        # the first slice-4 oracle run scored the expression FAIL for having
+        # no comparable probe -- the loud failure the SKIP rule exists for.
+        "use Image::ExifTool::ICC_Profile;",
         "my $self = new Image::ExifTool;",
         "binmode STDOUT, ':utf8';",
         # ExifTool itself runs every ValueConv/PrintConv/RawConv string

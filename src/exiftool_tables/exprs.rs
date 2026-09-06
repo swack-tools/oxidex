@@ -773,18 +773,30 @@ pub fn list_hex(list: &[f64]) -> String {
         .collect()
 }
 
+/// A bare `$v[i]` as a whole conversion: the element, or `None` past the
+/// end -- Perl's `undef`, which as a ValueConv result suppresses the tag
+/// rather than reading as 0 (`verify_exprs.py` caught the 0 on a
+/// one-element probe of `my @c = split " ", $val; $c[1]`). Contrast
+/// [`list_get`], the arithmetic case, where undef numifies to 0.
+#[must_use]
+pub fn list_elem(list: &[f64], index: usize) -> Option<f64> {
+    list.get(index).copied()
+}
+
 /// `join " ", unpack "H2H2", $val` on an `undef[2]` field (Sony Tag9050):
 /// the first two bytes as two lowercase hex pairs joined by a space. Perl's
-/// `H2` template reads one byte per group and yields fewer groups for a
-/// shorter buffer, so the join simply has fewer parts.
+/// `H2H2` template ALWAYS yields two groups -- an empty string for a byte
+/// that is not there -- so a short buffer still joins two parts: one byte
+/// prints `"41 "`, no bytes print `" "` (the pinned Perl on both;
+/// `verify_exprs.py` caught the first port dropping the empty groups).
 #[must_use]
 pub fn unpack_h2_pairs(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .take(2)
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(" ")
+    let group = |i: usize| {
+        bytes
+            .get(i)
+            .map_or_else(String::new, |b| format!("{b:02x}"))
+    };
+    format!("{} {}", group(0), group(1))
 }
 
 /// `Image::ExifTool::ICC_Profile::HexID($val)` (ICC_Profile.pm, pinned
@@ -1398,8 +1410,14 @@ mod tests {
         assert_eq!(list_hex(&[0.0, 255.0, 16.0, 256.0 + 171.0]), "00ff10ab");
         assert_eq!(list_hex(&[]), "");
         assert_eq!(unpack_h2_pairs(&[0x0a, 0xff, 0x33]), "0a ff");
-        assert_eq!(unpack_h2_pairs(&[0x0a]), "0a");
-        assert_eq!(unpack_h2_pairs(&[]), "");
+        // `H2H2` always yields two groups: pinned perl 5.38.2 prints "41 "
+        // for one byte and " " for none.
+        assert_eq!(unpack_h2_pairs(&[0x41]), "41 ");
+        assert_eq!(unpack_h2_pairs(&[]), " ");
+        // A bare `$v[i]` result is undef past the end, not 0.
+        assert_eq!(list_elem(&v, 1), Some(2.5));
+        assert_eq!(list_elem(&v, 9), None);
+        assert_eq!(list_elem(&[], 0), None);
     }
 
     /// ICC_Profile.pm HexID: the all-zero ID prints `0`, anything else the

@@ -1132,10 +1132,28 @@ def _mk_concat(left, right):
         elif vt == "u64bits":
             parts.append(f"({code}).to_string()")
         elif vt in _NUMERIC_VTYPES:
+            if _ARITH_RESULT_RE.match(code):
+                # Perl performs `+ - *` (and exact `/`) in INTEGER arithmetic
+                # whenever both operands are integral, and stringifies the IV
+                # result with exact digits; this compiler's f64 model prints
+                # every plain result through %.15g. The two agree below 1e15
+                # and part company above it -- verify_exprs.py caught
+                # `$val * 1e6 . " microseconds"` printing `2.147483647e+15`
+                # where Perl prints `2147483647000000` at $val = 2^31-1.
+                # `_NUMERIC_VTYPES`' docstring discloses that limit for bare
+                # results; a concatenation makes it reachable at 32-bit
+                # magnitudes, so an arithmetic result is refused here rather
+                # than approximated. `$val` itself, int(...), a helper call
+                # and a bitwise result all stringify exactly and pass.
+                raise ExprCompileError("concatenation of an arithmetic result (IV arithmetic not modelled)")
             parts.append(_stringify(vt, code))
         else:
             raise ExprCompileError(f"concatenation of a {vt} operand")
     return ("string", f'format!("{{}}{{}}", {parts[0]}, {parts[1]})')
+
+
+# The shape _mk_binop / _mk_pow / _mk_neg emit for an arithmetic result.
+_ARITH_RESULT_RE = re.compile(r"^\(\(.*\) [-+*/] \(.*\)\)$|^\(.*\)\.powf\(|^\(-\(")
 
 
 def _mk_pow(left, right):
@@ -1420,12 +1438,27 @@ def _compile_list(s):
     else:
         if is_str:
             return None
-        vt, code = _Parser(_tokenize(result), name, list_var).parse_top()
-        vt, code = _as_f64((vt, code))
+        toks = _tokenize(result)
+        if len(toks) == 2 and toks[0][0] == "LISTIDX":
+            # A bare `$v[i]` as the whole result: Perl returns the element,
+            # or undef past the end -- and an undef ValueConv result
+            # suppresses the tag, which is not the same as 0 (verify_exprs.py
+            # caught `my @c = split " ", $val; $c[1]` on a one-element list
+            # printing 0 where Perl has UNDEF). Option, like `$val ? $val :
+            # undef` in the scalar grammar.
+            nm, idx = re.match(r"\$([A-Za-z_]\w*)\[(\d+)\]", toks[0][1]).groups()
+            if nm != name:
+                return None
+            vt, code = "f64_option", f"crate::exiftool_tables::exprs::list_elem({list_var}, {idx})"
+        else:
+            vt, code = _Parser(toks, name, list_var).parse_top()
+            vt, code = _as_f64((vt, code))
     if vt == "string":
         rty = "String"
     elif vt in _NUMERIC_VTYPES:
         rty = "f64"
+    elif vt == "f64_option":
+        rty = "Option<f64>"
     else:
         return None
     if body:

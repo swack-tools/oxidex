@@ -109,6 +109,18 @@ class Concatenation(unittest.TestCase):
         self.assertIsNone(exprs.translate_or_compile_any('$val . undef'))
         self.assertIsNone(exprs.translate_or_compile_any('IsInt($val) . "x"'))
 
+    def test_arithmetic_result_operand_is_refused(self):
+        # Perl keeps `+ - *` on integral operands in IV arithmetic and prints
+        # the exact digits; the f64 model prints %.15g. The oracle caught
+        # `$val * 1e6 . " microseconds"` at $val = 2^31-1, so an arithmetic
+        # result is refused in a concatenation rather than approximated.
+        for text in ('$val * 1e6 . " microseconds"', '($val + 1) . "x"', '"x" . $val / 2',
+                     '($val ** 2) . "x"', '(-$val) . "x"'):
+            self.assertIsNone(exprs.translate_or_compile_any(text), text)
+        # ...while the exact stringifications still pass.
+        for text in ('$val . " us"', 'int($val) . "x"', '($val >> 2) . " " . ($val & 0x3)'):
+            self.assertIsNotNone(exprs.translate_or_compile_any(text), text)
+
     def test_decimal_literals_still_lex_as_numbers(self):
         self.assertEqual(exprs.translate_or_compile_any("$val * .5")[2], "(({v}) * (0.5_f64))")
 
@@ -163,6 +175,19 @@ class ListDomain(unittest.TestCase):
             self.compile("Image::ExifTool::ICC_Profile::HexID($val)"),
             ("list", "String", "crate::exiftool_tables::exprs::icc_hex_id({v})"),
         )
+
+    def test_bare_element_result_is_undef_past_the_end(self):
+        # The oracle caught `$c[1]` on a one-element list printing 0 where
+        # Perl returns undef (tag suppressed): a bare element is an Option.
+        for text in ('my @c = split " ", $val; $c[1]', 'my @v = split(" ",$val); $v[1]',
+                     'my @v = split(" ",$val); return $v[0];'):
+            r = exprs.translate_or_compile_any(text)
+            self.assertEqual((r[0], r[1]), ("list", "Option<f64>"), text)
+            self.assertIn("exprs::list_elem({v}, ", r[2])
+        # ...but an element inside arithmetic still numifies undef to 0.
+        r = exprs.translate_or_compile_any('my @v = split(" ",$val); $v[1] * 2')
+        self.assertEqual((r[0], r[1]), ("list", "f64"))
+        self.assertIn("list_get({v}, 1)", r[2])
 
     def test_list_hex_and_bytes_hex_spellings(self):
         self.assertEqual(self.compile('unpack "H*", pack "C*", split " ", $val')[2],

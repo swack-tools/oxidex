@@ -2127,6 +2127,12 @@ def gen_expr_enum(used):
             if rty == "f64":
                 render_list.append(f"            ExprId::{ident} => Some(crate::exiftool_tables::exprs::perl_num({body})),")
                 value_list.append(f"            ExprId::{ident} => Some(ExprValue::Number({body})),")
+            elif rty == "Option<f64>":
+                # A bare `$v[i]`: undef past the end of the list suppresses
+                # the tag, exactly like the numeric domain's `$val ? $val :
+                # undef`.
+                render_list.append(f"            ExprId::{ident} => ({body}).map(crate::exiftool_tables::exprs::perl_num),")
+                value_list.append(f"            ExprId::{ident} => ({body}).map(ExprValue::Number),")
             else:
                 render_list.append(f"            ExprId::{ident} => Some({body}),")
                 value_list.append(f"            ExprId::{ident} => Some(ExprValue::String({body})),")
