@@ -70,8 +70,25 @@ _COMPOSITE_PLACEHOLDER_RE = re.compile(r"\{v\d+\}")
 # --- census (same walk as expr_coverage.py / expr_census.py) --------------
 
 def walk_tags(node, out):
+    """Every tag hash reachable from `node`, INCLUDING `_variants`
+    alternatives (Step 23's conditional entries).
+
+    The walk used to stop at the top-level hash, on the grounds that
+    `_variants` inside Composite tables carry `$val[N]`-indexed conversions
+    of a different value domain. main() already skips those by shape (the
+    `{v0}` placeholder test), so the narrowing bought nothing there -- and it
+    cost the binary tables their variant conversions: codegen.py compiles a
+    variant field like any other and checks it against this script's ledger,
+    so a variant-only expression was `expr_refused_oracle` on every regen
+    and emitted as `PrintConv::None`. Pentax::BatteryInfo's
+    `BodyBatteryADNoLoad`/`BodyBatteryADLoad` (`sprintf("%d (%.1fV,
+    %d%%)", ...)`) were the two PrintConv sites at 0fd65de6 in exactly that
+    state -- a raw number under a real tag name, in a table Gate A passed.
+    """
     if isinstance(node, dict):
         out.append(node)
+        if "_variants" in node:
+            walk_tags(node["_variants"], out)
     elif isinstance(node, list):
         for v in node:
             walk_tags(v, out)
@@ -79,11 +96,13 @@ def walk_tags(node, out):
 
 def walk_code_refs(node, out):
     """Every tag hash reachable from `node`, INCLUDING `_variants`
-    alternatives -- but used only to collect CODE refs.
+    alternatives -- used to collect CODE refs.
 
-    Deliberately not folded into `walk_tags`. Widening that walk widens the
-    *expression* census too, and `_variants` alternatives inside ExifTool's
-    Composite tables carry `$val[N]`-indexed conversions -- a different value
+    Historically the only walk that descended `_variants`; `walk_tags` now
+    does too (see its docstring), so the two are the same traversal kept
+    under two names for their two callers. The original reason for the
+    split -- `_variants` alternatives inside ExifTool's Composite tables
+    carry `$val[N]`-indexed conversions, a different value
     domain (`exprs.compile_composite`, `@val` rather than a lone scalar) that
     this harness has no probe shape for and cannot build Rust for: the
     generated `expr_oracle_harness.rs` fails to compile on the `{v0}`
