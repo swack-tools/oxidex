@@ -230,51 +230,6 @@ fn printed_integer(value: &str) -> Option<i64> {
     })
 }
 
-/// ExifTool's `ConvertBitrate`: scale by 1000 through bps/kbps/Mbps/Gbps,
-/// then use `%.3g` below 100 and `%.0f` otherwise.
-fn convert_bitrate(bitrate: f64) -> String {
-    const UNITS: [&str; 4] = ["bps", "kbps", "Mbps", "Gbps"];
-    let mut value = bitrate;
-    for (index, unit) in UNITS.iter().enumerate() {
-        if value >= 1000.0 && index + 1 < UNITS.len() {
-            value /= 1000.0;
-            continue;
-        }
-        return if value < 100.0 {
-            format!("{} {unit}", format_significant_3(value))
-        } else {
-            format!("{value:.0} {unit}")
-        };
-    }
-    unreachable!("the bitrate unit list is non-empty")
-}
-
-/// Perl's `%.3g`, without exponential notation for the values ConvertBitrate
-/// receives after unit scaling.
-fn format_significant_3(value: f64) -> String {
-    format_significant(value, 3)
-}
-
-/// Perl's `%.*g` for the non-exponential range these composites live in:
-/// `digits` significant figures, with trailing zeros (and a bare decimal
-/// point) stripped, which is what `%g` does and `%f` does not.
-fn format_significant(value: f64, digits: i32) -> String {
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    let magnitude = value.abs().log10().floor() as i32;
-    let decimals = (digits - 1 - magnitude).max(0) as usize;
-    let rendered = format!("{value:.decimals$}");
-    if rendered.contains('.') {
-        rendered
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string()
-    } else {
-        rendered
-    }
-}
-
 fn canon_exposure_mode(value: &str) -> Option<i64> {
     Some(match value {
         "Easy" => 0,
@@ -1203,7 +1158,10 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
                 return None;
             }
             let bitrate = (size * 8.0 / duration + 0.5).floor();
-            Computed::new(bitrate.to_string(), convert_bitrate(bitrate))
+            Computed::new(
+                bitrate.to_string(),
+                crate::core::formatters::bitrate::convert_bitrate(bitrate),
+            )
         }
 
         // require: ImageWidth, ImageHeight
@@ -2030,7 +1988,10 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             let metres = (2f64.powf(position / 16.0 - 5.0) + 1.0) * f(get(i, 1))? / 1000.0;
             Computed::new(
                 crate::exiftool_tables::exprs::perl_num(metres),
-                format!("{} m", format_significant(metres, 4)),
+                format!(
+                    "{} m",
+                    crate::core::formatters::numeric_precision::perl_g(metres, 4)
+                ),
             )
         }
 
@@ -3522,6 +3483,28 @@ mod tests {
     }
 
     #[test]
+    fn quicktime_avg_bitrate_renders_through_the_shared_convert_bitrate() {
+        // QuickTime.pm:8653-8665: int(MediaDataSize * 8 / Duration + 0.5),
+        // then ConvertBitrate. 529125 bytes over 1 s is 4233000 bps; pinned
+        // ExifTool 13.59 `ConvertBitrate(4233000)` is `4.23 Mbps`, and
+        // `ConvertBitrate(17500000)` is `17.5 Mbps`. A private copy of
+        // ConvertBitrate used to live in this module; the shared port is
+        // the one the differential oracle checks.
+        assert_eq!(
+            cg("QuickTime", "AvgBitrate", &[Some("529125"), Some("1")]).as_deref(),
+            Some("4.23 Mbps")
+        );
+        assert_eq!(
+            cg("QuickTime", "AvgBitrate", &[Some("4375000"), Some("2")]).as_deref(),
+            Some("17.5 Mbps")
+        );
+        assert_eq!(
+            cg("QuickTime", "AvgBitrate", &[Some("100"), Some("0")]),
+            None
+        );
+    }
+
+    #[test]
     fn sony_focus_distances_scale_by_focal_length() {
         // combined-samples/Sony/SonyDSLR-A200.jpg: FocusPosition 94,
         // FocalLength "30.0 mm" -> 94 * 30 / 1000 = 2.82 -> "2.82 m".
@@ -3539,6 +3522,14 @@ mod tests {
         assert_eq!(
             cg("Sony", "FocusDistance2", &[Some("133"), Some("35 mm")]).as_deref(),
             Some("0.3827 m")
+        );
+        // `%.4g` switches to exponent form at 1e4: pinned perl 5.38.2
+        // `sprintf("%.4g m", (2**(254/16-5)+1)*6000/1000)` is `1.127e+04 m`.
+        // The private fixed-notation `%g` this module used to carry printed
+        // `11269 m` here; the shared `perl_g` does what Perl does.
+        assert_eq!(
+            cg("Sony", "FocusDistance2", &[Some("254"), Some("6000 mm")]).as_deref(),
+            Some("1.127e+04 m")
         );
         // `return undef unless $val` and `'inf' if $val >= 255`.
         assert_eq!(

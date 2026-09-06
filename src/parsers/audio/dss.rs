@@ -157,30 +157,14 @@ fn format_dss_duration(value: &str) -> Option<String> {
 /// if ($h > 24) { my $d = int($h / 24); $h -= $d * 24; $sign = "$sign$d days "; }
 /// return sprintf("$sign%d:%.2d:%.2d", $h, $m, int($time));
 /// ```
+///
+/// The shared port takes the float ExifTool's own code does; this ValueConv
+/// only ever produces whole seconds, and an integer-arithmetic copy that
+/// used to live here agreed with the shared port on every integer probe
+/// around every breakpoint (30 s, 1 min, 1 h, 24 h, 25 h) in the
+/// consolidation sweep, so the copy is gone.
 fn convert_duration(total_seconds: i64) -> String {
-    if total_seconds == 0 {
-        return "0 s".to_string();
-    }
-    let (sign, magnitude) = if total_seconds > 0 {
-        ("", total_seconds)
-    } else {
-        ("-", -total_seconds)
-    };
-    if magnitude < 30 {
-        return format!("{sign}{magnitude}.00 s");
-    }
-    // ExifTool adds 0.5 then truncates; for the integer input this ValueConv
-    // produces, that leaves int($time) == the seconds remainder exactly.
-    let mut hours = magnitude / 3600;
-    let remainder = magnitude % 3600;
-    let minutes = remainder / 60;
-    let seconds = remainder % 60;
-    if hours > 24 {
-        let days = hours / 24;
-        hours -= days * 24;
-        return format!("{sign}{days} days {hours}:{minutes:02}:{seconds:02}");
-    }
-    format!("{sign}{hours}:{minutes:02}:{seconds:02}")
+    crate::core::formatters::convert_duration(total_seconds as f64)
 }
 
 #[cfg(test)]

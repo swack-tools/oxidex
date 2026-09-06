@@ -609,21 +609,11 @@ fn print_f_number(val: f64) -> String {
     }
 }
 
-/// `Image::ExifTool::Exif::PrintExposureTime`.
-///
-/// ```text
-/// if ($secs < 0.25001 and $secs > 0) {
-///     return sprintf("1/%d",int(0.5 + 1/$secs));
-/// }
-/// $_ = sprintf("%.1f",$secs);
-/// s/\.0$//;
-/// ```
+/// `Image::ExifTool::Exif::PrintExposureTime`, the shared port. A private
+/// copy used to live here; it agreed with the shared one byte-for-byte on
+/// every probe of the consolidation sweep, so it is gone.
 fn print_exposure_time(secs: f64) -> String {
-    if secs > 0.0 && secs < 0.250_01 {
-        return format!("1/{}", (0.5 + 1.0 / secs) as i64);
-    }
-    let s = format!("{secs:.1}");
-    s.strip_suffix(".0").unwrap_or(&s).to_string()
+    crate::core::formatters::print_exposure_time(secs)
 }
 
 /// Apply a table entry's conversion to the raw JSON text.

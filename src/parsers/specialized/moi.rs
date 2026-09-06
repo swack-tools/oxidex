@@ -201,26 +201,11 @@ fn video_bitrate_value(raw: i64) -> Option<f64> {
     }
 }
 
-/// ExifTool.pm:6877-6894 `ConvertDuration`.
+/// ExifTool.pm:6877-6894 `ConvertDuration`, the shared port. A private copy
+/// used to live here; the consolidation sweep found it byte-identical to the
+/// shared one on every probe, so it is gone.
 fn convert_duration(time: f64) -> String {
-    if time == 0.0 {
-        return "0 s".to_string();
-    }
-    let (sign, mut time) = if time > 0.0 { ("", time) } else { ("-", -time) };
-    if time < 30.0 {
-        return format!("{sign}{time:.2} s");
-    }
-    time += 0.5; // round off to the nearest second
-    let mut h = (time / 3600.0) as i64;
-    time -= (h as f64) * 3600.0;
-    let m = (time / 60.0) as i64;
-    time -= (m as f64) * 60.0;
-    if h > 24 {
-        let d = h / 24;
-        h -= d * 24;
-        return format!("{sign}{d} days {h}:{m:02}:{:02}", time as i64);
-    }
-    format!("{sign}{h}:{m:02}:{:02}", time as i64)
+    crate::core::formatters::convert_duration(time)
 }
 
 #[cfg(test)]

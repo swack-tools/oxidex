@@ -788,7 +788,7 @@ fn ac3_bitrate(code: u8) -> TagValue {
     };
     TagValue::new_string(format!(
         "{}{}",
-        convert_bitrate(f64::from(RATES[index])),
+        crate::core::formatters::bitrate::convert_bitrate(f64::from(RATES[index])),
         suffix
     ))
 }
@@ -831,44 +831,6 @@ fn ac3_sample_rate(code: u8) -> TagValue {
         1 => TagValue::new_integer(44100),
         2 => TagValue::new_integer(32000),
         _ => TagValue::new_string(format!("Unknown ({})", code)),
-    }
-}
-
-/// ExifTool's `ConvertBitrate`: step up through bps/kbps/Mbps/Gbps, then print
-/// with 3 significant digits below 100 and no decimals at or above it.
-fn convert_bitrate(bitrate: f64) -> String {
-    const UNITS: [&str; 4] = ["bps", "kbps", "Mbps", "Gbps"];
-    let mut value = bitrate;
-    for (index, unit) in UNITS.iter().enumerate() {
-        let is_last = index == UNITS.len() - 1;
-        if value >= 1000.0 && !is_last {
-            value /= 1000.0;
-            continue;
-        }
-        return if value < 100.0 {
-            format!("{} {}", format_significant_3(value), unit)
-        } else {
-            format!("{:.0} {}", value, unit)
-        };
-    }
-    unreachable!("UNITS is non-empty so the loop always returns")
-}
-
-/// Perl's `%.3g`, which drops trailing zeros and any trailing decimal point.
-fn format_significant_3(value: f64) -> String {
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    let magnitude = value.abs().log10().floor() as i32;
-    let decimals = (2 - magnitude).max(0) as usize;
-    let rendered = format!("{:.*}", decimals, value);
-    if rendered.contains('.') {
-        rendered
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string()
-    } else {
-        rendered
     }
 }
 
@@ -1175,12 +1137,20 @@ mod tests {
 
     #[test]
     fn test_convert_bitrate_matches_exiftool() {
+        // The AC-3 table now renders through the shared `ConvertBitrate`
+        // port (a private copy used to live in this module); pin the
+        // values the MTS rate table actually produces, through the call
+        // site that produces them.
+        use crate::core::formatters::bitrate::convert_bitrate;
         assert_eq!(convert_bitrate(256_000.0), "256 kbps");
         assert_eq!(convert_bitrate(32_000.0), "32 kbps");
         assert_eq!(convert_bitrate(640_000.0), "640 kbps");
         assert_eq!(convert_bitrate(112_000.0), "112 kbps");
         assert_eq!(convert_bitrate(1_500_000.0), "1.5 Mbps");
         assert_eq!(convert_bitrate(999.0), "999 bps");
+        assert_eq!(ac3_bitrate(8), TagValue::new_string("128 kbps"));
+        assert_eq!(ac3_bitrate(32 + 13), TagValue::new_string("320 kbps max"));
+        assert_eq!(ac3_bitrate(19), TagValue::new_string("Unknown (19)"));
     }
 
     #[test]
