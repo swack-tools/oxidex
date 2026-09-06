@@ -9,18 +9,10 @@
     "refused_by_reason": {
       "input_domain": 11,
       "nonexpr": 57,
-      "oracle": 9,
-      "shape": 270
+      "oracle": 76,
+      "shape": 203
     },
     "top_refused_expressions": [
-      {
-        "expression": "my @v=split(\" \",$val); $_*=15 foreach @v; \"$v[1] $v[0] $v[3] $v[2]\"",
-        "uses": 20
-      },
-      {
-        "expression": "my @a=split \" \",$val;$a[0]*=2;$a[3]*=2;\"@a\"",
-        "uses": 19
-      },
       {
         "expression": "$val =~ s/[ \\0]+$//; $val",
         "uses": 9
@@ -48,10 +40,6 @@
       {
         "expression": "sprintf(\"%.2x.%.2x %.4x:%.2x:%.2x Rev.%s\", unpack(\"CCvCCa\", $val))",
         "uses": 6
-      },
-      {
-        "expression": "my @a = split \" \",$val; $_ /= 0x4000 foreach @a; \"@a\"",
-        "uses": 5
       },
       {
         "expression": "return undef if $val !~ /[^0\\0 ]/; # ignore if empty if ($val =~ s/(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(.)/$1:$2:$3 $4:$5:$6.$7/s) { $val .= TimeZoneString(unpack('c', $8) * 15); } return $val;",
@@ -82,10 +70,6 @@
         "uses": 4
       },
       {
-        "expression": "my @a = split ' ', $val; $_ /= 0x40000000 foreach @a; \"@a\";",
-        "uses": 3
-      },
-      {
         "expression": "$val / ($$self{FocalUnits} || 1)",
         "uses": 3
       },
@@ -112,6 +96,22 @@
       {
         "expression": "my @v = split(' ',$val); $v[0] &= 0x0f; $v[1] = $v[2] * 256 + $v[3]; # (always high byte first) return \"$v[0] $v[1]\";",
         "uses": 3
+      },
+      {
+        "expression": "$val or $val + 256",
+        "uses": 2
+      },
+      {
+        "expression": "sprintf(\"%x.%x.%x\", unpack(\"nCC\", $val))",
+        "uses": 2
+      },
+      {
+        "expression": "ConvertUnixTime($val / 1e6, 1, 6)",
+        "uses": 2
+      },
+      {
+        "expression": "unpack(\"v\",$val)",
+        "uses": 2
       }
     ]
   }

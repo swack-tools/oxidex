@@ -301,7 +301,13 @@ def value_domain(format_name, count):
     refuses it instead of applying a scalar translation element-wise.
     """
     if count != 1:
-        return None
+        # `int16u[4]` and kin: ReadValue joins the elements with a space
+        # (ExifTool.pm:6286 ff.) and the conversion re-splits them, which
+        # exprs.py's list domain compiles against the elements as `&[f64]`
+        # (`_compile_list`) and runtime.rs decodes from `DecodedValue::Array`.
+        # Only a numeric scalar base has that shape; `string[N]`/`undef[N]`
+        # never reach here with count > 1 (they are one scalar of N bytes).
+        return "list" if format_name.split("[")[0] in SCALAR_FORMATS else None
     if format_name.startswith("string"):
         return "str"
     if format_name.startswith("undef"):
@@ -1207,6 +1213,16 @@ GATE_A_DISQUALIFYING = (
     "tag_variant_field_unsupported",
     # expressions currently emitted without a safe conversion
     "expr_unsupported",
+    # An expression the grammar accepts but the oracle ledger does not carry
+    # is emitted exactly like an unsupported one -- PrintConv::None, not
+    # withheld -- so it disqualifies the table exactly like one. In a real
+    # regen this only fires for an expression whose every probe the oracle
+    # SKIPPED (an "Undefined subroutine" die on each), which is a conversion
+    # nobody has checked; on a codegen run against a stale ledger it keeps a
+    # table whose conversions merely PARSE from reading as eligible. Shape
+    # acceptance alone is never a shipping permission (verify_exprs.py's own
+    # words), and this is the line that makes Gate A say so.
+    "expr_refused_oracle",
     # Step 25's unsupported BITMASK/OTHER conversions are still emitted with
     # `PrintConv::None`; unlike CODE refs, they have no Omitted.print_conv
     # refusal flag, so they remain Gate A hazards.
@@ -2061,15 +2077,21 @@ def gen_expr_enum(used):
             "    #[must_use]\n"
             "    pub fn value_str(&self, _val: &str) -> Option<ExprValue> { None }\n"
             "    #[must_use]\n"
-            "    pub fn value_bytes(&self, _val: &[u8]) -> Option<ExprValue> { None }\n}\n"
+            "    pub fn value_bytes(&self, _val: &[u8]) -> Option<ExprValue> { None }\n"
+            "    #[must_use]\n"
+            "    pub fn apply_list(&self, _val: &[f64]) -> Option<String> { None }\n"
+            "    #[must_use]\n"
+            "    pub fn value_list(&self, _val: &[f64]) -> Option<ExprValue> { None }\n}\n"
         )
     variants = "\n".join(f"    /// `{rust_str(e)}`\n    {i}," for i, e in sorted(used.items()))
     render_num = []
     render_str = []
     render_bytes = []
+    render_list = []
     value_num = []
     value_str = []
     value_bytes = []
+    value_list = []
     for ident, expr in sorted(used.items()):
         domain, rty, rexpr = exprs.translate_or_compile_any(expr)
         body = rexpr.replace("{v}", "val")
@@ -2096,6 +2118,18 @@ def gen_expr_enum(used):
         elif domain == "str":
             render_str.append(f"            ExprId::{ident} => Some({body}),")
             value_str.append(f"            ExprId::{ident} => Some(ExprValue::String({body})),")
+        elif domain == "list":
+            # A fixed-count field's elements as `&[f64]` (see exprs.py
+            # _compile_list and runtime.rs's Array arms). A list conversion
+            # yields a String at every pinned site but one shape (`$v[i]`
+            # alone), which is a number and renders through perl_num like a
+            # numeric-domain f64.
+            if rty == "f64":
+                render_list.append(f"            ExprId::{ident} => Some(crate::exiftool_tables::exprs::perl_num({body})),")
+                value_list.append(f"            ExprId::{ident} => Some(ExprValue::Number({body})),")
+            else:
+                render_list.append(f"            ExprId::{ident} => Some({body}),")
+                value_list.append(f"            ExprId::{ident} => Some(ExprValue::String({body})),")
         else:  # bytes
             render_bytes.append(f"            ExprId::{ident} => Some({body}),")
             value_bytes.append(f"            ExprId::{ident} => Some(ExprValue::String({body})),")
@@ -2175,6 +2209,23 @@ impl ExprId {{
         let _ = val;
         match self {{
 {arms_or_none(value_bytes)}
+        }}
+    }}
+
+    /// Render a fixed-count field's elements (the list domain).
+    #[must_use]
+    pub fn apply_list(&self, val: &[f64]) -> Option<String> {{
+        let _ = val;
+        match self {{
+{arms_or_none(render_list)}
+        }}
+    }}
+
+    #[must_use]
+    pub fn value_list(&self, val: &[f64]) -> Option<ExprValue> {{
+        let _ = val;
+        match self {{
+{arms_or_none(value_list)}
         }}
     }}
 }}

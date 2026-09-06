@@ -170,11 +170,19 @@ pub fn apply_value_conv(
         | DecodedValue::SignedRational(..) => conversion.value_num(value.number()?),
         DecodedValue::String(value) => conversion.value_str(value),
         DecodedValue::Undefined(value) => conversion.value_bytes(value),
-        // R2 deliberately does not compile array ValueConvs.  If a future
-        // compiler proves ExifTool's list semantics, this branch is the one
-        // that must change; applying a scalar ExprId each-element today would
-        // be an approximation.
-        DecodedValue::Array(_) => None,
+        // A fixed-count field's ValueConv sees the space-joined list ReadValue
+        // built (ExifTool.pm:6286 ff.) and re-splits it; the list-domain
+        // compiler (`tools/exiftool-tables/exprs.py::_compile_list`, checked
+        // by verify_exprs.py at every element count the tables carry) takes
+        // the elements as numbers. R2 refused this branch until that
+        // compiler existed; it still refuses an array whose elements are not
+        // all numeric, and a scalar ExprId applied element-wise remains an
+        // approximation this branch never makes -- `value_list` is None for
+        // every ExprId that is not list-domain.
+        DecodedValue::Array(values) => {
+            let numbers: Option<Vec<f64>> = values.iter().map(DecodedValue::number).collect();
+            conversion.value_list(&numbers?)
+        }
     }?;
     Some(match output {
         ExprValue::Number(value)
@@ -867,7 +875,12 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
             | DecodedValue::SignedRational(..) => expression.apply(value.number()?),
             DecodedValue::String(value) => expression.apply_str(value),
             DecodedValue::Undefined(value) => expression.apply_bytes(value),
-            DecodedValue::Array(_) => None,
+            // A fixed-count field's PrintConv on the elements as numbers --
+            // see `apply_value_conv`'s Array arm for the list domain.
+            DecodedValue::Array(values) => {
+                let numbers: Option<Vec<f64>> = values.iter().map(DecodedValue::number).collect();
+                expression.apply_list(&numbers?)
+            }
         },
         PrintConv::Bitmask { exact, bits } => {
             let value = value.integer()?;

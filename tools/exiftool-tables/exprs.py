@@ -339,6 +339,10 @@ def coverage(expr_counter):
 #              tag values a compiled-expression path.
 #   "bytes" -- $val is raw bytes (Decode-UCS2, unpack("H*"), ASF::GetGUID).
 #              Same status as "str".
+#   "list"  -- $val is a fixed-count field's elements (`int16u[4]`), the
+#              space-joined list ReadValue hands the conversion; the Rust
+#              side sees `&[f64]`. See _compile_list. Perl's `.` (string
+#              concatenation, `_mk_concat`) is in the scalar grammar too.
 #
 # ConvertDateTime is translated as the identity function deliberately, not as
 # an approximation of the general case: `Image::ExifTool::ConvertDateTime`
@@ -357,7 +361,7 @@ class ExprCompileError(Exception):
 # --- lexer -------------------------------------------------------------
 
 _TOKEN_SPEC = [
-    ("QHELPER", r"Image::ExifTool::(?:Exif::PrintExposureTime|Exif::PrintFNumber|Exif::PrintFraction|Canon::CanonEv|Nikon::PrintPC|GPS::ToDMS|ConvertUnixTime)"),
+    ("QHELPER", r"Image::ExifTool::(?:Exif::PrintExposureTime|Exif::PrintFNumber|Exif::PrintFraction|Canon::CanonEv|Nikon::PrintPC|GPS::ToDMS|ConvertUnixTime|ICC_Profile::HexID)"),
     ("SELFCONVERTDATETIME", r"\$self->ConvertDateTime"),
     ("SELFDECODE", r"\$self->Decode"),
     ("SELFTOK", r"\$self"),
@@ -370,7 +374,16 @@ _TOKEN_SPEC = [
     # "$val[".
     ("VALIDX", r"\$val\[(\d+)\]"),
     ("VAL", r"\$val"),
+    # List-domain element and whole-list references (`$v[1]`, `@v`), only
+    # meaningful when _Parser was given a bound list name -- see
+    # _compile_list. Listed after VAL so `$val` / `$val[N]` keep their own
+    # tokens; a name is never "val".
+    ("LISTIDX", r"\$([A-Za-z_]\w*)\[(\d+)\]"),
+    ("LISTALL", r"@([A-Za-z_]\w*)"),
     ("NUM", r"0[xX][0-9a-fA-F]+|\d+\.\d+(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|\d+(?:[eE][+-]?\d+)?"),
+    # Perl's string concatenation. After NUM so `.5` stays a number; the
+    # lookahead keeps `1.` (never seen) from lexing as NUM DOT either way.
+    ("DOT", r"\.(?!\d)"),
     ("STR", r'"(?:[^"\\]|\\.)*"' + r"|'(?:[^'\\]|\\.)*'"),
     ("IDENT", r"[A-Za-z_][A-Za-z_0-9]*"),
     ("POW", r"\*\*"),
@@ -470,9 +483,16 @@ _MATH_FN = {"abs": "abs", "log": "ln", "exp": "exp", "sqrt": "sqrt"}
 
 
 class _Parser:
-    def __init__(self, toks):
+    def __init__(self, toks, list_name=None, list_var=None):
         self.toks = toks
         self.i = 0
+        # List-domain context (see _compile_list): `list_name` is the Perl
+        # array bound by `my @NAME = split ...` (or "" for the anonymous
+        # `split(" ",$val)` form), `list_var` the Rust `&[f64]` expression
+        # that holds it. Outside the list domain both are None and the
+        # LISTIDX/LISTALL tokens are refused.
+        self.list_name = list_name
+        self.list_var = list_var
 
     def _peek(self):
         return self.toks[self.i]
@@ -524,10 +544,12 @@ class _Parser:
 
     def parse_add(self):
         left = self.parse_mul()
-        while self._at("PLUS") or self._at("MINUS"):
-            op = self._eat(self._peek()[0])[1]
+        # Perl's `.` shares the additive precedence level with + and -
+        # (perlop), left-associative like them.
+        while self._at("PLUS") or self._at("MINUS") or self._at("DOT"):
+            kind, op = self._eat(self._peek()[0])
             right = self.parse_mul()
-            left = _mk_binop(op, left, right)
+            left = _mk_concat(left, right) if kind == "DOT" else _mk_binop(op, left, right)
         return left
 
     def parse_mul(self):
@@ -560,11 +582,28 @@ class _Parser:
             return _mk_num(text)
         if kind == "VAL":
             self._eat("VAL")
+            if self.list_var is not None:
+                # In the list domain `$val` is the space-joined list, which
+                # only `split` (consumed by _compile_list / _parse_sprintf)
+                # and the list-valued helpers read; arithmetic on it is a
+                # Perl numification of "1 2 3" -- never what a table means.
+                raise ExprCompileError("bare $val in a list-domain expression")
             return ("f64", "{v}")
         if kind == "VALIDX":
             _, idxtext = self._eat("VALIDX")
             idx = re.match(r"\$val\[(\d+)\]", idxtext).group(1)
             return ("f64", "{v" + idx + "}")
+        if kind == "LISTIDX":
+            _, idxtext = self._eat("LISTIDX")
+            name, idx = re.match(r"\$([A-Za-z_]\w*)\[(\d+)\]", idxtext).groups()
+            if self.list_var is None or name != self.list_name:
+                raise ExprCompileError(f"element of an unbound array @{name}")
+            # Perl reads a missing element as undef: 0 in arithmetic, "" in
+            # a string (with a warning). list_get is the arithmetic case;
+            # _compile_list handles interpolation itself.
+            return ("f64", f"crate::exiftool_tables::exprs::list_get({self.list_var}, {idx})")
+        if kind == "LISTALL":
+            raise ExprCompileError("@array outside a sprintf argument list")
         if kind == "LPAREN":
             self._eat("LPAREN")
             v = self.parse_ternary()
@@ -628,6 +667,17 @@ class _Parser:
         self._eat("LPAREN")
         if text.endswith("ConvertUnixTime"):
             return self._parse_convert_unix_time_args()
+        if text.endswith("ICC_Profile::HexID"):
+            # ICC_Profile.pm HexID: `split(' ', $val)`, then `0` if every
+            # element starts with 0, else each element as `%.2x`
+            # concatenated. A list-domain helper: its argument is the
+            # space-joined list itself, so it is only in grammar when
+            # _compile_list has bound one (`$val` = the whole list here).
+            if self.list_var is None:
+                raise ExprCompileError("HexID takes the whole list; only in the list domain")
+            self._eat("VAL")
+            self._eat("RPAREN")
+            return ("string", f"crate::exiftool_tables::exprs::icc_hex_id({self.list_var})")
         if text.endswith("PrintExposureTime") or text.endswith("PrintFNumber"):
             arg = self.parse_ternary()
             self._eat("RPAREN")
@@ -759,16 +809,80 @@ class _Parser:
 
     def _parse_sprintf(self):
         self._eat("LPAREN")
+        fmt = self._parse_sprintf_format()
+        args = []
+        while self._at("COMMA"):
+            self._eat("COMMA")
+            if self.list_var is not None and (self._at("LISTALL") or self._is_split_source()):
+                # `sprintf(FMT, @v)` / `sprintf(FMT, split(" ",$val))`: the
+                # list supplies the arguments positionally. Bind exactly as
+                # many elements as the format has conversions; a shorter
+                # list reads undef -> 0 through list_get, which is what
+                # Perl's %d/%f make of a missing argument (with a warning).
+                if self._at("LISTALL"):
+                    _, atext = self._eat("LISTALL")
+                    if atext[1:] != self.list_name:
+                        raise ExprCompileError(f"unbound array {atext}")
+                else:
+                    self._parse_split_source()
+                n = _sprintf_arg_count(fmt)
+                args.extend(
+                    ("f64", f"crate::exiftool_tables::exprs::list_get({self.list_var}, {i})")
+                    for i in range(n)
+                )
+                continue
+            args.append(self.parse_ternary())
+        self._eat("RPAREN")
+        return _mk_sprintf(fmt, args)
+
+    def _parse_sprintf_format(self):
+        """A sprintf format: one double-quoted literal, or literals joined
+        with `.` where a literal may carry Perl's `x N` repetition (`"%3d
+        %4d %6d" . " %3d %4d %6d" x 10`, Sony MeterInfo). `x` binds tighter
+        than `.` (perlop), so the repetition applies to the literal just
+        read. Folded to one string at compile time -- there is nothing to
+        evaluate at runtime."""
         _, stext = self._eat("STR")
         if stext[0] != '"':
             raise ExprCompileError("sprintf format must be double-quoted")
         fmt = stext[1:-1]
-        args = []
-        while self._at("COMMA"):
-            self._eat("COMMA")
-            args.append(self.parse_ternary())
-        self._eat("RPAREN")
-        return _mk_sprintf(fmt, args)
+        fmt = self._maybe_repeat(fmt)
+        while self._at("DOT"):
+            self._eat("DOT")
+            _, stext = self._eat("STR")
+            if stext[0] != '"':
+                raise ExprCompileError("sprintf format pieces must be double-quoted")
+            fmt += self._maybe_repeat(stext[1:-1])
+        return fmt
+
+    def _maybe_repeat(self, piece):
+        if self._at("IDENT") and self._peek()[1] == "x":
+            self._eat("IDENT")
+            _, n = self._eat("NUM")
+            if not n.isdigit() or int(n) > 64:
+                raise ExprCompileError("sprintf format repetition must be a small integer literal")
+            return piece * int(n)
+        return piece
+
+    def _is_split_source(self):
+        return self._at("IDENT") and self._peek()[1] == "split"
+
+    def _parse_split_source(self):
+        """Consume `split(" ",$val)` / `split " ",$val` / `split(' ',$val)` /
+        `split ' ', $val` -- the four spellings the tables use for "the list".
+        The separator must be a single space: Perl's `split " "` is the
+        awk-style whitespace split ReadValue's space-joined list expects."""
+        self._eat("IDENT")  # split
+        paren = self._at("LPAREN")
+        if paren:
+            self._eat("LPAREN")
+        _, sep = self._eat("STR")
+        if sep[1:-1] != " ":
+            raise ExprCompileError("only split on a single space is in grammar")
+        self._eat("COMMA")
+        self._eat("VAL")
+        if paren:
+            self._eat("RPAREN")
 
 
 _SPRINTF_SPEC_RE = re.compile(r"%([-+0]*)(\d*)\.?(\d*)([dfxXg%])")
@@ -787,6 +901,16 @@ def _mk_sprintf(fmt, args):
     pinned call site uses them, and an unreproduced flag is refused, not
     guessed at.
     """
+    # Every `%` must start a conversion this function models. Before this
+    # guard, `%c` / `%s` / `%e` fell through the spec regex and were emitted
+    # as literal text -- `sprintf("%d.%d%c",@a)` became `format!("{}.{}%c")`,
+    # a silently wrong PrintConv. The oracle would have refused it a ledger
+    # entry, but the grammar should say no itself, not lean on the oracle.
+    # `%%` is a literal percent, not a conversion: strip those pairs first
+    # (the first version of this guard read the second `%` of `%%` as a
+    # conversion and refused every `sprintf("%.0f%%", ...)` in the tables).
+    if re.search(r"%(?![-+0]*\d*\.?\d*[dfxXg])", fmt.replace("%%", "")):
+        raise ExprCompileError("sprintf conversion outside the modelled set")
     parts = []
     rust_args = []
     pos = 0
@@ -987,6 +1111,33 @@ def _mk_binop(op, left, right):
     return ("f64", f"(({lc}) {op} ({rc}))")
 
 
+def _sprintf_arg_count(fmt):
+    """How many arguments a (folded) sprintf format consumes: every
+    conversion except the literal `%%`."""
+    return sum(1 for m in _SPRINTF_SPEC_RE.finditer(fmt) if m.group(4) != "%")
+
+
+def _mk_concat(left, right):
+    """Perl's `.`: both sides stringified the way Perl stringifies them --
+    a string as itself, an NV through %.15g (perl_num), an IV through its
+    exact digits (perl_int), and a bitwise-operator result (a UV in Perl:
+    `($val >> 8) . "."` in ICC_Profile.pm's ProfileVersion) as unsigned
+    digits straight off the u64. A bool or undef operand is refused: Perl's
+    "1"/"" spellings of those are never what a table means by them."""
+    parts = []
+    for node in (left, right):
+        vt, code = node
+        if vt == "string":
+            parts.append(code)
+        elif vt == "u64bits":
+            parts.append(f"({code}).to_string()")
+        elif vt in _NUMERIC_VTYPES:
+            parts.append(_stringify(vt, code))
+        else:
+            raise ExprCompileError(f"concatenation of a {vt} operand")
+    return ("string", f'format!("{{}}{{}}", {parts[0]}, {parts[1]})')
+
+
 def _mk_pow(left, right):
     lt, lc = _as_f64(left)
     rt, rc = _as_f64(right)
@@ -1134,6 +1285,153 @@ _UNPACK_HEX_RE = re.compile(r'^unpack\("H\*",\s*\$val\)$')
 _GETGUID_RE = re.compile(
     r"^(?:require Image::ExifTool::ASF;\s*)?Image::ExifTool::ASF::GetGUID\(\$val\)$"
 )
+# Three more bytes-domain spellings of "hex of the bytes" (Sony Tag9050,
+# ITC::Item, Nintendo/QuickTime SchemeInfo): two hex pairs joined by a
+# space, uppercase hex, and hex behind a "0x" prefix.
+_UNPACK_H2_PAIRS_RE = re.compile(r'^join " ", unpack "H2H2", \$val$')
+_UC_UNPACK_HEX_RE = re.compile(r'^uc unpack "H\*", \$val$')
+_0X_UNPACK_HEX_RE = re.compile(r'^"0x" \. unpack\("H\*",\s*\$val\)$')
+
+# --- the list domain -------------------------------------------------------
+# A fixed-count field (`int16u[4]`, `int32u[33]`, `int8u[16]` ...) reaches its
+# ValueConv/PrintConv as ONE scalar: ReadValue joins the elements with a
+# space (ExifTool.pm:6286 ff.), and the conversion re-splits it. Every pinned
+# shape is one of: a `sprintf` fed positionally from the list, an interpolated
+# string of indexed elements, a whole-list join, or a short statement sequence
+# (`my @v = split ...; $_ *= 15 foreach @v; "$v[1] $v[0] ..."`) ending in one
+# of those. The Rust side sees `&[f64]` -- the elements as numbers, which is
+# what the runtime's `DecodedValue::Array` decodes -- and a missing element
+# reads as Perl's undef would: 0 in arithmetic, "" in a string.
+_SPLIT_SRC = r"split\s*(?:\(\s*)?(?:\" \"|' ')\s*,\s*\$val\s*\)?"
+_LIST_HINT_RE = re.compile(_SPLIT_SRC + r"|@[A-Za-z_]\w*|ICC_Profile::HexID")
+_LIST_BIND_RE = re.compile(r"^my\s+@([A-Za-z_]\w*)\s*=\s*" + _SPLIT_SRC + r"\s*;\s*")
+_LIST_HEX_RE = re.compile(r'^unpack\s+"H\*",\s*pack\s+"C\*",\s*' + _SPLIT_SRC + r"$")
+_FOREACH_OP_RE = re.compile(r"^\$_\s*([*/+-])=\s*(.+?)\s+foreach\s+@([A-Za-z_]\w*)$")
+_FOREACH_FMT_RE = re.compile(r"^\$_\s*=\s*sprintf\('%\.(\d+)f',\s*\$_\)\s+foreach\s+@([A-Za-z_]\w*)$")
+_ELEM_OPASSIGN_RE = re.compile(r"^\$([A-Za-z_]\w*)\[(\d+)\]\s*([*/+&|-])=\s*(.+)$")
+_ELEM_ASSIGN_RE = re.compile(r"^\$([A-Za-z_]\w*)\[(\d+)\]\s*=\s*(.+)$")
+_INTERP_PIECE_RE = re.compile(r"\$([A-Za-z_]\w*)\[(\d+)\]|@([A-Za-z_]\w*)")
+
+
+def _list_interpolation(body, name, list_var, is_str):
+    """A double-quoted result string of a list-domain sequence: `"@a"`,
+    `"$v[1] $v[0] $v[3] $v[2]"`, `"$a[1].$a[0].$a[3].$a[2]"`. Anything else
+    interpolated is refused."""
+    if "$val" in body:
+        raise ExprCompileError("$val inside a list-domain string")
+    parts, args, pos = [], [], 0
+    for m in _INTERP_PIECE_RE.finditer(body):
+        parts.append(_rust_fmt_esc(_unescape_dq(body[pos:m.start()])))
+        pos = m.end()
+        if m.group(3) is not None:
+            if m.group(3) != name:
+                raise ExprCompileError(f"unbound array @{m.group(3)}")
+            parts.append("{}")
+            args.append('__s.join(" ")' if is_str
+                        else f"crate::exiftool_tables::exprs::list_join({list_var})")
+        else:
+            if m.group(1) != name:
+                raise ExprCompileError(f"unbound array @{m.group(1)}")
+            idx = int(m.group(2))
+            parts.append("{}")
+            args.append(f"__s.get({idx}).cloned().unwrap_or_default()" if is_str
+                        else f"crate::exiftool_tables::exprs::list_elem_str({list_var}, {idx})")
+    parts.append(_rust_fmt_esc(_unescape_dq(body[pos:])))
+    tail = "".join(parts)
+    if re.search(r"\$|@", tail):
+        raise ExprCompileError("unsupported interpolation in a list-domain string")
+    if not args:
+        raise ExprCompileError("list-domain string interpolates nothing")
+    return ("string", 'format!("' + tail + '", ' + ", ".join(args) + ")")
+
+
+def _compile_list(s):
+    """Compile one list-domain conversion (see the block comment above), or
+    return None. `{v}` in the result is the `&[f64]` slice."""
+    if _LIST_HEX_RE.match(s):
+        return ("list", "String", "crate::exiftool_tables::exprs::list_hex({v})")
+    m = _LIST_BIND_RE.match(s)
+    name, rest = (m.group(1), s[m.end():]) if m else ("", s)
+    if "#" in rest:
+        # normalize() folded the newline that ended a `# comment`, so the
+        # comment's extent is unknowable here; refuse rather than guess.
+        return None
+    stmts = [t.strip() for t in rest.split(";") if t.strip()]
+    if not stmts:
+        return None
+    result = stmts[-1]
+    if result.startswith("return "):
+        result = result[len("return "):].strip()
+    body = stmts[:-1]
+    if body and not name:
+        return None
+    lines, is_str, mutates = [], False, False
+    for st in body:
+        m1 = _FOREACH_OP_RE.match(st)
+        if m1 and m1.group(3) == name:
+            vt, code = _as_f64(_Parser(_tokenize(m1.group(2)), name, "&__l").parse_top())
+            if vt not in _NUMERIC_VTYPES:
+                return None
+            lines.append(f"for __x in __l.iter_mut() {{ *__x = *__x {m1.group(1)} ({code}); }}")
+            mutates = True
+            continue
+        m2 = _FOREACH_FMT_RE.match(st)
+        if m2 and m2.group(2) == name and not is_str:
+            prec = int(m2.group(1))
+            lines.append(
+                "let __s: Vec<String> = __l.iter().map(|x| format!(\"{:."
+                + str(prec) + "}\", x)).collect();"
+            )
+            is_str = True
+            continue
+        m3 = _ELEM_OPASSIGN_RE.match(st)
+        if m3 and m3.group(1) == name and not is_str:
+            idx, op = int(m3.group(2)), m3.group(3)
+            node = _Parser(_tokenize(m3.group(4)), name, "&__l").parse_top()
+            cur = f"crate::exiftool_tables::exprs::list_get(&__l, {idx})"
+            if op in ("&", "|"):
+                lb, rb = _as_bits(("f64", cur)), _as_bits(node)
+                value = f"(({lb} {op} {rb}) as f64)"
+            else:
+                vt, code = _as_f64(node)
+                if vt not in _NUMERIC_VTYPES:
+                    return None
+                value = f"({cur} {op} ({code}))"
+            lines.append(
+                f"{{ let __v = {value}; crate::exiftool_tables::exprs::list_set(&mut __l, {idx}, __v); }}"
+            )
+            mutates = True
+            continue
+        m4 = _ELEM_ASSIGN_RE.match(st)
+        if m4 and m4.group(1) == name and not is_str:
+            idx = int(m4.group(2))
+            vt, code = _as_f64(_Parser(_tokenize(m4.group(3)), name, "&__l").parse_top())
+            if vt not in _NUMERIC_VTYPES:
+                return None
+            lines.append(
+                f"{{ let __v = {code}; crate::exiftool_tables::exprs::list_set(&mut __l, {idx}, __v); }}"
+            )
+            mutates = True
+            continue
+        return None
+    list_var = "&__l" if body else "{v}"
+    if len(result) >= 2 and result[0] == '"' and result[-1] == '"' and '"' not in result[1:-1]:
+        vt, code = _list_interpolation(result[1:-1], name, list_var, is_str)
+    else:
+        if is_str:
+            return None
+        vt, code = _Parser(_tokenize(result), name, list_var).parse_top()
+        vt, code = _as_f64((vt, code))
+    if vt == "string":
+        rty = "String"
+    elif vt in _NUMERIC_VTYPES:
+        rty = "f64"
+    else:
+        return None
+    if body:
+        decl = "let mut __l" if mutates else "let __l"
+        code = f"{{ {decl}: Vec<f64> = ({{v}}).to_vec(); {' '.join(lines)} {code} }}"
+    return ("list", rty, code)
 
 
 def _tr_unescape_class(cls):
@@ -1236,6 +1534,21 @@ def _compile_uncached(s):
 
     if _GETGUID_RE.match(s):
         return ("bytes", "String", "crate::exiftool_tables::exprs::asf_get_guid({v})")
+
+    if _UNPACK_H2_PAIRS_RE.match(s):
+        return ("bytes", "String", "crate::exiftool_tables::exprs::unpack_h2_pairs({v})")
+    if _UC_UNPACK_HEX_RE.match(s):
+        return ("bytes", "String", "crate::exiftool_tables::exprs::unpack_hex({v}).to_uppercase()")
+    if _0X_UNPACK_HEX_RE.match(s):
+        return ("bytes", "String", 'format!("0x{}", crate::exiftool_tables::exprs::unpack_hex({v}))')
+
+    if _LIST_HINT_RE.search(s):
+        try:
+            return _compile_list(s)
+        except ExprCompileError:
+            return None
+        except (IndexError, RecursionError):
+            return None
 
     m = _TR_RE.match(s)
     if m:

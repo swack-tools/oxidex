@@ -715,6 +715,103 @@ pub fn asf_get_guid(bytes: &[u8]) -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// The list domain: a fixed-count field's elements (`int16u[4]`, `int32u[33]`,
+// `int8u[16]` ...). ExifTool's ReadValue hands the conversion the elements
+// space-joined in one scalar, and every pinned conversion re-splits it
+// (`split(" ",$val)`); `tools/exiftool-tables/exprs.py::_compile_list` compiles
+// those shapes against `&[f64]`, which is what `runtime::apply_value_conv`
+// decodes a `DecodedValue::Array` into. The helpers below are the element
+// semantics Perl gives a list: a missing element is `undef` -- 0 in
+// arithmetic, "" in a string (both with a warning ExifTool suppresses).
+// ---------------------------------------------------------------------------
+
+/// `$v[i]` in arithmetic: the element, or 0 for an index past the end
+/// (Perl's `undef` numifies to 0 -- a record shortened by ReadValue's count
+/// clamp hands the conversion fewer elements than the table declares).
+#[must_use]
+pub fn list_get(list: &[f64], index: usize) -> f64 {
+    list.get(index).copied().unwrap_or(0.0)
+}
+
+/// `$v[i] = ...` / `$v[i] OP= ...`: Perl extends the array on assignment past
+/// its end (filling with undef, i.e. 0 here); a compiled statement sequence
+/// only ever assigns indices the table's count covers, so the extension is
+/// exactness for the short-record case, not a hidden growth path.
+pub fn list_set(list: &mut Vec<f64>, index: usize, value: f64) {
+    if index >= list.len() {
+        list.resize(index + 1, 0.0);
+    }
+    list[index] = value;
+}
+
+/// `"$v[i]"` in a string: the element stringified as Perl does (`%.15g` --
+/// an integer element prints its digits), or "" past the end (`undef`).
+#[must_use]
+pub fn list_elem_str(list: &[f64], index: usize) -> String {
+    list.get(index).map_or_else(String::new, |v| perl_num(*v))
+}
+
+/// `"@v"`: the elements joined by `$"` (a single space), each stringified
+/// as [`perl_num`] does -- `@a` after `$_ /= 0x4000 foreach @a` prints
+/// `0.5 0.25 ...`, after `$_ *= 15` it prints integers.
+#[must_use]
+pub fn list_join(list: &[f64]) -> String {
+    list.iter()
+        .map(|v| perl_num(*v))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `unpack "H*", pack "C*", split " ", $val` (Sony Tag9050): each element
+/// packed as one byte (`C` truncates to the low 8 bits, as Perl does) and
+/// rendered as two lowercase hex digits, no separators.
+#[must_use]
+pub fn list_hex(list: &[f64]) -> String {
+    list.iter()
+        .map(|v| format!("{:02x}", (*v as i64) as u8))
+        .collect()
+}
+
+/// `join " ", unpack "H2H2", $val` on an `undef[2]` field (Sony Tag9050):
+/// the first two bytes as two lowercase hex pairs joined by a space. Perl's
+/// `H2` template reads one byte per group and yields fewer groups for a
+/// shorter buffer, so the join simply has fewer parts.
+#[must_use]
+pub fn unpack_h2_pairs(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .take(2)
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `Image::ExifTool::ICC_Profile::HexID($val)` (ICC_Profile.pm, pinned
+/// 13.59) on the `int8u[16]` ProfileID:
+///
+/// ```perl
+/// my @vals = split(' ', $val);
+/// return 0 unless grep(!/^0/, @vals);   # a simple zero if no MD5 done
+/// $val = '';
+/// foreach (@vals) { $val .= sprintf("%.2x",$_); }
+/// return $val;
+/// ```
+///
+/// `grep(!/^0/, @vals)` is a STRING test on each element's own
+/// stringification -- an element is "zero-ish" when its digits start with
+/// `0`, which for the integer bytes this field carries means exactly the
+/// value 0. `%.2x` of each element: lowercase, at least two digits.
+#[must_use]
+pub fn icc_hex_id(list: &[f64]) -> String {
+    if list.iter().all(|v| perl_num(*v).starts_with('0')) {
+        return "0".to_string();
+    }
+    list.iter()
+        .map(|v| format!("{:02x}", (*v as i64) as u64))
+        .collect()
+}
+
 /// `sprintf("%[+].Ng", $val)` -- C's `%g` at `prec` significant digits, with
 /// the optional `+` flag. `tools/exiftool-tables/exprs.py`'s `_mk_sprintf`
 /// used to refuse every `%g` on the grounds that Rust's formatter has no
@@ -1278,5 +1375,48 @@ mod tests {
         assert_eq!(asf_get_guid(b""), "");
         assert_eq!(asf_get_guid(b"Hello World!!!!"), "Hello World!!!!");
         assert_eq!(asf_get_guid(b"Hello World 17 by"), "Hello World 17 by");
+    }
+
+    /// The list-domain element semantics: a missing element is Perl's
+    /// undef -- 0 in arithmetic, "" in a string -- and the joins/hex
+    /// renderings follow `perl_num`'s stringification and `%.2x`.
+    #[test]
+    fn list_helpers_follow_perl_element_semantics() {
+        let v = [1.0, 2.5, 300.0, 0.0];
+        assert_eq!(list_get(&v, 1), 2.5);
+        assert_eq!(list_get(&v, 9), 0.0);
+        assert_eq!(list_elem_str(&v, 1), "2.5");
+        assert_eq!(list_elem_str(&v, 2), "300");
+        assert_eq!(list_elem_str(&v, 9), "");
+        assert_eq!(list_join(&v), "1 2.5 300 0");
+        assert_eq!(list_join(&[]), "");
+        let mut m = vec![1.0, 2.0];
+        list_set(&mut m, 0, 15.0);
+        list_set(&mut m, 3, 7.0);
+        assert_eq!(m, vec![15.0, 2.0, 0.0, 7.0]);
+        // `pack "C*"` keeps the low byte; `unpack "H*"` is lowercase.
+        assert_eq!(list_hex(&[0.0, 255.0, 16.0, 256.0 + 171.0]), "00ff10ab");
+        assert_eq!(list_hex(&[]), "");
+        assert_eq!(unpack_h2_pairs(&[0x0a, 0xff, 0x33]), "0a ff");
+        assert_eq!(unpack_h2_pairs(&[0x0a]), "0a");
+        assert_eq!(unpack_h2_pairs(&[]), "");
+    }
+
+    /// ICC_Profile.pm HexID: the all-zero ID prints `0`, anything else the
+    /// bytes as `%.2x` run together (the MD5 form).
+    #[test]
+    fn icc_hex_id_matches_exiftool() {
+        assert_eq!(icc_hex_id(&[0.0; 16]), "0");
+        assert_eq!(icc_hex_id(&[]), "0");
+        let id = [
+            0xd4, 0x1d, 0x8c, 0xd9, 0x8f, 0x00, 0xb2, 0x04, 0xe9, 0x80, 0x09, 0x98, 0xec, 0xf8,
+            0x42, 0x7e,
+        ]
+        .map(f64::from);
+        assert_eq!(icc_hex_id(&id), "d41d8cd98f00b204e9800998ecf8427e");
+        // A single non-zero byte is enough to leave the "no MD5" case.
+        let mut one = [0.0; 16];
+        one[15] = 1.0;
+        assert_eq!(icc_hex_id(&one), "00000000000000000000000000000001");
     }
 }
