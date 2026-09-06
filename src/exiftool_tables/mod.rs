@@ -53,8 +53,8 @@ pub use enabled::{ENABLED, is_enabled};
 pub use engine::{Cursor, Dir, Emitted, Step, process_binary_data, read_value};
 pub use runtime::{
     Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
-    RefusalCounts, TableDecode, all_fractional_census, decode_binary_table,
-    decode_binary_table_variants, decode_bits, fractional_census, unknown_fallback,
+    RefusalCounts, TableDecode, all_fractional_census, apply_value_conv, decode_binary_table,
+    decode_binary_table_variants, decode_bits, fractional_census, to_tag_value, unknown_fallback,
 };
 pub use subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
 

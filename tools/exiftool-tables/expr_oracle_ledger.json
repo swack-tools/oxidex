@@ -2,8 +2,8 @@
   "exiftool_version": "13.59",
   "expression_counts": {
     "total": 1537,
-    "translated": 496,
-    "verified": 496
+    "translated": 507,
+    "verified": 507
   },
   "instrument": {
     "et_lib": "/home/allen/git/fx30-regen/target/exiftool-src/exiftool-13.59/lib",
@@ -14,14 +14,14 @@
   "perl_version": "v5.38.2",
   "probe_counts": {
     "fail": 0,
-    "pass": 13425,
+    "pass": 13775,
     "skip": 10
   },
   "schema": 2,
   "tables_sha256": "6b6bd4f85f1b259d6386c7b9770ab0f26ff243adad205c76c3eaed302f6214a6",
   "use_counts": {
     "total": 7039,
-    "verified": 4880
+    "verified": 4968
   },
   "verified_expressions": [
     "\"$val %\"",
@@ -293,6 +293,8 @@
     "$val ? sprintf(\"%.2fV\", $val * 5 / 186) : \"n/a\"",
     "$val ? sprintf(\"0x%.4x\",$val) : $val",
     "$val ? sqrt(2)**($val/256) : 0",
+    "$val or undef",
+    "$val || undef",
     "$val+1",
     "$val/10",
     "$val/1000",
@@ -416,6 +418,11 @@
     "Image::ExifTool::Nikon::PrintAFPointsUpDown($val, 11)",
     "Image::ExifTool::Nikon::PrintAFPointsUpDown($val, 13)",
     "Image::ExifTool::Nikon::PrintAFPointsUpDown($val, 17)",
+    "Image::ExifTool::Nikon::PrintPC($val)",
+    "Image::ExifTool::Nikon::PrintPC($val,\"No Sharpening\",\"%d\")",
+    "Image::ExifTool::Nikon::PrintPC($val,\"None\")",
+    "Image::ExifTool::Nikon::PrintPC($val,\"None\",\"%.2f\",4)",
+    "Image::ExifTool::Nikon::PrintPC($val,undef,\"%.2f\",4)",
     "IsInt($val) ? \"$val C\" : $val",
     "abs($val)",
     "abs($val)<100 ? 1/(2**$val) : 0",
@@ -483,6 +490,7 @@
     "sprintf(\"%.2f\",$val)",
     "sprintf(\"%.2f%%\", $val * 100)",
     "sprintf(\"%.2fx\",$val)",
+    "sprintf(\"%.2g\",$val)",
     "sprintf(\"%.3d\", $val)",
     "sprintf(\"%.3d\",$val)",
     "sprintf(\"%.3f m\", $val)",
@@ -497,12 +505,15 @@
     "sprintf(\"%.5f\",$val)",
     "sprintf(\"%.6f\",$val)",
     "sprintf(\"%.7d\", $val)",
+    "sprintf(\"%.7g\",$val)",
     "sprintf(\"%.8d\",$val)",
+    "sprintf(\"%.8g\",$val)",
     "sprintf(\"%.8x\",$val)",
     "sprintf(\"%3d\",$val)",
     "sprintf(\"%4d:%.2d:%.2d\",$val>>16,($val&0xff00)>>8,$val&0xff)",
     "sprintf(\"%d (level %.1f)\", $val, $val/30)",
     "sprintf(\"%d.%.4d\",$val >> 16, $val & 0xffff)",
+    "sprintf(\"%g %%\",$val*100)",
     "sprintf(\"%x.%.2x\",$val>>8,$val&0xff)",
     "sprintf(\"0x%.2x\", $val)",
     "sprintf(\"0x%.2x\",$val)",
