@@ -279,11 +279,23 @@ def coverage(expr_counter):
 # Same doctrine as TRANSLATIONS above, enforced by construction instead of by
 # lookup: a Perl snippet is compiled only if every one of its constructs is
 # one this module recognises and can reproduce exactly. Anything else --
-# an unrecognised function name (`ConvertDuration`, `CanonEv`, ...), a `tr///`
-# range, `length($val)`, string equality on $val, a second `$val`
-# interpolation -- fails to parse and `compile_any` returns None. There is no
-# partial mode and no fallback rendering: a construct this module cannot
-# prove correct is refused, exactly like an unregistered TRANSLATIONS lookup.
+# an unrecognised function name (`ConvertUnixTime`, `Nikon::PrintPC`, ...), a
+# `tr///` range, `length($val)`, string equality on $val, a second `$val`
+# interpolation, a `$$self{...}` read -- fails to parse and `compile_any`
+# returns None. There is no partial mode and no fallback rendering: a
+# construct this module cannot prove correct is refused, exactly like an
+# unregistered TRANSLATIONS lookup.
+#
+# Named helpers the grammar DOES know, and how each is typed:
+#   string-valued: Exif::PrintExposureTime, Exif::PrintFNumber,
+#                  Exif::PrintFraction, GPS::ToDMS (fully-qualified, QHELPER),
+#                  ConvertDuration, ConvertBitrate (bare names -- subs of
+#                  package Image::ExifTool, see _parse_ident_call).
+#   number-valued: Canon::CanonEv -- the one helper that returns an f64 and
+#                  therefore composes under exp/log/arithmetic like `$val`.
+# Every one of them compiles to a call into src/exiftool_tables/exprs.rs and
+# is differentially checked by verify_exprs.py against the pinned Perl sub
+# itself; none is trusted on the strength of its transcription.
 #
 # Three value domains fall out of the grammar rather than being declared up
 # front:
@@ -314,7 +326,7 @@ class ExprCompileError(Exception):
 # --- lexer -------------------------------------------------------------
 
 _TOKEN_SPEC = [
-    ("QHELPER", r"Image::ExifTool::(?:Exif::PrintExposureTime|Exif::PrintFNumber|GPS::ToDMS)"),
+    ("QHELPER", r"Image::ExifTool::(?:Exif::PrintExposureTime|Exif::PrintFNumber|Exif::PrintFraction|Canon::CanonEv|GPS::ToDMS)"),
     ("SELFCONVERTDATETIME", r"\$self->ConvertDateTime"),
     ("SELFDECODE", r"\$self->Decode"),
     ("SELFTOK", r"\$self"),
@@ -552,6 +564,26 @@ class _Parser:
             return _mk_predicate(text, arg)
         if text == "sprintf":
             return self._parse_sprintf()
+        if text in ("ConvertDuration", "ConvertBitrate"):
+            # ExifTool.pm:6877-6895 / :6902-6913. Both are subs of package
+            # Image::ExifTool, which is why a tag table can call them by bare
+            # name (ExifTool evals every conversion string from inside that
+            # package, ExifTool.pm:3656-3664) and why verify_exprs.py's own
+            # `package Image::ExifTool;` line resolves them identically. Both
+            # are pure functions of one numeric argument (the leading IsFloat
+            # guard is always true for a numeric field) and return a string.
+            # The argument is parsed as a full expression, not just `$val`,
+            # so `ConvertDuration(int($val + 0.5))` (a real pinned call site)
+            # compiles too -- hence _NUMERIC_VTYPES rather than "f64" alone,
+            # since int() yields the "f64_int" vtype.
+            self._eat("LPAREN")
+            arg = self.parse_ternary()
+            self._eat("RPAREN")
+            avt, ac = _as_f64(arg)
+            if avt not in _NUMERIC_VTYPES:
+                raise ExprCompileError(f"{text} needs a numeric argument")
+            fn = "convert_duration" if text == "ConvertDuration" else "convert_bitrate"
+            return ("string", f"crate::exiftool_tables::exprs::{fn}({ac})")
         raise ExprCompileError(f"unrecognised function {text!r}")
 
     def _parse_qhelper(self):
@@ -565,6 +597,30 @@ class _Parser:
             if avt != "f64":
                 raise ExprCompileError(f"{fn} needs a numeric argument")
             return ("string", f"crate::exiftool_tables::exprs::{fn}({ac})")
+        if text.endswith("Exif::PrintFraction"):
+            # Exif.pm:5516-5535 -- a pure function of $val (the `defined $val`
+            # guard is always true for a numeric field). String result.
+            arg = self.parse_ternary()
+            self._eat("RPAREN")
+            avt, ac = _as_f64(arg)
+            if avt not in _NUMERIC_VTYPES:
+                raise ExprCompileError("PrintFraction needs a numeric argument")
+            return ("string", f"crate::exiftool_tables::exprs::print_fraction({ac})")
+        if text.endswith("Canon::CanonEv"):
+            # Canon.pm:10650-10670 -- a pure numeric function of $val, and the
+            # only QHELPER that returns a NUMBER rather than a string. That is
+            # what lets it compose: every pinned call site wraps it in further
+            # arithmetic (`exp(4*log(2)*(1-CanonEv($val-24)))`,
+            # `exp(CanonEv($val)*log(2)/2)`, `-CanonEv($val*4)*log(2)`), so a
+            # string-typed result would refuse all 35 of them at the next
+            # operator. Returns the "f64" vtype so _mk_func1/_mk_neg/_mk_binop
+            # accept it exactly as they accept a `$val` subexpression.
+            arg = self.parse_ternary()
+            self._eat("RPAREN")
+            avt, ac = _as_f64(arg)
+            if avt not in _NUMERIC_VTYPES:
+                raise ExprCompileError("CanonEv needs a numeric argument")
+            return ("f64", f"crate::exiftool_tables::exprs::canon_ev({ac})")
         # GPS::ToDMS($self, $val, 1, ["N"|"E"])
         self._eat("SELFTOK")
         self._eat("COMMA")

@@ -19,31 +19,18 @@ pub fn convert_bitrate(mut bitrate: f64) -> String {
         unit_index += 1;
     }
     let number = if bitrate < 100.0 {
-        // Perl's "%.3g": three significant digits, trimmed of trailing zeros.
-        format_significant(bitrate, 3)
+        // C's `%.3g`, exponent form included. A local "three significant
+        // digits, fixed notation" helper used to live here; it agreed with
+        // Perl on every realistic bitrate and disagreed on the tails the
+        // differential oracle probes: `ConvertBitrate(-1000)` is `-1e+03 bps`
+        // in Perl (a negative never scales past `bps`, and `%.3g` of -1000
+        // is `%e` form), and `1e-6` is `1e-06 bps`. `perl_g` is the one
+        // general `%g` in the crate; there is no reason for a second.
+        crate::core::formatters::numeric_precision::perl_g(bitrate, 3)
     } else {
         format!("{:.0}", bitrate)
     };
     format!("{number} {}", units[unit_index])
-}
-
-/// Perl's `%.Ng` formatting: `N` significant digits, no trailing zeros or
-/// decimal point, no exponent for the magnitudes this call site ever sees.
-fn format_significant(value: f64, digits: i32) -> String {
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    let magnitude = value.abs().log10().floor() as i32;
-    let decimals = (digits - 1 - magnitude).max(0);
-    let formatted = format!("{value:.*}", decimals as usize);
-    if formatted.contains('.') {
-        formatted
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string()
-    } else {
-        formatted
-    }
 }
 
 #[cfg(test)]
@@ -59,5 +46,26 @@ mod tests {
         assert_eq!(convert_bitrate(5_500_000.0), "5.5 Mbps");
         assert_eq!(convert_bitrate(28_800_000.0), "28.8 Mbps");
         assert_eq!(convert_bitrate(224_000.0), "224 kbps");
+    }
+
+    /// The `%.3g` tails, quoted from `Image::ExifTool::ConvertBitrate` under
+    /// the pinned 13.59 Perl (`perl -MImage::ExifTool -e ...`). These are the
+    /// probes the fixed-notation helper this replaced got wrong; the unit
+    /// boundaries and the exhausted-units case are checked alongside them.
+    #[test]
+    fn matches_perl_on_the_g_tails_and_unit_boundaries() {
+        assert_eq!(convert_bitrate(0.0), "0 bps");
+        assert_eq!(convert_bitrate(999.0), "999 bps");
+        assert_eq!(convert_bitrate(1000.0), "1 kbps");
+        // 99.999 kbps rounds to "100" under %.3g, not "99.9" or "100.0".
+        assert_eq!(convert_bitrate(99_999.0), "100 kbps");
+        assert_eq!(convert_bitrate(1e6), "1 Mbps");
+        // Exponent form: %.3g switches to %e below 1e-4 ...
+        assert_eq!(convert_bitrate(1e-6), "1e-06 bps");
+        // ... and a negative never scales, so -1000 stays in bps and %.3g
+        // renders it in %e form too.
+        assert_eq!(convert_bitrate(-1000.0), "-1e+03 bps");
+        // Units run out at Gbps; from there it is %.0f of the Gbps figure.
+        assert_eq!(convert_bitrate(1e18), "1000000000 Gbps");
     }
 }

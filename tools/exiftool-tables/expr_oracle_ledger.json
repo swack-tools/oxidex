@@ -2,8 +2,8 @@
   "exiftool_version": "13.59",
   "expression_counts": {
     "total": 1537,
-    "translated": 486,
-    "verified": 486
+    "translated": 496,
+    "verified": 496
   },
   "instrument": {
     "et_lib": "/home/allen/git/fx30-regen/target/exiftool-src/exiftool-13.59/lib",
@@ -14,14 +14,14 @@
   "perl_version": "v5.38.2",
   "probe_counts": {
     "fail": 0,
-    "pass": 12999,
+    "pass": 13425,
     "skip": 10
   },
   "schema": 2,
   "tables_sha256": "6b6bd4f85f1b259d6386c7b9770ab0f26ff243adad205c76c3eaed302f6214a6",
   "use_counts": {
     "total": 7039,
-    "verified": 4700
+    "verified": 4880
   },
   "verified_expressions": [
     "\"$val %\"",
@@ -398,10 +398,15 @@
     "53190 - $val",
     "6 - $val",
     "8 * ($val + 1)",
+    "ConvertBitrate($val)",
+    "ConvertDuration($val)",
+    "ConvertDuration(int($val + 0.5))",
+    "Image::ExifTool::Canon::CanonEv($val)",
     "Image::ExifTool::CanonCustom::ConvertPfn($val)",
     "Image::ExifTool::ConvertFileSize($val)",
     "Image::ExifTool::Exif::PrintExposureTime($val)",
     "Image::ExifTool::Exif::PrintFNumber($val)",
+    "Image::ExifTool::Exif::PrintFraction($val)",
     "Image::ExifTool::GPS::ToDMS($self, $val, 1)",
     "Image::ExifTool::GPS::ToDMS($self, $val, 1, \"E\")",
     "Image::ExifTool::GPS::ToDMS($self, $val, 1, \"N\")",
@@ -425,6 +430,11 @@
     "exp(($val-8)/16*log(2))",
     "exp((75-$val) * log(2) * 3 / 40)",
     "exp(-$val/96*log(2))",
+    "exp(-Image::ExifTool::Canon::CanonEv($val)*log(2))",
+    "exp(-Image::ExifTool::Canon::CanonEv($val*4)*log(2))*1000/8",
+    "exp(4*log(2)*(1-Image::ExifTool::Canon::CanonEv($val-24)))",
+    "exp(Image::ExifTool::Canon::CanonEv($val)*log(2)/2)",
+    "exp(Image::ExifTool::Canon::CanonEv($val*4-32)*log(2)/2)",
     "int($val * 100 + 0.5) / 100",
     "int($val * 1000 + 0.5) / 1000",
     "int($val * 1e6 + 0.5) * 1e-6",

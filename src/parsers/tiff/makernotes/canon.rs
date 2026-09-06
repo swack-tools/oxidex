@@ -3360,17 +3360,45 @@ fn apex_to_ev(value: i16) -> String {
 ///     elsif ($frac == 0x14) { $frac = 0x40 / 3; }     # 2/3 stop
 ///     return $sign * ($val + $frac) / 0x20;
 /// ```
+///
+/// One implementation, not two: this delegates to
+/// [`crate::exiftool_tables::exprs::canon_ev`], the oracle-verified f64 port
+/// the expression compiler emits calls to. For every `i32` the two are
+/// identical (an integer has no fraction for the Perl's `$val -= $frac` to
+/// keep, and any `i32` magnitude fits the mask); the f64 version is the one
+/// that also matches Perl on a non-integer input, which is why it is the one
+/// that owns the logic. `canon_ev_i32_agrees_with_the_shared_f64_port` below
+/// pins that equivalence rather than assuming it.
 pub fn canon_ev(value: i32) -> f64 {
-    let sign = if value < 0 { -1.0 } else { 1.0 };
-    let magnitude = value.unsigned_abs();
-    let raw_frac = magnitude & 0x1f;
-    let whole = (magnitude - raw_frac) as f64;
-    let frac = match raw_frac {
-        0x0c => 0x20 as f64 / 3.0,
-        0x14 => 0x40 as f64 / 3.0,
-        other => other as f64,
-    };
-    sign * (whole + frac) / 32.0
+    crate::exiftool_tables::exprs::canon_ev(f64::from(value))
+}
+
+#[cfg(test)]
+mod canon_ev_equivalence {
+    /// The `i32` entry point and the shared f64 port must be one function.
+    /// Checked over every low-five-bit pattern on both sides of zero, every
+    /// stop code the Perl special-cases (0x0c, 0x14), and the `i32` extremes,
+    /// rather than asserted -- this is the equivalence that justified
+    /// deleting the second implementation.
+    #[test]
+    fn canon_ev_i32_agrees_with_the_shared_f64_port() {
+        let mut probes: Vec<i32> = (-1024..=1024).collect();
+        probes.extend([i32::MIN, i32::MIN + 1, i32::MAX - 1, i32::MAX]);
+        for v in probes {
+            let via_i32 = super::canon_ev(v);
+            let via_f64 = crate::exiftool_tables::exprs::canon_ev(f64::from(v));
+            assert!(
+                via_i32.to_bits() == via_f64.to_bits(),
+                "canon_ev({v}): i32 path {via_i32} != f64 path {via_f64}"
+            );
+        }
+        // The independently-known anchors from Canon.pm's own comment block
+        // (`0x0c -> 0.33333`, `0x10 -> 0.5`, `0x14 -> 0.66666`, `0x20 -> 1`).
+        assert!((super::canon_ev(0x0c) - 1.0 / 3.0).abs() < 1e-12);
+        assert_eq!(super::canon_ev(0x10), 0.5);
+        assert!((super::canon_ev(0x14) - 2.0 / 3.0).abs() < 1e-12);
+        assert_eq!(super::canon_ev(0x20), 1.0);
+    }
 }
 
 /// Renders a number the way Perl's `sprintf("%.2g", $val)` does.

@@ -228,6 +228,34 @@ NARROW_NUM_DOMAIN_PROBES.update({
 })
 
 
+# Boundary probes for the named helpers whose call text carries no literal of
+# its own to mine. `ConvertDuration($val)` has nothing for _LIT_RE to find,
+# so on NUM_BASE alone its 30 s / 60 s / 3600 s / 86400 s branch points and
+# the `$h > 24` day split are exercised only by whatever base values happen
+# to land near them. These are UNIONED with the generic battery (and with
+# any literals the surrounding expression does carry), never substituted for
+# it -- the composed CanonEv sites (`... CanonEv($val-24) ...`) keep their
+# mined 24/25/23 probes as well as the stop codes below.
+_HELPER_BOUNDARY_PROBES = {
+    "ConvertDuration": [
+        29.99, 29.995, 30.0, 59.4, 59.5, 60.0, 3599.5, 3600.0, 86399.0,
+        86400.0, 86400.5, 90000.0, 172800.0, -30.0, -59.5, -86400.0,
+    ],
+    "ConvertBitrate": [
+        0.001, 99.9, 99.95, 100.0, 999.0, 999.5, 1000.0, 99999.0, 999999.0,
+        1e6, 1e9, 999.5e9, 1e12, -1000.0,
+    ],
+    "PrintFraction": [
+        1 / 3, 2 / 3, 0.25, 0.333, 0.3334, 0.5, 0.7, -0.7, 0.999, 1.001, 1.5,
+        -1.5, 1.326429536, 1e-3,
+    ],
+    "CanonEv": [
+        8.0, 12.0, 16.0, 20.0, 24.0, 32.0, 36.0, 44.0, 52.0, 56.0, 64.0,
+        -12.0, -20.0, -32.0, 12.7, 44.9, 200.0,
+    ],
+}
+
+
 def numeric_probes_for(expr):
     if expr in NARROW_NUM_DOMAIN_PROBES:
         return NARROW_NUM_DOMAIN_PROBES[expr]
@@ -241,6 +269,9 @@ def numeric_probes_for(expr):
         vals.update((v, v + 1.0, v - 1.0))
         if v != 0.0:
             vals.add(-v)
+    for helper, extra in _HELPER_BOUNDARY_PROBES.items():
+        if helper in expr:
+            vals.update(extra)
     return sorted(vals)
 
 
@@ -294,6 +325,14 @@ def build_perl_script(jobs, et_lib):
         # run once.
         "use Image::ExifTool::CanonCustom;",
         "use Image::ExifTool::Nikon;",
+        # `Image::ExifTool::Canon::CanonEv` is a QHELPER in exprs.py's
+        # grammar. Without this line every CanonEv probe dies "Undefined
+        # subroutine", is scored ERROR, and is SKIPPED -- and an expression
+        # whose every probe is skipped is already refused entry to the ledger
+        # by the `s[0] > 0` test in main(), so the failure would be loud;
+        # but it would read as a translation defect rather than a harness
+        # one, which is the wrong bug to send someone chasing.
+        "use Image::ExifTool::Canon;",
         "my $self = new Image::ExifTool;",
         "binmode STDOUT, ':utf8';",
         # ExifTool itself runs every ValueConv/PrintConv/RawConv string
