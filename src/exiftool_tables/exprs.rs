@@ -146,18 +146,14 @@ pub fn perl_int(v: f64) -> String {
 /// `secs` here is always finite (it is a decoded numeric tag value), so the
 /// `IsFloat` guard -- which only matters for a non-numeric string input --
 /// never turns false in this pipeline; it is omitted rather than faked.
+///
+/// Delegates to the one shared port in `core::formatters`, like the other
+/// named helpers below, so the differential oracle exercises the same code
+/// every hand parser calls. (A second copy lived here until the
+/// consolidation sweep showed the two agreed on every probe.)
 #[must_use]
 pub fn print_exposure_time(secs: f64) -> String {
-    if secs < 0.25001 && secs > 0.0 {
-        // Perl's `int()` truncates toward zero; `0.5 + 1/secs` is always
-        // positive here, so truncation and floor agree.
-        return format!("1/{}", (0.5 + 1.0 / secs).trunc() as i64);
-    }
-    let s = format!("{secs:.1}");
-    match s.strip_suffix(".0") {
-        Some(stripped) => stripped.to_string(),
-        None => s,
-    }
+    crate::core::formatters::exif_print_conv::print_exposure_time(secs)
 }
 
 /// `Image::ExifTool::Exif::PrintFNumber($val)`.

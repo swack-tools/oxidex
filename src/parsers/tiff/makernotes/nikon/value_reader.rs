@@ -134,39 +134,16 @@ pub fn ascii_value(bytes: &[u8]) -> String {
 /// `RoundFloat` is `sprintf("%.${sig}g", $val)` -- so a 64-bit rational carries
 /// TEN significant digits, not Perl's usual fifteen. That is the difference
 /// between `4557/2048` printing as ExifTool's `2.225097656` and as the exact
-/// `2.22509765625`.
+/// `2.22509765625`. The shared `exiftool_rational_number` is exactly that
+/// `RoundFloat`, sign of zero included: a signed rational `0/-N` divides to
+/// `-0.0` in Perl (pp_divide only takes the integer path when |left| >= |right|)
+/// and `%.10g` then prints `-0`. A private `%.<precision>g` used to live here
+/// and printed `0` for that case; on every finite input away from negative
+/// zero it agreed byte-for-byte with `perl_g(value, 10)`, and `rational_value`
+/// already returns `None` for a zero denominator, so the two never differed on
+/// a reachable value. One `%g` in the crate is enough.
 pub fn format_number(value: f64) -> String {
-    format_significant(value, 10)
-}
-
-/// C's `%.<precision>g` with no sign flag: `precision` significant digits,
-/// `%e` style outside `-4 <= exp < precision`, trailing zeros trimmed.
-fn format_significant(value: f64, precision: usize) -> String {
-    if value == 0.0 {
-        return "0".to_string();
-    }
-    if !value.is_finite() {
-        return format!("{}", value);
-    }
-    let precision = precision.max(1);
-    // The exponent %g switches on is the one the value has AFTER rounding to
-    // `precision` digits, so read it back off a rounded rendering rather than
-    // computing log10 of the unrounded value.
-    let scientific = format!("{:.*e}", precision - 1, value);
-    let (mantissa, exp_text) = scientific.split_once('e').unwrap_or((&scientific, "0"));
-    let exponent: i32 = exp_text.parse().unwrap_or(0);
-    if exponent < -4 || exponent >= precision as i32 {
-        // C renders the exponent with a sign and at least two digits.
-        format!(
-            "{}e{}{:02}",
-            trim_zeros(mantissa),
-            if exponent < 0 { '-' } else { '+' },
-            exponent.abs()
-        )
-    } else {
-        let decimals = (precision as i32 - 1 - exponent).max(0) as usize;
-        trim_zeros(&format!("{:.*}", decimals, value))
-    }
+    crate::core::formatters::numeric_precision::exiftool_rational_number(value)
 }
 
 /// Nikon aperture encoding: `2**($val/24)` (ExifTool `%nikonApertureConversions`).
@@ -185,15 +162,6 @@ pub fn nikon_focal_length(raw: u8) -> f64 {
 /// `ProgramShift`, `ExposureBracketValue` and the flash compensations print.
 pub fn print_fraction(value: f64) -> String {
     crate::core::formatters::exif_print_conv::print_fraction(value)
-}
-
-/// Drop the trailing zeros (and any bare decimal point) that `%g` suppresses.
-fn trim_zeros(s: &str) -> String {
-    if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
-    } else {
-        s.to_string()
-    }
 }
 
 /// ExifTool `Image::ExifTool::Exif::PrintLensInfo`: four rationals
@@ -437,6 +405,11 @@ mod tests {
         assert_eq!(format_number(0.001), "0.001");
         assert_eq!(format_number(-4.5), "-4.5");
         assert_eq!(format_number(0.0), "0");
+        // A signed rational `0/-N` divides to -0.0 in Perl (pp_divide takes
+        // the NV path when |numerator| < |denominator|) and `RoundFloat`'s
+        // `%.10g` keeps the sign: pinned perl 5.38.2 `sprintf("%.10g", -0.0)`
+        // is `-0`. The private `%g` this module used to carry printed `0`.
+        assert_eq!(format_number(-0.0), "-0");
         // WB_RBLevels off a D5: 4557/2048 is exactly 2.22509765625, and
         // ExifTool reports 2.225097656 -- RoundFloat(..., 10).
         assert_eq!(format_number(4557.0 / 2048.0), "2.225097656");
