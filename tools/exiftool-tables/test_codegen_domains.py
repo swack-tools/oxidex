@@ -49,6 +49,31 @@ class PrintConvInputDomain(unittest.TestCase):
         tag = _tag("undef[16]", "Image::ExifTool::ASF::GetGUID($val)", "$val")
         self.assertEqual(codegen.print_conv_input_domain(tag, "bytes", True), "str")
 
+    def test_list_value_conv_returning_a_string_feeds_a_str_print_conv(self):
+        # ICC_Profile::Header ProfileDateTime: int16u[6] -> sprintf over the
+        # split -> String -> `$self->ConvertDateTime($val)` (str identity).
+        tag = _tag("int16u[6]", 'sprintf("%.4d:%.2d:%.2d %.2d:%.2d:%.2d",split(" ",$val));',
+                   "$self->ConvertDateTime($val)")
+        self.assertEqual(codegen.print_conv_input_domain(tag, "list", True), "str")
+
+
+class ValueDomain(unittest.TestCase):
+    def test_scalar_formats(self):
+        self.assertEqual(codegen.value_domain("int16u", 1), "num")
+        self.assertEqual(codegen.value_domain("string[4]", 1), "str")
+        self.assertEqual(codegen.value_domain("undef[16]", 1), "bytes")
+
+    def test_fixed_count_numeric_is_the_list_domain(self):
+        for fmt in ("int16u[4]", "int32u[33]", "int8u[16]", "int16s[5]", "fixed32s[3]", "float[2]"):
+            base = fmt.split("[")[0]
+            want = "list" if base in codegen.SCALAR_FORMATS else None
+            self.assertEqual(codegen.value_domain(fmt, 4), want, fmt)
+        # codegen passes the base with the count separately as well
+        self.assertEqual(codegen.value_domain("int16u", 4), "list")
+
+    def test_unknown_base_with_a_count_stays_refused(self):
+        self.assertIsNone(codegen.value_domain("var_string[3]", 3))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -51,9 +51,12 @@
 //! # Why `MRC::Main` is not table-only either
 //!
 //! `MachineStamp` (MRC.pm:73) carries a `PrintConv` of
-//! `'sprintf("0x%.2x 0x%.2x 0x%.2x 0x%.2x",split " ", $val)'`, which the
-//! generator does not compile (`PrintConv::None` on an unflagged field).
-//! `NumberOfLabels` (MRC.pm:76) gates `Label0`..`Label9` (MRC.pm:77-86) by
+//! `'sprintf("0x%.2x 0x%.2x 0x%.2x 0x%.2x",split " ", $val)'` -- a
+//! list-domain expression (the `int8u[4]` elements, space-joined and
+//! re-split) that the generator compiles and the differential oracle
+//! checks, so the field renders through `DecodedField::emit` like any other;
+//! this parser used to format the four bytes itself while the table carried
+//! `PrintConv::None`. `NumberOfLabels` (MRC.pm:76) gates `Label0`..`Label9` (MRC.pm:77-86) by
 //! `Condition => '$$self{NLab} > N'`; each `LabelN` is `omitted.condition`
 //! and is hand-verified against that count below. `ImageDepth` (MRC.pm:39-45),
 //! `ExtendedHeaderSize` (MRC.pm:74) and `ExtendedHeaderType` (MRC.pm:75) each
@@ -72,9 +75,9 @@
 //! (`ExifTool.pm:1173`, `Keywords`/`Subject`-style tags). oxidex's CLI
 //! formatters apply the List rule uniformly to every `TagValue::Array`,
 //! which is correct for a real List tag but wrong for these three, so
-//! [`space_joined`] resolves them to a final space-joined string here,
-//! matching `MachineStamp`'s existing pattern of doing the ExifTool-exact
-//! rendering in the parser rather than the shared CLI layer.
+//! [`space_joined`] resolves them to a final space-joined string here --
+//! the ExifTool-exact rendering done in the parser rather than the shared
+//! CLI layer, for a field that carries no `PrintConv` to compile.
 //!
 //! # References
 //!
@@ -693,18 +696,17 @@ pub fn parse_mrc_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
                     metadata.insert(key, access.emit_raw());
                 }
             }
+            // `MachineStamp`'s PrintConv (`sprintf("0x%.2x 0x%.2x 0x%.2x
+            // 0x%.2x",split " ", $val)`, MRC.pm:73) is a list-domain
+            // expression the generator now compiles, so `emit()` hands back
+            // the rendered string. This arm used to match `TagValue::Array`
+            // and format the four bytes itself because the table carried
+            // `PrintConv::None`; the moment the generator could render the
+            // field, that match silently dropped the tag (the same shape as
+            // DJI's RelativeHumidity in slice 2). Take the rendering.
             "MachineStamp" => {
-                if let Some(TagValue::Array(values)) = decoded.emit() {
-                    let bytes: Vec<i64> = values.iter().filter_map(TagValue::as_integer).collect();
-                    if bytes.len() == 4 {
-                        metadata.insert(
-                            key,
-                            TagValue::new_string(format!(
-                                "0x{:02x} 0x{:02x} 0x{:02x} 0x{:02x}",
-                                bytes[0], bytes[1], bytes[2], bytes[3]
-                            )),
-                        );
-                    }
+                if let Some(TagValue::String(rendered)) = decoded.emit() {
+                    metadata.insert(key, TagValue::new_string(rendered));
                 }
             }
             "GridSize" | "StartPoint" | "Origin" => {

@@ -70,8 +70,25 @@ _COMPOSITE_PLACEHOLDER_RE = re.compile(r"\{v\d+\}")
 # --- census (same walk as expr_coverage.py / expr_census.py) --------------
 
 def walk_tags(node, out):
+    """Every tag hash reachable from `node`, INCLUDING `_variants`
+    alternatives (Step 23's conditional entries).
+
+    The walk used to stop at the top-level hash, on the grounds that
+    `_variants` inside Composite tables carry `$val[N]`-indexed conversions
+    of a different value domain. main() already skips those by shape (the
+    `{v0}` placeholder test), so the narrowing bought nothing there -- and it
+    cost the binary tables their variant conversions: codegen.py compiles a
+    variant field like any other and checks it against this script's ledger,
+    so a variant-only expression was `expr_refused_oracle` on every regen
+    and emitted as `PrintConv::None`. Pentax::BatteryInfo's
+    `BodyBatteryADNoLoad`/`BodyBatteryADLoad` (`sprintf("%d (%.1fV,
+    %d%%)", ...)`) were the two PrintConv sites at 0fd65de6 in exactly that
+    state -- a raw number under a real tag name, in a table Gate A passed.
+    """
     if isinstance(node, dict):
         out.append(node)
+        if "_variants" in node:
+            walk_tags(node["_variants"], out)
     elif isinstance(node, list):
         for v in node:
             walk_tags(v, out)
@@ -79,11 +96,13 @@ def walk_tags(node, out):
 
 def walk_code_refs(node, out):
     """Every tag hash reachable from `node`, INCLUDING `_variants`
-    alternatives -- but used only to collect CODE refs.
+    alternatives -- used to collect CODE refs.
 
-    Deliberately not folded into `walk_tags`. Widening that walk widens the
-    *expression* census too, and `_variants` alternatives inside ExifTool's
-    Composite tables carry `$val[N]`-indexed conversions -- a different value
+    Historically the only walk that descended `_variants`; `walk_tags` now
+    does too (see its docstring), so the two are the same traversal kept
+    under two names for their two callers. The original reason for the
+    split -- `_variants` alternatives inside ExifTool's Composite tables
+    carry `$val[N]`-indexed conversions, a different value
     domain (`exprs.compile_composite`, `@val` rather than a lone scalar) that
     this harness has no probe shape for and cannot build Rust for: the
     generated `expr_oracle_harness.rs` fails to compile on the `{v0}`
@@ -122,18 +141,28 @@ def census(tables_json_path):
     """
     d = json.load(open(tables_json_path, encoding="utf-8"))
     counter = {}
+    # raw expr -> set of element counts of the fields that carry it (1 for a
+    # scalar). A list-domain expression's probe needs the field's count --
+    # `sprintf("%4d %4d %4d (%dK)", split(" ",$val))` reads four elements
+    # because the field is `int16s[4]`, which the text alone does not say.
+    counts_by_expr = {}
     for _modname, mod in d["modules"].items():
         for _tname, t in (mod.get("tables") or {}).items():
+            table_format = (t.get("meta") or {}).get("FORMAT")
             for _tid, tagnode in (t.get("tags") or {}).items():
                 variants = []
                 walk_tags(tagnode, variants)
                 for tag in variants:
+                    fmt = tag.get("Format") or table_format or ""
+                    m = _SIZED_FORMAT_RE.match(str(fmt))
+                    count = int(m.group(2)) if m and m.group(1) not in ("string", "undef") else 1
                     for slot in SLOTS:
                         v = tag.get(slot)
                         if isinstance(v, dict) and v.get("kind") == "expr":
                             e = v.get("expr")
                             if isinstance(e, str) and e.strip():
                                 counter[e] = counter.get(e, 0) + 1
+                                counts_by_expr.setdefault(e, set()).add(count)
                 code_nodes = []
                 walk_code_refs(tagnode, code_nodes)
                 for tag in code_nodes:
@@ -143,7 +172,7 @@ def census(tables_json_path):
                             named = exprs.code_ref_expr(v.get("deparse"))
                             if named:
                                 counter[named] = counter.get(named, 0) + 1
-    return d.get("exiftool_version"), counter
+    return d.get("exiftool_version"), counter, counts_by_expr
 
 
 # --- capability probe ------------------------------------------------------
@@ -199,6 +228,68 @@ NUM_BASE = [
     4294967295.0, 655.345, 655.36,
 ]
 _LIT_RE = re.compile(r"0[xX][0-9a-fA-F]+|\d+\.\d+(?:[eE][+-]?\d+)?|\d+(?:[eE][+-]?\d+)?")
+# `int16u[4]` -> (base, count); codegen.py's SIZED_RE, repeated here rather
+# than imported so this script keeps depending on exprs.py alone.
+_SIZED_FORMAT_RE = re.compile(r"^(\w+)\[(\d+)\]$")
+# The element indices and sprintf conversions a list-domain expression reads,
+# so a probe can be sized from the text when no carrying field says otherwise.
+_LIST_INDEX_RE = re.compile(r"\$[A-Za-z_]\w*\[(\d+)\]")
+_LIST_SPEC_RE = re.compile(r"%[-+0]*\d*\.?\d*[dfxXg]")
+
+
+def list_probes_for(expr, counts):
+    """Probe lists for one list-domain expression, at every element count a
+    carrying field declares (plus the count the text itself needs, and one
+    short and one long list around each): small integers, all-zero, all-max
+    of the 16-bit width, negatives (a signed field), the mined literals
+    broadcast, and the `(%dK)`-style boundary values. Kept within the
+    magnitude of a 32-bit field: the elements come from `split` of an integer
+    string on the Perl side, and the IV/NV stringification split perl_int/
+    perl_num model only matters past 1e15 -- beyond any format's width."""
+    needed = 0
+    for m in _LIST_INDEX_RE.finditer(expr):
+        needed = max(needed, int(m.group(1)) + 1)
+    specs = len(_LIST_SPEC_RE.findall(expr))
+    needed = max(needed, specs, 1)
+    sizes = set(counts or ()) | {needed}
+    sizes.discard(0)
+    probes = []
+    lits = set()
+    for m in _LIT_RE.finditer(expr):
+        t = m.group()
+        try:
+            v = float(int(t, 16)) if t[:2].lower() == "0x" else float(t)
+        except ValueError:
+            continue
+        if abs(v) < 2 ** 31:
+            lits.add(v)
+    for n in sorted(sizes):
+        base = [float(i) for i in range(n)]
+        probes.append(base)
+        probes.append([1.0] * n)
+        probes.append([0.0] * n)
+        probes.append([255.0] * n)
+        probes.append([65535.0] * n)
+        probes.append([-1.0] * n)
+        probes.append([float(1000 * (i + 1)) for i in range(n)])
+        probes.append([float(1024 * (i + 1)) for i in range(n)])
+        probes.append([float(2 ** 31 - 1)] * n)
+        probes.append([float(-(2 ** 31))] * n)
+        for v in sorted(lits):
+            probes.append([v] * n)
+            probes.append([v + 1.0] * n)
+            probes.append([v - 1.0] * n)
+        if n > 1:
+            probes.append(base[:-1])  # short list: Perl reads undef -> 0 / ""
+        probes.append(base + [float(n)])  # long list: extra element ignored
+    # Dedupe, order-preserving.
+    seen, out = set(), []
+    for p in probes:
+        key = tuple(p)
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
 
 
 # `PrintAFPointsLeftRight($val, ncol)` / `PrintAFPointsUpDown($val, nrow)`
@@ -339,9 +430,11 @@ BYTES_PROBES_RAW = [
 ]
 
 
-def probes_for(domain, raw_expr):
+def probes_for(domain, raw_expr, counts=None):
     if domain == "num":
         return numeric_probes_for(raw_expr)
+    if domain == "list":
+        return list_probes_for(raw_expr, counts)
     if domain == "str":
         if "ConvertDateTime" in raw_expr:
             return STR_PROBES_CDT
@@ -393,6 +486,11 @@ def build_perl_script(jobs, et_lib):
         # probe dies "Undefined subroutine", scores ERROR, and the
         # expression can never earn a ledger PASS.
         "use Image::ExifTool::ASF;",
+        # `Image::ExifTool::ICC_Profile::HexID` is a list-domain QHELPER;
+        # without this line its every probe died "Undefined subroutine" and
+        # the first slice-4 oracle run scored the expression FAIL for having
+        # no comparable probe -- the loud failure the SKIP rule exists for.
+        "use Image::ExifTool::ICC_Profile;",
         "my $self = new Image::ExifTool;",
         "binmode STDOUT, ':utf8';",
         # ExifTool itself runs every ValueConv/PrintConv/RawConv string
@@ -411,6 +509,13 @@ def build_perl_script(jobs, et_lib):
             set_val = f"my $val = {probe!r};"
         elif domain == "str":
             set_val = f'my $val = "{perl_escape(probe)}";'
+        elif domain == "list":
+            # What ReadValue hands a fixed-count field's conversion: the
+            # elements joined by a space, as one string (ExifTool.pm:6286 ff.).
+            # Integral probes are written as integers so Perl reads them as
+            # IVs, exactly as it reads a real record's elements.
+            joined = " ".join(str(int(v)) if float(v).is_integer() else repr(v) for v in probe)
+            set_val = f'my $val = "{joined}";'
         else:
             set_val = f'my $val = pack("H*", "{probe.hex()}");'  # probe is already bytes
         lines.append("{")
@@ -479,11 +584,18 @@ def rust_bytes_literal(b):
     return f"(&[{body}][..])"
 
 
+def rust_list_literal(values):
+    body = ", ".join(rust_num_literal(v) for v in values)
+    return f"(&[{body}][..])"
+
+
 def render_probe(domain, probe):
     if domain == "num":
         return rust_num_literal(probe)
     if domain == "str":
         return rust_str_literal(probe)
+    if domain == "list":
+        return rust_list_literal(probe)
     return rust_bytes_literal(probe)
 
 
@@ -594,7 +706,7 @@ def main():
                f"tables:  {args.tables_json}"],
     )
 
-    version, counter = census(args.tables_json)
+    version, counter, counts_by_expr = census(args.tables_json)
     perl_version = capability_probe(args.perl, args.et_lib, version)
 
     # Every expression the shipped translator (TRANSLATIONS + compile())
@@ -626,7 +738,7 @@ def main():
 
     jobs = []
     for e in sorted(by_expr):
-        for probe in probes_for(domain_of[e], e):
+        for probe in probes_for(domain_of[e], e, counts_by_expr.get(e)):
             jobs.append((len(jobs), domain_of[e], e, probe))
 
     print(f"pinned release        {version}")
