@@ -48,11 +48,42 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // and 0x0208 TextInfo (custom PROCESS_PROC), so
     // `parse_camera_type_and_quality` stays their only producer, unchanged.
     //
-    // GATE B A/B: PENDING (measured by the integrator on the i7:
-    // control = staging/ifd-2 @ 134008e9, treatment = this branch).
+    // GATE B A/B of record (i7, `/tmp/i7-missing-census.sh` = release build
+    // + `conformance.py --json-out` over combined-samples, 4238 files,
+    // against the pinned 13.59 oracle, both probes OK; per-file diff
+    // `/tmp/i7-ab-diff.py`). Control = staging/ifd-2-control @ 99890bec
+    // (the same generated tables and grammar, no call site, no allowlist
+    // line; its numbers equal the tip 83bff055's gate), treatment = the
+    // call-site commit merged, 751a1093:
     //
-    //     control    TOTAL ... match ... value ... missing ... extra ...
-    //     treatment  TOTAL ... match ... value ... missing ... extra ...
+    //     control    TOTAL 4238 443903 21 598 5830 10461 98.6%
+    //     treatment  TOTAL 4238 444530 21 553 5248 10461 98.7%
+    //
+    // 123 files touched; 583 MISSING -> matched (SerialNumber 95, DataDump
+    // 51, Macro 44, SceneMode 38, BWMode 37, DigitalZoom 37,
+    // PreCaptureFrames 37, OneTouchWB 37, WhiteBoard 36, WhiteBalanceBias
+    // 36, Firmware 32, FlashExposureComp 20, WBMode 20, BodyFirmwareVersion
+    // 20, ApertureValue 18, ...); 46 VALUE rows fixed (WhiteBalanceBracket
+    // 36, SceneMode 10: the MainInfo-last projection); 0 new EXTRA; and two
+    // rows that were wrong DOWNSTREAM of a correct walk, each fixed by its
+    // own measured commit on this branch:
+    //   - 1 new VALUE, OlympusBrioD100.jpg FlashExposureComp (rational64s
+    //     128/0, `inf` in the oracle): `core/exiftool_compat.rs` rule 17
+    //     rewrote every infinity to `undef`. Fixed in aed1480f (rule 17
+    //     follows ExifTool.pm:6111/6118). Its A/B, 751a1093 -> aed1480f:
+    //         TOTAL 4238 444530 21 553 5248 10461 -> 4238 444545 21 538 5248 10461
+    //     14 files, 15 VALUE rows fixed (CompressedBitsPerPixel 5,
+    //     DigitalZoomRatio 3, ExposureCompensation 3, FlashExposureComp 1,
+    //     FocusMode 1, ExposureTime 1, BrightnessValue 1), 0 new VALUE,
+    //     0 new EXTRA, 0 matched -> MISSING.
+    //   - 1 matched -> MISSING, OlympusD450Z.jpg CameraID (`string`, 32 x
+    //     0xFF; the oracle prints 32 `?` through exiftool:3822
+    //     `XMP::FixUTF8`, and the hand walk had printed the same): the
+    //     engine withheld a non-UTF-8 string. Fixed in 701b9497
+    //     (`runtime::fix_utf8`). Its A/B, aed1480f -> 701b9497:
+    //         TOTAL 4238 444545 21 538 5248 10461 -> 4238 444547 21 538 5246 10461
+    //     2 files, 2 MISSING -> matched (this CameraID, and OlympusFE-120.jpg
+    //     SerialNumber), 0 new VALUE, 0 new EXTRA, 0 matched -> MISSING.
     //
     // Local pre-measurement (a prediction of the i7 run, not the gate):
     // `tools/exiftool-tables/conformance.py` over the 315-file Olympus
