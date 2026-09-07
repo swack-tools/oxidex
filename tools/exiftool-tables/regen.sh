@@ -40,6 +40,10 @@ fi
 CACHE="${OXIDEX_ET_CACHE:-$ROOT/target/exiftool-src}"
 LIB="$CACHE/exiftool-$VERSION/lib"
 OUT="$ROOT/src/exiftool_tables/binary_tables.rs"
+# Slice I-1: the IFD-style (`Exif::ProcessExif`) tables, one generator run,
+# second output file. Written together with $OUT so the two can never come
+# from different dumps (their EXIFTOOL_VERSION stamps are tested equal).
+IFD_OUT="$ROOT/src/exiftool_tables/ifd_tables.rs"
 JSON="$CACHE/tables-$VERSION.json"
 EXPR_LEDGER="$ROOT/tools/exiftool-tables/expr_oracle_ledger.json"
 VALUE_CONV_LEDGER="$ROOT/tools/exiftool-tables/value_conv_ledger.json"
@@ -69,7 +73,7 @@ python3 "$HERE/verify_exprs.py" "$JSON" \
 
 echo
 echo ">> generating Rust"
-python3 "$HERE/codegen.py" "$JSON" -o "$OUT" \
+python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
 echo
@@ -92,7 +96,7 @@ echo ">> formatting generated sources"
 # rustfmt is part of generation, not an afterthought: without it the committed
 # files (which do get formatted) differ from freshly generated ones on every
 # run, and a generator whose output churns cannot be reviewed in a diff.
-cargo fmt -- "$OUT" "$ROOT/src/composite/tables.rs" "$ROOT/src/filetype/tables.rs" \
+cargo fmt -- "$OUT" "$IFD_OUT" "$ROOT/src/composite/tables.rs" "$ROOT/src/filetype/tables.rs" \
     "$ROOT/src/parsers/specialized/fits/tables.rs" \
     2>/dev/null || echo "   (rustfmt unavailable; output left unformatted)"
 
@@ -112,4 +116,4 @@ echo ">> verifying generated Rust against ExifTool (independent path)"
 OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/verify.py" "$OUT" "$LIB" --oracle "$HERE/oracle.pl"
 
 echo
-echo ">> done: $OUT"
+echo ">> done: $OUT and $IFD_OUT"
