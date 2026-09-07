@@ -89,6 +89,18 @@ fresh dump produced by `oracle.pl`, which shares no code with `dump_tables.pl`.
 Comparing against the generator's own JSON would only prove self-consistency —
 it would cheerfully confirm a bug both sides inherited.
 
+Slice I-1 (IFD-style tables, `docs/superpowers/specs/2026-09-06-ifd-tables-
+design.md` §4) gives both a second scope: `oracle.pl` emits `IFD`-prefixed rows
+for every ProcessExif-style table (its header lists the row formats), and
+`verify.py` runs an IFD stage over `src/exiftool_tables/ifd_tables.rs` from the
+same oracle output — skipped with a message while that file is absent. The
+hand-written `fixtures/ifd_tables_sample.rs` is the spec's exact shape with
+real 13.59 facts; `test_verify_ifd.py` pins that each kind of wrong fact fails
+and that a refusal never does, and `verify.py --ifd-generated
+fixtures/ifd_tables_sample.rs` must PASS against the pinned tree.
+`reachability.py` prints the matching IFD census (`ALL_IFD_TABLES` /
+`ENABLED_IFD` / `find_ifd_table` call sites) after the binary one.
+
 ## The rule: never approximate
 
 A conversion is translated only if its exact expression is registered in
