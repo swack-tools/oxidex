@@ -252,6 +252,20 @@ pub(crate) fn record_makernote_tag(
 ///   corpus stores the same number in both places, so this one file is the
 ///   whole observable difference -- and the reason the demotion is needed at
 ///   all rather than assumed harmless.
+/// * `Olympus:ShutterSpeedValue`/`Olympus:ApertureValue`/
+///   `Olympus:BrightnessValue`/`Olympus:Sharpness` -- `%Olympus::Main`
+///   0x1000, 0x1002, 0x1003 and 0x100f, each `Priority => 0` explicitly
+///   (Olympus.pm:913-941, 1000), each the MakerNote twin of an `ExifIFD`
+///   tag (0x9201-0x9203, 0xa40a). The first two are new with slice I-2 --
+///   the generated `Olympus::Main` table walks them, the hand table never
+///   did -- and are `Composite:ShutterSpeed`/`Composite:Aperture`
+///   dependencies, so at the default priority they would win the composite
+///   tie on order alone on every E-1/E-300-era file exactly as Canon's
+///   `ExposureTime` did above. 0x1001 `ISOValue` is `Priority => 0` too but
+///   collides with nothing (`ISO` is a different name), so it is left off
+///   by this list's own rule; within the MakerNote itself the parser
+///   already records every `Priority => 0` row through
+///   [`insert_low_priority`].
 ///
 /// Not exhaustive: other manufacturers declare the same `Priority => 0` "let
 /// EXIF take priority" convention for their own ISO/FNumber/FocalLength-
@@ -291,6 +305,10 @@ const PRIORITY_ZERO_DUPLICATES: &[(&str, &str)] = &[
     ("Sony:ISO", "Sony"),
     ("Sony:FocalLength", "Sony"),
     ("Leica:FocalLength", "Leica"),
+    ("Olympus:ShutterSpeedValue", "Olympus"),
+    ("Olympus:ApertureValue", "Olympus"),
+    ("Olympus:BrightnessValue", "Olympus"),
+    ("Olympus:Sharpness", "Olympus"),
 ];
 
 fn priority_zero_duplicate_group1(tag_name: &str) -> Option<&'static str> {
@@ -585,6 +603,41 @@ mod tests {
         assert_eq!(
             resolved[0].occurrence.raw,
             crate::core::TagValue::new_integer(50)
+        );
+    }
+
+    /// Same shape, for the two `%Olympus::Main` APEX tags slice I-2's
+    /// generated-table walk adds (Olympus.pm:913-931, `Priority => 0`):
+    /// `ExifIFD:ShutterSpeedValue` must keep the bare `ShutterSpeedValue`
+    /// composite dependency even though the Olympus copy is recorded after
+    /// it, and the Olympus copy stays reachable under its own key.
+    #[test]
+    fn olympus_shutter_speed_value_defers_to_the_normal_priority_exif_tag() {
+        let mut metadata = crate::core::MetadataMap::new();
+        metadata.insert(
+            "ExifIFD:ShutterSpeedValue",
+            crate::core::TagValue::new_string("1/100"),
+        );
+        record_makernote_tag(
+            &mut metadata,
+            "Olympus:ShutterSpeedValue".to_string(),
+            crate::core::TagValue::new_string("1/99"),
+        );
+
+        let resolved = crate::cli::tag_resolution::resolve_requested_tags(
+            &metadata,
+            &["ShutterSpeedValue".to_string()],
+            false,
+        );
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved[0].occurrence.raw,
+            crate::core::TagValue::new_string("1/100"),
+            "the bare ShutterSpeedValue dependency must bind the normal-priority EXIF tag"
+        );
+        assert_eq!(
+            metadata.get_string("Olympus:ShutterSpeedValue"),
+            Some("1/99")
         );
     }
 

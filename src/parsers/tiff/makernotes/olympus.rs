@@ -28,6 +28,7 @@ pub mod text_info;
 use crate::const_decoder;
 use crate::core::{MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::{Ctx, IfdDir, IfdTable, MemberValue, find_ifd_table, process_exif};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
@@ -631,15 +632,49 @@ impl OlympusParser {
             Some(0)
         };
 
-        ifd::walk_directory(
-            data,
-            ifd_start,
-            base,
-            effective_byte_order,
-            "Olympus",
-            tables::MAIN,
-            tags,
-        );
+        // Slice I-2 (docs/superpowers/specs/2026-09-06-ifd-tables-design.md,
+        // section 5): `Olympus::Main` through the generated table and the IFD
+        // engine, behind Gate B. The lookup is spelled with literal arguments
+        // because `tools/exiftool-tables/reachability.py` counts literal call
+        // sites, and `enabled()` re-checks Gate A at runtime. Without the
+        // `("Olympus", "Main")` line in `enabled_ifd.rs` `main_table` is
+        // `None` and this method runs exactly as it did before the slice.
+        let main_table = find_ifd_table("Olympus", "Main").filter(|table| table.enabled());
+        if let Some(table) = main_table {
+            walk_main_through_engine(
+                table,
+                data,
+                ifd_start,
+                base,
+                effective_byte_order,
+                model,
+                tags,
+            );
+            // The `MAIN` rows the generated table withholds or never
+            // transcribed keep their hand conversion, and the three rows the
+            // engine renders differently from ExifTool today are overwritten
+            // with the hand rendering -- see `tables::MAIN_RESIDUAL` and
+            // `tables::ENGINE_MISRENDERS`, whose tests pin both classes.
+            ifd::walk_directory(
+                data,
+                ifd_start,
+                base,
+                effective_byte_order,
+                "Olympus",
+                tables::MAIN_RESIDUAL,
+                tags,
+            );
+        } else {
+            ifd::walk_directory(
+                data,
+                ifd_start,
+                base,
+                effective_byte_order,
+                "Olympus",
+                tables::MAIN,
+                tags,
+            );
+        }
 
         for entry in &entries {
             let table: &[ifd::TagDef] = match entry.tag_id {
@@ -700,10 +735,233 @@ impl OlympusParser {
             }
         }
 
+        // ExifTool reaches `MainInfo` (0x4000, the same `Olympus::Main`
+        // table at a second offset) LAST, after every sub-directory above,
+        // and its values therefore win every same-named collision with them
+        // (`SceneMode`, `WhiteBalanceBracket`, `SerialNumber`, ...). The
+        // engine walk above already followed that edge -- its target is the
+        // very table the allowlist line enables -- but did so before the hand
+        // sub-IFD walks ran, so the directory is walked once more here to put
+        // its tags where ExifTool's order puts them. See `main_info_directory`.
+        if let Some(table) = main_table {
+            if let Some((start, order)) =
+                main_info_directory(data, ifd_start, &entries, base, effective_byte_order)
+            {
+                walk_main_through_engine(table, data, start, base, order, model, tags);
+                // The same remainder as for the top level: the withheld rows
+                // (a MainInfo directory carries SpecialMode and DigitalZoom
+                // too) and the overrides, in the same order relative to the
+                // engine's own insertions.
+                ifd::walk_directory(
+                    data,
+                    start,
+                    base,
+                    order,
+                    "Olympus",
+                    tables::MAIN_RESIDUAL,
+                    tags,
+                );
+            }
+        }
+
         parse_camera_type_and_quality(data, ifd_start, &entries, base, effective_byte_order, tags);
 
         Ok(())
     }
+}
+
+// ============================================================================
+// Olympus::Main through the generated table (slice I-2)
+// ============================================================================
+
+/// One `ProcessExif` walk of the generated `Olympus::Main` at `ifd_start`,
+/// inserted into the same `HashMap<String, String>` the hand walk fills, under
+/// the same `Olympus:<Name>` keys.
+///
+/// `$$self{Model}` is seeded from the EXIF `Model` the dispatcher hands this
+/// parser (the engine reads it for Exif.pm:6475's Sony-ILCE first-entry rule);
+/// `Make` is not available to a `MakerNoteParser` and is not guessed at -- the
+/// only `Make` the engine consults is the Apple `format 16` rule
+/// (Exif.pm:6463), which no Olympus note reaches. `Compression`/`SubfileType`
+/// the engine seeds itself (Exif.pm:6447).
+///
+/// Every `Emitted` is inserted the way `FoundTag` would record it
+/// (`shared::tag_priority`): a `Priority => 0` tag (`low_priority`, e.g. the
+/// APEX 0x1000-0x1003 and 0x100f `Sharpness`, Olympus.pm:913-941, 1000) never
+/// displaces a value already under its key, everything else always does. No
+/// `Olympus::Main` tag carries `Avoid`, so `Emitted::avoid` has nothing to
+/// decide here. The value is rendered to the string the hand path would have
+/// produced for its shape ([`engine_value_text`]); a shape the string map
+/// cannot carry faithfully is dropped rather than approximated.
+fn walk_main_through_engine(
+    table: &'static IfdTable,
+    data: &[u8],
+    ifd_start: usize,
+    base: Option<i64>,
+    order: ByteOrder,
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+) {
+    let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
+    if let Some(model) = model {
+        members.insert("Model", MemberValue::Str(model.to_string()));
+    }
+    let mut ctx = Ctx::new(&mut members);
+    let mut emitted = Vec::new();
+    process_exif(
+        table,
+        IfdDir {
+            data,
+            ifd_start,
+            base,
+            byte_order: order.to_io_byte_order(),
+            group1: Some("Olympus"),
+        },
+        &mut ctx,
+        &mut emitted,
+    );
+    for tag in emitted {
+        let Some(text) = engine_value_text(&tag.value) else {
+            continue;
+        };
+        // The tag's family-1 group as ExifTool reports it: `Olympus` for
+        // every reported `Olympus::Main` row (the table's group 1; the only
+        // `Groups => { 1 => 'MakerNotes' }` overrides sit on the `*IFD`
+        // sub-directory variants, which are never values).
+        let key = format!("{}:{}", tag.group1, tag.name);
+        if tag.low_priority {
+            super::shared::tag_priority::insert_low_priority(tags, key, text);
+        } else {
+            tags.insert(key, text);
+        }
+    }
+}
+
+/// The string the hand walk (`ifd::apply_conv`) would have produced for an
+/// engine value of the same shape, so that switching the producer changes no
+/// byte of the map:
+///
+/// * `String` -- itself. This is also every multi-count numeric entry (the
+///   engine space-joins them, ExifTool.pm:6330) and every rendered
+///   `PrintConv`.
+/// * `Integer` -- decimal, as `OlyVal::Int`'s `print_raw`.
+/// * `Float` -- Perl's `%.15g` (`exprs::perl_num`), as `OlyVal::Float`'s
+///   `fmt_g15`. No `Olympus::Main` row is float-typed; kept for the shape.
+/// * `Rational` -- `ifd::print_rational`, exactly the hand rendering: an
+///   exact quotient prints as an integer, otherwise `RoundFloat` at 10
+///   significant digits (`GetRational64s`, ExifTool.pm:6107-6120). The
+///   `Olympus::Main` rows that reach this arm unconverted are all
+///   `rational64s` (0x1003, 0x1006, 0x1023, 0x1025, 0x103d, 0x103e), so the
+///   `i32` pair `TagValue::Rational` carries is exact; every `rational64u` row
+///   in the table has a `PrintConv` and arrives here already a `String`.
+/// * anything else -- dropped. `Binary` is an `undef` run with no
+///   conversion (only 0x0000 `MakerNoteVersion` in this table, which no
+///   Olympus note in the corpus carries): the string map cannot say whether
+///   its bytes are text, and guessing is worse than the absent tag. `Array`
+///   only arises for `List => 1` tags, of which `Olympus::Main` has none;
+///   `DateTime`/`Structure` cannot come out of an IFD walk.
+fn engine_value_text(value: &TagValue) -> Option<String> {
+    match value {
+        TagValue::String(s) => Some(s.clone()),
+        TagValue::Integer(n) => Some(n.to_string()),
+        TagValue::Float(f) => Some(crate::exiftool_tables::exprs::perl_num(*f)),
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } => Some(ifd::print_rational(
+            i64::from(*numerator),
+            i64::from(*denominator),
+        )),
+        _ => None,
+    }
+}
+
+/// Where and in which byte order ExifTool walks the 0x4000 `MainInfo`
+/// directory, as the engine's own descent computed it, or `None` when the
+/// second walk must not run.
+///
+/// Olympus.pm:1528-1548 declares two alternatives for 0x4000: the old-style
+/// `MainInfo` (`$format ne "ifd" and $format ne "int32u"`: the entry's own
+/// bytes are the directory, `SubDirectory.ByteOrder => 'Unknown'`) and the
+/// `SubIFD` `MainInfoIFD` (`Start => '$val'`, byte order inherited). For an
+/// out-of-line value both starts are the stored offset plus the note's base
+/// correction -- the same arithmetic the sub-IFD loop in `parse_located`
+/// applies to every pointer -- so the start is shared and only the byte-order
+/// rule differs. `'Unknown'` is Exif.pm:6982-6993, reproduced here verbatim
+/// (and in `ifd_engine::detect_byte_order`, which is private to the engine):
+///
+/// ```perl
+/// my $num = Get16u($subdirDataPt, $subdirStart);
+/// if ($num & 0xff00 and ($num>>8) > ($num&0xff)) {
+///     $newByteOrder = $otherOrder{$oldByteOrder};
+/// } else {
+///     $newByteOrder = $oldByteOrder;
+/// }
+/// ```
+///
+/// Refused (nothing walked, the engine's first pass already reported what
+/// it could) when: a `SubIFD`-variant entry holds more than one pointer
+/// (no `MaxSubdirs`, so ExifTool's `IsInt` fails on the space-joined value,
+/// Exif.pm:6957-6959, and nothing is walked); an old-style entry's value is
+/// inline (a directory cannot fit in four bytes; the first pass tried the
+/// entry's own bytes and read nothing); the base is unknown (the first pass
+/// could not locate it either); the start is the top-level directory itself
+/// (the engine's guard refused that re-entry in pass one, ExifTool.pm:9065-
+/// 9072, and walking it here would put the top-level values after the
+/// sub-directories'); or the directory contains its own 0x4000 (ExifTool's
+/// `PROCESSED` check stops a re-entry that a fresh root walk here would not).
+fn main_info_directory(
+    data: &[u8],
+    ifd_start: usize,
+    entries: &[ifd::RawEntry],
+    base: Option<i64>,
+    order: ByteOrder,
+) -> Option<(usize, ByteOrder)> {
+    let entry = entries
+        .iter()
+        .find(|e| e.tag_id == OLYMPUS_MAIN_INFO_SUBIFD)?;
+    // Olympus.pm:1531 -- `$format ne "ifd" and $format ne "int32u"` selects
+    // the old-style alternative; `ifd` (13) and `int32u` (4) the `SubIFD` one.
+    let is_sub_ifd_variant =
+        entry.field_type == ifd::ftype::TIFF_LONG || entry.field_type == ifd::ftype::TIFF_IFD;
+    if is_sub_ifd_variant {
+        if entry.count != 1 {
+            return None;
+        }
+    } else {
+        let size = (entry.count as usize).checked_mul(ifd::type_size(entry.field_type))?;
+        if size <= 4 {
+            return None;
+        }
+    }
+    // The inline pointer (`SubIFD`) or the out-of-line value's offset (old
+    // style): both are the entry's 4-byte value field, plus the correction.
+    let start = usize::try_from(i64::from(entry.value_offset).checked_add(base?)?).ok()?;
+    if start == ifd_start {
+        return None;
+    }
+    let sub_order = if is_sub_ifd_variant {
+        order
+    } else {
+        let bytes = data.get(start..start.checked_add(2)?)?;
+        let num = match order {
+            ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
+            ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
+        };
+        if num & 0xff00 != 0 && (num >> 8) > (num & 0xff) {
+            match order {
+                ByteOrder::BigEndian => ByteOrder::LittleEndian,
+                ByteOrder::LittleEndian => ByteOrder::BigEndian,
+            }
+        } else {
+            order
+        }
+    };
+    let nested = ifd::read_ifd(data, start, sub_order)?;
+    if nested.iter().any(|e| e.tag_id == OLYMPUS_MAIN_INFO_SUBIFD) {
+        return None;
+    }
+    Some((start, sub_order))
 }
 
 /// `Olympus::Main` 0x0201 `Quality`, 0x0207 `CameraType` and the 0x0208

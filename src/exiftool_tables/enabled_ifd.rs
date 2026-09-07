@@ -12,8 +12,68 @@
 use super::ifd_schema::IfdTable;
 
 /// The allowlist. Sorted by `(module, table)`; [`is_enabled`] binary-searches
-/// it. Empty until slice I-2 lands the first measured line (Olympus::Main).
-pub static ENABLED_IFD: &[(&str, &str)] = &[];
+/// it. Every entry carries the evidence that put it here, in the comment
+/// above it, in the shape `enabled.rs` uses.
+pub static ENABLED_IFD: &[(&str, &str)] = &[
+    // Olympus::Main -- `src/parsers/tiff/makernotes/olympus.rs`'s
+    // `parse_located` (the `find_ifd_table("Olympus", "Main")` block, and
+    // the second `walk_main_through_engine` call that places the 0x4000
+    // `MainInfo` re-walk last), slice I-2 of
+    // `docs/superpowers/specs/2026-09-06-ifd-tables-design.md`. The table is
+    // `%Image::ExifTool::Olympus::Main` (Olympus.pm:613-1620 in the pinned
+    // 13.59 tree; the top-level MakerNote IFD every Olympus / OM Digital
+    // Solutions body writes under the `OLYMP\0`, `OLYMPUS\0II`/`MM` and
+    // `OM SYSTEM\0` headers, MakerNotes.pm:560-600). Corpus carriers: the
+    // 315 JPEGs under `/tmp/oxidex-exiftool-cache/combined-samples/Olympus`
+    // plus ExifTool's own `t/images/Olympus.jpg`, `Olympus2.jpg` and
+    // `OlympusE1.jpg`, which `tests/olympus_main_ifd_table.rs` pins per tag
+    // against the pinned oracle.
+    //
+    // What the line changes: the top-level Main tags and, through the
+    // table's own 0x4000 edge (Olympus.pm:1528-1548, target = this table),
+    // the `MainInfo` re-walk ExifTool performs last, are reported by the IFD
+    // engine over the generated `IFD_OLYMPUS_MAIN`; the hand `tables::MAIN`
+    // walk is replaced by `tables::MAIN_RESIDUAL` (the six rows the generator
+    // withholds or refused: SpecialMode, DigitalZoom, PreviewImage,
+    // ZoomedPreviewStart/Length, PreviewImageStart -- plus the three
+    // `tables::ENGINE_MISRENDERS` overrides, WBMode / FocalPlaneDiagonal /
+    // ManualFocusDistance, whose engine rendering differs from ExifTool
+    // today and whose hand rendering therefore lands last; the defects are
+    // cited in tables.rs and that list can only shrink). The seven sub-tables
+    // (Equipment, CameraSettings, RawDevelopment(2), ImageProcessing,
+    // FocusInfo, RawInfo) are NOT listed here, so the engine refuses their
+    // edges and the hand walks of them run exactly as before (slice I-3).
+    // The generator withholds 0x0201 Quality (PrintConv reads the
+    // `CameraType` data member), 0x0207 CameraType (Condition + ValueConv)
+    // and 0x0208 TextInfo (custom PROCESS_PROC), so
+    // `parse_camera_type_and_quality` stays their only producer, unchanged.
+    //
+    // GATE B A/B: PENDING (measured by the integrator on the i7:
+    // control = staging/ifd-2 @ 134008e9, treatment = this branch).
+    //
+    //     control    TOTAL ... match ... value ... missing ... extra ...
+    //     treatment  TOTAL ... match ... value ... missing ... extra ...
+    //
+    // Local pre-measurement (a prediction of the i7 run, not the gate):
+    // `tools/exiftool-tables/conformance.py` over the 315-file Olympus
+    // directory only, pinned 13.59 oracle (`exiftool-pinned.sh -ver` ->
+    // 13.59, `-FileType t/images/OOXML.docx` -> DOCX), release binaries
+    // built at 134008e9 (control) and at this branch (treatment):
+    //
+    //     control    TOTAL 315 37580 match 0 rename 61 value 994 missing 186 extra 97.3%
+    //     treatment  TOTAL 315 38207 match 0 rename 16 value 412 missing 186 extra 98.9%
+    //
+    // 582 MISSING moved to matched, VALUE 61 -> 16 (the 36 WhiteBalanceBracket
+    // and 10 SceneMode rows where ExifTool projects the MainInfo copy over
+    // CameraSettings' now agree; one new: OlympusBrioD100.jpg
+    // FlashExposureComp 128/0, `inf` in the oracle, rewritten to `undef` by
+    // `core/exiftool_compat.rs` rule 17 after this parser produced `inf`),
+    // zero new EXTRA. `scripts/compare_file.py` over the same files plus
+    // t/images Olympus.jpg/Olympus2.jpg/OlympusE1.jpg: MISSING 938 -> 371,
+    // WRONG 16 -> 16 (OlympusD450Z.jpg CameraID, non-UTF-8 bytes, moved from
+    // WRONG `????...` to MISSING: the engine refuses rather than re-encodes).
+    ("Olympus", "Main"),
+];
 
 /// Whether the IFD engine may walk `table`: Gate A (static soundness,
 /// re-checked here rather than trusted from the list) AND Gate B (this list).
@@ -31,10 +91,9 @@ mod tests {
     use crate::exiftool_tables::{ALL_IFD_TABLES, find_ifd_table};
 
     // The four tests `enabled.rs` carries for the binary allowlist, over the
-    // IFD one. On the engine branch `ALL_IFD_TABLES` is the empty stub in
-    // `ifd_tables.rs`, so the three that iterate tables pass vacuously; they
-    // become the real Gate-B guard the moment the generated file replaces the
-    // stub, with no edit needed here.
+    // IFD one. They passed vacuously while `ALL_IFD_TABLES` was the engine
+    // branch's empty stub; with the generated file and slice I-2's first
+    // line in, they are the real Gate-B guard.
 
     /// `is_enabled` binary-searches, so an unsorted list would silently fail
     /// to find entries rather than fail loudly.
