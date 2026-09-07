@@ -108,6 +108,43 @@ pub static ENABLED: &[(&str, &str)] = &[
     // shared ProcessBinaryData engine; one line is this table's review and
     // revert unit.
     ("H264", "RecInfo"),
+    // ICC_Profile::Header -- `src/parsers/icc/mod.rs`'s `header_tags`, the
+    // 128-byte profile header ExifTool hands to `ProcessDirectory` with
+    // `DirLen => 128` (ICC_Profile.pm:1283-1295; the table is :652-757).
+    // Corpus carriers: every file with an embedded or standalone ICC profile
+    // -- 136 of 4,238 under the pinned 13.59 oracle (`exiftool-pinned.sh -r
+    // -j -G1`), across JPEG, PNG, TIFF/RAW, PSD, XCF and the ICC files.
+    //
+    // This line REPLACES a hand transcription of the same table
+    // (`icc/header.rs`, deleted in 4b-ii): the generated table carries
+    // ExifTool's own `%manuSig`/`%profileClass` hashes and every conversion
+    // is oracle-verified (`verify_exprs.py`), where the hand code dropped a
+    // tag whenever a signature was blank or unlisted -- ExifTool prints
+    // `""` for a blank key `%manuSig` maps (`'' => ''`) and `Unknown (...)`
+    // for a miss (ExifTool.pm:3624-3631, engine 4b-i). Gate A became sound
+    // for this table with slice 4 (`.` concatenation, the list domain for
+    // `int16u[6]` / `int32u[2]` / `int8u[16]`, `HexID`).
+    //
+    // Gate B, `tools/exiftool-tables/conformance.py` over
+    // `/tmp/oxidex-exiftool-cache/combined-samples` --recursive --min-files
+    // 3875 --min-tags 5000 against pinned 13.59 (both probes OK), release
+    // binaries built on the i7 (`/tmp/i7-missing-census.sh`, 2026-09-06)
+    // from the same tables WITHOUT this line (control, `91fb1168`) and this
+    // branch (treatment, `0039bf36`), per-file diff of the two `--json-out`
+    // files (`/tmp/icc-ab.txt`):
+    //
+    //     control  TOTAL 4238 443839 21 607 5885 10461 98.6%
+    //     enabled  TOTAL 4238 443903 21 598 5830 10461 98.6%
+    //
+    // 29 files touched. 55 MISSING moved to matched (ProfileCMMType 27,
+    // PrimaryPlatform 24, DeviceManufacturer 4 -- the blank signatures the
+    // hand code dropped and ExifTool prints as `""` or `Unknown ()`), 9
+    // VALUE rows fixed (ProfileCreator 3, PrimaryPlatform 3,
+    // DeviceManufacturer 3 -- the `Unknown (SEC)` renderings 4b-i's hash-miss
+    // fallback supplies), zero new VALUE, zero new EXTRA, zero matched ->
+    // MISSING. Per-field on the synthetic fixture pinned with the same
+    // oracle: `parsers::icc::tests`.
+    ("ICC_Profile", "Header"),
     // ID3::v1 -- `src/parsers/audio/mp3.rs:499`, the 128-byte ID3v1 trailer.
     // This one is the clearest case for the shared `ReadValue`: every field
     // is a `string[N]` butted against the end of a fixed 128-byte record,

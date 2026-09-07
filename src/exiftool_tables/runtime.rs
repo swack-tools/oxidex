@@ -252,6 +252,29 @@ pub fn to_tag_value(value: &DecodedValue) -> TagValue {
     }
 }
 
+/// [`to_tag_value`], except that a fixed-count field becomes the ONE value
+/// ExifTool reports for it: `ReadValue` joins the elements with a single
+/// space (ExifTool.pm:6312, `$val = join(' ', @vals)`), so `exiftool -j`
+/// prints `"0.9642 1 0.82491"` for a `fixed32s[3]`, never a JSON list. The
+/// elements take Perl's text (`DecodedValue::perl_string`); an array whose
+/// elements have no exact Perl text here (rationals -- see `perl_string`)
+/// keeps the [`TagValue::Array`] form rather than print digits ExifTool
+/// would not.
+///
+/// This is what [`super::engine::process_binary_data`] emits. The older
+/// [`DecodedField::emit`] path keeps returning `TagValue::Array` because
+/// hand call sites (`sony/amount.rs`) consume that shape directly.
+#[must_use]
+pub fn to_exiftool_value(value: &DecodedValue) -> TagValue {
+    match value {
+        DecodedValue::Array(_) => match value.perl_string() {
+            Some(joined) => TagValue::String(joined),
+            None => to_tag_value(value),
+        },
+        _ => to_tag_value(value),
+    }
+}
+
 /// A caller's acknowledgment of which of a field's [`Omitted`] semantics it
 /// has independently supplied, one bit per flag.
 ///
