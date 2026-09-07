@@ -543,6 +543,107 @@ pub static MAIN: &[TagDef] = &[
 ];
 
 // ===========================================================================
+// Olympus::Main -- the rows the generated table cannot produce (slice I-2)
+// ===========================================================================
+//
+// When `src/exiftool_tables/enabled_ifd.rs` lists `("Olympus", "Main")`, the
+// top-level Main directory is walked by the IFD engine over the generated
+// `IFD_OLYMPUS_MAIN` (`olympus.rs::parse_located`), and `MAIN` above is not
+// walked at all -- walking both would insert every Main tag twice. This is
+// the exact remainder: the `MAIN` rows the generator either withheld
+// (`Omitted` set, so the engine never reports them) or refused to transcribe
+// (no row at all), which therefore still have the hand conversion as their
+// only producer. Nothing else may appear here: a row the engine does produce
+// would be emitted twice, and a row ExifTool never prints (0x103f
+// `FieldCount`, `Unknown => 1`, Olympus.pm:1157-1161) must stay out even
+// though `MAIN` carries it. `main_residual_is_exactly_the_generated_tables_
+// remainder` below pins this list against the generated table, so a
+// regeneration that starts producing one of these fails loudly rather than
+// double-emitting.
+//
+// * 0x0200 `SpecialMode` -- PrintConv is a Perl `sub` (Olympus.pm:684-694);
+//   withheld as `omitted.print_conv`.
+// * 0x0204 `DigitalZoom` -- PrintConv `'$val=~/\./ or $val.=".0"; $val'`
+//   (Olympus.pm:752), outside the expression grammar; `omitted.print_conv`.
+// * 0x0280 `PreviewImage` -- `%Image::ExifTool::previewImageTagInfo`
+//   (Olympus.pm:788-793), a `RawConv` image validator; not transcribed.
+// * 0x0f04 `ZoomedPreviewStart` / 0x0f05 `ZoomedPreviewLength` --
+//   `OffsetPair`/`DataTag` (Olympus.pm:893-907); not transcribed (the design
+//   spec's `IsOffset`/`OffsetPair`/`DataTag` refusal, section 6).
+// * 0x1036 `PreviewImageStart` -- `Flags => 'IsOffset'` (Olympus.pm:1121-
+//   1129); not transcribed. `olympus::absolutise_preview_image_start` still
+//   reads the stored number this row yields.
+//
+// A second, deliberately separate class -- `ENGINE_MISRENDERS` -- holds rows
+// the generated table DOES produce but renders differently from ExifTool
+// today. The engine inserts its value first and the hand row here overwrites
+// it (the residual walk runs after every engine walk), so the map ends with
+// the hand rendering, which the pinned oracle confirms on the corpus. Each
+// entry names the engine defect; the class exists so the defect is counted
+// in one place and so this list can only SHRINK: when the engine is fixed
+// the entry is removed here and from `ENGINE_MISRENDERS`, and the test below
+// then requires the row to be engine-only again. Measured with
+// `scripts/compare_file.py` over the 315-file Olympus directory against the
+// pinned 13.59 oracle, treatment = the engine's rendering alone:
+//
+// * 0x1015 `WBMode` -- `int16u[2]` with a PrintConv hash keyed by the
+//   space-joined value (`'1 0' => 'Auto'`, ..., Olympus.pm:1020-1041).
+//   `runtime::render`'s `StrEnum` arm takes `DecodedValue::enum_key`, which
+//   is `None` for a fixed-count `Array`, so the walk falls back to the raw
+//   `"1 0"`; ExifTool looks the joined string up (`Auto`) and prints
+//   `Unknown (1 1)` on a miss. 20 corpus files (`OlympusBrioD100.jpg` `Auto`
+//   vs `1 0`, `OlympusE10.jpg` `One-touch` vs `3 0`, `OlympusStylus300.jpg`
+//   `3000 Kelvin` vs `2 2`, `OlympusC160.jpg` `Unknown (1 1)` vs `1 1`).
+//   `Conv::ListLookup` is exactly that hash lookup on the joined integers.
+// * 0x0205 `FocalPlaneDiagonal` and 0x100c `ManualFocusDistance` --
+//   `rational64u` with `PrintConv => '"$val mm"'` (Olympus.pm:755-760,
+//   986-990). ExifTool's `$val` for a 64-bit rational is already
+//   `RoundFloat($n/$d, 10)` (`GetRational64u`, ExifTool.pm:6114-6120), and
+//   the interpolation prints that 10-significant-digit string; the IFD
+//   engine hands `render`'s `Expr` arm the exact quotient, which
+//   `perl_num` prints at 15 digits. 5 corpus files differ
+//   (`OlympusFE-120.jpg`: `1.733823728e-07 mm` vs `1.73382372803657e-07
+//   mm`, from 256/1476505344; `OlympusIR-500.jpg`: `4.399844367 mm` vs
+//   `4.39984436747585 mm`), and `Composite:ScaleFactor35efl`'s dependants
+//   (`FocalLength35efl`, `HyperfocalDistance`) move with it. `print_mm`
+//   goes through `print_rational` -> `exiftool_rational_number`, the 10-digit
+//   rule. `ManualFocusDistance` has no corpus carrier and is listed on the
+//   shape alone -- the same defect, not a measured one.
+pub static MAIN_RESIDUAL: &[TagDef] = &[
+    TagDef::func(0x0200, "SpecialMode", print_special_mode),
+    TagDef::func(0x0204, "DigitalZoom", print_digital_zoom),
+    TagDef::func(0x0205, "FocalPlaneDiagonal", print_mm),
+    TagDef::binary(0x0280, "PreviewImage"),
+    TagDef::raw(0x0F04, "ZoomedPreviewStart"),
+    TagDef::raw(0x0F05, "ZoomedPreviewLength"),
+    TagDef::func(0x100C, "ManualFocusDistance", print_mm),
+    TagDef::list_lookup(0x1015, "WBMode", MAIN_WB_MODE),
+    TagDef::raw(0x1036, "PreviewImageStart"),
+];
+
+/// The `MAIN_RESIDUAL` rows that override an engine rendering rather than
+/// supply a withheld one -- see the second class in the comment above.
+pub static ENGINE_MISRENDERS: &[u16] = &[0x0205, 0x100C, 0x1015];
+
+/// Olympus.pm:1024-1041, `%Olympus::Main` 0x1015 `WBMode` -- keyed by the
+/// space-joined `int16u[2]` value; the bare `'1'` key is ExifTool's own
+/// (a one-count entry reads as `"1"`).
+static MAIN_WB_MODE: &[(&str, &str)] = &[
+    ("1", "Auto"),
+    ("1 0", "Auto"),
+    ("1 2", "Auto (2)"),
+    ("1 4", "Auto (4)"),
+    ("2 2", "3000 Kelvin"),
+    ("2 3", "3700 Kelvin"),
+    ("2 4", "4000 Kelvin"),
+    ("2 5", "4500 Kelvin"),
+    ("2 6", "5500 Kelvin"),
+    ("2 7", "6500 Kelvin"),
+    ("2 8", "7500 Kelvin"),
+    ("3 0", "One-touch"),
+];
+
+// ===========================================================================
 // Olympus::Main, re-entered via the MainInfoIFD sub-IFD (0x4000)
 // ===========================================================================
 //
@@ -1578,6 +1679,117 @@ mod tests {
 
     fn conv_of(table: &'static [TagDef], id: u16) -> &'static TagDef {
         table.iter().find(|d| d.id == id).expect("tag in table")
+    }
+
+    /// `MAIN_RESIDUAL` is EXACTLY the set of `MAIN` rows the generated
+    /// `Olympus::Main` cannot report: a row that is absent from the generated
+    /// table or withheld there (`Omitted` set) must be in the residual, and
+    /// every other `MAIN` row must not be -- with one named exception, a row
+    /// the generated table carries as `Unknown` (ExifTool never prints it
+    /// without `-u`), which stays out of both. Both directions matter: a
+    /// missing residual row is a silently lost tag, a superfluous one is a
+    /// tag inserted twice. The generated table is reached through
+    /// `ALL_IFD_TABLES` rather than a literal `find_ifd_table` so that
+    /// `tools/exiftool-tables/reachability.py`'s call-site census counts
+    /// only the live call in `olympus.rs`.
+    #[test]
+    fn main_residual_is_exactly_the_generated_tables_remainder() {
+        let generated = crate::exiftool_tables::ALL_IFD_TABLES
+            .iter()
+            .find(|t| t.module == "Olympus" && t.table == "Main")
+            .expect("Olympus::Main is generated");
+        for row in MAIN {
+            // The override class is checked by the test below, not here: an
+            // override IS an engine-reported row with a residual twin.
+            let in_residual = MAIN_RESIDUAL
+                .iter()
+                .any(|r| r.id == row.id && !ENGINE_MISRENDERS.contains(&r.id));
+            match generated.tag(row.id) {
+                None => assert!(
+                    in_residual,
+                    "{:#06x} {} is not in the generated Olympus::Main; the hand row is its only producer and must be in MAIN_RESIDUAL",
+                    row.id, row.name
+                ),
+                Some(tag) if tag.omitted.any() => assert!(
+                    in_residual,
+                    "{:#06x} {} is withheld by the generated table ({:?}); the hand row is its only producer and must be in MAIN_RESIDUAL",
+                    row.id, row.name, tag.omitted
+                ),
+                Some(tag) if tag.flags.unknown => assert!(
+                    !in_residual,
+                    "{:#06x} {} is `Unknown => 1` in Olympus.pm: ExifTool never reports it without -u, so no hand row may re-add it",
+                    row.id, row.name
+                ),
+                Some(tag) => {
+                    assert!(
+                        !in_residual,
+                        "{:#06x} {} is produced by the engine; a residual row would insert it twice",
+                        row.id, row.name
+                    );
+                    assert_eq!(
+                        tag.name, row.name,
+                        "{:#06x}: the generated name must equal the hand name or the `Olympus:<name>` key changes",
+                        row.id
+                    );
+                    assert!(
+                        tag.subdir.is_none(),
+                        "{:#06x} {} is a SubDirectory in the generated table, not a value",
+                        row.id,
+                        row.name
+                    );
+                }
+            }
+        }
+        for residual in MAIN_RESIDUAL {
+            if ENGINE_MISRENDERS.contains(&residual.id) {
+                continue;
+            }
+            assert!(
+                MAIN.iter()
+                    .any(|m| m.id == residual.id && m.name == residual.name),
+                "{:#06x} {} in MAIN_RESIDUAL is not a MAIN row; a withheld-row residual may only restate what the hand table already had",
+                residual.id,
+                residual.name
+            );
+        }
+    }
+
+    /// The override class: every `ENGINE_MISRENDERS` id is a residual row
+    /// AND a row the generated table reports (present, not withheld, not
+    /// `Unknown`, not a SubDirectory) under the same name -- otherwise it is
+    /// not an override of anything and belongs in the first class or
+    /// nowhere. When the engine defect an entry cites is fixed, the entry
+    /// comes out of both lists; nothing here can tell that the rendering is
+    /// now right, so the corpus A/B on the affected carriers is the check.
+    #[test]
+    fn engine_misrenders_are_overrides_of_rows_the_engine_reports() {
+        let generated = crate::exiftool_tables::ALL_IFD_TABLES
+            .iter()
+            .find(|t| t.module == "Olympus" && t.table == "Main")
+            .expect("Olympus::Main is generated");
+        for id in ENGINE_MISRENDERS {
+            let residual = MAIN_RESIDUAL
+                .iter()
+                .find(|r| r.id == *id)
+                .unwrap_or_else(|| {
+                    panic!("{id:#06x} is in ENGINE_MISRENDERS but not in MAIN_RESIDUAL")
+                });
+            let tag = generated.tag(*id).unwrap_or_else(|| {
+                panic!(
+                    "{id:#06x} {} is not in the generated table; it is a withheld-class residual, not an override",
+                    residual.name
+                )
+            });
+            assert!(
+                !tag.omitted.any() && !tag.flags.unknown && tag.subdir.is_none(),
+                "{id:#06x} {}: the engine does not report this row, so there is nothing to override",
+                residual.name
+            );
+            assert_eq!(
+                tag.name, residual.name,
+                "{id:#06x}: an override must keep the generated name"
+            );
+        }
     }
 
     #[test]

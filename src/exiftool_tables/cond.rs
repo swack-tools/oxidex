@@ -218,8 +218,12 @@ pub enum Cond {
         op: CmpOp,
         value: i64,
     },
-    /// `$format eq "..."`.
-    FormatEq { value: &'static str },
+    /// `$format eq "..."` / `$format ne "..."` (`negate` for `ne`) -- the
+    /// entry's format name as `ProcessExif` binds `$format` (Exif.pm:6713,
+    /// the `$formatName[$format]` spelling: `int16u`, `undef`, `ifd`, ...).
+    /// An unset `$format` (a binary-table walk never binds one) compares as
+    /// Perl's undef: `eq` false, `ne` true.
+    FormatEq { value: &'static str, negate: bool },
     /// `$count <op> N`.
     CountCmp { op: CmpOp, value: i64 },
     /// `<left> and <right>`, both evaluated (never short-circuited away
@@ -296,7 +300,7 @@ impl Cond {
                 Some(MemberValue::Num(n)) => op.apply(n & mask, *value),
                 _ => false,
             },
-            Cond::FormatEq { value } => ctx.format == Some(*value),
+            Cond::FormatEq { value, negate } => (ctx.format == Some(*value)) != *negate,
             Cond::CountCmp { op, value } => ctx.count.is_some_and(|c| op.apply(c, *value)),
             Cond::And(left, right) => {
                 // Both sides always run through `eval` when `left` is true,
@@ -358,8 +362,23 @@ fn regex_match_str(pattern: &str, ignore_case: bool, subject: &str) -> bool {
     }
 }
 
+/// `$$valPt =~ /pattern/` over the raw bytes ExifTool holds in `$$valPt`.
+///
+/// Built with `.unicode(false)`: in the `regex` crate's default Unicode
+/// mode a `\xd7` in the pattern is the CODEPOINT U+00D7 (the two UTF-8
+/// bytes C3 97), so `/\xd7/` never matched the single byte 0xD7 a
+/// MakerNote signature carries -- Perl's `\xd7` on a byte string is that
+/// byte. Found by verify_cond.py the moment its census reached the
+/// IFD-style tables (slice I-2), where eleven `$$valPt` Conditions carry
+/// bytes above 0x7f (Minolta `\xd7`, DJI `\xaa\x55\x12\x06`, Sony
+/// `[\x05\xff]`, JPEG `\xff\xd8\xff`, ...); every binary-table `$$valPt`
+/// pattern is ASCII, which is why it never showed. Byte mode also makes
+/// `.`/`\w`/`\b` byte-wise, which is Perl's semantics on a byte string.
 fn regex_match_bytes(pattern: &str, subject: &[u8]) -> bool {
-    match regex::bytes::RegexBuilder::new(pattern).build() {
+    match regex::bytes::RegexBuilder::new(pattern)
+        .unicode(false)
+        .build()
+    {
         Ok(re) => re.is_match(subject),
         Err(_) => false,
     }

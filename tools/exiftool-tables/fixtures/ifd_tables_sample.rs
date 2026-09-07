@@ -491,7 +491,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
         alternatives: &[
             (
                 Cond::And(
-                    &Cond::FormatEq { value: "ifd" },
+                    &Cond::FormatEq { value: "ifd", negate: false },
                     &Cond::CountCmp {
                         op: CmpOp::Gt,
                         value: 0,

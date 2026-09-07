@@ -873,7 +873,7 @@ pub fn decode_value_of(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Opti
                 .iter()
                 .position(|byte| *byte == 0)
                 .unwrap_or(bytes.len());
-            DecodedValue::String(std::str::from_utf8(&bytes[..end]).ok()?.to_string())
+            DecodedValue::String(fix_utf8(&bytes[..end])?)
         }
         Fmt::Undef(_) => DecodedValue::Undefined(bytes.to_vec()),
         // Unreachable via `decode_field`, which refuses `Fmt::Var` before it
@@ -882,6 +882,73 @@ pub fn decode_value_of(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Opti
         // `_ => None` arm and be dropped without anyone noticing.
         Fmt::Var(_) => return None,
     })
+}
+
+/// `Image::ExifTool::XMP::FixUTF8` (XMP.pm:2943-2975), which the exiftool
+/// application runs over every string it prints as JSON ("JSON strings must
+/// be valid UTF8", exiftool:3822-3823): each byte that neither starts nor
+/// continues a well-formed UTF-8 sequence becomes `?`, ONE BYTE AT A TIME --
+/// a bad lead byte becomes `?`, and its would-be continuation bytes are then
+/// re-scanned and each become `?` in turn. Well-formed is what `IsUTF8`
+/// means there: a lead byte 0xC2-0xF7 followed by its one to three
+/// continuation bytes (0x80-0xBF), minus the overlong (E0 80-9F, F0 80-8F),
+/// surrogate (ED A0-BF), noncharacter (EF BF BE/BF) and above-U+10FFFF
+/// (F4 90+, F5-F7 with anything) encodings. ASCII bytes and the accepted
+/// sequences are copied through unchanged.
+///
+/// ExifTool keeps the raw bytes internally and substitutes only when
+/// printing; a `String` cannot hold raw bytes, so the substitution happens
+/// here at decode time instead. Under the `-j` instrument every census and
+/// gate grades with, the two are indistinguishable -- OlympusD450Z.jpg's
+/// CameraID (32 x 0xFF) prints as 32 `?` in both.
+///
+/// `None` only if the output were not UTF-8, which the accept rules above
+/// make impossible; checking it keeps that a verified claim.
+pub(super) fn fix_utf8(bytes: &[u8]) -> Option<String> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let ch = bytes[i];
+        if ch < 0x80 {
+            out.push(ch);
+            i += 1;
+            continue;
+        }
+        if (0xc2..0xf8).contains(&ch) {
+            let n = if ch < 0xe0 {
+                1
+            } else if ch < 0xf0 {
+                2
+            } else {
+                3
+            };
+            if let Some(cont) = bytes.get(i + 1..i + 1 + n)
+                && cont.iter().all(|b| (0x80..=0xbf).contains(b))
+            {
+                let bad = match n {
+                    1 => false,
+                    2 => {
+                        (ch == 0xe0 && (cont[0] & 0xe0) == 0x80)
+                            || (ch == 0xed && (cont[0] & 0xe0) == 0xa0)
+                            || (ch == 0xef && cont[0] == 0xbf && (cont[1] & 0xfe) == 0xbe)
+                    }
+                    _ => {
+                        (ch == 0xf0 && (cont[0] & 0xf0) == 0x80)
+                            || (ch == 0xf4 && cont[0] > 0x8f)
+                            || ch > 0xf4
+                    }
+                };
+                if !bad {
+                    out.extend_from_slice(&bytes[i..i + 1 + n]);
+                    i += 1 + n;
+                    continue;
+                }
+            }
+        }
+        out.push(b'?');
+        i += 1;
+    }
+    String::from_utf8(out).ok()
 }
 
 /// ExifTool's `int($val * $scale + ±0.5) / $scale`, the idiom every `GetFixed*`
@@ -2554,5 +2621,55 @@ mod tests {
             Some(TagValue::Float(22050.0)),
             "SampleRate must decode to exactly 22050, matching the pinned oracle"
         );
+    }
+    /// `fix_utf8` is XMP.pm:2943-2975 byte for byte: the D450Z CameraID row
+    /// (32 x 0xFF -> 32 `?`, what the pinned oracle prints under `-j`), the
+    /// accepted shapes, and every rejection rule the Perl spells out --
+    /// each replaced ONE BYTE at a time, continuation bytes included.
+    #[test]
+    fn fix_utf8_transcribes_exiftools_fixutf8() {
+        let d450z = [0xffu8; 32];
+        assert_eq!(
+            fix_utf8(&d450z).as_deref(),
+            Some("????????????????????????????????")
+        );
+        assert_eq!(
+            fix_utf8(b"OLYMPUS DIGITAL CAMERA").as_deref(),
+            Some("OLYMPUS DIGITAL CAMERA")
+        );
+        assert_eq!(fix_utf8(b"caf\xc3\xa9").as_deref(), Some("caf\u{e9}"));
+        assert_eq!(fix_utf8(b"\xe2\x82\xac").as_deref(), Some("\u{20ac}"));
+        assert_eq!(fix_utf8(b"\xf0\x9f\x98\x80").as_deref(), Some("\u{1f600}"));
+        // A truncated sequence: the lead byte, then its stranded
+        // continuation byte, each become `?`.
+        assert_eq!(fix_utf8(b"ab\xe2\x82").as_deref(), Some("ab??"));
+        // Continuation bytes with no lead (< 0xC2) are bad one by one.
+        assert_eq!(fix_utf8(b"\x80\xbf").as_deref(), Some("??"));
+        // Overlong two-byte (C0/C1 leads) and three-byte (E0 80-9F).
+        assert_eq!(fix_utf8(b"\xc0\x80").as_deref(), Some("??"));
+        assert_eq!(fix_utf8(b"\xe0\x80\x80").as_deref(), Some("???"));
+        assert_eq!(fix_utf8(b"\xe0\xa0\x80").as_deref(), Some("\u{800}"));
+        // Surrogates (ED A0-BF) and the noncharacters U+FFFE/U+FFFF, which
+        // Rust's decoder would accept and ExifTool does not.
+        assert_eq!(fix_utf8(b"\xed\xa0\x80").as_deref(), Some("???"));
+        assert_eq!(fix_utf8(b"\xed\x9f\xbf").as_deref(), Some("\u{d7ff}"));
+        assert_eq!(fix_utf8(b"\xef\xbf\xbe").as_deref(), Some("???"));
+        assert_eq!(fix_utf8(b"\xef\xbf\xbd").as_deref(), Some("\u{fffd}"));
+        // Four-byte: overlong (F0 80-8F), above U+10FFFF (F4 90+, F5-F7).
+        assert_eq!(fix_utf8(b"\xf0\x80\x80\x80").as_deref(), Some("????"));
+        assert_eq!(fix_utf8(b"\xf4\x90\x80\x80").as_deref(), Some("????"));
+        assert_eq!(fix_utf8(b"\xf5\x80\x80\x80").as_deref(), Some("????"));
+        assert_eq!(fix_utf8(b"\xf4\x8f\xbf\xbf").as_deref(), Some("\u{10ffff}"));
+        // Leads 0xF8-0xFF never start a sequence.
+        assert_eq!(fix_utf8(b"\xf8\x80\x80\x80\x80").as_deref(), Some("?????"));
+    }
+
+    /// The `string` arm keeps its NUL truncation (ExifTool.pm:6309) and now
+    /// prints the malformed remainder instead of withholding the tag.
+    #[test]
+    fn str_arm_prints_malformed_bytes_as_question_marks() {
+        let bytes = b"OLY\xff\xfe\0trailing";
+        let decoded = decode_value_of(bytes, Fmt::Str(bytes.len() as u32), ByteOrder::Little);
+        assert_eq!(decoded, Some(DecodedValue::String("OLY??".to_string())));
     }
 }

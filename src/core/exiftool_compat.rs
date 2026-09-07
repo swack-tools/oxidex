@@ -36,7 +36,8 @@
 //! 14. ThumbnailImage (binary -> "(Binary data X bytes, use -b option to extract)")
 //! 15. Percentage tags (Quality, MeasurementFlare: append %)
 //! 16. Unit suffixes (FocalLength -> "X mm", GPSAltitude -> "X m")
-//! 17. Special values (infinity -> "undef", -0 -> "0")
+//! 17. Special values (zero-denominator rationals -> "inf"/"undef" as
+//!     ExifTool.pm:6111/6118 print them, -0 -> "0")
 //! 18. Default: return original value unchanged
 //!
 //! # Example
@@ -163,7 +164,8 @@ pub fn format_for_exiftool(metadata: &MetadataMap) -> MetadataMap {
 /// 14. ThumbnailImage (binary -> "(Binary data X bytes, use -b option to extract)")
 /// 15. Percentage tags (Quality, MeasurementFlare: append %)
 /// 16. Unit suffixes (FocalLength, GPSAltitude)
-/// 17. Special values (infinity -> "undef", -0 -> "0")
+/// 17. Special values (zero-denominator rationals -> "inf"/"undef" as
+///     ExifTool.pm:6111/6118 print them, -0 -> "0")
 /// 18. Default: return original value unchanged
 ///
 /// # Arguments
@@ -898,56 +900,55 @@ fn format_tag_value_rules(tag_name: &str, value: &TagValue) -> TagValue {
     }
 
     // ---------------------------------------------------------------------
-    // Rule 17: Special Values (infinity -> "undef", -0 -> "0")
-    // Handle special float/rational values that result from invalid/undefined data.
-    // GPS tags like GPSDestBearing/GPSDestDistance produce infinity when
-    // the denominator is 0. ExifTool displays "undef" for these cases.
-    // Also handles string representations ("inf", "-0") for values already
-    // converted to string.
+    // Rule 17: Special Values (zero-denominator rationals, -0 -> "0")
+    //
+    // ExifTool.pm:6107-6120 (`GetRational64s`/`GetRational64u`) decide what a
+    // zero denominator prints, and they decide it from the NUMERATOR:
+    //
+    //     $ratDenom = Get32u($dataPt, $pos + 4) or return $ratNumer ? 'inf' : 'undef';
+    //
+    // so `n/0` (n != 0, either sign -- the signed reader tests the numerator
+    // for truth, not for sign) prints `inf` and only `0/0` prints `undef`,
+    // and the PrintConvs downstream pass both sentinels through unchanged
+    // (Exif.pm `PrintFNumber("inf")` -> `inf`; GPS.pm:277/291 GPSDestBearing
+    // and GPSDestDistance have no PrintConv at all). This rule used to rewrite
+    // EVERY infinity -- float, rational or the string "inf" -- to `undef`,
+    // under a comment claiming ExifTool "displays undef for these cases"; the
+    // corpus census at `refactor/tag-machinery` @ 83bff055 (conformance.py
+    // JSON over combined-samples against the pinned 13.59 oracle) counted 10
+    // VALUE rows where the oracle prints `inf` and this rule printed `undef`
+    // (CompressedBitsPerPixel 5, DigitalZoomRatio 3, ExposureTime 1,
+    // BrightnessValue 1), zero rows the other way, and one enum label
+    // (`FocusMode: Infinity`) it had rewritten to `undef` as a side effect.
+    //
+    // A `TagValue::Float` infinity only arises here from a hand parser that
+    // divided a rational's numerator by its zero denominator in f64, so it is
+    // the `n/0` case and prints `inf` (the sign is folded, as the Perl does).
+    // A string "inf"/"undef" is a parser that already followed the Perl
+    // (`shared::table_ifd::print_rational`, Panasonic, XMP, the IFD engine)
+    // or a deliberate-infinity PrintConv (Minolta FocusDistance
+    // `$val ? "$val m" : "inf"`, Canon.pm:1200 `%focusDistanceByteSwap`, Sony
+    // Composite FocusDistance2); either way it is printed as is.
     // ---------------------------------------------------------------------
     if let Some(f) = value.as_float()
         && let Some(formatted) = format_special_float_values(f)
     {
         return TagValue::String(formatted);
     }
-    // Handle Rational values with denominator 0 (would produce infinity)
-    if let TagValue::Rational { denominator, .. } = value
+    if let TagValue::Rational {
+        numerator,
+        denominator,
+    } = value
         && *denominator == 0
     {
-        return TagValue::String("undef".to_string());
+        return TagValue::String(if *numerator == 0 { "undef" } else { "inf" }.to_string());
     }
-    // Also handle string representations of special values.
-    //
-    // A few tags print the literal "inf" on purpose rather than as the symptom
-    // of a divide-by-zero: Minolta's FocusDistance has the PrintConv
-    // `$val ? "$val m" : "inf"`, so a focus distance of zero means "focused at
-    // infinity" and ExifTool reports exactly "inf". Rewriting those to "undef"
-    // would replace a real reading with an error marker. Canon's
-    // `%focusDistanceByteSwap` (Canon.pm:1200, backing `%Canon::CameraInfo*`
-    // FocusDistanceUpper/Lower) has the same shape the other way around:
-    // `$val > 655.345 ? "inf" : "$val m"` -- the raw sentinel 0xffff (655.35 m
-    // after the ValueConv) means "not focused / infinity", and is exactly as
-    // deliberate as Minolta's zero. Sony's `Composite:FocusDistance2` is the
-    // third of the same kind: its ValueConv is `return 'inf' if $val >= 255`
-    // and its PrintConv `$val eq "inf" ? $val : sprintf("%.4g m", $val)`, so
-    // the FocusPosition2 sentinel 255 means infinity, not a divide-by-zero.
-    // Without it here, 8 Sony bodies in the sample corpus printed "undef"
-    // where the pinned oracle prints "inf".
-    const DELIBERATE_INFINITY: &[&str] = &[
-        "FocusDistance",
-        "FocusDistance2",
-        "FocusDistanceUpper",
-        "FocusDistanceLower",
-    ];
-    if let Some(s) = value.as_string() {
-        if (s == "inf" || s == "-inf" || s == "Infinity" || s == "-Infinity")
-            && !DELIBERATE_INFINITY.contains(&base_name)
-        {
-            return TagValue::String("undef".to_string());
-        }
-        if s == "-0" || s == "-0.0" {
-            return TagValue::String("0".to_string());
-        }
+    // Perl prints a negative zero as `0`; a parser that formatted -0.0 in Rust
+    // hands us "-0" here.
+    if let Some(s) = value.as_string()
+        && (s == "-0" || s == "-0.0")
+    {
+        return TagValue::String("0".to_string());
     }
 
     // ---------------------------------------------------------------------
@@ -1238,9 +1239,11 @@ fn apex_print_conv(base_name: &str, value: &TagValue) -> Option<TagValue> {
 /// assert_eq!(format_special_float_values(42.5), None);
 /// ```
 fn format_special_float_values(value: f64) -> Option<String> {
-    // Check for infinity (positive or negative) - indicates invalid rational (div by zero)
+    // An infinity of either sign is a rational's nonzero numerator over a
+    // zero denominator computed in f64; ExifTool.pm:6111/6118 print that as
+    // `inf` whatever the sign (Rule 17 above).
     if value.is_infinite() {
-        return Some("undef".to_string());
+        return Some("inf".to_string());
     }
 
     // Check for negative zero - normalize to "0"
@@ -2123,10 +2126,12 @@ mod tests {
             format_tag_value("ExifIFD:FNumber", &rational(0, 10)),
             TagValue::String("0".to_string())
         );
-        // A zero denominator is Rule 17's, and still is.
+        // A zero denominator is Rule 17's: ExifTool.pm:6118 reads 4/0 as
+        // `inf` and Exif.pm's `PrintFNumber("inf")` returns it unchanged
+        // (both probed under the pinned 13.59 lib).
         assert_eq!(
             format_tag_value("ExifIFD:FNumber", &rational(4, 0)),
-            TagValue::String("undef".to_string())
+            TagValue::String("inf".to_string())
         );
     }
 
@@ -2917,16 +2922,15 @@ mod tests {
 
     #[test]
     fn test_format_special_float_values_infinity() {
-        // Positive infinity should return "undef"
+        // ExifTool.pm:6111/6118: a nonzero numerator over a zero denominator
+        // is `inf`, and the signed reader folds the sign.
         assert_eq!(
             format_special_float_values(f64::INFINITY),
-            Some("undef".to_string())
+            Some("inf".to_string())
         );
-
-        // Negative infinity should also return "undef"
         assert_eq!(
             format_special_float_values(f64::NEG_INFINITY),
-            Some("undef".to_string())
+            Some("inf".to_string())
         );
     }
 
@@ -2947,15 +2951,54 @@ mod tests {
     }
 
     #[test]
-    fn test_infinity_float_formats_to_undef() {
-        // Test that TagValue::Float with infinity formats to "undef"
+    fn test_infinity_float_formats_to_inf() {
+        // GPS.pm:277/291: GPSDestBearing and GPSDestDistance are rational64u
+        // with no PrintConv, so `GetRational64u`'s `inf` is what prints.
         let value = TagValue::Float(f64::INFINITY);
         let formatted = format_tag_value("EXIF:GPSDestBearing", &value);
-        assert_eq!(formatted.as_string(), Some("undef"));
+        assert_eq!(formatted.as_string(), Some("inf"));
 
         let value = TagValue::Float(f64::NEG_INFINITY);
         let formatted = format_tag_value("EXIF:GPSDestDistance", &value);
-        assert_eq!(formatted.as_string(), Some("undef"));
+        assert_eq!(formatted.as_string(), Some("inf"));
+    }
+
+    /// Rule 17 decides a zero-denominator rational from its numerator, as
+    /// ExifTool.pm:6107-6120 do: `128/0` is the OlympusBrioD100.jpg
+    /// FlashExposureComp row the pinned oracle prints as `inf`, `0/0` is
+    /// `undef`, and neither sentinel is rewritten once a parser has printed
+    /// it -- nor is an enum label that happens to spell an infinity.
+    #[test]
+    fn zero_denominator_rationals_print_as_exiftool_reads_them() {
+        let inf = TagValue::Rational {
+            numerator: 128,
+            denominator: 0,
+        };
+        let undef = TagValue::Rational {
+            numerator: 0,
+            denominator: 0,
+        };
+        assert_eq!(
+            format_tag_value("MakerNotes:FlashExposureComp", &inf).as_string(),
+            Some("inf")
+        );
+        assert_eq!(
+            format_tag_value("MakerNotes:FlashExposureComp", &undef).as_string(),
+            Some("undef")
+        );
+        for (tag, text) in [
+            ("EXIF:GPSSpeed", "inf"),
+            ("EXIF:GPSSpeed", "undef"),
+            ("MakerNotes:FocusMode", "Infinity"),
+            ("MakerNotes:FocusDistance", "inf"),
+        ] {
+            let value = TagValue::String(text.to_string());
+            assert_eq!(
+                format_tag_value(tag, &value).as_string(),
+                Some(text),
+                "{tag} must pass {text:?} through"
+            );
+        }
     }
 
     #[test]
