@@ -19,6 +19,13 @@ the codegen's *input*, so comparing against it would test nothing about the
 codegen. Reading back what was actually written catches escaping bugs, integer
 overflow in enum keys, sort-order mistakes that break binary_search, and
 truncation -- the failures that compile perfectly.
+
+Slice I-1 adds a second stage over `src/exiftool_tables/ifd_tables.rs` (the
+ProcessExif-style tables; see `docs/superpowers/specs/2026-09-06-ifd-tables-
+design.md` section 4), run after the binary stage from the same oracle
+output and folded into the same exit status. It is skipped, with a message,
+when that file does not exist on the tree -- the binary verification above is
+unaffected either way. `parse_ifd_rust` / `verify_ifd` are the two halves.
 """
 
 import argparse
@@ -423,12 +430,17 @@ def _parse_int_pairs(src, open_bracket, k, label):
 # `groups: TagGroups { g0: None, g1: Some("GPS"), g2: Some("Location") }`.
 # Scanned from the field's tail rather than captured by FIELD_RE, which stops
 # at `subdir:` (whose value nests arbitrarily -- see that pattern's comment).
-TAG_GROUPS_RE = re.compile(
-    r'groups:\s*(?:TagGroups::NONE'
+_TAG_GROUPS_BODY = (
+    r'(?:TagGroups::NONE'
     r'|TagGroups\s*\{\s*g0:\s*(?P<g0>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
     r'g1:\s*(?P<g1>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
     r'g2:\s*(?P<g2>None|Some\("(?:[^"\\]|\\.)*"\)),?\s*\})'
 )
+TAG_GROUPS_RE = re.compile(r'groups:\s*' + _TAG_GROUPS_BODY)
+# The same value grammar anchored to a captured `groups:` VALUE on its own
+# (slice I-1's `IFD_TAG_RE` captures the value; the binary `FIELD_RE` does
+# not, hence the two entry points over one body).
+_TAG_GROUPS_VALUE_RE = re.compile(r'^' + _TAG_GROUPS_BODY + r'$', re.S)
 
 
 def _some_str(text):
@@ -505,6 +517,16 @@ def _parse_one_field(
     tag_groups[k] = (_some_str(gm.group("g0")), _some_str(gm.group("g1")),
                      _some_str(gm.group("g2")))
 
+    _parse_print_conv(src, pc_start, pc_end, k, enums, bitmasks, other_ids, print_hexes, pc_kinds)
+
+
+def _parse_print_conv(src, pc_start, pc_end, k, enums, bitmasks, other_ids, print_hexes, pc_kinds):
+    """Populate `enums`/`bitmasks`/`other_ids`/`print_hexes`/`pc_kinds` for
+    the `print_conv:` value spanning `src[pc_start:pc_end]` under dict key
+    `k`. Shared by the binary `Field` parser and slice I-1's `IfdTag` parser:
+    a `PrintConv::...` literal means the same thing in both schemas (the
+    IFD schema reuses the type), so one reader serves both."""
+    pc = src[pc_start:pc_end].strip()
     pc_kinds[k] = pc.split("(", 1)[0]
     # Rescan enum bodies from the source itself rather than trusting a
     # regex capture -- see _enum_body for why.
@@ -726,11 +748,22 @@ def parse_rust(path):
     )
 
 
-def load_oracle(lib, oracle_pl):
-    out = subprocess.run(
+def run_oracle(lib, oracle_pl):
+    """`oracle.pl`'s raw TSV for `lib` -- one run feeds both the binary
+    reader (`parse_binary_oracle`) and slice I-1's `parse_ifd_oracle`."""
+    return subprocess.run(
         [_PERL, oracle_pl, lib],
         capture_output=True, check=True, text=True, encoding="utf-8",
     ).stdout
+
+
+def load_oracle(lib, oracle_pl):
+    """Run the oracle and read its binary-table rows (the pre-I-1 entry
+    point, kept for callers that only want that half)."""
+    return parse_binary_oracle(run_oracle(lib, oracle_pl))
+
+
+def parse_binary_oracle(out):
     names, enums, masks = {}, defaultdict(dict), {}
     hooks, subdirs, varfmts = set(), set(), set()
     bitmasks = defaultdict(dict)
@@ -756,6 +789,12 @@ def load_oracle(lib, oracle_pl):
     subdir_facts = {}
     for line in out.splitlines():
         p = line.split("\t")
+        # Slice I-1: IFD rows carry a leading kind column and are read by
+        # `parse_ifd_oracle`; they never have the column counts below with
+        # a marker in p[3] (that slot holds the tag key), but routing on the
+        # kind column is the stated contract, not a coincidence.
+        if p[0] == "IFD":
+            continue
         if len(p) == 4:
             names[(p[0], p[1], p[2])] = p[3]
         elif len(p) == 6 and p[3] == "ENUM":
@@ -929,15 +968,872 @@ def expected_subdir_edge(fact):
     return m.group(1), m.group(2)
 
 
+# ===========================================================================
+# Slice I-1: the IFD-style tables, `src/exiftool_tables/ifd_tables.rs`.
+# ===========================================================================
+#
+# Same doctrine, second table kind. The generated file is parsed back (never
+# the dump JSON) and every emitted fact is compared with `oracle.pl`'s `IFD`
+# rows, which read the live Perl hashes independently of dump_tables.pl. The
+# property is SOUNDNESS: the generator may emit fewer tables, tags, enum
+# entries or edges than ExifTool has, but never a table or tag ExifTool
+# lacks, a wrong name / format / count / writable / group / flag, a
+# `SetMember` naming the wrong member, a conversion refusal the tag does not
+# warrant (or a silently dropped one), or a `SubDirectory` edge whose target,
+# start, byte order, FixFormat, SubIFD, MaxSubdirs, DirName or Validate fact
+# differs from ExifTool's. Two things are refusals by design and never a
+# mismatch on their own: an edge left `None` (with `omitted.subdirectory`
+# set) and a `RawConv` left `omitted.raw_conv` -- withholding is always
+# sound. They are counted as notes so the coverage they hold back is visible.
+#
+# The per-tag field order below is `ifd_schema.rs`'s `IfdTag` order, which
+# is what the generator emits (the spec, section 2); rustfmt wraps it, so
+# every pattern is whitespace-tolerant, and `parse_ifd_rust` asserts it
+# accounted for every `IfdTag {` in the file so under-parsing fails loudly.
+
+IFD_TABLE_RE = re.compile(
+    r'pub static (?P<ident>\w+): IfdTable = IfdTable \{\s*'
+    r'module:\s*"(?P<module>[^"]*)",\s*'
+    r'table:\s*"(?P<table>[^"]*)",\s*'
+    r'group0:\s*"(?P<group0>[^"]*)",\s*'
+    r'group1:\s*"(?P<group1>[^"]*)",\s*'
+    r'group2:\s*"(?P<group2>[^"]*)",\s*'
+    r'set_group1:\s*(?P<set_group1>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+    r'priority:\s*(?P<priority>None|Some\(-?\d+\)),\s*'
+    r'gate_a:\s*GateA\s*\{\s*blocked_by:\s*&\[',
+    re.S,
+)
+IFD_TABLE_DECL_RE = re.compile(r'pub static \w+: IfdTable = IfdTable \{')
+IFD_TAG_RE = re.compile(
+    r'IfdTag\s*\{\s*'
+    r'id:\s*(?P<id>\d+),\s*'
+    r'name:\s*"(?P<name>(?:[^"\\]|\\.)*)",\s*'
+    # Scalar formats only (the spec refuses everything else for an IFD tag):
+    # `None`, `Some(Fmt::Int16u)`, `Some(Fmt::Str(11))`. A `Fmt::Var(...)`
+    # here is deliberately NOT matched -- it would leave an `IfdTag {`
+    # unaccounted for and fail the parse loudly, which is the right outcome
+    # for a shape the schema forbids.
+    r'format:\s*(?P<fmt>None|Some\(Fmt::\w+(?:\(\d+\))?\)),\s*'
+    r'count:\s*(?P<count>None|Some\(\d+\)),\s*'
+    r'writable:\s*(?P<writable>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+    r'groups:\s*(?P<groups>TagGroups::NONE|TagGroups\s*\{[^{}]*\}),\s*'
+    r'flags:\s*(?P<flags>IfdFlags::NONE|IfdFlags\s*\{[^{}]*\}),\s*'
+    r'omitted:\s*(?P<omitted>Omitted::NONE|Omitted\s*\{[^{}]*\}),\s*'
+    r'raw_conv:\s*(?P<raw_conv>None|Some\(\s*RawConvEffect::SetMember\s*\{\s*'
+    r'member:\s*"(?P<member>(?:[^"\\]|\\.)*)",?\s*\}\s*,?\s*\)),\s*'
+    r'value_conv:\s*(?:None|Some\(\s*ExprId::\w+\s*,?\s*\)),\s*'
+    # `print_conv:` and `subdir:` values are located by `_value_span`, as
+    # for a binary `Field` (their nesting is unbounded).
+    r'print_conv:\s*',
+    re.S,
+)
+IFD_TAG_COUNT_RE = re.compile(r'IfdTag\s*\{\s*id:')
+IFD_TAGS_MARKER_RE = re.compile(r'tags:\s*&\[')
+IFD_VARIANTS_MARKER_RE = re.compile(r'variants:\s*&\[')
+IFD_VARIANT_GROUP_DECL_RE = re.compile(r'IfdVariantGroup\s*\{')
+IFD_VARIANT_GROUP_RE = re.compile(
+    r'IfdVariantGroup\s*\{\s*id:\s*(?P<id>\d+),\s*alternatives:\s*&\['
+)
+ALL_IFD_TABLES_RE = re.compile(r'pub static ALL_IFD_TABLES:\s*&\[&IfdTable\]\s*=\s*&\[')
+_IFD_FLAGS_RE = re.compile(
+    r'IfdFlags\s*\{\s*unknown:\s*(?P<unknown>true|false),\s*binary:\s*(?P<binary>true|false),\s*'
+    r'list:\s*(?P<list>true|false),\s*protected:\s*(?P<protected>true|false),\s*'
+    r'avoid:\s*(?P<avoid>true|false),\s*priority:\s*(?P<priority>None|Some\(-?\d+\)),?\s*\}$'
+)
+_OMITTED_MEMBERS = ("value_conv", "raw_conv", "condition", "hook", "subdirectory", "print_conv")
+_IFD_SUBDIR_EDGE_RE = re.compile(
+    r'^Some\(\s*IfdSubdirEdge\s*\{\s*'
+    r'module:\s*"(?P<module>[^"]*)"\s*,\s*'
+    r'table:\s*"(?P<table>[^"]*)"\s*,\s*'
+    r'start:\s*IfdStart::(?P<start_kind>ValuePtr|Val)\(\s*(?P<start_n>-?\d+)\s*,?\s*\)\s*,\s*'
+    r'base:\s*',
+    re.S,
+)
+# Matched at the index where the `base:` value ended (`re.match(text, pos)`,
+# so no `^` -- Python anchors `^` to the string start, not to `pos`).
+_IFD_SUBDIR_TAIL_RE = re.compile(
+    r'\s*,\s*byte_order:\s*IfdByteOrder::(?P<byte_order>Inherit|Little|Big|Unknown)\s*,\s*'
+    r'fix_format:\s*(?P<fix_format>None|Some\(Fmt::\w+(?:\(\d+\))?\))\s*,\s*'
+    r'sub_ifd:\s*(?P<sub_ifd>true|false)\s*,\s*'
+    r'max_subdirs:\s*(?P<max_subdirs>None|Some\(\d+\))\s*,\s*'
+    r'dir_name:\s*(?P<dir_name>None|Some\("(?:[^"\\]|\\.)*"\))\s*,\s*'
+    r'validate:\s*(?P<validate>true|false)\s*,?\s*\}\s*,?\s*\)\s*$',
+    re.S,
+)
+_OUT_OF_DATE = "-- the verifier's pattern is out of date; fix it before trusting a PASS"
+
+
+def _some_int(text):
+    """`Some(N)` -> N; `None` -> None."""
+    return None if text == "None" else int(text[len("Some("):-1])
+
+
+def _some_str_opt(text):
+    """`Some("X")` -> "X"; `None` -> None (unlike `_some_str`, which maps
+    None to "" for the groups convention)."""
+    return None if text == "None" else unescape(text[len('Some("'):-len('")')])
+
+
+def _parse_tag_groups_value(text, k):
+    m = _TAG_GROUPS_VALUE_RE.match(text.strip())
+    if m is None:
+        raise SystemExit(f"{k}: unrecognised groups value {text!r} {_OUT_OF_DATE}")
+    return (_some_str(m.group("g0")), _some_str(m.group("g1")), _some_str(m.group("g2")))
+
+
+def _parse_ifd_flags(text, k):
+    """-> (unknown, binary, list, protected, avoid, priority) as in the
+    oracle's FLAGS row: five bools and an int-or-None."""
+    text = re.sub(r"\s+", " ", text.strip())
+    if text == "IfdFlags::NONE":
+        return (False, False, False, False, False, None)
+    m = _IFD_FLAGS_RE.match(text)
+    if m is None:
+        raise SystemExit(f"{k}: unrecognised flags value {text!r} {_OUT_OF_DATE}")
+    return (
+        m.group("unknown") == "true", m.group("binary") == "true", m.group("list") == "true",
+        m.group("protected") == "true", m.group("avoid") == "true", _some_int(m.group("priority")),
+    )
+
+
+def _parse_omitted(text, k):
+    """-> {member: bool} for all six `Omitted` members."""
+    text = re.sub(r"\s+", " ", text.strip())
+    if text == "Omitted::NONE":
+        return {m: False for m in _OMITTED_MEMBERS}
+    out = {}
+    for member in _OMITTED_MEMBERS:
+        mm = re.search(rf"\b{member}:\s*(true|false)\b", text)
+        if mm is None:
+            raise SystemExit(f"{k}: omitted value {text!r} has no `{member}:` {_OUT_OF_DATE}")
+        out[member] = mm.group(1) == "true"
+    return out
+
+
+def _parse_ifd_subdir_value(text, k):
+    """`None` -> None; `Some(IfdSubdirEdge { ... })` -> its facts. The
+    `base:` value (`None` or `Some(&BaseExpr::...)`, nested arbitrarily) is
+    located by `_value_span` and kept as whitespace-free text."""
+    text = text.strip()
+    if text == "None":
+        return None
+    m = _IFD_SUBDIR_EDGE_RE.match(text)
+    if not m:
+        raise SystemExit(f"{k}: unrecognised subdir value {text!r} {_OUT_OF_DATE}")
+    base_begin = m.end()
+    base_end = _value_span(text, base_begin)
+    tm = _IFD_SUBDIR_TAIL_RE.match(text, base_end)
+    if not tm:
+        raise SystemExit(f"{k}: unrecognised subdir value (tail) {text!r} {_OUT_OF_DATE}")
+    return {
+        "module": m.group("module"),
+        "table": m.group("table"),
+        "start": (m.group("start_kind"), int(m.group("start_n"))),
+        "base": re.sub(r"\s+", "", text[base_begin:base_end]),
+        "byte_order": tm.group("byte_order"),
+        "fix_format": re.sub(r"\s+", "", tm.group("fix_format")),
+        "sub_ifd": tm.group("sub_ifd") == "true",
+        "max_subdirs": _some_int(tm.group("max_subdirs")),
+        "dir_name": _some_str_opt(tm.group("dir_name")),
+        "validate": tm.group("validate") == "true",
+    }
+
+
+class ParsedIfd(NamedTuple):
+    """`parse_ifd_rust`'s result. `tags` maps `(module, table, key)` -- key
+    `"22"` for a plain tag, `"22#1"` for a `_variants` alternative, exactly
+    `oracle.pl`'s IFD key -- to a dict of that tag's facts; `variant_keys`
+    says which are alternatives. `enums`/`bitmasks`/`other_ids`/
+    `print_hexes`/`pc_kinds` are the shared `_parse_print_conv` outputs.
+    `all_tables` is `ALL_IFD_TABLES`'s ident list in file order; `structure`
+    collects invariant breaches (sortedness, disjointness, the ident list)
+    that `verify_ifd` reports as mismatches."""
+    tables: dict
+    tags: dict
+    variant_keys: set
+    enums: dict
+    bitmasks: dict
+    other_ids: dict
+    print_hexes: dict
+    pc_kinds: dict
+    all_tables: list
+    structure: list
+
+
+def _parse_one_ifd_tag(src, f, k, out):
+    tag = {
+        "id": int(f.group("id")),
+        "name": unescape(f.group("name")),
+        "fmt": re.sub(r"\s+", "", f.group("fmt")),
+        "count": _some_int(f.group("count")),
+        "writable": _some_str_opt(f.group("writable")),
+        "groups": _parse_tag_groups_value(f.group("groups"), k),
+        "flags": _parse_ifd_flags(f.group("flags"), k),
+        "omitted": _parse_omitted(f.group("omitted"), k),
+        "raw_conv": unescape(f.group("member")) if f.group("member") is not None else None,
+    }
+    pc_start = f.end()
+    pc_end = _value_span(src, pc_start)
+    sm = _SUBDIR_LABEL_RE.match(src, pc_end)
+    if not sm:
+        raise SystemExit(
+            f"{k}: no `, subdir:` immediately after the print_conv value "
+            f"{src[pc_start:pc_end].strip()!r} {_OUT_OF_DATE}"
+        )
+    subdir_end = _value_span(src, sm.end())
+    tag["subdir"] = _parse_ifd_subdir_value(src[sm.end():subdir_end], k)
+    _parse_print_conv(
+        src, pc_start, pc_end, k, out.enums, out.bitmasks, out.other_ids, out.print_hexes, out.pc_kinds,
+    )
+    tag["pc_kind"] = out.pc_kinds[k]
+    out.tags[k] = tag
+
+
+def parse_ifd_rust(path):
+    """Parse every `IfdTable` static out of `path` -> `ParsedIfd`.
+
+    Loud on anything it does not fully understand: an `IfdTable` header the
+    pattern cannot read, a `tags:`/`variants:` array it cannot find, an
+    `IfdTag {` it did not parse (counted per population AND over the whole
+    file, so a table whose header failed cannot hide its tags inside the
+    previous table's range), an `IfdVariantGroup {` it did not parse, a
+    `print_conv`/`subdir`/`flags`/`omitted`/`groups` value in a shape it
+    does not know. A verifier that parses zero tags reports zero mismatches,
+    which is why every one of these is a SystemExit and not a warning.
+    """
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    out = ParsedIfd({}, {}, set(), defaultdict(dict), {}, {}, {}, {}, [], [])
+
+    heads = list(IFD_TABLE_RE.finditer(src))
+    declared = len(IFD_TABLE_DECL_RE.findall(src))
+    if declared != len(heads):
+        raise SystemExit(
+            f"parsed {len(heads)} IfdTable headers but {path} declares {declared} "
+            f"{_OUT_OF_DATE}"
+        )
+    all_m = ALL_IFD_TABLES_RE.search(src)
+    if all_m is None:
+        raise SystemExit(f"no `pub static ALL_IFD_TABLES` in {path} {_OUT_OF_DATE}")
+    a_start, a_end = _bracket_span(src, all_m.end() - 1)
+    out.all_tables.extend(re.findall(r"&(\w+)", src[a_start:a_end]))
+
+    anchors = sorted([m.start() for m in heads] + [all_m.start(), len(src)])
+    expected_plain = expected_variant = 0
+    for m in heads:
+        start = m.start()
+        end = min(a for a in anchors if a > start)
+        mod, tbl, ident = m.group("module"), m.group("table"), m.group("ident")
+        _, bb_end = _bracket_span(src, m.end() - 1)
+        blocked = src[m.end():bb_end].strip() != ""
+
+        tm = IFD_TAGS_MARKER_RE.search(src, bb_end, end)
+        if tm is None:
+            raise SystemExit(f"{mod}::{tbl}: no `tags: &[` member {_OUT_OF_DATE}")
+        t_start, t_end = _bracket_span(src, tm.end() - 1)
+        expected_plain += len(IFD_TAG_COUNT_RE.findall(src, t_start, t_end))
+        ids = []
+        for f in IFD_TAG_RE.finditer(src, t_start, t_end):
+            k = (mod, tbl, f.group("id"))
+            if k in out.tags:
+                out.structure.append(f"{k}: duplicate id in `tags`")
+            _parse_one_ifd_tag(src, f, k, out)
+            ids.append(int(f.group("id")))
+
+        vm = IFD_VARIANTS_MARKER_RE.search(src, t_end, end)
+        if vm is None:
+            raise SystemExit(f"{mod}::{tbl}: no `variants: &[` member {_OUT_OF_DATE}")
+        v_start, v_end = _bracket_span(src, vm.end() - 1)
+        declared_groups = len(IFD_VARIANT_GROUP_DECL_RE.findall(src, v_start, v_end))
+        vids = []
+        for gm in IFD_VARIANT_GROUP_RE.finditer(src, v_start, v_end):
+            gid = int(gm.group("id"))
+            vids.append(gid)
+            a_s, a_e = _bracket_span(src, gm.end() - 1)
+            expected_variant += len(IFD_TAG_COUNT_RE.findall(src, a_s, a_e))
+            for pos, f in enumerate(IFD_TAG_RE.finditer(src, a_s, a_e)):
+                k = (mod, tbl, f"{gid}#{pos}")
+                out.variant_keys.add(k)
+                _parse_one_ifd_tag(src, f, k, out)
+                if int(f.group("id")) != gid:
+                    out.structure.append(
+                        f"{k}: alternative carries id {f.group('id')} inside group id {gid}"
+                    )
+        if len(vids) != declared_groups:
+            raise SystemExit(
+                f"{mod}::{tbl}: parsed {len(vids)} IfdVariantGroup literals of "
+                f"{declared_groups} {_OUT_OF_DATE}"
+            )
+
+        # The schema's binary_search contract (`IfdTable::tag` /
+        # `variant_group`): sorted, unique, and the two id spaces disjoint.
+        if ids != sorted(ids) or len(set(ids)) != len(ids):
+            out.structure.append(f"{mod}::{tbl}: `tags` is not sorted by unique id")
+        if vids != sorted(vids) or len(set(vids)) != len(vids):
+            out.structure.append(f"{mod}::{tbl}: `variants` is not sorted by unique id")
+        if set(ids) & set(vids):
+            out.structure.append(
+                f"{mod}::{tbl}: ids {sorted(set(ids) & set(vids))} appear in both `tags` and `variants`"
+            )
+        key = (mod, tbl)
+        if key in out.tables:
+            out.structure.append(f"{mod}::{tbl}: declared twice")
+        out.tables[key] = {
+            "ident": ident,
+            "groups": (m.group("group0"), m.group("group1"), m.group("group2")),
+            "set_group1": _some_str_opt(m.group("set_group1")),
+            "priority": _some_int(m.group("priority")),
+            "gate_a_blocked": blocked,
+        }
+
+    got_plain = len(out.tags) - len(out.variant_keys)
+    if got_plain != expected_plain:
+        raise SystemExit(
+            f"parsed {got_plain} plain IFD tags but `tags:` arrays contain "
+            f"{expected_plain} {_OUT_OF_DATE}"
+        )
+    if len(out.variant_keys) != expected_variant:
+        raise SystemExit(
+            f"parsed {len(out.variant_keys)} IFD variant alternatives but "
+            f"`alternatives:` arrays contain {expected_variant} {_OUT_OF_DATE}"
+        )
+    total = len(IFD_TAG_COUNT_RE.findall(src))
+    if total != len(out.tags):
+        raise SystemExit(
+            f"parsed {len(out.tags)} IfdTag literals but {path} contains {total} "
+            f"`IfdTag {{` {_OUT_OF_DATE}"
+        )
+
+    idents = {v["ident"]: key for key, v in out.tables.items()}
+    if sorted(out.all_tables) != sorted(idents):
+        out.structure.append(
+            "ALL_IFD_TABLES does not list every IfdTable static exactly once: "
+            f"{sorted(set(out.all_tables) ^ set(idents))}"
+        )
+    else:
+        order = [idents[i] for i in out.all_tables]
+        if order != sorted(order):
+            out.structure.append("ALL_IFD_TABLES is not sorted by (module, table)")
+    return out
+
+
+class IfdOracle(NamedTuple):
+    """`parse_ifd_oracle`'s result: `oracle.pl`'s `IFD` rows by kind, keyed
+    `(module, table)` for the table rows and `(module, table, key)` for the
+    rest. Text facts are kept verbatim; the verifier re-derives meaning."""
+    tables: dict
+    names: dict
+    formats: dict
+    counts: dict
+    writables: dict
+    enums: dict
+    bitmasks: dict
+    other_present: set
+    other_print_hex: dict
+    pcrefs: dict
+    groups: dict
+    flags: dict
+    rawconvs: dict
+    hooks: set
+    conditions: set
+    subdirs: dict
+
+
+def parse_ifd_oracle(out):
+    """Read the `IFD` rows out of `oracle.pl`'s output (see its header for
+    the row formats). An `IFD` row of a shape this reader does not know is
+    a SystemExit: the oracle and the verifier move in lockstep, and a row
+    silently ignored is a fact silently unverified."""
+    o = IfdOracle({}, {}, {}, {}, {}, defaultdict(dict), defaultdict(dict), set(), {}, {},
+                  {}, {}, {}, set(), set(), {})
+    for line in out.splitlines():
+        p = line.split("\t")
+        if p[0] != "IFD":
+            continue
+        n, kind = len(p), p[4] if len(p) > 4 else ""
+        tk, k = (p[1], p[2]), (p[1], p[2], p[3])
+        if kind == "TGROUPS" and n == 8:
+            o.tables.setdefault(tk, {"set_group1": None, "priority": None})["tgroups"] = (p[5], p[6], p[7])
+        elif kind == "SETGROUP1" and n == 6:
+            o.tables.setdefault(tk, {"priority": None})["set_group1"] = p[5]
+        elif kind == "PRIORITY" and n == 6:
+            o.tables.setdefault(tk, {"set_group1": None})["priority"] = p[5]
+        elif kind == "NAME" and n == 6:
+            o.names[k] = p[5]
+        elif kind == "FORMAT" and n == 6:
+            o.formats[k] = p[5]
+        elif kind == "COUNT" and n == 6:
+            o.counts[k] = p[5]
+        elif kind == "WRITABLE" and n == 6:
+            o.writables[k] = p[5]
+        elif kind == "ENUM" and n == 7:
+            o.enums[k][p[5]] = p[6]
+        elif kind == "BITMASK" and n == 7:
+            o.bitmasks[k][p[5]] = p[6]
+        elif kind == "OTHER" and n == 6:
+            o.other_present.add(k)
+            o.other_print_hex[k] = p[5] == "1"
+        elif kind == "PCREF" and n == 6:
+            o.pcrefs[k] = p[5]
+        elif kind == "GROUPS" and n == 8:
+            o.groups[k] = (p[5], p[6], p[7])
+        elif kind == "FLAGS" and n == 11:
+            o.flags[k] = tuple(x == "1" for x in p[5:10]) + (None if p[10] == "-" else int(p[10]),)
+        elif kind == "RAWCONV" and n == 6:
+            o.rawconvs[k] = p[5]
+        elif kind == "HOOK" and n == 6:
+            o.hooks.add(k)
+        elif kind == "CONDITION" and n == 6:
+            o.conditions.add(k)
+        elif kind == "SUBDIR" and n == 15:
+            o.subdirs[k] = {
+                "tagtable": p[5], "start": p[6], "base": p[7], "processproc": p[8],
+                "byteorder": p[9], "validate": p[10] == "1", "fixformat": p[11],
+                "subifd": p[12] == "1", "maxsubdirs": p[13], "dirname": p[14],
+            }
+        else:
+            raise SystemExit(
+                f"unrecognised IFD oracle row {line!r} -- oracle.pl and verify.py "
+                "must move in lockstep; fix the reader before trusting a PASS"
+            )
+    return o
+
+
+def _count_decl(text):
+    """The `count:` an IFD tag must carry for a raw `Count` of `text` (None
+    when the tag declares none): a non-negative integer verbatim; ExifTool's
+    `Count => -1` ("variable") has no `u32` representation, so `None` is
+    the only honest value there."""
+    if text is None:
+        return None
+    try:
+        n = int(text)
+    except ValueError:
+        return None
+    return n if n >= 0 else None
+
+
+def expected_ifd_format(spelling, count_decl):
+    """-> `(fmt_literal, count)` the generated `IfdTag` must carry for a raw
+    `Format` of `spelling` (None = absent) and a declared count of
+    `count_decl`, or None when the spec refuses the spelling
+    (`ifd_format_unsupported`: the tag must not be emitted at all).
+
+    The spec (section 2, `format`/`count`): `fmt[N]` -> `Some(fmt)` with
+    `count: Some(N)`; bare `string`/`undef` -> `format: None` (the entry's
+    own type is read; there is no `Fmt::Str(0)`) with the count from
+    `Count`; any other scalar in the schema -> `Some(Fmt::X)`; anything else
+    refused. `string[N]`/`undef[N]` go through the existing scalar parser's
+    sized forms (`Fmt::Str(N)`/`Fmt::Undef(N)`) with `count: Some(N)`.
+    `var_*` and `pstring` are ProcessBinaryData constructs and are refused
+    here.
+    """
+    if spelling is None:
+        return ("None", count_decl)
+    m = _SIZED_FMT_RE.match(spelling)
+    if m:
+        base, n = m.group(1), int(m.group(2))
+        if base == "string":
+            return (f"Some(Fmt::Str({n}))", n)
+        if base == "undef":
+            return (f"Some(Fmt::Undef({n}))", n)
+        if base in _FMT_VARIANT:
+            return (f"Some(Fmt::{_FMT_VARIANT[base]})", n)
+        return None
+    if spelling in ("string", "undef"):
+        return ("None", count_decl)
+    if spelling in _FMT_VARIANT:
+        return (f"Some(Fmt::{_FMT_VARIANT[spelling]})", count_decl)
+    return None
+
+
+# The one `RawConv` shape carried as data (`RawConvEffect::SetMember`): the
+# data-member capture, in either of Perl's two spellings of the same
+# dereference (`$$self{X}` and `$self->{X}` are the same expression), with
+# an optional trailing `;`. The verifier judges truth, not spelling policy:
+# a generator that accepts only `$$self{X}` refuses the other spelling
+# (sound), and one that accepts both is not wrong to.
+_SET_MEMBER_RE = re.compile(r"^\$(?:\$self\{|self->\{)(\w+)\}\s*=\s*\$val\s*;?$")
+_IFD_START_RE = re.compile(r"^\$(valuePtr|val)(?:\s*([+-])\s*(\d+))?$")
+# The spec's `ByteOrder` spellings (section 2). Anything else is refused by
+# the generator; see `expected_ifd_edge` for how a refusal is scored.
+_SPEC_BYTE_ORDERS = {
+    "-": "Inherit", "LittleEndian": "Little", "II": "Little",
+    "BigEndian": "Big", "MM": "Big", "Unknown": "Unknown",
+}
+
+
+def expected_ifd_edge(fact):
+    """Independently decide, from one oracle SUBDIR row, what edge the
+    generator may emit -> `(edge_facts, spec_refuses)`.
+
+    `edge_facts` is None when the facts put the edge outside the spec's
+    grammar for a reason that makes any emitted edge WRONG (no parseable
+    TagTable; a ProcessProc other than ProcessBinaryData; a Start outside
+    `$valuePtr`/`$val` +- n; a Base outside the arithmetic grammar; a
+    FixFormat the schema cannot spell; a MaxSubdirs that is not a count).
+    `spec_refuses` is True when the only thing outside the spec is the
+    ByteOrder spelling: the spec lists six spellings, ExifTool itself
+    (Exif.pm:6974-6990) reads `/^Little/i`, `/^Big/i` and treats everything
+    else as detect-from-entry-count, so an edge emitted for, say,
+    `'Little-endian'` with `IfdByteOrder::Little` is not a wrong fact --
+    `verify_ifd` accepts either that or a refusal for it, and counts the
+    former as a note."""
+    m = _TAGTABLE_RE.match(fact["tagtable"])
+    if not m:
+        return None, False
+    proc = fact["processproc"]
+    if proc != "-" and not proc.endswith("::ProcessBinaryData"):
+        return None, False
+    start = fact["start"]
+    if start == "-":
+        start_v = ("ValuePtr", 0)
+    else:
+        sm = _IFD_START_RE.match(start.strip())
+        if not sm:
+            return None, False
+        n = int(sm.group(3) or 0)
+        if sm.group(2) == "-":
+            n = -n
+        start_v = ("ValuePtr" if sm.group(1) == "valuePtr" else "Val", n)
+    base = fact["base"]
+    if base != "-" and not _arith_is_well_formed(base, {"start", "base"}):
+        return None, False
+    bo = fact["byteorder"]
+    spec_refuses = False
+    if bo in _SPEC_BYTE_ORDERS:
+        bo_v = _SPEC_BYTE_ORDERS[bo]
+    else:
+        spec_refuses = True
+        if re.match(r"Little", bo, re.I):
+            bo_v = "Little"
+        elif re.match(r"Big", bo, re.I):
+            bo_v = "Big"
+        else:
+            bo_v = "Unknown"
+    fix = fact["fixformat"]
+    if fix in ("-", "ifd"):
+        fix_v = "None"
+    elif fix in _FMT_VARIANT:
+        fix_v = f"Some(Fmt::{_FMT_VARIANT[fix]})"
+    else:
+        return None, False
+    if fact["maxsubdirs"] == "-":
+        max_v = None
+    elif fact["maxsubdirs"].isdigit():
+        max_v = int(fact["maxsubdirs"])
+    else:
+        return None, False
+    return {
+        "module": m.group(1),
+        "table": m.group(2),
+        "start": start_v,
+        "base_present": base != "-",
+        "byte_order": bo_v,
+        "fix_format": fix_v,
+        "sub_ifd": fact["subifd"],
+        "max_subdirs": max_v,
+        "dir_name": None if fact["dirname"] == "-" else fact["dirname"],
+        "validate": fact["validate"],
+    }, spec_refuses
+
+
+class _Tally:
+    """match / MISMATCH counter with a bounded example list."""
+
+    def __init__(self, show):
+        self.ok = 0
+        self.bad = 0
+        self.examples = []
+        self.show = show
+
+    def hit(self):
+        self.ok += 1
+
+    def miss(self, example):
+        self.bad += 1
+        if len(self.examples) < self.show:
+            self.examples.append(example)
+
+    @property
+    def total(self):
+        return self.ok + self.bad
+
+
+def verify_ifd(gen, orc, show=10):
+    """Compare a `ParsedIfd` with an `IfdOracle` -> `(report_lines, failed)`.
+    `failed` is the number of discrepancies (0 = PASS for this stage)."""
+    T = lambda: _Tally(show)  # noqa: E731
+    t_table, t_tgroups, t_setg1, t_prio = T(), T(), T(), T()
+    t_name, t_fmt, t_writable, t_groups, t_flags = T(), T(), T(), T(), T()
+    t_hook, t_subdir_flag, t_cond, t_rawconv, t_pcref = T(), T(), T(), T(), T()
+    t_enum, t_bitmask, t_other, t_edge = T(), T(), T(), T()
+    orphan_tables, orphan_tags, orphan_examples = 0, 0, []
+    unsupported_fmt = []
+    variant_orphan = 0
+    note_edge_refused_modelable = 0
+    note_byteorder_outside_spec = 0
+    note_rawconv_refused_setmember = 0
+
+    # --- tables ---------------------------------------------------------
+    for (mod, tbl), tf in sorted(gen.tables.items()):
+        o = orc.tables.get((mod, tbl))
+        if o is None or "tgroups" not in o:
+            orphan_tables += 1
+            t_table.miss(((mod, tbl), "not an IFD-scope table in ExifTool"))
+            continue
+        t_table.hit()
+        raw = o["tgroups"]
+        want = (raw[0] or mod, raw[1] or mod, raw[2] or "Other")
+        if tf["groups"] == want:
+            t_tgroups.hit()
+        else:
+            t_tgroups.miss(((mod, tbl), tf["groups"], want, raw))
+        if tf["set_group1"] == o.get("set_group1"):
+            t_setg1.hit()
+        else:
+            t_setg1.miss(((mod, tbl), tf["set_group1"], o.get("set_group1")))
+        want_prio = o.get("priority")
+        try:
+            want_prio = None if want_prio is None else int(want_prio)
+        except ValueError:
+            pass
+        if tf["priority"] == want_prio:
+            t_prio.hit()
+        else:
+            t_prio.miss(((mod, tbl), tf["priority"], want_prio))
+
+    # --- tags -----------------------------------------------------------
+    for k, tag in gen.tags.items():
+        is_variant = k in gen.variant_keys
+        truth = orc.names.get(k)
+        if truth is None:
+            if is_variant:
+                variant_orphan += 1
+            orphan_tags += 1
+            if len(orphan_examples) < show:
+                orphan_examples.append(k)
+            continue
+        if truth == tag["name"]:
+            t_name.hit()
+        else:
+            t_name.miss((k, tag["name"], truth))
+
+        want_fmt = expected_ifd_format(orc.formats.get(k), _count_decl(orc.counts.get(k)))
+        got_fmt = (tag["fmt"], tag["count"])
+        if want_fmt is None:
+            unsupported_fmt.append((k, orc.formats.get(k), got_fmt))
+        elif got_fmt == want_fmt:
+            t_fmt.hit()
+        else:
+            t_fmt.miss((k, got_fmt, want_fmt, orc.formats.get(k), orc.counts.get(k)))
+
+        want_w = orc.writables.get(k)
+        if tag["writable"] == want_w:
+            t_writable.hit()
+        else:
+            t_writable.miss((k, tag["writable"], want_w))
+
+        want_g = orc.groups.get(k, ("", "", ""))
+        if tag["groups"] == want_g:
+            t_groups.hit()
+        else:
+            t_groups.miss((k, tag["groups"], want_g))
+
+        want_f = orc.flags.get(k, (False, False, False, False, False, None))
+        if tag["flags"] == want_f:
+            t_flags.hit()
+        else:
+            t_flags.miss((k, tag["flags"], want_f))
+
+        om = tag["omitted"]
+        for tally, member, present in (
+            (t_hook, "hook", k in orc.hooks),
+            (t_subdir_flag, "subdirectory", k in orc.subdirs),
+        ):
+            if om[member] == present:
+                tally.hit()
+            else:
+                tally.miss((k, f"omitted.{member}", om[member], present))
+        # A plain entry's Condition is Perl the walk cannot run (withheld);
+        # an alternative's Condition is the compiled `Cond` that selected
+        # it, so the flag must be clear there (the spec's atomic refusal
+        # otherwise drops the whole group).
+        want_cond = False if is_variant else k in orc.conditions
+        if om["condition"] == want_cond:
+            t_cond.hit()
+        else:
+            t_cond.miss((k, "omitted.condition", om["condition"], want_cond))
+
+        rc = orc.rawconvs.get(k)
+        member = tag["raw_conv"]
+        if member is not None:
+            sm = _SET_MEMBER_RE.match(rc) if rc is not None else None
+            if om["raw_conv"]:
+                t_rawconv.miss((k, f"SetMember {member!r} together with omitted.raw_conv"))
+            elif rc is None:
+                t_rawconv.miss((k, f"SetMember {member!r} but ExifTool has no RawConv"))
+            elif sm is None or sm.group(1) != member:
+                t_rawconv.miss((k, f"SetMember {member!r} but RawConv is {rc!r}"))
+            else:
+                t_rawconv.hit()
+        elif om["raw_conv"] and rc is None:
+            t_rawconv.miss((k, "omitted.raw_conv but ExifTool has no RawConv"))
+        elif rc is not None and not om["raw_conv"]:
+            t_rawconv.miss((k, f"RawConv {rc!r} dropped silently"))
+        else:
+            if rc is not None and _SET_MEMBER_RE.match(rc):
+                note_rawconv_refused_setmember += 1
+            t_rawconv.hit()
+
+        # Same three-way check as the binary stage's PCREF logic.
+        flagged, is_ref = om["print_conv"], k in orc.pcrefs
+        if flagged and not is_ref:
+            t_pcref.miss((k, "print_conv refused but ExifTool has no PrintConv ref"))
+        elif is_ref and not flagged and tag["pc_kind"] == "PrintConv::None":
+            t_pcref.miss((k, f"ExifTool PrintConv is a {orc.pcrefs[k]} ref, dropped silently"))
+        else:
+            t_pcref.hit()
+
+        truth_enum = {norm_key(a): b for a, b in orc.enums.get(k, {}).items()}
+        for kk, vv in gen.enums.get(k, {}).items():
+            t = truth_enum.get(norm_key(kk))
+            if t == vv:
+                t_enum.hit()
+            else:
+                t_enum.miss((k, kk, vv, t))
+        if k in gen.bitmasks or k in orc.bitmasks:
+            got = {norm_key(kk): vv for kk, vv in gen.bitmasks.get(k, {}).items()}
+            want = {norm_key(kk): vv for kk, vv in orc.bitmasks.get(k, {}).items()}
+            if got == want:
+                t_bitmask.hit()
+            else:
+                t_bitmask.miss((k, got, want))
+        variant = gen.other_ids.get(k)
+        if variant is not None:
+            if k not in orc.other_present:
+                t_other.miss((k, f"other: Some(OtherId::{variant})", "no OTHER in ExifTool"))
+            elif gen.print_hexes.get(k, False) != orc.other_print_hex.get(k, False):
+                t_other.miss((k, f"print_hex: {gen.print_hexes.get(k, False)}",
+                              f"PrintHex: {orc.other_print_hex.get(k, False)}"))
+            else:
+                t_other.hit()
+
+        edge = tag["subdir"]
+        fact = orc.subdirs.get(k)
+        if edge is not None:
+            if not om["subdirectory"]:
+                t_edge.miss((k, "edge emitted without omitted.subdirectory"))
+            elif fact is None:
+                t_edge.miss((k, "edge emitted but ExifTool has no SubDirectory"))
+            else:
+                want, spec_refuses = expected_ifd_edge(fact)
+                if want is None:
+                    t_edge.miss((k, "edge emitted where the facts require a refusal", fact))
+                else:
+                    diffs = [
+                        f for f in ("module", "table", "start", "byte_order", "fix_format",
+                                    "sub_ifd", "max_subdirs", "dir_name", "validate")
+                        if edge[f] != want[f]
+                    ]
+                    if (edge["base"] != "None") != want["base_present"]:
+                        diffs.append("base")
+                    if diffs:
+                        t_edge.miss((k, {f: edge[f] for f in diffs},
+                                     {f: want.get(f, want.get("base_present")) for f in diffs}))
+                    else:
+                        t_edge.hit()
+                        if spec_refuses:
+                            note_byteorder_outside_spec += 1
+        elif fact is not None and om["subdirectory"]:
+            want, spec_refuses = expected_ifd_edge(fact)
+            if want is not None and not spec_refuses:
+                note_edge_refused_modelable += 1
+
+    structure_bad = len(gen.structure)
+    failed = (
+        orphan_tables + t_tgroups.bad + t_setg1.bad + t_prio.bad + orphan_tags
+        + t_name.bad + t_fmt.bad + len(unsupported_fmt) + t_writable.bad + t_groups.bad
+        + t_flags.bad + t_hook.bad + t_subdir_flag.bad + t_cond.bad + t_rawconv.bad
+        + t_pcref.bad + t_enum.bad + t_bitmask.bad + t_other.bad + t_edge.bad + structure_bad
+    )
+    n_edges = sum(1 for t in gen.tags.values() if t["subdir"] is not None)
+    lines = [
+        "",
+        "IFD tables (slice I-1)",
+        f"tables checked   {t_table.total}",
+        f"  match          {t_table.ok}",
+        f"  not in oracle  {orphan_tables}",
+        f"  effective groups MISMATCH {t_tgroups.bad}   set_group1 MISMATCH {t_setg1.bad}   "
+        f"priority MISMATCH {t_prio.bad}",
+        f"  structure (sort order / disjoint ids / ALL_IFD_TABLES) MISMATCH {structure_bad}",
+        f"tags checked     {len(gen.tags)}  (variant alternatives {len(gen.variant_keys)})",
+        f"  name match     {t_name.ok}",
+        f"  name MISMATCH  {t_name.bad}",
+        f"  not in oracle  {orphan_tags}  (of which variant alternatives {variant_orphan})",
+        f"  format+count   {t_fmt.total}  MISMATCH {t_fmt.bad}  "
+        f"unsupported format emitted anyway {len(unsupported_fmt)}",
+        f"  writable       {t_writable.total}  MISMATCH {t_writable.bad}",
+        f"  groups         {t_groups.total}  MISMATCH {t_groups.bad}",
+        f"  flags          {t_flags.total}  MISMATCH {t_flags.bad}",
+        f"  hook/subdirectory/condition flags MISMATCH {t_hook.bad}/{t_subdir_flag.bad}/{t_cond.bad}",
+        f"  raw_conv       {t_rawconv.total}  MISMATCH {t_rawconv.bad}  "
+        f"(SetMember-shaped RawConvs refused instead: {note_rawconv_refused_setmember})",
+        f"  print_conv refusals {t_pcref.total}  MISMATCH {t_pcref.bad}",
+        f"enum entries     {t_enum.total}",
+        f"  match          {t_enum.ok}",
+        f"  MISMATCH       {t_enum.bad}",
+        f"BITMASK tags     {t_bitmask.total}  MISMATCH {t_bitmask.bad}",
+        f"OTHER-backed tags {t_other.total}  MISMATCH {t_other.bad}",
+        f"subdirectory edges {n_edges}",
+        f"  match          {t_edge.ok}",
+        f"  MISMATCH       {t_edge.bad}",
+        f"  refused though the facts were modelable (note, not a mismatch) "
+        f"{note_edge_refused_modelable}",
+        f"  ByteOrder spelling outside the spec's six, emitted per ExifTool's rule (note) "
+        f"{note_byteorder_outside_spec}",
+        f"IFD MISMATCH total {failed}",
+    ]
+    for tally, label in (
+        (t_table, "table"), (t_tgroups, "table groups"), (t_setg1, "set_group1"),
+        (t_prio, "table priority"), (t_name, "name"), (t_fmt, "format"), (t_writable, "writable"),
+        (t_groups, "tag groups"), (t_flags, "flags"), (t_hook, "hook flag"),
+        (t_subdir_flag, "subdirectory flag"), (t_cond, "condition flag"), (t_rawconv, "raw_conv"),
+        (t_pcref, "print_conv flag"), (t_enum, "enum"), (t_bitmask, "bitmask"), (t_other, "other"),
+        (t_edge, "subdir edge"),
+    ):
+        for ex in tally.examples:
+            lines.append(f"  {label}  {ex!r}")
+    for k in orphan_examples:
+        lines.append(f"  orphan tag {k}")
+    for ex in unsupported_fmt[:show]:
+        lines.append(f"  format  {ex[0]}: Format {ex[1]!r} is outside the schema but was "
+                     f"emitted as {ex[2]!r} -- it must be refused, not approximated")
+    for s in gen.structure[:show]:
+        lines.append(f"  structure  {s}")
+    return lines, failed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("generated_rs")
     ap.add_argument("exiftool_lib")
     ap.add_argument("--oracle", default="oracle.pl")
     ap.add_argument("--show", type=int, default=10)
+    ap.add_argument(
+        "--ifd-generated", default=None,
+        help="slice I-1's src/exiftool_tables/ifd_tables.rs (default: the file of that "
+             "name beside GENERATED_RS); the IFD stage is skipped, with a message, when "
+             "it does not exist",
+    )
     args = ap.parse_args()
 
     version = check_version(args.generated_rs, args.exiftool_lib)
+    ifd_path = (
+        Path(args.ifd_generated) if args.ifd_generated
+        else Path(args.generated_rs).with_name("ifd_tables.rs")
+    )
+    ifd_present = ifd_path.is_file()
 
     git = instrument.git_state()
     dirty_overridden = instrument.refuse_if_dirty(git, "verify.py")
@@ -956,6 +1852,7 @@ def main():
             f"exiftool: {version} (lib {args.exiftool_lib})",
             f"perl:    {_PERL} -- {capability}",
             f"target:  {args.generated_rs}",
+            f"ifd:     {ifd_path}" + ("" if ifd_present else "  (absent -> IFD stage skipped)"),
         ],
     )
     (
@@ -963,11 +1860,12 @@ def main():
         gen_sound_until, gen_variant_keys, gen_bitmasks, gen_other_ids, gen_print_hexes,
         gen_pc_refused, gen_pc_kinds, gen_formats, gen_table_groups, gen_tag_groups,
     ) = parse_rust(args.generated_rs)
+    oracle_out = run_oracle(args.exiftool_lib, args.oracle)
     (
         or_names, or_enums, or_masks, or_hooks, or_subdirs, or_subdir_facts, or_varfmts,
         or_bitmasks, or_other_present, or_other_print_hex, or_pcrefs,
         or_rawfmts, or_tblgroups, or_taggroups,
-    ) = load_oracle(args.exiftool_lib, args.oracle)
+    ) = parse_binary_oracle(oracle_out)
 
     if not gen_fields:
         sys.exit("parsed 0 fields from generated Rust -- verifier is broken, "
@@ -1411,12 +2309,33 @@ def main():
         print(f"  format  {k}: Format {raw!r} is outside the schema but was "
               f"emitted as {got!r} -- it must be refused, not approximated")
 
+    # Slice I-1: the IFD stage, from the same oracle run. Skipped -- never
+    # silently passed -- when the generated file is not on this tree.
+    ifd_failed = 0
+    if ifd_present:
+        stamped = VERSION_RE.search(ifd_path.read_text(encoding="utf-8"))
+        if stamped and stamped.group(1) != version:
+            raise SystemExit(
+                f"ExifTool pin skew: {ifd_path} was transcribed from {stamped.group(1)}, "
+                f"but the binary tables and the pin say {version} -- regenerate both together"
+            )
+        gen_ifd = parse_ifd_rust(ifd_path)
+        if not gen_ifd.tables:
+            sys.exit(f"parsed 0 IfdTable statics from {ifd_path} -- verifier is broken, "
+                     "not the generator; fix the parser before trusting a PASS")
+        ifd_lines, ifd_failed = verify_ifd(gen_ifd, parse_ifd_oracle(oracle_out), args.show)
+        print("\n".join(ifd_lines))
+    else:
+        print(f"\nIFD tables (slice I-1): SKIPPED -- {ifd_path} does not exist on this tree "
+              "(the generator has not produced it); the binary verification above stands alone")
+
     failed = (
         name_bad + enum_bad + orphan + mask_bad + bitmask_bad + other_bad
         + variant_name_bad + variant_enum_bad + variant_orphan + variant_mask_bad
         + hook_bad + subdir_bad + edge_bad + sound_bad
         + pcref_false_refusal + pcref_silent_drop
         + fmt_bad + len(unsupported_emitted) + group_bad + tag_group_bad
+        + ifd_failed
     )
     print("\nRESULT:", "PASS" if failed == 0 else f"FAIL ({failed} discrepancies)")
     sys.exit(1 if failed else 0)
