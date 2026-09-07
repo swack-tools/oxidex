@@ -128,12 +128,22 @@ pub static ENABLED: &[(&str, &str)] = &[
     // Gate B, `tools/exiftool-tables/conformance.py` over
     // `/tmp/oxidex-exiftool-cache/combined-samples` --recursive --min-files
     // 3875 --min-tags 5000 against pinned 13.59 (both probes OK), release
-    // binaries built on the i7 at the merge-base (control) and this branch:
+    // binaries built on the i7 (`/tmp/i7-missing-census.sh`, 2026-09-06)
+    // from the same tables WITHOUT this line (control, `91fb1168`) and this
+    // branch (treatment, `0039bf36`), per-file diff of the two `--json-out`
+    // files (`/tmp/icc-ab.txt`):
     //
-    //     control  TOTAL ICC_HEADER_CONTROL_TOTAL
-    //     enabled  TOTAL ICC_HEADER_BRANCH_TOTAL
+    //     control  TOTAL 4238 443839 21 607 5885 10461 98.6%
+    //     enabled  TOTAL 4238 443903 21 598 5830 10461 98.6%
     //
-    // ICC_HEADER_AB_SUMMARY
+    // 29 files touched. 55 MISSING moved to matched (ProfileCMMType 27,
+    // PrimaryPlatform 24, DeviceManufacturer 4 -- the blank signatures the
+    // hand code dropped and ExifTool prints as `""` or `Unknown ()`), 9
+    // VALUE rows fixed (ProfileCreator 3, PrimaryPlatform 3,
+    // DeviceManufacturer 3 -- the `Unknown (SEC)` renderings 4b-i's hash-miss
+    // fallback supplies), zero new VALUE, zero new EXTRA, zero matched ->
+    // MISSING. Per-field on the synthetic fixture pinned with the same
+    // oracle: `parsers::icc::tests`.
     ("ICC_Profile", "Header"),
     // ID3::v1 -- `src/parsers/audio/mp3.rs:499`, the 128-byte ID3v1 trailer.
     // This one is the clearest case for the shared `ReadValue`: every field
