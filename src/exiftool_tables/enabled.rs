@@ -108,6 +108,33 @@ pub static ENABLED: &[(&str, &str)] = &[
     // shared ProcessBinaryData engine; one line is this table's review and
     // revert unit.
     ("H264", "RecInfo"),
+    // ICC_Profile::Header -- `src/parsers/icc/mod.rs`'s `header_tags`, the
+    // 128-byte profile header ExifTool hands to `ProcessDirectory` with
+    // `DirLen => 128` (ICC_Profile.pm:1283-1295; the table is :652-757).
+    // Corpus carriers: every file with an embedded or standalone ICC profile
+    // -- 136 of 4,238 under the pinned 13.59 oracle (`exiftool-pinned.sh -r
+    // -j -G1`), across JPEG, PNG, TIFF/RAW, PSD, XCF and the ICC files.
+    //
+    // This line REPLACES a hand transcription of the same table
+    // (`icc/header.rs`, deleted in 4b-ii): the generated table carries
+    // ExifTool's own `%manuSig`/`%profileClass` hashes and every conversion
+    // is oracle-verified (`verify_exprs.py`), where the hand code dropped a
+    // tag whenever a signature was blank or unlisted -- ExifTool prints
+    // `""` for a blank key `%manuSig` maps (`'' => ''`) and `Unknown (...)`
+    // for a miss (ExifTool.pm:3624-3631, engine 4b-i). Gate A became sound
+    // for this table with slice 4 (`.` concatenation, the list domain for
+    // `int16u[6]` / `int32u[2]` / `int8u[16]`, `HexID`).
+    //
+    // Gate B, `tools/exiftool-tables/conformance.py` over
+    // `/tmp/oxidex-exiftool-cache/combined-samples` --recursive --min-files
+    // 3875 --min-tags 5000 against pinned 13.59 (both probes OK), release
+    // binaries built on the i7 at the merge-base (control) and this branch:
+    //
+    //     control  TOTAL ICC_HEADER_CONTROL_TOTAL
+    //     enabled  TOTAL ICC_HEADER_BRANCH_TOTAL
+    //
+    // ICC_HEADER_AB_SUMMARY
+    ("ICC_Profile", "Header"),
     // ID3::v1 -- `src/parsers/audio/mp3.rs:499`, the 128-byte ID3v1 trailer.
     // This one is the clearest case for the shared `ReadValue`: every field
     // is a `string[N]` butted against the end of a fixed 128-byte record,

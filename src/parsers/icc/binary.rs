@@ -16,22 +16,6 @@ pub fn read_u32_be(data: &[u8], offset: usize) -> Result<u32> {
         .ok_or_else(|| ExifToolError::parse_error("Offset out of bounds"))
 }
 
-/// Reads a 2-byte big-endian unsigned integer
-pub fn read_u16_be(data: &[u8], offset: usize) -> Result<u16> {
-    let reader = EndianReader::big_endian(data);
-    reader
-        .u16_at(offset)
-        .ok_or_else(|| ExifToolError::parse_error("Offset out of bounds"))
-}
-
-/// Reads an 8-byte big-endian unsigned integer
-pub fn read_u64_be(data: &[u8], offset: usize) -> Result<u64> {
-    let reader = EndianReader::big_endian(data);
-    reader
-        .u64_at(offset)
-        .ok_or_else(|| ExifToolError::parse_error("Offset out of bounds"))
-}
-
 /// Reads a 4-byte signature as a trimmed ASCII string
 /// Null bytes are stripped to handle null-padded signatures.
 pub fn read_signature(data: &[u8], offset: usize) -> Result<String> {
@@ -42,25 +26,6 @@ pub fn read_signature(data: &[u8], offset: usize) -> Result<String> {
     // Convert to string and strip null bytes and whitespace
     let s = String::from_utf8_lossy(bytes);
     Ok(s.trim_matches('\0').trim().to_string())
-}
-
-/// Reads a 4-byte signature exactly as ExifTool's `string[4]` format does:
-/// truncated at the first null byte, but with padding spaces preserved.
-///
-/// ExifTool's `ReadValue` only truncates string values at a null terminator
-/// (`s/\0.*//s`); it never strips trailing spaces. Several ICC signatures
-/// (e.g. `RGB `, `XYZ `) are space-padded by spec and ExifTool reports them
-/// with the padding intact.
-pub fn read_signature_raw(data: &[u8], offset: usize) -> Result<String> {
-    let reader = EndianReader::big_endian(data);
-    let bytes = reader
-        .bytes_at(offset, 4)
-        .ok_or_else(|| ExifToolError::parse_error("Offset out of bounds"))?;
-    let s = String::from_utf8_lossy(bytes);
-    Ok(match s.find('\0') {
-        Some(pos) => s[..pos].to_string(),
-        None => s.to_string(),
-    })
 }
 
 /// Reads a signed 15.16 fixed-point number and converts to f64
