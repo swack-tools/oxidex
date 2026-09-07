@@ -49,6 +49,22 @@
 /// hypothetical one.
 #[must_use]
 pub fn perl_num(v: f64) -> String {
+    perl_g(v, 15)
+}
+
+/// C's `%.<sig>g` as Perl's `sprintf` renders it, for any significant-digit
+/// count: [`perl_num`] is the 15-digit default stringification, and
+/// ExifTool's `RoundFloat` (ExifTool.pm:5960-5964, `sprintf("%.${sig}g",
+/// $val)`) is the same conversion at 10 digits for a `rational64u`/`s`
+/// element (`GetRational64u`, ExifTool.pm:6114-6120) and 7 for the 32-bit
+/// rationals (ExifTool.pm:6100-6106). One implementation, so the two cannot
+/// drift.
+///
+/// `%g` picks scientific notation when the exponent is below -4 or at least
+/// `sig`, strips trailing zeros in either form, and never prints a bare
+/// trailing point -- all reproduced below. `sig` must be at least 1.
+#[must_use]
+pub fn perl_g(v: f64, sig: usize) -> String {
     if v == 0.0 {
         return "0".to_string();
     }
@@ -63,22 +79,23 @@ pub fn perl_num(v: f64) -> String {
         };
     }
 
-    const SIG: usize = 15;
+    let sig = sig.max(1);
     let neg = v.is_sign_negative();
     let av = v.abs();
-    // 15 significant digits in scientific form: one digit before the point,
-    // 14 after. Read the exponent back out of Rust's own `{:e}` rendering
-    // rather than computing it independently (a hand-rolled log10 disagrees
-    // with the formatter's rounding right at power-of-ten boundaries).
-    let sci = format!("{:.*e}", SIG - 1, av);
+    // `sig` significant digits in scientific form: one digit before the
+    // point, `sig - 1` after. Read the exponent back out of Rust's own `{:e}`
+    // rendering rather than computing it independently (a hand-rolled log10
+    // disagrees with the formatter's rounding right at power-of-ten
+    // boundaries).
+    let sci = format!("{:.*e}", sig - 1, av);
     let (mantissa, exp_str) = sci.split_once('e').expect("`{:e}` always emits 'e'");
     let exp: i32 = exp_str
         .parse()
         .expect("`{:e}`'s exponent is a plain integer");
     let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    debug_assert_eq!(digits.len(), SIG);
+    debug_assert_eq!(digits.len(), sig);
 
-    let body = if exp < -4 || exp >= SIG as i32 {
+    let body = if exp < -4 || exp >= sig as i32 {
         // %e form: d[.ddddd]e±NN, trailing mantissa zeros stripped.
         let frac = digits[1..].trim_end_matches('0');
         let m = if frac.is_empty() {

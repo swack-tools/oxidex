@@ -107,6 +107,62 @@ impl DecodedValue {
             _ => None,
         }
     }
+
+    /// The string Perl holds for this scalar once `ReadValue` has produced
+    /// it -- the element `join(' ', @vals)` (ExifTool.pm:6330) concatenates
+    /// when an entry carries more than one value, and what `$$self{X} =
+    /// $val` stores as a data member.
+    ///
+    /// * an integer is its decimal digits (a Perl IV);
+    /// * a float is Perl's default `%.15g` stringification
+    ///   ([`super::exprs::perl_num`]);
+    /// * a rational is what `GetRational64u`/`GetRational64s`
+    ///   (ExifTool.pm:6107-6120) returned: `RoundFloat($n / $d, 10)`, i.e.
+    ///   `sprintf("%.10g")` of the quotient (ExifTool.pm:5960-5964), or the
+    ///   literal `inf` / `undef` for a zero denominator (`$ratDenom or return
+    ///   $ratNumer ? 'inf' : 'undef'`). Only the 64-bit rationals exist as
+    ///   IFD entry types (TIFF types 5 and 10), which is why this function
+    ///   is stated for them; a `rational32u` field's `RoundFloat(..., 7)`
+    ///   (ExifTool.pm:6100-6106) is a different rendering, and a binary-table
+    ///   caller holding one must not use this;
+    /// * a string is itself;
+    /// * an `undef` byte run and a nested array are `None`: the first is not
+    ///   a Perl *number* and the second cannot occur as an element (a
+    ///   caller joins the outer array itself). Refusing both keeps this a
+    ///   scalar rule rather than a guess.
+    #[must_use]
+    pub fn perl_string(&self) -> Option<String> {
+        match self {
+            Self::Integer(value) => Some(value.to_string()),
+            Self::Float(value) => Some(super::exprs::perl_num(*value)),
+            Self::UnsignedRational(numerator, denominator) => Some(perl_rational64(
+                f64::from(*numerator),
+                f64::from(*denominator),
+            )),
+            Self::SignedRational(numerator, denominator) => Some(perl_rational64(
+                f64::from(*numerator),
+                f64::from(*denominator),
+            )),
+            Self::String(value) => Some(value.clone()),
+            Self::Undefined(_) | Self::Array(_) => None,
+        }
+    }
+}
+
+/// `GetRational64u`/`GetRational64s` (ExifTool.pm:6107-6120): `$ratDenom or
+/// return $ratNumer ? 'inf' : 'undef'`, else `RoundFloat($n / $d, 10)`. The
+/// operands are exact in an `f64` (they are 32-bit integers), so the quotient
+/// is the same IEEE double Perl divides to.
+fn perl_rational64(numerator: f64, denominator: f64) -> String {
+    if denominator == 0.0 {
+        if numerator == 0.0 {
+            "undef".to_string()
+        } else {
+            "inf".to_string()
+        }
+    } else {
+        super::exprs::perl_g(numerator / denominator, 10)
+    }
 }
 
 /// One successfully decoded generated field.
@@ -221,6 +277,44 @@ pub fn to_tag_value(value: &DecodedValue) -> TagValue {
         DecodedValue::Undefined(bytes) => TagValue::Binary(bytes.clone()),
         DecodedValue::Array(values) => TagValue::Array(values.iter().map(to_tag_value).collect()),
     }
+}
+
+/// [`to_tag_value`], except that a numeric [`DecodedValue::Array`] becomes
+/// ONE space-joined string -- the value ExifTool itself holds for a
+/// multi-count IFD entry.
+///
+/// `ReadValue` (ExifTool.pm:6286-6332) returns the elements of a repeated
+/// numeric entry as a single scalar: `return join(' ', @vals) if @vals > 1;`
+/// (ExifTool.pm:6330). Everything downstream -- `PrintConv` hashes, `-j`
+/// output, `$$self{X} = $val` -- sees that one string, so an IFD walk that
+/// reported a `TagValue::Array` here would disagree with `exiftool -j`
+/// (which prints `"1 2 3"`, not `[1, 2, 3]`) on every multi-value tag.
+/// [`super::ifd_engine`] reports through this unless the tag declares
+/// `List => 1`, in which case the array shape is what ExifTool emits.
+///
+/// Each element is rendered by [`DecodedValue::perl_string`]; an array with
+/// an element that has no Perl scalar string (an `undef` run, a nested
+/// array) is not a "numeric Array" and falls through to [`to_tag_value`]
+/// unchanged -- the IFD walk never builds one, and a binary-table caller
+/// that does keeps the shape it had.
+#[must_use]
+pub fn to_exiftool_value(value: &DecodedValue) -> TagValue {
+    if let DecodedValue::Array(values) = value {
+        let joined: Option<Vec<String>> = values
+            .iter()
+            .map(|element| match element {
+                DecodedValue::Integer(_)
+                | DecodedValue::Float(_)
+                | DecodedValue::UnsignedRational(..)
+                | DecodedValue::SignedRational(..) => element.perl_string(),
+                _ => None,
+            })
+            .collect();
+        if let Some(joined) = joined {
+            return TagValue::String(joined.join(" "));
+        }
+    }
+    to_tag_value(value)
 }
 
 /// A caller's acknowledgment of which of a field's [`Omitted`] semantics it
