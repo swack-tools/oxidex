@@ -644,6 +644,37 @@ class ReachabilityCensus(unittest.TestCase):
         self.assertEqual(([t["table"] for t in enabled], len(eligible), len(refused)), (["Main"], 2, 1))
         self.assertTrue(by[("FLIR", "Main")]["hand_wired"])
 
+    def test_ifd_report_section_renders(self):
+        import contextlib
+        import io
+        tables = reachability.parse_tables(SAMPLE, "ifd")
+        enabled, eligible, refused = reachability.classify(
+            tables, {("Olympus", "Equipment")}, {("Olympus", "Main"), ("FLIR", "Main")}
+        )
+        # Edge targets resolve across BOTH kinds: a binary target is labelled
+        # as such, an unknown one as `no-layout`.
+        status = {(t["module"], t["table"]): t["status"] for t in tables}
+        status[("IPTC", "Main")] = "binary:eligible"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            reasons = reachability.report(
+                tables, enabled, eligible, refused, {("Olympus", "Main"), ("FLIR", "Main")}, 0,
+                "find_ifd_table", status,
+            )
+        out = buf.getvalue()
+        self.assertIn("tables emitted            4", out)
+        self.assertIn("  enabled  (gate A + measured allowlist)   1", out)
+        self.assertIn("  eligible (gate A, awaiting a gate B run) 2", out)
+        self.assertIn("  refused  (gate A blocks)                 1", out)
+        self.assertIn("hand-wired find_ifd_table call sites", out)
+        self.assertIn("  FLIR::Main                   eligible", out)
+        self.assertIn("  Olympus::Main                   ifd_expr_domain_unknown=2", out)
+        self.assertIn("SubDirectory edges: 6 from 2 tables (1 of which are hand-wired today)", out)
+        self.assertIn("  -> IPTC::Main                   x1   binary:eligible", out)
+        self.assertIn("  -> Kodak::IFD                    x1   no-layout", out)
+        self.assertIn("  -> Olympus::Equipment              x2   enabled", out)
+        self.assertEqual(dict(reasons), {"ifd_expr_domain_unknown": 1})
+
     def test_empty_ifd_allowlist_parses(self):
         allowed = reachability.parse_allowlist(reachability.IFD_ALLOWLIST, "ENABLED_IFD")
         self.assertEqual(allowed, set())
