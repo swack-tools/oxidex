@@ -316,10 +316,20 @@ def value_domain(format_name, count):
 
 
 def rust_str(s):
-    """Escape a Python str into a Rust string literal body."""
+    """Escape a Python str into a Rust string literal body.
+
+    Control characters (NUL first among them: Exif::Main's FileSource keys
+    `"\\3\\0\\0\\0"`, Exif.pm:2820) are written as Rust `\\u{..}` escapes
+    rather than raw bytes, so the generated source carries no NUL/control
+    bytes and every tool that reads it back (`verify.py`, `grep`) sees the
+    key ExifTool declared. `verify.py::unescape` decodes the same escapes.
+    """
     out = s.replace("\\", "\\\\").replace('"', '\\"')
     out = out.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-    return out
+    return "".join(
+        f"\\u{{{ord(ch):x}}}" if (ord(ch) < 0x20 and ch not in "\n\r\t") or ord(ch) == 0x7f else ch
+        for ch in out
+    )
 
 
 def parse_index(key):
@@ -804,11 +814,20 @@ def omitted_for(tag, stats, condition_resolved=False, value_conv_modeled=False,
         # `conv_for` already counts this exact event as `conv_dropped`; adding
         # another scalar would let the coverage report give one fact two names.
         flags.append("print_conv")
+    return _omitted_literal(flags)
+
+
+OMITTED_MEMBERS = ("value_conv", "raw_conv", "condition", "hook", "subdirectory", "print_conv")
+
+
+def _omitted_literal(flags):
+    """The Rust `Omitted` literal for the set of members in `flags` -- shared
+    by the binary path (`omitted_for`) and the IFD path (`ifd_omitted_for`)
+    so the two can never spell the same refusal differently."""
     if not flags:
         return "Omitted::NONE"
     return "Omitted { " + ", ".join(
-        f"{m}: {'true' if m in flags else 'false'}"
-        for m in ("value_conv", "raw_conv", "condition", "hook", "subdirectory", "print_conv")
+        f"{m}: {'true' if m in flags else 'false'}" for m in OMITTED_MEMBERS
     ) + " }"
 
 
@@ -1258,7 +1277,45 @@ GATE_A_DISQUALIFYING = (
     "subdir_refused_tagtable",
     "subdir_refused_start",
     "subdir_refused_base",
+    # IFD-style tables (slice I-1; `gen_ifd_tag_literal` / `compile_ifd_subdir`
+    # below, contract in docs/superpowers/specs/2026-09-06-ifd-tables-design.md
+    # section 2). Same two failure classes as above: an entry that is not in the
+    # emitted table at all, so nothing marks its place --
+    "ifd_tag_id_unrepresentable",
+    "ifd_format_unsupported",
+    "ifd_flags_unreadable",
+    "ifd_priority_unreadable",
+    # (NOT here, deliberately: `ifd_expr_domain_unknown` and
+    # `ifd_bitmask_words_unsupported` -- a PrintConv the schema cannot type
+    # or render is refused AND the field is withheld through
+    # `Omitted.print_conv`, which is honest absence, the same class as
+    # `conv_dropped`; a ValueConv with no domain sets `Omitted.value_conv`
+    # the same way. A bare `string`/`undef` Format is not here either: the
+    # schema carries it as the unsized `Fmt::Str(0)`/`Fmt::Undef(0)` and the
+    # walk honours it.)
+    # SubDirectory edges refused -- the pointer is emitted with no target
+    # (subdir: None), so every tag on the far side is silently absent. Same
+    # rule as the binary `subdir_refused_*` set above. `ifd_subdir_refused_
+    # validate` is deliberately NOT here: that edge IS emitted (`validate:
+    # true`) and it is the walk that refuses it, countably, at runtime.
+    "ifd_subdir_refused_tagtable",
+    "ifd_subdir_refused_processproc",
+    "ifd_subdir_refused_unmodeled_key",
+    "ifd_subdir_refused_start",
+    "ifd_subdir_refused_base",
+    "ifd_subdir_refused_byteorder",
+    "ifd_subdir_refused_fixformat",
+    "ifd_subdir_refused_unreadable",
 )
+# NOT disqualifying, and why (IFD): `ifd_isoffset_unsupported` -- spec
+# section 6: the offset/length tags (PreviewImageStart & co.) are refused as a
+# class and stay explicit hand post-passes (slice I-3); refusing every
+# MakerNotes Main table for carrying one would block the whole slice for a
+# semantic the walk is not meant to reproduce. `ifd_count_unrepresentable`,
+# `ifd_writable_unmodeled`, `ifd_fixformat_undumped` -- data the walk never
+# reads (the entry says its own count; Writable is the writer's; FixFormat is
+# consulted only by WriteExif.pl:1760). `ifd_set_group1_flag` -- table-level,
+# see `gen_ifd_table`.
 
 
 def gate_a_for(table_stats, offset_hazard):
@@ -1298,7 +1355,11 @@ def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs):
     # yield plausible integers at offsets that mean nothing, under real ExifTool
     # tag names. codegen_subdirs.py hard-errors on this same construct.
     if not is_binary_table(meta):
-        stats["table_not_binary"] += 1
+        # Slice I-1: the IFD-style tables (`is_ifd_table`) are transcribed by
+        # `gen_ifd_table` into their own file, so they are counted under their
+        # own name here and "not ProcessBinaryData" keeps meaning "transcribed
+        # by nothing at all".
+        stats["table_ifd" if is_ifd_table(meta) else "table_not_binary"] += 1
         return None
     fmt_name = meta.get("FORMAT")
     if not isinstance(fmt_name, str):
@@ -1470,6 +1531,1090 @@ pub static {ident}: BinaryTable = BinaryTable {{
     variants: {variants_expr},
 }};
 """
+
+
+# =============================================================================
+# IFD-style tables (slice I-1): ExifTool's `Exif::ProcessExif` tables
+# =============================================================================
+#
+# Everything above this line transcribes `ProcessBinaryData` tables -- a flat
+# byte record, a field per offset. The functions below transcribe the OTHER
+# shape ExifTool reads mechanically: an IFD, where every 12-byte entry names
+# its own tag id, format and count (Exif.pm's `ProcessExif`) and the table is
+# keyed by tag id. `docs/superpowers/specs/2026-09-06-ifd-tables-design.md`
+# (section 2) is the contract; `src/exiftool_tables/ifd_schema.rs` is the
+# hand-written schema these literals are emitted against. The doctrine is the
+# same, key by key: transcribe exactly, or refuse and count under a name the
+# REPORT prints (`IFD_REPORT`).
+#
+# Shared with the binary path on purpose: the scalar `Format` grammar
+# (`SCALAR_FORMATS`/`SIZED_RE`), `conv_for`/`value_conv_for`/
+# `print_conv_input_domain` (an expression is compiled, domain-checked and
+# oracle-gated once, the same way, for both table kinds -- `verify_exprs.py`'s
+# census is dump-wide), `compile_groups_field`, `gate_a_for`, `conds.py`'s
+# `Condition` compiler and `subdirs.py`'s `TagTable`/`Base` grammar.
+# Deliberately NOT shared: the run-wide counters (a separate `Counter`, so the
+# binary REPORT's numbers do not move when these tables are added) and the
+# output file (`--ifd-out`), so `binary_tables.rs`'s table literals stay
+# byte-for-byte what they were. The one place the two files touch is the
+# `ExprId` enum, which lives in `binary_tables.rs` and must carry every
+# conversion either file references -- which is why `main()` always runs this
+# pass, `--ifd-out` or not.
+
+
+def is_ifd_table(meta):
+    """True for the tables ExifTool walks with `Image::ExifTool::Exif::
+    ProcessExif`: `PROCESS_PROC` absent (ExifTool.pm:9052, `$proc =
+    $$tagTablePtr{PROCESS_PROC} || \\&Image::ExifTool::Exif::ProcessExif`)
+    or naming that sub explicitly (one table in 13.59, `FujiFilm::IFD`).
+
+    The absent-PROCESS_PROC half over-includes: `Composite` tables, XMP
+    tables and record tables such as IPTC, PICT and Matroska have no
+    PROCESS_PROC either, because their module reads them through its own
+    code rather than through `ProcessDirectory`. They are still emitted --
+    with every entry refused under `ifd_tag_id_unrepresentable` (their keys
+    are not integers) or `ifd_format_unsupported` (their formats are not
+    EXIF scalars) and Gate A blocked -- so the census says which tables are
+    real IFDs and why the rest are not, rather than dropping them silently.
+    """
+    pp = meta.get("PROCESS_PROC")
+    if pp is None:
+        return True
+    if isinstance(pp, dict):
+        name = pp.get("__name") or ""
+    elif isinstance(pp, str):
+        name = pp
+    else:
+        return False
+    return name.endswith("Exif::ProcessExif")
+
+
+def perl_truthy(value):
+    """Perl truthiness of a dumped scalar: `undef`, `""`, `"0"` and `0` are
+    false, everything else (including any ref) is true. The dump carries
+    numeric table values as decimal strings (`"1"`), so the string rule is the
+    one that fires in practice."""
+    if value is None or value is False:
+        return False
+    if value is True:
+        return True
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value not in ("", "0")
+    return True
+
+
+def expand_flags(tag, stats):
+    """ExifTool.pm:5877-5893 `ExpandFlags`, run by `SetupTagTable`
+    (ExifTool.pm:5914) on every entry of every table before any walk reads
+    it: an ARRAY `Flags` sets each named key to 1, a HASH copies key/value,
+    a scalar sets that one key. Only after this does `$$tagInfo{Unknown}`,
+    `{Binary}`, `{SubIFD}`, `{PrintHex}` or `{IsOffset}` mean what ProcessExif
+    tests -- `Flags => ['Unknown', 'Binary', 'Drop']` (Exif::Main) has no
+    top-level `Unknown` key in the dump at all. Returns a shallow copy;
+    `dump_tables.pl` reads the raw hash at require-time, before SetupTagTable
+    has run, so the expansion is reproduced here rather than assumed.
+
+    The binary path does NOT do this (its output must not move); the binary
+    tables' Flags population is Step 26's business, not this slice's.
+    """
+    flags = tag.get("Flags")
+    if flags is None:
+        return tag
+    out = dict(tag)
+    if isinstance(flags, list):
+        items = [(f, 1) for f in flags]
+    elif isinstance(flags, dict):
+        items = list(flags.items())
+    else:
+        items = [(flags, 1)]
+    for key, value in items:
+        if not isinstance(key, str) or not key:
+            # A flag this generator cannot even name might be `Unknown`,
+            # which decides whether the tag is reported at all.
+            stats["ifd_flags_unreadable"] += 1
+            continue
+        out[key] = value
+    return out
+
+
+IFD_TAG_ID_MAX = 0xFFFF
+_IFD_TAG_KEY_RE = re.compile(r"^(?:0|[1-9]\d*)$")
+
+
+def parse_ifd_tag_id(key):
+    """The integer tag id a dumped table key names, or `None`.
+
+    ExifTool keys these tables by integer and Perl stringifies an integer
+    key as plain decimal, which is what `dump_tables.pl` writes. Anything
+    else -- a chunk name (`AIFF::Main`'s `'ANNO'`), a Composite name, a DICOM
+    `'0002,0000'`, a hex spelling, a leading zero -- is not an IFD tag id and
+    is refused (`ifd_tag_id_unrepresentable`), as is an integer outside the
+    16-bit field an IFD entry has for it.
+    """
+    if not isinstance(key, str) or not _IFD_TAG_KEY_RE.match(key):
+        return None
+    n = int(key, 10)
+    return n if n <= IFD_TAG_ID_MAX else None
+
+
+# The two EXIF formats that name a byte string rather than a scalar.
+# ProcessExif honours a bare `Format => 'string'`/`'undef'` override exactly
+# like a scalar one (Exif.pm:6737-6745: `%formatNumber` maps both, the entry's
+# format number is replaced and its count recomputed from the byte size) and
+# `ReadValue` then differs between the two (ExifTool.pm:6306-6308: `string`
+# is truncated at the first NUL, `undef` is not). The schema carries the
+# override as the UNSIZED forms `Fmt::Str(0)` / `Fmt::Undef(0)` -- "this
+# kind, the entry's own byte length" (`ifd_schema.rs`, `IfdTag::format`;
+# `ifd_engine.rs` reads exactly that) -- so an `undef`-typed CameraID under
+# `Format => 'string'` (Olympus.pm) is NUL-truncated as ExifTool does rather
+# than reported as bytes. Counted (informational) under `ifd_format_unsized`.
+IFD_UNSIZED_FORMATS = {"string": "Some(Fmt::Str(0))", "undef": "Some(Fmt::Undef(0))"}
+
+
+def ifd_format_for(tag, stats):
+    """`(fmt_src, count_from_format, domain_spelling)` for a tag's `Format`,
+    or `None` when the spelling is refused (counted `ifd_format_unsupported`).
+
+    Per the contract: `fmt[N]` -> `Some(Fmt)` plus `count: Some(N)`; a scalar
+    spelling -> `Some(Fmt)`; a bare `string`/`undef` -> the unsized
+    `Some(Fmt::Str(0))`/`Some(Fmt::Undef(0))` (see `IFD_UNSIZED_FORMATS`);
+    anything else -- `ifd`, `unicode`, `binary`,
+    `utf8`, Matroska's `unsigned`, PICT's `Rect`, IPTC's `string[0,32]` /
+    `digits[8]` -- is refused. Note that `%formatNumber` (Exif.pm:96) has no
+    sized spelling at all, so a `fmt[N]` Format is only ever declared by the
+    non-IFD record tables the PROCESS_PROC-absent rule over-includes (IPTC,
+    PICT); it is transcribed as the contract says and Gate A blocks those
+    tables on their other formats regardless.
+    """
+    f = tag.get("Format")
+    if f is None:
+        return "None", None, None
+    if isinstance(f, str):
+        m = SIZED_RE.match(f)
+        if m:
+            base, n = m.group(1), int(m.group(2))
+            if base in SCALAR_FORMATS:
+                return f"Some(Fmt::{SCALAR_FORMATS[base][0]})", n, base
+            if base == "string":
+                return f"Some(Fmt::Str({n}))", n, base
+            if base == "undef":
+                return f"Some(Fmt::Undef({n}))", n, base
+        elif f in IFD_UNSIZED_FORMATS:
+            stats["ifd_format_unsized"] += 1
+            return IFD_UNSIZED_FORMATS[f], None, f
+        elif f in SCALAR_FORMATS:
+            return f"Some(Fmt::{SCALAR_FORMATS[f][0]})", None, f
+    stats["ifd_format_unsupported"] += 1
+    stats["ifd_format_unsupported_spellings"][str(f)] += 1
+    return None
+
+
+def ifd_count_for(tag, count_from_format, stats):
+    """`(count, known)`: the `count: Option<u32>` to emit and whether the
+    tag's count is statically known at all.
+
+    `Count => N` with N >= 1 is data (the entry says its own count at walk
+    time; the writer and the domain rule below read this). `Count => -1`
+    (ExifTool: "any number of values", 95 IFD tags) and `0` have no `u32`
+    reading, so they emit `None` and count `ifd_count_unrepresentable`, and
+    `known` is False so no scalar-domain conversion is compiled against a
+    count this generator does not know. A `[N]` in the Format wins over a
+    disagreeing `Count` (none disagree in 13.59; a disagreement is counted).
+    """
+    raw = tag.get("Count")
+    if count_from_format is not None:
+        if raw is not None and str(raw).strip() != str(count_from_format):
+            stats["ifd_count_unrepresentable"] += 1
+        return count_from_format, True
+    if raw is None:
+        return None, True
+    try:
+        n = int(str(raw).strip(), 10)
+    except ValueError:
+        n = -1
+    if 1 <= n <= 0xFFFF_FFFF:
+        return n, True
+    stats["ifd_count_unrepresentable"] += 1
+    return None, False
+
+
+_IFD_INT_RE = re.compile(r"^-?\d+$")
+
+
+def ifd_writable_for(tag, stats):
+    """The `Writable` spelling, verbatim, when it is an EXIF format name;
+    `None` for the integer form (`Writable => 0/1/2` is a permission, not a
+    format) and for a spelling that is not a format at all (counted
+    `ifd_writable_unmodeled`; XMP's `lang-alt`/`integer`/`real` live only in
+    tables whose keys are already refused)."""
+    w = tag.get("Writable")
+    if w is None or isinstance(w, bool) or not isinstance(w, str):
+        return None
+    if _IFD_INT_RE.match(w.strip()):
+        return None
+    if w in SCALAR_FORMATS or w in IFD_UNSIZED_FORMATS:
+        return w
+    stats["ifd_writable_unmodeled"] += 1
+    return None
+
+
+def ifd_value_domain(spelling, count, count_known):
+    """The one scalar domain a conversion on this tag may consume, or `None`.
+
+    `ReadValue` (ExifTool.pm:6286-6338) returns a `string`/`undef` value as
+    one byte string whatever the count (`str`/`bytes`), and a numeric format
+    as the elements joined with spaces -- one number (`num`) or, for a
+    declared `Count` above 1, the list an expression re-splits (`list`, the
+    same domain `value_domain` gives a binary `int16u[4]`). A numeric tag
+    whose count is unknown (`Count => -1`, or nothing declared but no format
+    either) has no domain: an expression verified for one shape must not run
+    on the other.
+    """
+    if spelling is None:
+        return None
+    if spelling == "string":
+        return "str"
+    if spelling == "undef":
+        return "bytes"
+    if spelling not in SCALAR_FORMATS or not count_known:
+        return None
+    return "num" if count is None or count == 1 else "list"
+
+
+# `$$self{X} = $val`, optionally terminated: the one RawConv shape the walk
+# carries as DATA (`RawConvEffect::SetMember`) rather than refusing. ExifTool
+# returns the assignment's value, i.e. `$val`, so the tag is still reported;
+# what changes is that a later `Condition` can read the member. Anything with
+# more in it -- `$val =~ s/\\s+$//; $$self{Make} = $val` (Exif::Main's Make/
+# Model/Software: a substitution first), `$$self{TrackTypes}{$val} = 1; ...`
+# -- is refused as a whole, because reproducing half of a RawConv is exactly
+# the approximation AGENTS.md forbids. `$self->{X}` is Perl's arrow spelling
+# of the same dereference (Olympus.pm's CameraType, PanasonicRaw's Make/Model:
+# 3 of the 13 stores in 13.59) and is the same member reference `conds.py`'s
+# `_MEMBER` grammar reads, so it compiles to the same effect.
+_RAW_CONV_SET_MEMBER_RE = re.compile(
+    r"^\s*(?:\$\$self\{(\w+)\}|\$self->\{(\w+)\})\s*=\s*\$val\s*;?\s*$"
+)
+
+
+def raw_conv_effect(raw_conv):
+    """The member name of a `$$self{X} = $val` RawConv, else `None`."""
+    if not isinstance(raw_conv, dict) or raw_conv.get("kind") != "expr":
+        return None
+    m = _RAW_CONV_SET_MEMBER_RE.match(raw_conv.get("expr") or "")
+    return (m.group(1) or m.group(2)) if m else None
+
+
+# Presence of any of these means the tag's value is an offset (or the length
+# paired with one) into the file rather than a reported value: ProcessExif
+# rewrites it (`IsOffset`, Exif.pm:7157-7170; `ChangeBase`, :6628-6632, a
+# per-tag `$valuePtr` correction), pairs it for validation/extraction
+# (`OffsetPair`, `DataTag`), and the Composite `PreviewImage`/`ThumbnailImage`
+# logic reads the pair. Spec section 6 puts previews out of v1: the TAG is
+# refused (not emitted) and counted `ifd_isoffset_unsupported`, NOT Gate-A
+# disqualifying -- every MakerNotes Main table carries a PreviewImageStart and
+# the offset semantics stay explicit, counted hand post-passes (slice I-3)
+# rather than something a table-driven walk half-does. `IsOffset` may arrive
+# via `Flags` (expanded before this check) or only as a name in `_extra_keys`
+# (dump_tables.pl does not carry its value; presence is enough to refuse on).
+IFD_OFFSET_KEYS = ("IsOffset", "OffsetPair", "DataTag", "ChangeBase")
+
+
+def _has_offset_semantics(tag):
+    extra = tag.get("_extra_keys") or ()
+    return any(tag.get(k) is not None or k in extra for k in IFD_OFFSET_KEYS)
+
+
+def _bitmask_needs_words(tag):
+    """A BITMASK PrintConv whose tag declares `BitsPerWord`/`BitsTotal`
+    (Sony::Main AFPointsUsed, FocalPlaneAFPointsUsed): DecodeBits then splits
+    the value into words of that width (ExifTool.pm:6385-6407), which
+    `PrintConv::Bitmask` -- verified only for the 32-bit default -- would
+    render wrongly. Refused (`ifd_bitmask_words_unsupported`) before
+    `conv_for` can emit it."""
+    if tag.get("BitsPerWord") is None and tag.get("BitsTotal") is None:
+        return False
+    pc = tag.get("PrintConv")
+    directives = pc.get("directives") if isinstance(pc, dict) else None
+    return isinstance(directives, dict) and "BITMASK" in directives
+
+
+def ifd_flags_literal(unknown, binary, list_, protected, avoid, priority):
+    if not (unknown or binary or list_ or protected or avoid) and priority is None:
+        return "IfdFlags::NONE"
+
+    def b(v):
+        return "true" if v else "false"
+
+    p = "None" if priority is None else f"Some({priority})"
+    return (
+        f"IfdFlags {{ unknown: {b(unknown)}, binary: {b(binary)}, list: {b(list_)}, "
+        f"protected: {b(protected)}, avoid: {b(avoid)}, priority: {p} }}"
+    )
+
+
+def ifd_omitted_for(tag, stats, condition_resolved, value_conv_modeled,
+                    print_conv_refused, raw_conv_modeled):
+    """`omitted_for`'s rules with one more exemption: a `RawConv` the walk
+    carries as `RawConvEffect::SetMember` is reproduced, not omitted.
+    `subdirectory` is set for ANY `SubDirectory`, modeled edge or not, exactly
+    as for binary tables (`compile_subdir`'s doc): the entry's bytes are a
+    pointer, never this tag's reported value, and the binary engine already
+    descends the edge before it consults `omitted` (engine.rs `walk`)."""
+    flags = []
+    for key, member in (
+        ("ValueConv", "value_conv"),
+        ("RawConv", "raw_conv"),
+        ("Condition", "condition"),
+        ("Hook", "hook"),
+        ("SubDirectory", "subdirectory"),
+    ):
+        if member == "condition" and condition_resolved:
+            continue
+        if member == "value_conv" and value_conv_modeled:
+            continue
+        if member == "raw_conv" and raw_conv_modeled:
+            continue
+        if tag.get(key) is not None:
+            flags.append(member)
+            stats[f"omitted_{member}"] += 1
+    if print_conv_refused:
+        flags.append("print_conv")
+    return _omitted_literal(flags)
+
+
+# The SubDirectory keys ProcessExif's SubDirectory branch reads and this
+# schema carries (Exif.pm:6929 MaxSubdirs, :6940 TagTable, :6950 Start,
+# :6970 ByteOrder, :7002 Base, :7053 DirName, :7083 Validate, :7092
+# ProcessProc), the keys it never reads (write-side), and -- implicitly --
+# everything else, which is refused: `OffsetPt` (:7010, adds an offset read
+# from the data to the start), `EntryBased` (:6541, entry-relative offsets),
+# `FixBase`/`FixOffsets`/`AutoFix`/`RelativeBase`/`BadOffset` (maker-note
+# base heuristics handed to the nested walk, :7054-7056, :6964) and the
+# processor-specific `Magic`/`Header`/`IgnoreProp` each change where or how
+# the target is read. An edge that named the table and dropped one of them
+# would describe the pointer wrongly, not merely incompletely -- the same
+# argument `subdir.rs`'s module doc makes for `ProcessProc`.
+IFD_SUBDIR_KEYS = frozenset(
+    ("TagTable", "Start", "Base", "ByteOrder", "Validate", "ProcessProc", "DirName", "MaxSubdirs")
+)
+IFD_SUBDIR_IGNORED_KEYS = frozenset(("WriteProc",))
+
+# `#### eval Start ($valuePtr, $val)` (Exif.pm:6955): `$valuePtr` is the
+# absolute position of the entry's value bytes, `$val` the decoded value. Only
+# these two variables, with an optional integer offset, compile; a bare
+# literal (`Start => '16'`, an absolute offset from the data block's base) or
+# any other arithmetic is refused (`ifd_subdir_refused_start`).
+_IFD_START_VALUEPTR_RE = re.compile(r"^\$valuePtr(?:\s*([+-])\s*(\d+))?$")
+_IFD_START_VAL_RE = re.compile(r"^\$val(?:\s*([+-])\s*(\d+))?$")
+
+
+def compile_ifd_start(value):
+    """`SubDirectory.Start` -> Rust `IfdStart` source, or raise."""
+    if value is None:
+        return "IfdStart::ValuePtr(0)"
+    if not isinstance(value, str):
+        raise subdirs.SubdirCompileError(f"Start is not a string: {value!r}")
+    text = value.strip()
+    for regex, variant in ((_IFD_START_VALUEPTR_RE, "ValuePtr"), (_IFD_START_VAL_RE, "Val")):
+        m = regex.match(text)
+        if m:
+            n = int(m.group(2)) if m.group(2) else 0
+            if m.group(1) == "-":
+                n = -n
+            return f"IfdStart::{variant}({n})"
+    raise subdirs.SubdirCompileError(f"Start outside the IFD grammar: {value!r}")
+
+
+def compile_ifd_byte_order(value):
+    """`SubDirectory.ByteOrder` -> Rust `IfdByteOrder` source, or raise.
+
+    Exif.pm:6970-6990 tests the spelling with `/^Little/i` and `/^Big/i`
+    (so `'Little-endian'`, six Casio/Sony edges, is little-endian) and treats
+    any OTHER true value as "detect from the entry count"; only the one
+    spelling ExifTool's tables actually use for that, `'Unknown'`, is
+    compiled to `IfdByteOrder::Unknown`. `'II'`/`'MM'` would take the detect
+    branch in ExifTool, not name an order, and are refused rather than
+    mapped -- the design note's `II`/`MM` line does not match the Perl.
+    """
+    if value is None:
+        return "IfdByteOrder::Inherit"
+    if isinstance(value, str):
+        if re.match(r"^Little", value, re.IGNORECASE):
+            return "IfdByteOrder::Little"
+        if re.match(r"^Big", value, re.IGNORECASE):
+            return "IfdByteOrder::Big"
+        if value == "Unknown":
+            return "IfdByteOrder::Unknown"
+    raise subdirs.SubdirCompileError(f"ByteOrder outside the IFD grammar: {value!r}")
+
+
+class IfdGenContext:
+    """Run-wide facts the per-tag emitter needs: which `(module, table)`
+    pairs are IFD-style and which are ProcessBinaryData, so an edge's target
+    kind can be counted without a second pass over the generated Rust."""
+
+    def __init__(self, ifd_tables, binary_tables):
+        self.ifd_tables = ifd_tables
+        self.binary_tables = binary_tables
+
+    @classmethod
+    def from_doc(cls, doc):
+        ifd, binary = set(), set()
+        for mod_name, mod in doc["modules"].items():
+            for tbl_name, tbl in mod.get("tables", {}).items():
+                meta = tbl.get("meta") or {}
+                if is_binary_table(meta):
+                    binary.add((mod_name, tbl_name))
+                elif is_ifd_table(meta):
+                    ifd.add((mod_name, tbl_name))
+        return cls(ifd, binary)
+
+    def target_kind(self, module, table):
+        if (module, table) in self.ifd_tables:
+            return "ifd"
+        if (module, table) in self.binary_tables:
+            return "binary"
+        return "other"
+
+
+def compile_ifd_subdir(tag, stats, ctx):
+    """A tag's `SubDirectory` (tag already flag-expanded) as `Some(IfdSubdirEdge
+    {...})` source, or `"None"` with exactly one `ifd_subdir_refused_*`
+    counter bumped. Never a guess: see `IFD_SUBDIR_KEYS`, `compile_ifd_start`,
+    `compile_ifd_byte_order` and `src/exiftool_tables/ifd_schema.rs` for the
+    Exif.pm citations behind each check.
+
+    `FixFormat` is read from the TAG (it is a sibling of `Flags => 'SubIFD'`,
+    not a SubDirectory key) and carried as the contract says -- `'ifd'` means
+    `sub_ifd: true`, a scalar spelling becomes `fix_format: Some(Fmt)` --
+    but note what it is: ExifTool consults it only when WRITING a SubIFD tag
+    with the wrong format (WriteExif.pl:1760; README:930). `ProcessExif`
+    never reads it, so a walk must not reinterpret an entry on it.
+    """
+    sd = tag.get("SubDirectory")
+    if not isinstance(sd, dict):
+        stats["ifd_subdir_refused_tagtable"] += 1
+        return "None"
+    try:
+        module, table = subdirs.parse_tag_table(sd.get("TagTable"))
+    except subdirs.SubdirCompileError:
+        stats["ifd_subdir_refused_tagtable"] += 1
+        return "None"
+
+    pp = sd.get("ProcessProc")
+    if pp is not None:
+        pp_name = pp.get("__name") if isinstance(pp, dict) else (pp if isinstance(pp, str) else None)
+        if not (pp_name or "").endswith("ProcessBinaryData"):
+            stats["ifd_subdir_refused_processproc"] += 1
+            return "None"
+
+    unmodeled = sorted(k for k in sd if k not in IFD_SUBDIR_KEYS and k not in IFD_SUBDIR_IGNORED_KEYS)
+    if unmodeled:
+        stats["ifd_subdir_refused_unmodeled_key"] += 1
+        for key in unmodeled:
+            stats["ifd_subdir_unmodeled_keys"][key] += 1
+        return "None"
+
+    try:
+        start_src = compile_ifd_start(sd.get("Start"))
+    except subdirs.SubdirCompileError:
+        stats["ifd_subdir_refused_start"] += 1
+        stats["ifd_subdir_refused_start_spellings"][repr(sd.get("Start"))] += 1
+        return "None"
+
+    base_src = "None"
+    if sd.get("Base") is not None:
+        try:
+            base_src = f"Some(&{subdirs.compile_base(sd.get('Base'))})"
+        except subdirs.SubdirCompileError:
+            stats["ifd_subdir_refused_base"] += 1
+            return "None"
+
+    try:
+        byte_order_src = compile_ifd_byte_order(sd.get("ByteOrder"))
+    except subdirs.SubdirCompileError:
+        stats["ifd_subdir_refused_byteorder"] += 1
+        return "None"
+
+    extra = tag.get("_extra_keys") or ()
+    # `SubIFD` reaches here either expanded from `Flags => 'SubIFD'`, or as a
+    # direct key (ExifOffset, Exif.pm) -- carried by dump_tables.pl since this
+    # slice, and before that visible only as a name in `_extra_keys`, where
+    # presence is the fact (nobody writes `SubIFD => 0`).
+    sub_ifd = perl_truthy(tag.get("SubIFD")) or "SubIFD" in extra
+    fix_format = tag.get("FixFormat")
+    fix_src = "None"
+    if fix_format is not None:
+        if fix_format == "ifd":
+            sub_ifd = True
+        elif isinstance(fix_format, str) and fix_format in SCALAR_FORMATS:
+            fix_src = f"Some(Fmt::{SCALAR_FORMATS[fix_format][0]})"
+        else:
+            stats["ifd_subdir_refused_fixformat"] += 1
+            return "None"
+
+    max_subdirs = sd.get("MaxSubdirs")
+    max_src = "None"
+    if max_subdirs is not None:
+        try:
+            n = int(str(max_subdirs).strip(), 10)
+        except ValueError:
+            n = -1
+        if not 1 <= n <= 0xFFFF_FFFF:
+            stats["ifd_subdir_refused_unreadable"] += 1
+            return "None"
+        max_src = f"Some({n})"
+
+    dir_name = sd.get("DirName")
+    if dir_name is not None and not isinstance(dir_name, str):
+        stats["ifd_subdir_refused_unreadable"] += 1
+        return "None"
+    dir_src = "None" if dir_name is None else f'Some("{rust_str(dir_name)}")'
+
+    validate = sd.get("Validate") is not None
+    if validate:
+        # Emitted, so the reachability census sees the edge; the walk refuses
+        # it (`validate: true`), because `#### eval Validate ($val, $dirData,
+        # $subdirStart, $size)` (Exif.pm:7082) is Perl over the directory bytes.
+        stats["ifd_subdir_refused_validate"] += 1
+
+    stats["ifd_subdir_edge_modeled"] += 1
+    stats[f"ifd_subdir_edge_target_{ctx.target_kind(module, table)}"] += 1
+    if sub_ifd:
+        stats["ifd_subdir_edge_sub_ifd"] += 1
+    if perl_truthy(tag.get("MakerNotes")) or "MakerNotes" in extra:
+        # Exif.pm:7066-7071: a `MakerNotes => 1` tag's sub-directory gets
+        # `MakerNoteAddr` and `NoFixBase`, i.e. the maker-note base-fixing
+        # heuristics apply on the far side of this edge. Counted so the engine
+        # knows which edges those are; the edge itself is unchanged.
+        stats["ifd_subdir_edge_makernotes"] += 1
+
+    return (
+        "Some(IfdSubdirEdge { "
+        f'module: "{rust_str(module)}", table: "{rust_str(table)}", '
+        f"start: {start_src}, base: {base_src}, byte_order: {byte_order_src}, "
+        f"fix_format: {fix_src}, sub_ifd: {'true' if sub_ifd else 'false'}, "
+        f"max_subdirs: {max_src}, dir_name: {dir_src}, "
+        f"validate: {'true' if validate else 'false'} }})"
+    )
+
+
+def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
+                        condition_resolved=False):
+    """One `IfdTag { ... }` literal for `tag` at `tag_id`, as `(src, None)`,
+    or `(None, reason)` when the tag is refused -- `reason` is the name of
+    the one counter that says why, for `compile_ifd_variant_group`'s report.
+
+    Key by key per the contract (spec section 2); the Exif.pm citations are
+    on the helpers. Order matters only where noted: `expand_flags` first
+    (everything below reads the expanded keys), the offset refusal before any
+    conversion is compiled (a refused tag must leave no partial-credit
+    counters behind), the domain before either conversion.
+    """
+    tag = expand_flags(tag, stats)
+
+    name = tag.get("Name")
+    if not isinstance(name, str) or not name:
+        stats["tag_no_name"] += 1
+        return None, "tag_no_name"
+
+    if _has_offset_semantics(tag):
+        stats["ifd_isoffset_unsupported"] += 1
+        return None, "ifd_isoffset_unsupported"
+
+    fmt = ifd_format_for(tag, stats)
+    if fmt is None:
+        return None, "ifd_format_unsupported"
+    fmt_src, count_from_format, format_spelling = fmt
+    count, count_known = ifd_count_for(tag, count_from_format, stats)
+    writable = ifd_writable_for(tag, stats)
+    if tag.get("FixFormat") is None and "FixFormat" in (tag.get("_extra_keys") or ()):
+        # The dump predates dump_tables.pl carrying FixFormat: the key is
+        # known to exist and its value is not. Absent means absent (the
+        # contract's rule for this artifact); counted so the artifact says
+        # how many edges await the regeneration that will carry it.
+        stats["ifd_fixformat_undumped"] += 1
+
+    # The domain from `Format` when declared, else from `Writable` (the same
+    # spelling grammar), else none -- and none means every expression on the
+    # tag is refused, since an expression verified in one domain must not
+    # run in another.
+    domain = ifd_value_domain(format_spelling or writable, count, count_known)
+
+    vc_src, value_conv_modeled = "None", False
+    vc = tag.get("ValueConv")
+    if vc is not None:
+        if domain is None and isinstance(vc, dict) and vc.get("kind") == "expr":
+            stats["ifd_expr_domain_unknown"] += 1
+        else:
+            vc_src, value_conv_modeled = value_conv_for(tag, stats, domain, verified_exprs)
+
+    pc_domain = print_conv_input_domain(tag, domain, value_conv_modeled)
+    pc = tag.get("PrintConv")
+    pc_src, pc_refused = "PrintConv::None", False
+    if _bitmask_needs_words(tag):
+        # Refused AND withheld (`Omitted.print_conv`): ExifTool declares a
+        # PrintConv here, so emitting the tag with `PrintConv::None` and no
+        # flag would print the raw word under the real tag name.
+        stats["ifd_bitmask_words_unsupported"] += 1
+        pc_refused = True
+    elif pc_domain is None and isinstance(pc, dict) and pc.get("kind") == "expr":
+        # Same: an expression this schema cannot type is refused, and the
+        # field is withheld rather than reported unconverted.
+        stats["ifd_expr_domain_unknown"] += 1
+        pc_refused = True
+    else:
+        pc_src, pc_refused = conv_for(tag, stats, pc_domain, verified_exprs)
+
+    member = raw_conv_effect(tag.get("RawConv"))
+    if member is not None:
+        raw_conv_src = f'Some(RawConvEffect::SetMember {{ member: "{rust_str(member)}" }})'
+        stats["ifd_raw_conv_set_member"] += 1
+    else:
+        raw_conv_src = "None"
+        if tag.get("DataMember") is not None:
+            # ExifTool stores this tag as a data member through a RawConv the
+            # walk cannot run (`$val =~ s/\\s+$//; $$self{Make} = $val`), so a
+            # later Condition reading it sees nothing unless the engine seeds
+            # it another way (slice I-2 seeds Make/Model from EXIF).
+            stats["ifd_data_member_unmodeled"] += 1
+
+    unknown = perl_truthy(tag.get("Unknown"))
+    if unknown:
+        stats["ifd_flag_unknown"] += 1
+    # SetupTagTable (ExifTool.pm:5915): a table-level AVOID overrides every
+    # tag's own Avoid when declared.
+    table_avoid = table_meta.get("AVOID")
+    avoid = perl_truthy(table_avoid) if table_avoid is not None else perl_truthy(tag.get("Avoid"))
+    priority = None
+    raw_priority = tag.get("Priority")
+    if raw_priority is not None:
+        try:
+            priority = int(str(raw_priority).strip(), 10)
+        except ValueError:
+            stats["ifd_priority_unreadable"] += 1
+    flags_src = ifd_flags_literal(
+        unknown,
+        perl_truthy(tag.get("Binary")),
+        perl_truthy(tag.get("List")),
+        perl_truthy(tag.get("Protected")),
+        avoid,
+        priority,
+    )
+
+    subdir_src = "None"
+    if tag.get("SubDirectory") is not None:
+        subdir_src = compile_ifd_subdir(tag, stats, ctx)
+
+    omitted_src = ifd_omitted_for(
+        tag, stats, condition_resolved, value_conv_modeled, pc_refused, member is not None
+    )
+    count_src = "None" if count is None else f"Some({count})"
+    writable_src = "None" if writable is None else f'Some("{rust_str(writable)}")'
+    src = (
+        f'IfdTag {{ id: {tag_id:#06x}, name: "{rust_str(name)}", format: {fmt_src}, '
+        f"count: {count_src}, writable: {writable_src}, "
+        f"groups: {compile_groups_field(tag.get('Groups'), stats)}, flags: {flags_src}, "
+        f"omitted: {omitted_src}, raw_conv: {raw_conv_src}, value_conv: {vc_src}, "
+        f"print_conv: {pc_src}, subdir: {subdir_src} }}"
+    )
+    return src, None
+
+
+# Nested Counters the IFD path writes into (diagnostic listings, popped
+# before the coverage assertion) -- the binary path's six plus this slice's.
+IFD_NESTED_STAT_KEYS = (
+    "unsupported_exprs",
+    "pc_directives_dropped",
+    "other_unregistered_bodies",
+    "value_conv_refused_expressions",
+    "dropped_code_refs",
+    "hook_refusal_reasons",
+    "ifd_format_unsupported_spellings",
+    "ifd_subdir_refused_start_spellings",
+    "ifd_subdir_unmodeled_keys",
+    "ifd_variant_cond_texts",
+    "ifd_variant_field_reasons",
+    "ifd_gate_a_blocked_by",
+)
+
+
+def new_ifd_stats():
+    stats = Counter()
+    for key in IFD_NESTED_STAT_KEYS:
+        stats[key] = Counter()
+    return stats
+
+
+def compile_ifd_variant_group(tag, tag_id, stats, verified_exprs, ctx, table_meta):
+    """A `_variants` array at `tag_id` as `IfdVariantGroup {...}` source, or
+    `None` -- atomically, for `compile_variant_group`'s reason: dropping one
+    alternative changes first-match order (`GetTagInfo`), and the wrong
+    alternative winning is a wrong value under a real tag name. Trial-compiles
+    into a throwaway Counter and merges only on success; a refused group
+    bumps exactly one of `tag_variant_cond_unsupported` /
+    `tag_variant_field_unsupported` (the caller adds `tag_variant_skipped`),
+    and records the refusing Condition text or per-tag reason so the REPORT
+    can name what the grammar would have to learn."""
+    variants = tag["_variants"]
+    trial = new_ifd_stats()
+    alt_srcs = []
+    for v in variants:
+        if not isinstance(v, dict) or "_variants" in v:
+            stats["tag_variant_cond_unsupported"] += 1
+            stats["ifd_variant_cond_texts"]["<nested _variants>"] += 1
+            return None
+        condition = v.get("Condition")
+        cond_src = conds.compile_cond(condition)
+        if cond_src is None:
+            stats["tag_variant_cond_unsupported"] += 1
+            text = exprs.normalize(condition) if isinstance(condition, str) else repr(condition)
+            stats["ifd_variant_cond_texts"][text] += 1
+            return None
+        tag_src, reason = gen_ifd_tag_literal(
+            v, tag_id, trial, verified_exprs, ctx, table_meta, condition_resolved=True
+        )
+        if tag_src is None:
+            stats["tag_variant_field_unsupported"] += 1
+            stats["ifd_variant_field_reasons"][reason] += 1
+            return None
+        alt_srcs.append(f"({cond_src}, {tag_src})")
+
+    _merge_stats(stats, trial)
+    stats["tag_variant_emitted"] += 1
+    stats["ifd_variant_alternatives"] += len(alt_srcs)
+    return f"IfdVariantGroup {{ id: {tag_id:#06x}, alternatives: &[{', '.join(alt_srcs)}] }}"
+
+
+def ifd_table_ident(mod_name, tbl_name):
+    """`IFD_<MODULE>_<TABLE>`: upper-case, non-alphanumerics as `_`, the
+    `BinaryTable` statics' rule with a distinguishing prefix."""
+    return "IFD_" + re.sub(r"[^A-Za-z0-9]", "_", f"{mod_name}_{tbl_name}").upper()
+
+
+def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx):
+    """Emit one `IfdTable` literal for a table `is_ifd_table` selected.
+
+    Every selected table is emitted, including one whose every key is refused
+    (a Composite or XMP table under the absent-PROCESS_PROC rule): it then
+    carries `tags: &[]` and a Gate A that names the refusal, which is how the
+    reachability census tells "not an IFD table" from "not transcribed".
+    Gate A is computed from a per-table Counter exactly as `gen_table` does.
+    """
+    meta = tbl.get("meta") or {}
+    stats = new_ifd_stats()
+
+    entries = []
+    seen = set()
+    for key, tag in tbl["tags"].items():
+        tag_id = parse_ifd_tag_id(key)
+        if tag_id is None:
+            stats["ifd_tag_id_unrepresentable"] += 1
+            continue
+        # Distinct dump keys parse to distinct ids (decimal, no leading
+        # zeros), so a repeat here is a generator bug, not a table fact.
+        assert tag_id not in seen, f"{mod_name}::{tbl_name}: duplicate tag id {tag_id} from key {key!r}"
+        seen.add(tag_id)
+        entries.append((tag_id, tag))
+
+    rows, variant_rows = [], []
+    for tag_id, tag in sorted(entries, key=lambda e: e[0]):
+        if "_variants" in tag:
+            group_src = compile_ifd_variant_group(tag, tag_id, stats, verified_exprs, ctx, meta)
+            if group_src is None:
+                stats["tag_variant_skipped"] += 1
+                continue
+            variant_rows.append(f"    {group_src},")
+            continue
+        tag_src, _reason = gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, meta)
+        if tag_src is None:
+            continue
+        rows.append(f"    {tag_src},")
+        stats["ifd_tag_emitted"] += 1
+
+    # Effective groups after GetTagTable's defaulting -- see gen_table.
+    groups = meta.get("GROUPS") if isinstance(meta.get("GROUPS"), dict) else {}
+    g0 = groups.get("0") or mod_name
+    g1 = groups.get("1") or mod_name
+    g2 = groups.get("2") or "Other"
+
+    # SET_GROUP1 is a FLAG, not a name: Exif.pm:7183 `$et->SetGroup($tagKey,
+    # $dirName) if $$tagTablePtr{SET_GROUP1}` -- group 1 becomes the
+    # directory NAME the table was reached under (`IFD0`/`IFD1`/`ExifIFD` for
+    # Exif::Main, the SubDirectory's DirName for Kodak::IFD, ...), which no
+    # static string can carry. Every one of the six declarations in 13.59 is
+    # the literal `1`. The schema's `set_group1: Option<&str>` carries the
+    # declared payload VERBATIM (`Some("1")`) so the verifier can compare it
+    # with the oracle's `SETGROUP1` row and the walk reads it as a flag
+    # (`is_some()`), taking the directory name from `IfdDir.group1`. Counted
+    # under `ifd_set_group1_flag`.
+    set_group1_raw = meta.get("SET_GROUP1")
+    set_group1_flag = perl_truthy(set_group1_raw)
+    set_group1_src = f'Some("{rust_str(str(set_group1_raw))}")' if set_group1_flag else "None"
+    if set_group1_flag:
+        stats["ifd_set_group1_flag"] += 1
+
+    try:
+        priority = meta.get("PRIORITY")
+        priority_src = "None" if priority is None else f"Some({int(str(priority), 0)})"
+    except (TypeError, ValueError):
+        priority_src = "None"
+
+    stats["ifd_table_emitted"] += 1
+    passes, reasons = gate_a_for(stats, False)
+    run_stats["ifd_gate_a_pass" if passes else "ifd_gate_a_fail"] += 1
+    for key, _n in reasons:
+        run_stats["ifd_gate_a_blocked_by"][key] += 1
+    reasons_src = "&[]" if not reasons else "&[" + ", ".join(
+        f'("{k}", {n})' for k, n in reasons
+    ) + "]"
+    _merge_stats(run_stats, stats)
+
+    kind = "PROCESS_PROC absent" if meta.get("PROCESS_PROC") is None else "PROCESS_PROC Exif::ProcessExif"
+    set_group1_doc = (
+        "\n/// `SET_GROUP1` declared (Exif.pm:7183: group 1 is the directory name the"
+        "\n/// walk was given, not a static string) -- see codegen.py `gen_ifd_table`."
+        if set_group1_flag
+        else ""
+    )
+    tags_src = "&[]" if not rows else "&[\n" + "\n".join(rows) + "\n    ]"
+    variants_src = "&[]" if not variant_rows else "&[\n" + "\n".join(variant_rows) + "\n    ]"
+    return f"""
+/// `Image::ExifTool::{mod_name}::{tbl_name}` -- {len(rows)} tags,
+/// {len(variant_rows)} `_variants` groups (IFD-style: {kind}).{set_group1_doc}
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static {ifd_table_ident(mod_name, tbl_name)}: IfdTable = IfdTable {{
+    module: "{rust_str(mod_name)}",
+    table: "{rust_str(tbl_name)}",
+    group0: "{rust_str(g0)}",
+    group1: "{rust_str(g1)}",
+    group2: "{rust_str(g2)}",
+    set_group1: {set_group1_src},
+    priority: {priority_src},
+    gate_a: GateA {{ blocked_by: {reasons_src} }},
+    tags: {tags_src},
+    variants: {variants_src},
+}};
+"""
+
+
+def gen_ifd_tables(doc, module_names, verified_exprs):
+    """Every IFD-style table of `doc`, in `(module, table)` order (the order
+    `ALL_IFD_TABLES` is declared in, which `find_ifd_table` relies on).
+    Returns `(chunks, index_rows, ifd_stats)`."""
+    ctx = IfdGenContext.from_doc(doc)
+    ifd_stats = new_ifd_stats()
+    chunks, index_rows, idents = [], [], set()
+    mods = doc["modules"]
+    for mod_name in module_names:
+        mod = mods.get(mod_name)
+        if not mod:
+            continue
+        for tbl_name in sorted(mod["tables"]):
+            tbl = mod["tables"][tbl_name]
+            if not is_ifd_table(tbl.get("meta") or {}):
+                continue
+            chunks.append(gen_ifd_table(mod_name, tbl_name, tbl, ifd_stats, verified_exprs, ctx))
+            ident = ifd_table_ident(mod_name, tbl_name)
+            if ident in idents:
+                raise SystemExit(
+                    f"IFD table identifier collision: {ident} (from {mod_name}::{tbl_name}) "
+                    "-- two tables would alias to one static"
+                )
+            idents.add(ident)
+            index_rows.append(f"    &{ident},")
+    return chunks, index_rows, ifd_stats
+
+
+IFD_PRELUDE = '''//! ExifTool IFD-style tag tables -- the `Exif::ProcessExif` tables --
+//! generated from ExifTool __VERSION__'s own Perl hashes.
+//!
+//! DO NOT EDIT. Regenerate with:
+//!
+//! ```sh
+//! perl tools/exiftool-tables/dump_tables.pl <exiftool>/lib > tables.json
+//! python3 tools/exiftool-tables/codegen.py tables.json \\
+//!     -o src/exiftool_tables/binary_tables.rs --ifd-out <this file>
+//! ```
+//!
+//! Selection is `codegen.py::is_ifd_table`: every table whose `PROCESS_PROC`
+//! is absent (ExifTool.pm:9052 defaults it to `Exif::ProcessExif`) or names
+//! `Exif::ProcessExif`. That rule over-includes tables ExifTool never walks
+//! as an IFD -- `Composite`, XMP, and record tables such as IPTC, PICT and
+//! Matroska whose keys are not integer tag ids or whose formats are not EXIF
+//! scalars. Those are still emitted, with every entry refused and counted
+//! (`ifd_tag_id_unrepresentable`, `ifd_format_unsupported`) and Gate A
+//! blocked, so the census says which tables are real IFDs and why the rest
+//! are not, instead of dropping them silently.
+//!
+//! Every conversion here is the same oracle-verified `ExprId`/enum the
+//! `ProcessBinaryData` tables carry (`super::binary_tables`), compiled by the
+//! same code path; a conversion the generator could not reproduce is refused
+//! and counted, never approximated. `codegen.py`'s REPORT ("IFD tables"
+//! section) is the accounting, and `src/exiftool_tables/ifd_schema.rs`
+//! documents every field. Two facts a walk must not read into this data:
+//! `IfdSubdirEdge::fix_format` is write-side only (WriteExif.pl:1760), and
+//! `IfdTable::set_group1` is ExifTool's `SET_GROUP1` payload verbatim -- a
+//! flag meaning "group 1 = the directory name the walk was given"
+//! (Exif.pm:7183), never a group name itself.
+
+#![allow(clippy::unreadable_literal, clippy::too_many_lines, unused_parens)]
+
+/// The ExifTool release these tables were transcribed from. Must equal
+/// `super::EXIFTOOL_VERSION` (`binary_tables.rs`'s stamp): the two files are
+/// one regeneration, and a skew between them is the mixed-release hazard
+/// `tools/exiftool-tables/regen-all.sh` exists to prevent.
+pub const IFD_EXIFTOOL_VERSION: &str = "__VERSION__";
+
+// Imported unconditionally, for binary_tables.rs's reason: which of these a
+// given run constructs depends on the pinned tree, not on this file's logic,
+// so a conditional `use` would be generator-output nondeterminism.
+#[allow(unused_imports)]
+use super::cond::{CmpOp, Cond, EffectSource};
+#[allow(unused_imports)]
+use super::ifd_schema::{
+    IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
+    RawConvEffect,
+};
+#[allow(unused_imports)]
+use super::subdir::BaseExpr;
+#[allow(unused_imports)]
+use super::{ExprId, Fmt, GateA, Omitted, OtherId, PrintConv, TagGroups};
+'''
+
+
+# The IFD counters, every one the code above can touch, under the heading it
+# prints under; `print_ifd_report` asserts the coverage the same way `main`
+# does for REPORT. Shared-name counters (`enum_int`, `omitted_value_conv`,
+# `tag_variant_skipped`, ...) are the SAME events the binary path counts under
+# those names -- the code path is shared -- tallied here for IFD tables only.
+IFD_REPORT = (
+    ("IFD tables (slice I-1): selection and Gate A", (
+        ("tables selected (PROCESS_PROC absent / Exif::ProcessExif)", "ifd_table_emitted"),
+        ("  of which passing Gate A (ELIGIBLE, not enabled)", "ifd_gate_a_pass"),
+        ("  of which blocked by Gate A", "ifd_gate_a_fail"),
+        ("  of which declare SET_GROUP1 (a flag; set_group1 carries the payload verbatim)", "ifd_set_group1_flag"),
+    )),
+    ("IFD tables: transcribed", (
+        ("tags emitted", "ifd_tag_emitted"),
+        ("  of which flagged Unknown (a flag here, never a drop)", "ifd_flag_unknown"),
+        ("variant groups compiled", "tag_variant_emitted"),
+        ("  alternatives across them", "ifd_variant_alternatives"),
+        ("RawConv `$$self{X} = $val` carried as SetMember", "ifd_raw_conv_set_member"),
+        ("int enums", "enum_int"),
+        ("int enums with tag-level PrintHex (PartialEnumInt, other: None)", "enum_int_printhex"),
+        ("string enums", "enum_str"),
+        ("string enums with tag-level PrintHex (IsInt is a runtime fact; withheld)", "enum_str_printhex_refused"),
+        ("exprs translated (exact match)", "expr_translated"),
+        ("exprs translated (grammar-compiled)", "expr_compiled"),
+        ("named subs reached via a CODE ref", "expr_translated_code_ref"),
+        ("ValueConv ExprIds (oracle-approved)", "value_conv_compiled"),
+        ("BITMASK fields (DecodeBits)", "bitmask_emitted"),
+        ("OTHER conversions registered", "other_translated"),
+        ("per-tag group overrides", "tag_group_override"),
+        ("SubDirectory edges modeled", "ifd_subdir_edge_modeled"),
+        ("  target is an IFD-style table", "ifd_subdir_edge_target_ifd"),
+        ("  target is a ProcessBinaryData table", "ifd_subdir_edge_target_binary"),
+        ("  target is neither (no transcribed layout)", "ifd_subdir_edge_target_other"),
+        ("  Flags SubIFD / FixFormat ifd (sub_ifd: true)", "ifd_subdir_edge_sub_ifd"),
+        ("  on a MakerNotes-marked tag (base fixing applies beyond it)", "ifd_subdir_edge_makernotes"),
+        ("  carrying Validate (emitted; the walk refuses it)", "ifd_subdir_refused_validate"),
+    )),
+    ("IFD tables: emitted with semantics recorded but not applied (the walk withholds)", (
+        ("ValueConv", "omitted_value_conv"),
+        ("RawConv (every shape but SetMember)", "omitted_raw_conv"),
+        ("  of which DataMember stores the walk cannot reproduce", "ifd_data_member_unmodeled"),
+        ("Condition on a single-entry tag", "omitted_condition"),
+        ("Hook", "omitted_hook"),
+        ("SubDirectory (edge modeled or refused; see below)", "omitted_subdirectory"),
+    )),
+    ("IFD tables: refused, not approximated", (
+        ("table keys not an integer in 0..=0xFFFF (tag not emitted)", "ifd_tag_id_unrepresentable"),
+        ("IsOffset/OffsetPair/DataTag/ChangeBase tags (not emitted; hand post-passes)", "ifd_isoffset_unsupported"),
+        ("Format outside the scalar grammar (tag not emitted)", "ifd_format_unsupported"),
+        ("Format bare string/undef (emitted as the unsized Fmt::Str(0)/Undef(0); informational)", "ifd_format_unsized"),
+        ("conversions refused: no scalar domain from Format/Writable/Count", "ifd_expr_domain_unknown"),
+        ("BITMASK with BitsPerWord/BitsTotal (PrintConv refused)", "ifd_bitmask_words_unsupported"),
+        ("Flags entries not a string", "ifd_flags_unreadable"),
+        ("Priority not an integer", "ifd_priority_unreadable"),
+        ("Count -1/0/non-integer (count: None)", "ifd_count_unrepresentable"),
+        ("Writable spelling not a format (writable: None)", "ifd_writable_unmodeled"),
+        ("FixFormat present but not in this dump (fix_format: None until regen)", "ifd_fixformat_undumped"),
+        ("exprs unsupported", "expr_unsupported"),
+        ("exprs refused: input domain", "expr_refused_input_domain"),
+        ("exprs refused: no matching oracle PASS ledger", "expr_refused_oracle"),
+        ("ValueConv non-expression shape", "value_conv_refused_nonexpr"),
+        ("ValueConv outside closed grammar", "value_conv_refused_shape"),
+        ("ValueConv input domain/array", "value_conv_refused_input_domain"),
+        ("ValueConv without matching oracle PASS", "value_conv_refused_oracle"),
+        ("other PrintConv (tag withheld: Omitted.print_conv)", "conv_dropped"),
+        ("BITMASK unreadable (non-integer/out-of-range bit key)", "bitmask_unreadable"),
+        ("OTHER not in the registry", "other_unregistered"),
+        ("OTHER registered but exact map is string-keyed", "other_str_domain_unsupported"),
+        ("variant groups refused (atomic)", "tag_variant_skipped"),
+        ("  of which a Condition outside the closed grammar", "tag_variant_cond_unsupported"),
+        ("  of which an alternative refused for a per-tag reason", "tag_variant_field_unsupported"),
+        ("tag Groups naming only families 3+", "tag_group_unmodeled_family"),
+        ("unnamed tags", "tag_no_name"),
+    )),
+    ("IFD tables: SubDirectory edges refused (tag emitted with omitted.subdirectory, subdir: None)", (
+        ("TagTable missing or an unrecognised shape", "ifd_subdir_refused_tagtable"),
+        ("ProcessProc other than ProcessBinaryData", "ifd_subdir_refused_processproc"),
+        ("a SubDirectory key the schema does not model (OffsetPt, FixBase, ...)", "ifd_subdir_refused_unmodeled_key"),
+        ("Start outside `$valuePtr [+-] n` / `$val [+-] n`", "ifd_subdir_refused_start"),
+        ("Base outside the closed grammar", "ifd_subdir_refused_base"),
+        ("ByteOrder not /^Little/i, /^Big/i or `Unknown`", "ifd_subdir_refused_byteorder"),
+        ("FixFormat neither `ifd` nor a scalar format", "ifd_subdir_refused_fixformat"),
+        ("MaxSubdirs/DirName unreadable", "ifd_subdir_refused_unreadable"),
+    )),
+)
+
+
+def print_ifd_report(ifd_stats):
+    """Print `IFD_REPORT` from `ifd_stats` and the diagnostic listings, and
+    refuse (SystemExit) if any counter the code touched is not reported --
+    the same completeness rule `main` applies to REPORT."""
+    nested = {key: ifd_stats.pop(key) for key in IFD_NESTED_STAT_KEYS}
+    printed = set()
+    print()
+    for heading, rows in IFD_REPORT:
+        print(f"  --- {heading} ---")
+        for label, key in rows:
+            printed.add(key)
+            print(f"  {label:<78}{ifd_stats[key]}")
+    missed = sorted(set(ifd_stats) - printed)
+    if missed:
+        raise SystemExit(
+            "these IFD counters were recorded but not reported: "
+            + ", ".join(missed)
+            + " -- add them to IFD_REPORT; an unreported refusal is a coverage lie"
+        )
+
+    listings = (
+        ("ifd_gate_a_blocked_by", "IFD tables blocked by Gate A, by reason (tables, not tags)", 20),
+        ("ifd_variant_cond_texts", "IFD variant Conditions outside the closed grammar (compile these next)", 12),
+        ("ifd_variant_field_reasons", "IFD variant alternatives refused, by per-tag reason", 10),
+        ("ifd_format_unsupported_spellings", "IFD Format spellings refused", 12),
+        ("ifd_subdir_refused_start_spellings", "IFD SubDirectory Start spellings refused", 10),
+        ("ifd_subdir_unmodeled_keys", "IFD SubDirectory keys the schema does not model", 10),
+        ("unsupported_exprs", "IFD: top unsupported expressions", 10),
+        ("value_conv_refused_expressions", "IFD: top refused ValueConv expressions", 10),
+        ("dropped_code_refs", "IFD: PrintConv CODE refs refused (tag withheld)", 10),
+        ("other_unregistered_bodies", "IFD: top unregistered OTHER closures", 10),
+        ("pc_directives_dropped", "IFD: PrintConv directives dropped from partial enums", 10),
+        ("hook_refusal_reasons", "IFD: Hooks refused, by reason", 10),
+    )
+    for key, heading, limit in listings:
+        counter = nested[key]
+        if not counter:
+            continue
+        print(f"\n  {heading}:")
+        for text, n in counter.most_common(limit):
+            flat = re.sub(r"\s+", " ", str(text))
+            print(f"    {n:>5}  {flat if len(flat) <= 100 else flat[:97] + '...'}")
 
 
 PRELUDE = '''//! ExifTool binary tag tables, generated from ExifTool's own Perl hashes.
@@ -2338,6 +3483,7 @@ REPORT = (
         ("tag Groups naming only families 3+ (not table-derived)", "tag_group_unmodeled_family"),
         ("unnamed tags", "tag_no_name"),
         ("tables not ProcessBinaryData", "table_not_binary"),
+        ("tables IFD-style (transcribed separately, see the IFD section)", "table_ifd"),
         ("tables bad FORMAT", "table_bad_format"),
         ("BITMASK unreadable (non-integer/out-of-range bit key)", "bitmask_unreadable"),
         ("OTHER not in the Step 25 registry", "other_unregistered"),
@@ -2366,6 +3512,12 @@ def main():
     ap.add_argument("--modules", nargs="*", help="limit to these modules")
     ap.add_argument("--expr-ledger", help="PASS-only ledger from verify_exprs.py")
     ap.add_argument("--value-conv-ledger-out", help="write R2 ValueConv refusal/coverage ledger")
+    ap.add_argument(
+        "--ifd-out",
+        help="write the IFD-style (Exif::ProcessExif) tables here "
+        "(src/exiftool_tables/ifd_tables.rs); they are generated and reported "
+        "either way, so the shared ExprId enum in -o does not depend on this flag",
+    )
     args = ap.parse_args()
 
     with open(args.tables_json, encoding="utf-8") as fh:
@@ -2413,6 +3565,13 @@ def main():
                 ident = re.sub(r"[^A-Za-z0-9]", "_", f"{mod_name}_{tbl_name}").upper()
                 index_rows.append(f"    &{ident},")
 
+    # Slice I-1: the IFD-style tables. Always generated, whether or not
+    # --ifd-out asks for the file: the ExprId enum written into -o below must
+    # carry every conversion EITHER file references, so which variants it has
+    # cannot be allowed to depend on a flag.
+    ifd_chunks, ifd_index_rows, ifd_stats = gen_ifd_tables(doc, names, verified_exprs)
+    ifd_joined = "".join(ifd_chunks)
+
     # Collect the expressions actually referenced so the enum has no dead arms.
     # Iterate in sorted order: set iteration order varies between runs, and a
     # generator whose output depends on it cannot be checked into git.
@@ -2428,7 +3587,7 @@ def main():
                 f"identifier collision: {ident!r} maps to both {used[ident]!r} "
                 f"and {e!r} -- two conversions would alias to one variant"
             )
-        if f"ExprId::{ident}" in joined:
+        if f"ExprId::{ident}" in joined or f"ExprId::{ident}" in ifd_joined:
             used[ident] = e
 
     index = (
@@ -2459,6 +3618,20 @@ def main():
         fh.write(gen_expr_enum(used))
         fh.write(joined)
         fh.write(index)
+
+    if args.ifd_out:
+        ifd_index = (
+            "\n/// Every generated IFD-style table, sorted by `(module, table)` for\n"
+            "/// `find_ifd_table`'s binary search.\n"
+            "pub static ALL_IFD_TABLES: &[&IfdTable] = &[\n"
+            + "\n".join(ifd_index_rows)
+            + "\n];\n"
+        )
+        with open(args.ifd_out, "w", encoding="utf-8") as fh:
+            fh.write(IFD_PRELUDE.replace("__VERSION__", version))
+            fh.write(ifd_joined)
+            fh.write(ifd_index)
+        print(f"wrote IFD tables     {args.ifd_out}")
 
     ue = stats.pop("unsupported_exprs")
     pcd = stats.pop("pc_directives_dropped")
@@ -2543,6 +3716,8 @@ def main():
         for e, n in vc_refused.most_common(10):
             flat = e if len(e) <= 58 else e[:55] + "..."
             print(f"    {n:>4}  {flat}")
+
+    print_ifd_report(ifd_stats)
 
 
 if __name__ == "__main__":

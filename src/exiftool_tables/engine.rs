@@ -283,12 +283,23 @@ pub struct Emitted {
     pub table: &'static str,
     /// ExifTool's `GROUPS => { 0 => ..., 2 => ... }` for the emitting table.
     pub group0: &'static str,
+    /// The family-1 group ExifTool's `GetGroup` (ExifTool.pm:3810-3860)
+    /// would report: for a binary table the field's own `Groups{1}` else the
+    /// table's effective group 1 ([`BinaryTable::effective_groups`]); for an
+    /// IFD table see [`super::ifd_engine`]'s precedence (a `SET_GROUP1` table
+    /// reports its directory name, Exif.pm:7183).
+    pub group1: &'static str,
     pub group2: &'static str,
     pub name: &'static str,
     pub value: TagValue,
     /// ExifTool's `PRIORITY => 0` (ExifTool.pm:9471, `$priority = $$tbl{PRIORITY}`):
     /// this value must not displace one already reported under the same name.
     pub low_priority: bool,
+    /// ExifTool's per-tag `Avoid => 1` (ExifTool.pm:9472: a tag with no
+    /// priority of its own and no table `PRIORITY` defaults to priority 0
+    /// when it carries `Avoid`). Binary-table fields never carry it; IFD tags
+    /// do ([`super::ifd_schema::IfdFlags::avoid`]).
+    pub avoid: bool,
 }
 
 /// The `%dirInfo` a `ProcessBinaryData` call receives (ExifTool.pm:9880-9888).
@@ -348,18 +359,24 @@ impl<'a> Dir<'a> {
 /// ExifTool.pm:10136 sets for exactly the field-relative branch. The depth cap
 /// is belt-and-braces for the `NotDup` branch, where ExifTool's own guard does
 /// not apply and only the fact that `entry` advances bounds the recursion.
-struct Guard {
+///
+/// Shared with [`super::ifd_engine`]: `ProcessDirectory` keeps ONE
+/// `$$self{PROCESSED}` per file whichever `PROCESS_PROC` a directory uses, so
+/// an IFD walk that descends into a `ProcessBinaryData` table hands its
+/// guard down rather than starting a fresh one -- otherwise the depth cap
+/// would restart at every engine boundary.
+pub(super) struct Guard {
     processed: Vec<(usize, i64)>,
-    depth: u32,
+    pub(super) depth: u32,
 }
 
 /// ExifTool has no fixed limit; this bounds the `NotDup` branch, where
 /// `$$self{PROCESSED}` deliberately does not. Every edge in the pinned tree
 /// nests at most 3 deep from a live root, so this is slack, not a policy.
-const MAX_SUBDIR_DEPTH: u32 = 8;
+pub(super) const MAX_SUBDIR_DEPTH: u32 = 8;
 
 impl Guard {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             processed: Vec::new(),
             depth: 0,
@@ -367,7 +384,7 @@ impl Guard {
     }
 
     /// ExifTool.pm:9067 -- `if ($$self{PROCESSED}{$addr} and not $$dirInfo{NotDup})`.
-    fn admit(&mut self, addr: i64, table: usize, not_dup: bool) -> bool {
+    pub(super) fn admit(&mut self, addr: i64, table: usize, not_dup: bool) -> bool {
         if self.depth >= MAX_SUBDIR_DEPTH {
             return false;
         }
@@ -411,7 +428,11 @@ struct Entry {
     condition_resolved: bool,
 }
 
-fn walk(
+/// [`process_binary_data`] with a caller-supplied [`Guard`] -- the entry
+/// [`super::ifd_engine`] uses when a `ProcessExif` table's `SubDirectory`
+/// points at a `ProcessBinaryData` table, so the cycle set and depth count
+/// span both engines the way ExifTool's single `$$self{PROCESSED}` does.
+pub(super) fn walk(
     table: &'static BinaryTable,
     dir: Dir<'_>,
     ctx: &mut cond::Ctx,
@@ -489,10 +510,17 @@ fn walk(
             module: table.module,
             table: table.table,
             group0: table.group0,
+            // The field's own `Groups{1}` else the table's (ExifTool.pm:
+            // 9236-9244 via `effective_groups`).
+            group1: table.effective_groups(field).1,
             group2: table.group2,
             name: field.name,
             value,
             low_priority: table.priority == Some(0),
+            // `Avoid` is not part of the binary-table schema (`Field` has no
+            // flags); no ProcessBinaryData field in the pinned tree declares
+            // it.
+            avoid: false,
         });
     }
 }

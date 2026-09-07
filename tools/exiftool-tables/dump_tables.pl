@@ -100,6 +100,18 @@ my %TABLE_META = map { $_ => 1 } qw(
 # BitShift 0, where deriving would give 2 and shift every enum key off its
 # meaning.  Carrying the key is what keeps the transcription exact instead of
 # merely plausible.
+#
+# FixFormat and SubIFD (slice I-1, the IFD-style tables) are tag-level keys,
+# siblings of `Flags => 'SubIFD'` on the sub-IFD alternatives of Olympus.pm's
+# 0x2010-0x5000 entries and on Exif.pm's ExifOffset (0x8769).  SubIFD is the
+# un-sugared form of that Flags entry -- ProcessExif reads `$$tagInfo{SubIFD}`
+# (Exif.pm:6724, :6733, :6747, :7058) after SetupTagTable has expanded Flags
+# into it -- so a tag that declares it directly must be carried, not left in
+# `_extra_keys` where only its presence survives.  FixFormat is read by
+# WriteExif.pl:1760 alone (README:930: "[Writable EXIF SubIFD SubDirectory's
+# only]"); the IFD schema carries it as data so the transcription is complete,
+# and codegen.py says so where it emits it.  Keys inside a SubDirectory hash
+# (MaxSubdirs, DirName, ...) need no entry here: `scrub` copies that hash whole.
 my @TAG_KEYS = qw(
     Name Description Format Writable Count Groups Notes Mask BitShift Condition
     PrintConv ValueConv RawConv PrintConvInv ValueConvInv Hook
@@ -108,6 +120,7 @@ my @TAG_KEYS = qw(
     Base Offset ChangeBase
     Require Desire Inhibit
     BitsPerWord BitsTotal
+    FixFormat SubIFD
 );
 
 sub scrub {

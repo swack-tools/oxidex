@@ -116,9 +116,14 @@ impl DecodedValue {
     /// space-joined element string (ExifTool.pm:6312), so the elements are
     /// joined the same way. `None` for a rational: ExifTool's raw rational is
     /// `RoundFloat($num / $den, 10)` (ExifTool.pm `GetRational64u`), a
-    /// rounding this schema does not reproduce, so the caller falls back to
-    /// the raw value rather than print a digit string Perl would not.
-    fn perl_string(&self) -> Option<String> {
+    /// rounding whose WIDTH (`RoundFloat(.., 10)` for the 64-bit TIFF types 5
+    /// and 10, `RoundFloat(.., 7)` for a binary table's `rational32u`) this
+    /// value does not carry, so the caller falls back to the raw value rather
+    /// than print a digit string Perl would not. The IFD engine, whose
+    /// rationals are always the 64-bit types, renders them with
+    /// [`perl_rational64`] itself.
+    #[must_use]
+    pub fn perl_string(&self) -> Option<String> {
         match self {
             Self::Integer(value) => Some(value.to_string()),
             Self::Float(value) => Some(super::exprs::perl_num(*value)),
@@ -131,6 +136,25 @@ impl DecodedValue {
                 .collect::<Option<Vec<_>>>()
                 .map(|parts| parts.join(" ")),
         }
+    }
+}
+
+/// `GetRational64u`/`GetRational64s` (ExifTool.pm:6107-6120): `$ratDenom or
+/// return $ratNumer ? 'inf' : 'undef'`, else `RoundFloat($n / $d, 10)`. The
+/// operands are exact in an `f64` (they are 32-bit integers), so the quotient
+/// is the same IEEE double Perl divides to. For the IFD engine only: an IFD
+/// entry's rational is always one of TIFF types 5/10 (64-bit); a binary
+/// table's `rational32u` rounds to 7 digits and must not use this.
+#[must_use]
+pub(super) fn perl_rational64(numerator: f64, denominator: f64) -> String {
+    if denominator == 0.0 {
+        if numerator == 0.0 {
+            "undef".to_string()
+        } else {
+            "inf".to_string()
+        }
+    } else {
+        super::exprs::perl_g(numerator / denominator, 10)
     }
 }
 

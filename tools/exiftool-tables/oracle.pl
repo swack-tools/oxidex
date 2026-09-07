@@ -45,6 +45,57 @@
 # src/exiftool_tables/subdir.rs's module doc for why: ProcessProc changes how
 # the target is walked, and ByteOrder/Validate are keys ProcessBinaryData's
 # SubDirectory branch never reads at all).
+#
+# Slice I-1 (IFD-style tables, docs/superpowers/specs/2026-09-06-ifd-tables-
+# design.md section 4): a SECOND scope, emitted from the same walk, for the
+# tables ExifTool reads with ProcessExif -- PROCESS_PROC absent, or naming
+# `Image::ExifTool::Exif::ProcessExif`, on a hash that is a tag table by
+# ExifTool's own `%specialTags` (a table-level key, or a structured tag
+# entry). Every IFD row carries a leading kind column `IFD` so the two row
+# spaces cannot collide even for the two tables that fall in BOTH scopes
+# (a scalar FORMAT with no PROCESS_PROC); the binary rows above are emitted
+# exactly as before, byte for byte. A module named `IFD` would defeat that
+# routing, so the walk dies if it ever meets one.
+#
+#   IFD MODULE TABLE ''   TGROUPS   G0 G1 G2                 -- raw GROUPS (8)
+#   IFD MODULE TABLE ''   SETGROUP1 VALUE                    -- SET_GROUP1 verbatim (6)
+#   IFD MODULE TABLE ''   PRIORITY  N                        -- table PRIORITY verbatim (6)
+#   IFD MODULE TABLE KEY  NAME      NAME                     -- one per tag entry (6)
+#   IFD MODULE TABLE KEY  FORMAT    SPELLING                 -- tag's raw Format (6)
+#   IFD MODULE TABLE KEY  COUNT     N                        -- tag's raw Count (6)
+#   IFD MODULE TABLE KEY  WRITABLE  SPELLING                 -- Writable when it is a
+#                                                               format spelling, never 0/1 (6)
+#   IFD MODULE TABLE KEY  ENUM      KEY VALUE                -- one per PrintConv entry (7)
+#   IFD MODULE TABLE KEY  BITMASK   BIT LABEL                -- one per BITMASK entry (7)
+#   IFD MODULE TABLE KEY  OTHER     PRINTHEX                 -- PrintConv has OTHER (6)
+#   IFD MODULE TABLE KEY  PCREF     REFTYPE                  -- PrintConv is a non-HASH ref (6)
+#   IFD MODULE TABLE KEY  PCEXPR    1                        -- PrintConv is a scalar (Perl expression) (6)
+#   IFD MODULE TABLE KEY  GROUPS    G0 G1 G2                 -- tag's own Groups (8)
+#   IFD MODULE TABLE KEY  FLAGS     UNKNOWN BINARY LIST PROTECTED AVOID PRIORITY
+#                                                            -- 0/1 each, PRIORITY a
+#                                                               number or '-' (11)
+#   IFD MODULE TABLE KEY  RAWCONV   TEXT                     -- whitespace-collapsed RawConv,
+#                                                               '__CODE__' for a code ref (6)
+#   IFD MODULE TABLE KEY  HOOK      1                        -- tag carries a Hook (6)
+#   IFD MODULE TABLE KEY  CONDITION 1                        -- a PLAIN entry carries a
+#                                                               Condition (6)
+#   IFD MODULE TABLE KEY  SUBDIR    TAGTABLE START BASE PROCESSPROC BYTEORDER VALIDATE
+#                                   FIXFORMAT SUBIFD MAXSUBDIRS DIRNAME       (15)
+#
+# KEY is the integer tag id as ExifTool keys it, or `"$k#$i"` for the i-th
+# alternative of a `_variants` arrayref (same convention as the binary rows).
+# FLAGS reads each flag the way ExifTool's `ExpandFlags` (ExifTool.pm:5878-
+# 5894) would materialise it -- a direct `Binary => 1` and a `Flags =>
+# ['Unknown','Binary']` are the same fact -- because `SetupTagTable` has not
+# necessarily run on a hash this walk reads raw. SUBDIR's text facts are the
+# raw (to_text) source strings, '-' when the key is absent, `__REF__` for a
+# reference; PROCESSPROC is the resolved sub name (the generator emits an
+# edge through one only when it names ProcessBinaryData); VALIDATE is 1/0
+# presence; FIXFORMAT is the TAG's raw FixFormat; SUBIFD is 1 when the tag
+# has the SubIFD flag or `FixFormat => 'ifd'` (Exif.pm's SubIFD loop reads
+# the pointer(s) rather than the bytes). CONDITION is emitted only for a
+# plain entry: an alternative's Condition is what selects it, compiled by
+# conds.py into the `Cond` that guards it, so it is not an omission there.
 
 use strict;
 use warnings;
@@ -192,12 +243,208 @@ sub emit_entry {
     }
 }
 
+# --- Slice I-1: the IFD-style scope ---------------------------------------
+
+# Fully-qualified name of a CODE ref, '' when B cannot name it (an anonymous
+# sub reports as `...::__ANON__`, which is fine: the only question ever asked
+# of the answer is whether it ends in a specific named sub).
+sub sub_name {
+    my ($cv) = @_;
+    my $b = eval { B::svref_2object($cv) };
+    return '' unless $b && $b->isa('B::CV');
+    my $gv = eval { $b->GV };
+    return '' unless $gv && ref($gv) ne 'B::SPECIAL';
+    return eval { $gv->STASH->NAME . '::' . $gv->NAME } // '';
+}
+
+# Whether `$t` is in the IFD scope: ProcessExif is ExifTool's default
+# PROCESS_PROC (ExifTool.pm's ProcessDirectory falls back to it), so a tag
+# table with no PROCESS_PROC at all is one, and so is one naming it
+# explicitly. "Tag table" is decided by ExifTool's own `%specialTags` (the
+# table-level keys ExifTool.pm:1230-1237 recognises), NOT by dump_tables.pl's
+# hand list: a hash qualifies when it carries such a key, or when some
+# ordinary (non-special, non-underscore) key holds a structured entry. A
+# plain lookup hash of scalars (a lens-type map with no metadata) does not.
+sub in_ifd_scope {
+    my ($t, $pp) = @_;
+    if (defined $pp) {
+        return 0 unless ref $pp eq 'CODE';
+        return 0 unless sub_name($pp) =~ /::Exif::ProcessExif$/;
+    }
+    no warnings 'once';
+    my $has_meta = grep { $Image::ExifTool::specialTags{$_} } keys %$t;
+    my $struct = grep { !$Image::ExifTool::specialTags{$_} && !/^_/ && ref $t->{$_} } keys %$t;
+    return ($has_meta || $struct) ? 1 : 0;
+}
+
+# ExifTool.pm:5878-5894 `ExpandFlags`, re-derived: the keys a tag's `Flags`
+# would materialise once `SetupTagTable` runs. Returned as a hash so a
+# reader can ask for one flag; the result overrides a direct key exactly
+# as `$$tagInfo{$_} = 1` would.
+sub expanded_flags {
+    my ($e) = @_;
+    my %out;
+    my $flags = $e->{Flags};
+    return \%out unless defined $flags;
+    if (ref $flags eq 'ARRAY') {
+        $out{$_} = 1 for @$flags;
+    } elsif (ref $flags eq 'HASH') {
+        $out{$_} = $flags->{$_} for keys %$flags;
+    } elsif (!ref $flags) {
+        $out{$flags} = 1;
+    }
+    return \%out;
+}
+
+sub flag_fact {
+    my ($e, $x, $name) = @_;
+    return exists $x->{$name} ? $x->{$name} : $e->{$name};
+}
+
+# '-' when absent, `__REF__` for a reference, else the cleaned text.
+sub dash_text {
+    my ($v) = @_;
+    return '-' unless defined $v;
+    return ref $v ? '__REF__' : clean($v);
+}
+
+# Emit every IFD row for one tag-info entry `$e` at `$key`. `$plain` is true
+# for a scalar-keyed entry and false for a `_variants` alternative (only the
+# former gets a CONDITION row -- see the header).
+sub emit_ifd_entry {
+    my ($mod, $sym, $key, $e, $plain) = @_;
+    my $name = ref $e eq 'HASH' ? $e->{Name} : $e;
+    return unless defined $name && !ref $name;
+    my @p = ('IFD', $mod, $sym, $key);
+    print join("\t", @p, 'NAME', clean($name)), "\n";
+    return unless ref $e eq 'HASH';
+    my $x = expanded_flags($e);
+
+    my $fmt = $e->{Format};
+    print join("\t", @p, 'FORMAT', clean($fmt)), "\n" if defined $fmt && !ref $fmt;
+    my $cnt = $e->{Count};
+    print join("\t", @p, 'COUNT', clean($cnt)), "\n" if defined $cnt && !ref $cnt;
+    # `Writable => 1`/`0` is a yes/no about writability, not a format; only
+    # a spelling says which value domain the generator may assume.
+    my $w = $e->{Writable};
+    print join("\t", @p, 'WRITABLE', clean($w)), "\n"
+        if defined $w && !ref $w && $w !~ /^\d+$/;
+
+    my $tgrp = $e->{Groups};
+    if (ref $tgrp eq 'HASH') {
+        print join("\t", @p, 'GROUPS',
+            map { defined $tgrp->{$_} && !ref $tgrp->{$_} ? clean($tgrp->{$_}) : '' } (0, 1, 2)
+        ), "\n";
+    }
+
+    my $prio = flag_fact($e, $x, 'Priority');
+    print join("\t", @p, 'FLAGS',
+        (map { flag_fact($e, $x, $_) ? 1 : 0 } qw(Unknown Binary List Protected Avoid)),
+        (defined $prio && !ref $prio ? clean($prio) : '-'),
+    ), "\n";
+
+    my $rc = $e->{RawConv};
+    if (defined $rc) {
+        my $s;
+        if (ref $rc eq 'CODE') { $s = '__CODE__' }
+        elsif (ref $rc)        { $s = '__REF__' }
+        else {
+            $s = clean($rc);
+            $s =~ s/\s+/ /g;
+            $s =~ s/^ //;
+            $s =~ s/ $//;
+        }
+        print join("\t", @p, 'RAWCONV', $s), "\n";
+    }
+    print join("\t", @p, 'HOOK', 1), "\n" if defined $e->{Hook};
+    print join("\t", @p, 'CONDITION', 1), "\n" if $plain && defined $e->{Condition};
+
+    if (defined $e->{SubDirectory}) {
+        my $sd = $e->{SubDirectory};
+        my ($tagtable, $start, $base, $proc, $bo, $validate, $max, $dir) = ('-') x 8;
+        $validate = 0;
+        if (ref $sd eq 'HASH') {
+            $tagtable = dash_text($sd->{TagTable});
+            $start = dash_text($sd->{Start});
+            $base = dash_text($sd->{Base});
+            if (defined $sd->{ProcessProc}) {
+                $proc = ref $sd->{ProcessProc} eq 'CODE'
+                    ? (sub_name($sd->{ProcessProc}) || '__CODE__')
+                    : dash_text($sd->{ProcessProc});
+            }
+            $bo = dash_text($sd->{ByteOrder});
+            $validate = defined $sd->{Validate} ? 1 : 0;
+            $max = dash_text($sd->{MaxSubdirs});
+            $dir = dash_text($sd->{DirName});
+        }
+        my $fix = $e->{FixFormat};
+        my $subifd = (flag_fact($e, $x, 'SubIFD')
+            || (defined $fix && !ref $fix && $fix eq 'ifd')) ? 1 : 0;
+        print join("\t", @p, 'SUBDIR', $tagtable, $start, $base, $proc, $bo, $validate,
+                   dash_text($fix), $subifd, $max, $dir), "\n";
+    }
+
+    my $pc = $e->{PrintConv};
+    if (defined $pc && ref $pc && ref $pc ne 'HASH') {
+        print join("\t", @p, 'PCREF', ref $pc), "\n";
+    }
+    # A scalar PrintConv is Perl source (an expression) the generator either
+    # compiles or refuses; the row lets verify.py tell a legitimate refusal
+    # (`Omitted { print_conv: true }` where ExifTool DOES convert) from a
+    # refusal of nothing.
+    if (defined $pc && !ref $pc) {
+        print join("\t", @p, 'PCEXPR', 1), "\n";
+    }
+    return unless ref $pc eq 'HASH';
+    if (ref $pc->{BITMASK} eq 'HASH') {
+        for my $bk (sort keys %{$pc->{BITMASK}}) {
+            print join("\t", @p, 'BITMASK', clean($bk), clean($pc->{BITMASK}{$bk})), "\n";
+        }
+    }
+    if (exists $pc->{OTHER}) {
+        my $print_hex = flag_fact($e, $x, 'PrintHex') ? '1' : '';
+        print join("\t", @p, 'OTHER', $print_hex), "\n";
+    }
+    for my $ck (sort keys %$pc) {
+        next if $ck =~ /^(BITMASK|OTHER|Notes|PrintHex|SeparateTable)$/;
+        next if ref $pc->{$ck};
+        print join("\t", @p, 'ENUM', clean($ck), clean($pc->{$ck})), "\n";
+    }
+}
+
+sub emit_ifd_table {
+    my ($mod, $sym, $t) = @_;
+    my $g = $t->{GROUPS};
+    my @graw = ref $g eq 'HASH'
+        ? map { defined $g->{$_} && !ref $g->{$_} ? clean($g->{$_}) : '' } (0, 1, 2)
+        : ('', '', '');
+    print join("\t", 'IFD', $mod, $sym, '', 'TGROUPS', @graw), "\n";
+    print join("\t", 'IFD', $mod, $sym, '', 'SETGROUP1', clean($t->{SET_GROUP1})), "\n"
+        if defined $t->{SET_GROUP1} && !ref $t->{SET_GROUP1};
+    print join("\t", 'IFD', $mod, $sym, '', 'PRIORITY', clean($t->{PRIORITY})), "\n"
+        if defined $t->{PRIORITY} && !ref $t->{PRIORITY};
+    for my $k (sort keys %$t) {
+        next if $k !~ /^-?[\d.]+$/;
+        my $e = $t->{$k};
+        if (ref $e eq 'ARRAY') {
+            my $i = 0;
+            for my $alt (@$e) {
+                emit_ifd_entry($mod, $sym, "$k#$i", $alt, 0);
+                $i++;
+            }
+            next;
+        }
+        emit_ifd_entry($mod, $sym, $k, $e, 1);
+    }
+}
+
 opendir(my $dh, "$LIB/Image/ExifTool") or die "opendir: $!";
 my @mods = sort map { s/\.pm$//r } grep { /\.pm$/ } readdir($dh);
 closedir $dh;
 my %skip = map { $_ => 1 } qw(BuildTagLookup TagLookup TagNames Writer Shift Import Validate Geolocation);
 
 for my $mod (grep { !$skip{$_} } @mods) {
+    die "a module named IFD would collide with the IFD row kind column\n" if $mod eq 'IFD';
     my $pkg = "Image::ExifTool::$mod";
     eval "require $pkg; 1" or next;
     no strict 'refs';
@@ -222,8 +469,13 @@ for my $mod (grep { !$skip{$_} } @mods) {
                 }
             }
         }
-        next unless $has_format || $is_bin;
+        # Slice I-1: the IFD scope is decided independently of the binary
+        # one, and a table may sit in both (a scalar FORMAT with no
+        # PROCESS_PROC); its two row sets are told apart by the `IFD` column.
+        my $is_ifd = in_ifd_scope($t, $pp);
+        next unless $has_format || $is_bin || $is_ifd;
 
+        if ($has_format || $is_bin) {
         # Step 26: the table's RAW GROUPS, exactly as the module declares it
         # (this reads the hash BEFORE GetTagTable would default it, so
         # verify.py can re-derive the defaulting rule rather than be handed
@@ -258,5 +510,8 @@ for my $mod (grep { !$skip{$_} } @mods) {
             }
             emit_entry($mod, $sym, $k, $e);
         }
+        }
+
+        emit_ifd_table($mod, $sym, $t) if $is_ifd;
     }
 }

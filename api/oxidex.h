@@ -4112,6 +4112,15 @@
 #define GPS_INFO_IFD_POINTER 34853
 
 /*
+ The largest entry count [`read_ifd`] accepts. ExifTool has no such bound
+ (it reads whatever the `int16u` says and lets each entry fail on its
+ own); `table_ifd.rs` added it as the guard that keeps a random buffer
+ from being walked as a directory, and no real maker-note IFD in the
+ corpus comes within a factor of two of it.
+ */
+#define MAX_IFD_ENTRIES 512
+
+/*
  A caller's acknowledgment of which of a field's [`Omitted`] semantics it
  has independently supplied, one bit per flag.
 
@@ -4121,6 +4130,11 @@
  with `|`, e.g. `Acknowledged::CONDITION | Acknowledged::VALUE_CONV`.
  */
 typedef struct Acknowledged Acknowledged;
+
+/*
+ The per-tag flags ExifTool consults when reporting an IFD tag.
+ */
+typedef struct IfdFlags IfdFlags;
 
 /*
  Semantics ExifTool applies to a field that this schema does not reproduce.
@@ -4148,6 +4162,8 @@ typedef struct TagGroups TagGroups;
 typedef struct ExifToolHandle {
     uint8_t _private[0];
 } ExifToolHandle;
+
+
 
 
 
