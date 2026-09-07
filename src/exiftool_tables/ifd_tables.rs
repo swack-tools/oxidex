@@ -18898,7 +18898,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                         start: IfdStart::Val(0),
                         base: None,
                         byte_order: IfdByteOrder::Inherit,
-                        fix_format: None,
+                        fix_format: Some(Fmt::Int8u),
                         sub_ifd: true,
                         max_subdirs: None,
                         dir_name: Some("SR2Private"),
