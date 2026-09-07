@@ -39,8 +39,10 @@
 pub mod binary_tables;
 pub mod cond;
 pub mod enabled;
+pub mod enabled_ifd;
 pub mod engine;
 pub mod exprs;
+pub mod ifd_schema;
 pub mod runtime;
 pub mod subdir;
 
@@ -50,7 +52,12 @@ pub use binary_tables::{
 };
 pub use cond::{CmpOp, Cond, Ctx, EffectSource, MemberValue, VariantGroup, first_match};
 pub use enabled::{ENABLED, is_enabled};
+pub use enabled_ifd::ENABLED_IFD;
 pub use engine::{Cursor, Dir, Emitted, Step, process_binary_data, read_value};
+pub use ifd_schema::{
+    IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
+    RawConvEffect,
+};
 pub use runtime::{
     Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
     RefusalCounts, TableDecode, all_fractional_census, apply_value_conv, decode_binary_table,
