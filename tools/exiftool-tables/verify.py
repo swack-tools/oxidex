@@ -328,11 +328,28 @@ def _enum_body(src, open_bracket):
     return body, tuples
 
 
+_RUST_ESCAPE_RE = re.compile(r'\\(?:u\{([0-9a-fA-F]{1,6})\}|x([0-9a-fA-F]{2})|(.))', re.S)
+_RUST_SIMPLE_ESCAPES = {"\\": "\\", '"': '"', "n": "\n", "r": "\r", "t": "\t", "0": "\0", "'": "'"}
+
+
 def unescape(s):
-    return (s.replace('\\\\', '\x00')
-             .replace('\\"', '"').replace('\\n', '\n')
-             .replace('\\r', '\r').replace('\\t', '\t')
-             .replace('\x00', '\\'))
+    """Decode a Rust string-literal body exactly as rustc would: `\\\\`,
+    `\\"`, `\\n`, `\\r`, `\\t`, `\\0`, `\\xNN` and `\\u{..}` (which is how
+    `codegen.py::rust_str` spells NUL and other control characters, e.g.
+    Exif::Main FileSource's `"\\3\\0\\0\\0"` key). A single left-to-right pass
+    -- the old placeholder trick (`\\\\` -> NUL -> `\\`) turned a real NUL
+    byte in the source into a backslash and never met one until the IFD
+    tables did."""
+    def one(m):
+        if m.group(1) is not None:
+            return chr(int(m.group(1), 16))
+        if m.group(2) is not None:
+            return chr(int(m.group(2), 16))
+        ch = m.group(3)
+        if ch in _RUST_SIMPLE_ESCAPES:
+            return _RUST_SIMPLE_ESCAPES[ch]
+        raise SystemExit(f"unescape: unknown Rust escape \\{ch!r} in {s!r} -- extend unescape() before trusting a PASS")
+    return _RUST_ESCAPE_RE.sub(one, s)
 
 
 # Step 27: the `Some(SubdirEdge { module: "...", table: "...", start: ...`
@@ -1006,7 +1023,7 @@ IFD_TABLE_RE = re.compile(
 IFD_TABLE_DECL_RE = re.compile(r'pub static \w+: IfdTable = IfdTable \{')
 IFD_TAG_RE = re.compile(
     r'IfdTag\s*\{\s*'
-    r'id:\s*(?P<id>\d+),\s*'
+    r'id:\s*(?P<id>0x[0-9a-fA-F]+|\d+),\s*'
     r'name:\s*"(?P<name>(?:[^"\\]|\\.)*)",\s*'
     # Scalar formats only (the spec refuses everything else for an IFD tag):
     # `None`, `Some(Fmt::Int16u)`, `Some(Fmt::Str(11))`. A `Fmt::Var(...)`
@@ -1032,7 +1049,7 @@ IFD_TAGS_MARKER_RE = re.compile(r'tags:\s*&\[')
 IFD_VARIANTS_MARKER_RE = re.compile(r'variants:\s*&\[')
 IFD_VARIANT_GROUP_DECL_RE = re.compile(r'IfdVariantGroup\s*\{')
 IFD_VARIANT_GROUP_RE = re.compile(
-    r'IfdVariantGroup\s*\{\s*id:\s*(?P<id>\d+),\s*alternatives:\s*&\['
+    r'IfdVariantGroup\s*\{\s*id:\s*(?P<id>0x[0-9a-fA-F]+|\d+),\s*alternatives:\s*&\['
 )
 ALL_IFD_TABLES_RE = re.compile(r'pub static ALL_IFD_TABLES:\s*&\[&IfdTable\]\s*=\s*&\[')
 _IFD_FLAGS_RE = re.compile(
@@ -1162,7 +1179,7 @@ class ParsedIfd(NamedTuple):
 
 def _parse_one_ifd_tag(src, f, k, out):
     tag = {
-        "id": int(f.group("id")),
+        "id": int(f.group("id"), 0),
         "name": unescape(f.group("name")),
         "fmt": re.sub(r"\s+", "", f.group("fmt")),
         "count": _some_int(f.group("count")),
@@ -1234,11 +1251,13 @@ def parse_ifd_rust(path):
         expected_plain += len(IFD_TAG_COUNT_RE.findall(src, t_start, t_end))
         ids = []
         for f in IFD_TAG_RE.finditer(src, t_start, t_end):
-            k = (mod, tbl, f.group("id"))
+            # The generator spells ids `0x%04x`; the oracle keys rows by the
+            # decimal Perl key. Normalise so the two meet.
+            k = (mod, tbl, str(int(f.group("id"), 0)))
             if k in out.tags:
                 out.structure.append(f"{k}: duplicate id in `tags`")
             _parse_one_ifd_tag(src, f, k, out)
-            ids.append(int(f.group("id")))
+            ids.append(int(f.group("id"), 0))
 
         vm = IFD_VARIANTS_MARKER_RE.search(src, t_end, end)
         if vm is None:
@@ -1247,7 +1266,7 @@ def parse_ifd_rust(path):
         declared_groups = len(IFD_VARIANT_GROUP_DECL_RE.findall(src, v_start, v_end))
         vids = []
         for gm in IFD_VARIANT_GROUP_RE.finditer(src, v_start, v_end):
-            gid = int(gm.group("id"))
+            gid = int(gm.group("id"), 0)
             vids.append(gid)
             a_s, a_e = _bracket_span(src, gm.end() - 1)
             expected_variant += len(IFD_TAG_COUNT_RE.findall(src, a_s, a_e))
@@ -1255,7 +1274,7 @@ def parse_ifd_rust(path):
                 k = (mod, tbl, f"{gid}#{pos}")
                 out.variant_keys.add(k)
                 _parse_one_ifd_tag(src, f, k, out)
-                if int(f.group("id")) != gid:
+                if int(f.group("id"), 0) != gid:
                     out.structure.append(
                         f"{k}: alternative carries id {f.group('id')} inside group id {gid}"
                     )
@@ -1337,6 +1356,8 @@ class IfdOracle(NamedTuple):
     hooks: set
     conditions: set
     subdirs: dict
+    # `PCEXPR` rows: keys whose ExifTool PrintConv is a scalar expression.
+    pcexprs: set
 
 
 def parse_ifd_oracle(out):
@@ -1345,7 +1366,7 @@ def parse_ifd_oracle(out):
     a SystemExit: the oracle and the verifier move in lockstep, and a row
     silently ignored is a fact silently unverified."""
     o = IfdOracle({}, {}, {}, {}, {}, defaultdict(dict), defaultdict(dict), set(), {}, {},
-                  {}, {}, {}, set(), set(), {})
+                  {}, {}, {}, set(), set(), {}, set())
     for line in out.splitlines():
         p = line.split("\t")
         if p[0] != "IFD":
@@ -1375,6 +1396,8 @@ def parse_ifd_oracle(out):
             o.other_print_hex[k] = p[5] == "1"
         elif kind == "PCREF" and n == 6:
             o.pcrefs[k] = p[5]
+        elif kind == "PCEXPR" and n == 6:
+            o.pcexprs.add(k)
         elif kind == "GROUPS" and n == 8:
             o.groups[k] = (p[5], p[6], p[7])
         elif kind == "FLAGS" and n == 11:
@@ -1420,13 +1443,14 @@ def expected_ifd_format(spelling, count_decl):
     (`ifd_format_unsupported`: the tag must not be emitted at all).
 
     The spec (section 2, `format`/`count`): `fmt[N]` -> `Some(fmt)` with
-    `count: Some(N)`; bare `string`/`undef` -> `format: None` (the entry's
-    own type is read; there is no `Fmt::Str(0)`) with the count from
-    `Count`; any other scalar in the schema -> `Some(Fmt::X)`; anything else
-    refused. `string[N]`/`undef[N]` go through the existing scalar parser's
-    sized forms (`Fmt::Str(N)`/`Fmt::Undef(N)`) with `count: Some(N)`.
-    `var_*` and `pstring` are ProcessBinaryData constructs and are refused
-    here.
+    `count: Some(N)`; bare `string`/`undef` -> the UNSIZED
+    `Some(Fmt::Str(0))`/`Some(Fmt::Undef(0))` ("this kind, the entry's own
+    byte length": a live reinterpretation, Exif.pm:6737-6745, which the walk
+    honours) with the count from `Count`; any other scalar in the schema ->
+    `Some(Fmt::X)`; anything else refused. `string[N]`/`undef[N]` go through
+    the existing scalar parser's sized forms (`Fmt::Str(N)`/`Fmt::Undef(N)`)
+    with `count: Some(N)`. `var_*` and `pstring` are ProcessBinaryData
+    constructs and are refused here.
     """
     if spelling is None:
         return ("None", count_decl)
@@ -1440,8 +1464,10 @@ def expected_ifd_format(spelling, count_decl):
         if base in _FMT_VARIANT:
             return (f"Some(Fmt::{_FMT_VARIANT[base]})", n)
         return None
-    if spelling in ("string", "undef"):
-        return ("None", count_decl)
+    if spelling == "string":
+        return ("Some(Fmt::Str(0))", count_decl)
+    if spelling == "undef":
+        return ("Some(Fmt::Undef(0))", count_decl)
     if spelling in _FMT_VARIANT:
         return (f"Some(Fmt::{_FMT_VARIANT[spelling]})", count_decl)
     return None
@@ -1568,6 +1594,8 @@ def verify_ifd(gen, orc, show=10):
     t_name, t_fmt, t_writable, t_groups, t_flags = T(), T(), T(), T(), T()
     t_hook, t_subdir_flag, t_cond, t_rawconv, t_pcref = T(), T(), T(), T(), T()
     t_enum, t_bitmask, t_other, t_edge = T(), T(), T(), T()
+    bitmask_refused = 0  # BITMASK PrintConvs the generator refused (omitted.print_conv), a note
+    note_pcexpr_unflagged = 0  # expression PrintConvs emitted raw and unflagged (Gate A's expr_unsupported)
     orphan_tables, orphan_tags, orphan_examples = 0, 0, []
     unsupported_fmt = []
     variant_orphan = 0
@@ -1686,13 +1714,27 @@ def verify_ifd(gen, orc, show=10):
                 note_rawconv_refused_setmember += 1
             t_rawconv.hit()
 
-        # Same three-way check as the binary stage's PCREF logic.
+        # The binary stage's PCREF three-way check, widened to every kind of
+        # ExifTool PrintConv: a refusal (`Omitted { print_conv: true }`) is
+        # legitimate iff ExifTool declares SOME PrintConv here -- a code ref
+        # (PCREF), a scalar expression (PCEXPR), or a hash the generator would
+        # not reproduce (ENUM/BITMASK/OTHER rows; e.g. a BITMASK with
+        # BitsPerWord) -- and a refusal of nothing is a false refusal. A
+        # PCREF emitted unflagged as `PrintConv::None` is the dangerous
+        # direction, as before. An expression PrintConv emitted unflagged as
+        # `PrintConv::None` (the generator's `expr_unsupported` path, which
+        # Gate A disqualifies at table level) is counted as a note here, the
+        # same way the binary stage tolerates it.
         flagged, is_ref = om["print_conv"], k in orc.pcrefs
-        if flagged and not is_ref:
-            t_pcref.miss((k, "print_conv refused but ExifTool has no PrintConv ref"))
+        has_pc = (is_ref or k in orc.pcexprs or k in orc.enums or k in orc.bitmasks
+                  or k in orc.other_present)
+        if flagged and not has_pc:
+            t_pcref.miss((k, "print_conv refused but ExifTool has no PrintConv"))
         elif is_ref and not flagged and tag["pc_kind"] == "PrintConv::None":
             t_pcref.miss((k, f"ExifTool PrintConv is a {orc.pcrefs[k]} ref, dropped silently"))
         else:
+            if k in orc.pcexprs and not flagged and tag["pc_kind"] == "PrintConv::None":
+                note_pcexpr_unflagged += 1
             t_pcref.hit()
 
         truth_enum = {norm_key(a): b for a, b in orc.enums.get(k, {}).items()}
@@ -1702,13 +1744,23 @@ def verify_ifd(gen, orc, show=10):
                 t_enum.hit()
             else:
                 t_enum.miss((k, kk, vv, t))
-        if k in gen.bitmasks or k in orc.bitmasks:
-            got = {norm_key(kk): vv for kk, vv in gen.bitmasks.get(k, {}).items()}
+        if k in gen.bitmasks:
+            got = {norm_key(kk): vv for kk, vv in gen.bitmasks[k].items()}
             want = {norm_key(kk): vv for kk, vv in orc.bitmasks.get(k, {}).items()}
             if got == want:
                 t_bitmask.hit()
             else:
                 t_bitmask.miss((k, got, want))
+        elif k in orc.bitmasks:
+            # ExifTool declares a BITMASK the generator did not emit. A
+            # counted refusal (`omitted.print_conv: true`, e.g. codegen's
+            # `ifd_bitmask_words_unsupported` for a BitsPerWord hash) is
+            # honest absence -- a note; an emitted PrintConv that silently
+            # lost the BITMASK is a mismatch.
+            if gen.tags[k]["omitted"].get("print_conv"):
+                bitmask_refused += 1
+            else:
+                t_bitmask.miss((k, {}, {norm_key(kk): vv for kk, vv in orc.bitmasks[k].items()}))
         variant = gen.other_ids.get(k)
         if variant is not None:
             if k not in orc.other_present:
@@ -1779,11 +1831,11 @@ def verify_ifd(gen, orc, show=10):
         f"  hook/subdirectory/condition flags MISMATCH {t_hook.bad}/{t_subdir_flag.bad}/{t_cond.bad}",
         f"  raw_conv       {t_rawconv.total}  MISMATCH {t_rawconv.bad}  "
         f"(SetMember-shaped RawConvs refused instead: {note_rawconv_refused_setmember})",
-        f"  print_conv refusals {t_pcref.total}  MISMATCH {t_pcref.bad}",
+        f"  print_conv refusals {t_pcref.total}  MISMATCH {t_pcref.bad}  (expression PrintConv emitted unflagged, Gate-A territory, note: {note_pcexpr_unflagged})",
         f"enum entries     {t_enum.total}",
         f"  match          {t_enum.ok}",
         f"  MISMATCH       {t_enum.bad}",
-        f"BITMASK tags     {t_bitmask.total}  MISMATCH {t_bitmask.bad}",
+        f"BITMASK tags     {t_bitmask.total}  MISMATCH {t_bitmask.bad}  (refused PrintConv, note: {bitmask_refused})",
         f"OTHER-backed tags {t_other.total}  MISMATCH {t_other.bad}",
         f"subdirectory edges {n_edges}",
         f"  match          {t_edge.ok}",

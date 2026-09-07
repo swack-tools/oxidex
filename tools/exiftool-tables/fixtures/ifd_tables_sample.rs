@@ -150,7 +150,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
         IfdTag {
             id: 33723,
             name: "IPTC-NAA",
-            format: None,
+            format: Some(Fmt::Undef(0)),
             count: None,
             writable: Some("int32u"),
             groups: TagGroups::NONE,

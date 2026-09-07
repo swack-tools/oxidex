@@ -316,10 +316,20 @@ def value_domain(format_name, count):
 
 
 def rust_str(s):
-    """Escape a Python str into a Rust string literal body."""
+    """Escape a Python str into a Rust string literal body.
+
+    Control characters (NUL first among them: Exif::Main's FileSource keys
+    `"\\3\\0\\0\\0"`, Exif.pm:2820) are written as Rust `\\u{..}` escapes
+    rather than raw bytes, so the generated source carries no NUL/control
+    bytes and every tool that reads it back (`verify.py`, `grep`) sees the
+    key ExifTool declared. `verify.py::unescape` decodes the same escapes.
+    """
     out = s.replace("\\", "\\\\").replace('"', '\\"')
     out = out.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-    return out
+    return "".join(
+        f"\\u{{{ord(ch):x}}}" if (ord(ch) < 0x20 and ch not in "\n\r\t") or ord(ch) == 0x7f else ch
+        for ch in out
+    )
 
 
 def parse_index(key):
@@ -1254,15 +1264,14 @@ GATE_A_DISQUALIFYING = (
     "ifd_format_unsupported",
     "ifd_flags_unreadable",
     "ifd_priority_unreadable",
-    # -- or an entry that IS emitted but under-describes what ExifTool does
-    # with it and carries no Omitted flag to say so: a bare `string`/`undef`
-    # Format is a live reinterpretation (Exif.pm:6737-6745) the schema's
-    # `Fmt` cannot carry, a conversion with no scalar domain is refused
-    # without a flag, a BITMASK with BitsPerWord would render with the wrong
-    # word width.
-    "ifd_format_unsized_override",
-    "ifd_expr_domain_unknown",
-    "ifd_bitmask_words_unsupported",
+    # (NOT here, deliberately: `ifd_expr_domain_unknown` and
+    # `ifd_bitmask_words_unsupported` -- a PrintConv the schema cannot type
+    # or render is refused AND the field is withheld through
+    # `Omitted.print_conv`, which is honest absence, the same class as
+    # `conv_dropped`; a ValueConv with no domain sets `Omitted.value_conv`
+    # the same way. A bare `string`/`undef` Format is not here either: the
+    # schema carries it as the unsized `Fmt::Str(0)`/`Fmt::Undef(0)` and the
+    # walk honours it.)
     # SubDirectory edges refused -- the pointer is emitted with no target
     # (subdir: None), so every tag on the far side is silently absent. Same
     # rule as the binary `subdir_refused_*` set above. `ifd_subdir_refused_
@@ -1634,14 +1643,13 @@ def parse_ifd_tag_id(key):
 # like a scalar one (Exif.pm:6737-6745: `%formatNumber` maps both, the entry's
 # format number is replaced and its count recomputed from the byte size) and
 # `ReadValue` then differs between the two (ExifTool.pm:6306-6308: `string`
-# is truncated at the first NUL, `undef` is not). The schema's `Fmt` has no
-# unsized string variant, so the contract emits `format: None` for these and
-# this generator counts every one under `ifd_format_unsized_override`, which
-# blocks Gate A: whenever the entry's own type differs from the override (an
-# `undef`-typed CameraID under `Format => 'string'`, Olympus.pm; an
-# `int8u`-typed value under `Format => 'undef'`), reading "as the entry
-# declares" is not what ExifTool does, and nothing in the emitted tag says so.
-IFD_UNSIZED_FORMATS = ("string", "undef")
+# is truncated at the first NUL, `undef` is not). The schema carries the
+# override as the UNSIZED forms `Fmt::Str(0)` / `Fmt::Undef(0)` -- "this
+# kind, the entry's own byte length" (`ifd_schema.rs`, `IfdTag::format`;
+# `ifd_engine.rs` reads exactly that) -- so an `undef`-typed CameraID under
+# `Format => 'string'` (Olympus.pm) is NUL-truncated as ExifTool does rather
+# than reported as bytes. Counted (informational) under `ifd_format_unsized`.
+IFD_UNSIZED_FORMATS = {"string": "Some(Fmt::Str(0))", "undef": "Some(Fmt::Undef(0))"}
 
 
 def ifd_format_for(tag, stats):
@@ -1649,8 +1657,9 @@ def ifd_format_for(tag, stats):
     or `None` when the spelling is refused (counted `ifd_format_unsupported`).
 
     Per the contract: `fmt[N]` -> `Some(Fmt)` plus `count: Some(N)`; a scalar
-    spelling -> `Some(Fmt)`; a bare `string`/`undef` -> `format: None` (see
-    `IFD_UNSIZED_FORMATS`); anything else -- `ifd`, `unicode`, `binary`,
+    spelling -> `Some(Fmt)`; a bare `string`/`undef` -> the unsized
+    `Some(Fmt::Str(0))`/`Some(Fmt::Undef(0))` (see `IFD_UNSIZED_FORMATS`);
+    anything else -- `ifd`, `unicode`, `binary`,
     `utf8`, Matroska's `unsigned`, PICT's `Rect`, IPTC's `string[0,32]` /
     `digits[8]` -- is refused. Note that `%formatNumber` (Exif.pm:96) has no
     sized spelling at all, so a `fmt[N]` Format is only ever declared by the
@@ -1672,8 +1681,8 @@ def ifd_format_for(tag, stats):
             if base == "undef":
                 return f"Some(Fmt::Undef({n}))", n, base
         elif f in IFD_UNSIZED_FORMATS:
-            stats["ifd_format_unsized_override"] += 1
-            return "None", None, f
+            stats["ifd_format_unsized"] += 1
+            return IFD_UNSIZED_FORMATS[f], None, f
         elif f in SCALAR_FORMATS:
             return f"Some(Fmt::{SCALAR_FORMATS[f][0]})", None, f
     stats["ifd_format_unsupported"] += 1
@@ -2126,9 +2135,16 @@ def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
     pc = tag.get("PrintConv")
     pc_src, pc_refused = "PrintConv::None", False
     if _bitmask_needs_words(tag):
+        # Refused AND withheld (`Omitted.print_conv`): ExifTool declares a
+        # PrintConv here, so emitting the tag with `PrintConv::None` and no
+        # flag would print the raw word under the real tag name.
         stats["ifd_bitmask_words_unsupported"] += 1
+        pc_refused = True
     elif pc_domain is None and isinstance(pc, dict) and pc.get("kind") == "expr":
+        # Same: an expression this schema cannot type is refused, and the
+        # field is withheld rather than reported unconverted.
         stats["ifd_expr_domain_unknown"] += 1
+        pc_refused = True
     else:
         pc_src, pc_refused = conv_for(tag, stats, pc_domain, verified_exprs)
 
@@ -2309,10 +2325,14 @@ def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx):
     # directory NAME the table was reached under (`IFD0`/`IFD1`/`ExifIFD` for
     # Exif::Main, the SubDirectory's DirName for Kodak::IFD, ...), which no
     # static string can carry. Every one of the six declarations in 13.59 is
-    # the literal `1`. The schema's `set_group1: Option<&str>` therefore stays
-    # `None` and the flag is counted (`ifd_set_group1_flag`); a walk that
-    # passes the directory name in `IfdDir.group1` reproduces the effect.
-    set_group1_flag = perl_truthy(meta.get("SET_GROUP1"))
+    # the literal `1`. The schema's `set_group1: Option<&str>` carries the
+    # declared payload VERBATIM (`Some("1")`) so the verifier can compare it
+    # with the oracle's `SETGROUP1` row and the walk reads it as a flag
+    # (`is_some()`), taking the directory name from `IfdDir.group1`. Counted
+    # under `ifd_set_group1_flag`.
+    set_group1_raw = meta.get("SET_GROUP1")
+    set_group1_flag = perl_truthy(set_group1_raw)
+    set_group1_src = f'Some("{rust_str(str(set_group1_raw))}")' if set_group1_flag else "None"
     if set_group1_flag:
         stats["ifd_set_group1_flag"] += 1
 
@@ -2334,8 +2354,8 @@ def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx):
 
     kind = "PROCESS_PROC absent" if meta.get("PROCESS_PROC") is None else "PROCESS_PROC Exif::ProcessExif"
     set_group1_doc = (
-        "\n/// `SET_GROUP1` declared (Exif.pm:7183: group 1 is the directory name, not"
-        "\n/// a static string) -- `set_group1` stays `None`; see codegen.py `gen_ifd_table`."
+        "\n/// `SET_GROUP1` declared (Exif.pm:7183: group 1 is the directory name the"
+        "\n/// walk was given, not a static string) -- see codegen.py `gen_ifd_table`."
         if set_group1_flag
         else ""
     )
@@ -2351,7 +2371,7 @@ pub static {ifd_table_ident(mod_name, tbl_name)}: IfdTable = IfdTable {{
     group0: "{rust_str(g0)}",
     group1: "{rust_str(g1)}",
     group2: "{rust_str(g2)}",
-    set_group1: None,
+    set_group1: {set_group1_src},
     priority: {priority_src},
     gate_a: GateA {{ blocked_by: {reasons_src} }},
     tags: {tags_src},
@@ -2416,8 +2436,9 @@ IFD_PRELUDE = '''//! ExifTool IFD-style tag tables -- the `Exif::ProcessExif` ta
 //! section) is the accounting, and `src/exiftool_tables/ifd_schema.rs`
 //! documents every field. Two facts a walk must not read into this data:
 //! `IfdSubdirEdge::fix_format` is write-side only (WriteExif.pl:1760), and
-//! `IfdTable::set_group1` is always `None` because ExifTool's `SET_GROUP1`
-//! is a flag meaning "group 1 = the directory name" (Exif.pm:7183).
+//! `IfdTable::set_group1` is ExifTool's `SET_GROUP1` payload verbatim -- a
+//! flag meaning "group 1 = the directory name the walk was given"
+//! (Exif.pm:7183), never a group name itself.
 
 #![allow(clippy::unreadable_literal, clippy::too_many_lines, unused_parens)]
 
@@ -2491,7 +2512,7 @@ IFD_REPORT = (
         ("table keys not an integer in 0..=0xFFFF (tag not emitted)", "ifd_tag_id_unrepresentable"),
         ("IsOffset/OffsetPair/DataTag/ChangeBase tags (not emitted; hand post-passes)", "ifd_isoffset_unsupported"),
         ("Format outside the scalar grammar (tag not emitted)", "ifd_format_unsupported"),
-        ("Format bare string/undef (emitted format: None; reinterpretation not carried)", "ifd_format_unsized_override"),
+        ("Format bare string/undef (emitted as the unsized Fmt::Str(0)/Undef(0); informational)", "ifd_format_unsized"),
         ("conversions refused: no scalar domain from Format/Writable/Count", "ifd_expr_domain_unknown"),
         ("BITMASK with BitsPerWord/BitsTotal (PrintConv refused)", "ifd_bitmask_words_unsupported"),
         ("Flags entries not a string", "ifd_flags_unreadable"),

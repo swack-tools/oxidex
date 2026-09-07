@@ -161,13 +161,21 @@ class TagLiteral(unittest.TestCase):
         src, _, _ = _emit({"Name": "SpecialMode", "Count": "3", "Writable": "int32u"})
         self.assertIn("format: None, count: Some(3), writable: Some(\"int32u\")", src)
 
-    def test_bare_string_and_undef_formats_emit_none_and_are_counted(self):
-        # Exif.pm:6737-6745 makes the override live; Fmt cannot carry it.
+    def test_bare_string_and_undef_formats_emit_the_unsized_override(self):
+        # Exif.pm:6737-6745 makes the override live: the entry's bytes are
+        # re-read as this kind with the entry's own length, which the schema
+        # spells `Fmt::Str(0)` / `Fmt::Undef(0)` and the walk honours
+        # (`ReadValue` NUL-truncates `string` only). Not a Gate-A hazard.
         src, reason, stats = _emit({"Name": "CameraID", "Format": "string"})
         self.assertIsNone(reason)
-        self.assertIn("format: None, count: None, writable: None", src)
-        self.assertEqual(stats["ifd_format_unsized_override"], 1)
-        self.assertIn("ifd_format_unsized_override", codegen.GATE_A_DISQUALIFYING)
+        self.assertIn("format: Some(Fmt::Str(0)), count: None, writable: None", src)
+        src, reason, stats2 = _emit({"Name": "Blob", "Format": "undef", "Count": "4"})
+        self.assertIsNone(reason)
+        self.assertIn("format: Some(Fmt::Undef(0)), count: Some(4), writable: None", src)
+        self.assertEqual(stats["ifd_format_unsized"], 1)
+        self.assertEqual(stats2["ifd_format_unsized"], 1)
+        self.assertNotIn("ifd_format_unsized", codegen.GATE_A_DISQUALIFYING)
+        self.assertNotIn("ifd_format_unsized_override", codegen.GATE_A_DISQUALIFYING)
 
     def test_unsupported_format_refuses_the_tag(self):
         for spelling in ("Rect", "unsigned", "ifd", "string[0,32]", "digits[8]", "var_string", 7):
@@ -218,8 +226,12 @@ class TagLiteral(unittest.TestCase):
         src, _, stats = _emit(tag, verified=verified)
         self.assertIn("value_conv: None, print_conv: PrintConv::None", src)
         self.assertEqual(stats["ifd_expr_domain_unknown"], 2)
+        # Both conversions are refused AND the field is withheld: honest
+        # absence (Omitted flags), not a Gate-A hazard.
         self.assertIn("omitted: Omitted { value_conv: true,", src)
-        self.assertIn("ifd_expr_domain_unknown", codegen.GATE_A_DISQUALIFYING)
+        self.assertIn("print_conv: true", src.split("omitted: Omitted {", 1)[1].split("}", 1)[0])
+        self.assertNotIn("ifd_expr_domain_unknown", codegen.GATE_A_DISQUALIFYING)
+        self.assertNotIn("ifd_bitmask_words_unsupported", codegen.GATE_A_DISQUALIFYING)
         # Enums need no domain.
         tag = {"Name": "T", "PrintConv": {"kind": "enum", "map": {"1": "On"}, "directives": None}}
         src, _, stats = _emit(tag)
@@ -532,7 +544,9 @@ class TableLiteral(unittest.TestCase):
         self.assertEqual(ids, ["0x0001", "0x0100", "0x0203"])
         self.assertIn("IfdVariantGroup { id: 0x2010,", src)
         self.assertIn('group0: "MakerNotes",\n    group1: "Olympus",\n    group2: "Camera",', src)
-        self.assertIn("set_group1: None,\n    priority: Some(0),", src)
+        # The declared payload verbatim (a flag ExifTool tests for truth,
+        # Exif.pm:7183); the walk reads `is_some()`.
+        self.assertIn('set_group1: Some("1"),\n    priority: Some(0),', src)
         self.assertIn("gate_a: GateA { blocked_by: &[] }", src)
         self.assertIn("pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {", src)
         self.assertIn("SET_GROUP1` declared (Exif.pm:7183", src)

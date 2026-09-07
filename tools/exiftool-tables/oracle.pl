@@ -69,6 +69,7 @@
 #   IFD MODULE TABLE KEY  BITMASK   BIT LABEL                -- one per BITMASK entry (7)
 #   IFD MODULE TABLE KEY  OTHER     PRINTHEX                 -- PrintConv has OTHER (6)
 #   IFD MODULE TABLE KEY  PCREF     REFTYPE                  -- PrintConv is a non-HASH ref (6)
+#   IFD MODULE TABLE KEY  PCEXPR    1                        -- PrintConv is a scalar (Perl expression) (6)
 #   IFD MODULE TABLE KEY  GROUPS    G0 G1 G2                 -- tag's own Groups (8)
 #   IFD MODULE TABLE KEY  FLAGS     UNKNOWN BINARY LIST PROTECTED AVOID PRIORITY
 #                                                            -- 0/1 each, PRIORITY a
@@ -386,6 +387,13 @@ sub emit_ifd_entry {
     my $pc = $e->{PrintConv};
     if (defined $pc && ref $pc && ref $pc ne 'HASH') {
         print join("\t", @p, 'PCREF', ref $pc), "\n";
+    }
+    # A scalar PrintConv is Perl source (an expression) the generator either
+    # compiles or refuses; the row lets verify.py tell a legitimate refusal
+    # (`Omitted { print_conv: true }` where ExifTool DOES convert) from a
+    # refusal of nothing.
+    if (defined $pc && !ref $pc) {
+        print join("\t", @p, 'PCEXPR', 1), "\n";
     }
     return unless ref $pc eq 'HASH';
     if (ref $pc->{BITMASK} eq 'HASH') {

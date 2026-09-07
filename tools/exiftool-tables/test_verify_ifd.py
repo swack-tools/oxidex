@@ -442,9 +442,14 @@ class EachWrongFactIsExactlyOneMismatch(unittest.TestCase):
     def test_wrong_format(self):
         self._one("format: Some(Fmt::Rational64s)", "format: Some(Fmt::Rational64u)", "format  (")
 
-    def test_bare_undef_must_be_none_not_a_sized_format(self):
-        self._one('name: "IPTC-NAA",\n            format: None,',
+    def test_bare_undef_must_be_the_unsized_form_not_a_sized_one(self):
+        # `Format => 'undef'` is the unsized `Fmt::Undef(0)` (the entry's own
+        # length); a sized `Undef(4)` claims a width ExifTool never declared.
+        self._one('name: "IPTC-NAA",\n            format: Some(Fmt::Undef(0)),',
                   'name: "IPTC-NAA",\n            format: Some(Fmt::Undef(4)),', "format  (")
+        # ... and dropping the override altogether is a mismatch too.
+        self._one('name: "IPTC-NAA",\n            format: Some(Fmt::Undef(0)),',
+                  'name: "IPTC-NAA",\n            format: None,', "format  (")
 
     def test_wrong_writable(self):
         self._one('writable: Some("rational64u")', 'writable: Some("rational64s")', "writable  (")
@@ -585,8 +590,8 @@ class ExpectedFormat(unittest.TestCase):
         f = verify.expected_ifd_format
         self.assertEqual(f(None, None), ("None", None))
         self.assertEqual(f(None, 3), ("None", 3))
-        self.assertEqual(f("undef", 4), ("None", 4))
-        self.assertEqual(f("string", None), ("None", None))
+        self.assertEqual(f("undef", 4), ("Some(Fmt::Undef(0))", 4))
+        self.assertEqual(f("string", None), ("Some(Fmt::Str(0))", None))
         self.assertEqual(f("int16u", None), ("Some(Fmt::Int16u)", None))
         self.assertEqual(f("int16u", 2), ("Some(Fmt::Int16u)", 2))
         self.assertEqual(f("int8u[8]", None), ("Some(Fmt::Int8u)", 8))

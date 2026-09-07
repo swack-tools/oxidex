@@ -60,8 +60,12 @@ pub struct IfdTable {
     pub group0: &'static str,
     pub group1: &'static str,
     pub group2: &'static str,
-    /// The table's `SET_GROUP1` (a family-1 override applied to every tag
-    /// reported from it, e.g. Olympus's IFD sub-tables), when declared.
+    /// The table's `SET_GROUP1` payload, verbatim (`Some("1")` for every
+    /// declaration in 13.59). It is a FLAG, not a name: Exif.pm:7183 sets
+    /// family 1 to the directory NAME the table was reached under
+    /// (`IFD0`/`IFD1`/`ExifIFD` for Exif::Main, a SubDirectory's `DirName`
+    /// for Kodak::IFD), which the walk takes from `IfdDir::group1`; a
+    /// `SET_GROUP1` table walked with no directory name is withheld.
     pub set_group1: Option<&'static str>,
     /// The table-level `PRIORITY` (ExifTool.pm:9471): `Some(0)` means a
     /// value from this table never displaces one already reported under the
@@ -113,7 +117,12 @@ pub struct IfdTag {
     pub name: &'static str,
     /// ExifTool's `Format` on an IFD tag: reinterpret the entry's bytes as
     /// this type (the byte LENGTH still follows the entry's declared type,
-    /// Exif.pm:6733-6760). `None` = read as the entry declares.
+    /// Exif.pm:6733-6760). `None` = read as the entry declares. The UNSIZED
+    /// `Some(Fmt::Str(0))` / `Some(Fmt::Undef(0))` are a bare `Format =>
+    /// 'string'` / `'undef'`: "this kind, the entry's own byte length"
+    /// (Exif.pm:6737-6745; `ReadValue` then NUL-truncates `string` only,
+    /// ExifTool.pm:6306-6308) -- a live override, so an `undef`-typed
+    /// CameraID under `Format => 'string'` reads as text, not bytes.
     pub format: Option<Fmt>,
     /// ExifTool's `Count` (or the `[N]` of `Format => 'int16u[N]'`). Data
     /// for writers and verifiers; the walk reads the entry's own count.
@@ -235,9 +244,10 @@ pub struct IfdSubdirEdge {
     /// -- the same restricted arithmetic as [`BaseExpr`]. `None` = inherit.
     pub base: Option<&'static BaseExpr>,
     pub byte_order: IfdByteOrder,
-    /// `FixFormat => 'ifd'` and friends: treat the entry as this format
-    /// regardless of what it declares (the `SubIFD` alternative's way of
-    /// reading a mis-typed pointer).
+    /// `FixFormat`, carried as DATA only: ExifTool consults it when
+    /// WRITING (WriteExif.pl:1760, to correct a mis-typed pointer entry);
+    /// `ProcessExif` never reinterprets an entry on it, and neither does the
+    /// walk. `FixFormat => 'ifd'` is spelled `sub_ifd: true` instead.
     pub fix_format: Option<Fmt>,
     /// `Flags => 'SubIFD'`: the value is an offset to a sub-IFD (Exif.pm's
     /// SubIFD loop; `$val` may hold several offsets).
