@@ -107,6 +107,31 @@ impl DecodedValue {
             _ => None,
         }
     }
+
+    /// The text Perl interpolates for `$val` in `"Unknown ($val)"`
+    /// (ExifTool.pm:3630) when a hash `PrintConv` misses.
+    ///
+    /// Integers and strings are their own text; a float prints the way Perl
+    /// stringifies an NV; a fixed-count field's `$val` is ExifTool's
+    /// space-joined element string (ExifTool.pm:6312), so the elements are
+    /// joined the same way. `None` for a rational: ExifTool's raw rational is
+    /// `RoundFloat($num / $den, 10)` (ExifTool.pm `GetRational64u`), a
+    /// rounding this schema does not reproduce, so the caller falls back to
+    /// the raw value rather than print a digit string Perl would not.
+    fn perl_string(&self) -> Option<String> {
+        match self {
+            Self::Integer(value) => Some(value.to_string()),
+            Self::Float(value) => Some(super::exprs::perl_num(*value)),
+            Self::String(value) => Some(value.clone()),
+            Self::Undefined(bytes) => String::from_utf8(bytes.clone()).ok(),
+            Self::UnsignedRational(..) | Self::SignedRational(..) => None,
+            Self::Array(values) => values
+                .iter()
+                .map(DecodedValue::perl_string)
+                .collect::<Option<Vec<_>>>()
+                .map(|parts| parts.join(" ")),
+        }
+    }
 }
 
 /// One successfully decoded generated field.
@@ -126,11 +151,14 @@ impl DecodedField {
     /// The value ExifTool would report for this field, or `None` when any of
     /// `Field::omitted`'s six flags is set.
     ///
-    /// A clean field (no flag set) renders its generated `PrintConv`; when
-    /// that yields nothing -- `PrintConv::None`, or a hash/expression that
-    /// does not cover this value -- the raw decoded value stands in, which is
-    /// the same "no conversion is honest, a guess is not" rule
-    /// [`PrintConv`]'s own doc comment states. A flagged field always
+    /// A clean field (no flag set) renders its generated `PrintConv`. A hash
+    /// `PrintConv` always renders: a key it does not carry yields ExifTool's
+    /// own `"Unknown ($val)"` (ExifTool.pm:3624-3631), which is the exact
+    /// conversion, not a guess. Only when the conversion yields nothing --
+    /// `PrintConv::None`, an expression returning Perl `undef`, or a value
+    /// this schema cannot key (a rational under a hash) -- does the raw
+    /// decoded value stand in, which is the same "no conversion is honest, a
+    /// guess is not" rule [`PrintConv`]'s own doc comment states. A flagged field always
     /// refuses: ExifTool ran a `ValueConv`/`RawConv`/`Condition`/`Hook`/
     /// `SubDirectory` this schema does not reproduce, and reporting the raw
     /// bytes under the real tag name would be a confident wrong value
@@ -201,9 +229,10 @@ pub fn apply_value_conv(
 /// Render a [`DecodedValue`] as a [`TagValue`] with no conversion applied.
 ///
 /// The fallback [`DecodedField::emit`] and [`RawAccess::emit_raw`] both use
-/// when a `PrintConv` does not apply (absent, or a hash/expression that does
-/// not cover this value) -- the raw value stands in, honestly, rather than a
-/// guessed string.
+/// when a `PrintConv` does not apply (absent, an expression that returned
+/// `undef`, or a hash over a value it cannot key) -- the raw value stands in,
+/// honestly, rather than a guessed string. A hash miss on a keyable value is
+/// NOT this case: [`render`] gives it ExifTool's own `Unknown ($val)`.
 #[must_use]
 pub fn to_tag_value(value: &DecodedValue) -> TagValue {
     match value {
@@ -847,7 +876,18 @@ fn read_u64(bytes: &[u8], order: ByteOrder) -> Option<u64> {
 }
 
 /// Render `value` through `conv`, or `None` when the conversion does not
-/// apply (absent, or a hash/expression that does not cover this value).
+/// apply (absent, an expression that returns `undef`, or a value the
+/// conversion cannot key).
+///
+/// A hash `PrintConv` (`IntEnum`/`StrEnum`/`PartialEnumInt`/`Bitmask`) never
+/// returns `None` for a value it can key: ExifTool's hash lookup has its own
+/// miss rendering, `"Unknown ($val)"` (ExifTool.pm:3624-3631, ported as
+/// [`unknown_fallback`]), and reproducing it IS the exact conversion. Until
+/// 4b-i `IntEnum`/`StrEnum` stayed silent on a miss and the raw value stood
+/// in, which is not what ExifTool prints: the pinned 13.59 oracle over the
+/// corpus reports `ICC_Profile:PrimaryPlatform` as `Unknown ()` in 24 files
+/// and `Unknown (SEC)` in 3 (blank / unlisted signature), where the raw
+/// fallback would have printed `` and `SEC`.
 ///
 /// Public for [`super::engine`], which reaches the same rendering decision at
 /// the end of its own walk; a second copy would be a second place for the
@@ -856,17 +896,29 @@ fn read_u64(bytes: &[u8], order: ByteOrder) -> Option<u64> {
 pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
     match conv {
         PrintConv::None => None,
-        PrintConv::IntEnum(map) => {
-            let value = value.integer()?;
-            map.binary_search_by_key(&value, |(key, _)| *key)
+        PrintConv::IntEnum(map) => Some(match value.integer() {
+            Some(key) => map
+                .binary_search_by_key(&key, |(candidate, _)| *candidate)
                 .ok()
-                .map(|index| map[index].1.to_string())
-        }
+                .map_or_else(
+                    || unknown_fallback(key, false),
+                    |index| map[index].1.to_string(),
+                ),
+            // Not an integer (a non-integral float, a string, a fixed-count
+            // list): `$$conv{$val}` misses an integer-keyed hash and ExifTool
+            // renders the same fallback around Perl's text for `$val`.
+            None => unknown_text(&value.perl_string()?),
+        }),
         PrintConv::StrEnum(map) => {
             let key = value.enum_key()?;
-            map.iter()
-                .find(|(candidate, _)| *candidate == key)
-                .map(|(_, rendered)| (*rendered).to_string())
+            Some(
+                map.iter()
+                    .find(|(candidate, _)| *candidate == key)
+                    .map_or_else(
+                        || unknown_text(&key),
+                        |(_, rendered)| (*rendered).to_string(),
+                    ),
+            )
         }
         PrintConv::Expr(expression) => match value {
             DecodedValue::Integer(_)
@@ -975,8 +1027,9 @@ pub fn decode_bits(val: i64, lookup: &[(u32, &str)]) -> String {
 /// }
 /// ```
 ///
-/// `IsInt($val)` is trivially true here -- this schema's raw value is always
-/// an integer -- so the only live condition is `PrintHex`. Perl's `%x` on a
+/// `IsInt($val)` is trivially true here -- every caller passes an integer
+/// key; [`unknown_text`] is the same form for a key that is not an integer,
+/// where `PrintHex` cannot apply -- so the only live condition is `PrintHex`. Perl's `%x` on a
 /// negative value formats its native-width two's-complement bit pattern;
 /// `val as u64` reproduces that for a 64-bit build.
 #[must_use]
@@ -986,6 +1039,18 @@ pub fn unknown_fallback(val: i64, print_hex: bool) -> String {
     } else {
         format!("Unknown ({val})")
     }
+}
+
+/// [`unknown_fallback`] for a key that is not an integer: the plain
+/// `"Unknown ($val)"` arm of ExifTool.pm:3630, with `$val` as Perl would
+/// interpolate it -- a string key verbatim (an empty signature reads
+/// `Unknown ()`, exactly what the pinned oracle prints for a blank
+/// `PrimaryPlatform`), a float or a space-joined list through
+/// `DecodedValue::perl_string`. `PrintHex` cannot apply: `IsInt($val)` is
+/// false for every value that reaches here.
+#[must_use]
+pub fn unknown_text(text: &str) -> String {
+    format!("Unknown ({text})")
 }
 
 const fn opposite(order: ByteOrder) -> ByteOrder {
@@ -2032,6 +2097,88 @@ mod tests {
         // Perl's `%x` on a negative value formats its native-width two's
         // complement bit pattern.
         assert_eq!(unknown_fallback(-1, true), "Unknown (0xffffffffffffffff)");
+    }
+
+    // --- 4b-i: IntEnum / StrEnum misses (ExifTool.pm:3624-3631) -----------
+
+    /// A plain hash `PrintConv` renders ExifTool's `"Unknown ($val)"` for a
+    /// key it does not carry, instead of falling back to the raw value. The
+    /// expected strings are what `exiftool-pinned.sh -j` (13.59) prints for
+    /// the same situations in the corpus: `ICC_Profile:PrimaryPlatform` is
+    /// `Unknown ()` in 24 files and `Unknown (SEC)` in 3, `ProfileCMMType`
+    /// is `Unknown (UCCM)` in 1 (scratchpad `icc-header-oracle.json`,
+    /// 2026-09-06).
+    #[test]
+    fn int_enum_miss_renders_exiftool_unknown() {
+        let conv = PrintConv::IntEnum(&[(0, "Perceptual"), (1, "Media-Relative Colorimetric")]);
+        assert_eq!(
+            render(conv, &DecodedValue::Integer(1)),
+            Some("Media-Relative Colorimetric".to_string())
+        );
+        assert_eq!(
+            render(conv, &DecodedValue::Integer(7)),
+            Some("Unknown (7)".to_string())
+        );
+        // An integral float is the same key as its IV (post-ValueConv `2.0`).
+        assert_eq!(
+            render(conv, &DecodedValue::Float(1.0)),
+            Some("Media-Relative Colorimetric".to_string())
+        );
+        // A non-integral float misses and interpolates as Perl prints an NV.
+        assert_eq!(
+            render(conv, &DecodedValue::Float(2.5)),
+            Some("Unknown (2.5)".to_string())
+        );
+        // A fixed-count field's `$val` is the space-joined element list.
+        assert_eq!(
+            render(
+                conv,
+                &DecodedValue::Array(vec![DecodedValue::Integer(1), DecodedValue::Integer(2)])
+            ),
+            Some("Unknown (1 2)".to_string())
+        );
+        // A rational cannot be keyed the way Perl would print it: no
+        // rendering, the raw value stands in (documented gap, not a guess).
+        assert_eq!(render(conv, &DecodedValue::UnsignedRational(1, 3)), None);
+    }
+
+    #[test]
+    fn str_enum_miss_renders_exiftool_unknown() {
+        let conv = PrintConv::StrEnum(&[
+            ("", ""),
+            ("APPL", "Apple Computer Inc."),
+            ("MSFT", "Microsoft Corporation"),
+        ]);
+        assert_eq!(
+            render(conv, &DecodedValue::String("APPL".to_string())),
+            Some("Apple Computer Inc.".to_string())
+        );
+        // manuSig-style `'' => ''`: a blank key that IS in the hash renders
+        // the empty string, not Unknown.
+        assert_eq!(
+            render(conv, &DecodedValue::String(String::new())),
+            Some(String::new())
+        );
+        assert_eq!(
+            render(conv, &DecodedValue::String("SEC".to_string())),
+            Some("Unknown (SEC)".to_string())
+        );
+        // The PrimaryPlatform hash has no blank key: blank misses to `Unknown ()`.
+        let platform = PrintConv::StrEnum(&[("APPL", "Apple Computer Inc.")]);
+        assert_eq!(
+            render(platform, &DecodedValue::String(String::new())),
+            Some("Unknown ()".to_string())
+        );
+        // An `undef[N]` field keys by its bytes when they are UTF-8 ...
+        assert_eq!(
+            render(platform, &DecodedValue::Undefined(b"UCCM".to_vec())),
+            Some("Unknown (UCCM)".to_string())
+        );
+        // ... and cannot be keyed at all when they are not.
+        assert_eq!(
+            render(platform, &DecodedValue::Undefined(vec![0xff, 0xfe])),
+            None
+        );
     }
 
     // --- Step 25: PartialEnumInt (ExifTool.pm:3612-3631) --------------------

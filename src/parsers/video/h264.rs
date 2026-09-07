@@ -760,13 +760,18 @@ mod tests {
         assert!(metadata.is_empty());
     }
 
-    /// Codes outside each PrintConv table must report their raw value rather
-    /// than borrowing a neighbouring label.
+    /// Codes outside each PrintConv table must report themselves rather than
+    /// borrowing a neighbouring label. For the generated `H264::RecInfo` table
+    /// that is ExifTool's own hash-miss rendering, `"Unknown ($val)"`
+    /// (ExifTool.pm:3624-3631): H264.pm:561-568 keys RecordingMode at 0x02,
+    /// 0x04, 0x05, 0x06 and 0x07, so 0x03 misses and prints `Unknown (3)` --
+    /// not the bare `3` this test pinned before 4b-i, when a miss fell back
+    /// to the raw value.
     #[test]
     fn test_unknown_codes_report_themselves() {
         let mut metadata = MetadataMap::new();
         decode_rec_info(&[0x03, 0, 0, 0], &mut metadata);
-        assert_eq!(shown(&metadata, "H264:RecordingMode"), "3");
+        assert_eq!(shown(&metadata, "H264:RecordingMode"), "Unknown (3)");
 
         let mut metadata = MetadataMap::new();
         assert_eq!(decode_make_model(&[0x12, 0x34, 0, 0], &mut metadata), None);

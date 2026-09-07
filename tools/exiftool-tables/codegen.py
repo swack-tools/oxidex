@@ -505,14 +505,35 @@ def conv_for(tag, stats, input_domain, verified_exprs):
 
         # No BITMASK, no OTHER: whatever else is in `directives` is benign
         # (Notes/PrintHex/SeparateTable -- see BENIGN_PC_DIRECTIVES's doc),
-        # so the map is a complete enum, unmatched-value fallback and all
-        # (IntEnum/StrEnum stay silent on a miss; that is unchanged by Step
-        # 25, which scopes the Unknown($val) fallback to the OTHER/BITMASK
-        # population only -- see AGENTS.md's step description).
+        # so the map is a plain hash. On a miss the runtime renders ExifTool's
+        # own `Unknown ($val)` (ExifTool.pm:3624-3631; `runtime.rs::render`,
+        # 4b-i -- before it IntEnum/StrEnum fell back to the raw value, which
+        # the corpus oracle showed is NOT what ExifTool prints). The one fact
+        # that fallback needs from the schema is the TAG-level `PrintHex`
+        # (`sprintf('Unknown (0x%x)', $val)` when `IsInt($val)`): an
+        # int-keyed hash carrying it is emitted as `PartialEnumInt { other:
+        # None, print_hex: true }`, whose runtime chain already renders that
+        # form; a string-keyed hash carrying it is REFUSED (field withheld
+        # through `Omitted.print_conv`), because `IsInt($val)` there is a
+        # property of the runtime value this schema does not carry, and
+        # printing the decimal form for a value Perl would print in hex is
+        # the confident wrong value the doctrine forbids. (Pinned 13.59 dump:
+        # 139 int hashes and 3 string hashes -- Sigma LensType, none in a
+        # ProcessBinaryData table -- carry PrintHex.)
         exact_pairs = _int_pairs(m)
+        print_hex = bool(tag.get("PrintHex"))
         if exact_pairs is not None:
+            if print_hex:
+                stats["enum_int_printhex"] += 1
+                return (
+                    "PrintConv::PartialEnumInt { exact: &["
+                    f"{_rust_pairs(exact_pairs)}], other: None, print_hex: true }}"
+                ), False
             stats["enum_int"] += 1
             return f"PrintConv::IntEnum(&[{_rust_pairs(exact_pairs)}])", False
+        if print_hex:
+            stats["enum_str_printhex_refused"] += 1
+            return "PrintConv::None", True
         stats["enum_str"] += 1
         body = ", ".join(
             f'("{rust_str(k)}", "{rust_str(v)}")' for k, v in sorted(m.items())
@@ -1730,8 +1751,16 @@ impl Fmt {
 #[derive(Clone, Copy, Debug)]
 pub enum PrintConv {
     None,
-    /// Sorted by key; look up with `binary_search_by_key`.
+    /// A plain ExifTool `PrintConv` hash (no BITMASK, no OTHER, no tag-level
+    /// PrintHex). Sorted by key; look up with `binary_search_by_key`. A key
+    /// the map does not carry renders ExifTool's own `"Unknown ($val)"`
+    /// (ExifTool.pm:3624-3631; `runtime.rs::render`), never the raw value.
     IntEnum(&'static [(i64, &'static str)]),
+    /// Same, string-keyed (`string[N]`/`undef[N]` fields); a miss renders
+    /// `"Unknown ($val)"` with the key verbatim (`Unknown ()` for a blank
+    /// signature). A string hash whose tag declares `PrintHex` is refused by
+    /// the generator instead: `IsInt($val)` is a runtime property of the
+    /// value this schema does not carry.
     StrEnum(&'static [(&'static str, &'static str)]),
     Expr(ExprId),
     /// ExifTool's `BITMASK` fallback (ExifTool.pm:3616-3618; `DecodeBits` at
@@ -1753,11 +1782,11 @@ pub enum PrintConv {
     /// `tools/exiftool-tables/others.py` -> `OtherId`), then ExifTool's own
     /// `"Unknown ($val)"` / `sprintf('Unknown (0x%x)', $val)` fallback
     /// (`print_hex` mirrors the tag's `PrintHex`) for whatever `other`
-    /// itself leaves undefined. `other` is `None` only for a
-    /// hand-constructed value (never emitted by `codegen.py`, which only
-    /// builds this variant once `other` has resolved) -- kept `Option`
-    /// because the plain exact+Unknown chain is itself a legitimate,
-    /// independently useful shape.
+    /// itself leaves undefined. `other: None` is the plain exact+Unknown
+    /// chain: `codegen.py` emits it for an int-keyed hash with NO `OTHER`
+    /// whose tag declares `PrintHex` (4b-i), so the hex form of the miss
+    /// rendering is carried by the schema rather than lost -- `IntEnum`
+    /// has no `print_hex` and renders the decimal form.
     PartialEnumInt {
         exact: &'static [(i64, &'static str)],
         other: Option<OtherId>,
@@ -2254,6 +2283,7 @@ REPORT = (
         ("tags emitted", "tag_emitted"),
         ("variant tags compiled (Step 23)", "tag_variant_emitted"),
         ("int enums", "enum_int"),
+        ("int enums with tag-level PrintHex (PartialEnumInt, other: None)", "enum_int_printhex"),
         ("string enums", "enum_str"),
         ("exprs translated (exact match)", "expr_translated"),
         ("exprs translated (grammar-compiled, Step 15)", "expr_compiled"),
@@ -2296,6 +2326,7 @@ REPORT = (
         ("ValueConv input domain/array", "value_conv_refused_input_domain"),
         ("ValueConv without matching oracle PASS", "value_conv_refused_oracle"),
         ("other PrintConv (field withheld: Omitted.print_conv)", "conv_dropped"),
+        ("string enums with tag-level PrintHex (IsInt is a runtime fact; withheld)", "enum_str_printhex_refused"),
         ("variant tags", "tag_variant_skipped"),
         ("  of which Condition outside the closed grammar", "tag_variant_cond_unsupported"),
         ("  of which a per-field reason (Unknown/format/mask/...)", "tag_variant_field_unsupported"),
