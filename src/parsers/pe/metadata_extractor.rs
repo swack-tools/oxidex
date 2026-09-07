@@ -55,14 +55,25 @@ const IMAGE_FILE_DLL: u16 = 0x2000;
 /// (`Win16 EXE`/`Win16 DLL`) and several other executable families; those
 /// reach different parsers in OxiDex and are untouched.
 fn set_pe_file_type(header: &CoffHeader, metadata: &mut MetadataMap) {
+    // EXE.pm indexes the hash directly -- `$$tagTablePtr{0}{PrintConv}
+    // {$header{Machine}} || ''` -- so a machine the table does not name is
+    // `''`, NOT the `Unknown (0x...)` that `GetValue`'s own fallback would
+    // render for the MachineType tag. That is why this site reads the exact
+    // map instead of going through `runtime::render`. The tag declares
+    // `PrintHex`, so the generator emits its map as `PartialEnumInt { other:
+    // None, print_hex: true }` (4b-i); both shapes carry the same sorted
+    // exact array.
     let machine = crate::exiftool_tables::find_table("EXE", "Main")
         .and_then(|t| t.fields.iter().find(|f| f.index == 0))
-        .and_then(|f| match f.print_conv {
-            crate::exiftool_tables::PrintConv::IntEnum(map) => map
-                .binary_search_by_key(&i64::from(header.machine), |(k, _)| *k)
+        .and_then(|f| {
+            let map = match f.print_conv {
+                crate::exiftool_tables::PrintConv::IntEnum(map)
+                | crate::exiftool_tables::PrintConv::PartialEnumInt { exact: map, .. } => map,
+                _ => return None,
+            };
+            map.binary_search_by_key(&i64::from(header.machine), |(k, _)| *k)
                 .ok()
-                .map(|i| map[i].1),
-            _ => None,
+                .map(|i| map[i].1)
         })
         .unwrap_or("");
 

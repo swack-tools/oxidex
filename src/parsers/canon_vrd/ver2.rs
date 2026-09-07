@@ -76,14 +76,11 @@ pub(super) fn parse_ver2(record: &[u8], metadata: &mut MetadataMap) {
         let value = match (field.print_conv, &value) {
             // No conversion: ExifTool prints the int16s as it stands.
             (PrintConv::None, TagValue::Integer(_)) => value,
-            // The enum matched: `emit` already rendered its string.
+            // The enum matched, or it missed and `emit` rendered ExifTool's
+            // own `"Unknown ($val)"` (ExifTool.pm:3624-3631) -- since 4b-i
+            // `runtime::render` does that for every hash miss, so this
+            // module no longer formats the fallback itself.
             (PrintConv::IntEnum(_), TagValue::String(_)) => value,
-            // `emit` fell back to the raw value because the enum lookup
-            // missed -- ExifTool's fallback for a value the hash does not
-            // list.
-            (PrintConv::IntEnum(_), TagValue::Integer(raw)) => {
-                TagValue::String(format!("Unknown ({raw})"))
-            }
             // Unreachable below LAST_LOSSLESS_INDEX, and guessing at a
             // conversion this module has not accounted for is exactly what the
             // index bound exists to prevent.
