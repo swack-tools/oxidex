@@ -92,7 +92,7 @@ _RE_BITAND_BARE = re.compile(rf"^{_MEMBER}\s*&\s*(0[xX][0-9a-fA-F]+|\d+)$")
 _RE_BITAND_CMP = re.compile(
     rf"^\(\s*{_MEMBER}\s*&\s*(0[xX][0-9a-fA-F]+|\d+)\s*\)\s*(==|!=)\s*(-?\d+)$"
 )
-_RE_FORMAT_ATOM = re.compile(r'^\$format\s*eq\s*"([^"]*)"$')
+_RE_FORMAT_ATOM = re.compile(r'^\$format\s*(eq|ne)\s*"([^"]*)"$')
 _RE_COUNT_ATOM = re.compile(r"^\$count\s*(==|!=|>=|<=|>|<)\s*(-?\d+)$")
 # `($$self{Member} = <source>) [and <rest>]` -- the assignment-as-condition
 # idiom (Canon.pm:1312, Pentax.pm:4343, Sony.pm:902).
@@ -142,6 +142,44 @@ def _regex_ast_ok(node):
     return True
 
 
+_OCTAL_DIGITS = "01234567"
+
+
+def _perl_regex_to_rust(pattern):
+    """Translate the Perl escapes Rust's `regex` crate spells differently,
+    scanning escape by escape so an escaped backslash is never re-read.
+
+    Octal escapes: Perl's `\\0`, `\\012`, and -- inside a character class,
+    where a numeric escape is always a character -- `\\4` (Sony.pm's
+    `[\\0-\\4]`) become `\\xNN`. Outside a class a `\\1`..`\\9` would be a
+    backreference, which `_validate_regex_pattern`'s allowlist already
+    refuses, so every numeric escape that reaches here is octal. The old
+    `replace("\\0", "\\x00")` left `\\4` for the Rust crate to reject, and a
+    rejected pattern fails CLOSED (`regex_match_bytes` -> false): `$$valPt =~
+    /^610[\\0-\\4]/` answered 0 where Perl answered 1 -- found by
+    verify_cond.py once its census reached the IFD tables (slice I-2).
+    """
+    out = []
+    i, n = 0, len(pattern)
+    while i < n:
+        ch = pattern[i]
+        if ch != "\\" or i + 1 >= n:
+            out.append(ch)
+            i += 1
+            continue
+        nxt = pattern[i + 1]
+        if nxt in _OCTAL_DIGITS:
+            j = i + 1
+            while j < n and j < i + 4 and pattern[j] in _OCTAL_DIGITS:
+                j += 1
+            out.append(f"\\x{int(pattern[i + 1:j], 8):02x}")
+            i = j
+            continue
+        out.append(ch + nxt)
+        i += 2
+    return "".join(out)
+
+
 def _validate_regex_pattern(pattern):
     """Structural validation via Python's own regex-parser AST, not a
     character allowlist -- see module docstring. Raises CondCompileError if
@@ -181,7 +219,7 @@ def _compile_atom(text):
         if any(f not in "i" for f in flags):
             raise CondCompileError(f"unsupported regex flags {flags!r}")
         _validate_regex_pattern(pattern)
-        rust_pattern = pattern.replace("\\0", "\\x00")
+        rust_pattern = _perl_regex_to_rust(pattern)
         negate = "true" if op == "!~" else "false"
         ic = "true" if "i" in flags else "false"
         return (
@@ -239,13 +277,14 @@ def _compile_atom(text):
         if flags:
             raise CondCompileError("$$valPt regex flags are unsupported")
         _validate_regex_pattern(pattern)
-        rust_pattern = pattern.replace("\\0", "\\x00")
+        rust_pattern = _perl_regex_to_rust(pattern)
         negate = "true" if op == "!~" else "false"
         return f"Cond::ValPtRegex {{ pattern: {_rust_str(rust_pattern)}, negate: {negate} }}"
 
     m = _RE_FORMAT_ATOM.match(text)
     if m:
-        return f"Cond::FormatEq {{ value: {_rust_str(m.group(1))} }}"
+        negate = "true" if m.group(1) == "ne" else "false"
+        return f"Cond::FormatEq {{ value: {_rust_str(m.group(2))}, negate: {negate} }}"
 
     m = _RE_COUNT_ATOM.match(text)
     if m:
@@ -289,12 +328,66 @@ def _compile_setmember(text):
     return None
 
 
+def _collapse_ws_outside_literals(text):
+    """Collapse runs of whitespace to one space EXCEPT inside a regex body
+    (`=~`/`!~` followed by `/.../`) or a quoted string, where every byte is
+    the pattern. `Sony.pm`'s MakerNotes signature `VHAB     \0` (five
+    spaces) compiled to `VHAB \x00` under the old whole-text collapse and
+    disagreed with the pinned Perl on the first probe that carried the real
+    signature -- found by verify_cond.py once its census reached the IFD
+    tables (slice I-2)."""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        # regex literal after =~ / !~ (the only place a bare `/` opens one)
+        if ch in "=!" and text.startswith("~", i + 1):
+            out.append(ch + "~")
+            i += 2
+            j = i
+            while j < n and text[j].isspace():
+                j += 1
+            if j < n and text[j] == "/":
+                out.append(" " if j > i else "")
+                k = j + 1
+                while k < n:
+                    if text[k] == "\\" and k + 1 < n:
+                        k += 2
+                        continue
+                    if text[k] == "/":
+                        break
+                    k += 1
+                out.append(text[j:k + 1])
+                i = k + 1
+            continue
+        if ch in "\"'":
+            k = i + 1
+            while k < n:
+                if text[k] == "\\" and k + 1 < n:
+                    k += 2
+                    continue
+                if text[k] == ch:
+                    break
+                k += 1
+            out.append(text[i:k + 1])
+            i = k + 1
+            continue
+        if ch.isspace():
+            while i < n and text[i].isspace():
+                i += 1
+            out.append(" ")
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def compile_cond_atoms_conjunction(text):
     """Compile `text` as either a single atom or an `and`-conjunction of
     atoms (right-folded into nested `Cond::And`), or a `SetMember` idiom.
     Returns Rust source text for a `Cond` value, or None if nothing in this
     grammar matches (caller decides whether that is a hard refusal)."""
-    text = re.sub(r"\s+", " ", text.strip())
+    text = _collapse_ws_outside_literals(text.strip())
     try:
         sm = _compile_setmember(text)
         if sm is not None:

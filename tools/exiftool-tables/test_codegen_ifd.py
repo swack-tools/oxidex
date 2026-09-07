@@ -215,11 +215,17 @@ class TagLiteral(unittest.TestCase):
                "PrintConv": {"kind": "expr", "expr": "$val / 10"}}
         src, _, _ = _emit(tag, verified=verified)
         self.assertIn("PrintConv::Expr(ExprId::", src)
-        # A str-domain tag must not run a num-domain expression.
+        # A str-domain tag must not run a num-domain expression -- and for an
+        # IFD tag the refusal WITHHOLDS the tag (Omitted.print_conv) instead of
+        # emitting it raw: the refusal is re-counted under the withheld
+        # counters, never under the table-disqualifying key.
         tag = {"Name": "T", "Writable": "string", "PrintConv": {"kind": "expr", "expr": "$val / 10"}}
         src, _, stats = _emit(tag, verified=verified)
         self.assertIn("print_conv: PrintConv::None", src)
-        self.assertEqual(stats["expr_refused_input_domain"], 1)
+        self.assertIn("print_conv: true", src.split("omitted: Omitted {", 1)[1].split("}", 1)[0])
+        self.assertEqual(stats["expr_refused_input_domain"], 0)
+        self.assertEqual(stats["ifd_print_conv_withheld"], 1)
+        self.assertEqual(stats["ifd_print_conv_withheld_by"]["expr_refused_input_domain"], 1)
         # No Format, no Writable: no domain at all -> ifd_expr_domain_unknown.
         tag = {"Name": "T", "PrintConv": {"kind": "expr", "expr": "$val / 10"},
                "ValueConv": {"kind": "expr", "expr": "$val / 10"}}
@@ -490,7 +496,7 @@ class VariantGroups(unittest.TestCase):
              "SubDirectory": {"TagTable": "Image::ExifTool::Olympus::Equipment", "ByteOrder": "Unknown"}},
         ]
         src, stats = self._group(alts)
-        self.assertTrue(src.startswith("IfdVariantGroup { id: 0x2010, alternatives: &[(Cond::FormatEq { value: \"int32u\" }, IfdTag { id: 0x2010, name: \"EquipmentIFD\""), src)
+        self.assertTrue(src.startswith("IfdVariantGroup { id: 0x2010, alternatives: &[(Cond::FormatEq { value: \"int32u\", negate: false }, IfdTag { id: 0x2010, name: \"EquipmentIFD\""), src)
         self.assertIn("(Cond::Always, IfdTag { id: 0x2010, name: \"Equipment\"", src)
         self.assertIn("unknown: true", src)
         self.assertEqual(stats["tag_variant_emitted"], 1)
@@ -499,7 +505,7 @@ class VariantGroups(unittest.TestCase):
 
     def test_refused_atomically_on_a_condition_outside_the_grammar(self):
         alts = [
-            {"Name": "Equipment", "Condition": '$format ne "ifd" and $format ne "int32u"',
+            {"Name": "Equipment", "Condition": "$$self{TIFF_TYPE} eq 'SRW' and $$self{PATH}[-2] eq 'IFD1'",
              "SubDirectory": {"TagTable": "Image::ExifTool::Olympus::Equipment"}},
             {"Name": "EquipmentIFD", "Flags": "SubIFD",
              "SubDirectory": {"TagTable": "Image::ExifTool::Olympus::Equipment", "Start": "$val"}},
@@ -507,7 +513,7 @@ class VariantGroups(unittest.TestCase):
         src, stats = self._group(alts)
         self.assertIsNone(src)
         self.assertEqual(_plain(stats), {"tag_variant_cond_unsupported": 1})
-        self.assertEqual(stats["ifd_variant_cond_texts"]['$format ne "ifd" and $format ne "int32u"'], 1)
+        self.assertEqual(stats["ifd_variant_cond_texts"]["$$self{TIFF_TYPE} eq 'SRW' and $$self{PATH}[-2] eq 'IFD1'"], 1)
         # No partial credit leaked from the alternative that would have compiled.
         self.assertEqual(stats["ifd_subdir_edge_modeled"], 0)
 

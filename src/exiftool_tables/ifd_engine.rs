@@ -1923,7 +1923,10 @@ mod tests {
 
     // -- _variants (Exif.pm:6719-6720, ExifTool.pm:9164-9188) ---------------------
 
-    const FMT_IS_UNDEF: Cond = Cond::FormatEq { value: "undef" };
+    const FMT_IS_UNDEF: Cond = Cond::FormatEq {
+        value: "undef",
+        negate: false,
+    };
     const COUNT_GT_2: Cond = Cond::CountCmp {
         op: CmpOp::Gt,
         value: 2,

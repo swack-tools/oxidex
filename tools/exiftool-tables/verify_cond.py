@@ -62,11 +62,24 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS_PATH = REPO_ROOT / "src" / "bin" / "cond_oracle_harness.rs"
 
 
-# --- census: every Condition string inside a binary table's _variants ------
+# --- census: every Condition string inside a binary OR IFD-style table's
+# _variants (slice I-2: the IFD generator compiles the same closed grammar,
+# so its Conditions are probed by the same oracle -- `$format ne "ifd" and
+# $format ne "int32u"`, Olympus.pm, is the first form only IFD tables use) --
 
 def is_binary_table(meta):
     pp = meta.get("PROCESS_PROC")
     return isinstance(pp, dict) and (pp.get("__name") or "").endswith("ProcessBinaryData")
+
+
+def is_ifd_table(meta):
+    """`codegen.py::is_ifd_table`'s rule, restated independently: no
+    PROCESS_PROC, or ExifTool's own `Exif::ProcessExif`."""
+    pp = meta.get("PROCESS_PROC")
+    if pp is None:
+        return True
+    name = pp.get("__name") if isinstance(pp, dict) else str(pp)
+    return (name or "").endswith("Exif::ProcessExif")
 
 
 def census(tables_json_path):
@@ -74,7 +87,8 @@ def census(tables_json_path):
     counter = {}
     for _modname, mod in d["modules"].items():
         for _tname, t in (mod.get("tables") or {}).items():
-            if not is_binary_table(t.get("meta") or {}):
+            meta = t.get("meta") or {}
+            if not (is_binary_table(meta) or is_ifd_table(meta)):
                 continue
             for _tid, tag in (t.get("tags") or {}).items():
                 if isinstance(tag, dict) and "_variants" in tag:
@@ -181,7 +195,7 @@ _NUM_ATOM_RE = re.compile(
 _STR_ATOM_RE = re.compile(rf'{conds._MEMBER}\s*(eq|ne)\s*"([^"]*)"')
 _REGEX_ATOM_RE = re.compile(rf"{conds._MEMBER}\s*(=~|!~)\s*/((?:[^/\\]|\\.)*)/([a-z]*)")
 _VALPT_ATOM_RE = re.compile(r"\$\$valPt\s*(=~|!~)\s*/((?:[^/\\]|\\.)*)/([a-z]*)")
-_FORMAT_ATOM_RE = re.compile(r'\$format\s*eq\s*"([^"]*)"')
+_FORMAT_ATOM_RE = re.compile(r'\$format\s*(eq|ne)\s*"([^"]*)"')
 _COUNT_ATOM_RE = re.compile(r"\$count\s*(==|!=|>=|<=|>|<)\s*(-?\d+)")
 _BARE_MEMBER_RE = re.compile(rf"(?<!=)(?<!~){conds._MEMBER}(?!\s*[=!<>&(])")
 
@@ -233,7 +247,7 @@ def probes_for(condition):
         add("valPt", _DECOY_STRINGS)
 
     for m in _FORMAT_ATOM_RE.finditer(condition):
-        add("format", [m.group(1), "other-format"])
+        add("format", [m.group(2), "other-format"])
 
     for m in _COUNT_ATOM_RE.finditer(condition):
         n = int(m.group(2))
@@ -272,7 +286,44 @@ def build_combinations(channels, cap=48):
 # --- Perl side ----------------------------------------------------------
 
 def perl_escape(s):
-    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\x00", "\\0")
+    """Escape for a Perl double-quoted string, byte-exactly: printable ASCII
+    verbatim (backslash, quote and the interpolation sigils `$`/`@` escaped),
+    every other char as `\\xNN` (`\\x{HHHH}` above 0xFF). A probe such as
+    `\\xff\\xd8\\xff` or `\\xd7` must reach Perl as those BYTES -- written
+    raw into a script that has no `use utf8`, a `\u00ff` became the two
+    UTF-8 bytes C3 BF and `/\\xff/` no longer matched; the 12 `$$valPt`
+    disagreements the IFD-table census first produced were all this."""
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch in "$@":
+            out.append("\\" + ch)
+        elif 0x20 <= o < 0x7f:
+            out.append(ch)
+        elif o <= 0xff:
+            out.append(f"\\x{o:02x}")
+        else:
+            out.append(f"\\x{{{o:x}}}")
+    return "".join(out)
+
+
+def rust_bytes_literal(s):
+    """`&[u8]` literal carrying the same bytes `perl_escape` gives Perl: one
+    byte per char up to 0xFF (a regex example generator yields chars from
+    `\\xNN` escapes), UTF-8 for anything above, so the Rust `regex::bytes`
+    matcher sees exactly the bytes ExifTool's `$$valPt` would hold."""
+    bs = bytearray()
+    for ch in s:
+        o = ord(ch)
+        if o <= 0xff:
+            bs.append(o)
+        else:
+            bs.extend(ch.encode("utf-8"))
+    return "&[" + ", ".join(f"0x{b:02x}" for b in bs) + "]"
 
 
 def build_perl_script(jobs, et_lib):
@@ -365,7 +416,7 @@ def build_rust_harness(jobs, cond_rust_by_text):
                     )
         lines.append("        let mut ctx = oxidex::exiftool_tables::cond::Ctx::new(&mut members);")
         if "valPt" in combo:
-            lines.append(f"        let __valpt = {rust_str_literal(combo['valPt'])}.as_bytes();")
+            lines.append(f"        let __valpt: &[u8] = {rust_bytes_literal(combo['valPt'])};")
             lines.append("        ctx.val_pt = Some(__valpt);")
         if "format" in combo:
             lines.append(f"        ctx.format = Some({rust_str_literal(combo['format'])});")
@@ -439,7 +490,7 @@ def main():
         cond_rust_by_text[c] = rust
 
     print(f"pinned release            {version}")
-    print(f"distinct Conditions in _variants (binary tables)  {len(counter)}")
+    print(f"distinct Conditions in _variants (binary + IFD tables)  {len(counter)}")
     print(f"compiled by conds.py (this oracle's corpus)        {len(cond_rust_by_text)}")
     print(f"  of which SetMember (not exercised by this corpus-driven probe --")
     print(f"           see hand-written cond.rs unit tests instead)  {setmember_count}")

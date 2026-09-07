@@ -457,7 +457,16 @@ def conv_for(tag, stats, input_domain, verified_exprs):
             return "PrintConv::None", False
 
         if not m:
-            return "PrintConv::None", False
+            # `PrintConv => { }` (Kodak.pm:1431 WhiteBalance, "no values yet
+            # known"): a hash with no entries misses every value, and
+            # ExifTool then renders its own `"Unknown ($val)"`
+            # (ExifTool.pm:3624-3631). An empty `IntEnum` reproduces exactly
+            # that through `runtime::render` (an integer misses to `Unknown
+            # (n)`, anything else to `Unknown (<perl string>)`), where the
+            # old `PrintConv::None` reported the raw value -- a silent
+            # divergence for a tag ExifTool DOES convert.
+            stats["enum_empty"] += 1
+            return "PrintConv::IntEnum(&[])", False
 
         # OTHER: resolved only through Step 25's deparse-keyed registry
         # (tools/exiftool-tables/others.py) -- an exact match on the
@@ -1821,6 +1830,20 @@ def raw_conv_effect(raw_conv):
 # (dump_tables.pl does not carry its value; presence is enough to refuse on).
 IFD_OFFSET_KEYS = ("IsOffset", "OffsetPair", "DataTag", "ChangeBase")
 
+# `conv_for` refusals that, for a BINARY table, leave the field emitted raw
+# and disqualify the table (see GATE_A_DISQUALIFYING). For an IFD tag the
+# same refusal withholds the one tag instead (`gen_ifd_tag_literal`), so
+# these keys are re-counted under `ifd_print_conv_withheld_by` rather than
+# raised against the table.
+IFD_WITHHELD_PRINT_CONV_KEYS = (
+    "expr_unsupported",
+    "expr_refused_input_domain",
+    "expr_refused_oracle",
+    "other_unregistered",
+    "other_str_domain_unsupported",
+    "bitmask_unreadable",
+)
+
 
 def _has_offset_semantics(tag):
     extra = tag.get("_extra_keys") or ()
@@ -2167,7 +2190,28 @@ def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
         stats["ifd_expr_domain_unknown"] += 1
         pc_refused = True
     else:
-        pc_src, pc_refused = conv_for(tag, stats, pc_domain, verified_exprs)
+        # `conv_for` shares the binary tables' contract, where a refused
+        # expression / unregistered OTHER / unreadable BITMASK comes back as
+        # (`PrintConv::None`, refused=False) -- emitted RAW, with the table
+        # disqualified by the counter (`expr_unsupported`, ...). An IFD tag
+        # is withheld instead (`Omitted.print_conv`, honest absence, the
+        # `conv_dropped` class), so one untranslatable conversion stops one
+        # tag and not the whole table: Olympus::Main's
+        # `$val=~/\./ or $val.=".0"; $val` (13.59) is the motivating case.
+        # The refusal is re-counted under `ifd_print_conv_withheld[_by]` so
+        # the REPORT still says why; the table-disqualifying key is NOT
+        # raised for it.
+        trial = new_ifd_stats()  # carries the nested Counters conv_for indexes into
+        pc_src, pc_refused = conv_for(tag, trial, pc_domain, verified_exprs)
+        if pc_src == "PrintConv::None" and not pc_refused and isinstance(pc, dict):
+            pc_refused = True
+            withheld_by = [k for k in IFD_WITHHELD_PRINT_CONV_KEYS if trial.get(k)]
+            stats["ifd_print_conv_withheld"] += 1
+            for k in withheld_by:
+                stats["ifd_print_conv_withheld_by"][k] += trial.pop(k)
+            if not withheld_by:
+                stats["ifd_print_conv_withheld_by"]["(no counter -- an empty or list-shaped PrintConv)"] += 1
+        _merge_stats(stats, trial)
 
     member = raw_conv_effect(tag.get("RawConv"))
     if member is not None:
@@ -2237,6 +2281,7 @@ IFD_NESTED_STAT_KEYS = (
     "ifd_subdir_refused_start_spellings",
     "ifd_subdir_unmodeled_keys",
     "ifd_variant_cond_texts",
+    "ifd_print_conv_withheld_by",
     "ifd_variant_field_reasons",
     "ifd_gate_a_blocked_by",
 )
@@ -2508,6 +2553,7 @@ IFD_REPORT = (
         ("int enums with tag-level PrintHex (PartialEnumInt, other: None)", "enum_int_printhex"),
         ("string enums", "enum_str"),
         ("string enums with tag-level PrintHex (IsInt is a runtime fact; withheld)", "enum_str_printhex_refused"),
+        ("empty PrintConv hashes (IntEnum(&[]): every value renders Unknown ($val))", "enum_empty"),
         ("exprs translated (exact match)", "expr_translated"),
         ("exprs translated (grammar-compiled)", "expr_compiled"),
         ("named subs reached via a CODE ref", "expr_translated_code_ref"),
@@ -2538,6 +2584,7 @@ IFD_REPORT = (
         ("Format bare string/undef (emitted as the unsized Fmt::Str(0)/Undef(0); informational)", "ifd_format_unsized"),
         ("conversions refused: no scalar domain from Format/Writable/Count", "ifd_expr_domain_unknown"),
         ("BITMASK with BitsPerWord/BitsTotal (PrintConv refused)", "ifd_bitmask_words_unsupported"),
+        ("PrintConv refused and WITHHELD per tag (Omitted.print_conv; not table-disqualifying)", "ifd_print_conv_withheld"),
         ("Flags entries not a string", "ifd_flags_unreadable"),
         ("Priority not an integer", "ifd_priority_unreadable"),
         ("Count -1/0/non-integer (count: None)", "ifd_count_unrepresentable"),
@@ -2596,6 +2643,7 @@ def print_ifd_report(ifd_stats):
     listings = (
         ("ifd_gate_a_blocked_by", "IFD tables blocked by Gate A, by reason (tables, not tags)", 20),
         ("ifd_variant_cond_texts", "IFD variant Conditions outside the closed grammar (compile these next)", 12),
+        ("ifd_print_conv_withheld_by", "IFD PrintConvs withheld per tag, by the conv_for refusal that caused it", 12),
         ("ifd_variant_field_reasons", "IFD variant alternatives refused, by per-tag reason", 10),
         ("ifd_format_unsupported_spellings", "IFD Format spellings refused", 12),
         ("ifd_subdir_refused_start_spellings", "IFD SubDirectory Start spellings refused", 10),
@@ -3430,6 +3478,7 @@ REPORT = (
         ("int enums", "enum_int"),
         ("int enums with tag-level PrintHex (PartialEnumInt, other: None)", "enum_int_printhex"),
         ("string enums", "enum_str"),
+        ("empty PrintConv hashes (IntEnum(&[]): every value renders Unknown ($val))", "enum_empty"),
         ("exprs translated (exact match)", "expr_translated"),
         ("exprs translated (grammar-compiled, Step 15)", "expr_compiled"),
         ("named subs reached via a CODE ref", "expr_translated_code_ref"),
