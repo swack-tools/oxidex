@@ -276,42 +276,27 @@ pub fn to_tag_value(value: &DecodedValue) -> TagValue {
     }
 }
 
-/// [`to_tag_value`], except that a numeric [`DecodedValue::Array`] becomes
-/// ONE space-joined string -- the value ExifTool itself holds for a
-/// multi-count IFD entry.
+/// [`to_tag_value`], except that a fixed-count field becomes the ONE value
+/// ExifTool reports for it: `ReadValue` joins the elements with a single
+/// space (ExifTool.pm:6312, `$val = join(' ', @vals)`), so `exiftool -j`
+/// prints `"0.9642 1 0.82491"` for a `fixed32s[3]`, never a JSON list. The
+/// elements take Perl's text (`DecodedValue::perl_string`); an array whose
+/// elements have no exact Perl text here (rationals -- see `perl_string`)
+/// keeps the [`TagValue::Array`] form rather than print digits ExifTool
+/// would not.
 ///
-/// `ReadValue` (ExifTool.pm:6286-6332) returns the elements of a repeated
-/// numeric entry as a single scalar: `return join(' ', @vals) if @vals > 1;`
-/// (ExifTool.pm:6330). Everything downstream -- `PrintConv` hashes, `-j`
-/// output, `$$self{X} = $val` -- sees that one string, so an IFD walk that
-/// reported a `TagValue::Array` here would disagree with `exiftool -j`
-/// (which prints `"1 2 3"`, not `[1, 2, 3]`) on every multi-value tag.
-/// [`super::ifd_engine`] reports through this unless the tag declares
-/// `List => 1`, in which case the array shape is what ExifTool emits.
-///
-/// Each element is rendered by [`DecodedValue::perl_string`]; an array with
-/// an element that has no Perl scalar string (an `undef` run, a nested
-/// array) is not a "numeric Array" and falls through to [`to_tag_value`]
-/// unchanged -- the IFD walk never builds one, and a binary-table caller
-/// that does keeps the shape it had.
+/// This is what [`super::engine::process_binary_data`] emits. The older
+/// [`DecodedField::emit`] path keeps returning `TagValue::Array` because
+/// hand call sites (`sony/amount.rs`) consume that shape directly.
 #[must_use]
 pub fn to_exiftool_value(value: &DecodedValue) -> TagValue {
-    if let DecodedValue::Array(values) = value {
-        let joined: Option<Vec<String>> = values
-            .iter()
-            .map(|element| match element {
-                DecodedValue::Integer(_)
-                | DecodedValue::Float(_)
-                | DecodedValue::UnsignedRational(..)
-                | DecodedValue::SignedRational(..) => element.perl_string(),
-                _ => None,
-            })
-            .collect();
-        if let Some(joined) = joined {
-            return TagValue::String(joined.join(" "));
-        }
+    match value {
+        DecodedValue::Array(_) => match value.perl_string() {
+            Some(joined) => TagValue::String(joined),
+            None => to_tag_value(value),
+        },
+        _ => to_tag_value(value),
     }
-    to_tag_value(value)
 }
 
 /// A caller's acknowledgment of which of a field's [`Omitted`] semantics it

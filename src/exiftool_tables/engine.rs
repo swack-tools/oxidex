@@ -500,7 +500,11 @@ pub(super) fn walk(
         };
         let value = match super::runtime::render(field.print_conv, &converted) {
             Some(rendered) => TagValue::String(rendered),
-            None => super::runtime::to_tag_value(&converted),
+            // The unconverted value in the form ExifTool reports it: a
+            // fixed-count field is ONE space-joined string (ExifTool.pm:6312
+            // `join ' '`), not a list -- `exiftool -j` prints
+            // `"ConnectionSpaceIlluminant": "0.9642 1 0.82491"`.
+            None => super::runtime::to_exiftool_value(&converted),
         };
         out.push(Emitted {
             module: table.module,

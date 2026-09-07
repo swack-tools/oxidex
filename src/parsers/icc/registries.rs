@@ -2,20 +2,16 @@
 //!
 //! This module contains all static definitions for ICC tag processing:
 //! - TAG_REGISTRY: Tag signatures, names, and types
-//! - HEADER_FIELDS: Header field definitions and extractors
-//! - Lookup tables: Profile classes, platforms, technologies, etc.
-
-use crate::core::TagValue;
-use crate::error::Result;
-use std::collections::HashMap;
+//! - Lookup tables: technologies, illuminants, observers, geometries, CICP
+//!
+//! The 128-byte header's signature hashes (CMM, manufacturer, platform,
+//! class, rendering intent) are NOT here: they are ExifTool's own
+//! `%manuSig`/`%profileClass` maps in the generated `ICC_Profile::Header`
+//! table, walked by `super::parse_icc_profile` (4b-ii).
 
 // ============================================================================
 // TYPE ALIASES
 // ============================================================================
-
-/// Type alias for header field extractor functions
-/// Maps bytes at offset into metadata using the provided HashMap
-pub type ExtractFn = fn(&[u8], usize, &mut HashMap<String, TagValue>) -> Result<()>;
 
 // ============================================================================
 // CORE REGISTRY STRUCTURES
@@ -73,16 +69,6 @@ pub struct TagDef {
     pub name: &'static str,
     /// Type of data this tag contains
     pub tag_type: TagType,
-}
-
-/// Header field definition for structured parsing
-pub struct HeaderField {
-    /// Byte offset in ICC header
-    pub offset: usize,
-    /// Field name in metadata
-    pub name: &'static str,
-    /// Extractor function
-    pub extract: ExtractFn,
 }
 
 /// Lookup table entry for mapping codes to names
@@ -319,58 +305,6 @@ pub fn cicp_print(table: &[(u8, &str)], value: u8) -> String {
 // LOOKUP TABLES
 // ============================================================================
 
-/// Profile class lookup table
-pub static PROFILE_CLASSES: &[LookupEntry] = &[
-    LookupEntry {
-        code: "scnr",
-        name: "Input Device Profile",
-    },
-    LookupEntry {
-        code: "mntr",
-        name: "Display Device Profile",
-    },
-    LookupEntry {
-        code: "prtr",
-        name: "Output Device Profile",
-    },
-    LookupEntry {
-        code: "link",
-        name: "DeviceLink Profile",
-    },
-    LookupEntry {
-        code: "spac",
-        name: "ColorSpace Profile",
-    },
-    LookupEntry {
-        code: "abst",
-        name: "Abstract Profile",
-    },
-    LookupEntry {
-        code: "nmcl",
-        name: "Named Color Profile",
-    },
-];
-
-/// Platform lookup table
-pub static PLATFORMS: &[LookupEntry] = &[
-    LookupEntry {
-        code: "APPL",
-        name: "Apple Computer Inc.",
-    },
-    LookupEntry {
-        code: "MSFT",
-        name: "Microsoft Corporation",
-    },
-    LookupEntry {
-        code: "SGI",
-        name: "Silicon Graphics Inc.",
-    },
-    LookupEntry {
-        code: "SUNW",
-        name: "Sun Microsystems",
-    },
-];
-
 /// Technology lookup table
 pub static TECHNOLOGIES: &[LookupEntry] = &[
     LookupEntry {
@@ -460,221 +394,6 @@ pub static TECHNOLOGIES: &[LookupEntry] = &[
     LookupEntry {
         code: "flex",
         name: "Flexography",
-    },
-];
-
-/// Rendering intent names (indexed by code 0-3)
-/// Names match ExifTool output format
-pub static RENDERING_INTENTS: &[&str] = &[
-    "Perceptual",
-    "Media-Relative Colorimetric",
-    "Saturation",
-    "ICC-Absolute Colorimetric",
-];
-
-/// CMM (Color Management Module) type lookup table
-///
-/// Maps 4-character CMM signature codes to human-readable CMM names.
-/// These codes identify the Color Management Module used to create the profile.
-pub static CMM_TYPES: &[LookupEntry] = &[
-    LookupEntry {
-        code: "ADBE",
-        name: "Adobe Systems Inc.",
-    },
-    LookupEntry {
-        code: "ACMS",
-        name: "Agfa Color Management System",
-    },
-    LookupEntry {
-        code: "appl",
-        name: "Apple Computer Inc.",
-    },
-    LookupEntry {
-        code: "APPL",
-        name: "Apple Computer Inc.",
-    },
-    LookupEntry {
-        code: "CCMS",
-        name: "ColorGear",
-    },
-    LookupEntry {
-        code: "Efi",
-        name: "EFI",
-    },
-    LookupEntry {
-        code: "EFI",
-        name: "EFI",
-    },
-    LookupEntry {
-        code: "FF",
-        name: "Fuji Film",
-    },
-    LookupEntry {
-        code: "EXAC",
-        name: "ExactCode",
-    },
-    LookupEntry {
-        code: "Hcmm",
-        name: "Harlequin",
-    },
-    LookupEntry {
-        code: "argl",
-        name: "Argyll CMS",
-    },
-    LookupEntry {
-        code: "LgoS",
-        name: "Logo Sync",
-    },
-    LookupEntry {
-        code: "HDM",
-        name: "Heidelberg",
-    },
-    LookupEntry {
-        code: "lcms",
-        name: "Little CMS",
-    },
-    LookupEntry {
-        code: "KCMS",
-        name: "Kodak Color Management System",
-    },
-    LookupEntry {
-        code: "Lino",
-        name: "Linotronic",
-    },
-    LookupEntry {
-        code: "MCML",
-        name: "Konica Minolta",
-    },
-    LookupEntry {
-        code: "NKON",
-        name: "Nikon Corporation",
-    },
-    LookupEntry {
-        code: "WCS",
-        name: "Microsoft WCS",
-    },
-    LookupEntry {
-        code: "MSFT",
-        name: "Microsoft Corporation",
-    },
-    LookupEntry {
-        code: "SIGN",
-        name: "Mutoh",
-    },
-    LookupEntry {
-        code: "ONYX",
-        name: "Onyx Graphics",
-    },
-    LookupEntry {
-        code: "RGMS",
-        name: "DeviceLink",
-    },
-    LookupEntry {
-        code: "SICC",
-        name: "SampleICC",
-    },
-    LookupEntry {
-        code: "TCMM",
-        name: "Toshiba",
-    },
-    LookupEntry {
-        code: "UCCM",
-        name: "Unknown (UCCM)",
-    },
-    LookupEntry {
-        code: "32BT",
-        name: "the imaging factory",
-    },
-    LookupEntry {
-        code: "vivo",
-        name: "Vivo Mobile",
-    },
-    LookupEntry {
-        code: "WTG",
-        name: "Ware to Go",
-    },
-    LookupEntry {
-        code: "zc00",
-        name: "Zoran",
-    },
-];
-
-/// Device manufacturer / profile creator lookup table
-///
-/// Maps 4-character manufacturer signature codes to human-readable names.
-/// Used for DeviceManufacturer and ProfileCreator header fields.
-pub static MANUFACTURERS: &[LookupEntry] = &[
-    LookupEntry {
-        code: "ADBE",
-        name: "Adobe Systems Inc.",
-    },
-    LookupEntry {
-        code: "APPL",
-        name: "Apple Computer Inc.",
-    },
-    LookupEntry {
-        code: "appl",
-        name: "Apple Computer Inc.",
-    },
-    LookupEntry {
-        code: "CANO",
-        name: "Canon, Inc. (Canon Development Americas, Inc.)",
-    },
-    LookupEntry {
-        code: "EPSO",
-        name: "Epson",
-    },
-    LookupEntry {
-        code: "GOOG",
-        name: "Google",
-    },
-    LookupEntry {
-        code: "HP",
-        name: "Hewlett-Packard",
-    },
-    LookupEntry {
-        code: "IEC",
-        name: "Hewlett-Packard",
-    },
-    LookupEntry {
-        code: "ISL",
-        name: "Ichikawa Soft Laboratory",
-    },
-    LookupEntry {
-        code: "KODA",
-        name: "Kodak",
-    },
-    LookupEntry {
-        code: "MSFT",
-        name: "Microsoft Corporation",
-    },
-    LookupEntry {
-        code: "NKON",
-        name: "Nikon",
-    },
-    LookupEntry {
-        code: "SGI",
-        name: "Silicon Graphics",
-    },
-    LookupEntry {
-        code: "SUNW",
-        name: "Sun Microsystems",
-    },
-    LookupEntry {
-        code: "TOSH",
-        name: "Toshiba",
-    },
-    LookupEntry {
-        code: "argl",
-        name: "Argyll CMS",
-    },
-    LookupEntry {
-        code: "lcms",
-        name: "Little CMS",
-    },
-    LookupEntry {
-        code: "none",
-        name: "none",
     },
 ];
 
