@@ -43,6 +43,7 @@ pub mod enabled_ifd;
 pub mod engine;
 pub mod exprs;
 pub mod ifd_schema;
+pub mod ifd_tables;
 pub mod runtime;
 pub mod subdir;
 
@@ -58,6 +59,7 @@ pub use ifd_schema::{
     IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
     RawConvEffect,
 };
+pub use ifd_tables::{ALL_IFD_TABLES, IFD_EXIFTOOL_VERSION};
 pub use runtime::{
     Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
     RefusalCounts, TableDecode, all_fractional_census, apply_value_conv, decode_binary_table,
@@ -73,6 +75,23 @@ pub fn find_table(module: &str, table: &str) -> Option<&'static BinaryTable> {
         .iter()
         .copied()
         .find(|t| t.module == module && t.table == table)
+}
+
+/// Look up a generated IFD-style (`Exif::ProcessExif`) table by ExifTool
+/// module and table name, e.g. `("Olympus", "Main")` -- [`find_table`]'s
+/// sibling for [`ALL_IFD_TABLES`].
+///
+/// `codegen.py` emits that index sorted by `(module, table)` (the test
+/// `all_ifd_tables_are_sorted_by_module_and_table` pins it), so this is a
+/// binary search rather than the linear scan the binary index still uses:
+/// the IFD walk resolves an edge's target per `SubDirectory` entry, and
+/// `Exif::Main` alone hands it a few hundred of those per file.
+#[must_use]
+pub fn find_ifd_table(module: &str, table: &str) -> Option<&'static IfdTable> {
+    ALL_IFD_TABLES
+        .binary_search_by(|t| (t.module, t.table).cmp(&(module, table)))
+        .ok()
+        .map(|i| ALL_IFD_TABLES[i])
 }
 
 /// A table a live call site asks [`find_table`] for that the generator
@@ -891,5 +910,274 @@ mod tests {
                 "{module}::{table} offsets_sound_until"
             );
         }
+    }
+
+    // ----- IFD-style tables (slice I-1; `ifd_tables.rs`) -----
+
+    /// Every `IfdTag` of every table, the `tags` and the `_variants`
+    /// alternatives alike -- the same two populations the binary census
+    /// tests above walk.
+    fn every_ifd_tag() -> impl Iterator<Item = (&'static IfdTable, &'static IfdTag)> {
+        ALL_IFD_TABLES.iter().flat_map(|t| {
+            t.tags.iter().map(move |tag| (*t, tag)).chain(
+                t.variants
+                    .iter()
+                    .flat_map(move |g| g.alternatives.iter().map(move |(_, tag)| (*t, tag))),
+            )
+        })
+    }
+
+    /// `ifd_tables.rs` and `binary_tables.rs` are one regeneration
+    /// (`regen.sh` writes both from one `codegen.py` run); a skew between
+    /// their stamps is the intra-repo mixed-release hazard
+    /// `tools/exiftool-tables/regen-all.sh`'s header describes.
+    #[test]
+    fn ifd_tables_come_from_the_same_release_as_binary_tables() {
+        assert_eq!(
+            IFD_EXIFTOOL_VERSION, EXIFTOOL_VERSION,
+            "ifd_tables.rs was transcribed from ExifTool {IFD_EXIFTOOL_VERSION} but \
+             binary_tables.rs from {EXIFTOOL_VERSION}; regenerate both with `just regen-tables`"
+        );
+    }
+
+    #[test]
+    fn ifd_tables_are_present() {
+        // 496 in 13.59: the 495 tables with no PROCESS_PROC plus FujiFilm::IFD,
+        // which names Exif::ProcessExif explicitly.
+        assert!(
+            ALL_IFD_TABLES.len() > 400,
+            "expected the generated IFD table set, found {}",
+            ALL_IFD_TABLES.len()
+        );
+        assert!(
+            find_ifd_table("FujiFilm", "IFD").is_some(),
+            "FujiFilm::IFD is the one table selected by an explicit PROCESS_PROC"
+        );
+    }
+
+    /// `find_ifd_table` binary-searches `ALL_IFD_TABLES` by `(module, table)`,
+    /// so the generator's ordering promise is load-bearing: an unsorted index
+    /// would make lookups silently miss rather than fail.
+    #[test]
+    fn all_ifd_tables_are_sorted_by_module_and_table() {
+        assert!(
+            ALL_IFD_TABLES
+                .windows(2)
+                .all(|w| (w[0].module, w[0].table) < (w[1].module, w[1].table)),
+            "ALL_IFD_TABLES must be strictly sorted by (module, table)"
+        );
+        for t in ALL_IFD_TABLES {
+            let found = find_ifd_table(t.module, t.table)
+                .unwrap_or_else(|| panic!("{}::{} not found by find_ifd_table", t.module, t.table));
+            assert!(
+                std::ptr::eq(found, *t),
+                "{}::{} resolved to a different static",
+                t.module,
+                t.table
+            );
+        }
+        assert!(find_ifd_table("Olympus", "NoSuchTable").is_none());
+    }
+
+    /// `IfdTable::tag` / `variant_group` binary-search by id; the generator
+    /// asserts uniqueness at emission time, and this pins the whole contract
+    /// on the committed artifact: sorted, unique, and disjoint between the
+    /// two arrays (an id with a compiled `_variants` group never also appears
+    /// in `tags`).
+    #[test]
+    fn ifd_tags_and_variants_are_sorted_unique_and_disjoint() {
+        for t in ALL_IFD_TABLES {
+            assert!(
+                t.tags.windows(2).all(|w| w[0].id < w[1].id),
+                "{}::{} tags are not strictly sorted by id",
+                t.module,
+                t.table
+            );
+            assert!(
+                t.variants.windows(2).all(|w| w[0].id < w[1].id),
+                "{}::{} variant groups are not strictly sorted by id",
+                t.module,
+                t.table
+            );
+            for g in t.variants {
+                assert!(
+                    !g.alternatives.is_empty(),
+                    "{}::{} variant group {:#06x} has no alternatives",
+                    t.module,
+                    t.table,
+                    g.id
+                );
+                assert!(
+                    t.tag(g.id).is_none(),
+                    "{}::{} id {:#06x} is both a tag and a variant group",
+                    t.module,
+                    t.table,
+                    g.id
+                );
+            }
+            for tag in t.tags {
+                assert!(std::ptr::eq(
+                    t.tag(tag.id).expect("binary search finds every tag"),
+                    tag
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn ifd_int_enums_are_sorted_for_binary_search() {
+        for (t, tag) in every_ifd_tag() {
+            if let PrintConv::IntEnum(m) = tag.print_conv {
+                assert!(
+                    m.windows(2).all(|w| w[0].0 < w[1].0),
+                    "{}::{} {} enum is not strictly sorted",
+                    t.module,
+                    t.table,
+                    tag.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ifd_no_empty_names() {
+        for (t, tag) in every_ifd_tag() {
+            assert!(
+                !tag.name.is_empty(),
+                "{}::{} has an unnamed tag",
+                t.module,
+                t.table
+            );
+        }
+    }
+
+    /// A refused table must say WHY, in the generator's own counter names
+    /// (the binary census's `every_gate_a_refusal_names_its_reason`, for
+    /// the IFD set).
+    #[test]
+    fn ifd_every_gate_a_refusal_names_its_reason() {
+        for t in ALL_IFD_TABLES {
+            if t.gate_a.passes() {
+                assert!(t.gate_a.blocked_by.is_empty());
+                continue;
+            }
+            assert!(
+                !t.gate_a.blocked_by.is_empty(),
+                "{}::{} is refused with no reason recorded",
+                t.module,
+                t.table
+            );
+            for (reason, count) in t.gate_a.blocked_by {
+                assert!(
+                    *count > 0,
+                    "{}::{} reason {reason} has count 0",
+                    t.module,
+                    t.table
+                );
+            }
+        }
+    }
+
+    /// The binary census's enablement invariants, for `ENABLED_IFD`: every
+    /// table in exactly one class, Gate B never overriding Gate A, and
+    /// `enabled` exactly the allowlist's size (zero in slice I-1).
+    #[test]
+    fn ifd_every_table_lands_in_exactly_one_enablement_class() {
+        let (mut enabled, mut eligible, mut refused) = (0usize, 0usize, 0usize);
+        for t in ALL_IFD_TABLES {
+            match (t.gate_a.passes(), t.enabled()) {
+                (true, true) => enabled += 1,
+                (true, false) => eligible += 1,
+                (false, false) => refused += 1,
+                (false, true) => {
+                    panic!(
+                        "{}::{} is enabled despite gate A blocking it",
+                        t.module, t.table
+                    )
+                }
+            }
+        }
+        assert_eq!(enabled + eligible + refused, ALL_IFD_TABLES.len());
+        assert_eq!(
+            enabled,
+            ENABLED_IFD.len(),
+            "enabled must equal the Gate B allowlist size"
+        );
+        assert!(
+            eligible > 50,
+            "expected a real eligible population, found {eligible}"
+        );
+    }
+
+    /// `Unknown => 1` is a FLAG on an IFD tag, never a drop (the binary
+    /// tables keep dropping theirs): an unknown-by-design tag must stay
+    /// distinguishable from one the generator failed to transcribe.
+    #[test]
+    fn ifd_unknown_tags_are_carried_as_a_flag() {
+        let unknown = every_ifd_tag().filter(|(_, tag)| tag.flags.unknown).count();
+        assert!(
+            unknown > 100,
+            "expected the Unknown population as flags, found {unknown}"
+        );
+    }
+
+    /// A tag with a `SubDirectory` always carries `omitted.subdirectory`
+    /// (its bytes are a pointer, never its value) -- with `subdir: Some` when
+    /// the edge compiled and `None` when it was refused and counted. An edge
+    /// without the flag would let the walk report the pointer as a value.
+    #[test]
+    fn ifd_subdir_edges_always_carry_the_subdirectory_flag() {
+        let (mut modeled, mut refused) = (0usize, 0usize);
+        for (t, tag) in every_ifd_tag() {
+            match tag.subdir {
+                Some(edge) => {
+                    modeled += 1;
+                    assert!(
+                        tag.omitted.subdirectory,
+                        "{}::{} {} has an edge to {}::{} but no omitted.subdirectory",
+                        t.module, t.table, tag.name, edge.module, edge.table
+                    );
+                }
+                None if tag.omitted.subdirectory => refused += 1,
+                None => {}
+            }
+        }
+        assert!(
+            modeled > 300,
+            "expected the modeled edge population, found {modeled}"
+        );
+        assert!(
+            refused > 0,
+            "some edges are refused and must stay countable, found {refused}"
+        );
+    }
+
+    /// Olympus.pm 0x0203: `BWMode => { Writable => 'int16u', PrintConv => {
+    /// 0 => 'Off', 1 => 'On', 6 => '(none)' } }` -- the tag slice I-2 walks
+    /// first, resolved through the same `IfdTable::tag` the engine uses.
+    #[test]
+    fn olympus_main_bwmode_matches_olympus_pm() {
+        let t = find_ifd_table("Olympus", "Main").expect("Olympus::Main");
+        assert_eq!(
+            (t.group0, t.group1, t.group2),
+            ("MakerNotes", "Olympus", "Camera")
+        );
+        let tag = t.tag(0x0203).expect("Olympus::Main 0x0203");
+        assert_eq!(tag.name, "BWMode");
+        assert_eq!(tag.writable, Some("int16u"));
+        assert_eq!(tag.format, None);
+        assert!(
+            !tag.omitted.any(),
+            "BWMode carries nothing the generator omitted"
+        );
+        let PrintConv::IntEnum(m) = tag.print_conv else {
+            panic!(
+                "BWMode PrintConv is an int enum, found {:?}",
+                tag.print_conv
+            );
+        };
+        assert_eq!(m, &[(0, "Off"), (1, "On"), (6, "(none)")]);
+        assert_eq!(tag.print_conv.apply(6).as_deref(), Some("(none)"));
+        assert_eq!(tag.print_conv.apply(2), None);
     }
 }
