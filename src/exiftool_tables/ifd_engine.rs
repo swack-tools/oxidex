@@ -532,13 +532,13 @@ fn decode_plan(located: &Located<'_>, plan: ReadPlan, order: ByteOrder) -> Optio
             Some(DecodedValue::Array(values))
         }
         // ExifTool.pm:6308-6311: one value spanning every byte, NUL-truncated
-        // for `string`. `decode_value_of`'s `Str` arm is that rule, and it
-        // refuses (rather than lossily re-encodes) bytes that are not UTF-8.
+        // for `string`. `decode_value_of`'s `Str` arm is that rule, and both
+        // it and the `utf8` arm print malformed UTF-8 the way the exiftool
+        // application does: `XMP::FixUTF8`'s `?` per bad byte
+        // (`runtime::fix_utf8`), not a refusal and not a lossy re-encode.
         Kind::Str => decode_value_of(bytes, Fmt::Str(u32::try_from(bytes.len()).ok()?), order),
         Kind::Undef => Some(DecodedValue::Undefined(bytes.to_vec())),
-        Kind::Utf8 => String::from_utf8(bytes.to_vec())
-            .ok()
-            .map(DecodedValue::String),
+        Kind::Utf8 => runtime::fix_utf8(bytes).map(DecodedValue::String),
     }
 }
 
