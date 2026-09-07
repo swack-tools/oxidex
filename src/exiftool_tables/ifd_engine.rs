@@ -794,7 +794,7 @@ fn walk(
                 // ExifTool.pm:6330: the entry's value is ONE space-joined
                 // scalar unless the tag is a `List`.
                 None if tag.flags.list => runtime::to_tag_value(&converted),
-                None => runtime::to_exiftool_value(&converted),
+                None => ifd_exiftool_value(&converted),
             }
         };
         let Some(group1) = group1_of(table, tag, &dir) else {
@@ -869,10 +869,59 @@ fn member_value(raw: &DecodedValue) -> Option<MemberValue> {
         }
         DecodedValue::Array(values) => values
             .iter()
-            .map(DecodedValue::perl_string)
+            .map(ifd_perl_string)
             .collect::<Option<Vec<_>>>()
             .map(|parts| MemberValue::Str(parts.join(" "))),
-        other => other.perl_string().map(MemberValue::Str),
+        other => ifd_perl_string(other).map(MemberValue::Str),
+    }
+}
+
+/// The string Perl holds for one IFD scalar once `ReadValue` has produced it
+/// -- the element `join(' ', @vals)` (ExifTool.pm:6330) concatenates when an
+/// entry carries more than one value, and what `$$self{X} = $val` stores.
+///
+/// [`DecodedValue::perl_string`] (shared with the binary engine) refuses a
+/// rational because its digit string depends on the rational's WIDTH, which
+/// a `DecodedValue` does not carry. Here that is known: an IFD entry's
+/// rational is always TIFF type 5 or 10, i.e. what `GetRational64u`/
+/// `GetRational64s` return -- `RoundFloat($n / $d, 10)`, or `inf` / `undef`
+/// for a zero denominator (ExifTool.pm:6107-6120, 5960-5964) -- which
+/// [`runtime::perl_rational64`] renders. An `undef` byte run is not a Perl
+/// number and a nested array cannot occur as an element (callers join the
+/// outer array themselves): both are `None`, keeping this a scalar rule.
+fn ifd_perl_string(value: &DecodedValue) -> Option<String> {
+    match value {
+        DecodedValue::UnsignedRational(numerator, denominator) => Some(runtime::perl_rational64(
+            f64::from(*numerator),
+            f64::from(*denominator),
+        )),
+        DecodedValue::SignedRational(numerator, denominator) => Some(runtime::perl_rational64(
+            f64::from(*numerator),
+            f64::from(*denominator),
+        )),
+        DecodedValue::Undefined(_) | DecodedValue::Array(_) => None,
+        other => other.perl_string(),
+    }
+}
+
+/// The unconverted value in the form ExifTool reports an IFD entry: a
+/// fixed-count entry is ONE space-joined string (ExifTool.pm:6330) with each
+/// element rendered by [`ifd_perl_string`] (so a `rational64u[3]` GPS
+/// coordinate reads `"41 24.2 0"` exactly as `-j` prints it); everything
+/// else is [`runtime::to_tag_value`]. An array whose elements have no Perl
+/// string (an `undef` run inside a list) keeps the [`TagValue::Array`] form
+/// rather than print text Perl would not.
+fn ifd_exiftool_value(value: &DecodedValue) -> TagValue {
+    match value {
+        DecodedValue::Array(values) => match values
+            .iter()
+            .map(ifd_perl_string)
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(parts) => TagValue::String(parts.join(" ")),
+            None => runtime::to_tag_value(value),
+        },
+        other => runtime::to_tag_value(other),
     }
 }
 
@@ -886,10 +935,10 @@ fn perl_length(raw: &DecodedValue) -> Option<usize> {
         DecodedValue::String(s) => Some(s.len()),
         DecodedValue::Array(values) => values
             .iter()
-            .map(DecodedValue::perl_string)
+            .map(ifd_perl_string)
             .collect::<Option<Vec<_>>>()
             .map(|parts| parts.join(" ").len()),
-        other => other.perl_string().map(|s| s.len()),
+        other => ifd_perl_string(other).map(|s| s.len()),
     }
 }
 
@@ -1493,20 +1542,19 @@ mod tests {
             assert!(!got[0].low_priority);
             assert!(!got[0].avoid);
         }
-        // An enum MISS. On this branch (b890b0e0) `runtime::render` returns
-        // `None` for an `IntEnum` key it does not hold and the raw value
-        // stands in; ExifTool prints `Unknown (9)` (ExifTool.pm:3624-3631),
-        // and a branch landing that change into `render` will move this
-        // assertion to `TagValue::String("Unknown (9)")` -- the engine does
-        // not special-case it, so nothing here needs to change but the
-        // expectation.
+        // An enum MISS renders ExifTool's own `Unknown (9)` (ExifTool.pm:
+        // 3624-3631) -- `runtime::render` does that for every hash miss
+        // since 4b-i (`b7797fa2`); the engine does not special-case it.
         let data = ifd(
             ByteOrder::Big,
             &[int16u_entry(ByteOrder::Big, 0x0001, 9)],
             &[],
         );
         let got = run(&PLAIN, &data, ByteOrder::Big, Some(0));
-        assert_eq!(values(&got), vec![("Mode", TagValue::Integer(9))]);
+        assert_eq!(
+            values(&got),
+            vec![("Mode", TagValue::String("Unknown (9)".to_string()))]
+        );
     }
 
     #[test]
@@ -1847,7 +1895,8 @@ mod tests {
             values(&run_with(&PLAIN, &data, order, Some(0), &mut members)),
             vec![
                 ("Raw", TagValue::Integer(7)),
-                ("Mode", TagValue::Integer(9))
+                // 9 misses PLAIN's IntEnum: ExifTool's `Unknown (9)` (4b-i).
+                ("Mode", TagValue::String("Unknown (9)".to_string()))
             ]
         );
     }
@@ -2632,38 +2681,35 @@ mod tests {
     // -- Helpers pinned on their own -----------------------------------------------
 
     #[test]
-    fn perl_string_renders_elements_as_read_value_would() {
+    fn ifd_perl_string_renders_elements_as_read_value_would() {
         assert_eq!(
-            DecodedValue::Integer(-7).perl_string().as_deref(),
+            ifd_perl_string(&DecodedValue::Integer(-7)).as_deref(),
             Some("-7")
         );
         assert_eq!(
-            DecodedValue::UnsignedRational(1, 3)
-                .perl_string()
-                .as_deref(),
+            ifd_perl_string(&DecodedValue::UnsignedRational(1, 3)).as_deref(),
             Some("0.3333333333")
         );
         assert_eq!(
-            DecodedValue::SignedRational(-1, 2).perl_string().as_deref(),
+            ifd_perl_string(&DecodedValue::SignedRational(-1, 2)).as_deref(),
             Some("-0.5")
         );
         assert_eq!(
-            DecodedValue::UnsignedRational(4, 0)
-                .perl_string()
-                .as_deref(),
+            ifd_perl_string(&DecodedValue::UnsignedRational(4, 0)).as_deref(),
             Some("inf")
         );
         assert_eq!(
-            DecodedValue::UnsignedRational(0, 0)
-                .perl_string()
-                .as_deref(),
+            ifd_perl_string(&DecodedValue::UnsignedRational(0, 0)).as_deref(),
             Some("undef")
         );
         assert_eq!(
-            DecodedValue::Float(1.0 / 3.0).perl_string().as_deref(),
+            ifd_perl_string(&DecodedValue::Float(1.0 / 3.0)).as_deref(),
             Some("0.333333333333333")
         );
-        assert_eq!(DecodedValue::Undefined(vec![1]).perl_string(), None);
+        assert_eq!(ifd_perl_string(&DecodedValue::Undefined(vec![1])), None);
+        // The shared rule refuses a rational (width unknown there); the IFD
+        // rule above is the one that knows the width.
+        assert_eq!(DecodedValue::UnsignedRational(1, 3).perl_string(), None);
     }
 
     #[test]
