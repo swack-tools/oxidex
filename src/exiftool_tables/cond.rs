@@ -389,9 +389,27 @@ pub fn first_match<'a>(
     alternatives: &'a [(Cond, super::Field)],
     ctx: &mut Ctx,
 ) -> Option<&'a super::Field> {
-    for (cond, field) in alternatives {
+    first_match_in(alternatives, ctx)
+}
+
+/// [`first_match`] over an [`super::IfdVariantGroup`]'s alternatives -- the
+/// same `GetTagInfo` walk (ExifTool.pm:9164-9188), reached from
+/// `ProcessExif` with `$$valPt`, `$format` and `$count` in scope
+/// (Exif.pm:6719-6720 passes the first 128 bytes of the value, the entry's
+/// declared format name and its count). The two table kinds carry different
+/// payload types and nothing else differs, so both delegate to one loop.
+#[must_use]
+pub fn first_match_ifd<'a>(
+    alternatives: &'a [(Cond, super::IfdTag)],
+    ctx: &mut Ctx,
+) -> Option<&'a super::IfdTag> {
+    first_match_in(alternatives, ctx)
+}
+
+fn first_match_in<'a, T>(alternatives: &'a [(Cond, T)], ctx: &mut Ctx) -> Option<&'a T> {
+    for (cond, payload) in alternatives {
         if cond.eval(ctx) {
-            return Some(field);
+            return Some(payload);
         }
     }
     None

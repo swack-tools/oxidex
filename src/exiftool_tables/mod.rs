@@ -42,7 +42,9 @@ pub mod enabled;
 pub mod enabled_ifd;
 pub mod engine;
 pub mod exprs;
+pub mod ifd_engine;
 pub mod ifd_schema;
+pub mod ifd_tables;
 pub mod runtime;
 pub mod subdir;
 
@@ -50,18 +52,23 @@ pub use binary_tables::{
     ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, ExprValue, Field, Fmt, GateA,
     HookCond, HookDelta, HookEffect, Mask, Omitted, OtherId, PrintConv, TagGroups, VarFmt, VarKind,
 };
-pub use cond::{CmpOp, Cond, Ctx, EffectSource, MemberValue, VariantGroup, first_match};
+pub use cond::{
+    CmpOp, Cond, Ctx, EffectSource, MemberValue, VariantGroup, first_match, first_match_ifd,
+};
 pub use enabled::{ENABLED, is_enabled};
 pub use enabled_ifd::ENABLED_IFD;
 pub use engine::{Cursor, Dir, Emitted, Step, process_binary_data, read_value};
+pub use ifd_engine::{IfdDir, IfdEntry, process_exif, read_ifd};
 pub use ifd_schema::{
     IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
     RawConvEffect,
 };
+pub use ifd_tables::ALL_IFD_TABLES;
 pub use runtime::{
     Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
     RefusalCounts, TableDecode, all_fractional_census, apply_value_conv, decode_binary_table,
-    decode_binary_table_variants, decode_bits, fractional_census, to_tag_value, unknown_fallback,
+    decode_binary_table_variants, decode_bits, fractional_census, to_exiftool_value, to_tag_value,
+    unknown_fallback,
 };
 pub use subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
 
@@ -70,6 +77,21 @@ pub use subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
 #[must_use]
 pub fn find_table(module: &str, table: &str) -> Option<&'static BinaryTable> {
     ALL_BINARY_TABLES
+        .iter()
+        .copied()
+        .find(|t| t.module == module && t.table == table)
+}
+
+/// Look up a generated IFD-style (`ProcessExif`) table by ExifTool module
+/// and table name, e.g. `("Olympus", "Equipment")` -- the sibling of
+/// [`find_table`] over [`ALL_IFD_TABLES`]. The two name spaces are disjoint
+/// by construction (`codegen.py` sorts every table into exactly one of them
+/// by `PROCESS_PROC`), so a `SubDirectory` edge resolves by asking this
+/// first and [`find_table`] second; a `Some` from both would be a generator
+/// bug, not a table that is somehow both kinds.
+#[must_use]
+pub fn find_ifd_table(module: &str, table: &str) -> Option<&'static IfdTable> {
+    ALL_IFD_TABLES
         .iter()
         .copied()
         .find(|t| t.module == module && t.table == table)
@@ -259,6 +281,55 @@ mod tests {
             "expected the generated table set, found {}",
             ALL_BINARY_TABLES.len()
         );
+    }
+
+    /// The invariants `find_ifd_table` and the IFD engine's lookups rely on,
+    /// stated so they hold for the empty stub on the engine branch and for
+    /// the generated set after integration alike: every emitted table is
+    /// findable by its own name, resolves to itself, names a table the
+    /// binary set does not also claim, and keeps `tags`/`variants` sorted
+    /// (both are binary-searched by [`IfdTable::tag`] /
+    /// [`IfdTable::variant_group`], so an unsorted table would miss entries
+    /// silently rather than fail).
+    #[test]
+    fn ifd_tables_are_findable_disjoint_and_sorted() {
+        for t in ALL_IFD_TABLES {
+            let found = find_ifd_table(t.module, t.table)
+                .unwrap_or_else(|| panic!("{}::{} is emitted but not findable", t.module, t.table));
+            assert!(
+                std::ptr::eq(found, *t),
+                "{}::{} resolves to a different table (duplicate name)",
+                t.module,
+                t.table
+            );
+            assert!(
+                find_table(t.module, t.table).is_none(),
+                "{}::{} is emitted as both an IFD table and a binary table",
+                t.module,
+                t.table
+            );
+            assert!(
+                t.tags.windows(2).all(|w| w[0].id < w[1].id),
+                "{}::{} tags are not strictly sorted by id",
+                t.module,
+                t.table
+            );
+            assert!(
+                t.variants.windows(2).all(|w| w[0].id < w[1].id),
+                "{}::{} variants are not strictly sorted by id",
+                t.module,
+                t.table
+            );
+            for tag in t.tags {
+                assert!(
+                    t.variant_group(tag.id).is_none(),
+                    "{}::{} id {:#06x} is both a tag and a variant group",
+                    t.module,
+                    t.table,
+                    tag.id
+                );
+            }
+        }
     }
 
     #[test]
