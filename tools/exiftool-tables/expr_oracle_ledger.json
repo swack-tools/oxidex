@@ -2,8 +2,8 @@
   "exiftool_version": "13.59",
   "expression_counts": {
     "total": 1635,
-    "translated": 599,
-    "verified": 599
+    "translated": 607,
+    "verified": 607
   },
   "instrument": {
     "et_lib": "/tmp/oxidex-exiftool-cache/exiftool/lib",
@@ -15,14 +15,14 @@
   "perl_version": "v5.38.2",
   "probe_counts": {
     "fail": 0,
-    "pass": 16427,
+    "pass": 16789,
     "skip": 14
   },
   "schema": 2,
   "tables_sha256": "193cf4e91326f53c7bdfd674cb10da0937c8bcdb4c0285ad4f507fd9f96a8fb8",
   "use_counts": {
     "total": 7377,
-    "verified": 5496
+    "verified": 5511
   },
   "verified_expressions": [
     "\"$val %\"",
@@ -238,6 +238,10 @@
     "$val == 7 ? undef : $val",
     "$val == 8 ? \"n/a\" : $val",
     "$val == 90 ? \"n/a\" : $val",
+    "$val =~ s/ .*//; ($val - 50) / 10",
+    "$val =~ s/ .*//; ConvertUnixTime($val)",
+    "$val =~ s/ .*//s; $val",
+    "$val =~ s/\\s+$//; $val",
     "$val =~ tr/ /./; $val",
     "$val =~ tr/ /x/; $val",
     "$val =~ tr/-/:/; $val",
@@ -326,6 +330,10 @@
     "$val==0x7f ? \"n/a\" : $val",
     "$val==42 ? \"Out of range\" : \"$val dB\"",
     "$val==65535 ? undef : $val",
+    "$val=~s/ .*//; $val",
+    "$val=~s/ .*//; $val / 256",
+    "$val=~s/\\s+$//; $val",
+    "$val=~s/\\s+$//;$val",
     "$val=~tr/ /./; $val",
     "$val=~tr/ /:/; $val",
     "$val=~tr/ /x/; $val",

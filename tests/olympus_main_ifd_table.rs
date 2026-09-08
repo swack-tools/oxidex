@@ -283,27 +283,30 @@ fn olympus_e1_jpg_main_tags_match_the_pinned_oracle() {
     assert_eq!(resolved.len(), 1, "one occurrence answers the bare name");
     assert_eq!(family1_label(resolved[0].occurrence), "ExifIFD");
 
-    // WITHHELD, on purpose: 0x1017 RedBalance / 0x1018 BlueBalance carry
-    // `ValueConv => '$val=~s/ .*//; $val / 256'` (Olympus.pm:1042-1055), a
-    // regex the expression grammar does not compile, so the generator sets
-    // `omitted.value_conv` and the engine reports nothing. The oracle prints
-    // 1.609375 / 1.1328125; the hand table never had these rows either, so
-    // this is a MISSING that stays MISSING rather than an approximation
-    // (`AGENTS.md`, "never approximate"). When the generator learns the
-    // conversion the first assertion fails and the pin below becomes a value.
+    // 0x1017 RedBalance / 0x1018 BlueBalance carry
+    // `ValueConv => '$val=~s/ .*//; $val / 256'` (Olympus.pm:1042-1055): the
+    // first element of the `int16u[2]`, over 256. Slice I-2 pinned these as
+    // WITHHELD (the grammar did not compile the first-element form, so the
+    // generator set `omitted.value_conv` and the engine reported nothing --
+    // a MISSING that stayed MISSING rather than an approximation); slice I-3
+    // taught the grammar the form, the i7 oracle approved it (verify_exprs
+    // PASS 607/607), and the regenerated table now carries the conversion,
+    // so the pin is the oracle's value: 412/256 and 290/256.
     let table = find_ifd_table("Olympus", "Main").expect("Olympus::Main");
-    for (id, key) in [
-        (0x1017u16, "Olympus:RedBalance"),
-        (0x1018, "Olympus:BlueBalance"),
+    for (id, key, want) in [
+        (0x1017u16, "Olympus:RedBalance", "1.609375"),
+        (0x1018, "Olympus:BlueBalance", "1.1328125"),
     ] {
         let tag = table.tag(id).expect("row is transcribed");
         assert!(
-            tag.omitted.value_conv,
-            "{key}: the generator now compiles the ValueConv -- pin the oracle's value here instead"
+            !tag.omitted.any(),
+            "{key}: the generated row must be fully transcribed ({:?})",
+            tag.omitted
         );
-        assert!(
-            !metadata.contains_key(key),
-            "{key} must be absent while its ValueConv is withheld"
+        assert_eq!(
+            shown(&metadata, key).as_deref(),
+            Some(want),
+            "OlympusE1.jpg: {key}"
         );
     }
 }
