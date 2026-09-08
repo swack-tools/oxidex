@@ -126,6 +126,40 @@ pub fn perl_g(v: f64, sig: usize) -> String {
     if neg { format!("-{body}") } else { body }
 }
 
+/// ExifTool's `RoundFloat` (ExifTool.pm:5960-5964) as the NUMBER Perl reads
+/// back from it.
+///
+/// `RoundFloat` is `sprintf("%.${sig}g", $val)`: it returns a STRING, and
+/// `GetRational64u`/`GetRational64s` (ExifTool.pm:6107-6120) hand exactly
+/// that string on as a rational's value, so every consumer -- a `RawConv`
+/// storing `$$self{X} = $val`, a `ValueConv` or `PrintConv` expression
+/// doing arithmetic on `$val`, a hash `PrintConv` keyed by it, `"$val mm"`
+/// interpolating it -- sees the ten-digit number, never the exact quotient.
+/// Arithmetic numifies the string (`$val * 2`), so the value to carry is the
+/// double Perl parses from it: this is [`perl_g`] parsed back.
+///
+/// The parse is the identity on the DIGITS: `%.15g` ([`perl_num`], Perl's
+/// default stringification) of the double nearest a decimal with at most 15
+/// significant digits reproduces that decimal (`DBL_DIG` = 15 is the
+/// definition of that guarantee), and `sig` is 10 or 7 here, so
+/// `perl_num(round_float(v, 10)) == perl_g(v, 10)` -- `"$val mm"` on
+/// 256/1476505344 prints `1.733823728e-07 mm` whether Perl interpolates the
+/// string or the numified double. Pinned below on the corpus values.
+///
+/// `sig` must be at least 1. A non-finite `v` is returned as is: `perl_g`
+/// prints Perl's `Inf`/`NaN` for it, which parse back to themselves, and no
+/// caller's rational can produce one (a zero denominator is `inf`/`undef`
+/// BEFORE `RoundFloat`, ExifTool.pm:6111/6118).
+#[must_use]
+pub fn round_float(v: f64, sig: usize) -> f64 {
+    if !v.is_finite() {
+        return v;
+    }
+    perl_g(v, sig)
+        .parse()
+        .expect("`perl_g` prints a finite double in C `%g` form, which `f64::from_str` accepts")
+}
+
 /// Perl's stringification of an *integer* (IV) value -- what `int(EXPR)`
 /// produces when it is later used as a string, as opposed to `perl_num`
 /// above (a plain float/NV). Perl prints an IV as its exact decimal digits
@@ -319,6 +353,28 @@ pub fn tr_translate(val: &str, from: &str, to: &str, delete: bool) -> String {
         }
     }
     out
+}
+
+/// `$val =~ s/\s+$//; $val` -- the string with its trailing whitespace
+/// removed (Exif.pm:925 and PanasonicRaw.pm:313 `Artist`, Olympus.pm:769
+/// `CameraType`, Olympus.pm:1615,1666 the Equipment serial numbers,
+/// Kodak.pm:516 `SerialNumber`, Flash.pm:182 `CreateDate`; pinned 13.59).
+///
+/// `\s` here is Perl's NATIVE character class, not Unicode's: ExifTool.pm
+/// evals every conversion (:3656-3664) with neither `use utf8` nor
+/// `unicode_strings` in scope (:19 is a bare `require 5.004`), and the value
+/// `ReadValue`/`ProcessBinaryData` hands a `string` field is a byte string,
+/// so `\s` matches exactly space, `\t`, `\n`, `\r`, `\f` and `\v` (VT since
+/// Perl 5.18) and nothing above 0x7f. [`str::trim_end`] would also strip
+/// NBSP (U+00A0), U+0085 and the U+2000 block, which Perl leaves alone on
+/// such a string -- so the class is spelled out rather than delegated. `$`
+/// matches at the end or before a final newline, and the greedy `\s+`
+/// already covers that newline, so the match is the whole ASCII-whitespace
+/// suffix; an all-whitespace string becomes `""` (defined, not undef).
+#[must_use]
+pub fn trim_trailing_ws(val: &str) -> String {
+    val.trim_end_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c' | '\x0b'))
+        .to_string()
 }
 
 /// `Image::ExifTool::CanonCustom::ConvertPfn($val)`.
@@ -944,6 +1000,32 @@ mod tests {
     /// distinction, and it is the one a hand-written `format!("{}", v)` gets
     /// wrong.
     #[test]
+    fn trim_trailing_ws_is_perls_native_class() {
+        // the pinned motivating value (Olympus.pm:769: "SX151 " has a
+        // trailing space), every ASCII whitespace character alone and in a
+        // run, and the newline `$` would otherwise stop before
+        assert_eq!(trim_trailing_ws("SX151 "), "SX151");
+        assert_eq!(trim_trailing_ws("abc \t\n\r\x0b\x0c"), "abc");
+        assert_eq!(trim_trailing_ws("abc\r\n"), "abc");
+        assert_eq!(trim_trailing_ws("abc\n"), "abc");
+        // leading and internal whitespace, and a NUL beside the run, stay
+        assert_eq!(trim_trailing_ws("  a b\tc "), "  a b\tc");
+        assert_eq!(trim_trailing_ws("a \n b"), "a \n b");
+        assert_eq!(trim_trailing_ws("abc\0 "), "abc\0");
+        assert_eq!(trim_trailing_ws("abc \0"), "abc \0");
+        // all-whitespace and empty: "" (defined), not undef
+        assert_eq!(trim_trailing_ws(" \t\n"), "");
+        assert_eq!(trim_trailing_ws(""), "");
+        assert_eq!(trim_trailing_ws("abc"), "abc");
+        // NOT Unicode White_Space: Perl's byte-string `\s` leaves these,
+        // and `str::trim_end` would not
+        assert_eq!(trim_trailing_ws("abc\u{a0}"), "abc\u{a0}");
+        assert_eq!(trim_trailing_ws("abc\u{85}"), "abc\u{85}");
+        assert_eq!(trim_trailing_ws("abc\u{2003}"), "abc\u{2003}");
+        assert_eq!(trim_trailing_ws("abc\u{a0} "), "abc\u{a0}");
+    }
+
+    #[test]
     fn convert_pfn_matches_exiftool() {
         assert_eq!(convert_pfn(0.0), "Off");
         assert_eq!(convert_pfn(1.0), "On");
@@ -1216,6 +1298,57 @@ mod tests {
         assert!(close(canon_ev(44.0), 1.333_333_333_333_333_3));
         assert!(close(canon_ev(12.7), 0.355_208_333_333_333_3));
         assert_eq!(canon_ev(200.0), 6.25);
+    }
+
+    /// `RoundFloat($n / $d, 10)` (ExifTool.pm:5960-5964, 6107-6120) parsed
+    /// back is the same digits under `%.15g`: the value an IFD rational
+    /// carries prints as ExifTool prints it. Expected strings are
+    /// `perl -e 'printf("%.10g", $n / $d)'` (perl 5.34.1, C `%g`), and the
+    /// numified round trip was checked there too (`$s + 0` interpolated).
+    /// `4.39984436747585` is the OlympusIR-500 FocalPlaneDiagonal quotient;
+    /// its integer form in the brief (4399844367/1000000000) is not a
+    /// `rational64u` (the numerator exceeds `u32::MAX`), so it is pinned as
+    /// the quotient.
+    #[test]
+    fn round_float_10_reads_back_as_the_digits_perl_prints() {
+        let cases: &[(f64, &str)] = &[
+            (1.0 / 3.0, "0.3333333333"),
+            (256.0 / 1_476_505_344.0, "1.733823728e-07"),
+            (4.399_844_367_475_85, "4.399844367"),
+            (2.0 / 1.0, "2"),
+            (1.0 / 4000.0, "0.00025"),
+            (4_294_967_295.0 / 1.0, "4294967295"),
+            (1.0 / 4_294_967_295.0, "2.328306437e-10"),
+            (-1.0 / 2.0, "-0.5"),
+            (1.0 / 7.0, "0.1428571429"),
+            (-2_147_483_648.0 / 1.0, "-2147483648"),
+        ];
+        for (quotient, expected) in cases {
+            assert_eq!(perl_g(*quotient, 10), *expected, "RoundFloat of {quotient}");
+            let rounded = round_float(*quotient, 10);
+            assert_eq!(
+                perl_num(rounded),
+                *expected,
+                "%.15g of the parsed number must be the %.10g string for {quotient}"
+            );
+            // Parsing loses the digits beyond ten, so a quotient that needed
+            // them is not returned unchanged ...
+            if perl_num(*quotient) != *expected {
+                assert_ne!(
+                    rounded, *quotient,
+                    "{quotient} carries more than ten digits"
+                );
+            }
+        }
+        // ... while an exact quotient is: `$$conv{2}` still hits key 2.
+        assert_eq!(round_float(2.0, 10), 2.0);
+        assert_eq!(round_float(4_294_967_295.0, 10), 4_294_967_295.0);
+        // The 32-bit width (`GetRational32u`, ExifTool.pm:6100-6106) is the
+        // same rule at seven digits.
+        assert_eq!(perl_num(round_float(1.0 / 3.0, 7)), "0.3333333");
+        // Non-finite passes through untouched.
+        assert!(round_float(f64::INFINITY, 10).is_infinite());
+        assert!(round_float(f64::NAN, 10).is_nan());
     }
 
     /// `%g` at the precisions the 13.59 tables use (2, 7, 8, the bare

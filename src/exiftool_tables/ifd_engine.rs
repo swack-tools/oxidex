@@ -126,6 +126,7 @@ use crate::io::ByteOrder;
 
 use super::cond::{self, MemberValue};
 use super::engine::{self, Dir, Emitted, Guard};
+use super::exprs;
 use super::ifd_schema::{IfdByteOrder, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, RawConvEffect};
 use super::runtime::{self, DecodedValue, decode_value_of};
 use super::subdir::BaseExpr;
@@ -506,10 +507,11 @@ fn read_plan(located: &Located<'_>, override_fmt: Option<Fmt>) -> Option<ReadPla
         // `$formatStr = $readFormat` (Exif.pm:6736) runs after Exif.pm:6682.
         count = size / new_size;
     }
-    if count == 0 {
-        // ExifTool.pm:6296-6297: `ReadValue` returns `''` for a zero count.
-        return None;
-    }
+    // ExifTool.pm:6296-6297: `return '' if defined $count` -- a zero count is
+    // not a refusal, it is the empty value, which `FoundTag` records like any
+    // other (OlympusXZ-1.jpg RawDevelopment2 0x0108, a 0-byte `int16s`,
+    // prints `""` and overwrites the RawDevelopment copy's `0`). `decode_plan`
+    // turns the zero-count plan into that empty string.
     Some(ReadPlan { kind, count })
 }
 
@@ -518,6 +520,10 @@ fn read_plan(located: &Located<'_>, override_fmt: Option<Fmt>) -> Option<ReadPla
 /// `$size` (Exif.pm:6503), so `$len * $count <= $size` by construction.
 fn decode_plan(located: &Located<'_>, plan: ReadPlan, order: ByteOrder) -> Option<DecodedValue> {
     let bytes = located.bytes;
+    if plan.count == 0 {
+        // ExifTool.pm:6296-6297, whatever the format.
+        return Some(DecodedValue::String(String::new()));
+    }
     match plan.kind {
         Kind::Num(fmt) => {
             let elem = usize::try_from(fmt.size()).ok()?;
@@ -757,6 +763,11 @@ fn walk(
         let Some(raw) = decode_plan(&located, plan, dir.byte_order) else {
             continue;
         };
+        // ExifTool.pm:6107-6120: the rational `ReadValue` hands on is already
+        // `RoundFloat($n / $d, 10)`, so everything below -- the `RawConv`
+        // member, `ValueConv`, `PrintConv`, the unconverted report -- sees
+        // that number, not the exact quotient. See `round_rationals`.
+        let raw = round_rationals(raw);
         // ExifTool.pm:9484-9505: `FoundTag` runs `RawConv` before any
         // conversion; the one shape carried as data stores the raw value
         // and returns it unchanged (the assignment's value).
@@ -858,6 +869,9 @@ fn group1_of(table: &IfdTable, tag: &IfdTag, dir: &IfdDir<'_>) -> Option<&'stati
 /// with `$val` bound to the value `ReadValue` returned). `Num` for an
 /// integer, else the Perl string of the value ([`DecodedValue::perl_string`];
 /// a multi-count entry is the space-joined string ExifTool.pm:6330 built).
+/// A rational arrives here already rounded ([`round_rationals`]), so the
+/// member holds the `RoundFloat($n / $d, 10)` digits ExifTool's `RawConv`
+/// would have stored -- `0.3333333333` for 1/3, never `0.333333333333333`.
 /// `None` when the value has no faithful Perl string (an `undef` run that is
 /// not UTF-8): the member is left unset and the tag withheld, so a later
 /// `Condition` sees "undefined" rather than an invented value.
@@ -886,9 +900,14 @@ fn member_value(raw: &DecodedValue) -> Option<MemberValue> {
 /// rational is always TIFF type 5 or 10, i.e. what `GetRational64u`/
 /// `GetRational64s` return -- `RoundFloat($n / $d, 10)`, or `inf` / `undef`
 /// for a zero denominator (ExifTool.pm:6107-6120, 5960-5964) -- which
-/// [`runtime::perl_rational64`] renders. An `undef` byte run is not a Perl
-/// number and a nested array cannot occur as an element (callers join the
-/// outer array themselves): both are `None`, keeping this a scalar rule.
+/// [`runtime::perl_rational64`] renders. From `walk` only the zero-
+/// denominator pairs still reach these arms: [`round_rationals`] has turned
+/// every other rational into the `Float` that string numifies to, which the
+/// `Float` arm prints back as the same digits. The rational arms stay so the
+/// rule is total over the type (and so the `inf`/`undef` spelling has one
+/// home). An `undef` byte run is not a Perl number and a nested array cannot
+/// occur as an element (callers join the outer array themselves): both are
+/// `None`, keeping this a scalar rule.
 fn ifd_perl_string(value: &DecodedValue) -> Option<String> {
     match value {
         DecodedValue::UnsignedRational(numerator, denominator) => Some(runtime::perl_rational64(
@@ -901,6 +920,55 @@ fn ifd_perl_string(value: &DecodedValue) -> Option<String> {
         )),
         DecodedValue::Undefined(_) | DecodedValue::Array(_) => None,
         other => other.perl_string(),
+    }
+}
+
+/// The `ReadValue` step applied to every decoded entry before anything
+/// consumes it: a rational element is neither the pair nor the exact
+/// quotient but what `GetRational64u`/`GetRational64s` return --
+/// `RoundFloat($n / $d, 10)` (ExifTool.pm:6112, 6119), and `RoundFloat` is
+/// literally `sprintf("%.10g", $val)` (ExifTool.pm:5960-5964) -- a STRING
+/// that every later consumer numifies: the `RawConv` `$$self{X} = $val`
+/// (ExifTool.pm:9497-9500) stores those digits, a `ValueConv`/`PrintConv`
+/// expression computes on that number (ExifTool.pm:3530-3664), a hash
+/// `PrintConv` keys `$$conv{$val}` by it (ExifTool.pm:3616), `"$val mm"`
+/// interpolates it, and an unconverted tag reports it. Handing on the exact
+/// quotient instead printed `1.73382372803657e-07 mm` for Olympus
+/// `FocalPlaneDiagonal` 256/1476505344 where the pinned 13.59 oracle prints
+/// `1.733823728e-07 mm` (5 corpus files under `scripts/compare_file.py`;
+/// the census is in `olympus/tables.rs` above `ENGINE_MISRENDERS`).
+///
+/// So each nonzero-denominator rational becomes the `Float`
+/// [`exprs::round_float`]`(n / d, 10)`: the double Perl parses from that
+/// string, whose `%.15g` is the string again (see there), so it prints the
+/// same digits wherever `perl_num` runs. Element-wise inside a fixed-count
+/// entry, as `ReadValue` rounds each element before joining (ExifTool.pm:
+/// 6312-6321). An integral quotient is still the integer key the integer-
+/// keyed hash arms look up (`DecodedValue::integer` reads an integral
+/// `Float`, so `$$conv{2}` hits for 2/1). A zero denominator returns
+/// `inf`/`undef` BEFORE `RoundFloat` (ExifTool.pm:6111, 6118) and is left as
+/// the pair for [`ifd_perl_string`]/[`runtime::to_tag_value`] to spell. The
+/// 64-bit width is this engine's to assume: an entry's rational is TIFF type
+/// 5 or 10; the binary engine's `rational32u` (seven digits, ExifTool.pm:
+/// 6100-6106) never comes through here.
+fn round_rationals(raw: DecodedValue) -> DecodedValue {
+    match raw {
+        DecodedValue::UnsignedRational(numerator, denominator) if denominator != 0 => {
+            DecodedValue::Float(exprs::round_float(
+                f64::from(numerator) / f64::from(denominator),
+                10,
+            ))
+        }
+        DecodedValue::SignedRational(numerator, denominator) if denominator != 0 => {
+            DecodedValue::Float(exprs::round_float(
+                f64::from(numerator) / f64::from(denominator),
+                10,
+            ))
+        }
+        DecodedValue::Array(values) => {
+            DecodedValue::Array(values.into_iter().map(round_rationals).collect())
+        }
+        other => other,
     }
 }
 
@@ -1277,7 +1345,7 @@ mod tests {
     use super::*;
     use crate::exiftool_tables::cond::{CmpOp, Cond};
     use crate::exiftool_tables::ifd_schema::IfdVariantGroup;
-    use crate::exiftool_tables::{GateA, IfdFlags, Omitted, PrintConv, TagGroups};
+    use crate::exiftool_tables::{ExprId, GateA, IfdFlags, Omitted, PrintConv, TagGroups};
 
     // -- Test-only enablement/lookup registry ----------------------------------
     //
@@ -1775,8 +1843,24 @@ mod tests {
         plain(0x0003, "Ratios"),
         plain(0x0004, "Utf8"),
         plain(0x0005, "Floats"),
+        plain(0x0006, "Empty"),
     ];
     static NUMERIC: IfdTable = table("Numeric", NUMERIC_TAGS);
+
+    #[test]
+    fn a_zero_count_entry_reads_as_the_empty_value() {
+        // ExifTool.pm:6296-6297: `return '' if defined $count` -- a zero-count
+        // entry is reported with the empty value, not skipped. OlympusXZ-1.jpg's
+        // RawDevelopment2 0x0108 (a 0-byte `int16s`) prints `""` and, walked
+        // after RawDevelopment, overwrites that table's `0` under the same name.
+        let order = ByteOrder::Big;
+        let data = ifd(order, &[entry(order, 0x0006, 8, 0, [0, 0, 0, 0])], &[]);
+        let got = run(&NUMERIC, &data, order, Some(0));
+        assert_eq!(
+            values(&got),
+            vec![("Empty", TagValue::String(String::new()))]
+        );
+    }
 
     #[test]
     fn a_multi_count_numeric_entry_is_one_space_joined_string() {
@@ -1807,14 +1891,11 @@ mod tests {
             values(&got),
             vec![
                 ("Triple", TagValue::String("1 2 3".to_string())),
-                // A single rational keeps its shape (design spec section 3).
-                (
-                    "Ratio",
-                    TagValue::Rational {
-                        numerator: 1,
-                        denominator: 3
-                    }
-                ),
+                // `decode_plan` still yields the pair (design spec section
+                // 3); the `ReadValue` step (`round_rationals`) then makes it
+                // the number `RoundFloat(1 / 3, 10)` numifies to (ExifTool.pm:
+                // 6119), which is what a single unconverted rational reports.
+                ("Ratio", TagValue::Float(0.333_333_333_3)),
                 ("Ratios", TagValue::String("0.3333333333 inf".to_string())),
                 ("Utf8", TagValue::String("caf\u{e9}!".to_string())),
                 (
@@ -1825,12 +1906,197 @@ mod tests {
         );
     }
 
+    // -- ReadValue's rational is RoundFloat(.., 10) (ExifTool.pm:6107-6120) --------
+
+    static ROUNDED_TAGS: &[IfdTag] = &[
+        // Olympus.pm:755-760 0x0205 `FocalPlaneDiagonal`, `rational64u`,
+        // `PrintConv => '"$val mm"'` -- the generated expression itself.
+        IfdTag {
+            print_conv: PrintConv::Expr(ExprId::ValMm18ABDF),
+            ..plain(0x0001, "Diagonal")
+        },
+        IfdTag {
+            print_conv: PrintConv::IntEnum(&[(2, "Two")]),
+            ..plain(0x0002, "Mode")
+        },
+        IfdTag {
+            raw_conv: Some(RawConvEffect::SetMember {
+                member: "TestRatio",
+            }),
+            ..plain(0x0003, "Ratio")
+        },
+        IfdTag {
+            print_conv: PrintConv::IntEnum(&[(1, "One")]),
+            ..plain(0x0004, "Signed")
+        },
+        plain(0x0005, "Zero"),
+        IfdTag {
+            print_conv: PrintConv::StrEnum(&[("0.5 0.25", "Quarter")]),
+            ..plain(0x0006, "Pair")
+        },
+        plain(0x0007, "Big"),
+    ];
+    static ROUNDED: IfdTable = table("Rounded", ROUNDED_TAGS);
+
+    /// Every consumer of a rational sees `RoundFloat($n / $d, 10)`
+    /// (ExifTool.pm:6112/6119, `sprintf("%.10g")` at 5960-5964): the
+    /// `"$val mm"` interpolation, the integer-keyed hash, the `RawConv`
+    /// member store, the miss text, the joined key of a fixed-count entry
+    /// and the unconverted report. Expected strings are perl 5.34.1's own
+    /// `printf("%.10g", $n / $d)`; the `1.733823728e-07 mm` line is what
+    /// the pinned oracle prints for `OlympusFE-120.jpg` (`olympus/tables.rs`,
+    /// `ENGINE_MISRENDERS`).
     #[test]
-    fn a_zero_count_entry_is_withheld() {
-        // ExifTool reports `''` (ExifTool.pm:6297); not reproduced, refused.
+    fn a_rational_is_read_as_round_float_10_before_any_conversion() {
         let order = ByteOrder::Big;
-        let data = ifd(order, &[entry(order, 0x0001, 3, 0, [0; 4])], &[]);
-        assert!(run(&NUMERIC, &data, order, Some(0)).is_empty());
+        let floor = trailer_at(7) as u32;
+        let rational = |n: u32, d: u32| {
+            let mut bytes = Vec::with_capacity(8);
+            bytes.extend_from_slice(&bytes32(order, n));
+            bytes.extend_from_slice(&bytes32(order, d));
+            bytes
+        };
+        let mut trailer = Vec::new();
+        trailer.extend(rational(256, 1_476_505_344)); // floor + 0
+        trailer.extend(rational(2, 1)); // floor + 8
+        trailer.extend(rational(1, 3)); // floor + 16
+        trailer.extend(rational((-1i32) as u32, 2)); // floor + 24, rational64s
+        trailer.extend(rational(4, 0)); // floor + 32
+        trailer.extend(rational(1, 2)); // floor + 40
+        trailer.extend(rational(1, 4)); // floor + 48
+        trailer.extend(rational(4_294_967_295, 1)); // floor + 56
+        let data = ifd(
+            order,
+            &[
+                entry(order, 0x0001, 5, 1, bytes32(order, floor)),
+                entry(order, 0x0002, 5, 1, bytes32(order, floor + 8)),
+                entry(order, 0x0003, 5, 1, bytes32(order, floor + 16)),
+                entry(order, 0x0004, 10, 1, bytes32(order, floor + 24)),
+                entry(order, 0x0005, 5, 1, bytes32(order, floor + 32)),
+                entry(order, 0x0006, 5, 2, bytes32(order, floor + 40)),
+                entry(order, 0x0007, 5, 1, bytes32(order, floor + 56)),
+            ],
+            &trailer,
+        );
+        let mut members = HashMap::new();
+        let got = run_with(&ROUNDED, &data, order, Some(0), &mut members);
+        assert_eq!(
+            values(&got),
+            vec![
+                // `%.10g`, not `%.15g`: `1.73382372803657e-07 mm` was the defect.
+                (
+                    "Diagonal",
+                    TagValue::String("1.733823728e-07 mm".to_string())
+                ),
+                // An exact quotient is still the integer key: `$$conv{2}` hits.
+                ("Mode", TagValue::String("Two".to_string())),
+                // Unconverted: the number the ten-digit string numifies to.
+                ("Ratio", TagValue::Float(0.333_333_333_3)),
+                // A hash miss interpolates the rounded `$val` (ExifTool.pm:3633).
+                ("Signed", TagValue::String("Unknown (-0.5)".to_string())),
+                // A zero denominator is `inf` before `RoundFloat` (ExifTool.pm:
+                // 6118): the pair is kept for the caller to spell.
+                (
+                    "Zero",
+                    TagValue::Rational {
+                        numerator: 4,
+                        denominator: 0
+                    }
+                ),
+                // Element-wise, then `join(' ', @vals)` keys the hash.
+                ("Pair", TagValue::String("Quarter".to_string())),
+                // The full `u32` range survives (no `i32` wrap).
+                ("Big", TagValue::Float(4_294_967_295.0)),
+            ]
+        );
+        // `$$self{TestRatio} = $val` stored the `RoundFloat` digits.
+        assert_eq!(
+            members.get("TestRatio"),
+            Some(&MemberValue::Str("0.3333333333".to_string()))
+        );
+    }
+
+    #[test]
+    fn round_rationals_rounds_each_element_and_keeps_zero_denominators() {
+        assert_eq!(
+            round_rationals(DecodedValue::UnsignedRational(1, 3)),
+            DecodedValue::Float(0.333_333_333_3)
+        );
+        assert_eq!(
+            round_rationals(DecodedValue::SignedRational(-1, 2)),
+            DecodedValue::Float(-0.5)
+        );
+        assert_eq!(
+            round_rationals(DecodedValue::UnsignedRational(4, 0)),
+            DecodedValue::UnsignedRational(4, 0)
+        );
+        assert_eq!(
+            round_rationals(DecodedValue::SignedRational(0, 0)),
+            DecodedValue::SignedRational(0, 0)
+        );
+        assert_eq!(
+            round_rationals(DecodedValue::Array(vec![
+                DecodedValue::UnsignedRational(1, 3),
+                DecodedValue::UnsignedRational(5, 0),
+                DecodedValue::Integer(7),
+            ])),
+            DecodedValue::Array(vec![
+                DecodedValue::Float(0.333_333_333_3),
+                DecodedValue::UnsignedRational(5, 0),
+                DecodedValue::Integer(7),
+            ])
+        );
+        // The rounded number prints the ten-digit string, and the joined
+        // form is what ExifTool.pm:6330 builds from the element strings.
+        assert_eq!(
+            ifd_perl_string(&DecodedValue::Float(0.333_333_333_3)).as_deref(),
+            Some("0.3333333333")
+        );
+        let other = DecodedValue::String("s".to_string());
+        assert_eq!(round_rationals(other.clone()), other);
+    }
+
+    // -- A hash PrintConv keyed by a fixed-count value (ExifTool.pm:6330, 3616) ---
+
+    static WB_MODE_TAGS: &[IfdTag] = &[IfdTag {
+        // Olympus.pm:1020-1041 0x1015 `WBMode`, `int16u[2]`, keyed by the
+        // space-joined value; the bare `'1'` key is ExifTool's own.
+        count: Some(2),
+        print_conv: PrintConv::StrEnum(&[("1", "Auto"), ("1 0", "Auto"), ("3 0", "One-touch")]),
+        ..plain(0x1015, "WBMode")
+    }];
+    static WB_MODE: IfdTable = table("WbMode", WB_MODE_TAGS);
+
+    /// `ReadValue` returns `join(' ', @vals)` for a count above one
+    /// (ExifTool.pm:6330) and `GetValue` looks `$$conv{$val}` up with it
+    /// (ExifTool.pm:3616), `Unknown ($val)` on a miss (ExifTool.pm:3633).
+    /// The pinned oracle prints `Auto` for `OlympusBrioD100.jpg`'s `1 0`,
+    /// `One-touch` for `OlympusE10.jpg`'s `3 0` and `Unknown (1 1)` for
+    /// `OlympusC160.jpg` (`olympus/tables.rs`, `ENGINE_MISRENDERS`); the walk
+    /// used to fall back to the raw `1 0`.
+    #[test]
+    fn a_fixed_count_entry_keys_a_hash_print_conv_by_its_joined_value() {
+        let order = ByteOrder::Little;
+        let pair = |a: u16, b: u16| {
+            let mut value = [0u8; 4];
+            value[..2].copy_from_slice(&bytes16(order, a));
+            value[2..].copy_from_slice(&bytes16(order, b));
+            entry(order, 0x1015, 3, 2, value)
+        };
+        for (entry, expected) in [
+            (pair(1, 0), "Auto"),
+            (pair(3, 0), "One-touch"),
+            (pair(1, 1), "Unknown (1 1)"),
+            // A one-count entry is `$vals[0]` (ExifTool.pm:6331): the bare key.
+            (int16u_entry(order, 0x1015, 1), "Auto"),
+            (int16u_entry(order, 0x1015, 9), "Unknown (9)"),
+        ] {
+            let data = ifd(order, &[entry], &[]);
+            assert_eq!(
+                values(&run(&WB_MODE, &data, order, Some(0))),
+                vec![("WBMode", TagValue::String(expected.to_string()))]
+            );
+        }
     }
 
     // -- Bad format codes (Exif.pm:6463-6478) --------------------------------------
@@ -1964,6 +2230,72 @@ mod tests {
         assert_eq!(
             values(&run(&VARIANTS, &data, order, Some(0))),
             vec![("Other", TagValue::Integer(5))]
+        );
+    }
+
+    // -- the entry's count reaching a CountCmp variant (slice I-3) -----------------
+
+    static E1_OR_EM5: Cond = Cond::MemberRegex {
+        member: "Model",
+        pattern: r"E-(1|M5)\b",
+        ignore_case: false,
+        negate: false,
+    };
+    static COUNT_NE_1: Cond = Cond::CountCmp {
+        op: CmpOp::Ne,
+        value: 1,
+    };
+    static COUNT_GROUPS: &[IfdVariantGroup] = &[IfdVariantGroup {
+        id: 0x1500,
+        alternatives: &[
+            (
+                Cond::Or(&E1_OR_EM5, &COUNT_NE_1),
+                plain(0x1500, "SensorTemperatureRaw"),
+            ),
+            (Cond::Always, plain(0x1500, "SensorTemperatureCalibrated")),
+        ],
+    }];
+    static COUNTS: IfdTable = IfdTable {
+        variants: COUNT_GROUPS,
+        ..table("Counts", &[])
+    };
+
+    #[test]
+    fn the_entry_count_is_in_scope_for_a_variant_condition() {
+        // Olympus.pm:3580-3590 (FocusInfo 0x1500: `$$self{Model} =~
+        // /E-(1|M5)\b/ || $count != 1`) through Exif.pm:6719-6720, which
+        // hands `GetTagInfo` the entry's own count (Exif.pm:6461).
+        let order = ByteOrder::Little;
+        let names = |got: &[Emitted]| {
+            values(got)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
+        };
+
+        let mut members = HashMap::new();
+        members.insert("Model", MemberValue::Str("E-510".to_string()));
+        let one = ifd(order, &[int16u_entry(order, 0x1500, 534)], &[]);
+        assert_eq!(
+            names(&run_with(&COUNTS, &one, order, Some(0), &mut members)),
+            vec!["SensorTemperatureCalibrated"],
+            "E-510, count 1: the model regex misses and `$count != 1` is false"
+        );
+        // int16u[2] still fits the 4-byte value field, so the count is the
+        // only thing that differs from the entry above.
+        let mut inline = [0u8; 4];
+        inline[..2].copy_from_slice(&bytes16(order, 34));
+        let two = ifd(order, &[entry(order, 0x1500, 3, 2, inline)], &[]);
+        assert_eq!(
+            names(&run_with(&COUNTS, &two, order, Some(0), &mut members)),
+            vec!["SensorTemperatureRaw"],
+            "E-510, count 2: `$count != 1` selects the first alternative"
+        );
+        members.insert("Model", MemberValue::Str("E-M5".to_string()));
+        assert_eq!(
+            names(&run_with(&COUNTS, &one, order, Some(0), &mut members)),
+            vec!["SensorTemperatureRaw"],
+            "E-M5, count 1: the model regex alone selects the first alternative"
         );
     }
 

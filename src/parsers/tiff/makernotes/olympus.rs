@@ -676,15 +676,78 @@ impl OlympusParser {
             );
         }
 
+        // Slice I-3 (design spec section 5): the seven sub-tables
+        // `enabled_ifd.rs` lists were walked by the engine ABOVE --
+        // `ifd_engine::descend` follows the generated Main table's 0x2010,
+        // 0x2020, 0x2030, 0x2031, 0x2040, 0x2050 and 0x3000 edges in entry
+        // order, which is ExifTool's order (Exif.pm:6919-7102), under the
+        // same allowlist check -- so for each of them only the residual rows
+        // run here: `tables::<TABLE>_RESIDUAL`, the rows the generated table
+        // withholds plus the overrides whose hand rendering must land last
+        // (tables.rs pins both classes per table). A table the list does not
+        // carry, or every table when the Main line itself is off, keeps its
+        // hand walk exactly as before. FocusInfo's two model-conditional
+        // passes below the loop (`parse_focus_info_*`) are part of its
+        // residual: they keep producing the `FocusDistance` row and the
+        // `_variants` alternatives the generated table withholds, and skip
+        // the two alternatives the engine reports
+        // (`focus_info_engine_reports`). The lookups are spelled with
+        // literal arguments for `reachability.py`'s census.
+        let main_walked = main_table.is_some();
+        let equipment = sub_table_rows(
+            main_walked,
+            find_ifd_table("Olympus", "Equipment"),
+            tables::EQUIPMENT,
+            tables::EQUIPMENT_RESIDUAL,
+        );
+        let camera_settings = sub_table_rows(
+            main_walked,
+            find_ifd_table("Olympus", "CameraSettings"),
+            tables::CAMERA_SETTINGS,
+            tables::CAMERA_SETTINGS_RESIDUAL,
+        );
+        let raw_development = sub_table_rows(
+            main_walked,
+            find_ifd_table("Olympus", "RawDevelopment"),
+            tables::RAW_DEVELOPMENT,
+            tables::RAW_DEVELOPMENT_RESIDUAL,
+        );
+        let raw_development2 = sub_table_rows(
+            main_walked,
+            find_ifd_table("Olympus", "RawDevelopment2"),
+            tables::RAW_DEVELOPMENT2,
+            tables::RAW_DEVELOPMENT2_RESIDUAL,
+        );
+        let image_processing = sub_table_rows(
+            main_walked,
+            find_ifd_table("Olympus", "ImageProcessing"),
+            tables::IMAGE_PROCESSING,
+            tables::IMAGE_PROCESSING_RESIDUAL,
+        );
+        let raw_info = sub_table_rows(
+            main_walked,
+            find_ifd_table("Olympus", "RawInfo"),
+            tables::RAW_INFO,
+            tables::RAW_INFO_RESIDUAL,
+        );
+        let focus_info_table = find_ifd_table("Olympus", "FocusInfo");
+        let focus_info = sub_table_rows(
+            main_walked,
+            focus_info_table,
+            tables::FOCUS_INFO,
+            tables::FOCUS_INFO_RESIDUAL,
+        );
+        let focus_info_engine_walked = engine_walks(main_walked, focus_info_table);
+
         for entry in &entries {
             let table: &[ifd::TagDef] = match entry.tag_id {
-                OLYMPUS_EQUIPMENT_SUBIFD => tables::EQUIPMENT,
-                OLYMPUS_CAMERA_SETTINGS_SUBIFD => tables::CAMERA_SETTINGS,
-                OLYMPUS_RAW_DEVELOPMENT_SUBIFD => tables::RAW_DEVELOPMENT,
-                OLYMPUS_RAW_DEV2_SUBIFD => tables::RAW_DEVELOPMENT2,
-                OLYMPUS_IMAGE_PROCESSING_SUBIFD => tables::IMAGE_PROCESSING,
-                OLYMPUS_FOCUS_INFO_SUBIFD => tables::FOCUS_INFO,
-                OLYMPUS_RAW_INFO_SUBIFD => tables::RAW_INFO,
+                OLYMPUS_EQUIPMENT_SUBIFD => equipment,
+                OLYMPUS_CAMERA_SETTINGS_SUBIFD => camera_settings,
+                OLYMPUS_RAW_DEVELOPMENT_SUBIFD => raw_development,
+                OLYMPUS_RAW_DEV2_SUBIFD => raw_development2,
+                OLYMPUS_IMAGE_PROCESSING_SUBIFD => image_processing,
+                OLYMPUS_FOCUS_INFO_SUBIFD => focus_info,
+                OLYMPUS_RAW_INFO_SUBIFD => raw_info,
                 // ExifTool recurses into Olympus::Main a second time here
                 // (Olympus.pm 0x4000 `MainInfoIFD`); see tables::MAIN_INFO
                 // for why only BodyFirmwareVersion is re-declared for it.
@@ -729,6 +792,7 @@ impl OlympusParser {
                     base,
                     effective_byte_order,
                     model,
+                    focus_info_engine_walked,
                     tags,
                     value_forms,
                 );
@@ -743,28 +807,50 @@ impl OlympusParser {
         // very table the allowlist line enables -- but did so before the hand
         // sub-IFD walks ran, so the directory is walked once more here to put
         // its tags where ExifTool's order puts them. See `main_info_directory`.
-        if let Some(table) = main_table {
-            if let Some((start, order)) =
-                main_info_directory(data, ifd_start, &entries, base, effective_byte_order)
-            {
-                walk_main_through_engine(table, data, start, base, order, model, tags);
-                // The same remainder as for the top level: the withheld rows
-                // (a MainInfo directory carries SpecialMode and DigitalZoom
-                // too) and the overrides, in the same order relative to the
-                // engine's own insertions.
-                ifd::walk_directory(
-                    data,
-                    start,
-                    base,
-                    order,
-                    "Olympus",
-                    tables::MAIN_RESIDUAL,
-                    tags,
-                );
-            }
+        let main_info = main_info_directory(data, ifd_start, &entries, base, effective_byte_order);
+        if let Some(table) = main_table
+            && let Some((start, order)) = main_info
+        {
+            walk_main_through_engine(table, data, start, base, order, model, tags);
+            // The same remainder as for the top level: the withheld rows
+            // (a MainInfo directory carries SpecialMode and DigitalZoom
+            // too) and the overrides, in the same order relative to the
+            // engine's own insertions.
+            ifd::walk_directory(
+                data,
+                start,
+                base,
+                order,
+                "Olympus",
+                tables::MAIN_RESIDUAL,
+                tags,
+            );
         }
 
-        parse_camera_type_and_quality(data, ifd_start, &entries, base, effective_byte_order, tags);
+        // 0x0201 `Quality`, 0x0207 `CameraType` and 0x0208 `TextInfo` sit
+        // wherever the body put them: the older bodies write them in the
+        // top-level directory, the `OLYMPUS\0II` bodies from the FE/SP/u
+        // generations on write them ONLY inside the 0x4000 `MainInfo`
+        // directory (OlympusFE4010.jpg: the top level holds six entries --
+        // 0x0200, 0x0209 and four sub-directory pointers -- and MainInfo at
+        // note offset 0x3c0 holds Quality, CameraType and TextInfo). ExifTool
+        // walks MainInfo last, so both directories are scanned here in that
+        // order with `$$self{CameraType}` carried across them: the RawConv
+        // (Olympus.pm:767) sets the member at extraction, in directory
+        // order, and `Quality`'s PrintConv sub (Olympus.pm:708-726) reads it
+        // at conversion time -- after every directory -- so the FINAL member
+        // decides every Quality. 51 corpus files printed no CameraType and
+        // no Quality, and 44 no `Resolution` (a TextInfo row), for want of
+        // the second directory (conformance.py over combined-samples/Olympus
+        // at d4d6528b against the pinned 13.59 oracle).
+        let main_info_entries = main_info
+            .and_then(|(start, order)| Some((start, ifd::read_ifd(data, start, order)?, order)));
+        let mut directories: Vec<(usize, &[ifd::RawEntry], ByteOrder)> =
+            vec![(ifd_start, &entries, effective_byte_order)];
+        if let Some((start, mi_entries, order)) = &main_info_entries {
+            directories.push((*start, mi_entries, *order));
+        }
+        parse_camera_type_and_quality(data, &directories, base, tags);
 
         Ok(())
     }
@@ -773,6 +859,35 @@ impl OlympusParser {
 // ============================================================================
 // Olympus::Main through the generated table (slice I-2)
 // ============================================================================
+
+/// The rows `parse_located`'s sub-IFD loop walks for one sub-table (slice
+/// I-3): the residual when the engine's Main walk has already reported the
+/// table -- the Main line in force, so the walk ran, AND the sub-table's own
+/// line in force, so `ifd_engine::descend` did not refuse its edge -- else
+/// the full hand table. Either input alone is not enough: a sub-table line
+/// without the Main line reaches no engine walk at all (nothing descends
+/// into it), and the Main line without the sub-table line leaves the edge
+/// refused, so in both cases the hand walk is the only producer.
+fn sub_table_rows(
+    main_walked: bool,
+    table: Option<&'static IfdTable>,
+    hand: &'static [ifd::TagDef],
+    residual: &'static [ifd::TagDef],
+) -> &'static [ifd::TagDef] {
+    if engine_walks(main_walked, table) {
+        residual
+    } else {
+        hand
+    }
+}
+
+/// The condition [`sub_table_rows`] selects the residual on -- the engine's
+/// Main walk reported `table` -- on its own, for FocusInfo's model-conditional
+/// passes, which are part of that table's residual and need the same answer
+/// (`parse_focus_info_model_conditional`'s `engine_walked`).
+fn engine_walks(main_walked: bool, table: Option<&'static IfdTable>) -> bool {
+    main_walked && table.is_some_and(|t| t.enabled())
+}
 
 /// One `ProcessExif` walk of the generated `Olympus::Main` at `ifd_start`,
 /// inserted into the same `HashMap<String, String>` the hand walk fills, under
@@ -846,14 +961,17 @@ fn walk_main_through_engine(
 ///   `PrintConv`.
 /// * `Integer` -- decimal, as `OlyVal::Int`'s `print_raw`.
 /// * `Float` -- Perl's `%.15g` (`exprs::perl_num`), as `OlyVal::Float`'s
-///   `fmt_g15`. No `Olympus::Main` row is float-typed; kept for the shape.
-/// * `Rational` -- `ifd::print_rational`, exactly the hand rendering: an
-///   exact quotient prints as an integer, otherwise `RoundFloat` at 10
-///   significant digits (`GetRational64s`, ExifTool.pm:6107-6120). The
-///   `Olympus::Main` rows that reach this arm unconverted are all
-///   `rational64s` (0x1003, 0x1006, 0x1023, 0x1025, 0x103d, 0x103e), so the
-///   `i32` pair `TagValue::Rational` carries is exact; every `rational64u` row
-///   in the table has a `PrintConv` and arrives here already a `String`.
+///   `fmt_g15`. This is every unconverted rational with a nonzero
+///   denominator: the engine reads a 64-bit rational as the number Perl
+///   parses from `RoundFloat($n/$d, 10)` = `sprintf("%.10g")`
+///   (`GetRational64s`, ExifTool.pm:6107-6120, 5960-5964;
+///   `ifd_engine::round_rationals`), and `%.15g` of that number prints the
+///   same ten digits, which is what `ifd::print_rational` printed for the
+///   hand rows (0x1003, 0x1006, 0x1023, 0x1025, 0x103d, 0x103e). No
+///   `Olympus::Main` row is float-typed in the file.
+/// * `Rational` -- only a zero denominator reaches this arm now;
+///   `ifd::print_rational` prints it as ExifTool does (`inf` for a nonzero
+///   numerator, `undef` for zero, ExifTool.pm:6111/6118).
 /// * anything else -- dropped. `Binary` is an `undef` run with no
 ///   conversion (only 0x0000 `MakerNoteVersion` in this table, which no
 ///   Olympus note in the corpus carries): the string map cannot say whether
@@ -988,55 +1106,62 @@ fn main_info_directory(
 /// which is *not* `eq "NORMAL"` -- so ExifTool does extract it, prints
 /// `Unknown (NORMAL)`, and then `TextInfo` overwrites both the tag and the
 /// data member with the real body code.
+///
+/// `directories` are the IFDs ExifTool walks that can carry these three
+/// entries, in ExifTool's order (the top-level directory, then the 0x4000
+/// `MainInfo` directory when the note has one); the `CameraType` data member
+/// is carried across them, and the last `Quality` value seen is the one
+/// printed, as `FoundTag` lets a later same-priority value overwrite an
+/// earlier one.
 fn parse_camera_type_and_quality(
     data: &[u8],
-    ifd_start: usize,
-    entries: &[ifd::RawEntry],
+    directories: &[(usize, &[ifd::RawEntry], ByteOrder)],
     base: Option<i64>,
-    order: ByteOrder,
     tags: &mut HashMap<String, String>,
 ) {
-    let floor = ifd_start + 2 + entries.len() * 12 + 4;
     // ExifTool's `$$self{CameraType}`, tracked in extraction order.
     let mut camera_type: Option<String> = None;
     let mut quality: Option<i64> = None;
 
-    for entry in entries {
-        let decode = || ifd::decode_entry_with_floor(data, entry, base, order, None, floor);
-        match entry.tag_id {
-            MAIN_QUALITY => {
-                quality = decode().and_then(|v| v.ints().and_then(|n| n.first().copied()));
-            }
-            MAIN_CAMERA_TYPE => {
-                let Some(val) = decode() else { continue };
-                let ifd::OlyVal::Bytes(raw) = &val else {
-                    continue;
-                };
-                // `Condition => '$$valPt ne "NORMAL"'` tests the raw value.
-                if raw.as_slice() == b"NORMAL" {
-                    continue;
+    for &(ifd_start, entries, order) in directories {
+        let floor = ifd_start + 2 + entries.len() * 12 + 4;
+        for entry in entries {
+            let decode = || ifd::decode_entry_with_floor(data, entry, base, order, None, floor);
+            match entry.tag_id {
+                MAIN_QUALITY => {
+                    quality = decode().and_then(|v| v.ints().and_then(|n| n.first().copied()));
                 }
-                let Some(text) = val.as_string() else {
-                    continue;
-                };
-                // RawConv runs before ValueConv, so the data member keeps the
-                // trailing padding that ValueConv strips for display.
-                camera_type = Some(text.clone());
-                tags.insert(
-                    "Olympus:CameraType".to_string(),
-                    ifd::list_lookup_or_unknown(lookups::CAMERA_TYPE2, text.trim_end()),
-                );
-            }
-            MAIN_TEXT_INFO => {
-                let Some(val) = decode() else { continue };
-                let ifd::OlyVal::Bytes(raw) = &val else {
-                    continue;
-                };
-                if let Some(found) = text_info::parse(raw, tags) {
-                    camera_type = Some(found);
+                MAIN_CAMERA_TYPE => {
+                    let Some(val) = decode() else { continue };
+                    let ifd::OlyVal::Bytes(raw) = &val else {
+                        continue;
+                    };
+                    // `Condition => '$$valPt ne "NORMAL"'` tests the raw value.
+                    if raw.as_slice() == b"NORMAL" {
+                        continue;
+                    }
+                    let Some(text) = val.as_string() else {
+                        continue;
+                    };
+                    // RawConv runs before ValueConv, so the data member keeps the
+                    // trailing padding that ValueConv strips for display.
+                    camera_type = Some(text.clone());
+                    tags.insert(
+                        "Olympus:CameraType".to_string(),
+                        ifd::list_lookup_or_unknown(lookups::CAMERA_TYPE2, text.trim_end()),
+                    );
                 }
+                MAIN_TEXT_INFO => {
+                    let Some(val) = decode() else { continue };
+                    let ifd::OlyVal::Bytes(raw) = &val else {
+                        continue;
+                    };
+                    if let Some(found) = text_info::parse(raw, tags) {
+                        camera_type = Some(found);
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -1649,13 +1774,46 @@ fn af_point_details_forms(v: i64, model: &str) -> (String, String) {
     (value, print)
 }
 
+/// Whether the generated `IFD_OLYMPUS_FOCUSINFO` REPORTS `_variants` entry
+/// `id` for `model` -- the alternative `ifd_engine::resolve` picks (the
+/// first `Condition` match, ExifTool.pm:9164-9188) carries no `Omitted`
+/// flag -- so that, when the engine walked the directory, the hand pass must
+/// not produce it as well. Two alternatives are reported: 0x0308 `AFPoint`'s
+/// fourth (`$$self{Model}` matching `/^(E-M|OM-)/`, `Writable => 'int16u'`
+/// and nothing else, Olympus.pm:3456-3459, printed raw) and 0x031b
+/// `AFPointDetails`' second (every other body, Olympus.pm:3518-3522, raw).
+/// The other three `AFPoint` alternatives are withheld for their list
+/// `PrintConv`s and the E-P1 `RawConv` (Olympus.pm:3362, 3409, 3447), the
+/// E-M/OM `AFPointDetails` for its bit-field `ValueConv` (Olympus.pm:3471),
+/// and both 0x1500 `SensorTemperature` alternatives for their `PrintConv`
+/// and `RawConv` (Olympus.pm:3584, 3590): those stay the hand passes'.
+/// `focus_info_hand_pass_emits_exactly_the_withheld_alternatives` pins this
+/// split against the generated table's own `omitted` flags, resolved the
+/// engine's way, so a regeneration that flips one fails there by name. A
+/// missing `Model` (the payload-only `parse_with_model` path) is Perl's
+/// `undef !~ /re/`, true: `AFPoint`'s third alternative, withheld, on both
+/// sides.
+fn focus_info_engine_reports(id: u16, model: &str) -> bool {
+    match id {
+        0x0308 => is_em_or_om_model(model),
+        0x031B => !is_em_or_om_model(model),
+        _ => false,
+    }
+}
+
 /// Reads the three model-conditional `Olympus::FocusInfo` entries.
+///
+/// `engine_walked` is [`engine_walks`] for the generated `FocusInfo` table:
+/// when the IFD engine reported the directory, the alternatives it does not
+/// withhold ([`focus_info_engine_reports`]) are its rows and are skipped
+/// here, so every FocusInfo row has exactly one producer.
 fn parse_focus_info_model_conditional(
     data: &[u8],
     ifd_start: usize,
     base: Option<i64>,
     order: ByteOrder,
     model: Option<&str>,
+    engine_walked: bool,
     tags: &mut HashMap<String, String>,
     value_forms: &mut HashMap<String, String>,
 ) {
@@ -1670,6 +1828,9 @@ fn parse_focus_info_model_conditional(
     };
 
     for entry in &entries {
+        if engine_walked && focus_info_engine_reports(entry.tag_id, model) {
+            continue;
+        }
         match entry.tag_id {
             // `Format => 'int32u'` over the stored rational64u: the same eight
             // bytes, read as the numerator and denominator ExifTool splits.
@@ -2510,6 +2671,84 @@ mod olympus_preview_image_tests {
 #[cfg(test)]
 mod focus_info_model_conditional_tests {
     use super::*;
+    use crate::exiftool_tables::{ALL_IFD_TABLES, first_match_ifd};
+
+    /// The engine reports two of FocusInfo's model-conditional alternatives
+    /// itself and withholds the rest (`focus_info_engine_reports`), and
+    /// `parse_focus_info_model_conditional` emits an alternative only when
+    /// the engine does not. This resolves each `_variants` group of the
+    /// generated `IFD_OLYMPUS_FOCUSINFO` the way `ifd_engine::resolve` does
+    /// -- `cond::first_match_ifd` with `$$self{Model}` and `$count` in scope
+    /// -- for a body of every class ExifTool's conditions distinguish, and
+    /// requires the hand predicate to be the exact complement of "the
+    /// winner is not withheld". A regeneration that flips an alternative's
+    /// `omitted` fails here, naming the tag and model, rather than emitting
+    /// the row twice (the hand rendering silently overriding the engine's)
+    /// or not at all. `""` is the payload-only path with no `Model`.
+    #[test]
+    fn focus_info_hand_pass_emits_exactly_the_withheld_alternatives() {
+        let table = ALL_IFD_TABLES
+            .iter()
+            .find(|t| t.module == "Olympus" && t.table == "FocusInfo")
+            .copied()
+            .expect("Olympus::FocusInfo is generated");
+        let models = [
+            "E-1",
+            "E-3",
+            "E-5",
+            "E-30",
+            "E-300",
+            "E-500",
+            "E-520",
+            "E-600",
+            "E-620",
+            "E-P1",
+            "E-PL1",
+            "E-M5",
+            "E-M1MarkII",
+            "OM-1",
+            "OM-3",
+            "PEN-F",
+            "u760,S760",
+            "TG-4",
+            "Stylus1",
+            "",
+        ];
+        for id in [0x0308u16, 0x031B, 0x1500] {
+            let group = table
+                .variant_group(id)
+                .unwrap_or_else(|| panic!("{id:#06x} is a _variants group of Olympus::FocusInfo"));
+            for model in models {
+                for count in [1i64, 3] {
+                    let mut members = HashMap::new();
+                    if !model.is_empty() {
+                        members.insert("Model", MemberValue::Str(model.to_string()));
+                    }
+                    let mut ctx = Ctx::new(&mut members).with_count(count);
+                    let winner = first_match_ifd(group.alternatives, &mut ctx)
+                        .expect("a Cond::Always alternative ends every FocusInfo group");
+                    let engine_reports = !winner.omitted.any();
+                    assert_eq!(
+                        focus_info_engine_reports(id, model),
+                        engine_reports,
+                        "{id:#06x} {} for Model {model:?} count {count}: the engine {} it ({:?}), so the hand pass must {}",
+                        winner.name,
+                        if engine_reports {
+                            "reports"
+                        } else {
+                            "withholds"
+                        },
+                        winner.omitted,
+                        if engine_reports {
+                            "skip it"
+                        } else {
+                            "produce it"
+                        },
+                    );
+                }
+            }
+        }
+    }
 
     /// `OlympusE-30.jpg`  Model `E-30`
     ///   `AFPoint : Center (vertical); Single Target`   `-n` -> `17 0`

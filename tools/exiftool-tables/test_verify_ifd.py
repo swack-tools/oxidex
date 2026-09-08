@@ -680,9 +680,24 @@ class ReachabilityCensus(unittest.TestCase):
         self.assertIn("  -> Olympus::Equipment              x2   enabled", out)
         self.assertEqual(dict(reasons), {"ifd_expr_domain_unknown": 1})
 
-    def test_empty_ifd_allowlist_parses(self):
+    def test_ifd_allowlist_parses_exactly_the_lines_in_force(self):
+        # Slice I-1 pinned the empty allowlist here; slice I-2 landed the first
+        # line, and the pin went red for a day without anyone seeing it -- the
+        # Rust gate never runs this suite. The property worth pinning is the
+        # parser's: it returns exactly the uncommented `("Module", "Table")`
+        # tuples of the static and nothing else, so a line left behind a `//`
+        # (an OFF-PROOF toggle) is never counted as enabled.
         allowed = reachability.parse_allowlist(reachability.IFD_ALLOWLIST, "ENABLED_IFD")
-        self.assertEqual(allowed, set())
+        src = reachability.IFD_ALLOWLIST.read_text(encoding="utf-8")
+        body = src.split("pub static ENABLED_IFD", 1)[1].split("];", 1)[0]
+        expected = {
+            m.group(1, 2)
+            for m in re.finditer(r'^\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)\s*,', body, re.M)
+        }
+        self.assertEqual(allowed, expected)
+        self.assertIn(("Olympus", "Main"), allowed)
+        for module, table in allowed:
+            self.assertTrue(module and table, (module, table))
 
     def test_call_site_scan_keeps_the_two_lookups_apart(self):
         pat = re.compile(r'\bfind_table\(\s*"([^"]+)"\s*,\s*(?:"([^"]+)"|(\w+))\s*\)')
