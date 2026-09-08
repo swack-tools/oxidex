@@ -724,6 +724,10 @@ pub static EQUIPMENT: &[TagDef] = &[
 //   %.2x",@a[0,2])` (Olympus.pm:1649, 1716) feeding a string-keyed hash;
 //   `omitted.value_conv`. `print_lens_type` / `print_extender`.
 //
+// RETIRED (slice I-3 integration): the engine reads a 64-bit rational as
+// `RoundFloat($n/$d, 10)` before any conversion since commit ccb0567f, so the
+// row left this residual and the list below is empty (measured identical;
+// see the retiring commit). The record above stays as the class's history.
 // Override (`EQUIPMENT_ENGINE_MISRENDERS`, the second class of the
 // `MAIN_RESIDUAL` comment: the engine reports the row, the hand rendering
 // lands last):
@@ -748,7 +752,6 @@ pub static EQUIPMENT_RESIDUAL: &[TagDef] = &[
     // `PrintConv => '$val=~s/\s+$//;$val'` (Olympus.pm:1615, 1666); slice
     // I-3's trim-end form compiles it, the i7 oracle approved it, and the
     // regenerated table produces both rows, so their hand rows are gone.
-    TagDef::func(0x0103, "FocalPlaneDiagonal", print_mm),
     TagDef::func(0x0104, "BodyFirmwareVersion", print_firmware),
     TagDef::func(0x0201, "LensType", print_lens_type),
     TagDef::func(0x0204, "LensFirmwareVersion", print_firmware),
@@ -759,7 +762,7 @@ pub static EQUIPMENT_RESIDUAL: &[TagDef] = &[
 
 /// The `EQUIPMENT_RESIDUAL` rows that override an engine rendering rather
 /// than supply a withheld one -- see the comment above.
-pub static EQUIPMENT_ENGINE_MISRENDERS: &[u16] = &[0x0103];
+pub static EQUIPMENT_ENGINE_MISRENDERS: &[u16] = &[];
 
 // ===========================================================================
 // Olympus::CameraSettings (0x2020)
@@ -1440,6 +1443,11 @@ pub static CAMERA_SETTINGS: &[TagDef] = &[
 // edges to tables no allowlist carries, so the engine refuses them exactly
 // as the hand walk ignored them.
 //
+// RETIRED (slice I-3 integration): `runtime::render`'s `StrEnum` arm keys a
+// fixed-count `Array` by its space-joined elements since commit ccb0567f, so
+// the engine renders these rows as ExifTool does; the rows left this residual
+// and the list below is empty (measured identical on the Olympus directory,
+// see the retiring commit). The record above stays as the class's history.
 // Overrides (`CAMERA_SETTINGS_ENGINE_MISRENDERS`):
 //
 // * 0x0527 `NoiseFilter`, 0x052d `PictureModeEffect` -- `int16s[3]` with a
@@ -1506,7 +1514,6 @@ pub static CAMERA_SETTINGS_RESIDUAL: &[TagDef] = &[
         force_type: None,
         conv: Conv::List(CS_PICTURE_MODE_LIST),
     },
-    TagDef::list_lookup(0x0527, "NoiseFilter", CS_NOISE_FILTER),
     TagDef {
         id: 0x0529,
         name: "ArtFilter",
@@ -1519,7 +1526,6 @@ pub static CAMERA_SETTINGS_RESIDUAL: &[TagDef] = &[
         force_type: None,
         conv: Conv::List(CS_ART_FILTER_LIST),
     },
-    TagDef::list_lookup(0x052D, "PictureModeEffect", CS_PICTURE_MODE_EFFECT),
     TagDef {
         id: 0x052E,
         name: "ToneLevel",
@@ -1563,7 +1569,7 @@ pub static CAMERA_SETTINGS_RESIDUAL: &[TagDef] = &[
 
 /// The `CAMERA_SETTINGS_RESIDUAL` rows that override an engine rendering --
 /// see the comment above.
-pub static CAMERA_SETTINGS_ENGINE_MISRENDERS: &[u16] = &[0x0527, 0x052D];
+pub static CAMERA_SETTINGS_ENGINE_MISRENDERS: &[u16] = &[];
 
 // ===========================================================================
 // Olympus::RawDevelopment (0x2030)
@@ -1752,6 +1758,11 @@ pub static RAW_DEVELOPMENT2: &[TagDef] = &[
 // => 'ifd'`) is an edge to `Olympus::RawDevSubIFD`, which no allowlist
 // carries; the engine refuses it and the hand table never had a row for it.
 //
+// RETIRED (slice I-3 integration): `ifd_engine::read_plan`/`decode_plan` now
+// read a zero-count entry as ExifTool.pm:6296-6297 do (`return '' if defined
+// $count`), so the engine reports the empty value that overwrites the
+// RawDevelopment copy; the row left this residual and the list below is empty
+// (measured identical; see the retiring commit).
 // Override (`RAW_DEVELOPMENT2_ENGINE_MISRENDERS`):
 //
 // * 0x0108 `RawDevMemoryColorEmphasis` -- `Writable => 'int16u'`, no
@@ -1775,7 +1786,6 @@ pub static RAW_DEVELOPMENT2: &[TagDef] = &[
 //   empty value the entry comes out of both lists.
 pub static RAW_DEVELOPMENT2_RESIDUAL: &[TagDef] = &[
     TagDef::text(0x0000, "RawDevVersion"),
-    TagDef::raw(0x0108, "RawDevMemoryColorEmphasis"),
     TagDef {
         id: 0x0121,
         name: "RawDevArtFilter",
@@ -1786,7 +1796,7 @@ pub static RAW_DEVELOPMENT2_RESIDUAL: &[TagDef] = &[
 
 /// The `RAW_DEVELOPMENT2_RESIDUAL` row that overrides an engine
 /// (non-)rendering -- see the comment above.
-pub static RAW_DEVELOPMENT2_ENGINE_MISRENDERS: &[u16] = &[0x0108];
+pub static RAW_DEVELOPMENT2_ENGINE_MISRENDERS: &[u16] = &[];
 
 // ===========================================================================
 // Olympus::ImageProcessing (0x2040)
@@ -1934,6 +1944,11 @@ pub static IMAGE_PROCESSING: &[TagDef] = &[
 // 3265) IS compiled: the engine withholds the tag on a Perl `undef`, which
 // is what the hand `typed_func` did for 0.
 //
+// RETIRED (slice I-3 integration): `runtime::render`'s `StrEnum` arm keys a
+// fixed-count `Array` by its space-joined elements since commit ccb0567f, so
+// the engine renders these rows as ExifTool does; the rows left this residual
+// and the list below is empty (measured identical on the Olympus directory,
+// see the retiring commit). The record above stays as the class's history.
 // Overrides (`IMAGE_PROCESSING_ENGINE_MISRENDERS`):
 //
 // * 0x1112 `AspectRatio`, 0x1900 `KeystoneCompensation` -- `int8u[2]` with a
@@ -1957,13 +1972,11 @@ pub static IMAGE_PROCESSING_RESIDUAL: &[TagDef] = &[
         force_type: None,
         conv: Conv::List(IP_MULTIPLE_EXPOSURE_MODE_LIST),
     },
-    TagDef::list_lookup(0x1112, "AspectRatio", IP_ASPECT_RATIO),
-    TagDef::list_lookup(0x1900, "KeystoneCompensation", IP_KEYSTONE_COMPENSATION),
 ];
 
 /// The `IMAGE_PROCESSING_RESIDUAL` rows that override an engine rendering --
 /// see the comment above.
-pub static IMAGE_PROCESSING_ENGINE_MISRENDERS: &[u16] = &[0x1112, 0x1900];
+pub static IMAGE_PROCESSING_ENGINE_MISRENDERS: &[u16] = &[];
 
 // ===========================================================================
 // Olympus::FocusInfo (0x2050)

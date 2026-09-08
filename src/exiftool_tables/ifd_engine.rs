@@ -507,10 +507,11 @@ fn read_plan(located: &Located<'_>, override_fmt: Option<Fmt>) -> Option<ReadPla
         // `$formatStr = $readFormat` (Exif.pm:6736) runs after Exif.pm:6682.
         count = size / new_size;
     }
-    if count == 0 {
-        // ExifTool.pm:6296-6297: `ReadValue` returns `''` for a zero count.
-        return None;
-    }
+    // ExifTool.pm:6296-6297: `return '' if defined $count` -- a zero count is
+    // not a refusal, it is the empty value, which `FoundTag` records like any
+    // other (OlympusXZ-1.jpg RawDevelopment2 0x0108, a 0-byte `int16s`,
+    // prints `""` and overwrites the RawDevelopment copy's `0`). `decode_plan`
+    // turns the zero-count plan into that empty string.
     Some(ReadPlan { kind, count })
 }
 
@@ -519,6 +520,10 @@ fn read_plan(located: &Located<'_>, override_fmt: Option<Fmt>) -> Option<ReadPla
 /// `$size` (Exif.pm:6503), so `$len * $count <= $size` by construction.
 fn decode_plan(located: &Located<'_>, plan: ReadPlan, order: ByteOrder) -> Option<DecodedValue> {
     let bytes = located.bytes;
+    if plan.count == 0 {
+        // ExifTool.pm:6296-6297, whatever the format.
+        return Some(DecodedValue::String(String::new()));
+    }
     match plan.kind {
         Kind::Num(fmt) => {
             let elem = usize::try_from(fmt.size()).ok()?;
@@ -1838,8 +1843,24 @@ mod tests {
         plain(0x0003, "Ratios"),
         plain(0x0004, "Utf8"),
         plain(0x0005, "Floats"),
+        plain(0x0006, "Empty"),
     ];
     static NUMERIC: IfdTable = table("Numeric", NUMERIC_TAGS);
+
+    #[test]
+    fn a_zero_count_entry_reads_as_the_empty_value() {
+        // ExifTool.pm:6296-6297: `return '' if defined $count` -- a zero-count
+        // entry is reported with the empty value, not skipped. OlympusXZ-1.jpg's
+        // RawDevelopment2 0x0108 (a 0-byte `int16s`) prints `""` and, walked
+        // after RawDevelopment, overwrites that table's `0` under the same name.
+        let order = ByteOrder::Big;
+        let data = ifd(order, &[entry(order, 0x0006, 8, 0, [0, 0, 0, 0])], &[]);
+        let got = run(&NUMERIC, &data, order, Some(0));
+        assert_eq!(
+            values(&got),
+            vec![("Empty", TagValue::String(String::new()))]
+        );
+    }
 
     #[test]
     fn a_multi_count_numeric_entry_is_one_space_joined_string() {
@@ -1883,14 +1904,6 @@ mod tests {
                 ),
             ]
         );
-    }
-
-    #[test]
-    fn a_zero_count_entry_is_withheld() {
-        // ExifTool reports `''` (ExifTool.pm:6297); not reproduced, refused.
-        let order = ByteOrder::Big;
-        let data = ifd(order, &[entry(order, 0x0001, 3, 0, [0; 4])], &[]);
-        assert!(run(&NUMERIC, &data, order, Some(0)).is_empty());
     }
 
     // -- ReadValue's rational is RoundFloat(.., 10) (ExifTool.pm:6107-6120) --------
