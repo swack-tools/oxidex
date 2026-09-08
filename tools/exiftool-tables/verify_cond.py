@@ -9,26 +9,50 @@ shipped Rust `Cond::eval` over the same probe inputs and diffed the boolean
 result. Anything that disagrees is a real bug in the compiler, found before
 it ships a wrong first-match-wins decision under a real ExifTool tag name.
 
-Corpus: every distinct `Condition` string appearing in a binary table's
-`_variants` array in the pinned dump -- i.e. exactly the population
-`codegen.py`'s `compile_variant_group` draws from, so this oracle checks
-what actually shipped in `binary_tables.rs`, not a hypothetical wider
-grammar. Conditions `conds.py` refuses are skipped (nothing to verify: they
-were never compiled, `codegen.py` counts and reports the refusal itself).
+Corpus, three populations, reported separately so a number is never
+credited to the wrong one:
+
+  - `_variants`: every distinct `Condition` string appearing in a binary or
+    IFD-style table's `_variants` array in the pinned dump -- exactly the
+    population `codegen.py`'s `compile_variant_group` /
+    `compile_ifd_variant_group` draw from, so this part checks what
+    actually shipped in `binary_tables.rs` / `ifd_tables.rs`.
+  - single-entry: every distinct `Condition` on a scalar-keyed tag (no
+    `_variants`). `codegen.py` records these as `omitted.condition` and the
+    walks withhold the tag; NOTHING ships from them yet. They are probed
+    (slice I-3) because the grammar claims to compile them, and a claim the
+    oracle has not checked is worth nothing when the day comes to emit
+    them -- Olympus.pm:3621's `not defined $$self{ImageStabilization}` is
+    one, and the `defined` shape has no `_variants` instance at all.
+  - synthetic (`SYNTHETIC_CONDITIONS`): one Perl expression per connective
+    shape slice I-3's parser admits -- `&&`, `!`, `defined(...)`, and every
+    precedence pairing (`A || B and C`, `not A or B`, ...). The pinned dump
+    carries no `_variants` instance of most of them, and a per-atom probe
+    cannot see a grouping error: only a whole expression evaluated by Perl
+    can say the tree `conds.py` built is the tree Perl builds.
+
+Conditions `conds.py` refuses are skipped in every population (nothing to
+verify: they were never compiled, `codegen.py` counts and reports the
+refusal itself).
 
 Probe design (see `probes_for`): for each atomic construct inside a
 compiled condition -- a `$$self{Member} =~ /pattern/`, a `$$self{Member}
 <op> N`, a `$$self{Member} eq "str"`, `$$valPt =~ /pattern/`, `$format`/
-`$count` comparisons -- a small battery of concrete values is generated:
-literal strings the pattern's own vetted-subset AST would match (walked the
-same way `conds.py`'s validator walks it, so the same construct set is
-covered on both sides), numeric boundary values around each comparison
-target, and a handful of fixed decoys/near-misses. Every member/valPt/
-format/count channel referenced anywhere in the condition gets its own
-candidate list, and the FULL cross product (capped) becomes the probe
-battery for that condition -- this is what "the dump's own model-name
-corpus" means here: the model names ARE the corpus, generated straight out
-of ExifTool's own regex literals rather than a hand-picked list.
+`$count` comparisons, `defined $$self{Member}` -- a small battery of
+concrete values is generated: literal strings the pattern's own
+vetted-subset AST would match (walked the same way `conds.py`'s validator
+walks it, so the same construct set is covered on both sides), numeric
+boundary values around each comparison target (`$count` additionally gets
+1 and 2, the counts a scalar entry and a two-element one carry), a handful
+of fixed decoys/near-misses, and -- for a member that is `defined`-tested
+or read bare -- `UNDEF`, the member absent from `$self` exactly as
+ExifTool.pm:4331's `Init` leaves every DataMember before a file is read.
+Every member/valPt/format/count channel referenced anywhere in the
+condition gets its own candidate list, and the FULL cross product (capped)
+becomes the probe battery for that condition -- this is what "the dump's
+own model-name corpus" means here: the model names ARE the corpus,
+generated straight out of ExifTool's own regex literals rather than a
+hand-picked list.
 
 `Cond::SetMember` (the assignment-as-condition idiom) is NOT exercised by
 this corpus-driven oracle: none of the pinned dump's binary-table
@@ -83,20 +107,59 @@ def is_ifd_table(meta):
 
 
 def census(tables_json_path):
+    """-> `(exiftool_version, variants, single)`: two `{condition: uses}`
+    counters over the binary + IFD-style tables -- Conditions inside a
+    `_variants` array, and Conditions on scalar-keyed (single-entry) tags.
+    See the module docstring for why the second population is probed."""
     d = json.load(open(tables_json_path, encoding="utf-8"))
-    counter = {}
+    variants, single = {}, {}
     for _modname, mod in d["modules"].items():
         for _tname, t in (mod.get("tables") or {}).items():
             meta = t.get("meta") or {}
             if not (is_binary_table(meta) or is_ifd_table(meta)):
                 continue
             for _tid, tag in (t.get("tags") or {}).items():
-                if isinstance(tag, dict) and "_variants" in tag:
+                if not isinstance(tag, dict):
+                    continue
+                if "_variants" in tag:
                     for v in tag["_variants"]:
                         c = v.get("Condition") if isinstance(v, dict) else None
                         if isinstance(c, str) and c.strip():
-                            counter[c] = counter.get(c, 0) + 1
-    return d.get("exiftool_version"), counter
+                            variants[c] = variants.get(c, 0) + 1
+                else:
+                    c = tag.get("Condition")
+                    if isinstance(c, str) and c.strip():
+                        single[c] = single.get(c, 0) + 1
+    return d.get("exiftool_version"), variants, single
+
+
+# Grammar-coverage probes for the connective shapes slice I-3's parser
+# admits (conds.py module docstring: `or` < `and` < `not` < `||` < `&&` <
+# `!`, plus `defined`). Real Perl, evaluated by the same oracle as the dump's
+# own Conditions; the comment is what Perl's grouping must come out as.
+SYNTHETIC_CONDITIONS = (
+    "$$self{A} && $$self{B}",
+    "$$self{A} || $$self{B}",
+    "$$self{A} || $$self{B} and $$self{C}",  # (A || B) and C
+    "$$self{A} or $$self{B} and $$self{C}",  # A or (B and C)
+    "$$self{A} and $$self{B} || $$self{C}",  # A and (B || C)
+    "$$self{A} && $$self{B} || $$self{C}",  # (A && B) || C
+    "$$self{A} or $$self{B} or $$self{C}",
+    "not $$self{A} or $$self{B}",  # (not A) or B
+    "not $$self{A} and $$self{B}",  # (not A) and B
+    "!$$self{A} || $$self{B}",  # (!A) || B
+    "!$$self{A} && $$self{B}",  # (!A) && B
+    "defined $$self{A}",
+    "defined($$self{A})",
+    "!defined $$self{A}",
+    "!defined($$self{A}) || $count == 2",
+    "not defined $$self{A} and $count != 1",
+    "defined $$self{A} and $$self{A} == 3",
+    "$$self{Model} =~ m/^E-M|^OM-/ or $count > 2",
+    "$$self{Model} !~ m/^E-M/i and $count >= 2 && $count <= 3",
+    "$count < 2 or $$self{A}",
+    '$$self{Model} eq "X" or $$self{A}',
+)
 
 
 # --- capability probe -------------------------------------------------
@@ -193,11 +256,20 @@ _NUM_ATOM_RE = re.compile(
     rf"{conds._MEMBER}\s*(==|!=|>=|<=|>|<|&)\s*(-?(?:0[xX][0-9a-fA-F]+|\d+))"
 )
 _STR_ATOM_RE = re.compile(rf'{conds._MEMBER}\s*(eq|ne)\s*"([^"]*)"')
-_REGEX_ATOM_RE = re.compile(rf"{conds._MEMBER}\s*(=~|!~)\s*/((?:[^/\\]|\\.)*)/([a-z]*)")
+_REGEX_ATOM_RE = re.compile(rf"{conds._MEMBER}\s*(=~|!~)\s*m?/((?:[^/\\]|\\.)*)/([a-z]*)")
 _VALPT_ATOM_RE = re.compile(r"\$\$valPt\s*(=~|!~)\s*/((?:[^/\\]|\\.)*)/([a-z]*)")
 _FORMAT_ATOM_RE = re.compile(r'\$format\s*(eq|ne)\s*"([^"]*)"')
 _COUNT_ATOM_RE = re.compile(r"\$count\s*(==|!=|>=|<=|>|<)\s*(-?\d+)")
-_BARE_MEMBER_RE = re.compile(rf"(?<!=)(?<!~){conds._MEMBER}(?!\s*[=!<>&(])")
+_DEFINED_ATOM_RE = re.compile(rf"defined\s*\(?\s*{conds._MEMBER}\s*\)?")
+# A member read bare: not the left side of a comparison/regex/bitmask (`&`
+# followed by a mask), though `&&` after it is a connective, not a mask.
+_BARE_MEMBER_RE = re.compile(rf"(?<!=)(?<!~){conds._MEMBER}(?!\s*(?:[=!<>(]|&(?!&)))")
+
+# The member absent from `$self` (Perl: `not defined $$self{X}`), as a probe
+# value: `build_perl_script` leaves the key out, `build_rust_harness` skips
+# the insert.
+UNDEF = None
+_DEFINED_VALUES = ["defined-value", 0, ""]
 
 
 def _member_of(m):
@@ -216,6 +288,14 @@ def probes_for(condition):
         for v in values:
             if v not in channels[name]:
                 channels[name].append(v)
+
+    # `defined` first, so UNDEF is the first candidate of its channel and a
+    # capped cross product can never drop it.
+    defined_members = []
+    for m in _DEFINED_ATOM_RE.finditer(condition):
+        member = _member_of(m)
+        defined_members.append(member)
+        add(f"self:{member}", [UNDEF])
 
     for m in _REGEX_ATOM_RE.finditer(condition):
         member = _member_of(m)
@@ -251,16 +331,28 @@ def probes_for(condition):
 
     for m in _COUNT_ATOM_RE.finditer(condition):
         n = int(m.group(2))
-        add("count", [n, n - 1, n + 1, 0])
+        # The boundary and its neighbours, plus 1 and 2: the counts a scalar
+        # entry and a two-element one carry (Olympus.pm:3583's `$count != 1`
+        # turns on exactly that).
+        add("count", [n, n - 1, n + 1, 0, 1, 2])
+
+    # A `defined`-tested member no other construct gives values to: defined
+    # ones of every Perl kind that is still false (`defined 0` and
+    # `defined ""` are true) so `defined` is proven distinct from truthy.
+    for member in defined_members:
+        key = f"self:{member}"
+        if channels[key] == [UNDEF]:
+            add(key, _DEFINED_VALUES)
 
     # Bare-truthy members (no comparison operator anywhere touching them):
     # numeric 0/1 is the realistic case for every bare member in the census
-    # (a Perl flag data member set elsewhere in the same table's decode).
+    # (a Perl flag data member set elsewhere in the same table's decode),
+    # and UNDEF is the flag never having been set at all.
     for m in _BARE_MEMBER_RE.finditer(condition):
         member = _member_of(m)
         key = f"self:{member}"
         if key not in channels:
-            add(key, [0, 1])
+            add(key, [0, 1, UNDEF])
 
     return channels
 
@@ -339,6 +431,8 @@ def build_perl_script(jobs, et_lib):
         for chan, val in combo.items():
             if chan.startswith("self:"):
                 member = chan[len("self:"):]
+                if val is UNDEF:
+                    continue  # absent, as `Init` leaves it (ExifTool.pm:4331)
                 if isinstance(val, int):
                     self_pairs.append(f'"{member}" => {val}')
                 else:
@@ -404,6 +498,8 @@ def build_rust_harness(jobs, cond_rust_by_text):
         for chan, val in combo.items():
             if chan.startswith("self:"):
                 member = chan[len("self:"):]
+                if val is UNDEF:
+                    continue
                 if isinstance(val, int):
                     lines.append(
                         f'        members.insert({rust_str_literal(member)}, '
@@ -476,24 +572,45 @@ def main():
     ap.add_argument("--combo-cap", type=int, default=48)
     args = ap.parse_args()
 
-    version, counter = census(args.tables_json)
+    version, variants, single = census(args.tables_json)
     capability_probe(args.perl, args.et_lib, version)
 
+    # condition text -> (Rust source, population); a text in more than one
+    # population is credited to the first (`_variants`, the shipped one).
     cond_rust_by_text = {}
-    setmember_count = 0
-    for c in counter:
-        rust = conds.compile_cond(c)
-        if rust is None:
-            continue
-        if "SetMember" in rust:
-            setmember_count += 1
-        cond_rust_by_text[c] = rust
+    population_of = {}
+    counts = {}
+    for name, texts in (
+        ("_variants", variants),
+        ("single-entry", single),
+        ("synthetic", {c: 1 for c in SYNTHETIC_CONDITIONS}),
+    ):
+        compiled = setmember = 0
+        for c in texts:
+            rust = conds.compile_cond(c)
+            if rust is None:
+                continue
+            compiled += 1
+            if "SetMember" in rust:
+                setmember += 1
+            if c not in cond_rust_by_text:
+                cond_rust_by_text[c] = rust
+                population_of[c] = name
+        counts[name] = (len(texts), compiled, setmember)
 
     print(f"pinned release            {version}")
-    print(f"distinct Conditions in _variants (binary + IFD tables)  {len(counter)}")
-    print(f"compiled by conds.py (this oracle's corpus)        {len(cond_rust_by_text)}")
+    print(f"distinct Conditions in _variants (binary + IFD tables)  {counts['_variants'][0]}")
+    print(f"compiled by conds.py (what codegen.py ships)       {counts['_variants'][1]}")
     print(f"  of which SetMember (not exercised by this corpus-driven probe --")
-    print(f"           see hand-written cond.rs unit tests instead)  {setmember_count}")
+    print(f"           see hand-written cond.rs unit tests instead)  {counts['_variants'][2]}")
+    print(f"distinct single-entry Conditions (omitted.condition; nothing ships)  {counts['single-entry'][0]}")
+    print(f"compiled by conds.py (grammar-proving only)        {counts['single-entry'][1]}")
+    print(f"synthetic connective/precedence probes (SYNTHETIC_CONDITIONS)  {counts['synthetic'][0]}")
+    print(f"compiled by conds.py (every one must)              {counts['synthetic'][1]}")
+    if counts["synthetic"][1] != counts["synthetic"][0]:
+        raise SystemExit("a SYNTHETIC_CONDITIONS entry does not compile -- the grammar and "
+                         "this list disagree; fix one of them before trusting a PASS")
+    print(f"conditions probed (deduplicated across populations) {len(cond_rust_by_text)}")
 
     jobs = []
     for condition in sorted(cond_rust_by_text):
@@ -540,6 +657,11 @@ def main():
     print(f"probe-level: PASS {total_pass}  FAIL {total_fail}  SKIP(perl errored) {total_skip}")
     print(f"condition-level: PASS (0 failing probes) {conds_all_pass}/{len(cond_rust_by_text)}"
           f"   FAIL (>=1 failing probe) {conds_any_fail}/{len(cond_rust_by_text)}")
+    for name in ("_variants", "single-entry", "synthetic"):
+        members = [c for c in per_cond if population_of[c] == name]
+        ok = sum(1 for c in members if per_cond[c][1] == 0)
+        probes = sum(per_cond[c][0] + per_cond[c][1] for c in members)
+        print(f"  {name:13s} PASS {ok}/{len(members)} conditions over {probes} probes")
     print()
     print(f"sample of {min(args.sample_lines, len(per_cond))} per-condition results:")
     for c in sorted(per_cond)[: args.sample_lines]:
