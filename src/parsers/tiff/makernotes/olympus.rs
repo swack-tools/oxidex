@@ -743,28 +743,50 @@ impl OlympusParser {
         // very table the allowlist line enables -- but did so before the hand
         // sub-IFD walks ran, so the directory is walked once more here to put
         // its tags where ExifTool's order puts them. See `main_info_directory`.
-        if let Some(table) = main_table {
-            if let Some((start, order)) =
-                main_info_directory(data, ifd_start, &entries, base, effective_byte_order)
-            {
-                walk_main_through_engine(table, data, start, base, order, model, tags);
-                // The same remainder as for the top level: the withheld rows
-                // (a MainInfo directory carries SpecialMode and DigitalZoom
-                // too) and the overrides, in the same order relative to the
-                // engine's own insertions.
-                ifd::walk_directory(
-                    data,
-                    start,
-                    base,
-                    order,
-                    "Olympus",
-                    tables::MAIN_RESIDUAL,
-                    tags,
-                );
-            }
+        let main_info = main_info_directory(data, ifd_start, &entries, base, effective_byte_order);
+        if let Some(table) = main_table
+            && let Some((start, order)) = main_info
+        {
+            walk_main_through_engine(table, data, start, base, order, model, tags);
+            // The same remainder as for the top level: the withheld rows
+            // (a MainInfo directory carries SpecialMode and DigitalZoom
+            // too) and the overrides, in the same order relative to the
+            // engine's own insertions.
+            ifd::walk_directory(
+                data,
+                start,
+                base,
+                order,
+                "Olympus",
+                tables::MAIN_RESIDUAL,
+                tags,
+            );
         }
 
-        parse_camera_type_and_quality(data, ifd_start, &entries, base, effective_byte_order, tags);
+        // 0x0201 `Quality`, 0x0207 `CameraType` and 0x0208 `TextInfo` sit
+        // wherever the body put them: the older bodies write them in the
+        // top-level directory, the `OLYMPUS\0II` bodies from the FE/SP/u
+        // generations on write them ONLY inside the 0x4000 `MainInfo`
+        // directory (OlympusFE4010.jpg: the top level holds six entries --
+        // 0x0200, 0x0209 and four sub-directory pointers -- and MainInfo at
+        // note offset 0x3c0 holds Quality, CameraType and TextInfo). ExifTool
+        // walks MainInfo last, so both directories are scanned here in that
+        // order with `$$self{CameraType}` carried across them: the RawConv
+        // (Olympus.pm:767) sets the member at extraction, in directory
+        // order, and `Quality`'s PrintConv sub (Olympus.pm:708-726) reads it
+        // at conversion time -- after every directory -- so the FINAL member
+        // decides every Quality. 51 corpus files printed no CameraType and
+        // no Quality, and 44 no `Resolution` (a TextInfo row), for want of
+        // the second directory (conformance.py over combined-samples/Olympus
+        // at d4d6528b against the pinned 13.59 oracle).
+        let main_info_entries = main_info
+            .and_then(|(start, order)| Some((start, ifd::read_ifd(data, start, order)?, order)));
+        let mut directories: Vec<(usize, &[ifd::RawEntry], ByteOrder)> =
+            vec![(ifd_start, &entries, effective_byte_order)];
+        if let Some((start, mi_entries, order)) = &main_info_entries {
+            directories.push((*start, mi_entries, *order));
+        }
+        parse_camera_type_and_quality(data, &directories, base, tags);
 
         Ok(())
     }
@@ -988,55 +1010,62 @@ fn main_info_directory(
 /// which is *not* `eq "NORMAL"` -- so ExifTool does extract it, prints
 /// `Unknown (NORMAL)`, and then `TextInfo` overwrites both the tag and the
 /// data member with the real body code.
+///
+/// `directories` are the IFDs ExifTool walks that can carry these three
+/// entries, in ExifTool's order (the top-level directory, then the 0x4000
+/// `MainInfo` directory when the note has one); the `CameraType` data member
+/// is carried across them, and the last `Quality` value seen is the one
+/// printed, as `FoundTag` lets a later same-priority value overwrite an
+/// earlier one.
 fn parse_camera_type_and_quality(
     data: &[u8],
-    ifd_start: usize,
-    entries: &[ifd::RawEntry],
+    directories: &[(usize, &[ifd::RawEntry], ByteOrder)],
     base: Option<i64>,
-    order: ByteOrder,
     tags: &mut HashMap<String, String>,
 ) {
-    let floor = ifd_start + 2 + entries.len() * 12 + 4;
     // ExifTool's `$$self{CameraType}`, tracked in extraction order.
     let mut camera_type: Option<String> = None;
     let mut quality: Option<i64> = None;
 
-    for entry in entries {
-        let decode = || ifd::decode_entry_with_floor(data, entry, base, order, None, floor);
-        match entry.tag_id {
-            MAIN_QUALITY => {
-                quality = decode().and_then(|v| v.ints().and_then(|n| n.first().copied()));
-            }
-            MAIN_CAMERA_TYPE => {
-                let Some(val) = decode() else { continue };
-                let ifd::OlyVal::Bytes(raw) = &val else {
-                    continue;
-                };
-                // `Condition => '$$valPt ne "NORMAL"'` tests the raw value.
-                if raw.as_slice() == b"NORMAL" {
-                    continue;
+    for &(ifd_start, entries, order) in directories {
+        let floor = ifd_start + 2 + entries.len() * 12 + 4;
+        for entry in entries {
+            let decode = || ifd::decode_entry_with_floor(data, entry, base, order, None, floor);
+            match entry.tag_id {
+                MAIN_QUALITY => {
+                    quality = decode().and_then(|v| v.ints().and_then(|n| n.first().copied()));
                 }
-                let Some(text) = val.as_string() else {
-                    continue;
-                };
-                // RawConv runs before ValueConv, so the data member keeps the
-                // trailing padding that ValueConv strips for display.
-                camera_type = Some(text.clone());
-                tags.insert(
-                    "Olympus:CameraType".to_string(),
-                    ifd::list_lookup_or_unknown(lookups::CAMERA_TYPE2, text.trim_end()),
-                );
-            }
-            MAIN_TEXT_INFO => {
-                let Some(val) = decode() else { continue };
-                let ifd::OlyVal::Bytes(raw) = &val else {
-                    continue;
-                };
-                if let Some(found) = text_info::parse(raw, tags) {
-                    camera_type = Some(found);
+                MAIN_CAMERA_TYPE => {
+                    let Some(val) = decode() else { continue };
+                    let ifd::OlyVal::Bytes(raw) = &val else {
+                        continue;
+                    };
+                    // `Condition => '$$valPt ne "NORMAL"'` tests the raw value.
+                    if raw.as_slice() == b"NORMAL" {
+                        continue;
+                    }
+                    let Some(text) = val.as_string() else {
+                        continue;
+                    };
+                    // RawConv runs before ValueConv, so the data member keeps the
+                    // trailing padding that ValueConv strips for display.
+                    camera_type = Some(text.clone());
+                    tags.insert(
+                        "Olympus:CameraType".to_string(),
+                        ifd::list_lookup_or_unknown(lookups::CAMERA_TYPE2, text.trim_end()),
+                    );
                 }
+                MAIN_TEXT_INFO => {
+                    let Some(val) = decode() else { continue };
+                    let ifd::OlyVal::Bytes(raw) = &val else {
+                        continue;
+                    };
+                    if let Some(found) = text_info::parse(raw, tags) {
+                        camera_type = Some(found);
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
