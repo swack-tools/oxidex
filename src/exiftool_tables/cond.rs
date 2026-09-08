@@ -171,6 +171,16 @@ pub enum EffectSource {
 /// (`And(A, And(B, C))` -- the same left-to-right short-circuit order Perl's
 /// left-associative `and` produces), and [`Cond::SetMember`] for the
 /// assignment-as-condition idiom described in this module's doc comment.
+///
+/// Slice I-3 (the IFD tables' first Gate-A blockers, Olympus.pm's
+/// `FocusInfo`) adds two nodes and no new comparison: [`Cond::Or`] for the
+/// `or`/`||` disjunction (`$$self{Model} =~ /E-(1|M5)\b/ || $count != 1`,
+/// Olympus.pm:3583) and [`Cond::MemberDefined`] for the `defined
+/// $$self{Member}` presence test (`not defined $$self{ImageStabilization}`,
+/// Olympus.pm:3621). `&&` is [`Cond::And`]; `not`/`!` stay a flag on the
+/// negatable atoms ([`Cond::MemberTruthy`], [`Cond::MemberDefined`]) rather
+/// than a node, so a `not` over a whole `||` chain is a refusal in
+/// `conds.py`, never a mis-grouped tree here.
 #[derive(Clone, Copy, Debug)]
 pub enum Cond {
     /// `$$self{Member}` bare-truthy, or `not $$self{Member}` when `negate`.
@@ -224,13 +234,47 @@ pub enum Cond {
     /// An unset `$format` (a binary-table walk never binds one) compares as
     /// Perl's undef: `eq` false, `ne` true.
     FormatEq { value: &'static str, negate: bool },
-    /// `$count <op> N`.
+    /// `$count <op> N` -- `$count` as `ProcessExif` binds it: the entry's
+    /// own count field, `Get32u($dataPt, $entry+4)` (Exif.pm:6461), handed
+    /// to `GetTagInfo` at Exif.pm:6719-6720 (`#### eval Condition ($self,
+    /// [$valPt, $format, $count])` is ExifTool.pm:9172). An unset `$count`
+    /// (a binary-table walk never binds one) compares false.
     CountCmp { op: CmpOp, value: i64 },
+    /// `defined $$self{Member}` / `not defined $$self{Member}` (`negate`),
+    /// also spelled `defined($$self{Member})` / `!defined ...` -- slice
+    /// I-3, Olympus.pm:3621 (FocusInfo 0x1600 `ImageStabilization`: `not
+    /// defined $$self{ImageStabilization}`, "the other value is more
+    /// reliable, so ignore this totally if the other exists").
+    ///
+    /// A data member exists once something reading THIS file stored it: a
+    /// `RawConv` such as Olympus.pm:2626's `$$self{ImageStabilization} =
+    /// $val` (ExifTool.pm:9499, `#### eval RawConv`), or an assignment
+    /// inside an earlier `Condition` (ExifTool.pm:9172). ExifTool.pm:4331-
+    /// 4332 (`Init`: "delete all DataMember variables", `delete $$self{$_}
+    /// foreach grep /[a-z]/, keys %$self`) clears every such member before
+    /// each file, so `defined` asks "has anything in this file set it yet?".
+    /// `Ctx::members` holds exactly the members the walk has stored, so
+    /// presence in the map IS definedness. A member holding `""` or `0` is
+    /// defined (Perl: `defined ''` is true), which is what separates this
+    /// from [`Cond::MemberTruthy`].
+    MemberDefined { member: &'static str, negate: bool },
     /// `<left> and <right>`, both evaluated (never short-circuited away
     /// entirely -- `left` always runs; `right` runs only if `left` is true,
     /// matching Perl's `and`). A 3+-clause chain nests: see the enum's own
-    /// doc comment.
+    /// doc comment. `&&` compiles to this node too: the two spellings differ
+    /// only in precedence against their neighbours (`conds.py` resolves
+    /// that when it builds the tree), never in what the node does.
     And(&'static Cond, &'static Cond),
+    /// `<left> or <right>` / `<left> || <right>` -- slice I-3, Olympus.pm:
+    /// 3583 (FocusInfo 0x1500: `$$self{Model} =~ /E-(1|M5)\b/ || $count !=
+    /// 1`). `left` always runs; `right` runs only if `left` is false,
+    /// matching Perl's short-circuit `||`/`or` -- a [`Cond::SetMember`] on
+    /// the right of a true `left` does NOT fire, exactly as Perl never
+    /// evaluates it. A 3+-clause chain nests right like [`Cond::And`];
+    /// `conds.py` builds the tree at Perl's own precedence (`or` < `and` <
+    /// `not` < `||` < `&&` < `!`, perlop), so `A || B and C` arrives as
+    /// `And(Or(A, B), C)` and `A or B and C` as `Or(A, And(B, C))`.
+    Or(&'static Cond, &'static Cond),
     /// `($$self{Member} = <source>) [and <then>]` -- see this module's doc
     /// comment. The assignment always executes; the assigned value's Perl
     /// truthiness gates `then` as `and` would, and IS the result when `then`
@@ -302,6 +346,12 @@ impl Cond {
             },
             Cond::FormatEq { value, negate } => (ctx.format == Some(*value)) != *negate,
             Cond::CountCmp { op, value } => ctx.count.is_some_and(|c| op.apply(c, *value)),
+            Cond::MemberDefined { member, negate } => ctx.members.contains_key(*member) ^ negate,
+            Cond::Or(left, right) => {
+                // Perl's `||`/`or`: `right` is not evaluated at all when
+                // `left` is true, not even for a `SetMember` side effect.
+                left.eval(ctx) || right.eval(ctx)
+            }
             Cond::And(left, right) => {
                 // Both sides always run through `eval` when `left` is true,
                 // matching Perl's short-circuit `and` -- `right` is not
@@ -623,6 +673,107 @@ mod tests {
             negate: true,
         };
         assert!(negated.eval(&mut Ctx::new(&mut members)));
+    }
+
+    #[test]
+    fn member_defined_is_presence_not_truthiness() {
+        // Olympus.pm:3621 (FocusInfo 0x1600): `not defined
+        // $$self{ImageStabilization}` -- set by Olympus.pm:2626's RawConv
+        // `$$self{ImageStabilization} = $val` when ImageProcessing 0x604
+        // was read first.
+        let defined = Cond::MemberDefined {
+            member: "ImageStabilization",
+            negate: false,
+        };
+        let not_defined = Cond::MemberDefined {
+            member: "ImageStabilization",
+            negate: true,
+        };
+        let mut members = HashMap::new();
+        assert!(!defined.eval(&mut Ctx::new(&mut members)));
+        assert!(not_defined.eval(&mut Ctx::new(&mut members)));
+        // Perl: `defined 0` and `defined ''` are both true -- a stored
+        // member is defined whatever it holds (ExifTool.pm:4331 deletes
+        // members between files; nothing ever undefs one in place).
+        for v in [
+            MemberValue::Num(0),
+            MemberValue::Str(String::new()),
+            MemberValue::Num(3),
+        ] {
+            let mut members = ctx_with(&[("ImageStabilization", v.clone())]);
+            assert!(
+                defined.eval(&mut Ctx::new(&mut members)),
+                "{v:?} is defined"
+            );
+            assert!(
+                !not_defined.eval(&mut Ctx::new(&mut members)),
+                "{v:?} is defined"
+            );
+        }
+    }
+
+    #[test]
+    fn or_of_model_regex_and_count_is_olympus_focusinfo_0x1500() {
+        // Olympus.pm:3583: `$$self{Model} =~ /E-(1|M5)\b/ || $count != 1`,
+        // with `$count` the entry's count (Exif.pm:6461, 6719-6720).
+        static MODEL: Cond = Cond::MemberRegex {
+            member: "Model",
+            pattern: r"E-(1|M5)\b",
+            ignore_case: false,
+            negate: false,
+        };
+        static COUNT_NE_1: Cond = Cond::CountCmp {
+            op: CmpOp::Ne,
+            value: 1,
+        };
+        let cond = Cond::Or(&MODEL, &COUNT_NE_1);
+        let mut members = ctx_with(&[("Model", MemberValue::Str("E-M5".to_string()))]);
+        assert!(
+            cond.eval(&mut Ctx::new(&mut members).with_count(1)),
+            "E-M5 selects the first alternative on the model alone"
+        );
+        let mut members = ctx_with(&[("Model", MemberValue::Str("E-510".to_string()))]);
+        assert!(
+            !cond.eval(&mut Ctx::new(&mut members).with_count(1)),
+            "E-510 with count 1 falls through to the calibrated alternative"
+        );
+        assert!(
+            cond.eval(&mut Ctx::new(&mut members).with_count(3)),
+            "a Stylus 1 stores \"34 0 0\" (count 3): the first alternative"
+        );
+        assert!(
+            !cond.eval(&mut Ctx::new(&mut members)),
+            "no count bound (a binary-table walk): the comparison is false"
+        );
+    }
+
+    #[test]
+    fn or_short_circuits_like_perl() {
+        // Perl's `1 || ($$self{Flag} = 1)` never runs the assignment;
+        // `0 || ($$self{Flag} = 1)` does.
+        static SET_FLAG: Cond = Cond::SetMember {
+            member: "Flag",
+            source: EffectSource::Const(1),
+            then: None,
+        };
+        static UNSET: Cond = Cond::MemberTruthy {
+            member: "Unset",
+            negate: false,
+        };
+        let mut members = HashMap::new();
+        assert!(Cond::Or(&Cond::Always, &SET_FLAG).eval(&mut Ctx::new(&mut members)));
+        assert_eq!(
+            members.get("Flag"),
+            None,
+            "the right operand of a true `||` is never evaluated"
+        );
+        let mut members = HashMap::new();
+        assert!(Cond::Or(&UNSET, &SET_FLAG).eval(&mut Ctx::new(&mut members)));
+        assert_eq!(
+            members.get("Flag"),
+            Some(&MemberValue::Num(1)),
+            "a false left operand hands evaluation to the right"
+        );
     }
 
     #[test]

@@ -1967,6 +1967,72 @@ mod tests {
         );
     }
 
+    // -- the entry's count reaching a CountCmp variant (slice I-3) -----------------
+
+    static E1_OR_EM5: Cond = Cond::MemberRegex {
+        member: "Model",
+        pattern: r"E-(1|M5)\b",
+        ignore_case: false,
+        negate: false,
+    };
+    static COUNT_NE_1: Cond = Cond::CountCmp {
+        op: CmpOp::Ne,
+        value: 1,
+    };
+    static COUNT_GROUPS: &[IfdVariantGroup] = &[IfdVariantGroup {
+        id: 0x1500,
+        alternatives: &[
+            (
+                Cond::Or(&E1_OR_EM5, &COUNT_NE_1),
+                plain(0x1500, "SensorTemperatureRaw"),
+            ),
+            (Cond::Always, plain(0x1500, "SensorTemperatureCalibrated")),
+        ],
+    }];
+    static COUNTS: IfdTable = IfdTable {
+        variants: COUNT_GROUPS,
+        ..table("Counts", &[])
+    };
+
+    #[test]
+    fn the_entry_count_is_in_scope_for_a_variant_condition() {
+        // Olympus.pm:3580-3590 (FocusInfo 0x1500: `$$self{Model} =~
+        // /E-(1|M5)\b/ || $count != 1`) through Exif.pm:6719-6720, which
+        // hands `GetTagInfo` the entry's own count (Exif.pm:6461).
+        let order = ByteOrder::Little;
+        let names = |got: &[Emitted]| {
+            values(got)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
+        };
+
+        let mut members = HashMap::new();
+        members.insert("Model", MemberValue::Str("E-510".to_string()));
+        let one = ifd(order, &[int16u_entry(order, 0x1500, 534)], &[]);
+        assert_eq!(
+            names(&run_with(&COUNTS, &one, order, Some(0), &mut members)),
+            vec!["SensorTemperatureCalibrated"],
+            "E-510, count 1: the model regex misses and `$count != 1` is false"
+        );
+        // int16u[2] still fits the 4-byte value field, so the count is the
+        // only thing that differs from the entry above.
+        let mut inline = [0u8; 4];
+        inline[..2].copy_from_slice(&bytes16(order, 34));
+        let two = ifd(order, &[entry(order, 0x1500, 3, 2, inline)], &[]);
+        assert_eq!(
+            names(&run_with(&COUNTS, &two, order, Some(0), &mut members)),
+            vec!["SensorTemperatureRaw"],
+            "E-510, count 2: `$count != 1` selects the first alternative"
+        );
+        members.insert("Model", MemberValue::Str("E-M5".to_string()));
+        assert_eq!(
+            names(&run_with(&COUNTS, &one, order, Some(0), &mut members)),
+            vec!["SensorTemperatureRaw"],
+            "E-M5, count 1: the model regex alone selects the first alternative"
+        );
+    }
+
     // -- RawConv SetMember feeding a later MemberCmp variant -----------------------
 
     const VER_IS_2: Cond = Cond::MemberCmp {

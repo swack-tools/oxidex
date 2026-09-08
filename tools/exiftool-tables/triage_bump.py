@@ -35,7 +35,7 @@ of them, so this script and the generators cannot silently drift apart:
            a lone `Condition` on a single-entry tag is omitted always, not
            just "until Step 23 lands"; (2) a `_variants` array where at
            least one alternative's `Condition` falls outside `conds.py`'s
-           closed grammar (a three-way `or` chain, an `lt`/`ge` string
+           closed grammar (a parenthesised group, an `lt`/`ge` string
            compare, a `\\d`/`\\w`-shorthand regex class, ...) -- refused
            exactly like `codegen.py`'s `compile_variant_group` refuses it,
            all-or-nothing for the whole array, same as the AUTO case above
@@ -267,35 +267,18 @@ def _cond_failure_reason(condition):
     """`conds.compile_cond` returns a bare `None` on refusal -- exactly what
     the AUTO/COND decision needs (and this script takes that decision
     verbatim from it, never re-derives it), but not enough to explain *why*
-    to a human reading the report. Re-run the same atom compiler conds.py
-    itself uses (`conds._compile_atom` / `conds._compile_setmember`) and let
-    the first construct that fails explain itself via its own
-    `CondCompileError` message.
-
-    This duplicates only conds.py's trivial `and`-splitting (the same rule
-    `compile_cond_atoms_conjunction`'s docstring already states), never the
-    grammar itself -- what a construct means always comes from calling into
-    conds.py's own compiler functions, so this cannot accept something
-    conds.py would refuse, or vice versa. In the rare case duplicating the
-    split logic itself goes stale, the worst outcome is a less precise
-    *reason string*; the AUTO/COND bucket is decided elsewhere, by
-    `conds.compile_cond` alone.
-    """
+    to a human reading the report. `conds.refusal_reason` runs the same
+    compiler once more and returns the first `CondCompileError` message,
+    so the construct named here is the one conds.py's own parser refused
+    -- there is no second grammar to go stale (this used to duplicate the
+    `and`-splitting; slice I-3's tokenizer/precedence parser made that
+    heuristic wrong for `or`/`||`, so the duplication went)."""
     if not isinstance(condition, str) or not condition.strip():
         return "unrecognised condition shape (not a non-empty string)"
-    text = re.sub(r"\s+", " ", condition.strip())
-    try:
-        if conds._compile_setmember(text) is not None:
-            return "SetMember idiom -- should have compiled; conds.py disagreement, report a bug"
-    except conds.CondCompileError as e:
-        return str(e)
-    atoms = [p.strip() for p in text.split(" and ")] if " and " in text else [text]
-    for atom in atoms:
-        try:
-            conds._compile_atom(atom)
-        except conds.CondCompileError as e:
-            return str(e)
-    return f"refused by conds.compile_cond for an unresolved reason: {condition!r}"
+    reason = conds.refusal_reason(condition)
+    if reason is None:
+        return "compiles under conds.py -- classify_variants disagreement, report a bug"
+    return reason
 
 
 def classify_variants(module, table, tag_name, variants, kind):

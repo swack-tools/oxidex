@@ -36,13 +36,13 @@ class ClassifyVariantsTests(unittest.TestCase):
         self.assertIn("compile_variant_group", delta.note)
 
     def test_one_refused_condition_is_cond_and_names_the_construct(self):
-        # A three-way `or` chain is explicitly outside conds.py's grammar
-        # (see conds.py's module docstring) -- this is the exact shape that
-        # defeated the real Sony::Main tag 36944 / 37888 deltas in the
-        # 13.58 -> 13.59 bump.
+        # A parenthesised group is outside conds.py's grammar (see conds.py's
+        # module docstring) -- the shape that still defeats the real
+        # Sony::Main tag 36944 / 37888 alternatives. (An `or` chain was the
+        # fixture here until slice I-3 taught the grammar `or`/`||`.)
         variants = [
             {"Condition": "$$self{Model} =~ /^ILCE-7/", "Name": "A", "Format": "int16u"},
-            {"Condition": "$$self{Model} =~ /^A/ or $$self{Model} =~ /^B/",
+            {"Condition": "$$self{Model} =~ /^A/ or ($$self{Model} =~ /^B/ and $count == 1)",
              "Name": "B", "Format": "int16u"},
         ]
         delta = triage_bump.classify_variants("Sony", "Main", "36944", variants, "changed")
@@ -55,7 +55,8 @@ class ClassifyVariantsTests(unittest.TestCase):
     def test_lt_ge_string_compare_is_refused_and_named(self):
         # `lt`/`ge` string comparisons are one of the named grammar gaps
         # (Step 23's landing note: 11 of 12 refusals in the pinned corpus
-        # are OR chains / lt-ge compares / \d-class regexes).
+        # were OR chains / lt-ge compares / \d-class regexes; slice I-3
+        # took the OR chains, the other two remain).
         variants = [{"Condition": '$$self{Model} lt "Z"', "Name": "Weird", "Format": "int16u"}]
         delta = triage_bump.classify_variants("Test", "Tbl", "1", variants, "added")
 
@@ -97,7 +98,9 @@ class DiffTagVariantsIntegrationTests(unittest.TestCase):
         old_tag = {"_variants": [{"Condition": "$$self{Model} =~ /^A/", "Name": "A", "Format": "int16u"}]}
         new_tag = {"_variants": [
             {"Condition": "$$self{Model} =~ /^A/", "Name": "A", "Format": "int16u"},
-            {"Condition": "$$self{Model} =~ /^B/ or $$self{Model} =~ /^C/",
+            # a parenthesised group: outside the grammar (an `or` chain was
+            # the fixture until slice I-3 taught conds.py `or`/`||`)
+            {"Condition": "($$self{Model} =~ /^B/ or $$self{Model} =~ /^C/) and $count == 1",
              "Name": "B", "Format": "int16u"},
         ]}
         deltas = list(triage_bump.diff_tag("Sony", "Main", "36944", old_tag, new_tag, True))
