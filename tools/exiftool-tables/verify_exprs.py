@@ -120,6 +120,30 @@ def walk_code_refs(node, out):
             walk_code_refs(v, out)
 
 
+def element_count(tag, table_format):
+    """How many elements the field hands its conversion: a binary table's
+    sized `Format` (`int16u[4]`), or an IFD tag's `Count => 2` beside a
+    numeric `Writable`/`Format` (Olympus::Main RedBalance/BlueBalance,
+    Pentax::Main ExposureCompensation) -- the same shape codegen.py's
+    `ifd_value_domain` reads. Before the second half existed an IFD list
+    field was probed as a one-element list only, and a one-element list
+    cannot tell "the first element" from "the only element". A `string`/
+    `undef` base is one scalar whatever its count (ReadValue,
+    ExifTool.pm:6308-6311); an unknown or variable count (`-1`) is 1 here,
+    which only means "no declared list" to the probe sizing."""
+    fmt = tag.get("Format") or table_format or ""
+    m = _SIZED_FORMAT_RE.match(str(fmt))
+    if m:
+        return int(m.group(2)) if m.group(1) not in ("string", "undef") else 1
+    base = str(tag.get("Format") or tag.get("Writable") or "").split("[")[0]
+    if not base or base in ("string", "undef"):
+        return 1
+    raw = str(tag.get("Count") or "").strip()
+    if raw.isdigit() and int(raw) > 1:
+        return int(raw)
+    return 1
+
+
 def census(tables_json_path):
     """Every conversion the shipped translator claims to handle, by text.
 
@@ -153,9 +177,7 @@ def census(tables_json_path):
                 variants = []
                 walk_tags(tagnode, variants)
                 for tag in variants:
-                    fmt = tag.get("Format") or table_format or ""
-                    m = _SIZED_FORMAT_RE.match(str(fmt))
-                    count = int(m.group(2)) if m and m.group(1) not in ("string", "undef") else 1
+                    count = element_count(tag, table_format)
                     for slot in SLOTS:
                         v = tag.get(slot)
                         if isinstance(v, dict) and v.get("kind") == "expr":
@@ -252,6 +274,13 @@ def list_probes_for(expr, counts):
     specs = len(_LIST_SPEC_RE.findall(expr))
     needed = max(needed, specs, 1)
     sizes = set(counts or ()) | {needed}
+    first = exprs.is_first_element_form(expr)
+    if first:
+        # `$val =~ s/ .*//; ...` reads the first element only, and a
+        # one-element list cannot tell "first" from "only": probe two- and
+        # three-element lists whatever the carrying field declares
+        # (Samsung.pm:458,467's rational64u pair declares no Count at all).
+        sizes |= {1, 2, 3}
     sizes.discard(0)
     probes = []
     lits = set()
@@ -279,6 +308,24 @@ def list_probes_for(expr, counts):
             probes.append([v] * n)
             probes.append([v + 1.0] * n)
             probes.append([v - 1.0] * n)
+        if first and n > 1:
+            # Distinct first elements, each pair in BOTH orders, so a
+            # translation that took the last, largest, smallest or summed
+            # element instead of the first fails a probe.
+            for a, b in ((7.0, 3.0), (3.0, 7.0), (65535.0, 0.0), (0.0, 65535.0),
+                         (-1.0, 5.0), (12345.0, 99.0), (2.0 ** 31 - 1, 1.0)):
+                probes.append([a, b] + [11.0] * (n - 2))
+        for helper, extra in _HELPER_BOUNDARY_PROBES.items():
+            if helper in expr:
+                # The helper's own branch points as the FIRST element with
+                # a distinct filler behind it -- what the num-domain battery
+                # gives a scalar `ConvertUnixTime($val)`, the list-domain
+                # `$val =~ s/ .*//; ConvertUnixTime($val)` gets here. These
+                # may exceed the 32-bit magnitude note above (2**53 for
+                # ConvertUnixTime); they flow into a date, not a printed
+                # element, so the IV/NV stringification split is not reached.
+                for v in extra:
+                    probes.append([v] + [1.0] * (n - 1))
         if n > 1:
             probes.append(base[:-1])  # short list: Perl reads undef -> 0 / ""
         probes.append(base + [float(n)])  # long list: extra element ignored
@@ -413,6 +460,21 @@ STR_PROBES_CDT = [
     "2024:01:02 03:04:05", "2024:01:02 03:04:05-07:00", "2024:01:02 03:04:05Z",
     "", "not a date at all",
 ]
+# `$val =~ s/\s+$//; $val` (exprs.py _TRIM_TRAILING_WS_RE): every ASCII
+# whitespace character Perl's native `\s` covers, alone and in runs, at the
+# end (removed), at the start and inside (kept), a NUL beside the run (not
+# whitespace: kept, and it fences the run), the all-whitespace and empty
+# strings (`""`, defined), a bare word, and the real pinned value whose
+# trailing space motivated Olympus.pm:769 ("SX151 "). Non-ASCII stays out
+# for the output-encoding reason BYTES_PROBES_RAW gives; the Rust unit test
+# (exprs.rs) pins the NBSP/U+0085 non-trim instead.
+STR_PROBES_TRIM = [
+    "abc", "abc ", "abc  ", "abc\t", "abc \t ", "abc\n", "abc \n", "abc\r\n",
+    "abc\r", "abc\x0b", "abc\x0c", "abc \t\n\r\x0b\x0c", " abc", "  abc  ",
+    "a b c", "a b c ", "a\tb\nc\r", "a \n b", "abc\x00 ", "abc \x00",
+    "abc\x00", "", " ", "\t", " \t\n", "a", "SX151 ", "SX151",
+    "2024:01:02 03:04:05 ", "abc.", "trailing dot. ",
+]
 BYTES_PROBES_SRC = ["Hello", "", "abc", "A", "Test String", "cafe"]
 # Raw byte buffers for the bytes-domain shapes that are NOT the UCS2 decode
 # (unpack("H*"), ASF::GetGUID): the empty buffer, one byte, the 16-byte GUID
@@ -438,6 +500,8 @@ def probes_for(domain, raw_expr, counts=None):
     if domain == "str":
         if "ConvertDateTime" in raw_expr:
             return STR_PROBES_CDT
+        if exprs.is_trim_trailing_ws_form(raw_expr):
+            return STR_PROBES_TRIM
         return STR_PROBES_TR
     if "UCS2" not in raw_expr:
         return BYTES_PROBES_RAW
@@ -457,7 +521,21 @@ def probes_for(domain, raw_expr, counts=None):
 # --- Perl side --------------------------------------------------------
 
 def perl_escape(s):
-    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\x00", "\\0")
+    """`s` as the body of a Perl double-quoted string literal: the
+    interpolating and quoting characters (`\\`, `"`, `$`, `@`) escaped,
+    and every control character (NUL, tab, CR, LF, VT, FF, ...) as an
+    unambiguous braced `\\x{..}` -- a bare `\\0` followed by a digit would
+    read as a longer octal escape, and a raw tab or CR in the source is
+    legal but invisible in a diff of the generated script."""
+    out = []
+    for ch in s:
+        if ch in ("\\", '"', "$", "@"):
+            out.append("\\" + ch)
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append("\\x{%02x}" % ord(ch))
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def build_perl_script(jobs, et_lib):
@@ -523,7 +601,7 @@ def build_perl_script(jobs, et_lib):
         lines.append(f"  my $r = eval {{ {raw} }};")
         lines.append(f'  if ($@) {{ print "J{job_id}\\tERROR\\n"; }}')
         lines.append(f'  elsif (!defined $r) {{ print "J{job_id}\\tUNDEF\\n"; }}')
-        lines.append(f'  else {{ my $s = $r; $s =~ s/\\n/\\\\n/g; print "J{job_id}\\t$s\\n"; }}')
+        lines.append(f'  else {{ my $s = $r; $s =~ s/\\n/\\\\n/g; $s =~ s/\\r/\\\\r/g; print "J{job_id}\\t$s\\n"; }}')
         lines.append("}")
     return "\n".join(lines)
 
@@ -547,7 +625,10 @@ def run_perl(perl_bin, script_text, timeout):
         print("PERL HARNESS STDERR:", r.stderr[-4000:], file=sys.stderr)
         raise SystemExit(f"perl harness exited {r.returncode}")
     out = {}
-    for line in r.stdout.splitlines():
+    # LF only: `splitlines()` also splits on a CR/VT/FF inside a result, and
+    # it would do so on BOTH sides alike -- the truncated halves would then
+    # compare equal, and the oracle would have graded half a value.
+    for line in r.stdout.split("\n"):
         if "\t" in line:
             jid, val = line.split("\t", 1)
             out[jid] = val
@@ -564,16 +645,23 @@ def rust_num_literal(v):
 
 
 def rust_str_literal(s):
+    """`s` as a Rust `&str` literal. A raw CR is a compile error inside a
+    Rust string literal ("bare CR not allowed"), so it and every other
+    control character are written as escapes."""
     out = []
     for ch in s:
         if ch == "\\":
             out.append("\\\\")
         elif ch == '"':
             out.append('\\"')
-        elif ch == "\x00":
-            out.append("\\0")
         elif ch == "\n":
             out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append("\\u{%x}" % ord(ch))
         else:
             out.append(ch)
     return '"' + "".join(out) + '"'
@@ -628,7 +716,7 @@ def build_rust_harness(jobs, by_expr):
             expr_code = f"({code})"
         body.append(
             f'    out.push_str(&format!("J{job_id}\\t{{}}\\n", '
-            f"{{ let __r: String = {expr_code}; __r.replace('\\n', \"\\\\n\") }}));"
+            f"{{ let __r: String = {expr_code}; __r.replace('\\n', \"\\\\n\").replace('\\r', \"\\\\r\") }}));"
         )
     src = (
         "// GENERATED by tools/exiftool-tables/verify_exprs.py -- not committed.\n"
@@ -657,7 +745,7 @@ def run_rust(jobs, by_expr, timeout):
             print("RUST HARNESS STDERR:", r.stderr[-6000:], file=sys.stderr)
             raise SystemExit(f"rust harness exited {r.returncode}")
         out = {}
-        for line in r.stdout.splitlines():
+        for line in r.stdout.split("\n"):  # LF only, as in run_perl
             if "\t" in line:
                 jid, val = line.split("\t", 1)
                 out[jid] = val

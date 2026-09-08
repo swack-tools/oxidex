@@ -343,6 +343,12 @@ def coverage(expr_counter):
 #              space-joined list ReadValue hands the conversion; the Rust
 #              side sees `&[f64]`. See _compile_list. Perl's `.` (string
 #              concatenation, `_mk_concat`) is in the scalar grammar too.
+#              `$val =~ s/ .*//; <rest>` -- the first element, then <rest>
+#              on it -- is a list-domain shape as well (_compile_first_element).
+#
+# The str domain has three fixed shapes, each matched whole rather than
+# parsed: ConvertDateTime, tr/// and `$val =~ s/\s+$//; $val` (trailing
+# ASCII whitespace removed, _TRIM_TRAILING_WS_RE below).
 #
 # ConvertDateTime is translated as the identity function deliberately, not as
 # an approximation of the general case: `Image::ExifTool::ConvertDateTime`
@@ -483,7 +489,7 @@ _MATH_FN = {"abs": "abs", "log": "ln", "exp": "exp", "sqrt": "sqrt"}
 
 
 class _Parser:
-    def __init__(self, toks, list_name=None, list_var=None):
+    def __init__(self, toks, list_name=None, list_var=None, first_var=None):
         self.toks = toks
         self.i = 0
         # List-domain context (see _compile_list): `list_name` is the Perl
@@ -493,6 +499,13 @@ class _Parser:
         # LISTIDX/LISTALL tokens are refused.
         self.list_name = list_name
         self.list_var = list_var
+        # First-element context (see _compile_first_element): after
+        # `$val =~ s/ .*//;` the scalar `$val` IS the first element of the
+        # `&[f64]` slice `first_var` names. The scalar grammar runs
+        # unchanged with VAL bound to it; `list_var` stays None so the
+        # whole-list constructs (`split`, `@v`, HexID) are refused -- after
+        # the substitution there is no whole list left to read.
+        self.first_var = first_var
 
     def _peek(self):
         return self.toks[self.i]
@@ -582,6 +595,10 @@ class _Parser:
             return _mk_num(text)
         if kind == "VAL":
             self._eat("VAL")
+            if self.first_var is not None:
+                # `$v[0]` inside an expression: undef -> 0 past the end
+                # (list_get), exactly as _compile_list binds an element.
+                return ("f64", f"crate::exiftool_tables::exprs::list_get({self.first_var}, 0)")
             if self.list_var is not None:
                 # In the list domain `$val` is the space-joined list, which
                 # only `split` (consumed by _compile_list / _parse_sprintf)
@@ -1467,6 +1484,105 @@ def _compile_list(s):
     return ("list", rty, code)
 
 
+# --- first element of a space-joined list: `$val =~ s/ .*//; <rest>` -------
+# ReadValue (ExifTool.pm:6286-6332, pinned 13.59) hands a fixed-count numeric
+# field's conversion ONE scalar: the elements joined with a single space
+# (`return join(' ', @vals) if @vals > 1;`, :6330) or, for a count of 1, the
+# element itself (`return $vals[0];`, :6331). `$val =~ s/ .*//` deletes from
+# the first space to the end of the line, so `$val` becomes the first
+# element's text and `<rest>` is evaluated on it; a single-element value has
+# no space and passes through the substitution unchanged. The `/s` spelling
+# (Leaf.pm:77,114) lets `.` cross a newline, which a space-joined number list
+# never contains, so the two spellings are one operation in this domain.
+# Every other flag (`/g`, `/i`, ...), a different pattern, a second
+# statement, and the bare `$val =~ s/ .*//;` -- whose value is the
+# substitution's own return (the match count), not `$val` -- are refused.
+#
+# Compiled into the list domain (`{v}` is the `&[f64]` slice), with `$val`
+# inside `<rest>` bound to the first element exactly as _compile_list binds
+# `$v[0]`: list_get (undef -> 0) inside an expression, list_elem (undef ->
+# tag suppressed) as the whole result. `<rest>` is parsed by the scalar
+# grammar under that binding, so it may be anything the grammar already
+# translates on a scalar (`$val / 256`, `($val - 50) / 10`,
+# `ConvertUnixTime($val)`, `$val * 1e-6`) and nothing it does not. The
+# engine never hands a conversion an empty list (a zero count is dropped at
+# ReadValue, ExifTool.pm:6296-6297, and ifd_engine.rs's ReadPlan mirrors
+# that), so the undef conventions above are the short-record ones only.
+_FIRST_ELEMENT_RE = re.compile(r"^\$val\s*=~\s*s/ \.\*//s?\s*;\s*(.+)$")
+# The slice's name while `<rest>` is parsed -- deliberately NOT `{v}`, so a
+# scalar-`$val` emitter the binding does not cover (`"$val mm"` in
+# _mk_str_literal) is caught by the leak check in _compile_first_element
+# rather than silently interpolating the whole slice.
+_FIRST_SLICE = "__first_slice__"
+
+
+def _compile_first_element(rest):
+    """`(domain, rust_type, rust_code)` for the `<rest>` of a first-element
+    form, or raise ExprCompileError. See the block comment above."""
+    rest = rest.strip()
+    if rest.endswith(";"):
+        rest = rest[:-1].rstrip()
+    toks = _tokenize(rest)
+    if len(toks) == 2 and toks[0][0] == "VAL":
+        # A bare `$val` as the whole result: the first element, or undef past
+        # the end -- the Option _compile_list gives a bare `$v[i]`.
+        return ("list", "Option<f64>", "crate::exiftool_tables::exprs::list_elem({v}, 0)")
+    vt, code = _Parser(toks, first_var=_FIRST_SLICE).parse_top()
+    vt, code = _as_f64((vt, code))
+    if "{v}" in code:
+        raise ExprCompileError("scalar $val reached the first-element form unbound")
+    code = code.replace(_FIRST_SLICE, "{v}")
+    if vt == "string":
+        rty = "String"
+    elif vt in _NUMERIC_VTYPES:
+        rty = "f64"
+    elif vt == "f64_option":
+        rty = "Option<f64>"
+    else:
+        raise ExprCompileError(f"first-element result of vtype {vt}")
+    return ("list", rty, code)
+
+
+# --- trailing whitespace: `$val =~ s/\s+$//; $val` ---------------------------
+# The string with its trailing whitespace removed. `\s` in a conversion
+# ExifTool.pm evals (:3656-3664) has Perl's native semantics -- ExifTool.pm
+# enables neither `use utf8` nor `unicode_strings` (:19 is a bare
+# `require 5.004`) -- and the value ReadValue/ProcessBinaryData hands a
+# `string` field is a byte string, so `\s` is exactly [ \t\n\r\f\v] (VT
+# since Perl 5.18) and nothing above 0x7f: not NBSP, not U+0085, both of
+# which Rust's `str::trim_end` WOULD strip. Hence a dedicated helper,
+# exprs.rs::trim_trailing_ws, rather than the standard-library trim. `$`
+# matches at the end of the string or before a final newline, and the
+# greedy `\s+` already includes that newline, so the match is the whole
+# ASCII-whitespace suffix. The leading-trim sibling `s/^\s+//` is
+# deliberately absent: no pinned conversion carries it alone
+# (QuickTime.pm:6996,7004 pair it with a `s/ 0+(\w)/ $1/g` the grammar
+# refuses; JPEG.pm:776 and XMP.pm:4161 are procedural code, not
+# conversions), so the oracle could never probe it, and an unprobed shape
+# is not a translation.
+_TRIM_TRAILING_WS_RE = re.compile(r"^\$val\s*=~\s*s/\\s\+\$//\s*;\s*\$val$")
+
+# normalize() folds every whitespace run to one space, which is right for
+# Perl code and wrong INSIDE an `s///`, `tr///` or `y///` pattern or
+# replacement, where a run of two spaces is a different pattern from one:
+# `s/  .*//` would normalize to `s/ .*//` and be read as the first-element
+# form. No pinned conversion writes one, so this refuses the shape before
+# the fold rather than modelling it (compile_any checks the RAW text).
+_PATTERN_WS_RUN_RE = re.compile(r"=~\s*(?:s|tr|y)/(?:[^/]*/)?[^/]*\s{2,}")
+
+
+def is_first_element_form(expr):
+    """True for `$val =~ s/ .*//; <rest>` in any spacing, with or without
+    `/s` -- verify_exprs.py sizes and shapes its list probes from this."""
+    return isinstance(expr, str) and _FIRST_ELEMENT_RE.match(normalize(expr)) is not None
+
+
+def is_trim_trailing_ws_form(expr):
+    r"""True for `$val =~ s/\s+$//; $val` in any spacing -- verify_exprs.py
+    picks its string probes from this."""
+    return isinstance(expr, str) and _TRIM_TRAILING_WS_RE.match(normalize(expr)) is not None
+
+
 def _tr_unescape_class(cls):
     """Perl tr/// character class -> literal chars, or raise if it looks like
     a range (`a-z`) -- none of the census's classes are ranges, and expanding
@@ -1522,6 +1638,9 @@ def compile_any(expr):
     """
     if expr is None:
         return None
+    if _PATTERN_WS_RUN_RE.search(expr):
+        # Checked on the RAW text: the fold below would erase the evidence.
+        return None
     s = normalize(expr)
     if s in _COMPILE_CACHE:
         return _COMPILE_CACHE[s]
@@ -1574,6 +1693,18 @@ def _compile_uncached(s):
         return ("bytes", "String", "crate::exiftool_tables::exprs::unpack_hex({v}).to_uppercase()")
     if _0X_UNPACK_HEX_RE.match(s):
         return ("bytes", "String", 'format!("0x{}", crate::exiftool_tables::exprs::unpack_hex({v}))')
+
+    m = _FIRST_ELEMENT_RE.match(s)
+    if m:
+        try:
+            return _compile_first_element(m.group(1))
+        except ExprCompileError:
+            return None
+        except (IndexError, RecursionError):
+            return None
+
+    if _TRIM_TRAILING_WS_RE.match(s):
+        return ("str", "String", "crate::exiftool_tables::exprs::trim_trailing_ws({v})")
 
     if _LIST_HINT_RE.search(s):
         try:

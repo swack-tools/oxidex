@@ -321,6 +321,28 @@ pub fn tr_translate(val: &str, from: &str, to: &str, delete: bool) -> String {
     out
 }
 
+/// `$val =~ s/\s+$//; $val` -- the string with its trailing whitespace
+/// removed (Exif.pm:925 and PanasonicRaw.pm:313 `Artist`, Olympus.pm:769
+/// `CameraType`, Olympus.pm:1615,1666 the Equipment serial numbers,
+/// Kodak.pm:516 `SerialNumber`, Flash.pm:182 `CreateDate`; pinned 13.59).
+///
+/// `\s` here is Perl's NATIVE character class, not Unicode's: ExifTool.pm
+/// evals every conversion (:3656-3664) with neither `use utf8` nor
+/// `unicode_strings` in scope (:19 is a bare `require 5.004`), and the value
+/// `ReadValue`/`ProcessBinaryData` hands a `string` field is a byte string,
+/// so `\s` matches exactly space, `\t`, `\n`, `\r`, `\f` and `\v` (VT since
+/// Perl 5.18) and nothing above 0x7f. [`str::trim_end`] would also strip
+/// NBSP (U+00A0), U+0085 and the U+2000 block, which Perl leaves alone on
+/// such a string -- so the class is spelled out rather than delegated. `$`
+/// matches at the end or before a final newline, and the greedy `\s+`
+/// already covers that newline, so the match is the whole ASCII-whitespace
+/// suffix; an all-whitespace string becomes `""` (defined, not undef).
+#[must_use]
+pub fn trim_trailing_ws(val: &str) -> String {
+    val.trim_end_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c' | '\x0b'))
+        .to_string()
+}
+
 /// `Image::ExifTool::CanonCustom::ConvertPfn($val)`.
 ///
 /// ExifTool (`CanonCustom.pm:2624-2628`, pinned 13.59):
@@ -943,6 +965,32 @@ mod tests {
     /// `perl_num`'s, not Rust `Display`'s -- the `1e18` row is that
     /// distinction, and it is the one a hand-written `format!("{}", v)` gets
     /// wrong.
+    #[test]
+    fn trim_trailing_ws_is_perls_native_class() {
+        // the pinned motivating value (Olympus.pm:769: "SX151 " has a
+        // trailing space), every ASCII whitespace character alone and in a
+        // run, and the newline `$` would otherwise stop before
+        assert_eq!(trim_trailing_ws("SX151 "), "SX151");
+        assert_eq!(trim_trailing_ws("abc \t\n\r\x0b\x0c"), "abc");
+        assert_eq!(trim_trailing_ws("abc\r\n"), "abc");
+        assert_eq!(trim_trailing_ws("abc\n"), "abc");
+        // leading and internal whitespace, and a NUL beside the run, stay
+        assert_eq!(trim_trailing_ws("  a b\tc "), "  a b\tc");
+        assert_eq!(trim_trailing_ws("a \n b"), "a \n b");
+        assert_eq!(trim_trailing_ws("abc\0 "), "abc\0");
+        assert_eq!(trim_trailing_ws("abc \0"), "abc \0");
+        // all-whitespace and empty: "" (defined), not undef
+        assert_eq!(trim_trailing_ws(" \t\n"), "");
+        assert_eq!(trim_trailing_ws(""), "");
+        assert_eq!(trim_trailing_ws("abc"), "abc");
+        // NOT Unicode White_Space: Perl's byte-string `\s` leaves these,
+        // and `str::trim_end` would not
+        assert_eq!(trim_trailing_ws("abc\u{a0}"), "abc\u{a0}");
+        assert_eq!(trim_trailing_ws("abc\u{85}"), "abc\u{85}");
+        assert_eq!(trim_trailing_ws("abc\u{2003}"), "abc\u{2003}");
+        assert_eq!(trim_trailing_ws("abc\u{a0} "), "abc\u{a0}");
+    }
+
     #[test]
     fn convert_pfn_matches_exiftool() {
         assert_eq!(convert_pfn(0.0), "Off");

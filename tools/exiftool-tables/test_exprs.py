@@ -238,5 +238,94 @@ class ParenlessSprintfG(unittest.TestCase):
         self.assertIsNone(exprs.translate_or_compile_any('sprintf "%.2f", $val'))
 
 
+class FirstElementForm(unittest.TestCase):
+    """`$val =~ s/ .*//; <rest>`: ReadValue's space-joined list
+    (ExifTool.pm:6330) cut back to its first element, then <rest> on it.
+    List domain; `$val` inside <rest> is the first element."""
+
+    FIRST = "crate::exiftool_tables::exprs::list_get({v}, 0)"
+
+    def test_olympus_balance_and_pentax_compensation(self):
+        # Olympus.pm:1046,1053 (RedBalance/BlueBalance, int16u Count 2)
+        self.assertEqual(
+            exprs.translate_or_compile_any("$val=~s/ .*//; $val / 256"),
+            ("list", "f64", f"(({self.FIRST}) / (256.0_f64))"),
+        )
+        # Pentax.pm:1610 (ExposureCompensation, int16u Count 2)
+        r = exprs.translate_or_compile_any("$val =~ s/ .*//; ($val - 50) / 10")
+        self.assertEqual((r[0], r[1]), ("list", "f64"))
+        self.assertEqual(r[2], f"(((({self.FIRST}) - (50.0_f64))) / (10.0_f64))")
+
+    def test_helper_and_scale_on_the_first_element(self):
+        # QuickTime.pm:2515 (Nextbase TimeStamp)
+        self.assertEqual(
+            exprs.translate_or_compile_any("$val =~ s/ .*//; ConvertUnixTime($val)"),
+            ("list", "String",
+             f"crate::exiftool_tables::exprs::convert_unix_time({self.FIRST}, false)"),
+        )
+        # QuickTime.pm:6941 (a PrintConvInv: grammar-level only, never in the
+        # read-side census the oracle probes)
+        self.assertEqual(
+            exprs.translate_or_compile_any("$val =~ s/ .*//; $val * 1e-6")[2],
+            f"(({self.FIRST}) * (1e-06_f64))",
+        )
+
+    def test_bare_first_element_is_an_option_in_every_spelling(self):
+        # Samsung.pm:458,467 and Leaf.pm:77,114 (`/s`); the bare element is
+        # undef past the end, the Option _compile_list gives a bare `$v[i]`.
+        want = ("list", "Option<f64>", "crate::exiftool_tables::exprs::list_elem({v}, 0)")
+        for text in ("$val=~s/ .*//; $val", "$val =~ s/ .*//; $val", "$val =~ s/ .*//s; $val",
+                     "$val=~s/ .*//;$val", "$val =~ s/ .*//; $val;"):
+            self.assertEqual(exprs.translate_or_compile_any(text), want, text)
+            self.assertTrue(exprs.is_first_element_form(text), text)
+
+    def test_refusals(self):
+        for text in (
+            "$val =~ s/ .*//;",              # the value of s/// itself (its match count), not $val
+            "$val =~ s/ .*//",
+            "$val =~ s/ .*//g; $val",        # another flag: a second match after a newline
+            "$val =~ s/ .*//i; $val",
+            "$val =~ s/ .+//; $val",         # a different pattern
+            "$val =~ s/  .*//; $val",        # two-space pattern: normalize() would fold it
+            '$val=~s/ .*//;$$self{Charset} = $charsetName{"cp$val"}; $val',  # TNEF.pm:76
+            "$val =~ s/ .*//; $val =~ tr/a/b/; $val",   # a second statement
+            '$val =~ s/ .*//; "$val mm"',    # interpolating the first element: out of grammar
+            '$val =~ s/ .*//; sprintf("%d", split(" ", $val))',  # no whole list left to split
+            "$val =~ s/ .*//; Image::ExifTool::ICC_Profile::HexID($val)",
+            "$val =~ s/ .*//; $v[0]",        # an unbound array
+            "$val =~ s/ .*//; IsInt($val)",  # a bare bool result
+        ):
+            self.assertIsNone(exprs.translate_or_compile_any(text), text)
+        self.assertFalse(exprs.is_first_element_form("$val =~ s/ .*//;"))
+        self.assertFalse(exprs.is_first_element_form(None))
+
+
+class TrimTrailingWhitespace(unittest.TestCase):
+    """`$val =~ s/\s+$//; $val`: str domain, Perl's native `\s`."""
+
+    def test_every_pinned_spelling(self):
+        # Exif.pm:925, PanasonicRaw.pm:313, Olympus.pm:769 (`$val =~ ... $val`);
+        # Olympus.pm:1615,1666 (`;$val`); Flash.pm:182, Kodak.pm:516 (`$val=~`)
+        want = ("str", "String", "crate::exiftool_tables::exprs::trim_trailing_ws({v})")
+        for text in ("$val =~ s/\\s+$//; $val", "$val=~s/\\s+$//;$val", "$val=~s/\\s+$//; $val"):
+            self.assertEqual(exprs.translate_or_compile_any(text), want, text)
+            self.assertTrue(exprs.is_trim_trailing_ws_form(text), text)
+
+    def test_refusals(self):
+        for text in (
+            "$val =~ s/^\\s+//; $val",                       # leading: no pinned conversion carries it alone
+            "$val =~ s/^\\s+//; $val =~ s/\\s+$//; $val",   # the pair: same
+            "$val =~ s/\\s+$//; $$self{Make} = $val",        # Exif.pm:585
+            "$val =~ s/\\s+$//;",                            # bare: the match count
+            "$val =~ s/\\s+$//g; $val",
+            "$val =~ s/\\s+$//s; $val",
+            "$val =~ s/\\s*$//; $val",
+            "$val=~s/ 0+(\\w)/ $1/g; $val=~s/^\\s+//; $val",                          # QuickTime.pm:6996
+            "$_=$val; s/^(Unicode\\0|ASCII\\0\\0\\0)//; tr/\\0//d; s/\\s+$//; $_",     # Ricoh.pm:890
+        ):
+            self.assertIsNone(exprs.translate_or_compile_any(text), text)
+            self.assertFalse(exprs.is_trim_trailing_ws_form(text), text)
+
+
 if __name__ == "__main__":
     unittest.main()
