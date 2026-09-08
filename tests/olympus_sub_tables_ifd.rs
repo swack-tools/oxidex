@@ -1,14 +1,13 @@
-//! Slice I-3 gate B regression: the six Olympus MakerNote sub-tables that
+//! Slice I-3 gate B regression: the seven Olympus MakerNote sub-tables that
 //! pass gate A -- `Equipment`, `CameraSettings`, `RawDevelopment`,
-//! `RawDevelopment2`, `ImageProcessing`, `RawInfo` -- are read through their
+//! `RawDevelopment2`, `ImageProcessing`, `RawInfo`, and `FocusInfo`, whose
+//! line followed the other six as its own commit -- are read through their
 //! generated `IFD_OLYMPUS_*` tables and the IFD engine, which follows
-//! `Olympus::Main`'s 0x2010/0x2020/0x2030/0x2031/0x2040/0x3000 edges during
-//! the Main walk (`src/exiftool_tables/ifd_engine.rs::descend`), not through
-//! the hand `tables::EQUIPMENT` (etc.) walks -- see
+//! `Olympus::Main`'s 0x2010/0x2020/0x2030/0x2031/0x2040/0x2050/0x3000 edges
+//! during the Main walk (`src/exiftool_tables/ifd_engine.rs::descend`), not
+//! through the hand `tables::EQUIPMENT` (etc.) walks -- see
 //! `src/parsers/tiff/makernotes/olympus.rs::parse_located` (`sub_table_rows`)
-//! and the six lines in `src/exiftool_tables/enabled_ifd.rs`. `FocusInfo`
-//! stays hand-walked (gate A blocks it) and is pinned as such in
-//! `tests/olympus_main_ifd_table.rs`.
+//! and the seven lines in `src/exiftool_tables/enabled_ifd.rs`.
 //!
 //! # Why real carriers and not a builder
 //!
@@ -38,13 +37,18 @@
 //! table reports (the line's new path), `residual` for a row the generator
 //! withholds and `tables::<TABLE>_RESIDUAL` still hand-converts, `override`
 //! for a residual row that replaces an engine rendering the pinned oracle
-//! contradicts (`tables::<TABLE>_ENGINE_MISRENDERS`). On the two `t/images`
-//! carriers every row is a FOLD -- the hand walk already produced it -- so
-//! the assertion is that switching the producer changed no byte. The
-//! coverage the lines buy (rows the hand tables never had, the
-//! RawDevelopment2 directory, the joined-key overrides on a modern body)
-//! has no `t/images` carrier and is pinned on corpus files in an
-//! `#[ignore]`d test.
+//! contradicts (`tables::<TABLE>_ENGINE_MISRENDERS`), and `hand` for a
+//! FocusInfo row that is not a `TagDef` at all -- `FocusDistance` and the
+//! withheld `_variants` alternatives of `AFPoint`, `AFPointDetails` and
+//! `SensorTemperature`, which `parse_focus_info_*` still produces while
+//! skipping the two alternatives the engine reports
+//! (`focus_info_engine_reports`). On the two `t/images` carriers every row
+//! is a FOLD -- the hand walk already produced it -- so the assertion is
+//! that switching the producer changed no byte. The coverage the lines buy
+//! (rows the hand tables never had, the RawDevelopment2 directory, the
+//! joined-key overrides on a modern body, FocusInfo's
+//! `AntiShockWaitingTime`) has no `t/images` carrier and is pinned on
+//! corpus files in an `#[ignore]`d test.
 
 use oxidex::core::MetadataMap;
 use oxidex::core::operations::read_metadata;
@@ -54,18 +58,19 @@ use std::path::Path;
 const T_IMAGES: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images";
 const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus";
 
-/// The six sub-tables slice I-3 enables.
-const SUB_TABLES: [&str; 6] = [
+/// The seven sub-tables slice I-3 enables.
+const SUB_TABLES: [&str; 7] = [
     "Equipment",
     "CameraSettings",
     "RawDevelopment",
     "RawDevelopment2",
     "ImageProcessing",
     "RawInfo",
+    "FocusInfo",
 ];
 
 /// Each allowlist line is the reviewable unit; this asserts every one of the
-/// six is in force, so a revert of any fails loudly here rather than
+/// seven is in force, so a revert of any fails loudly here rather than
 /// silently switching that directory back to the hand walk.
 #[test]
 fn olympus_sub_tables_are_on_the_gate_b_allowlist() {
@@ -209,6 +214,21 @@ fn assert_tags(metadata: &MetadataMap, file: &str, expected: &[(&str, &str)]) {
 /// [Olympus]       NoiseReduction2                 : (none)
 /// [Olympus]       DistortionCorrection2           : Off
 /// [Olympus]       ShadingCompensation2            : Off
+/// [Olympus]       FocusInfoVersion                : 010
+/// [Olympus]       SceneDetect                     : 0
+/// [Olympus]       ZoomStepCount                   : 3
+/// [Olympus]       FocusStepCount                  : 332
+/// [Olympus]       FocusDistance                   : 0.705 m
+/// [Olympus]       AFPoint                         : Center (horizontal)
+/// [Olympus]       AFPointDetails                  : 0
+/// [Olympus]       ExternalFlash                   : Off
+/// [Olympus]       ExternalFlashBounce             : Bounce or Off
+/// [Olympus]       ExternalFlashZoom               : 0
+/// [Olympus]       InternalFlash                   : Off
+/// [Olympus]       SensorTemperature               : 20 C
+/// [Composite]     DOF                             : 0.17 m (0.63 - 0.80 m)
+/// [Composite]     FOV                             : 47.2 deg (0.62 m)
+/// [Composite]     HyperfocalDistance              : 5.93 m
 /// ```
 ///
 /// `FocalPlaneDiagonal`, `ColorMatrix`, `CoringFilter` and `ValidBits` are
@@ -326,6 +346,34 @@ fn olympus_e1_jpg_sub_table_tags_match_the_pinned_oracle() {
             ("Olympus:NoiseReduction2", "(none)"),
             ("Olympus:DistortionCorrection2", "Off"),
             ("Olympus:ShadingCompensation2", "Off"),
+            // --- FocusInfo (0x2050) ---
+            // residual: RawConv-stripped undef[4]
+            ("Olympus:FocusInfoVersion", "010"),
+            // engine: plain int16u
+            ("Olympus:SceneDetect", "0"),
+            ("Olympus:ZoomStepCount", "3"),
+            ("Olympus:FocusStepCount", "332"),
+            // hand: `Format => 'int32u'` over the rational, `$a / 1000`
+            ("Olympus:FocusDistance", "0.705 m"),
+            // hand: the third AFPoint alternative (`!~ /^(E-M|OM-)/`),
+            // withheld for its E-P1 RawConv
+            ("Olympus:AFPoint", "Center (horizontal)"),
+            // engine: AFPointDetails' second alternative (older bodies),
+            // printed raw; the hand pass skips it
+            ("Olympus:AFPointDetails", "0"),
+            // engine: `Count => 2` joined-key hash, `'0 0' => 'Off'`
+            ("Olympus:ExternalFlash", "Off"),
+            ("Olympus:ExternalFlashBounce", "Bounce or Off"),
+            // engine: rational64u
+            ("Olympus:ExternalFlashZoom", "0"),
+            // engine: `Count => -1` joined-key hash
+            ("Olympus:InternalFlash", "Off"),
+            // hand: the E-1 / count != 1 alternative, `"$val C"`
+            ("Olympus:SensorTemperature", "20 C"),
+            // Composite: read FocusDistance's ValueConv side channel (0.705)
+            ("Composite:DOF", "0.17 m (0.63 - 0.80 m)"),
+            ("Composite:FOV", "47.2 deg (0.62 m)"),
+            ("Composite:HyperfocalDistance", "5.93 m"),
         ],
     );
 }
@@ -365,7 +413,28 @@ fn olympus_e1_jpg_sub_table_tags_match_the_pinned_oracle() {
 /// [Olympus]       CoringFilter                    : 15
 /// [Olympus]       BlackLevel2                     : 63 63 63 63
 /// [Olympus]       ShadingCompensation2            : On
+/// [Olympus]       FocusInfoVersion                : 0100
+/// [Olympus]       SceneDetect                     : 0
+/// [Olympus]       ZoomStepCount                   : 13
+/// [Olympus]       FocusStepCount                  : 321
+/// [Olympus]       FocusStepInfinity               : 320
+/// [Olympus]       FocusStepNear                   : 375
+/// [Olympus]       FocusDistance                   : 385.8 m
+/// [Olympus]       AFPoint                         : Left (or n/a)
+/// [Olympus]       ExternalFlash                   : Off
+/// [Olympus]       ExternalFlashBounce             : Bounce or Off
+/// [Olympus]       ExternalFlashZoom               : 0
+/// [Olympus]       InternalFlash                   : Off
+/// [Olympus]       ImageStabilization              : On, Mode 2
+/// [Composite]     DOF                             : inf (4.46 m - inf)
+/// [Composite]     FOV                             : 18.4 deg (124.77 m)
+/// [Composite]     HyperfocalDistance              : 4.51 m
 /// ```
+///
+/// `ImageStabilization` here is FocusInfo's 0x1600 (this u760 writes no
+/// CameraSettings 0x0604): the generator withholds its `Condition` and no
+/// hand row ever existed, so it is MISSING before and after the line and
+/// is not pinned -- a follow-up, recorded in `enabled_ifd.rs`.
 ///
 /// `PreviewImageStart` (stored 4294966614, a wrapped negative the oracle
 /// prints verbatim) is not pinned here; the Main-slice test covers the
@@ -419,6 +488,24 @@ fn olympus2_jpg_sub_table_tags_match_the_pinned_oracle() {
             ("Olympus:CoringFilter", "15"),
             ("Olympus:BlackLevel2", "63 63 63 63"),
             ("Olympus:ShadingCompensation2", "On"),
+            // --- FocusInfo (0x2050) ---
+            ("Olympus:FocusInfoVersion", "0100"),
+            ("Olympus:SceneDetect", "0"),
+            ("Olympus:ZoomStepCount", "13"),
+            ("Olympus:FocusStepCount", "321"),
+            ("Olympus:FocusStepInfinity", "320"),
+            ("Olympus:FocusStepNear", "375"),
+            // hand: 385800 / 1000
+            ("Olympus:FocusDistance", "385.8 m"),
+            // hand: third alternative, a zero on a non-E-P1 body is kept
+            ("Olympus:AFPoint", "Left (or n/a)"),
+            ("Olympus:ExternalFlash", "Off"),
+            ("Olympus:ExternalFlashBounce", "Bounce or Off"),
+            ("Olympus:ExternalFlashZoom", "0"),
+            ("Olympus:InternalFlash", "Off"),
+            ("Composite:DOF", "inf (4.46 m - inf)"),
+            ("Composite:FOV", "18.4 deg (124.77 m)"),
+            ("Composite:HyperfocalDistance", "4.51 m"),
         ],
     );
 }
@@ -472,6 +559,36 @@ fn olympus2_jpg_sub_table_tags_match_the_pinned_oracle() {
 /// [Olympus]       FaceDetectArea                  : (Binary data 383 bytes, use -b option to extract)
 /// [Olympus]       MaxFaces                        : 8 8 0
 /// [Olympus]       FaceDetectFrameSize             : 640 480 640 480 0 0
+/// [Olympus]       FocusInfoVersion                : 0100
+/// [Olympus]       FocusStepInfinity               : 0
+/// [Olympus]       FocusStepNear                   : 0
+/// [Olympus]       FocusDistance                   : 0.35 m
+/// [Olympus]       AFPoint                         : 0
+/// [Olympus]       AFPointDetails                  : No Subject Detection; Face Priority; Normal AF; No Eye-AF; No Face Detection; No MF; AF Priority; No Object found; Unknown (0x5)
+/// [Olympus]       ManualFlash                     : Off
+/// [Olympus]       MacroLED                        : Off
+/// [Olympus]       SensorTemperature               : 24 C
+/// [Composite]     DOF                             : 0.03 m (0.34 - 0.36 m)
+/// ```
+///
+/// `OlympusE-M1MarkII.jpg` carries the one FocusInfo row the hand table
+/// never had, and `OlympusE-P1.jpg` is the body whose `AFPoint` ExifTool
+/// drops (Olympus.pm:3447's RawConv on a zero) while reporting the raw
+/// `AFPointDetails` of an older body and the calibrated
+/// `SensorTemperature`:
+///
+/// ```text
+/// $ exiftool-pinned.sh -a -G1 -s OlympusE-M1MarkII.jpg
+/// [Olympus]       AntiShockWaitingTime            : 2000
+/// [Olympus]       SensorTemperature               : 34 34 0 C
+/// $ exiftool-pinned.sh -a -G1 -s OlympusE-P1.jpg
+/// [Olympus]       FocusStepCount                  : 0
+/// [Olympus]       FocusDistance                   : 0.905 m
+/// [Olympus]       AFPointDetails                  : 8
+/// [Olympus]       ExternalFlash                   : On
+/// [Olympus]       ExternalFlashBounce             : Direct
+/// [Olympus]       SensorTemperature               : 35.5 C
+/// [Composite]     DOF                             : 0.15 m (0.84 - 0.99 m)
 /// ```
 ///
 /// `OlympusXZ-1.jpg` -- writes BOTH 0x2030 `RawDevelopment` and 0x2031
@@ -552,7 +669,66 @@ fn corpus_carriers_gain_the_rows_the_hand_tables_lacked_in_exiftools_order() {
             ),
             ("Olympus:MaxFaces", "8 8 0"),
             ("Olympus:FaceDetectFrameSize", "640 480 640 480 0 0"),
+            // --- FocusInfo (0x2050) ---
+            ("Olympus:FocusInfoVersion", "0100"),
+            ("Olympus:FocusStepInfinity", "0"),
+            ("Olympus:FocusStepNear", "0"),
+            ("Olympus:FocusDistance", "0.35 m"),
+            // engine: AFPoint's fourth alternative (E-Mxxx / OM-x), raw;
+            // the hand pass skips it
+            ("Olympus:AFPoint", "0"),
+            // hand: the E-M/OM AFPointDetails bit-field decomposition,
+            // withheld for its ValueConv; the PrintHex miss
+            (
+                "Olympus:AFPointDetails",
+                "No Subject Detection; Face Priority; Normal AF; No Eye-AF; No Face Detection; No MF; AF Priority; No Object found; Unknown (0x5)",
+            ),
+            // residual: the q{} PrintConv
+            ("Olympus:ManualFlash", "Off"),
+            ("Olympus:MacroLED", "Off"),
+            // hand: the E-M5 alternative
+            ("Olympus:SensorTemperature", "24 C"),
+            ("Composite:DOF", "0.03 m (0.34 - 0.36 m)"),
         ],
+    );
+
+    let em1ii = Path::new(CORPUS).join("OlympusE-M1MarkII.jpg");
+    let metadata = read_metadata(&em1ii).expect("OlympusE-M1MarkII.jpg parses");
+    assert_tags(
+        &metadata,
+        "OlympusE-M1MarkII.jpg",
+        &[
+            // engine: 0x2100, a row `tables::FOCUS_INFO` never had (MISSING
+            // before the line on all 21 carriers)
+            ("Olympus:AntiShockWaitingTime", "2000"),
+            // hand: the count != 1 alternative, `s/ 0 0$//`
+            ("Olympus:SensorTemperature", "34 34 0 C"),
+        ],
+    );
+
+    let ep1 = Path::new(CORPUS).join("OlympusE-P1.jpg");
+    let metadata = read_metadata(&ep1).expect("OlympusE-P1.jpg parses");
+    assert_tags(
+        &metadata,
+        "OlympusE-P1.jpg",
+        &[
+            ("Olympus:FocusStepCount", "0"),
+            ("Olympus:FocusDistance", "0.905 m"),
+            // engine: AFPointDetails' second alternative, raw
+            ("Olympus:AFPointDetails", "8"),
+            ("Olympus:ExternalFlash", "On"),
+            ("Olympus:ExternalFlashBounce", "Direct"),
+            // hand: the calibrated alternative, `84 - 3 * $val / 26`
+            ("Olympus:SensorTemperature", "35.5 C"),
+            ("Composite:DOF", "0.15 m (0.84 - 0.99 m)"),
+        ],
+    );
+    // hand: the third AFPoint alternative's RawConv drops a zero on the
+    // E-P1 (Olympus.pm:3447), and the engine withholds that alternative, so
+    // neither producer reports it.
+    assert!(
+        metadata.get("Olympus:AFPoint").is_none(),
+        "OlympusE-P1.jpg: AFPoint must not be reported (RawConv undef)"
     );
 
     let xz1 = Path::new(CORPUS).join("OlympusXZ-1.jpg");

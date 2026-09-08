@@ -67,20 +67,20 @@ fn olympus_main_is_on_the_gate_b_allowlist() {
     );
 }
 
-/// Slice I-3 moved six of the seven Olympus sub-tables onto the engine
-/// (`tests/olympus_sub_tables_ifd.rs` pins those lines); `FocusInfo` is the
-/// one that stays hand-walked. Its table passes gate A since the slice's
-/// condition forms (`$count != 1`, `not defined $$self{X}`) compiled its two
-/// `_variants` conditions, so it is eligible -- but the line is a measured
-/// decision that comes with a residual table, and neither exists yet.
-/// Pinning that keeps the engine's refusal of its edge -- and the hand walk
-/// plus `parse_focus_info_*` that produce its tags -- from silently changing
-/// when someone adds the line without measuring.
+/// Slice I-3 moved six of the seven Olympus sub-tables onto the engine, and
+/// `FocusInfo` -- eligible since the slice's condition forms (`$count != 1`,
+/// `not defined $$self{X}`) compiled its `_variants` conditions, but held
+/// back until its line came with a residual and a measurement -- followed
+/// as the seventh (`tests/olympus_sub_tables_ifd.rs` pins all seven lines
+/// and their carriers). This keeps the line in force: a revert would
+/// silently hand the directory back to the hand walk, and `tables::
+/// FOCUS_INFO_RESIDUAL` and `parse_focus_info_*`'s engine-walked split
+/// would then be producing only part of it.
 #[test]
-fn olympus_focus_info_is_deliberately_not_enabled_yet() {
+fn olympus_focus_info_line_is_in_force_with_its_residual() {
     assert!(
-        !ENABLED_IFD.contains(&("Olympus", "FocusInfo")),
-        "Olympus::FocusInfo is hand-walked until its line is measured"
+        ENABLED_IFD.contains(&("Olympus", "FocusInfo")),
+        "ENABLED_IFD must carry the (\"Olympus\", \"FocusInfo\") line"
     );
     let table = find_ifd_table("Olympus", "FocusInfo").expect("Olympus::FocusInfo is generated");
     assert!(
@@ -89,8 +89,8 @@ fn olympus_focus_info_is_deliberately_not_enabled_yet() {
         table.gate_a.blocked_by
     );
     assert!(
-        !table.enabled(),
-        "the line is a measured decision; see enabled_ifd.rs"
+        table.enabled(),
+        "Olympus::FocusInfo must be enabled (gate A and the gate B line together)"
     );
 }
 
