@@ -69,8 +69,10 @@ fn olympus_main_is_on_the_gate_b_allowlist() {
 
 /// Slice I-3 moved six of the seven Olympus sub-tables onto the engine
 /// (`tests/olympus_sub_tables_ifd.rs` pins those lines); `FocusInfo` is the
-/// one that stays hand-walked, because `IFD_OLYMPUS_FOCUSINFO` does not pass
-/// gate A (two `_variants` conditions the generator could not compile).
+/// one that stays hand-walked. Its table passes gate A since the slice's
+/// condition forms (`$count != 1`, `not defined $$self{X}`) compiled its two
+/// `_variants` conditions, so it is eligible -- but the line is a measured
+/// decision that comes with a residual table, and neither exists yet.
 /// Pinning that keeps the engine's refusal of its edge -- and the hand walk
 /// plus `parse_focus_info_*` that produce its tags -- from silently changing
 /// when someone adds the line without measuring.
@@ -78,12 +80,17 @@ fn olympus_main_is_on_the_gate_b_allowlist() {
 fn olympus_focus_info_is_deliberately_not_enabled_yet() {
     assert!(
         !ENABLED_IFD.contains(&("Olympus", "FocusInfo")),
-        "Olympus::FocusInfo is hand-walked until its table passes gate A and is measured"
+        "Olympus::FocusInfo is hand-walked until its line is measured"
     );
     let table = find_ifd_table("Olympus", "FocusInfo").expect("Olympus::FocusInfo is generated");
     assert!(
-        !table.gate_a.passes(),
-        "Olympus::FocusInfo now passes gate A: measure it and give it a residual before listing it"
+        table.gate_a.passes(),
+        "Olympus::FocusInfo stopped passing gate A: {:?}",
+        table.gate_a.blocked_by
+    );
+    assert!(
+        !table.enabled(),
+        "the line is a measured decision; see enabled_ifd.rs"
     );
 }
 

@@ -744,11 +744,13 @@ pub static EQUIPMENT: &[TagDef] = &[
 //   (`t/images/OlympusE1.jpg` carries both, 21.6 mm each).
 pub static EQUIPMENT_RESIDUAL: &[TagDef] = &[
     TagDef::text(0x0000, "EquipmentVersion"),
-    TagDef::text_trim(0x0101, "SerialNumber"),
+    // 0x0101 SerialNumber and 0x0202 LensSerialNumber carry
+    // `PrintConv => '$val=~s/\s+$//;$val'` (Olympus.pm:1615, 1666); slice
+    // I-3's trim-end form compiles it, the i7 oracle approved it, and the
+    // regenerated table produces both rows, so their hand rows are gone.
     TagDef::func(0x0103, "FocalPlaneDiagonal", print_mm),
     TagDef::func(0x0104, "BodyFirmwareVersion", print_firmware),
     TagDef::func(0x0201, "LensType", print_lens_type),
-    TagDef::text(0x0202, "LensSerialNumber"),
     TagDef::func(0x0204, "LensFirmwareVersion", print_firmware),
     TagDef::func(0x0301, "Extender", print_extender),
     TagDef::func(0x0304, "ExtenderFirmwareVersion", print_firmware),
@@ -2272,16 +2274,23 @@ mod tests {
         assert_misrenders_are_overrides("RawInfo", RAW_INFO_RESIDUAL, RAW_INFO_ENGINE_MISRENDERS);
     }
 
-    /// `FocusInfo` is the one sub-table that stays hand-walked (gate A blocks
-    /// `IFD_OLYMPUS_FOCUSINFO`: two `_variants` conditions the generator
-    /// could not compile), so it has no residual; pinning the gate here
-    /// keeps a regeneration that starts passing from silently leaving the
-    /// hand walk AND a future engine walk both in force.
+    /// `FocusInfo` is the one sub-table that stays hand-walked. Slice I-3's
+    /// condition forms (`$count != 1`, `not defined $$self{X}`) made
+    /// `IFD_OLYMPUS_FOCUSINFO` pass gate A, so it is ELIGIBLE, and it has no
+    /// residual and no allowlist line yet; pinning both keeps a line added
+    /// without a residual and a measurement from silently leaving the hand
+    /// walk AND the engine walk both in force.
     #[test]
-    fn focus_info_is_still_blocked_by_gate_a() {
+    fn focus_info_is_eligible_but_still_hand_walked() {
+        let table = generated("FocusInfo");
         assert!(
-            !generated("FocusInfo").gate_a.passes(),
-            "Olympus::FocusInfo now passes gate A: give it a residual and an allowlist line, measured, before enabling it"
+            table.gate_a.passes(),
+            "Olympus::FocusInfo stopped passing gate A: {:?}",
+            table.gate_a.blocked_by
+        );
+        assert!(
+            !table.enabled(),
+            "Olympus::FocusInfo is enabled: give it a residual (the rows the generated table withholds) and measure the line before listing it"
         );
     }
 
