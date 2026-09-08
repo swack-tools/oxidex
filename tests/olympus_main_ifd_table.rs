@@ -67,25 +67,24 @@ fn olympus_main_is_on_the_gate_b_allowlist() {
     );
 }
 
-/// The seven Olympus sub-tables stay hand-walked in this slice (I-3 lands
-/// them); pinning that keeps the engine's refusal of their edges from
-/// silently changing when someone adds a line without measuring.
+/// Slice I-3 moved six of the seven Olympus sub-tables onto the engine
+/// (`tests/olympus_sub_tables_ifd.rs` pins those lines); `FocusInfo` is the
+/// one that stays hand-walked, because `IFD_OLYMPUS_FOCUSINFO` does not pass
+/// gate A (two `_variants` conditions the generator could not compile).
+/// Pinning that keeps the engine's refusal of its edge -- and the hand walk
+/// plus `parse_focus_info_*` that produce its tags -- from silently changing
+/// when someone adds the line without measuring.
 #[test]
-fn olympus_sub_tables_are_deliberately_not_enabled_yet() {
-    for name in [
-        "Equipment",
-        "CameraSettings",
-        "RawDevelopment",
-        "RawDevelopment2",
-        "ImageProcessing",
-        "FocusInfo",
-        "RawInfo",
-    ] {
-        assert!(
-            !ENABLED_IFD.contains(&("Olympus", name)),
-            "Olympus::{name} is slice I-3's; it must not be on the allowlist yet"
-        );
-    }
+fn olympus_focus_info_is_deliberately_not_enabled_yet() {
+    assert!(
+        !ENABLED_IFD.contains(&("Olympus", "FocusInfo")),
+        "Olympus::FocusInfo is hand-walked until its table passes gate A and is measured"
+    );
+    let table = find_ifd_table("Olympus", "FocusInfo").expect("Olympus::FocusInfo is generated");
+    assert!(
+        !table.gate_a.passes(),
+        "Olympus::FocusInfo now passes gate A: measure it and give it a residual before listing it"
+    );
 }
 
 /// Reads a `t/images` carrier through the library's normal entry point, or
@@ -195,8 +194,9 @@ fn olympus_jpg_main_tags_match_the_pinned_oracle() {
 ///
 /// `CameraID` keeps its nine trailing spaces: `string` is NUL-truncated
 /// only (ExifTool.pm:6306-6308). `SceneMode` here is CameraSettings 0x0509
-/// (hand-walked), not Main 0x0403 -- pinned because the engine's Main walk
-/// must not displace it (Main has no 0x0403 in this file).
+/// (the engine's, through the 0x2020 edge since slice I-3), not Main 0x0403
+/// -- pinned because the top-level Main rows must not displace it (Main has
+/// no 0x0403 in this file).
 #[test]
 fn olympus2_jpg_main_tags_match_the_pinned_oracle() {
     let Some(metadata) = t_images_carrier("Olympus2.jpg") else {

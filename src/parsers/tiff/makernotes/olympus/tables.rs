@@ -693,6 +693,73 @@ pub static EQUIPMENT: &[TagDef] = &[
 ];
 
 // ===========================================================================
+// Olympus::Equipment -- the rows the generated table cannot produce (I-3)
+// ===========================================================================
+//
+// The same construction as `MAIN_RESIDUAL` above, for the `("Olympus",
+// "Equipment")` line in `src/exiftool_tables/enabled_ifd.rs`. With that line
+// in force the IFD engine walks the 0x2010 directory DURING the Main walk
+// (`ifd_engine::descend` follows `IFD_OLYMPUS_MAIN`'s 0x2010 edge in entry
+// order, which is ExifTool's order, Exif.pm:6919-7102), and
+// `olympus.rs::parse_located`'s sub-IFD loop walks this list where it used to
+// walk `EQUIPMENT` -- walking both would insert every Equipment tag twice.
+// `equipment_residual_is_exactly_the_generated_tables_remainder` pins the
+// list against `IFD_OLYMPUS_EQUIPMENT`, in both directions.
+//
+// Withheld by the generator (`Omitted` set, the engine reports nothing):
+//
+// * 0x0000 `EquipmentVersion` -- `RawConv => '$val=~s/\0+$//; $val'`
+//   (Olympus.pm:1601), not the one `$$self{X} = $val` RawConv shape the
+//   schema carries; `omitted.raw_conv`. The hand `text` row cuts at the
+//   first NUL, which is the same string for a NUL-padded `undef[4]`.
+// * 0x0101 `SerialNumber`, 0x0202 `LensSerialNumber` -- `PrintConv =>
+//   '$val=~s/\s+$//;$val'` (Olympus.pm:1615, 1666), a substitution the
+//   expression grammar does not compile; `omitted.print_conv`.
+// * 0x0104 `BodyFirmwareVersion`, 0x0204 `LensFirmwareVersion`, 0x0304
+//   `ExtenderFirmwareVersion`, 0x1002 `FlashFirmwareVersion` -- `PrintConv =>
+//   '$val=sprintf("%x",$val);$val=~s/(.{3})$/\.$1/;$val'` (Olympus.pm:1633,
+//   1673, 1730, 1770); `omitted.print_conv`. `print_firmware`.
+// * 0x0201 `LensType`, 0x0301 `Extender` -- `ValueConv => 'my @a=split("
+//   ",$val); sprintf("%x %.2x %.2x",@a[0,2,3])'` / `sprintf("%x
+//   %.2x",@a[0,2])` (Olympus.pm:1649, 1716) feeding a string-keyed hash;
+//   `omitted.value_conv`. `print_lens_type` / `print_extender`.
+//
+// Override (`EQUIPMENT_ENGINE_MISRENDERS`, the second class of the
+// `MAIN_RESIDUAL` comment: the engine reports the row, the hand rendering
+// lands last):
+//
+// * 0x0103 `FocalPlaneDiagonal` -- `rational64u` with `PrintConv => '"$val
+//   mm"'` (Olympus.pm:1627): the same defect as `Main` 0x0205 above (the
+//   engine interpolates the exact quotient at 15 digits, ExifTool
+//   `RoundFloat`s it to 10 first, ExifTool.pm:6114-6120). No corpus carrier
+//   stores a non-terminating quotient in THIS table (every Equipment
+//   FocalPlaneDiagonal under `combined-samples/Olympus` is a short decimal
+//   such as 21.6 mm or 9.25 mm, `exiftool-pinned.sh -a -G1 -s`; the build
+//   with all six override rows removed moved 0 rows for this tag under
+//   `conformance.py`), so like Main's 0x100c the entry stands on the shape
+//   alone. It also settles an
+//   ORDER: `MAIN_RESIDUAL`'s 0x0205 override runs after the engine walk and
+//   would otherwise leave the Main copy over Equipment's, where ExifTool --
+//   reaching 0x2010 after 0x0205 -- reports Equipment's last
+//   (`t/images/OlympusE1.jpg` carries both, 21.6 mm each).
+pub static EQUIPMENT_RESIDUAL: &[TagDef] = &[
+    TagDef::text(0x0000, "EquipmentVersion"),
+    TagDef::text_trim(0x0101, "SerialNumber"),
+    TagDef::func(0x0103, "FocalPlaneDiagonal", print_mm),
+    TagDef::func(0x0104, "BodyFirmwareVersion", print_firmware),
+    TagDef::func(0x0201, "LensType", print_lens_type),
+    TagDef::text(0x0202, "LensSerialNumber"),
+    TagDef::func(0x0204, "LensFirmwareVersion", print_firmware),
+    TagDef::func(0x0301, "Extender", print_extender),
+    TagDef::func(0x0304, "ExtenderFirmwareVersion", print_firmware),
+    TagDef::func(0x1002, "FlashFirmwareVersion", print_firmware),
+];
+
+/// The `EQUIPMENT_RESIDUAL` rows that override an engine rendering rather
+/// than supply a withheld one -- see the comment above.
+pub static EQUIPMENT_ENGINE_MISRENDERS: &[u16] = &[0x0103];
+
+// ===========================================================================
 // Olympus::CameraSettings (0x2020)
 // ===========================================================================
 
@@ -1054,6 +1121,15 @@ static CS_GRADATION_CONVS: &[ElemConv] = &[
     ElemConv::Map(&[(0, "User-Selected"), (1, "Auto-Override")]),
 ];
 
+/// Olympus.pm:2019-2024, `CameraSettings` 0x0404 `FlashControlMode` -- the
+/// first element's hash; the rest print raw.
+static CS_FLASH_CONTROL_MODE_LIST: &[ElemConv] = &[ElemConv::Map(&[
+    (0, "Off"),
+    (1, "TTL"),
+    (2, "Auto"),
+    (3, "Manual"),
+])];
+
 pub static CAMERA_SETTINGS: &[TagDef] = &[
     TagDef::text(0x0000, "CameraSettingsVersion"),
     TagDef::lookup(0x0100, "PreviewImageValid", NO_YES),
@@ -1155,12 +1231,7 @@ pub static CAMERA_SETTINGS: &[TagDef] = &[
         id: 0x0404,
         name: "FlashControlMode",
         force_type: None,
-        conv: Conv::List(&[ElemConv::Map(&[
-            (0, "Off"),
-            (1, "TTL"),
-            (2, "Auto"),
-            (3, "Manual"),
-        ])]),
+        conv: Conv::List(CS_FLASH_CONTROL_MODE_LIST),
     },
     TagDef::func(0x0405, "FlashIntensity", print_flash_strength),
     TagDef::func(0x0406, "ManualFlashStrength", print_flash_strength),
@@ -1315,6 +1386,184 @@ pub static CAMERA_SETTINGS: &[TagDef] = &[
 ];
 
 // ===========================================================================
+// Olympus::CameraSettings -- the rows the generated table cannot produce (I-3)
+// ===========================================================================
+//
+// For the `("Olympus", "CameraSettings")` line; see `EQUIPMENT_RESIDUAL` for
+// the construction. `camera_settings_residual_is_exactly_the_generated_
+// tables_remainder` pins it against `IFD_OLYMPUS_CAMERASETTINGS`.
+//
+// Not transcribed at all (no row in the generated table):
+//
+// * 0x0101 `PreviewImageStart`, 0x0102 `PreviewImageLength` -- `Flags =>
+//   'IsOffset'` / `OffsetPair` (Olympus.pm:1793-1809), the design spec's
+//   section-6 refusal. The stored number this row yields is what
+//   `olympus::absolutise_preview_image_start` rebases, exactly as before.
+//
+// Withheld (`Omitted` set):
+//
+// * 0x0000 `CameraSettingsVersion` -- `RawConv => '$val=~s/\0+$//; $val'`
+//   (Olympus.pm:1785); `omitted.raw_conv`.
+// * 0x0301 `FocusMode`, 0x0302 `FocusProcess`, 0x0404 `FlashControlMode`,
+//   0x0520 `PictureMode`, 0x0529 `ArtFilter`, 0x052c `MagicFilter`, 0x052e
+//   `ToneLevel`, 0x052f `ArtFilterEffect`, 0x0532 `ColorCreatorEffect`,
+//   0x0537 `MonochromeProfileSettings`, 0x0539 `ColorProfileSettings`,
+//   0x0821 `ISOAutoSettings` -- `PrintConv => [ ... ]`, ExifTool's
+//   per-element list form (Olympus.pm:1857, 1883, 2019, 2252, 2346, 2354,
+//   2369, 2406, 2437, 2450, 2483, 2683), which the generator does not
+//   model; `omitted.print_conv`. `Conv::List`.
+// * 0x050f `Gradation` -- the list form under `Relist => [ [0..2], 3 ]`
+//   (Olympus.pm:2236-2237); `Conv::Relist`.
+// * 0x0304 `AFAreas` -- `PrintConv => 'Image::ExifTool::Olympus::
+//   PrintAFAreas($val)'` (Olympus.pm:1905), a Perl sub; `print_af_areas`.
+// * 0x0305 `AFPointSelected` -- `ValueConv => '$val =~ s/\S* //; $val'` and a
+//   `q{}` PrintConv (Olympus.pm:1912-1917); `print_af_point_selected`.
+// * 0x0405 `FlashIntensity`, 0x0406 `ManualFlashStrength` -- `PrintConv =>
+//   { OTHER => sub {...} }` (Olympus.pm:2031-2036, 2042-2047);
+//   `print_flash_strength`.
+// * 0x0503 `CustomSaturation` -- a `q{}` PrintConv that reads
+//   `$$self{Model}` (Olympus.pm:2092-2099); `print_min_max` (the hand row
+//   renders the non-E-1 branch only, a pre-existing gap this slice does not
+//   change: `scripts/compare_file.py` reports it WRONG on both E-1 carriers
+//   before and after).
+// * 0x0600 `DriveMode`, 0x0601 `PanoramaMode` -- `q{}` PrintConvs
+//   (Olympus.pm:2525, 2599); `print_drive_mode` / `print_panorama_mode`.
+// * 0x0901 `ManometerReading` -- `ValueConv => 'my @a=split(" ",$val); $_ /=
+//   10 foreach @a; "@a"'` (Olympus.pm:2758); `print_manometer_reading`.
+//
+// Withheld rows the hand table never had (0x0804 `StackedImage`, 0x0903
+// `RollAngle`, 0x0904 `PitchAngle`) stay MISSING: no hand conversion exists
+// and none is guessed at. The two sub-directory rows (0x030a
+// `AFTargetInfo`, 0x030b `SubjectDetectInfo`, Olympus.pm:1962-1975) are
+// edges to tables no allowlist carries, so the engine refuses them exactly
+// as the hand walk ignored them.
+//
+// Overrides (`CAMERA_SETTINGS_ENGINE_MISRENDERS`):
+//
+// * 0x0527 `NoiseFilter`, 0x052d `PictureModeEffect` -- `int16s[3]` with a
+//   PrintConv hash keyed by the space-joined value (`'0 -2 1' => 'Standard'`,
+//   Olympus.pm:2333-2340, 2360-2366): the `Main` 0x1015 `WBMode` defect
+//   (`runtime::render`'s `StrEnum` arm has no key for a fixed-count
+//   `Array`, so the raw joined value stands in). Measured, `conformance.py`
+//   over the 315-file Olympus directory against the pinned 13.59 oracle,
+//   treatment = a build with all six override rows of this slice removed
+//   (the engine's rendering alone; the first such build silently failed to
+//   strip -- a reflowed anchor, the script exited before writing and the
+//   build ran on the unchanged source, byte-identical to the treatment by
+//   md5 -- and was caught by a debug probe of the engine's emitted value,
+//   then redone with every removal verified):
+//     NoiseFilter        83 files: Standard -> "0 -2 1" x41, n/a -> "0 0 0"
+//                        x29, Off -> "-2 -2 1" x10, Low -> "-1 -2 1" x2,
+//                        High -> "1 -2 1" x1 (OlympusAIR-A01.jpg,
+//                        OlympusE-3.jpg, OlympusE-30.jpg, ...)
+//     PictureModeEffect  51 files: Standard -> "0 -1 1" x40, n/a -> "0 0 0"
+//                        x11 (OlympusAIR-A01.jpg, OlympusE-5.jpg,
+//                        OlympusE-M1.jpg, ...)
+//   With the rows in place both are 0 new VALUE. `Conv::ListLookup` is that
+//   hash lookup, and renders a miss as ExifTool.pm:3624-3631 does,
+//   `Unknown (<joined>)`.
+pub static CAMERA_SETTINGS_RESIDUAL: &[TagDef] = &[
+    TagDef::text(0x0000, "CameraSettingsVersion"),
+    TagDef::raw(0x0101, "PreviewImageStart"),
+    TagDef::raw(0x0102, "PreviewImageLength"),
+    TagDef {
+        id: 0x0301,
+        name: "FocusMode",
+        force_type: None,
+        conv: Conv::List(CS_FOCUS_MODE_LIST),
+    },
+    TagDef {
+        id: 0x0302,
+        name: "FocusProcess",
+        force_type: None,
+        conv: Conv::List(CS_FOCUS_PROCESS_LIST),
+    },
+    TagDef::func(0x0304, "AFAreas", print_af_areas),
+    TagDef::func(0x0305, "AFPointSelected", print_af_point_selected),
+    TagDef {
+        id: 0x0404,
+        name: "FlashControlMode",
+        force_type: None,
+        conv: Conv::List(CS_FLASH_CONTROL_MODE_LIST),
+    },
+    TagDef::func(0x0405, "FlashIntensity", print_flash_strength),
+    TagDef::func(0x0406, "ManualFlashStrength", print_flash_strength),
+    TagDef::func(0x0503, "CustomSaturation", print_min_max),
+    TagDef {
+        id: 0x050F,
+        name: "Gradation",
+        force_type: None,
+        conv: Conv::Relist {
+            group: 3,
+            convs: CS_GRADATION_CONVS,
+        },
+    },
+    TagDef {
+        id: 0x0520,
+        name: "PictureMode",
+        force_type: None,
+        conv: Conv::List(CS_PICTURE_MODE_LIST),
+    },
+    TagDef::list_lookup(0x0527, "NoiseFilter", CS_NOISE_FILTER),
+    TagDef {
+        id: 0x0529,
+        name: "ArtFilter",
+        force_type: None,
+        conv: Conv::List(CS_ART_FILTER_LIST),
+    },
+    TagDef {
+        id: 0x052C,
+        name: "MagicFilter",
+        force_type: None,
+        conv: Conv::List(CS_ART_FILTER_LIST),
+    },
+    TagDef::list_lookup(0x052D, "PictureModeEffect", CS_PICTURE_MODE_EFFECT),
+    TagDef {
+        id: 0x052E,
+        name: "ToneLevel",
+        force_type: None,
+        conv: Conv::List(CS_TONE_LEVEL_LIST),
+    },
+    TagDef {
+        id: 0x052F,
+        name: "ArtFilterEffect",
+        force_type: None,
+        conv: Conv::List(CS_ART_FILTER_EFFECT_LIST),
+    },
+    TagDef {
+        id: 0x0532,
+        name: "ColorCreatorEffect",
+        force_type: None,
+        conv: Conv::List(CS_COLOR_CREATOR_LIST),
+    },
+    TagDef {
+        id: 0x0537,
+        name: "MonochromeProfileSettings",
+        force_type: None,
+        conv: Conv::List(CS_MONO_PROFILE_LIST),
+    },
+    TagDef {
+        id: 0x0539,
+        name: "ColorProfileSettings",
+        force_type: None,
+        conv: Conv::List(CS_COLOR_PROFILE_LIST),
+    },
+    TagDef::func(0x0600, "DriveMode", print_drive_mode),
+    TagDef::func(0x0601, "PanoramaMode", print_panorama_mode),
+    TagDef {
+        id: 0x0821,
+        name: "ISOAutoSettings",
+        force_type: None,
+        conv: Conv::List(CS_ISO_AUTO_SETTINGS_LIST),
+    },
+    TagDef::func(0x0901, "ManometerReading", print_manometer_reading),
+];
+
+/// The `CAMERA_SETTINGS_RESIDUAL` rows that override an engine rendering --
+/// see the comment above.
+pub static CAMERA_SETTINGS_ENGINE_MISRENDERS: &[u16] = &[0x0527, 0x052D];
+
+// ===========================================================================
 // Olympus::RawDevelopment (0x2030)
 // ===========================================================================
 
@@ -1383,6 +1632,26 @@ pub static RAW_DEVELOPMENT: &[TagDef] = &[
         },
     },
 ];
+
+// ===========================================================================
+// Olympus::RawDevelopment -- the rows the generated table cannot produce (I-3)
+// ===========================================================================
+//
+// For the `("Olympus", "RawDevelopment")` line; see `EQUIPMENT_RESIDUAL` for
+// the construction. One row: 0x0000 `RawDevVersion`, `RawConv =>
+// '$val=~s/\0+$//; $val'` (Olympus.pm:2864), `omitted.raw_conv`. Every other
+// row is plain or an integer hash (`RawDevNoiseReduction` / `RawDevSettings`
+// are `BITMASK` hashes the engine decodes, Olympus.pm:2892-2934) and is the
+// engine's. No override: none was needed on any of the 103 corpus carriers
+// (`exiftool-pinned.sh -a -G1 -s -RawDevEditStatus` census). A body that
+// writes both 0x2030 and 0x2031 (`OlympusXZ-1.jpg`, `OlympusE-M1.jpg`) has
+// the RawDevelopment2 copy of every shared name reported last, in ExifTool's
+// order, because the engine walks 0x2031 after 0x2030 and the residual loop
+// does the same.
+pub static RAW_DEVELOPMENT_RESIDUAL: &[TagDef] = &[TagDef::text(0x0000, "RawDevVersion")];
+
+/// No `RAW_DEVELOPMENT_RESIDUAL` row overrides an engine rendering.
+pub static RAW_DEVELOPMENT_ENGINE_MISRENDERS: &[u16] = &[];
 
 // ===========================================================================
 // Olympus::RawDevelopment2 (0x2031)
@@ -1467,8 +1736,90 @@ pub static RAW_DEVELOPMENT2: &[TagDef] = &[
 ];
 
 // ===========================================================================
+// Olympus::RawDevelopment2 -- the rows the generated table cannot produce (I-3)
+// ===========================================================================
+//
+// For the `("Olympus", "RawDevelopment2")` line; see `EQUIPMENT_RESIDUAL`.
+//
+// * 0x0000 `RawDevVersion` -- `RawConv => '$val=~s/\0+$//; $val'`
+//   (Olympus.pm:2944); `omitted.raw_conv`.
+// * 0x0121 `RawDevArtFilter` -- `PrintConv => [ \%filters ]` (Olympus.pm:
+//   3037), the list form; `omitted.print_conv`. `Conv::List`.
+//
+// 0x8000 `RawDevSubIFD` (Olympus.pm:3039-3049, `Flags => 'SubIFD'`, `FixFormat
+// => 'ifd'`) is an edge to `Olympus::RawDevSubIFD`, which no allowlist
+// carries; the engine refuses it and the hand table never had a row for it.
+//
+// Override (`RAW_DEVELOPMENT2_ENGINE_MISRENDERS`):
+//
+// * 0x0108 `RawDevMemoryColorEmphasis` -- `Writable => 'int16u'`, no
+//   conversion (Olympus.pm:2962). Both corpus carriers of this table write
+//   the entry with COUNT 0, which ExifTool reads as the empty string
+//   (`ReadValue`, ExifTool.pm:6297: `return '' if defined $count`) and
+//   reports; the engine withholds a zero-count entry instead
+//   (`ifd_engine::read_plan`, `if count == 0 { return None }`). On its own
+//   that would be one MISSING, but the same bodies also write 0x2030
+//   `RawDevelopment`, whose 0x0105 row of the same name (`int16u`, count 1)
+//   the engine reports first -- so the plain name kept `0` where ExifTool's
+//   last-wins order puts the 0x2031 copy's ``. Measured, `conformance.py`
+//   over the 315-file Olympus directory against the pinned 13.59 oracle,
+//   treatment = the engine alone for this row: 2 new VALUE rows,
+//   `OlympusXZ-1.jpg` and `OlympusE-M1.jpg`, oracle `''`, oxidex `0` (the
+//   same two rows again in the build with all six override rows removed);
+//   with this row the hand decode (`decode_entry_with_floor` yields an empty
+//   integer list, printed as ``) lands last again and both files match, as
+//   they did before the line. The engine defect is the zero-count
+//   withholding, reported with this slice; when `read_plan` returns the
+//   empty value the entry comes out of both lists.
+pub static RAW_DEVELOPMENT2_RESIDUAL: &[TagDef] = &[
+    TagDef::text(0x0000, "RawDevVersion"),
+    TagDef::raw(0x0108, "RawDevMemoryColorEmphasis"),
+    TagDef {
+        id: 0x0121,
+        name: "RawDevArtFilter",
+        force_type: None,
+        conv: Conv::List(CS_ART_FILTER_LIST),
+    },
+];
+
+/// The `RAW_DEVELOPMENT2_RESIDUAL` row that overrides an engine
+/// (non-)rendering -- see the comment above.
+pub static RAW_DEVELOPMENT2_ENGINE_MISRENDERS: &[u16] = &[0x0108];
+
+// ===========================================================================
 // Olympus::ImageProcessing (0x2040)
 // ===========================================================================
+
+/// Olympus.pm:3186-3193, `ImageProcessing` 0x101c `MultipleExposureMode` --
+/// the first element's hash; the rest print raw.
+static IP_MULTIPLE_EXPOSURE_MODE_LIST: &[ElemConv] = &[ElemConv::Map(&[
+    (0, "Off"),
+    (1, "Live Composite"),
+    (2, "On (2 frames)"),
+    (3, "On (3 frames)"),
+])];
+
+/// Olympus.pm:3211-3227, `ImageProcessing` 0x1112 `AspectRatio` -- keyed by
+/// the space-joined `int8u[2]` value.
+static IP_ASPECT_RATIO: &[(&str, &str)] = &[
+    ("1 1", "4:3"),
+    ("1 4", "1:1"),
+    ("2 1", "3:2 (RAW)"),
+    ("2 2", "3:2"),
+    ("3 1", "16:9 (RAW)"),
+    ("3 3", "16:9"),
+    ("4 1", "1:1 (RAW)"),
+    ("4 4", "6:6"),
+    ("5 5", "5:4"),
+    ("6 6", "7:6"),
+    ("7 7", "6:5"),
+    ("8 8", "7:5"),
+    ("9 1", "3:4 (RAW)"),
+    ("9 9", "3:4"),
+];
+
+/// Olympus.pm:3272-3275, `ImageProcessing` 0x1900 `KeystoneCompensation`.
+static IP_KEYSTONE_COMPENSATION: &[(&str, &str)] = &[("0 0", "Off"), ("0 1", "On")];
 
 pub static IMAGE_PROCESSING: &[TagDef] = &[
     TagDef::text(0x0000, "ImageProcessingVersion"),
@@ -1530,33 +1881,9 @@ pub static IMAGE_PROCESSING: &[TagDef] = &[
         id: 0x101C,
         name: "MultipleExposureMode",
         force_type: None,
-        conv: Conv::List(&[ElemConv::Map(&[
-            (0, "Off"),
-            (1, "Live Composite"),
-            (2, "On (2 frames)"),
-            (3, "On (3 frames)"),
-        ])]),
+        conv: Conv::List(IP_MULTIPLE_EXPOSURE_MODE_LIST),
     },
-    TagDef::list_lookup(
-        0x1112,
-        "AspectRatio",
-        &[
-            ("1 1", "4:3"),
-            ("1 4", "1:1"),
-            ("2 1", "3:2 (RAW)"),
-            ("2 2", "3:2"),
-            ("3 1", "16:9 (RAW)"),
-            ("3 3", "16:9"),
-            ("4 1", "1:1 (RAW)"),
-            ("4 4", "6:6"),
-            ("5 5", "5:4"),
-            ("6 6", "7:6"),
-            ("7 7", "6:5"),
-            ("8 8", "7:5"),
-            ("9 1", "3:4 (RAW)"),
-            ("9 9", "3:4"),
-        ],
-    ),
+    TagDef::list_lookup(0x1112, "AspectRatio", IP_ASPECT_RATIO),
     TagDef::raw(0x1113, "AspectFrame"),
     TagDef::raw(0x1200, "FacesDetected"),
     TagDef::binary(0x1201, "FaceDetectArea"),
@@ -1572,11 +1899,7 @@ pub static IMAGE_PROCESSING: &[TagDef] = &[
             Some(n) => Some(n.to_string()),
         },
     ),
-    TagDef::list_lookup(
-        0x1900,
-        "KeystoneCompensation",
-        &[("0 0", "Off"), ("0 1", "On")],
-    ),
+    TagDef::list_lookup(0x1900, "KeystoneCompensation", IP_KEYSTONE_COMPENSATION),
     TagDef::lookup(
         0x1901,
         "KeystoneDirection",
@@ -1589,6 +1912,56 @@ pub static IMAGE_PROCESSING: &[TagDef] = &[
         &[(0, "High"), (1, "Medium"), (2, "Soft")],
     ),
 ];
+
+// ===========================================================================
+// Olympus::ImageProcessing -- the rows the generated table cannot produce (I-3)
+// ===========================================================================
+//
+// For the `("Olympus", "ImageProcessing")` line; see `EQUIPMENT_RESIDUAL`.
+//
+// Withheld:
+//
+// * 0x0000 `ImageProcessingVersion` -- `RawConv => '$val=~s/\0+$//; $val'`
+//   (Olympus.pm:3067); `omitted.raw_conv`.
+// * 0x101c `MultipleExposureMode` -- `PrintConv => [{...}]` (Olympus.pm:
+//   3186), the list form; `omitted.print_conv`. `Conv::List`.
+//
+// The four `Unknown => 1` rows (0x0635/0x0636/0x1103/0x1104 `UnknownBlockN`)
+// are never reported without `-u` and have no hand row. 0x1306
+// `CameraTemperature`'s `ValueConv => '$val ? $val : undef'` (Olympus.pm:
+// 3265) IS compiled: the engine withholds the tag on a Perl `undef`, which
+// is what the hand `typed_func` did for 0.
+//
+// Overrides (`IMAGE_PROCESSING_ENGINE_MISRENDERS`):
+//
+// * 0x1112 `AspectRatio`, 0x1900 `KeystoneCompensation` -- `int8u[2]` with a
+//   PrintConv hash keyed by the space-joined value (`'1 1' => '4:3'`, `'0 0'
+//   => 'Off'`, Olympus.pm:3211-3227, 3272-3275): the `Main` 0x1015 `WBMode`
+//   defect (`runtime::render`'s `StrEnum` arm has no key for a fixed-count
+//   `Array`). Measured the same way as the CameraSettings overrides (the
+//   build with all six override rows removed, `conformance.py`, 315 files):
+//     AspectRatio           78 files: 4:3 -> "1 1" x72, 3:2 -> "2 2" x3,
+//                           Unknown (0 0) -> "0 0" x2, 16:9 -> "3 3" x1
+//                           (OlympusAIR-A01.jpg, OlympusE-30.jpg,
+//                           OlympusE-5.jpg, ...)
+//     KeystoneCompensation  18 files: Off -> "0 0" x18 (OlympusAIR-A01.jpg,
+//                           OlympusE-M10MarkII.jpg, ...)
+//   With the rows in place both are 0 new VALUE.
+pub static IMAGE_PROCESSING_RESIDUAL: &[TagDef] = &[
+    TagDef::text(0x0000, "ImageProcessingVersion"),
+    TagDef {
+        id: 0x101C,
+        name: "MultipleExposureMode",
+        force_type: None,
+        conv: Conv::List(IP_MULTIPLE_EXPOSURE_MODE_LIST),
+    },
+    TagDef::list_lookup(0x1112, "AspectRatio", IP_ASPECT_RATIO),
+    TagDef::list_lookup(0x1900, "KeystoneCompensation", IP_KEYSTONE_COMPENSATION),
+];
+
+/// The `IMAGE_PROCESSING_RESIDUAL` rows that override an engine rendering --
+/// see the comment above.
+pub static IMAGE_PROCESSING_ENGINE_MISRENDERS: &[u16] = &[0x1112, 0x1900];
 
 // ===========================================================================
 // Olympus::FocusInfo (0x2050)
@@ -1637,7 +2010,10 @@ pub static RAW_INFO: &[TagDef] = &[
     TagDef::raw(0x0123, "WB_RBLevelsTungsten"),
     TagDef::raw(0x0124, "WB_RBLevelsEveningSunlight"),
     TagDef::raw(0x0130, "WB_RBLevelsDaylightFluor"),
-    TagDef::raw(0x0131, "WB_RBLevelsNeutralWhiteFluor"),
+    // Olympus.pm:3672 in the pinned 13.59 tree names 0x0131
+    // `WB_RBLevelsDayWhiteFluor`; the earlier `WB_RBLevelsNeutralWhiteFluor`
+    // here was a stale name (a RENAME under `conformance.py`, not a value).
+    TagDef::raw(0x0131, "WB_RBLevelsDayWhiteFluor"),
     TagDef::raw(0x0132, "WB_RBLevelsCoolWhiteFluor"),
     TagDef::raw(0x0133, "WB_RBLevelsWhiteFluorescent"),
     TagDef::typed(0x0200, "ColorMatrix2", ftype::TIFF_SSHORT),
@@ -1645,12 +2021,33 @@ pub static RAW_INFO: &[TagDef] = &[
     TagDef::raw(0x0311, "CoringValues"),
     TagDef::raw(0x0600, "BlackLevel2"),
     TagDef::raw(0x0601, "YCbCrCoefficients"),
-    TagDef::raw(0x0611, "ValidBits"),
+    // Olympus.pm:3695: RawInfo's 0x0611 is `ValidPixelDepth`, not the
+    // `ValidBits` of Main 0x102c / ImageProcessing 0x0611 (stale name).
+    TagDef::raw(0x0611, "ValidPixelDepth"),
     TagDef::raw(0x0612, "CropLeft"),
     TagDef::raw(0x0613, "CropTop"),
     TagDef::raw(0x0614, "CropWidth"),
     TagDef::raw(0x0615, "CropHeight"),
 ];
+
+// ===========================================================================
+// Olympus::RawInfo -- the rows the generated table cannot produce (I-3)
+// ===========================================================================
+//
+// For the `("Olympus", "RawInfo")` line; see `EQUIPMENT_RESIDUAL`. One row:
+// 0x0000 `RawInfoVersion`, `RawConv => '$val=~s/\0+$//; $val'` (Olympus.pm:
+// 3661), `omitted.raw_conv`. The generated table carries 14 rows the hand
+// table never had (0x1000-0x2023, `LightSource` through `CMSharpness`,
+// Olympus.pm:3701-3759), which the engine now reports. No JPEG under
+// `combined-samples/Olympus` or `t/images` writes a 0x3000 directory (it is
+// an ORF-only block: `exiftool-pinned.sh -a -G1 -s -RawInfoVersion` over the
+// 315 files finds none), so this line is measured on nothing and can move
+// nothing in the corpus A/B; it is listed for the ORF path and pinned here
+// so a regeneration cannot silently double-emit.
+pub static RAW_INFO_RESIDUAL: &[TagDef] = &[TagDef::text(0x0000, "RawInfoVersion")];
+
+/// No `RAW_INFO_RESIDUAL` row overrides an engine rendering.
+pub static RAW_INFO_ENGINE_MISRENDERS: &[u16] = &[];
 
 #[cfg(test)]
 mod tests {
@@ -1661,38 +2058,48 @@ mod tests {
         table.iter().find(|d| d.id == id).expect("tag in table")
     }
 
-    /// `MAIN_RESIDUAL` is EXACTLY the set of `MAIN` rows the generated
-    /// `Olympus::Main` cannot report: a row that is absent from the generated
-    /// table or withheld there (`Omitted` set) must be in the residual, and
-    /// every other `MAIN` row must not be -- with one named exception, a row
-    /// the generated table carries as `Unknown` (ExifTool never prints it
-    /// without `-u`), which stays out of both. Both directions matter: a
-    /// missing residual row is a silently lost tag, a superfluous one is a
-    /// tag inserted twice. The generated table is reached through
+    /// The generated table for `(Olympus, table)`, reached through
     /// `ALL_IFD_TABLES` rather than a literal `find_ifd_table` so that
     /// `tools/exiftool-tables/reachability.py`'s call-site census counts
-    /// only the live call in `olympus.rs`.
-    #[test]
-    fn main_residual_is_exactly_the_generated_tables_remainder() {
-        let generated = crate::exiftool_tables::ALL_IFD_TABLES
+    /// only the live calls in `olympus.rs`.
+    fn generated(table: &str) -> &'static crate::exiftool_tables::IfdTable {
+        crate::exiftool_tables::ALL_IFD_TABLES
             .iter()
-            .find(|t| t.module == "Olympus" && t.table == "Main")
-            .expect("Olympus::Main is generated");
-        for row in MAIN {
-            // The override class is checked by the test below, not here: an
-            // override IS an engine-reported row with a residual twin.
-            let in_residual = MAIN_RESIDUAL
+            .find(|t| t.module == "Olympus" && t.table == table)
+            .copied()
+            .unwrap_or_else(|| panic!("Olympus::{table} is generated"))
+    }
+
+    /// `residual` is EXACTLY the set of `hand` rows the generated
+    /// `Olympus::<table>` cannot report: a row that is absent from the
+    /// generated table or withheld there (`Omitted` set) must be in the
+    /// residual, and every other hand row must not be -- with one named
+    /// exception, a row the generated table carries as `Unknown` (ExifTool
+    /// never prints it without `-u`), which stays out of both. Both
+    /// directions matter: a missing residual row is a silently lost tag, a
+    /// superfluous one is a tag inserted twice. `misrenders` (the override
+    /// class) is checked by [`assert_misrenders_are_overrides`], not here: an
+    /// override IS an engine-reported row with a residual twin.
+    fn assert_residual_is_exactly_the_remainder(
+        table: &str,
+        hand: &[TagDef],
+        residual: &[TagDef],
+        misrenders: &[u16],
+    ) {
+        let generated = generated(table);
+        for row in hand {
+            let in_residual = residual
                 .iter()
-                .any(|r| r.id == row.id && !ENGINE_MISRENDERS.contains(&r.id));
+                .any(|r| r.id == row.id && !misrenders.contains(&r.id));
             match generated.tag(row.id) {
                 None => assert!(
                     in_residual,
-                    "{:#06x} {} is not in the generated Olympus::Main; the hand row is its only producer and must be in MAIN_RESIDUAL",
+                    "{:#06x} {} is not in the generated Olympus::{table}; the hand row is its only producer and must be in the residual",
                     row.id, row.name
                 ),
                 Some(tag) if tag.omitted.any() => assert!(
                     in_residual,
-                    "{:#06x} {} is withheld by the generated table ({:?}); the hand row is its only producer and must be in MAIN_RESIDUAL",
+                    "{:#06x} {} is withheld by the generated Olympus::{table} ({:?}); the hand row is its only producer and must be in the residual",
                     row.id, row.name, tag.omitted
                 ),
                 Some(tag) if tag.flags.unknown => assert!(
@@ -1703,73 +2110,179 @@ mod tests {
                 Some(tag) => {
                     assert!(
                         !in_residual,
-                        "{:#06x} {} is produced by the engine; a residual row would insert it twice",
+                        "{:#06x} {} is produced by the engine (Olympus::{table}); a residual row would insert it twice",
                         row.id, row.name
                     );
                     assert_eq!(
                         tag.name, row.name,
-                        "{:#06x}: the generated name must equal the hand name or the `Olympus:<name>` key changes",
+                        "{:#06x} (Olympus::{table}): the generated name must equal the hand name or the `Olympus:<name>` key changes",
                         row.id
                     );
                     assert!(
                         tag.subdir.is_none(),
-                        "{:#06x} {} is a SubDirectory in the generated table, not a value",
+                        "{:#06x} {} is a SubDirectory in the generated Olympus::{table}, not a value",
                         row.id,
                         row.name
                     );
                 }
             }
         }
-        for residual in MAIN_RESIDUAL {
-            if ENGINE_MISRENDERS.contains(&residual.id) {
+        for row in residual {
+            if misrenders.contains(&row.id) {
                 continue;
             }
             assert!(
-                MAIN.iter()
-                    .any(|m| m.id == residual.id && m.name == residual.name),
-                "{:#06x} {} in MAIN_RESIDUAL is not a MAIN row; a withheld-row residual may only restate what the hand table already had",
-                residual.id,
-                residual.name
+                hand.iter().any(|m| m.id == row.id && m.name == row.name),
+                "{:#06x} {} in the Olympus::{table} residual is not a hand row; a withheld-row residual may only restate what the hand table already had",
+                row.id,
+                row.name
             );
         }
     }
 
-    /// The override class: every `ENGINE_MISRENDERS` id is a residual row
-    /// AND a row the generated table reports (present, not withheld, not
+    /// The override class: every id in `misrenders` is a residual row AND a
+    /// row the generated table reports (present, not withheld, not
     /// `Unknown`, not a SubDirectory) under the same name -- otherwise it is
     /// not an override of anything and belongs in the first class or
     /// nowhere. When the engine defect an entry cites is fixed, the entry
     /// comes out of both lists; nothing here can tell that the rendering is
     /// now right, so the corpus A/B on the affected carriers is the check.
-    #[test]
-    fn engine_misrenders_are_overrides_of_rows_the_engine_reports() {
-        let generated = crate::exiftool_tables::ALL_IFD_TABLES
-            .iter()
-            .find(|t| t.module == "Olympus" && t.table == "Main")
-            .expect("Olympus::Main is generated");
-        for id in ENGINE_MISRENDERS {
-            let residual = MAIN_RESIDUAL
-                .iter()
-                .find(|r| r.id == *id)
-                .unwrap_or_else(|| {
-                    panic!("{id:#06x} is in ENGINE_MISRENDERS but not in MAIN_RESIDUAL")
-                });
+    fn assert_misrenders_are_overrides(table: &str, residual: &[TagDef], misrenders: &[u16]) {
+        let generated = generated(table);
+        for id in misrenders {
+            let row = residual.iter().find(|r| r.id == *id).unwrap_or_else(|| {
+                panic!("{id:#06x} is an Olympus::{table} misrender but not a residual row")
+            });
             let tag = generated.tag(*id).unwrap_or_else(|| {
                 panic!(
-                    "{id:#06x} {} is not in the generated table; it is a withheld-class residual, not an override",
-                    residual.name
+                    "{id:#06x} {} is not in the generated Olympus::{table}; it is a withheld-class residual, not an override",
+                    row.name
                 )
             });
             assert!(
                 !tag.omitted.any() && !tag.flags.unknown && tag.subdir.is_none(),
-                "{id:#06x} {}: the engine does not report this row, so there is nothing to override",
-                residual.name
+                "{id:#06x} {}: the engine does not report this Olympus::{table} row, so there is nothing to override",
+                row.name
             );
             assert_eq!(
-                tag.name, residual.name,
-                "{id:#06x}: an override must keep the generated name"
+                tag.name, row.name,
+                "{id:#06x} (Olympus::{table}): an override must keep the generated name"
             );
         }
+    }
+
+    /// `MAIN_RESIDUAL` against the generated `Olympus::Main` (slice I-2).
+    #[test]
+    fn main_residual_is_exactly_the_generated_tables_remainder() {
+        assert_residual_is_exactly_the_remainder("Main", MAIN, MAIN_RESIDUAL, ENGINE_MISRENDERS);
+    }
+
+    #[test]
+    fn engine_misrenders_are_overrides_of_rows_the_engine_reports() {
+        assert_misrenders_are_overrides("Main", MAIN_RESIDUAL, ENGINE_MISRENDERS);
+    }
+
+    // Slice I-3: the same two pins for each sub-table its allowlist line
+    // moves onto the engine. One test per table so a failure names the
+    // table in its own name.
+
+    #[test]
+    fn equipment_residual_is_exactly_the_generated_tables_remainder() {
+        assert_residual_is_exactly_the_remainder(
+            "Equipment",
+            EQUIPMENT,
+            EQUIPMENT_RESIDUAL,
+            EQUIPMENT_ENGINE_MISRENDERS,
+        );
+        assert_misrenders_are_overrides(
+            "Equipment",
+            EQUIPMENT_RESIDUAL,
+            EQUIPMENT_ENGINE_MISRENDERS,
+        );
+    }
+
+    #[test]
+    fn camera_settings_residual_is_exactly_the_generated_tables_remainder() {
+        assert_residual_is_exactly_the_remainder(
+            "CameraSettings",
+            CAMERA_SETTINGS,
+            CAMERA_SETTINGS_RESIDUAL,
+            CAMERA_SETTINGS_ENGINE_MISRENDERS,
+        );
+        assert_misrenders_are_overrides(
+            "CameraSettings",
+            CAMERA_SETTINGS_RESIDUAL,
+            CAMERA_SETTINGS_ENGINE_MISRENDERS,
+        );
+    }
+
+    #[test]
+    fn raw_development_residual_is_exactly_the_generated_tables_remainder() {
+        assert_residual_is_exactly_the_remainder(
+            "RawDevelopment",
+            RAW_DEVELOPMENT,
+            RAW_DEVELOPMENT_RESIDUAL,
+            RAW_DEVELOPMENT_ENGINE_MISRENDERS,
+        );
+        assert_misrenders_are_overrides(
+            "RawDevelopment",
+            RAW_DEVELOPMENT_RESIDUAL,
+            RAW_DEVELOPMENT_ENGINE_MISRENDERS,
+        );
+    }
+
+    #[test]
+    fn raw_development2_residual_is_exactly_the_generated_tables_remainder() {
+        assert_residual_is_exactly_the_remainder(
+            "RawDevelopment2",
+            RAW_DEVELOPMENT2,
+            RAW_DEVELOPMENT2_RESIDUAL,
+            RAW_DEVELOPMENT2_ENGINE_MISRENDERS,
+        );
+        assert_misrenders_are_overrides(
+            "RawDevelopment2",
+            RAW_DEVELOPMENT2_RESIDUAL,
+            RAW_DEVELOPMENT2_ENGINE_MISRENDERS,
+        );
+    }
+
+    #[test]
+    fn image_processing_residual_is_exactly_the_generated_tables_remainder() {
+        assert_residual_is_exactly_the_remainder(
+            "ImageProcessing",
+            IMAGE_PROCESSING,
+            IMAGE_PROCESSING_RESIDUAL,
+            IMAGE_PROCESSING_ENGINE_MISRENDERS,
+        );
+        assert_misrenders_are_overrides(
+            "ImageProcessing",
+            IMAGE_PROCESSING_RESIDUAL,
+            IMAGE_PROCESSING_ENGINE_MISRENDERS,
+        );
+    }
+
+    #[test]
+    fn raw_info_residual_is_exactly_the_generated_tables_remainder() {
+        assert_residual_is_exactly_the_remainder(
+            "RawInfo",
+            RAW_INFO,
+            RAW_INFO_RESIDUAL,
+            RAW_INFO_ENGINE_MISRENDERS,
+        );
+        assert_misrenders_are_overrides("RawInfo", RAW_INFO_RESIDUAL, RAW_INFO_ENGINE_MISRENDERS);
+    }
+
+    /// `FocusInfo` is the one sub-table that stays hand-walked (gate A blocks
+    /// `IFD_OLYMPUS_FOCUSINFO`: two `_variants` conditions the generator
+    /// could not compile), so it has no residual; pinning the gate here
+    /// keeps a regeneration that starts passing from silently leaving the
+    /// hand walk AND a future engine walk both in force.
+    #[test]
+    fn focus_info_is_still_blocked_by_gate_a() {
+        assert!(
+            !generated("FocusInfo").gate_a.passes(),
+            "Olympus::FocusInfo now passes gate A: give it a residual and an allowlist line, measured, before enabling it"
+        );
     }
 
     #[test]
