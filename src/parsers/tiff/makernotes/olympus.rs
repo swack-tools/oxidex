@@ -676,19 +676,23 @@ impl OlympusParser {
             );
         }
 
-        // Slice I-3 (design spec section 5): the six sub-tables
+        // Slice I-3 (design spec section 5): the seven sub-tables
         // `enabled_ifd.rs` lists were walked by the engine ABOVE --
         // `ifd_engine::descend` follows the generated Main table's 0x2010,
-        // 0x2020, 0x2030, 0x2031, 0x2040 and 0x3000 edges in entry order,
-        // which is ExifTool's order (Exif.pm:6919-7102), under the same
-        // allowlist check -- so for each of them only the residual rows run
-        // here: `tables::<TABLE>_RESIDUAL`, the rows the generated table
+        // 0x2020, 0x2030, 0x2031, 0x2040, 0x2050 and 0x3000 edges in entry
+        // order, which is ExifTool's order (Exif.pm:6919-7102), under the
+        // same allowlist check -- so for each of them only the residual rows
+        // run here: `tables::<TABLE>_RESIDUAL`, the rows the generated table
         // withholds plus the overrides whose hand rendering must land last
         // (tables.rs pins both classes per table). A table the list does not
         // carry, or every table when the Main line itself is off, keeps its
-        // hand walk exactly as before. FocusInfo stays on the hand walk:
-        // `IFD_OLYMPUS_FOCUSINFO` does not pass gate A. The lookups are
-        // spelled with literal arguments for `reachability.py`'s census.
+        // hand walk exactly as before. FocusInfo's two model-conditional
+        // passes below the loop (`parse_focus_info_*`) are part of its
+        // residual: they keep producing the `FocusDistance` row and the
+        // `_variants` alternatives the generated table withholds, and skip
+        // the two alternatives the engine reports
+        // (`focus_info_engine_reports`). The lookups are spelled with
+        // literal arguments for `reachability.py`'s census.
         let main_walked = main_table.is_some();
         let equipment = sub_table_rows(
             main_walked,
@@ -726,6 +730,14 @@ impl OlympusParser {
             tables::RAW_INFO,
             tables::RAW_INFO_RESIDUAL,
         );
+        let focus_info_table = find_ifd_table("Olympus", "FocusInfo");
+        let focus_info = sub_table_rows(
+            main_walked,
+            focus_info_table,
+            tables::FOCUS_INFO,
+            tables::FOCUS_INFO_RESIDUAL,
+        );
+        let focus_info_engine_walked = engine_walks(main_walked, focus_info_table);
 
         for entry in &entries {
             let table: &[ifd::TagDef] = match entry.tag_id {
@@ -734,7 +746,7 @@ impl OlympusParser {
                 OLYMPUS_RAW_DEVELOPMENT_SUBIFD => raw_development,
                 OLYMPUS_RAW_DEV2_SUBIFD => raw_development2,
                 OLYMPUS_IMAGE_PROCESSING_SUBIFD => image_processing,
-                OLYMPUS_FOCUS_INFO_SUBIFD => tables::FOCUS_INFO,
+                OLYMPUS_FOCUS_INFO_SUBIFD => focus_info,
                 OLYMPUS_RAW_INFO_SUBIFD => raw_info,
                 // ExifTool recurses into Olympus::Main a second time here
                 // (Olympus.pm 0x4000 `MainInfoIFD`); see tables::MAIN_INFO
@@ -780,6 +792,7 @@ impl OlympusParser {
                     base,
                     effective_byte_order,
                     model,
+                    focus_info_engine_walked,
                     tags,
                     value_forms,
                 );
@@ -861,11 +874,19 @@ fn sub_table_rows(
     hand: &'static [ifd::TagDef],
     residual: &'static [ifd::TagDef],
 ) -> &'static [ifd::TagDef] {
-    if main_walked && table.is_some_and(|t| t.enabled()) {
+    if engine_walks(main_walked, table) {
         residual
     } else {
         hand
     }
+}
+
+/// The condition [`sub_table_rows`] selects the residual on -- the engine's
+/// Main walk reported `table` -- on its own, for FocusInfo's model-conditional
+/// passes, which are part of that table's residual and need the same answer
+/// (`parse_focus_info_model_conditional`'s `engine_walked`).
+fn engine_walks(main_walked: bool, table: Option<&'static IfdTable>) -> bool {
+    main_walked && table.is_some_and(|t| t.enabled())
 }
 
 /// One `ProcessExif` walk of the generated `Olympus::Main` at `ifd_start`,
@@ -1753,13 +1774,46 @@ fn af_point_details_forms(v: i64, model: &str) -> (String, String) {
     (value, print)
 }
 
+/// Whether the generated `IFD_OLYMPUS_FOCUSINFO` REPORTS `_variants` entry
+/// `id` for `model` -- the alternative `ifd_engine::resolve` picks (the
+/// first `Condition` match, ExifTool.pm:9164-9188) carries no `Omitted`
+/// flag -- so that, when the engine walked the directory, the hand pass must
+/// not produce it as well. Two alternatives are reported: 0x0308 `AFPoint`'s
+/// fourth (`$$self{Model}` matching `/^(E-M|OM-)/`, `Writable => 'int16u'`
+/// and nothing else, Olympus.pm:3456-3459, printed raw) and 0x031b
+/// `AFPointDetails`' second (every other body, Olympus.pm:3518-3522, raw).
+/// The other three `AFPoint` alternatives are withheld for their list
+/// `PrintConv`s and the E-P1 `RawConv` (Olympus.pm:3362, 3409, 3447), the
+/// E-M/OM `AFPointDetails` for its bit-field `ValueConv` (Olympus.pm:3471),
+/// and both 0x1500 `SensorTemperature` alternatives for their `PrintConv`
+/// and `RawConv` (Olympus.pm:3584, 3590): those stay the hand passes'.
+/// `focus_info_hand_pass_emits_exactly_the_withheld_alternatives` pins this
+/// split against the generated table's own `omitted` flags, resolved the
+/// engine's way, so a regeneration that flips one fails there by name. A
+/// missing `Model` (the payload-only `parse_with_model` path) is Perl's
+/// `undef !~ /re/`, true: `AFPoint`'s third alternative, withheld, on both
+/// sides.
+fn focus_info_engine_reports(id: u16, model: &str) -> bool {
+    match id {
+        0x0308 => is_em_or_om_model(model),
+        0x031B => !is_em_or_om_model(model),
+        _ => false,
+    }
+}
+
 /// Reads the three model-conditional `Olympus::FocusInfo` entries.
+///
+/// `engine_walked` is [`engine_walks`] for the generated `FocusInfo` table:
+/// when the IFD engine reported the directory, the alternatives it does not
+/// withhold ([`focus_info_engine_reports`]) are its rows and are skipped
+/// here, so every FocusInfo row has exactly one producer.
 fn parse_focus_info_model_conditional(
     data: &[u8],
     ifd_start: usize,
     base: Option<i64>,
     order: ByteOrder,
     model: Option<&str>,
+    engine_walked: bool,
     tags: &mut HashMap<String, String>,
     value_forms: &mut HashMap<String, String>,
 ) {
@@ -1774,6 +1828,9 @@ fn parse_focus_info_model_conditional(
     };
 
     for entry in &entries {
+        if engine_walked && focus_info_engine_reports(entry.tag_id, model) {
+            continue;
+        }
         match entry.tag_id {
             // `Format => 'int32u'` over the stored rational64u: the same eight
             // bytes, read as the numerator and denominator ExifTool splits.
@@ -2614,6 +2671,84 @@ mod olympus_preview_image_tests {
 #[cfg(test)]
 mod focus_info_model_conditional_tests {
     use super::*;
+    use crate::exiftool_tables::{ALL_IFD_TABLES, first_match_ifd};
+
+    /// The engine reports two of FocusInfo's model-conditional alternatives
+    /// itself and withholds the rest (`focus_info_engine_reports`), and
+    /// `parse_focus_info_model_conditional` emits an alternative only when
+    /// the engine does not. This resolves each `_variants` group of the
+    /// generated `IFD_OLYMPUS_FOCUSINFO` the way `ifd_engine::resolve` does
+    /// -- `cond::first_match_ifd` with `$$self{Model}` and `$count` in scope
+    /// -- for a body of every class ExifTool's conditions distinguish, and
+    /// requires the hand predicate to be the exact complement of "the
+    /// winner is not withheld". A regeneration that flips an alternative's
+    /// `omitted` fails here, naming the tag and model, rather than emitting
+    /// the row twice (the hand rendering silently overriding the engine's)
+    /// or not at all. `""` is the payload-only path with no `Model`.
+    #[test]
+    fn focus_info_hand_pass_emits_exactly_the_withheld_alternatives() {
+        let table = ALL_IFD_TABLES
+            .iter()
+            .find(|t| t.module == "Olympus" && t.table == "FocusInfo")
+            .copied()
+            .expect("Olympus::FocusInfo is generated");
+        let models = [
+            "E-1",
+            "E-3",
+            "E-5",
+            "E-30",
+            "E-300",
+            "E-500",
+            "E-520",
+            "E-600",
+            "E-620",
+            "E-P1",
+            "E-PL1",
+            "E-M5",
+            "E-M1MarkII",
+            "OM-1",
+            "OM-3",
+            "PEN-F",
+            "u760,S760",
+            "TG-4",
+            "Stylus1",
+            "",
+        ];
+        for id in [0x0308u16, 0x031B, 0x1500] {
+            let group = table
+                .variant_group(id)
+                .unwrap_or_else(|| panic!("{id:#06x} is a _variants group of Olympus::FocusInfo"));
+            for model in models {
+                for count in [1i64, 3] {
+                    let mut members = HashMap::new();
+                    if !model.is_empty() {
+                        members.insert("Model", MemberValue::Str(model.to_string()));
+                    }
+                    let mut ctx = Ctx::new(&mut members).with_count(count);
+                    let winner = first_match_ifd(group.alternatives, &mut ctx)
+                        .expect("a Cond::Always alternative ends every FocusInfo group");
+                    let engine_reports = !winner.omitted.any();
+                    assert_eq!(
+                        focus_info_engine_reports(id, model),
+                        engine_reports,
+                        "{id:#06x} {} for Model {model:?} count {count}: the engine {} it ({:?}), so the hand pass must {}",
+                        winner.name,
+                        if engine_reports {
+                            "reports"
+                        } else {
+                            "withholds"
+                        },
+                        winner.omitted,
+                        if engine_reports {
+                            "skip it"
+                        } else {
+                            "produce it"
+                        },
+                    );
+                }
+            }
+        }
+    }
 
     /// `OlympusE-30.jpg`  Model `E-30`
     ///   `AFPoint : Center (vertical); Single Target`   `-n` -> `17 0`

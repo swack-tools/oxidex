@@ -2012,6 +2012,62 @@ pub static FOCUS_INFO_SENSOR_TEMP: TagDef =
     TagDef::func(0x1500, "SensorTemperature", print_sensor_temperature_multi);
 
 // ===========================================================================
+// Olympus::FocusInfo -- the rows the generated table cannot produce (I-3)
+// ===========================================================================
+//
+// For the `("Olympus", "FocusInfo")` line; see `EQUIPMENT_RESIDUAL` for the
+// construction. Two of `FOCUS_INFO`'s twelve rows are withheld by
+// `IFD_OLYMPUS_FOCUSINFO`:
+//
+// * 0x0000 `FocusInfoVersion` -- `RawConv => '$val=~s/\0+$//; $val'`
+//   (Olympus.pm:3310), `omitted.raw_conv`.
+// * 0x1209 `ManualFlash` -- a `q{}` PrintConv over `int16u[2]`
+//   (Olympus.pm:3568-3573), `omitted.print_conv`; `print_manual_flash`.
+//
+// The other ten (`SceneDetect`, the four step counts, `ExternalFlashBounce`,
+// `ExternalFlashZoom`, `MacroLED`, and the two joined-key hashes
+// `ExternalFlash` -- `Count => 2`, `'0 0' => 'Off'`, Olympus.pm:3529-3536 --
+// and `InternalFlash` -- `Count => -1`, Olympus.pm:3552-3561) are the
+// engine's: `runtime::enum_key` keys a fixed-count `Array` by its
+// space-joined elements since the I-3 engine fixes (the `Main` `WBMode`
+// record above), so neither needs an override; the corpus A/B in
+// `enabled_ifd.rs` is the check (101 `ExternalFlash` / 101 `InternalFlash`
+// carriers, 0 new VALUE). So is 0x2100 `AntiShockWaitingTime`
+// (Olympus.pm:3631), a row the hand table never had: 21 corpus carriers
+// move MISSING -> matched. 0x0328 `AFInfo` (Olympus.pm:3524) is an edge to
+// `Olympus::AFInfo`, which no line carries: refused, as the hand walk never
+// followed it. 0x1600 `ImageStabilization` (`Condition => 'not defined
+// $$self{ImageStabilization}'` and a `q{}` PrintConv over `undef` bytes,
+// Olympus.pm:3618-3629) is withheld (`omitted.condition`, `print_conv`) and
+// never had a hand row, so it stays MISSING where a body writes it and no
+// CameraSettings 0x0604 (`On, Mode 1` / `On, Mode 2` on 21 corpus files and
+// `t/images/Olympus2.jpg`; `Off` on some of a further 15) -- a follow-up,
+// not this line. The three `Unknown => 1` rows (0x0209, 0x0211, 0x0212) and
+// 0x1203 are not reported without `-u`.
+//
+// The four model-conditional rows are not `TagDef` rows at all and are not
+// in this list: 0x0305 `FocusDistance` (`omitted.value_conv` and
+// `print_conv`, Olympus.pm:3338-3357), the `_variants` groups 0x0308
+// `AFPoint` (Olympus.pm:3359-3461) and 0x031b `AFPointDetails`
+// (Olympus.pm:3463-3523), and 0x1500 `SensorTemperature` (Olympus.pm:3580-
+// 3617) are produced by `olympus.rs`'s `parse_focus_info_model_conditional`
+// and `parse_focus_info_sensor_temperature`, which run after this residual
+// on the same directory. Two alternatives of those groups the engine DOES
+// report -- `AFPoint`'s fourth (E-Mxxx / OM-x bodies, `Writable =>
+// 'int16u'` and nothing else) and `AFPointDetails`' second (every other
+// body), both printed raw -- and the hand pass skips exactly those when the
+// engine walked the table (`olympus::focus_info_engine_reports`, pinned
+// against the generated `omitted` flags by
+// `focus_info_hand_pass_emits_exactly_the_withheld_alternatives`).
+pub static FOCUS_INFO_RESIDUAL: &[TagDef] = &[
+    TagDef::text(0x0000, "FocusInfoVersion"),
+    TagDef::func(0x1209, "ManualFlash", print_manual_flash),
+];
+
+/// No `FOCUS_INFO_RESIDUAL` row overrides an engine rendering.
+pub static FOCUS_INFO_ENGINE_MISRENDERS: &[u16] = &[];
+
+// ===========================================================================
 // Olympus::RawInfo (0x3000)
 // ===========================================================================
 
@@ -2287,23 +2343,25 @@ mod tests {
         assert_misrenders_are_overrides("RawInfo", RAW_INFO_RESIDUAL, RAW_INFO_ENGINE_MISRENDERS);
     }
 
-    /// `FocusInfo` is the one sub-table that stays hand-walked. Slice I-3's
-    /// condition forms (`$count != 1`, `not defined $$self{X}`) made
-    /// `IFD_OLYMPUS_FOCUSINFO` pass gate A, so it is ELIGIBLE, and it has no
-    /// residual and no allowlist line yet; pinning both keeps a line added
-    /// without a residual and a measurement from silently leaving the hand
-    /// walk AND the engine walk both in force.
+    /// The seventh sub-table line. `FocusInfo` was the one that stayed
+    /// hand-walked after the first six: slice I-3's condition forms
+    /// (`$count != 1`, `not defined $$self{X}`) made `IFD_OLYMPUS_FOCUSINFO`
+    /// pass gate A, and its line, residual and measurement followed as their
+    /// own commit. The `_variants` rows the residual does not carry are
+    /// pinned in `olympus.rs`
+    /// (`focus_info_hand_pass_emits_exactly_the_withheld_alternatives`).
     #[test]
-    fn focus_info_is_eligible_but_still_hand_walked() {
-        let table = generated("FocusInfo");
-        assert!(
-            table.gate_a.passes(),
-            "Olympus::FocusInfo stopped passing gate A: {:?}",
-            table.gate_a.blocked_by
+    fn focus_info_residual_is_exactly_the_generated_tables_remainder() {
+        assert_residual_is_exactly_the_remainder(
+            "FocusInfo",
+            FOCUS_INFO,
+            FOCUS_INFO_RESIDUAL,
+            FOCUS_INFO_ENGINE_MISRENDERS,
         );
-        assert!(
-            !table.enabled(),
-            "Olympus::FocusInfo is enabled: give it a residual (the rows the generated table withholds) and measure the line before listing it"
+        assert_misrenders_are_overrides(
+            "FocusInfo",
+            FOCUS_INFO_RESIDUAL,
+            FOCUS_INFO_ENGINE_MISRENDERS,
         );
     }
 
