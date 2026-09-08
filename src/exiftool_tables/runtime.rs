@@ -99,11 +99,22 @@ impl DecodedValue {
     /// Bytes that are not valid UTF-8 yield `None`, which is not a loss: a
     /// generated `StrEnum`'s keys are all `&str`, so no non-UTF-8 value could
     /// have matched one.
+    ///
+    /// A fixed-count field's `$val` is ONE string: `ReadValue` returns
+    /// `join(' ', @vals)` for more than one element (ExifTool.pm:6330), and
+    /// `GetValue`'s hash lookup is `$$conv{$val}` on that string
+    /// (ExifTool.pm:3614-3616), so Olympus `WBMode`'s `int16u[2]` `1 0` finds
+    /// `'1 0' => 'Auto'` (Olympus.pm:1024-1041) and `1 1` misses to
+    /// `Unknown (1 1)` (ExifTool.pm:3633). The elements take Perl's own text
+    /// ([`Self::perl_string`]): an element with no exact text here (a
+    /// rational of unknown width, see there) makes the whole key `None`, and
+    /// the caller falls back to the raw value rather than guess a key.
     fn enum_key(&self) -> Option<String> {
         match self {
             Self::Integer(value) => Some(value.to_string()),
             Self::String(value) => Some(value.clone()),
             Self::Undefined(bytes) => String::from_utf8(bytes.clone()).ok(),
+            Self::Array(_) => self.perl_string(),
             _ => None,
         }
     }
@@ -120,8 +131,11 @@ impl DecodedValue {
     /// and 10, `RoundFloat(.., 7)` for a binary table's `rational32u`) this
     /// value does not carry, so the caller falls back to the raw value rather
     /// than print a digit string Perl would not. The IFD engine, whose
-    /// rationals are always the 64-bit types, renders them with
-    /// [`perl_rational64`] itself.
+    /// rationals are always the 64-bit types, never asks: it replaces every
+    /// nonzero-denominator rational with the `Float` `RoundFloat($n / $d,
+    /// 10)` numifies to as soon as the entry is read (`ifd_engine::
+    /// round_rationals`, the `ReadValue` rule), and renders the zero-
+    /// denominator remainder with [`perl_rational64`] itself.
     #[must_use]
     pub fn perl_string(&self) -> Option<String> {
         match self {
@@ -144,7 +158,10 @@ impl DecodedValue {
 /// operands are exact in an `f64` (they are 32-bit integers), so the quotient
 /// is the same IEEE double Perl divides to. For the IFD engine only: an IFD
 /// entry's rational is always one of TIFF types 5/10 (64-bit); a binary
-/// table's `rational32u` rounds to 7 digits and must not use this.
+/// table's `rational32u` rounds to 7 digits and must not use this. The
+/// nonzero-denominator branch is the TEXT of the number
+/// [`super::exprs::round_float`]`(n / d, 10)` carries -- one `perl_g(.., 10)`
+/// behind both, so the two cannot disagree.
 #[must_use]
 pub(super) fn perl_rational64(numerator: f64, denominator: f64) -> String {
     if denominator == 0.0 {
@@ -257,14 +274,28 @@ pub fn apply_value_conv(
 /// `undef`, or a hash over a value it cannot key) -- the raw value stands in,
 /// honestly, rather than a guessed string. A hash miss on a keyable value is
 /// NOT this case: [`render`] gives it ExifTool's own `Unknown ($val)`.
+///
+/// [`TagValue::Rational`]'s fields are `i32`, and a `rational64u` element is
+/// a `u32` pair (`Get32u`, ExifTool.pm:6117-6118): a numerator or denominator
+/// above `i32::MAX` used to be cast with `as i32` and wrapped, so
+/// 4294967295/1 reported as -1/1. Such a pair is carried as the exact text
+/// ExifTool reports for it instead -- `RoundFloat($n / $d, 10)`, or `inf` /
+/// `undef` for a zero denominator (ExifTool.pm:6114-6120, [`perl_rational64`])
+/// -- which is the only `TagValue` shape that can hold it without loss. The
+/// 64-bit width is right for every value that can reach this arm: a binary
+/// table's `rational32u` is a `u16` pair (ExifTool.pm:6100-6106,
+/// [`decode_value_of`]) and always fits.
 #[must_use]
 pub fn to_tag_value(value: &DecodedValue) -> TagValue {
     match value {
         DecodedValue::Integer(v) => TagValue::Integer(*v),
         DecodedValue::Float(v) => TagValue::Float(*v),
-        DecodedValue::UnsignedRational(n, d) => TagValue::Rational {
-            numerator: *n as i32,
-            denominator: *d as i32,
+        DecodedValue::UnsignedRational(n, d) => match (i32::try_from(*n), i32::try_from(*d)) {
+            (Ok(numerator), Ok(denominator)) => TagValue::Rational {
+                numerator,
+                denominator,
+            },
+            _ => TagValue::String(perl_rational64(f64::from(*n), f64::from(*d))),
         },
         DecodedValue::SignedRational(n, d) => TagValue::Rational {
             numerator: *n,
@@ -2671,5 +2702,113 @@ mod tests {
         let bytes = b"OLY\xff\xfe\0trailing";
         let decoded = decode_value_of(bytes, Fmt::Str(bytes.len() as u32), ByteOrder::Little);
         assert_eq!(decoded, Some(DecodedValue::String("OLY??".to_string())));
+    }
+
+    /// ExifTool.pm:6330 `join(' ', @vals)` + ExifTool.pm:3616 `$$conv{$val}`:
+    /// a fixed-count value keys a string-keyed hash by its space-joined
+    /// elements. Olympus.pm:1024-1041 `WBMode` (`int16u[2]`) is the corpus
+    /// carrier: `OlympusBrioD100.jpg` prints `Auto` for `1 0`, and
+    /// `OlympusC160.jpg` `Unknown (1 1)` (pinned 13.59 oracle, via
+    /// `scripts/compare_file.py`; the counts are in `olympus/tables.rs`).
+    #[test]
+    fn str_enum_keys_a_fixed_count_value_by_its_space_joined_elements() {
+        let wb_mode = PrintConv::StrEnum(&[("1", "Auto"), ("1 0", "Auto"), ("3 0", "One-touch")]);
+        let pair = |a: i64, b: i64| {
+            DecodedValue::Array(vec![DecodedValue::Integer(a), DecodedValue::Integer(b)])
+        };
+        assert_eq!(render(wb_mode, &pair(1, 0)), Some("Auto".to_string()));
+        assert_eq!(render(wb_mode, &pair(3, 0)), Some("One-touch".to_string()));
+        assert_eq!(
+            render(wb_mode, &pair(1, 1)),
+            Some("Unknown (1 1)".to_string())
+        );
+        // A one-count entry is the bare element (`ReadValue` returns
+        // `$vals[0]`, ExifTool.pm:6331), which is why the hash carries `'1'`.
+        assert_eq!(
+            render(wb_mode, &DecodedValue::Integer(1)),
+            Some("Auto".to_string())
+        );
+        // Elements print as Perl prints them: an IFD rational array arrives
+        // here as the `Float`s `RoundFloat` numified to, and joins as `%.15g`.
+        let floats = DecodedValue::Array(vec![DecodedValue::Float(0.5), DecodedValue::Float(0.25)]);
+        assert_eq!(
+            render(PrintConv::StrEnum(&[("0.5 0.25", "hit")]), &floats),
+            Some("hit".to_string())
+        );
+        assert_eq!(
+            render(wb_mode, &floats),
+            Some("Unknown (0.5 0.25)".to_string())
+        );
+        // A binary-table rational element has no exact text (width unknown):
+        // no key, no rendering, the raw value stands in -- unchanged.
+        let rationals = DecodedValue::Array(vec![DecodedValue::UnsignedRational(1, 2)]);
+        assert_eq!(render(wb_mode, &rationals), None);
+        // The integer-keyed arm was already keyed this way (the miss text).
+        assert_eq!(
+            render(PrintConv::IntEnum(&[(1, "One")]), &pair(1, 1)),
+            Some("Unknown (1 1)".to_string())
+        );
+    }
+
+    /// `TagValue::Rational` is an `i32` pair; a `rational64u` is a `u32` pair
+    /// (ExifTool.pm:6117-6118). Above `i32::MAX` the exact text is reported
+    /// instead of a wrapped pair; expected strings are perl 5.34.1's
+    /// `printf("%.10g", $n / $d)`.
+    #[test]
+    fn to_tag_value_reports_a_rational_past_i32_as_exiftools_text() {
+        assert_eq!(
+            to_tag_value(&DecodedValue::UnsignedRational(4_294_967_295, 1)),
+            TagValue::String("4294967295".to_string())
+        );
+        assert_eq!(
+            to_tag_value(&DecodedValue::UnsignedRational(1, 4_294_967_295)),
+            TagValue::String("2.328306437e-10".to_string())
+        );
+        assert_eq!(
+            to_tag_value(&DecodedValue::UnsignedRational(0, 4_294_967_295)),
+            TagValue::String("0".to_string())
+        );
+        // The zero-denominator sentinels come with the same text rule.
+        assert_eq!(
+            to_tag_value(&DecodedValue::UnsignedRational(4_294_967_295, 0)),
+            TagValue::String("inf".to_string())
+        );
+        // A pair that fits keeps the pair shape, sign and zero denominator
+        // included, exactly as before.
+        assert_eq!(
+            to_tag_value(&DecodedValue::UnsignedRational(2_147_483_647, 1)),
+            TagValue::Rational {
+                numerator: 2_147_483_647,
+                denominator: 1
+            }
+        );
+        assert_eq!(
+            to_tag_value(&DecodedValue::UnsignedRational(4, 0)),
+            TagValue::Rational {
+                numerator: 4,
+                denominator: 0
+            }
+        );
+        assert_eq!(
+            to_tag_value(&DecodedValue::SignedRational(-1, 2)),
+            TagValue::Rational {
+                numerator: -1,
+                denominator: 2
+            }
+        );
+        // Inside a fixed-count value the same rule applies element-wise.
+        assert_eq!(
+            to_tag_value(&DecodedValue::Array(vec![
+                DecodedValue::UnsignedRational(4_294_967_295, 1),
+                DecodedValue::UnsignedRational(1, 2),
+            ])),
+            TagValue::Array(vec![
+                TagValue::String("4294967295".to_string()),
+                TagValue::Rational {
+                    numerator: 1,
+                    denominator: 2
+                },
+            ])
+        );
     }
 }
