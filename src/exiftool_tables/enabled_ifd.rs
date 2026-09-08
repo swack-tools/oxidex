@@ -74,8 +74,25 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // RawDevelopment2 line); the joined-key overrides here were measured by
     // a build with all six override rows removed (tables.rs).
     //
-    // GATE B A/B: PENDING (measured by the integrator on the i7: control =
-    // the previous line's census).
+    // GATE B A/B of record (i7, `/tmp/i7-missing-census.sh` = release build +
+    // `conformance.py --json-out` over combined-samples, 4238 files, against
+    // the pinned 13.59 oracle, both probes OK; per-file diff
+    // `/tmp/i7-ab-diff.py`). The six sub-table lines were measured together:
+    // control = census `ifd3c` @ c3a6ec27 (the same tree with no sub-table
+    // line), treatment = `ifd3d` @ 35064ec7 (all six lines with their
+    // residuals):
+    //
+    //     control    TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //     treatment  TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //
+    // 0 files touched -- a producer switch: the hand table already produced
+    // every row the generated table reports.
+    // Per table on the 315-file Olympus directory (the worker's local
+    // `conformance.py` A/B at 329dd16f, control = d4d6528b): 204 carriers,
+    // 0 MISSING -> matched, 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA. The retirement of this table's two override rows (0x0527
+    // NoiseFilter, 0x052d PictureModeEffect; 164cb80e, once the engine keyed
+    // a fixed-count value by its joined elements) was measured the same way:
+    // census `ifd3e` @ 164cb80e identical to `ifd3d`.
     ("Olympus", "CameraSettings"),
     // Olympus::Equipment -- slice I-3, the first sub-table line; see the
     // CameraSettings entry above for the shared layout. The table is
@@ -121,8 +138,25 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // Equipment's, equal in all 23), so the override is unobservable here
     // and stands on the shape and the order (tables.rs).
     //
-    // GATE B A/B: PENDING (measured by the integrator on the i7: control =
-    // the previous line's census).
+    // GATE B A/B of record (i7, `/tmp/i7-missing-census.sh` = release build +
+    // `conformance.py --json-out` over combined-samples, 4238 files, against
+    // the pinned 13.59 oracle, both probes OK; per-file diff
+    // `/tmp/i7-ab-diff.py`). The six sub-table lines were measured together:
+    // control = census `ifd3c` @ c3a6ec27 (the same tree with no sub-table
+    // line), treatment = `ifd3d` @ 35064ec7 (all six lines with their
+    // residuals):
+    //
+    //     control    TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //     treatment  TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //
+    // 0 files touched -- a producer switch: the hand table already produced
+    // every row the generated table reports.
+    // Per table on the 315-file Olympus directory (the worker's local
+    // `conformance.py` A/B at 329dd16f, control = d4d6528b): 184 carriers,
+    // 0 MISSING -> matched, 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA. The retirement of this table's override row (0x0103
+    // FocalPlaneDiagonal; 164cb80e, once the engine read a rational as
+    // RoundFloat 10) was measured the same way: census `ifd3e` @ 164cb80e
+    // identical to `ifd3d`.
     ("Olympus", "Equipment"),
     // Olympus::FocusInfo -- slice I-3's seventh sub-table line, its own
     // commit after the six (whose shared layout is under CameraSettings).
@@ -205,8 +239,25 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // `FocusDistance`'s ValueConv side channel, which the hand pass still
     // fills.
     //
-    // GATE B A/B: PENDING (measured by the integrator on the i7: control =
-    // the previous line's census).
+    // GATE B A/B of record (i7, `/tmp/i7-missing-census.sh` = release build +
+    // `conformance.py --json-out` over combined-samples, 4238 files, against
+    // the pinned 13.59 oracle, both probes OK; per-file diff
+    // `/tmp/i7-ab-diff.py`). Control = census `ifd3e` @ 164cb80e (the six
+    // other lines in force, FocusInfo hand-walked), treatment = `ifd3f` @
+    // de2f2baf (this line, residual FocusInfoVersion + ManualFlash, the hand
+    // model-conditional pass skipping the two variants the engine reports):
+    //
+    //     control    TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //     treatment  TOTAL 4238 444764 21 538 5029 10461 98.8%
+    //
+    // 21 files; 21 MISSING -> matched, all 0x2100 AntiShockWaitingTime (a row
+    // the hand table never had: `2000` on E-M1MarkII / E-M5MarkIII, `0` on 19
+    // more E-M / OM / TG / PEN-F bodies); 0 matched -> MISSING; 0 new VALUE;
+    // 0 new EXTRA. The worker's local `conformance.py` A/B over the 315-file
+    // Olympus directory (control = 35064ec7) had predicted exactly those 21
+    // rows; Composite DOF / FOV / HyperfocalDistance on the E-1, E-M5 and
+    // E-P1 carriers are unchanged (FocusDistance's value form stays with the
+    // hand pass, whose row the generator withholds).
     ("Olympus", "FocusInfo"),
     // Olympus::ImageProcessing -- slice I-3; the shared layout is under
     // CameraSettings. The table is `%Image::ExifTool::Olympus::
@@ -250,8 +301,24 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // rows removed (tables.rs: AspectRatio on 78 carriers,
     // KeystoneCompensation on 18).
     //
-    // GATE B A/B: PENDING (measured by the integrator on the i7: control =
-    // the previous line's census).
+    // GATE B A/B of record (i7, `/tmp/i7-missing-census.sh` = release build +
+    // `conformance.py --json-out` over combined-samples, 4238 files, against
+    // the pinned 13.59 oracle, both probes OK; per-file diff
+    // `/tmp/i7-ab-diff.py`). The six sub-table lines were measured together:
+    // control = census `ifd3c` @ c3a6ec27 (the same tree with no sub-table
+    // line), treatment = `ifd3d` @ 35064ec7 (all six lines with their
+    // residuals):
+    //
+    //     control    TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //     treatment  TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //
+    // 0 files touched -- a producer switch: the hand table already produced
+    // every row the generated table reports.
+    // Per table on the 315-file Olympus directory (the worker's local
+    // `conformance.py` A/B at 329dd16f, control = d4d6528b): 184 carriers,
+    // 0 MISSING -> matched, 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA. The retirement of this table's two override rows (0x1112
+    // AspectRatio, 0x1900 KeystoneCompensation; 164cb80e) was measured the
+    // same way: census `ifd3e` @ 164cb80e identical to `ifd3d`.
     ("Olympus", "ImageProcessing"),
     // Olympus::Main -- `src/parsers/tiff/makernotes/olympus.rs`'s
     // `parse_located` (the `find_ifd_table("Olympus", "Main")` block, and
@@ -384,8 +451,22 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // OlympusE1.jpg / Olympus2.jpg is byte-identical before and after. The 103
     // carriers move nothing.
     //
-    // GATE B A/B: PENDING (measured by the integrator on the i7: control =
-    // the previous line's census).
+    // GATE B A/B of record (i7, `/tmp/i7-missing-census.sh` = release build +
+    // `conformance.py --json-out` over combined-samples, 4238 files, against
+    // the pinned 13.59 oracle, both probes OK; per-file diff
+    // `/tmp/i7-ab-diff.py`). The six sub-table lines were measured together:
+    // control = census `ifd3c` @ c3a6ec27 (the same tree with no sub-table
+    // line), treatment = `ifd3d` @ 35064ec7 (all six lines with their
+    // residuals):
+    //
+    //     control    TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //     treatment  TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //
+    // 0 files touched -- a producer switch: the hand table already produced
+    // every row the generated table reports.
+    // Per table on the 315-file Olympus directory (the worker's local
+    // `conformance.py` A/B at 329dd16f, control = d4d6528b): 103 carriers,
+    // 0 MISSING -> matched, 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA.
     ("Olympus", "RawDevelopment"),
     // Olympus::RawDevelopment2 -- slice I-3; the shared layout is under
     // CameraSettings. The table is `%Image::ExifTool::Olympus::
@@ -429,8 +510,25 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // `RAW_DEVELOPMENT2_RESIDUAL` returns both to matched, which is the
     // treatment line above.
     //
-    // GATE B A/B: PENDING (measured by the integrator on the i7: control =
-    // the previous line's census).
+    // GATE B A/B of record (i7, `/tmp/i7-missing-census.sh` = release build +
+    // `conformance.py --json-out` over combined-samples, 4238 files, against
+    // the pinned 13.59 oracle, both probes OK; per-file diff
+    // `/tmp/i7-ab-diff.py`). The six sub-table lines were measured together:
+    // control = census `ifd3c` @ c3a6ec27 (the same tree with no sub-table
+    // line), treatment = `ifd3d` @ 35064ec7 (all six lines with their
+    // residuals):
+    //
+    //     control    TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //     treatment  TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //
+    // 0 files touched -- a producer switch: the hand table already produced
+    // every row the generated table reports.
+    // Per table on the 315-file Olympus directory (the worker's local
+    // `conformance.py` A/B at 329dd16f, control = d4d6528b): 2 (OlympusXZ-1.jpg, OlympusE-M1.jpg) carriers,
+    // 0 MISSING -> matched, 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA. The retirement of this table's override row (0x0108
+    // RawDevMemoryColorEmphasis; 164cb80e, once a zero-count entry read as the
+    // empty value, ExifTool.pm:6296-6297) was measured the same way: census
+    // `ifd3e` @ 164cb80e identical to `ifd3d`.
     ("Olympus", "RawDevelopment2"),
     // Olympus::RawInfo -- slice I-3; the shared layout is under
     // CameraSettings. The table is `%Image::ExifTool::Olympus::RawInfo`
@@ -470,8 +568,23 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // line has no carrier at all in the directory (see above) and moved
     // nothing by construction.
     //
-    // GATE B A/B: PENDING (measured by the integrator on the i7: control =
-    // the previous line's census).
+    // GATE B A/B of record (i7, `/tmp/i7-missing-census.sh` = release build +
+    // `conformance.py --json-out` over combined-samples, 4238 files, against
+    // the pinned 13.59 oracle, both probes OK; per-file diff
+    // `/tmp/i7-ab-diff.py`). The six sub-table lines were measured together:
+    // control = census `ifd3c` @ c3a6ec27 (the same tree with no sub-table
+    // line), treatment = `ifd3d` @ 35064ec7 (all six lines with their
+    // residuals):
+    //
+    //     control    TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //     treatment  TOTAL 4238 444743 21 538 5050 10461 98.8%
+    //
+    // 0 files touched -- a producer switch: the hand table already produced
+    // every row the generated table reports.
+    // This table has NO corpus carrier (no JPEG under combined-samples or
+    // t/images writes a 0x3000 directory; ORF-only), so the line is
+    // unmeasured by construction: its evidence is the residual pin test, the
+    // engine's own tests, and the census above moving nothing.
     ("Olympus", "RawInfo"),
 ];
 
