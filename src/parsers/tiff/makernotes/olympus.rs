@@ -868,14 +868,17 @@ fn walk_main_through_engine(
 ///   `PrintConv`.
 /// * `Integer` -- decimal, as `OlyVal::Int`'s `print_raw`.
 /// * `Float` -- Perl's `%.15g` (`exprs::perl_num`), as `OlyVal::Float`'s
-///   `fmt_g15`. No `Olympus::Main` row is float-typed; kept for the shape.
-/// * `Rational` -- `ifd::print_rational`, exactly the hand rendering: an
-///   exact quotient prints as an integer, otherwise `RoundFloat` at 10
-///   significant digits (`GetRational64s`, ExifTool.pm:6107-6120). The
-///   `Olympus::Main` rows that reach this arm unconverted are all
-///   `rational64s` (0x1003, 0x1006, 0x1023, 0x1025, 0x103d, 0x103e), so the
-///   `i32` pair `TagValue::Rational` carries is exact; every `rational64u` row
-///   in the table has a `PrintConv` and arrives here already a `String`.
+///   `fmt_g15`. This is every unconverted rational with a nonzero
+///   denominator: the engine reads a 64-bit rational as the number Perl
+///   parses from `RoundFloat($n/$d, 10)` = `sprintf("%.10g")`
+///   (`GetRational64s`, ExifTool.pm:6107-6120, 5960-5964;
+///   `ifd_engine::round_rationals`), and `%.15g` of that number prints the
+///   same ten digits, which is what `ifd::print_rational` printed for the
+///   hand rows (0x1003, 0x1006, 0x1023, 0x1025, 0x103d, 0x103e). No
+///   `Olympus::Main` row is float-typed in the file.
+/// * `Rational` -- only a zero denominator reaches this arm now;
+///   `ifd::print_rational` prints it as ExifTool does (`inf` for a nonzero
+///   numerator, `undef` for zero, ExifTool.pm:6111/6118).
 /// * anything else -- dropped. `Binary` is an `undef` run with no
 ///   conversion (only 0x0000 `MakerNoteVersion` in this table, which no
 ///   Olympus note in the corpus carries): the string map cannot say whether
