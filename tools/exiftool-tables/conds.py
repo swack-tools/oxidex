@@ -133,6 +133,7 @@ _RE_BITAND_CMP = re.compile(
     rf"^\(\s*{_MEMBER}\s*&\s*(0[xX][0-9a-fA-F]+|\d+)\s*\)\s*(==|!=)\s*(-?\d+)$"
 )
 _RE_FORMAT_ATOM = re.compile(r'^\$format\s*(eq|ne)\s*"([^"]*)"$')
+_RE_FORMAT_REGEX = re.compile(r"^\$format\s*(=~|!~)\s*/((?:[^/\\]|\\.)*)/([a-z]*)$")
 _RE_COUNT_ATOM = re.compile(r"^\$count\s*(==|!=|>=|<=|>|<)\s*(-?\d+)$")
 # `($$self{Member} = <source>) [and <rest>]` -- the assignment-as-condition
 # idiom (Canon.pm:1312, Pentax.pm:4343, Sony.pm:902).
@@ -330,6 +331,25 @@ def _compile_atom(text):
         negate = "true" if m.group(1) == "ne" else "false"
         return f"Cond::FormatEq {{ value: {_rust_str(m.group(2))}, negate: {negate} }}"
 
+    m = _RE_FORMAT_REGEX.match(text)
+    if m:
+        # Canon.pm `CanonCameraInfoUnknown32`/`...16`: `$format =~ /^int32/`.
+        # `$format` is the entry's format NAME as ProcessExif binds it
+        # (Exif.pm:6713, `$formatName[$format]`), so this is a string match
+        # over a closed ASCII vocabulary -- the same vetted regex subset
+        # `MemberRegex` uses.
+        op, pattern, flags = m.group(1), m.group(2), m.group(3)
+        if any(f not in "i" for f in flags):
+            raise CondCompileError(f"unsupported regex flags {flags!r}")
+        _validate_regex_pattern(pattern)
+        rust_pattern = _perl_regex_to_rust(pattern)
+        negate = "true" if op == "!~" else "false"
+        ic = "true" if "i" in flags else "false"
+        return (
+            f"Cond::FormatRegex {{ pattern: {_rust_str(rust_pattern)}, "
+            f"ignore_case: {ic}, negate: {negate} }}"
+        )
+
     m = _RE_COUNT_ATOM.match(text)
     if m:
         op, val = m.group(1), m.group(2)
@@ -468,8 +488,16 @@ def _tokenize(text):
     skipped whole, so `/ or /` and `"a && b"` never split an atom. Prefix
     `not `/`!` are emitted where an operand is expected; everything else at
     an operand position runs to the next top-level connective and is one
-    atom for `_compile_atom` to accept or refuse -- which is how a
-    parenthesised group `(A or B)` refuses: `(A` is not an atom."""
+    atom for `_compile_atom` to accept or refuse.
+
+    A `(` where an operand is expected, and the `)` that closes it, are their
+    own tokens, so `(A or B) and C` groups (slice I-4). The atom scanner
+    tracks its OWN parenthesis depth, so an atom that legitimately contains a
+    pair -- `defined($$self{X})`, `($$self{X} & 0x01) != 1` -- is not cut at
+    its inner `)`; only a `)` with no matching `(` inside the atom closes a
+    group. An assignment inside a group (`($$self{X} = 1) and ...`) therefore
+    reaches `_compile_atom` as `$$self{X} = 1`, which is not an atom, and is
+    refused -- the side effect is never reproduced by accident."""
     toks = []
     i, n = 0, len(text)
     expect_operand = True
@@ -486,7 +514,12 @@ def _tokenize(text):
                 toks.append(("op", "!"))
                 i += 1
                 continue
+            if text[i] == "(":
+                toks.append(("op", "("))
+                i += 1
+                continue
             start = i
+            depth = 0
             while i < n:
                 if text[i] in "=!" and text.startswith("~", i + 1):
                     i += 2
@@ -507,12 +540,22 @@ def _tokenize(text):
                     or text.startswith("&&", i)
                 ):
                     break
+                if text[i] == "(":
+                    depth += 1
+                elif text[i] == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
                 i += 1
             chunk = text[start:i].strip()
             if not chunk:
                 raise CondCompileError(f"missing operand before {text[i:]!r}")
             toks.append(("atom", chunk))
             expect_operand = False
+            continue
+        if text[i] == ")":
+            toks.append(("op", ")"))
+            i += 1
             continue
         for literal, name in _CONNECTIVE_TOKENS:
             if text.startswith(literal, i):
@@ -613,6 +656,21 @@ class _Parser:
             # `!` binds tighter than every connective, so whatever follows
             # the negated operand is handled by the levels above.
             return self._negated()
+        return self._parse_primary()
+
+    def _parse_primary(self):
+        """A parenthesised group, else an atom. A group binds tightest and
+        restarts the precedence ladder at its lowest level, which is what
+        perlop's grouping does: `(A or B) and C` is `And(Or(A, B), C)`, not
+        the `Or(A, And(B, C))` the bare chain would give."""
+        if self._peek_op() == "(":
+            self._take()
+            expr = self._parse_or()
+            if self._peek_op() != ")":
+                got = self._toks[self._i] if self._i < len(self._toks) else None
+                raise CondCompileError(f"unclosed parenthesised group, found {got!r}")
+            self._take()
+            return expr
         return self._parse_atom()
 
     def _parse_atom(self):
@@ -627,6 +685,14 @@ class _Parser:
         (`MemberTruthy`/`MemberDefined { negate: true }`). Anything else
         (`!$$self{X} == 1`, which Perl reads as `(!$$self{X}) == 1`; `not
         $$self{X} =~ /p/`) is refused rather than negated as a whole."""
+        if self._peek_op() == "(":
+            # `not (A or B)` needs a negation node over an arbitrary subtree;
+            # this schema carries negation as a per-atom flag only. Refused
+            # rather than mis-grouped as `(not A) or B`.
+            raise CondCompileError(
+                "`not`/`!` over a parenthesised group is outside the grammar "
+                "(negation is a per-atom flag, not a node)"
+            )
         if self._i >= len(self._toks) or self._toks[self._i][0] != "atom":
             got = self._toks[self._i] if self._i < len(self._toks) else None
             raise CondCompileError(f"`not`/`!` needs a member or `defined` operand, found {got!r}")

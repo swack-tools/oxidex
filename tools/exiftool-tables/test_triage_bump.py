@@ -36,13 +36,14 @@ class ClassifyVariantsTests(unittest.TestCase):
         self.assertIn("compile_variant_group", delta.note)
 
     def test_one_refused_condition_is_cond_and_names_the_construct(self):
-        # A parenthesised group is outside conds.py's grammar (see conds.py's
-        # module docstring) -- the shape that still defeats the real
-        # Sony::Main tag 36944 / 37888 alternatives. (An `or` chain was the
-        # fixture here until slice I-3 taught the grammar `or`/`||`.)
+        # An assignment inside a group is outside conds.py's grammar -- the
+        # shape that still defeats the real Sony::Main tag 37888 alternative.
+        # (An `or` chain was the fixture until slice I-3 taught the grammar
+        # `or`/`||`; a parenthesised group until slice I-4 taught it
+        # grouping. Each time, the fixture moves to what is still refused.)
         variants = [
             {"Condition": "$$self{Model} =~ /^ILCE-7/", "Name": "A", "Format": "int16u"},
-            {"Condition": "$$self{Model} =~ /^A/ or ($$self{Model} =~ /^B/ and $count == 1)",
+            {"Condition": "$$self{Model} =~ /^A/ or ($$self{Model} =~ /^B/ and $$self{Cipher} = 1)",
              "Name": "B", "Format": "int16u"},
         ]
         delta = triage_bump.classify_variants("Sony", "Main", "36944", variants, "changed")
@@ -98,9 +99,10 @@ class DiffTagVariantsIntegrationTests(unittest.TestCase):
         old_tag = {"_variants": [{"Condition": "$$self{Model} =~ /^A/", "Name": "A", "Format": "int16u"}]}
         new_tag = {"_variants": [
             {"Condition": "$$self{Model} =~ /^A/", "Name": "A", "Format": "int16u"},
-            # a parenthesised group: outside the grammar (an `or` chain was
-            # the fixture until slice I-3 taught conds.py `or`/`||`)
-            {"Condition": "($$self{Model} =~ /^B/ or $$self{Model} =~ /^C/) and $count == 1",
+            # an assignment inside a group: outside the grammar (an `or`
+            # chain was the fixture until slice I-3, a parenthesised group
+            # until slice I-4 taught conds.py grouping)
+            {"Condition": "($$self{Model} =~ /^B/ or $$self{Model} =~ /^C/) and $$self{Cipher} = 1",
              "Name": "B", "Format": "int16u"},
         ]}
         deltas = list(triage_bump.diff_tag("Sony", "Main", "36944", old_tag, new_tag, True))
