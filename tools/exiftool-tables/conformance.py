@@ -44,7 +44,7 @@ structural, numeric, date_time, binary, display_only -- so a PrintConv
 rounding nit doesn't read the same as a wrong decode.
 
 The two sides' keys are split by two different rules, on purpose. The
-oracle is asked for `-G0:1` keys ('EXIF:IFD0:Make'), and split_oracle_key
+oracle is asked for `-G0:1:4` keys ('EXIF:IFD0:Make'), and split_oracle_key
 takes the FIRST segment as the reporting group and the LAST as the name --
 ExifTool tag names never contain ':', so the middle segments are structure
 only. OxiDex keys go through split_oxidex_key: first segment is the group,
@@ -54,7 +54,7 @@ of the name ('OOXML:Custom:Division', 'PNG:tEXt:comment'); one shared
 last-segment rule silently rewrote those to 'Division'/'comment' and
 matched them, masking a name defect that is OxiDex's to fix.
 
-Unmatched occurrences are reported one row each. Under -G0:1 two leftover
+Unmatched occurrences are reported one row each. Under -G0:1:4 two leftover
 oracle rows from different family-1 groups ('EXIF:IFD0:Compression',
 'EXIF:IFD1:Compression') spell the same family-0 report key, so the 2nd,
 3rd... occurrence of a key carries ' (2)', ' (3)' rather than overwriting
@@ -96,8 +96,8 @@ def run_exiftool(oracle, path):
         # own. Comparing converted output against raw values would report
         # every correctly-read tag as a value mismatch.
         #
-        # -G0:1, not -G: ExifTool's JSON writer keeps ONE entry per key, and
-        # under family-0 keys every MPF sub-image (MPImage1/2/3), every
+        # -G0:1:4, not -G: ExifTool's JSON writer keeps ONE entry per key,
+        # and under family-0 keys every MPF sub-image (MPImage1/2/3), every
         # IFD0/IFD1 pair and every repeated XMP block share a key, so all but
         # one occurrence vanish before this script ever sees them -- in both
         # directions: OxiDex's correct rows score EXTRA against a partner
@@ -107,14 +107,22 @@ def run_exiftool(oracle, path):
         # prints 7 MPImage keys, `-G0:1 -s -j -a` prints 23, and the text
         # form `-G0:1 -s -a` (one row per occurrence) prints 23 MPImage rows;
         # `oxidex -j` prints 23. The family-1 segment carries the structure
-        # OxiDex's own -j output already prints, so the keys stop colliding;
-        # split_oracle_key still reports the family-0 segment as the group,
-        # so every report and every --json-out consumer sees the same group
-        # strings it saw before. What -G0:1 still collapses -- a repeat inside ONE
-        # family-1 group -- is family 4's job (`-G0:1:4`, which names the
-        # copies 'Copy1', 'Copy2'...); duplicate_loss_scan.py's module doc
-        # measures that -G1 / -G1:4 distinction and is the reference for it.
-        oracle.command(["-G0:1", "-s", "-j", "-a", path]),
+        # OxiDex's own -j output already prints, so the keys stop colliding.
+        #
+        # Family 4 on top of that: -G0:1 still collapsed a repeat inside ONE
+        # family-1 group. Measured per file as text-mode `-G0:1 -s -a` rows
+        # (one per occurrence, minus IGNORE) against parsed JSON keys over
+        # the author's 200-file subset (residual.py, pinned 13.59): 393 of
+        # 25,269 occurrences lost on 50 files -- MakerNotes:ImageName 53,
+        # ImageData 53, TextStamp 43, JUMBF:JUMDType 25, JUMDLabel 25,
+        # MakerNotes:BabyAge 15 ... Family 4 is ExifTool's per-instance
+        # 'Copy N' group (lib/Image/ExifTool.pm:3856), so `-G0:1:4` spells
+        # every repeat distinctly ('EXIF:IFD1:Copy2:XResolution'): residual
+        # 0 over the same 200 files. split_oracle_key reads the first and
+        # last segments only, so neither the family-1 nor the 'Copy N'
+        # segment reaches a report or a --json-out consumer -- they see the
+        # family-0 group strings they always saw.
+        oracle.command(["-G0:1:4", "-s", "-j", "-a", path]),
         capture_output=True, text=True, errors="replace",
     ).stdout
     try:
@@ -301,7 +309,7 @@ def occurrence_name(group, name, duplicate):
 
     'Group:Name' when the name occurs more than once on either side of this
     file, bare 'Name' when it is unique. `group` is the reporting group --
-    family 0 on the oracle side -- so under -G0:1 two leftover oracle rows
+    family 0 on the oracle side -- so under -G0:1:4 two leftover oracle rows
     from different family-1 groups ('EXIF:IFD0:Compression' and
     'EXIF:IFD1:Compression') spell the SAME key here; place_occurrence keeps
     them apart.

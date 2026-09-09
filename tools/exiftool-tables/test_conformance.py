@@ -192,7 +192,7 @@ class CompareTests(unittest.TestCase):
 
 
 class OracleKeyShapeTests(unittest.TestCase):
-    """The oracle is asked for `-G0:1` keys, not `-G`.
+    """The oracle is asked for `-G0:1:4` keys, not `-G`.
 
     ExifTool's JSON writer keeps ONE entry per key. Under family-0 keys the
     three MPF sub-images of combined-samples/Apple/Apple_iPhone11.jpg all
@@ -258,7 +258,11 @@ class OracleKeyShapeTests(unittest.TestCase):
             "MPImage3:MPImageLength": ("MPImage3", 3003),
         })
 
-    def test_run_exiftool_asks_for_family_0_and_1_groups(self):
+    def test_run_exiftool_asks_for_family_0_1_and_4_groups(self):
+        # Family 4 ('Copy N') is what keeps a repeat inside one family-1
+        # group from collapsing in ExifTool's one-entry-per-key JSON writer:
+        # residual 393/25,269 occurrences under -G0:1, 0 under -G0:1:4, over
+        # the author's 200-file subset (residual.py, pinned 13.59).
         seen = {}
 
         class Oracle:
@@ -275,7 +279,7 @@ class OracleKeyShapeTests(unittest.TestCase):
         with mock.patch.object(conformance.subprocess, "run", fake_run):
             et = conformance.run_exiftool(Oracle(), "x.jpg")
 
-        self.assertEqual(seen["argv"], ["exiftool", "-G0:1", "-s", "-j", "-a", "x.jpg"])
+        self.assertEqual(seen["argv"], ["exiftool", "-G0:1:4", "-s", "-j", "-a", "x.jpg"])
         self.assertEqual(et["MPF:MPImage1:MPImageLength"], 1001)
 
     def test_file_type_is_read_through_split_oracle_key(self):
