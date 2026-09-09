@@ -638,7 +638,18 @@ impl OlympusParser {
         // because `tools/exiftool-tables/reachability.py` counts literal call
         // sites, and `enabled()` re-checks Gate A at runtime. Without the
         // `("Olympus", "Main")` line in `enabled_ifd.rs` `main_table` is
-        // `None` and this method runs exactly as it did before the slice.
+        // `None` and NOTHING walks the top-level directory: slice I-4 retired
+        // the hand `tables::MAIN` this branch used to fall back to, so the
+        // generated table is the only producer for every row it reports.
+        // That state is unreachable in any build whose tests pass --
+        // `tests/olympus_main_ifd_table.rs::olympus_main_is_on_the_gate_b_
+        // allowlist` asserts the line is present AND `table.enabled()` (gate
+        // A and gate B together) -- and an un-enabled table therefore fails
+        // that test loudly instead of silently reporting a partial
+        // directory. Producing nothing here rather than the residual alone
+        // is deliberate: six of sixty-eight rows under real ExifTool tag
+        // names would look like ordinary output, whereas an empty Olympus
+        // block is unmistakable.
         let main_table = find_ifd_table("Olympus", "Main").filter(|table| table.enabled());
         if let Some(table) = main_table {
             walk_main_through_engine(
@@ -664,16 +675,6 @@ impl OlympusParser {
                 tables::MAIN_RESIDUAL,
                 tags,
             );
-        } else {
-            ifd::walk_directory(
-                data,
-                ifd_start,
-                base,
-                effective_byte_order,
-                "Olympus",
-                tables::MAIN,
-                tags,
-            );
         }
 
         // Slice I-3 (design spec section 5): the seven sub-tables
@@ -684,59 +685,53 @@ impl OlympusParser {
         // same allowlist check -- so for each of them only the residual rows
         // run here: `tables::<TABLE>_RESIDUAL`, the rows the generated table
         // withholds plus the overrides whose hand rendering must land last
-        // (tables.rs pins both classes per table). A table the list does not
-        // carry, or every table when the Main line itself is off, keeps its
-        // hand walk exactly as before. FocusInfo's two model-conditional
-        // passes below the loop (`parse_focus_info_*`) are part of its
-        // residual: they keep producing the `FocusDistance` row and the
-        // `_variants` alternatives the generated table withholds, and skip
-        // the two alternatives the engine reports
-        // (`focus_info_engine_reports`). The lookups are spelled with
-        // literal arguments for `reachability.py`'s census.
+        // (tables.rs pins both classes per table). Slice I-4 retired the
+        // hand `tables::<TABLE>` walks these lines replaced, so a table the
+        // list does not carry -- or every table when the Main line itself is
+        // off -- now walks NOTHING rather than falling back: an enabled
+        // generated table is the only path into these directories, and the
+        // per-table pins in `tests/olympus_sub_tables_ifd.rs` (each of the
+        // seven: on `ENABLED_IFD`, gate A passing, `enabled()`) turn a
+        // silent un-enable into a red test instead of a silently partial
+        // directory. FocusInfo's two model-conditional passes below the loop
+        // (`parse_focus_info_*`) are part of its residual: they keep
+        // producing the `FocusDistance` row and the `_variants` alternatives
+        // the generated table withholds, and skip the two alternatives the
+        // engine reports (`focus_info_engine_reports`). The lookups are
+        // spelled with literal arguments for `reachability.py`'s census.
         let main_walked = main_table.is_some();
         let equipment = sub_table_rows(
             main_walked,
             find_ifd_table("Olympus", "Equipment"),
-            tables::EQUIPMENT,
             tables::EQUIPMENT_RESIDUAL,
         );
         let camera_settings = sub_table_rows(
             main_walked,
             find_ifd_table("Olympus", "CameraSettings"),
-            tables::CAMERA_SETTINGS,
             tables::CAMERA_SETTINGS_RESIDUAL,
         );
         let raw_development = sub_table_rows(
             main_walked,
             find_ifd_table("Olympus", "RawDevelopment"),
-            tables::RAW_DEVELOPMENT,
             tables::RAW_DEVELOPMENT_RESIDUAL,
         );
         let raw_development2 = sub_table_rows(
             main_walked,
             find_ifd_table("Olympus", "RawDevelopment2"),
-            tables::RAW_DEVELOPMENT2,
             tables::RAW_DEVELOPMENT2_RESIDUAL,
         );
         let image_processing = sub_table_rows(
             main_walked,
             find_ifd_table("Olympus", "ImageProcessing"),
-            tables::IMAGE_PROCESSING,
             tables::IMAGE_PROCESSING_RESIDUAL,
         );
         let raw_info = sub_table_rows(
             main_walked,
             find_ifd_table("Olympus", "RawInfo"),
-            tables::RAW_INFO,
             tables::RAW_INFO_RESIDUAL,
         );
         let focus_info_table = find_ifd_table("Olympus", "FocusInfo");
-        let focus_info = sub_table_rows(
-            main_walked,
-            focus_info_table,
-            tables::FOCUS_INFO,
-            tables::FOCUS_INFO_RESIDUAL,
-        );
+        let focus_info = sub_table_rows(main_walked, focus_info_table, tables::FOCUS_INFO_RESIDUAL);
         let focus_info_engine_walked = engine_walks(main_walked, focus_info_table);
 
         for entry in &entries {
@@ -860,24 +855,29 @@ impl OlympusParser {
 // Olympus::Main through the generated table (slice I-2)
 // ============================================================================
 
-/// The rows `parse_located`'s sub-IFD loop walks for one sub-table (slice
-/// I-3): the residual when the engine's Main walk has already reported the
-/// table -- the Main line in force, so the walk ran, AND the sub-table's own
-/// line in force, so `ifd_engine::descend` did not refuse its edge -- else
-/// the full hand table. Either input alone is not enough: a sub-table line
-/// without the Main line reaches no engine walk at all (nothing descends
-/// into it), and the Main line without the sub-table line leaves the edge
-/// refused, so in both cases the hand walk is the only producer.
+/// The rows `parse_located`'s sub-IFD loop walks for one sub-table: the
+/// residual when the engine's Main walk has already reported the table --
+/// the Main line in force, so the walk ran, AND the sub-table's own line in
+/// force, so `ifd_engine::descend` did not refuse its edge -- else nothing.
+/// Either input alone is not enough: a sub-table line without the Main line
+/// reaches no engine walk at all (nothing descends into it), and the Main
+/// line without the sub-table line leaves the edge refused.
+///
+/// Slice I-3 spelled the second arm as the full hand table; slice I-4
+/// retired those eight tables, so the arm is now the empty slice. It is
+/// unreachable in a build whose tests pass (`olympus_sub_tables_ifd.rs`
+/// pins all seven lines plus the Main line they depend on), and a directory
+/// that reports nothing is the failure this project prefers to a directory
+/// that reports its withheld rows alone under real ExifTool tag names.
 fn sub_table_rows(
     main_walked: bool,
     table: Option<&'static IfdTable>,
-    hand: &'static [ifd::TagDef],
     residual: &'static [ifd::TagDef],
 ) -> &'static [ifd::TagDef] {
     if engine_walks(main_walked, table) {
         residual
     } else {
-        hand
+        &[]
     }
 }
 
