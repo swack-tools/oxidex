@@ -42,6 +42,24 @@ budget it explicitly (Step 21's default-mode EXTRA-budget gate reads this).
 Real VALUE differences are further classed by severity -- identity,
 structural, numeric, date_time, binary, display_only -- so a PrintConv
 rounding nit doesn't read the same as a wrong decode.
+
+The two sides' keys are split by two different rules, on purpose. The
+oracle is asked for `-G0:1` keys ('EXIF:IFD0:Make'), and split_oracle_key
+takes the FIRST segment as the reporting group and the LAST as the name --
+ExifTool tag names never contain ':', so the middle segments are structure
+only. OxiDex keys go through split_oxidex_key: first segment is the group,
+EVERYTHING after it is the name, exactly the rule the plain -G era used. The
+distinction matters because OxiDex emits keys whose middle segment is part
+of the name ('OOXML:Custom:Division', 'PNG:tEXt:comment'); one shared
+last-segment rule silently rewrote those to 'Division'/'comment' and
+matched them, masking a name defect that is OxiDex's to fix.
+
+Unmatched occurrences are reported one row each. Under -G0:1 two leftover
+oracle rows from different family-1 groups ('EXIF:IFD0:Compression',
+'EXIF:IFD1:Compression') spell the same family-0 report key, so the 2nd,
+3rd... occurrence of a key carries ' (2)', ' (3)' rather than overwriting
+the first -- see place_occurrence. MISSING/EXTRA are counts of occurrences,
+not of distinct keys.
 """
 
 import argparse
@@ -90,9 +108,9 @@ def run_exiftool(oracle, path):
         # form `-G0:1 -s -a` (one row per occurrence) prints 23 MPImage rows;
         # `oxidex -j` prints 23. The family-1 segment carries the structure
         # OxiDex's own -j output already prints, so the keys stop colliding;
-        # split_key still reports the family-0 segment as the group, so every
-        # report and every --json-out consumer sees the same group strings it
-        # saw before. What -G0:1 still collapses -- a repeat inside ONE
+        # split_oracle_key still reports the family-0 segment as the group,
+        # so every report and every --json-out consumer sees the same group
+        # strings it saw before. What -G0:1 still collapses -- a repeat inside ONE
         # family-1 group -- is family 4's job (`-G0:1:4`, which names the
         # copies 'Copy1', 'Copy2'...); duplicate_loss_scan.py's module doc
         # measures that -G1 / -G1:4 distinction and is the reference for it.
@@ -123,19 +141,20 @@ def run_oxidex(binary, path):
     return d if isinstance(d, dict) else {}
 
 
-def split_key(k):
-    """-> (group, name).
+def split_oracle_key(k):
+    """-> (group, name) for an ExifTool JSON key. ORACLE side only.
 
     ExifTool -G0:1 gives 'EXIF:IFD0:Make' (family 0, family 1, name) or --
-    when the two families coincide -- just 'File:FileType'; OxiDex -j gives
-    the family-1 form 'IFD0:Make'; bare names have no group. The NAME is
-    always the last ':'-segment and the reporting GROUP is always the first,
-    so a family-0 group is what every report and every --json-out consumer
-    sees, unchanged from the plain -G era, while the middle segments (family
-    1, or a family-4 'Copy1' should a caller ever ask for one) exist only to
-    keep the oracle's JSON keys distinct. No ExifTool or OxiDex tag NAME
-    contains ':' (audited over the 4,238-file census at 25a2109e: zero keys
-    with a colon inside the name), so last-segment is unambiguous.
+    when the two families coincide -- just 'File:FileType'; with family 4
+    asked for as well, 'EXIF:IFD0:Copy1:Make'. Bare names have no group.
+    The reporting GROUP is the first ':'-segment (family 0), so every report
+    row and every --json-out consumer sees the group strings it saw under
+    plain -G; the NAME is the last segment. The middle segments exist only
+    to keep the oracle's JSON keys distinct (its writer keeps one entry per
+    key). ExifTool tag names never contain ':' (audited over the 4,238-file
+    census at 25a2109e: zero oracle keys with a colon inside the name), so
+    last-segment is exact on THIS side. It is wrong for OxiDex keys, which
+    can carry ':' inside the name -- those go through split_oxidex_key.
     """
     if ":" not in k:
         return ("", k)
@@ -143,15 +162,33 @@ def split_key(k):
     return (segs[0], segs[-1])
 
 
+def split_oxidex_key(k):
+    """-> (group, name) for an `oxidex -j` key: first segment, then the rest.
+
+    OxiDex prints 'IFD0:Make' (its group, then the name) -- but it also
+    prints keys whose middle segment is part of the NAME, not a group:
+    ooxml.rs emits 'OOXML:Custom:<property>' (26 keys on t/images/OOXML.docx
+    under the 25a2109e binary) and png_writer.rs 'PNG:<chunk>:<keyword>'
+    ('PNG:tEXt:comment' on PNG.png). ExifTool spells those 'XML:Division'
+    and 'PNG:Comment', so the colon-in-name is a defect the census must keep
+    exposing: with the pre-f3b5f5e6 first-segment rule, kept here verbatim,
+    'Custom:Division' stays a distinct name and lands in EXTRA (or RENAME)
+    beside the oracle's MISSING 'Division'. Applying the oracle's last-
+    segment rule to this side -- which f3b5f5e6 did -- silently rewrote the
+    name to 'Division' and reported a match.
+    """
+    return tuple(k.split(":", 1)) if ":" in k else ("", k)
+
+
 def file_type(et):
     """ExifTool's File:FileType, whatever key shape the group flags gave it.
 
     Under -G0:1 the key is 'File:FileType' (family 1 == family 0, so ExifTool
     prints one segment), not 'File:File:FileType' -- but per_format must not
-    depend on that quirk, so the lookup goes through split_key.
+    depend on that quirk, so the lookup goes through split_oracle_key.
     """
     for k, v in et.items():
-        if split_key(k) == ("File", "FileType"):
+        if split_oracle_key(k) == ("File", "FileType"):
             return v
     return et.get("FileType")
 
@@ -236,8 +273,13 @@ def infer_renames(missing, extra):
     return renames
 
 
-def tags_by_name(tags):
+def tags_by_name(tags, split):
     """Collect every occurrence of a tag name, retaining its group and value.
+
+    `split` is the side's own key rule -- split_oracle_key for ExifTool
+    output, split_oxidex_key for `oxidex -j` -- and is deliberately not
+    defaulted: the two rules differ on exactly the keys where it matters
+    (see split_oxidex_key), so a caller must say which side it is holding.
 
     Group names normally should not affect a comparison: OxiDex deliberately
     normalises a number of ExifTool groups.  But names such as ``CreateDate``
@@ -247,7 +289,7 @@ def tags_by_name(tags):
     """
     by_name = defaultdict(list)
     for k, v in tags.items():
-        g, n = split_key(k)
+        g, n = split(k)
         if n in IGNORE:
             continue
         by_name[n].append((g, v))
@@ -255,8 +297,44 @@ def tags_by_name(tags):
 
 
 def occurrence_name(group, name, duplicate):
-    """Keep unmatched duplicate names distinct in the report."""
+    """Report key for one unmatched occurrence.
+
+    'Group:Name' when the name occurs more than once on either side of this
+    file, bare 'Name' when it is unique. `group` is the reporting group --
+    family 0 on the oracle side -- so under -G0:1 two leftover oracle rows
+    from different family-1 groups ('EXIF:IFD0:Compression' and
+    'EXIF:IFD1:Compression') spell the SAME key here; place_occurrence keeps
+    them apart.
+    """
     return f"{group}:{name}" if duplicate else name
+
+
+def place_occurrence(rows, key, group, value):
+    """Add one leftover occurrence to `rows` without overwriting an earlier one.
+
+    The 2nd, 3rd... occurrence of a report key is stored as 'key (2)',
+    'key (3)'. Before this, the dict write was last-writer-wins, so N
+    unmatched oracle occurrences sharing a family-0 key survived as ONE
+    MISSING row (DNG.dng: 'EXIF:Compression' kept IFD1's 'JPEG' and lost
+    IFD0's 'Uncompressed'; 187 occurrences lost over a 200-file format-
+    breadth subset, 969 leftovers -> 968 rows on a JPEG subset), so MISSING
+    was a lower bound. Suffixing -- rather than carrying the family-1 group
+    in the key -- keeps every key that existed before spelled exactly as it
+    was, so per_file.missing/.extra keys stay comparable across runs and the
+    'FMT:key' vote tables keep their shape; only a formerly-lost row gets a
+    new key. The first occurrence in oracle key order (ExifTool's extraction
+    order: IFD0 before IFD1) keeps the bare key. Applied to both sides for
+    symmetry; an `oxidex -j` dict cannot actually collide, since its key IS
+    'group:name'.
+    """
+    if key not in rows:
+        rows[key] = (group, value)
+        return key
+    n = 2
+    while f"{key} ({n})" in rows:
+        n += 1
+    rows[f"{key} ({n})"] = (group, value)
+    return f"{key} ({n})"
 
 
 _DATE_RE = re.compile(r"^\d{4}[:\-]\d{2}[:\-]\d{2}([ T]\d{2}:\d{2}:\d{2})?")
@@ -387,8 +465,8 @@ def _match_bucket(_name, expected, actual):
 
 
 def compare(et, ox):
-    et_by_name = tags_by_name(et)
-    ox_by_name = tags_by_name(ox)
+    et_by_name = tags_by_name(et, split_oracle_key)
+    ox_by_name = tags_by_name(ox, split_oxidex_key)
 
     matched, value_diff = [], []
     missing, extra = {}, {}
@@ -405,9 +483,9 @@ def compare(et, ox):
         for _g, v, _og, ov in diff_pairs:
             value_diff.append((n, v, ov, classify_severity(v, ov)))
         for g, v in leftover_expected:
-            missing[occurrence_name(g, n, duplicate)] = (g, v)
+            place_occurrence(missing, occurrence_name(g, n, duplicate), g, v)
         for g, v in leftover_actual:
-            extra[occurrence_name(g, n, duplicate)] = (g, v)
+            place_occurrence(extra, occurrence_name(g, n, duplicate), g, v)
 
     renames = infer_renames(missing, extra)
     for on, en, _v in renames:
