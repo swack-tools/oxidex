@@ -5,6 +5,7 @@ import importlib.util
 import unittest
 from collections import Counter
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("conformance.py")
@@ -188,6 +189,99 @@ class CompareTests(unittest.TestCase):
         # ID3v2's 16 tags plus the Composite all read correctly and match.
         self.assertEqual(len(result["matched"]), 18)
         self.assertEqual(result["renames"], [])
+
+
+class OracleKeyShapeTests(unittest.TestCase):
+    """The oracle is asked for `-G0:1` keys, not `-G`.
+
+    ExifTool's JSON writer keeps ONE entry per key. Under family-0 keys the
+    three MPF sub-images of combined-samples/Apple/Apple_iPhone11.jpg all
+    spell `MPF:MPImageLength`, so two of them were gone before compare()
+    ran and OxiDex's two correct rows scored EXTRA (census at 25a2109e:
+    MPImage1/2/3 EXTRA 3456/1488/166 over 4,238 files under conformance.py).
+    Family-1 qualification (`MPF:MPImage1:MPImageLength`) keeps the keys
+    distinct; split_key takes the group from the first segment and the name
+    from the last, so the report still speaks family-0 groups.
+    """
+
+    THREE_MPF_ROWS_FROM_OXIDEX = {
+        "MPImage1:MPImageLength": 1001,
+        "MPImage2:MPImageLength": 2002,
+        "MPImage3:MPImageLength": 3003,
+    }
+
+    def test_split_key_takes_first_segment_as_group_and_last_as_name(self):
+        self.assertEqual(conformance.split_key("EXIF:IFD0:Make"), ("EXIF", "Make"))
+        self.assertEqual(conformance.split_key("File:System:FileName"), ("File", "FileName"))
+        # Family 1 == family 0: ExifTool prints one segment, not "File:File".
+        self.assertEqual(conformance.split_key("File:FileType"), ("File", "FileType"))
+        # A family-4 copy segment, should a caller ever ask -G0:1:4, is
+        # just another middle segment.
+        self.assertEqual(
+            conformance.split_key("MPF:MPImage2:Copy2:MPImageLength"),
+            ("MPF", "MPImageLength"),
+        )
+        # OxiDex's own family-1 keys and bare names are unchanged.
+        self.assertEqual(conformance.split_key("IFD0:Make"), ("IFD0", "Make"))
+        self.assertEqual(conformance.split_key("Make"), ("", "Make"))
+
+    def test_family_1_qualified_oracle_keys_match_every_mpf_sub_image(self):
+        exiftool = {
+            "MPF:MPImage1:MPImageLength": 1001,
+            "MPF:MPImage2:MPImageLength": 2002,
+            "MPF:MPImage3:MPImageLength": 3003,
+        }
+
+        result = conformance.compare(exiftool, self.THREE_MPF_ROWS_FROM_OXIDEX)
+
+        self.assertEqual(result["matched"], ["MPImageLength"] * 3)
+        self.assertEqual(result["value_diff"], [])
+        self.assertEqual(result["missing"], {})
+        self.assertEqual(result["extra"], {})
+
+    def test_family_0_collapsed_oracle_key_scores_two_correct_rows_extra(self):
+        # What the old `-G -s -j -a` invocation handed compare(): ExifTool's
+        # writer had already kept one of the three MPImageLength entries, so
+        # the other two OxiDex rows -- both correct -- could only be EXTRA.
+        # This is the defect the -G0:1 request removes; compare() itself is
+        # blameless, which is why this case passes on the old code too.
+        exiftool = {"MPF:MPImageLength": 1001}
+
+        result = conformance.compare(exiftool, self.THREE_MPF_ROWS_FROM_OXIDEX)
+
+        self.assertEqual(result["matched"], ["MPImageLength"])
+        self.assertEqual(result["value_diff"], [])
+        self.assertEqual(result["missing"], {})
+        self.assertEqual(result["extra"], {
+            "MPImage2:MPImageLength": ("MPImage2", 2002),
+            "MPImage3:MPImageLength": ("MPImage3", 3003),
+        })
+
+    def test_run_exiftool_asks_for_family_0_and_1_groups(self):
+        seen = {}
+
+        class Oracle:
+            def command(self, extra):
+                return ["exiftool", *extra]
+
+        class Done:
+            stdout = '[{"SourceFile": "x.jpg", "MPF:MPImage1:MPImageLength": 1001}]'
+
+        def fake_run(argv, **_kwargs):
+            seen["argv"] = argv
+            return Done()
+
+        with mock.patch.object(conformance.subprocess, "run", fake_run):
+            et = conformance.run_exiftool(Oracle(), "x.jpg")
+
+        self.assertEqual(seen["argv"], ["exiftool", "-G0:1", "-s", "-j", "-a", "x.jpg"])
+        self.assertEqual(et["MPF:MPImage1:MPImageLength"], 1001)
+
+    def test_file_type_is_read_through_split_key(self):
+        self.assertEqual(conformance.file_type({"File:FileType": "JPEG"}), "JPEG")
+        self.assertEqual(conformance.file_type({"File:File:FileType": "JPEG"}), "JPEG")
+        self.assertEqual(conformance.file_type({"FileType": "JPEG"}), "JPEG")
+        self.assertIsNone(conformance.file_type({"EXIF:IFD0:Make": "Canon"}))
 
 
 class SeverityTests(unittest.TestCase):

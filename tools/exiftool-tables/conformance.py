@@ -77,7 +77,26 @@ def run_exiftool(oracle, path):
         # No -n: ExifTool must apply PrintConv, because OxiDex applies its
         # own. Comparing converted output against raw values would report
         # every correctly-read tag as a value mismatch.
-        oracle.command(["-G", "-s", "-j", "-a", path]),
+        #
+        # -G0:1, not -G: ExifTool's JSON writer keeps ONE entry per key, and
+        # under family-0 keys every MPF sub-image (MPImage1/2/3), every
+        # IFD0/IFD1 pair and every repeated XMP block share a key, so all but
+        # one occurrence vanish before this script ever sees them -- in both
+        # directions: OxiDex's correct rows score EXTRA against a partner
+        # that was dropped, and oracle rows OxiDex lacks are never counted
+        # MISSING. Measured on combined-samples/Apple/Apple_iPhone11.jpg
+        # (three embedded MPF images) with the pinned 13.59: `-G -s -j -a`
+        # prints 7 MPImage keys, `-G0:1 -s -j -a` prints 23, and the text
+        # form `-G0:1 -s -a` (one row per occurrence) prints 23 MPImage rows;
+        # `oxidex -j` prints 23. The family-1 segment carries the structure
+        # OxiDex's own -j output already prints, so the keys stop colliding;
+        # split_key still reports the family-0 segment as the group, so every
+        # report and every --json-out consumer sees the same group strings it
+        # saw before. What -G0:1 still collapses -- a repeat inside ONE
+        # family-1 group -- is family 4's job (`-G0:1:4`, which names the
+        # copies 'Copy1', 'Copy2'...); duplicate_loss_scan.py's module doc
+        # measures that -G1 / -G1:4 distinction and is the reference for it.
+        oracle.command(["-G0:1", "-s", "-j", "-a", path]),
         capture_output=True, text=True, errors="replace",
     ).stdout
     try:
@@ -105,8 +124,36 @@ def run_oxidex(binary, path):
 
 
 def split_key(k):
-    """-> (group, name). ExifTool -G gives 'EXIF:Make'; bare names have none."""
-    return tuple(k.split(":", 1)) if ":" in k else ("", k)
+    """-> (group, name).
+
+    ExifTool -G0:1 gives 'EXIF:IFD0:Make' (family 0, family 1, name) or --
+    when the two families coincide -- just 'File:FileType'; OxiDex -j gives
+    the family-1 form 'IFD0:Make'; bare names have no group. The NAME is
+    always the last ':'-segment and the reporting GROUP is always the first,
+    so a family-0 group is what every report and every --json-out consumer
+    sees, unchanged from the plain -G era, while the middle segments (family
+    1, or a family-4 'Copy1' should a caller ever ask for one) exist only to
+    keep the oracle's JSON keys distinct. No ExifTool or OxiDex tag NAME
+    contains ':' (audited over the 4,238-file census at 25a2109e: zero keys
+    with a colon inside the name), so last-segment is unambiguous.
+    """
+    if ":" not in k:
+        return ("", k)
+    segs = k.split(":")
+    return (segs[0], segs[-1])
+
+
+def file_type(et):
+    """ExifTool's File:FileType, whatever key shape the group flags gave it.
+
+    Under -G0:1 the key is 'File:FileType' (family 1 == family 0, so ExifTool
+    prints one segment), not 'File:File:FileType' -- but per_format must not
+    depend on that quirk, so the lookup goes through split_key.
+    """
+    for k, v in et.items():
+        if split_key(k) == ("File", "FileType"):
+            return v
+    return et.get("FileType")
 
 
 def norm_value(v):
@@ -543,8 +590,7 @@ def main():
         et_tags_seen += len(et)
         ox = run_oxidex(str(binary.path), path)
         r = compare(et, ox)
-        ext = (et.get("File:FileType") or et.get("FileType")
-               or os.path.splitext(path)[1].lstrip(".")).upper()
+        ext = (file_type(et) or os.path.splitext(path)[1].lstrip(".")).upper()
 
         c = per_ext[ext]
         c["files"] += 1
