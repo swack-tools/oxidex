@@ -935,7 +935,7 @@ pub fn decode_value_of(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Opti
 ///
 /// `None` only if the output were not UTF-8, which the accept rules above
 /// make impossible; checking it keeps that a verified claim.
-pub(super) fn fix_utf8(bytes: &[u8]) -> Option<String> {
+pub(crate) fn fix_utf8(bytes: &[u8]) -> Option<String> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
