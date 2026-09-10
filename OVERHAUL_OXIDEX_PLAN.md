@@ -1,5 +1,13 @@
 # OxiDex Overhaul Plan: wire tag handling up like ExifTool, with coverage as a computable ledger
 
+> **Historical specification, August 10, 2026.** Read
+> [Tag machinery status](docs/TAG_MACHINERY_STATUS.md) for what has landed,
+> what remains useful and which original steps are partial or superseded.
+> [The maintained backlog](docs/AUTOMATION-AND-TESTER-PLAN.md) defines next work.
+> Step numbers and original acceptance criteria below are preserved for traceability;
+> they are not a claim that each stage passed. The appendix is an archived session
+> prompt, not an instruction to restart the overhaul. Current repository rules apply.
+
 **Provenance.** This is Part VI of `~/git/MERGED_EXIFTOOL_OXIDEX_TAG_REVIEW.md` (2026-08-10), extracted verbatim as the operative plan. It was produced by merging two independent reviews — the in-house architecture review (Parts I–IV of that document: ExifTool 13.59 Perl machinery vs oxidex, recommendations R1–R9) and an independent ChatGPT review whose 38 claims were re-verified at oxidex tip `d4456ebc` (36 confirmed, 2 already fixed by #676/#678, 0 refuted). Every work item below rests on a verified finding or on Parts I–IV analysis; the evidence and citations live in that document (Part V holds the verified runtime-correctness findings; Appendix B holds the per-claim disposition).
 
 ## Execution rules for agent sessions running this plan

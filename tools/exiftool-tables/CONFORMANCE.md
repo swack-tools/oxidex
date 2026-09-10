@@ -1,5 +1,10 @@
 # conformance.py — measuring the ExifTool gap by *kind*, not just size
 
+Current contract reviewed 2026-09-10 at `c7f5dd81`. See
+[Tag machinery status](../../docs/TAG_MACHINERY_STATUS.md) for implementation
+status and the September census correction. Numerical examples below are
+historical measurements, not a fresh baseline.
+
 ```sh
 python3 tools/exiftool-tables/conformance.py <corpus> --recursive --exiftool-dir <exiftool-src>
 ```
@@ -21,7 +26,7 @@ the why decides what the work actually costs:
 | class     | meaning                                       | cost              |
 | --------- | --------------------------------------------- | ----------------- |
 | `RENAME`  | value read correctly, under a different name  | a string edit     |
-| `MISSING` | ExifTool emits it, OxiDex does not            | real parsing work |
+| `MISSING` | ExifTool emits it, OxiDex does not            | investigate generation, routing, refusal or parsing |
 | `VALUE`   | both emit it, values disagree                 | usually PrintConv |
 | `EXTRA`   | OxiDex-only, no counterpart                   | investigate       |
 
@@ -49,13 +54,24 @@ a correctly-named tag.
 
 ## Matching is group-qualified
 
+The oracle uses `-G0:1:4 -s -j -a` so JSON retains occurrences across
+directories and repeated instances. Comparison uses family 0 while preserving
+multiplicity: MISSING and EXTRA count occurrences, not distinct tag names.
+Repeated leftover report keys receive `(2)`, `(3)` suffixes. OxiDex keys retain
+everything after the first colon as the tag name, including embedded colons.
+
+The September 9 repair exposed oracle rows previously lost to duplicate JSON
+keys. Aggregate scores from the old instrument are not comparable with the new
+ones. Use the same current script on both binaries in a new comparison.
+
 A same-named tag from two different groups (`EXIF:Make` vs `IFD0:Make`,
 `MPC:Year` vs `APE:Year` vs `ID3:Year`) is paired across groups only when the
 value confirms it (a harmless group alias) or the name was unique on both
 sides of the file to begin with. Anything left over is reported as MISSING +
 EXTRA rather than guessed.
 
-Before this, the matcher would grab whatever OxiDex tag was left over under a
+In the older experiment recorded below, the matcher would grab whatever
+OxiDex tag was left over under a
 same-sounding name regardless of how many unrelated candidates were
 competing — bare-name comparison is group-blind. On a single-file `APE.mpc`
 corpus this manufactured 10 false VALUE diffs and one false cross-group MATCH
@@ -87,12 +103,10 @@ opening every file by hand.
 
 `parser_status()` and `family_views()` in `conformance.py` are deliberately
 inert today (`None` from parser_status, `None`/`{}` from family_views and in
-`--json-out`). Step 13's `ReadReport` (Parsed/Partial/IdentifiedOnly/
-Unsupported) will fill the first, so a format's parser status renders per
-format instead of only being inferable from "everything is MISSING". Stage
-4's `TagOccurrence` store will fill the second, so this instrument can report
-both a family-0 ExifTool-compatible view and a family-1 OxiDex-structural
-view of a comparison without another rewrite of `compare()`.
+`--json-out`). `ReadReport` and `TagOccurrence` already exist in `src/core`;
+it is these comparison hooks that remain unwired. Connecting them is remaining
+integration work, not a reason to rebuild either model. Keep parser status,
+group-family views and occurrence counts separate when adding that integration.
 
 ## Notes on comparison fairness
 

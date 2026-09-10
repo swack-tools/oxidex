@@ -60,19 +60,22 @@ oxidex --detector=magika unknown_file
 - [User Guide](https://oxidex.net/) - Installation, usage, and format support
 - [Benchmarks](https://oxidex.net/performance/#benchmark-results) - Performance comparison with Perl ExifTool
 - [API Reference](https://docs.rs/oxidex) - Rust library documentation
-- [AI Harness](docs/AI_HARNESS.md) - The autonomous fleet that closes ExifTool tag-coverage gaps, and its measured results
+- [Tag Machinery Status](docs/TAG_MACHINERY_STATUS.md) - Completed work, partial implementations and useful next steps
+- [Automation Backlog](docs/AUTOMATION-AND-TESTER-PLAN.md) - Remaining upgrade, verification and migration work
+- [AI Harness](docs/AI_HARNESS.md) - Harness architecture and historical experiments
 - [GitHub Issues](https://github.com/swack-tools/oxidex/issues) - Bug reports and feature requests
 
 ## Closing the parity gap
 
-Tag coverage is extended by an autonomous **AI harness** ("the fleet") that compares OxiDex
-against real ExifTool, asks a language model to patch the gaps it finds, and puts every candidate
-patch through a gate stack — apply, build, re-compare, targeted tests, duplicate check, reviewer,
-full test suite — before anything is committed.
+Coverage work starts with [transcribing ExifTool's declarations](docs/TRANSCRIPTION.md),
+extending shared decoding/conversion rules and routing real extraction through those tables.
+Generation, runtime activation and measured output are tracked separately.
 
-[**docs/AI_HARNESS.md**](docs/AI_HARNESS.md) documents how it works end to end and what it has
-actually produced: 67 tag gaps closed with measured evidence, per-model patch-apply rates, a full
-failure taxonomy, and an explicit list of the figures that could *not* be measured.
+[Tag Machinery Status](docs/TAG_MACHINERY_STATUS.md) records the audited integration
+commit, completed migrations, unfinished work and evidence limits. The
+[automation backlog](docs/AUTOMATION-AND-TESTER-PLAN.md) prioritizes a reproducible
+release-upgrade workflow and measured migrations. The AI harness report remains
+available as historical evidence; it is not the current coverage roadmap.
 
 ## Development
 
