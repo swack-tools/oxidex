@@ -8,7 +8,7 @@
 //! for `EXIF:Flash` do not change just because the bytes arrived inside a
 //! BPG extension instead of an APP1 segment.
 
-use crate::core::tag_conversion::raw_bytes_to_tag_value;
+use crate::core::tag_conversion::{exif_raw_conv_drops_entry, raw_bytes_to_tag_value};
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
 use crate::core::{MetadataMap, TagValue};
 use crate::io::buffered_reader::BufferedReader;
@@ -73,6 +73,13 @@ pub fn parse_embedded_exif(tiff_data: &[u8], metadata: &mut MetadataMap) -> bool
         }
         if *tag_id == GPS_IFD_POINTER && bytes.len() >= 4 {
             gps_ifd_offset = EndianReader::new(bytes, io_order).u32_at(0).map(u64::from);
+            continue;
+        }
+
+        // An Exif::Main RawConv that returns undef creates no tag at all
+        // (PanasonicTitle / PanasonicTitle2 when Panasonic's fixed-size field
+        // is all NUL, Exif.pm 13.59:3849-3873).
+        if exif_raw_conv_drops_entry(*tag_id, bytes) {
             continue;
         }
 
@@ -154,6 +161,75 @@ mod tests {
         data.extend_from_slice(b"Ph\0\0");
         data.extend_from_slice(&0u32.to_le_bytes()); // next IFD
         data
+    }
+
+    /// Minimal little-endian TIFF block whose IFD0 carries the given
+    /// entries; payloads longer than four bytes are stored after the IFD.
+    fn tiff_with_entries(entries: &[(u16, u16, &[u8])]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&0x002Au16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        let ifd_end = 8 + 2 + entries.len() * 12 + 4;
+        let mut tail: Vec<u8> = Vec::new();
+        for (tag, field_type, payload) in entries {
+            data.extend_from_slice(&tag.to_le_bytes());
+            data.extend_from_slice(&field_type.to_le_bytes());
+            data.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            if payload.len() <= 4 {
+                let mut inline = [0u8; 4];
+                inline[..payload.len()].copy_from_slice(payload);
+                data.extend_from_slice(&inline);
+            } else {
+                data.extend_from_slice(&((ifd_end + tail.len()) as u32).to_le_bytes());
+                tail.extend_from_slice(payload);
+            }
+        }
+        data.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        data.extend_from_slice(&tail);
+        data
+    }
+
+    /// Exif.pm 13.59:3849-3873: `RawConv => 'length($val) ? $val : undef'`
+    /// on PanasonicTitle (0xc6d2) / PanasonicTitle2 (0xc6d3) means an
+    /// all-NUL field produces no tag at all -- not "", not a binary
+    /// placeholder -- while a NUL-padded value prints exactly.
+    #[test]
+    fn panasonic_title_rawconv_undef_creates_no_tag() {
+        let mut title2 = b"9999:99:99 00:00:00".to_vec();
+        title2.resize(128, 0);
+        let block = tiff_with_entries(&[
+            (0x013B, 2, b"Ph\0"),
+            (0xC6D2, 7, &[0u8; 64]),
+            (0xC6D3, 7, &title2),
+        ]);
+        let mut metadata = MetadataMap::new();
+        assert!(parse_embedded_exif(&block, &mut metadata));
+        assert_eq!(metadata.get_string("IFD0:Artist"), Some("Ph"));
+        assert_eq!(
+            metadata.get("IFD0:PanasonicTitle"),
+            None,
+            "64 NUL bytes must create no PanasonicTitle, got {:?}",
+            metadata.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            metadata.get_string("IFD0:PanasonicTitle2"),
+            Some("9999:99:99 00:00:00")
+        );
+
+        // 128 NUL bytes for PanasonicTitle2, and a type-2 (ASCII) empty
+        // string for PanasonicTitle: the same empty `string` read, dropped.
+        let block = tiff_with_entries(&[
+            (0x013B, 2, b"Ph\0"),
+            (0xC6D2, 2, b"\0"),
+            (0xC6D3, 7, &[0u8; 128]),
+        ]);
+        let mut metadata = MetadataMap::new();
+        assert!(parse_embedded_exif(&block, &mut metadata));
+        assert_eq!(metadata.get_string("IFD0:Artist"), Some("Ph"));
+        assert_eq!(metadata.get("IFD0:PanasonicTitle"), None);
+        assert_eq!(metadata.get("IFD0:PanasonicTitle2"), None);
     }
 
     #[test]

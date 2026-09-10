@@ -7,7 +7,8 @@ use super::{FileReader, MetadataMap, TagValue};
 use crate::core::formatters::composite_image_exposure_times::format_composite_image_exposure_times;
 use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::{
-    apply_tile_offsets_value_conv, gps_coordinate_degrees, raw_bytes_to_tag_value,
+    apply_tile_offsets_value_conv, exif_raw_conv_drops_entry, gps_coordinate_degrees,
+    raw_bytes_to_tag_value,
 };
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::geotiff_parser;
@@ -639,6 +640,13 @@ pub(crate) fn process_tiff_ifd_tags<'a>(
             continue;
         }
 
+        // An Exif::Main RawConv that returns undef creates no tag at all
+        // (PanasonicTitle / PanasonicTitle2 when Panasonic's fixed-size field
+        // is all NUL, Exif.pm 13.59:3849-3873).
+        if exif_raw_conv_drops_entry(*tag_id, bytes) {
+            continue;
+        }
+
         // Convert tag to metadata
         let tag_name = lookup_tag_name(*tag_id, ifd_name);
         // Exif.pm 0x140 declares `Format => 'binary', Binary => 1`, so the
@@ -848,6 +856,12 @@ pub fn parse_exif_subifd(
                 let iop_offset = read_u32(bytes, byte_order);
                 interop_ifd_offset = Some(iop_offset as u64);
                 // Don't add the pointer tag to metadata - we'll parse the sub-IFD instead
+                continue;
+            }
+
+            // Exif::Main's RawConv-undef entries (Exif.pm 13.59:3849-3873)
+            // create no tag in any IFD the table serves.
+            if exif_raw_conv_drops_entry(*tag_id, bytes) {
                 continue;
             }
 

@@ -23,6 +23,52 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 // PUBLIC API
 // ============================================================================
 
+/// Whether ExifTool's `RawConv` for this `Image::ExifTool::Exif::Main` entry
+/// evaluates to `undef`, in which case ExifTool never creates the tag.
+///
+/// `raw_bytes_to_tag_value` returns a `TagValue`, not an `Option`, so it has
+/// no way to say "no tag"; every site that inserts an Exif::Main directory
+/// entry asks here first and skips the entry on `true`.
+///
+/// Exif.pm 13.59:3849-3873 -- 0xc6d2 `PanasonicTitle` and 0xc6d3
+/// `PanasonicTitle2`: `RawConv => 'length($val) ? $val : undef'`, because
+/// "panasonic always records this tag (64 zero bytes), so ignore it unless
+/// it contains valid information" (128 zero bytes for PanasonicTitle2).
+/// `$val` there is the `Format => 'string'` read, so a field that is NUL from
+/// its first byte is empty, however many bytes it occupies.
+#[must_use]
+pub fn exif_raw_conv_drops_entry(tag_id: u16, bytes: &[u8]) -> bool {
+    matches!(tag_id, 0xC6D2 | 0xC6D3) && exif_string_read(bytes).is_empty()
+}
+
+/// ExifTool's `ReadValue` for `Format => 'string'` (ExifTool.pm:6308-6311):
+/// the raw bytes with the first NUL and everything after it removed
+/// (`$vals[0] =~ s/\0.*//s if $format eq 'string'`). Nothing else is
+/// trimmed -- trailing blanks survive; only Make/Model/Artist/Copyright strip
+/// them, and they do it in their own `RawConv`, not here.
+fn exif_string_read(bytes: &[u8]) -> &[u8] {
+    let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    &bytes[..end]
+}
+
+/// The printed value of PanasonicTitle / PanasonicTitle2 (Exif.pm
+/// 13.59:3849-3873) once `RawConv` has kept it: the `string` read, then
+/// `ValueConv => '$self->Decode($val, "UTF8")'`. Under the default `UTF8`
+/// Charset, `Decode` is the identity -- it re-codes only `if ($from ne $to
+/// and length $val)` (ExifTool.pm:6349) -- so the bytes reach the writer as
+/// stored, and the `-j` writer then runs `XMP::FixUTF8` over them ("JSON
+/// strings must be valid UTF8", exiftool:3822-3823). `fix_utf8` is that
+/// routine, transcribed from XMP.pm:2943-2975; valid UTF-8 (every corpus
+/// carrier) passes through it byte for byte.
+fn panasonic_title_value(bytes: &[u8]) -> String {
+    let text = exif_string_read(bytes);
+    // `fix_utf8` returns `None` only if its own output were not UTF-8, which
+    // its accept rules rule out; the fallback is spelled out rather than
+    // unwrapped so a parser never panics on a value.
+    crate::exiftool_tables::runtime::fix_utf8(text)
+        .unwrap_or_else(|| String::from_utf8_lossy(text).into_owned())
+}
+
 /// Converts raw bytes from IFD to a TagValue.
 ///
 /// This function interprets raw bytes according to the EXIF field type,
@@ -82,15 +128,19 @@ pub fn raw_bytes_to_tag_value(
         return TagValue::new_string(text);
     }
 
-    // Exif.pm 0xc6d3 (`PanasonicTitle2`) is physically UNDEFINED but
-    // explicitly overrides its format to string. PanasonicDMC-TZ57.jpg
-    // stores a NUL-padded timestamp in this 128-byte field.
-    if tag_id == 0xC6D3 && field_type == 7 {
-        let decoded = String::from_utf8_lossy(bytes);
-        let text = decoded.split('\0').next().unwrap_or_default();
-        if !text.is_empty() {
-            return TagValue::new_string(text);
-        }
+    // Exif.pm 13.59:3849-3873 -- 0xc6d2 `PanasonicTitle` and 0xc6d3
+    // `PanasonicTitle2` are declared `Format => 'string'` ("written
+    // incorrectly as 'undef'"), and ProcessExif substitutes a tag's declared
+    // Format for the written one (Exif.pm:6729-6737), so the bytes are read
+    // as a string whatever type Panasonic wrote. The empty read is
+    // `RawConv => 'length($val) ? $val : undef'` -- no tag at all -- which
+    // the Exif::Main insert sites ask `exif_raw_conv_drops_entry` about
+    // before calling here; reaching this point with an empty read reports
+    // "" rather than inventing a binary placeholder ExifTool never prints.
+    // PanasonicDMC-TZ57.jpg stores a NUL-padded timestamp in the 128-byte
+    // PanasonicTitle2 field.
+    if matches!(tag_id, 0xC6D2 | 0xC6D3) {
+        return TagValue::new_string(panasonic_title_value(bytes));
     }
 
     // Exif.pm 0x9287 (`LearningOptOutIn`) is a variable-length int16u
@@ -1615,6 +1665,57 @@ mod tests {
             raw_bytes_to_tag_value(b"RICOH      \0", 2, 12, 0x010F, ByteOrder::LittleEndian);
 
         assert_eq!(value.as_string(), Some("RICOH"));
+    }
+
+    /// Exif.pm 13.59:3849-3873: Panasonic always writes PanasonicTitle as 64
+    /// NUL bytes and PanasonicTitle2 as 128 (`undef[64] read as string[64]`
+    /// under `-v3` on every one of the census's 243 carriers), and
+    /// `RawConv => 'length($val) ? $val : undef'` drops both. The written
+    /// type is irrelevant: ProcessExif reads the declared `Format =>
+    /// 'string'` whatever the entry says (Exif.pm:6729-6737).
+    #[test]
+    fn panasonic_title_all_nul_field_is_dropped_by_rawconv() {
+        assert!(exif_raw_conv_drops_entry(0xC6D2, &[0u8; 64]));
+        assert!(exif_raw_conv_drops_entry(0xC6D3, &[0u8; 128]));
+        // The odd sizes the corpus also carries (undef[64] / undef[256] for
+        // PanasonicTitle2) are the same read.
+        assert!(exif_raw_conv_drops_entry(0xC6D3, &[0u8; 64]));
+        assert!(exif_raw_conv_drops_entry(0xC6D3, &[0u8; 256]));
+        // A type-2 (ASCII) empty string is one NUL: the same empty read.
+        assert!(exif_raw_conv_drops_entry(0xC6D2, b"\0"));
+        assert!(exif_raw_conv_drops_entry(0xC6D3, b""));
+        // Any other tag is none of this function's business.
+        assert!(!exif_raw_conv_drops_entry(0x010F, &[0u8; 64]));
+        assert!(!exif_raw_conv_drops_entry(0xC6D4, &[0u8; 64]));
+    }
+
+    /// A NUL-padded value survives RawConv and reads as ExifTool's `string`
+    /// (ExifTool.pm:6311 `s/\0.*//s`): cut at the first NUL, nothing else
+    /// trimmed. PanasonicDMC-TZ57.jpg's PanasonicTitle2 is the corpus case.
+    #[test]
+    fn panasonic_title_nul_padded_value_reads_exactly() {
+        let mut bytes = b"9999:99:99 00:00:00".to_vec();
+        bytes.resize(128, 0);
+        assert!(!exif_raw_conv_drops_entry(0xC6D3, &bytes));
+        let value = raw_bytes_to_tag_value(&bytes, 7, 128, 0xC6D3, ByteOrder::LittleEndian);
+        assert_eq!(value.as_string(), Some("9999:99:99 00:00:00"));
+
+        // PanasonicTitle takes the same path, written as ASCII or undef.
+        let mut bytes = b"Baby \0garbage".to_vec();
+        bytes.resize(64, 0);
+        for field_type in [2u16, 7] {
+            let value =
+                raw_bytes_to_tag_value(&bytes, field_type, 64, 0xC6D2, ByteOrder::LittleEndian);
+            assert_eq!(value.as_string(), Some("Baby "), "field type {field_type}");
+        }
+
+        // The field is UTF-8 ("this text is UTF-8 encoded (hooray!)", Exif.pm
+        // 13.59:3850); Decode($val,"UTF8") is the identity under the default
+        // Charset, so multi-byte characters print as stored.
+        let mut bytes = "caf\u{e9} \u{1f600}".as_bytes().to_vec();
+        bytes.resize(64, 0);
+        let value = raw_bytes_to_tag_value(&bytes, 7, 64, 0xC6D2, ByteOrder::LittleEndian);
+        assert_eq!(value.as_string(), Some("caf\u{e9} \u{1f600}"));
     }
 
     #[test]

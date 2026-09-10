@@ -7,7 +7,7 @@ use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
 use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
-use crate::core::tag_conversion::raw_bytes_to_tag_value;
+use crate::core::tag_conversion::{exif_raw_conv_drops_entry, raw_bytes_to_tag_value};
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
 use crate::exiftool_tables::{decode_binary_table, find_table};
 use crate::io::EndianReader;
@@ -84,18 +84,20 @@ pub fn process_jfif_segments(
             // `1.01` and `1.02` survived the round trip by luck, which is why
             // only the 14 corpus files that are version 1.00 ever showed it.
             //
-            // Store the same string that the `JPEG:` alias below already
-            // builds -- and that the two (dead) JFIF parsers in
-            // `parsers/jpeg/app_segments/app0.rs` and
-            // `parsers/jpeg/jfif_parser.rs` already assert in their tests.
+            // Store the same string that the (dead, uncalled) parser in
+            // `parsers/jpeg/jfif_parser.rs` already asserts in its tests.
+            //
+            // Each of the four tags is inserted exactly once, under `JFIF:`.
+            // `%Image::ExifTool::JFIF::Main` is their only home -- ExifTool
+            // has no `JPEG:JFIFVersion` -- and an earlier revision's
+            // `JPEG:`-prefixed copies ("for format-specific tagging") had no
+            // reader anywhere in the crate and scored EXTRA on every JFIF file
+            // (3,117 rows under conformance.py over the 4,238-file corpus at
+            // 25a2109e). `jfif_emits_each_tag_once_under_jfif_group` below pins
+            // their absence.
             let jfif_version = format!("{}.{:02}", version_major, version_minor);
             metadata.insert(
                 "JFIF:JFIFVersion".to_string(),
-                TagValue::String(jfif_version.clone()),
-            );
-            // Also add JPEG: prefixed version for format-specific tagging
-            metadata.insert(
-                "JPEG:JFIFVersion".to_string(),
                 TagValue::String(jfif_version),
             );
 
@@ -109,29 +111,14 @@ pub fn process_jfif_segments(
                 "JFIF:ResolutionUnit".to_string(),
                 TagValue::String(unit_string.to_string()),
             );
-            // Also add JPEG: prefixed version for format-specific tagging
-            metadata.insert(
-                "JPEG:ResolutionUnit".to_string(),
-                TagValue::String(unit_string.to_string()),
-            );
 
             metadata.insert(
                 "JFIF:XResolution".to_string(),
                 TagValue::Integer(x_density as i64),
             );
-            // Also add JPEG: prefixed version for format-specific tagging
-            metadata.insert(
-                "JPEG:XResolution".to_string(),
-                TagValue::Integer(x_density as i64),
-            );
 
             metadata.insert(
                 "JFIF:YResolution".to_string(),
-                TagValue::Integer(y_density as i64),
-            );
-            // Also add JPEG: prefixed version for format-specific tagging
-            metadata.insert(
-                "JPEG:YResolution".to_string(),
                 TagValue::Integer(y_density as i64),
             );
         }
@@ -418,6 +405,13 @@ fn process_ifd0_tags(
             {
                 metadata.insert(tag_name, TagValue::new_string(value));
             }
+            continue;
+        }
+
+        // An Exif::Main RawConv that returns undef creates no tag at all
+        // (PanasonicTitle / PanasonicTitle2 when Panasonic's fixed-size field
+        // is all NUL, Exif.pm 13.59:3849-3873).
+        if exif_raw_conv_drops_entry(*tag_id, bytes) {
             continue;
         }
 
@@ -1950,6 +1944,49 @@ fn merge(source: MetadataMap, metadata: &mut MetadataMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `%Image::ExifTool::JFIF::Main` (ExifTool.pm) is the only home of
+    /// JFIFVersion / ResolutionUnit / XResolution / YResolution: ExifTool
+    /// prints each once, under `[JFIF]`, and has no `JPEG:` group for them.
+    /// An earlier revision of `process_jfif_segments` also inserted a
+    /// `JPEG:`-prefixed copy of each, which scored EXTRA on every JFIF file
+    /// (3,117 rows under conformance.py over the 4,238-file corpus at
+    /// 25a2109e). Pin both halves: the four `JFIF:` rows carry the oracle's
+    /// values for a 1.01 / inches / 144x144 header (AppleQT-100.jpg's), and
+    /// no `JPEG:` copy exists.
+    #[test]
+    fn jfif_emits_each_tag_once_under_jfif_group() {
+        // "JFIF\0", version 1.01, units 1 (inches), 144 x 144, no thumbnail.
+        let payload: [u8; 14] = [b'J', b'F', b'I', b'F', 0, 1, 1, 1, 0, 144, 0, 144, 0, 0];
+        let segments = vec![Segment::new(0xFFE0, 2, &payload)];
+        let mut metadata = MetadataMap::new();
+        let mut diagnostics = DiagnosticSink::new();
+        process_jfif_segments(&segments, &mut metadata, &mut diagnostics);
+
+        assert_eq!(metadata.get_string("JFIF:JFIFVersion"), Some("1.01"));
+        assert_eq!(metadata.get_string("JFIF:ResolutionUnit"), Some("inches"));
+        assert_eq!(metadata.get_integer("JFIF:XResolution"), Some(144));
+        assert_eq!(metadata.get_integer("JFIF:YResolution"), Some(144));
+        for name in [
+            "JFIFVersion",
+            "ResolutionUnit",
+            "XResolution",
+            "YResolution",
+        ] {
+            let jpeg_key = format!("JPEG:{name}");
+            assert!(
+                !metadata.contains_key(&jpeg_key),
+                "{jpeg_key} must not be emitted: ExifTool has no such tag"
+            );
+            let jfif_key = format!("JFIF:{name}");
+            assert_eq!(
+                metadata.occurrences_for(&jfif_key).len(),
+                1,
+                "{jfif_key} must be emitted exactly once"
+            );
+        }
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
 
     /// `ExifTool.jpg`'s own shape: an APP10 Unicode comment segment earlier
     /// in the file than a COM segment. Both are the same `Priority => 0`

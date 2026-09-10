@@ -5,6 +5,7 @@ import importlib.util
 import unittest
 from collections import Counter
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("conformance.py")
@@ -188,6 +189,257 @@ class CompareTests(unittest.TestCase):
         # ID3v2's 16 tags plus the Composite all read correctly and match.
         self.assertEqual(len(result["matched"]), 18)
         self.assertEqual(result["renames"], [])
+
+
+class OracleKeyShapeTests(unittest.TestCase):
+    """The oracle is asked for `-G0:1:4` keys, not `-G`.
+
+    ExifTool's JSON writer keeps ONE entry per key. Under family-0 keys the
+    three MPF sub-images of combined-samples/Apple/Apple_iPhone11.jpg all
+    spell `MPF:MPImageLength`, so two of them were gone before compare()
+    ran and OxiDex's two correct rows scored EXTRA (census at 25a2109e:
+    MPImage1/2/3 EXTRA 3456/1488/166 over 4,238 files under conformance.py).
+    Family-1 qualification (`MPF:MPImage1:MPImageLength`) keeps the keys
+    distinct; split_oracle_key takes the group from the first segment and
+    the name from the last, so the report still speaks family-0 groups.
+    OxiDex keys are NOT split that way -- see split_oxidex_key and
+    OxidexKeyShapeTests.
+    """
+
+    THREE_MPF_ROWS_FROM_OXIDEX = {
+        "MPImage1:MPImageLength": 1001,
+        "MPImage2:MPImageLength": 2002,
+        "MPImage3:MPImageLength": 3003,
+    }
+
+    def test_split_oracle_key_takes_first_segment_as_group_and_last_as_name(self):
+        split = conformance.split_oracle_key
+        self.assertEqual(split("EXIF:IFD0:Make"), ("EXIF", "Make"))
+        self.assertEqual(split("File:System:FileName"), ("File", "FileName"))
+        # Family 1 == family 0: ExifTool prints one segment, not "File:File".
+        self.assertEqual(split("File:FileType"), ("File", "FileType"))
+        # A family-4 copy segment, should a caller ever ask -G0:1:4, is
+        # just another middle segment.
+        self.assertEqual(
+            split("MPF:MPImage2:Copy2:MPImageLength"), ("MPF", "MPImageLength"),
+        )
+        self.assertEqual(split("EXIF:IFD0:Copy1:Make"), ("EXIF", "Make"))
+        self.assertEqual(split("Make"), ("", "Make"))
+
+    def test_family_1_qualified_oracle_keys_match_every_mpf_sub_image(self):
+        exiftool = {
+            "MPF:MPImage1:MPImageLength": 1001,
+            "MPF:MPImage2:MPImageLength": 2002,
+            "MPF:MPImage3:MPImageLength": 3003,
+        }
+
+        result = conformance.compare(exiftool, self.THREE_MPF_ROWS_FROM_OXIDEX)
+
+        self.assertEqual(result["matched"], ["MPImageLength"] * 3)
+        self.assertEqual(result["value_diff"], [])
+        self.assertEqual(result["missing"], {})
+        self.assertEqual(result["extra"], {})
+
+    def test_family_0_collapsed_oracle_key_scores_two_correct_rows_extra(self):
+        # What the old `-G -s -j -a` invocation handed compare(): ExifTool's
+        # writer had already kept one of the three MPImageLength entries, so
+        # the other two OxiDex rows -- both correct -- could only be EXTRA.
+        # This is the defect the -G0:1 request removes; compare() itself is
+        # blameless, which is why this case passes on the old code too.
+        exiftool = {"MPF:MPImageLength": 1001}
+
+        result = conformance.compare(exiftool, self.THREE_MPF_ROWS_FROM_OXIDEX)
+
+        self.assertEqual(result["matched"], ["MPImageLength"])
+        self.assertEqual(result["value_diff"], [])
+        self.assertEqual(result["missing"], {})
+        self.assertEqual(result["extra"], {
+            "MPImage2:MPImageLength": ("MPImage2", 2002),
+            "MPImage3:MPImageLength": ("MPImage3", 3003),
+        })
+
+    def test_run_exiftool_asks_for_family_0_1_and_4_groups(self):
+        # Family 4 ('Copy N') is what keeps a repeat inside one family-1
+        # group from collapsing in ExifTool's one-entry-per-key JSON writer:
+        # residual 393/25,269 occurrences under -G0:1, 0 under -G0:1:4, over
+        # the author's 200-file subset (residual.py, pinned 13.59).
+        seen = {}
+
+        class Oracle:
+            def command(self, extra):
+                return ["exiftool", *extra]
+
+        class Done:
+            stdout = '[{"SourceFile": "x.jpg", "MPF:MPImage1:MPImageLength": 1001}]'
+
+        def fake_run(argv, **_kwargs):
+            seen["argv"] = argv
+            return Done()
+
+        with mock.patch.object(conformance.subprocess, "run", fake_run):
+            et = conformance.run_exiftool(Oracle(), "x.jpg")
+
+        self.assertEqual(seen["argv"], ["exiftool", "-G0:1:4", "-s", "-j", "-a", "x.jpg"])
+        self.assertEqual(et["MPF:MPImage1:MPImageLength"], 1001)
+
+    def test_file_type_is_read_through_split_oracle_key(self):
+        self.assertEqual(conformance.file_type({"File:FileType": "JPEG"}), "JPEG")
+        self.assertEqual(conformance.file_type({"File:File:FileType": "JPEG"}), "JPEG")
+        self.assertEqual(conformance.file_type({"FileType": "JPEG"}), "JPEG")
+        self.assertIsNone(conformance.file_type({"EXIF:IFD0:Make": "Canon"}))
+
+
+class OxidexKeyShapeTests(unittest.TestCase):
+    """OxiDex keys split by the pre-f3b5f5e6 rule: first segment, then the rest.
+
+    OxiDex emits keys whose middle segment is part of the NAME, not a group
+    (src/parsers/document/ooxml.rs 'OOXML:Custom:{name}', src/writers/
+    png_writer.rs 'PNG:{chunk}:{keyword}'; 26 such keys on t/images/OOXML.docx
+    and one on PNG.png under the 25a2109e binary). f3b5f5e6 applied the
+    oracle's last-segment rule to both sides, which rewrote 'Custom:Division'
+    to 'Division' and matched it against the oracle's 'XML:Division' -- the
+    census stopped seeing a name defect that is OxiDex's to fix. The two
+    sides have their own rules now; this class pins the OxiDex one.
+    """
+
+    def test_split_oxidex_key_keeps_everything_after_the_group_as_the_name(self):
+        split = conformance.split_oxidex_key
+        self.assertEqual(split("OOXML:Custom:Division"), ("OOXML", "Custom:Division"))
+        self.assertEqual(split("PNG:tEXt:comment"), ("PNG", "tEXt:comment"))
+        self.assertEqual(split("IFD0:Make"), ("IFD0", "Make"))
+        self.assertEqual(split("MPImage2:MPImageLength"), ("MPImage2", "MPImageLength"))
+        self.assertEqual(split("Make"), ("", "Make"))
+
+    def test_the_two_rules_differ_exactly_where_a_name_carries_a_colon(self):
+        # Same input, two answers: that is why tags_by_name refuses a default.
+        self.assertEqual(conformance.split_oracle_key("OOXML:Custom:Division"),
+                         ("OOXML", "Division"))
+        self.assertEqual(conformance.split_oxidex_key("OOXML:Custom:Division"),
+                         ("OOXML", "Custom:Division"))
+        self.assertEqual(conformance.split_oracle_key("PNG:tEXt:comment"),
+                         ("PNG", "comment"))
+        self.assertEqual(conformance.split_oxidex_key("PNG:tEXt:comment"),
+                         ("PNG", "tEXt:comment"))
+
+    def test_tags_by_name_requires_the_side_to_be_named(self):
+        with self.assertRaises(TypeError):
+            conformance.tags_by_name({"IFD0:Make": "Canon"})
+
+    def test_oxidex_colon_in_name_is_exposed_not_masked(self):
+        # A non-distinctive value ('42' is too short for infer_renames to
+        # pair on), so the pair cannot be explained away as a RENAME either:
+        # the oracle's 'Division' is MISSING and OxiDex's 'Custom:Division'
+        # is EXTRA -- exactly what the 25a2109e script reported. Under
+        # f3b5f5e6's shared last-segment rule this compared as one match.
+        result = conformance.compare(
+            {"XML:Division": "42"},
+            {"OOXML:Custom:Division": "42"},
+        )
+
+        self.assertEqual(result["matched"], [])
+        self.assertEqual(result["value_diff"], [])
+        self.assertEqual(result["missing"], {"Division": ("XML", "42")})
+        self.assertEqual(result["extra"], {"Custom:Division": ("OOXML", "42")})
+        self.assertEqual(result["renames"], [])
+
+    def test_oxidex_png_chunk_key_is_exposed_as_a_rename_when_the_value_identifies_it(self):
+        # PNG.png: the oracle prints 'PNG:Comment' = 'test comment', OxiDex
+        # 'PNG:tEXt:comment'. The value is distinctive, so infer_renames
+        # pairs them and reports the RENAME 'tEXt:comment' -> 'Comment' --
+        # a name fix OxiDex owes, visible in the report, not a silent match.
+        result = conformance.compare(
+            {"PNG:Comment": "test comment"},
+            {"PNG:tEXt:comment": "test comment"},
+        )
+
+        self.assertEqual(result["matched"], [])
+        self.assertEqual(result["renames"], [("tEXt:comment", "Comment", "test comment")])
+        self.assertEqual(result["missing"], {})
+        self.assertEqual(result["extra"], {})
+
+
+class LeftoverOccurrenceTests(unittest.TestCase):
+    """Every unmatched occurrence is one report row; none is overwritten.
+
+    compare() keys leftover rows by occurrence_name(family-0 group, name).
+    Under -G0:1 two oracle rows from different family-1 groups spell the
+    same family-0 key, and the dict write was last-writer-wins: on DNG.dng
+    'EXIF:Compression' survived with IFD1's 'JPEG' while IFD0's
+    'Uncompressed' vanished, so MISSING was a lower bound (187 occurrences
+    lost over a reviewer's 200-file format-breadth subset; 969 leftovers ->
+    968 rows on a JPEG subset). place_occurrence suffixes ' (2)', ' (3)'.
+    """
+
+    def test_two_leftover_oracle_occurrences_sharing_a_family_0_key_both_count(self):
+        exiftool = {
+            "EXIF:IFD0:Compression": "Uncompressed",
+            "EXIF:IFD1:Compression": "JPEG",
+        }
+
+        result = conformance.compare(exiftool, {})
+
+        self.assertEqual(len(result["missing"]), 2)
+        self.assertEqual(result["missing"], {
+            "EXIF:Compression": ("EXIF", "Uncompressed"),
+            "EXIF:Compression (2)": ("EXIF", "JPEG"),
+        })
+        self.assertEqual(result["matched"], [])
+        self.assertEqual(result["value_diff"], [])
+        self.assertEqual(result["extra"], {})
+
+    def test_first_occurrence_in_oracle_order_keeps_the_bare_key(self):
+        exiftool = {
+            "EXIF:IFD0:XResolution": 72,
+            "EXIF:IFD1:XResolution": 300,
+            "EXIF:SubIFD:XResolution": 600,
+        }
+
+        result = conformance.compare(exiftool, {})
+
+        self.assertEqual(list(result["missing"].items()), [
+            ("EXIF:XResolution", ("EXIF", 72)),
+            ("EXIF:XResolution (2)", ("EXIF", 300)),
+            ("EXIF:XResolution (3)", ("EXIF", 600)),
+        ])
+
+    def test_a_matched_occurrence_does_not_shift_the_suffixes_of_the_leftovers(self):
+        exiftool = {
+            "EXIF:IFD0:Compression": "Uncompressed",
+            "EXIF:IFD1:Compression": "JPEG",
+            "EXIF:SubIFD:Compression": "JPEG",
+        }
+        oxidex = {"IFD1:Compression": "JPEG"}
+
+        result = conformance.compare(exiftool, oxidex)
+
+        # Tier 2 (exact value, any group) consumes ONE of the two 'JPEG'
+        # rows; the two leftovers are reported, in order, without a gap.
+        self.assertEqual(result["matched"], ["Compression"])
+        self.assertEqual(result["missing"], {
+            "EXIF:Compression": ("EXIF", "Uncompressed"),
+            "EXIF:Compression (2)": ("EXIF", "JPEG"),
+        })
+        self.assertEqual(result["extra"], {})
+
+    def test_place_occurrence_is_symmetric_for_the_extra_side(self):
+        # An `oxidex -j` dict cannot collide (its key IS 'group:name'), so
+        # the EXTRA path is exercised through the helper directly.
+        rows = {}
+        self.assertEqual(conformance.place_occurrence(rows, "PNG:Comment", "PNG", "a"),
+                         "PNG:Comment")
+        self.assertEqual(conformance.place_occurrence(rows, "PNG:Comment", "PNG", "b"),
+                         "PNG:Comment (2)")
+        self.assertEqual(conformance.place_occurrence(rows, "PNG:Comment", "PNG", "c"),
+                         "PNG:Comment (3)")
+        self.assertEqual(rows, {
+            "PNG:Comment": ("PNG", "a"),
+            "PNG:Comment (2)": ("PNG", "b"),
+            "PNG:Comment (3)": ("PNG", "c"),
+        })
+
+    def test_unique_names_are_untouched(self):
+        result = conformance.compare({"EXIF:IFD0:Make": "Canon"}, {})
+        self.assertEqual(result["missing"], {"Make": ("EXIF", "Canon")})
 
 
 class SeverityTests(unittest.TestCase):
