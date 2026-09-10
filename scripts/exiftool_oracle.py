@@ -426,6 +426,57 @@ def resolve_or_exit(explicit: str | None = None) -> Oracle:
     return oracle
 
 
+# --- The corpus gate's oracle read shape and key rules, mirrored ------------
+#
+# tools/exiftool-tables/conformance.py (the corpus gate) asks the oracle for
+# `-G0:1:4 -s -j -a` and splits the two sides' keys by two different rules.
+# scripts/ consumers that read per-file oracle JSON and match it against
+# oxidex output must use exactly that shape, and cannot sanely import it:
+# conformance.py imports THIS module and instrument, and carries an argparse
+# main. So the three names below are verbatim mirrors, pinned identical to
+# conformance.py's by scripts/test_exiftool_oracle.py -- conformance.py can
+# later import them from here; never write a third copy.
+#
+# Why the shape matters: under plain -G (or -G1) ExifTool's JSON writer keeps
+# ONE entry per printed key (pinned exiftool:2688-2689, 2745-2747), so every
+# MPF sub-image (MPImage1/2/3), every IFD0/IFD1 pair and every same-group
+# repeat vanishes before the caller sees it. Family 4 is ExifTool's per-
+# instance 'Copy N' group (lib/Image/ExifTool.pm:3856), which is what makes
+# every repeat a distinct key. Measured on t/images/ExifTool.jpg with the
+# pinned 13.59 (raw JSON-key regex, the duplicate_loss_scan.py:1120 method):
+# `-j -G` 402 keys, `-j -G1` 433, `-G0:1:4 -s -j -a` 444. -a is redundant
+# under -j (exiftool:1380-1382 sets Duplicates=1) but harmless, and matches
+# the gate's argv byte for byte.
+CENSUS_ORACLE_FLAGS = ("-G0:1:4", "-s", "-j", "-a")
+
+
+def split_oracle_key(k: str) -> tuple[str, str]:
+    """-> (group, name) for an ExifTool JSON key. ORACLE side only.
+
+    Mirror of conformance.split_oracle_key. Under -G0:1:4 a key is
+    'EXIF:IFD0:Make', 'EXIF:IFD0:Copy1:Make' or -- when the families
+    coincide -- 'File:FileType'; the reporting GROUP is the first segment
+    (family 0) and the NAME the last. ExifTool tag names never contain ':'
+    (audited over the 4,238-file census at 25a2109e), so last-segment is
+    exact on THIS side and wrong for oxidex keys -- see split_oxidex_key.
+    """
+    if ":" not in k:
+        return ("", k)
+    segs = k.split(":")
+    return (segs[0], segs[-1])
+
+
+def split_oxidex_key(k: str) -> tuple[str, str]:
+    """-> (group, name) for an `oxidex -j` key: first segment, then the rest.
+
+    Mirror of conformance.split_oxidex_key. OxiDex prints keys whose middle
+    segment is part of the NAME ('OOXML:Custom:Division', 'PNG:tEXt:comment'),
+    a defect the census must keep exposing; the oracle's last-segment rule
+    would silently rewrite those to 'Division' and report a match.
+    """
+    return tuple(k.split(":", 1)) if ":" in k else ("", k)
+
+
 def run_json(oracle: Oracle, args: list[str], path: str | Path) -> Any:
     """Run the oracle and parse its JSON with floats left as strings.
 
@@ -433,6 +484,10 @@ def run_json(oracle: Oracle, args: list[str], path: str | Path) -> Any:
     ExifTool's ``"1.80"`` into ``1.8``, and the harness then reports a value
     difference against an OxiDex output that was byte-identical. That has been
     rediscovered as a "bug" at least five separate times in this repo.
+
+    ``args`` decides which occurrences survive: pass ``CENSUS_ORACLE_FLAGS``
+    (and split the keys with :func:`split_oracle_key`) unless the caller has
+    a documented reason to read a lossy family-0/family-1 surface.
     """
     out = subprocess.run(  # nosec B603 -- list-argv, no shell
         oracle.command([*args, str(path)]),

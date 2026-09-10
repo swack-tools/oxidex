@@ -281,6 +281,18 @@ def main() -> None:
             print(f"[{module}:{table}] WRITE_NOOP: {out.strip()[:150]}", file=sys.stderr)
             continue
 
+        # Both reads below stay `-j -G1` on purpose. ExifTool's JSON writer
+        # keeps ONE entry per printed key, so under -G1 a repeat inside a
+        # single family-1 group collapses (433 vs 444 raw keys on t/images/
+        # ExifTool.jpg against the corpus gate's lossless `-G0:1:4 -s -j -a`,
+        # scripts/exiftool_oracle.CENSUS_ORACLE_FLAGS; pinned 13.59). That
+        # cannot hide what this script measures: find_key looks up exactly
+        # the Module:Tag it just wrote, then the bare name, first hit wins,
+        # and the oxidex side (-j -e) is read by the same rule -- a same-
+        # group second occurrence would be a block the write did not create.
+        # Adopting -G0:1:4 here would need find_key to split with
+        # split_oracle_key and would only add Copy-N keys this per-tag
+        # report never reads. Not a corpus-scoring instrument.
         # round trip: raw re-read via exiftool -n
         et_raw = read_json(exiftool_cmd + ["-n", "-j", "-G1", str(work_file)])
         # PrintConv'd reads for the oxidex comparison

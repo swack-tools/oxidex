@@ -5846,7 +5846,10 @@ def default_extract_live_evidence(repo_root, sample_path, tag_keys):
     the target tags on one real sample file -- NOT the comparison JSON (whose
     matched_tags carries no values, the unimplementable-recheck-evidence
     critique this resolves). Renders "<tag>: exiftool=<v> oxidex=<v>
-    (post-fix)" per tag found in either output.
+    (post-fix)" per tag found in either output. The oracle is read with
+    the corpus gate's lossless `-G0:1:4 -s -j -a` shape and both sides'
+    keys are split by their own rule (see lookup below); a tag with
+    several occurrences renders every distinct value.
 
     target/debug is tried first, target/fixloop next (see cargo_build's
     "fixloop" profile -- the one this loop's own build step actually
@@ -5868,8 +5871,18 @@ def default_extract_live_evidence(repo_root, sample_path, tag_keys):
         # unresolvable/skewed/degraded oracle raises OracleError (a RuntimeError)
         # and lands in the same best-effort "" as a missing binary did before.
         oracle = shared_exiftool_oracle()
+        # The corpus gate's shape (-G0:1:4 -s -j -a, exiftool_oracle.
+        # CENSUS_ORACLE_FLAGS), not `-j -G`: ExifTool's JSON writer keeps ONE
+        # entry per printed key, so under family-0 keys MPImage1/2/3,
+        # IFD0/IFD1 and every same-group repeat collapse to whichever copy
+        # printed first -- 402 keys under `-j -G` vs 444 under the census
+        # flags on t/images/ExifTool.jpg (pinned 13.59). With the old
+        # bare-name fallback below that surviving copy's value was then
+        # rendered under a tag_key naming ANOTHER group: a plausible,
+        # precisely-formatted, wrong `exiftool=` the reviewer cannot tell
+        # from a real one.
         et_proc = subprocess.run(  # nosec B603
-            oracle.command(["-j", "-G", str(sample_path)]),
+            oracle.command([*exiftool_oracle.CENSUS_ORACLE_FLAGS, str(sample_path)]),
             capture_output=True, text=True, timeout=30,
         )
         ox_proc = subprocess.run(  # nosec B603
@@ -5886,16 +5899,59 @@ def default_extract_live_evidence(repo_root, sample_path, tag_keys):
     except (OSError, subprocess.SubprocessError, ValueError, IndexError, RuntimeError):
         return ""
 
-    def lookup(tags, tag_key):
-        name = tag_key.rsplit(":", 1)[-1]
+    def lookup(tags, tag_key, split, structure):
+        """Value(s) for tag_key in one side's JSON, keyed by that side's own
+        rule (split_oracle_key for the oracle's 'EXIF:IFD0:Copy1:Make',
+        split_oxidex_key for oxidex's 'IFD0:Make' / 'OOXML:Custom:Division').
+
+        tag_key is a fix_gap key -- '<family>:<name>' where the family is a
+        family-0 group ('EXIF:Make') or, for value_differences, whatever the
+        comparison spelled ('IFD0:Make'). A group-qualified hit wins: name
+        equal and the tag_key group equal to the split group or to one of
+        the key's structural groups -- the family-1 / Copy N middle segments
+        on the oracle side; on the oxidex side (which spells family-1
+        groups: 'ExifIFD:ExposureTime', 'Canon:ExposureTime') the family-0
+        parent the oracle's own -G0:1 keys assign to that group. Only when
+        no group matches does the bare name stand in, so a group-spelling
+        mismatch between the two tools still yields evidence but a same-
+        named tag in another group no longer does (on t/images/Canon.jpg
+        the old first-hit lookup printed ExifIFD's ExposureTime under
+        'Canon:ExposureTime'). Every occurrence is kept: several
+        (MPImage1/2/3, IFD0/IFD1) render as the ordered list of their
+        distinct values, never just the first.
+        """
+        group, name = exiftool_oracle.split_oxidex_key(tag_key)
+        exact, by_name = [], []
         for k, v in tags.items():
-            if k == tag_key or k.rsplit(":", 1)[-1] == name:
-                return v
-        return None
+            g, n = split(k)
+            if n != name:
+                continue
+            by_name.append(v)
+            if g == group or group in structure(k):
+                exact.append(v)
+        distinct = []
+        for v in exact or by_name:
+            if v not in distinct:
+                distinct.append(v)
+        if not distinct:
+            return None
+        return distinct[0] if len(distinct) == 1 else distinct
+
+    # family-1 group -> family-0 group, read off the oracle's own keys
+    # ('EXIF:ExifIFD:ExposureTime' says ExifIFD sits under EXIF), so an oxidex
+    # 'ExifIFD:...' key can answer a family-0 'EXIF:...' tag_key exactly.
+    parent = {}
+    for k in et_tags:
+        segs = k.split(":")
+        if len(segs) >= 3 and not re.fullmatch(r"Copy\d+", segs[1]):
+            parent.setdefault(segs[1], segs[0])
 
     lines = []
     for tag_key in tag_keys:
-        et_val, ox_val = lookup(et_tags, tag_key), lookup(ox_tags, tag_key)
+        et_val = lookup(et_tags, tag_key, exiftool_oracle.split_oracle_key,
+                        lambda k: k.split(":")[1:-1])
+        ox_val = lookup(ox_tags, tag_key, exiftool_oracle.split_oxidex_key,
+                        lambda k: (parent[g],) if (g := k.split(":", 1)[0]) in parent else ())
         if et_val is None and ox_val is None:
             continue
         lines.append(f"{tag_key}: exiftool={et_val!r} oxidex={ox_val!r} (post-fix)")

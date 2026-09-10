@@ -8690,6 +8690,77 @@ class DefaultExtractLiveEvidenceTests(unittest.TestCase):
             result = default_extract_live_evidence(repo, "sample.jpg", ["EXIF:FNumber"])
         self.assertIn("exiftool='1.80' oxidex='1.80'", result)
 
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_reads_the_oracle_with_the_census_flags(self, mock_run, mock_oracle):
+        # The corpus gate's lossless shape, byte for byte: under `-j -G`
+        # ExifTool's JSON writer keeps one entry per printed key, so
+        # MPImage1/2/3, IFD0/IFD1 and same-group repeats collapse to the
+        # first copy (402 vs 444 keys on t/images/ExifTool.jpg, pinned 13.59).
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.return_value = MagicMock(stdout='[{"EXIF:IFD0:Make": "Canon"}]')
+            default_extract_live_evidence(repo, "sample.jpg", ["EXIF:Make"])
+        exiftool_argv = mock_run.call_args_list[0].args[0]
+        self.assertEqual(exiftool_argv[2:-1], ["-G0:1:4", "-s", "-j", "-a"])
+        self.assertEqual(tuple(exiftool_argv[2:-1]), exiftool_oracle.CENSUS_ORACLE_FLAGS)
+        self.assertEqual(exiftool_argv[-1], "sample.jpg")
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_splits_each_side_by_its_own_rule(self, mock_run, mock_oracle):
+        # Oracle keys carry family 0 : family 1 [: Copy N] : name and are
+        # read first-segment/last-segment; oxidex keys are first-segment/
+        # rest. A family-0 tag_key ('EXIF:Make') must find 'EXIF:IFD0:Make'
+        # on the oracle side and, by bare-name fallback, 'IFD0:Make' on the
+        # oxidex side (oxidex spells family-1 groups).
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.side_effect = [
+                MagicMock(stdout='[{"EXIF:IFD0:Make": "Canon", "EXIF:IFD0:Copy1:Model": "R6"}]'),
+                MagicMock(stdout='[{"IFD0:Make": "Canon", "IFD0:Model": "R6"}]'),
+            ]
+            result = default_extract_live_evidence(repo, "sample.jpg", ["EXIF:Make", "IFD0:Model"])
+        self.assertEqual(result.splitlines(), [
+            "EXIF:Make: exiftool='Canon' oxidex='Canon' (post-fix)",
+            "IFD0:Model: exiftool='R6' oxidex='R6' (post-fix)",
+        ])
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_group_qualified_hit_beats_a_same_named_tag_in_another_group(self, mock_run, mock_oracle):
+        # The old bare-name-first-hit lookup rendered IFD0's Make under
+        # 'XMP:Make' -- a plausible, wrong `exiftool=` a reviewer cannot
+        # distinguish from a real one.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.side_effect = [
+                MagicMock(stdout='[{"EXIF:IFD0:Make": "Canon", "XMP:XMP-tiff:Make": "Nikon"}]'),
+                MagicMock(stdout='[{"IFD0:Make": "Canon", "XMP-tiff:Make": "Nikon"}]'),
+            ]
+            result = default_extract_live_evidence(repo, "sample.jpg", ["XMP:Make"])
+        self.assertEqual(result, "XMP:Make: exiftool='Nikon' oxidex='Nikon' (post-fix)")
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_every_occurrence_of_a_repeated_tag_is_rendered(self, mock_run, mock_oracle):
+        # Three MPF sub-images: under -G0:1:4 they are three keys, and the
+        # evidence line carries all three distinct values in order rather
+        # than whichever copy printed first.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.side_effect = [
+                MagicMock(stdout='[{"MPF:MPImage1:MPImageLength": "10", '
+                                 '"MPF:MPImage2:MPImageLength": "20", '
+                                 '"MPF:MPImage3:MPImageLength": "20"}]'),
+                MagicMock(stdout='[{"MPImage1:MPImageLength": "10", '
+                                 '"MPImage2:MPImageLength": "20", '
+                                 '"MPImage3:MPImageLength": "30"}]'),
+            ]
+            result = default_extract_live_evidence(repo, "sample.jpg", ["MPF:MPImageLength"])
+        self.assertEqual(
+            result, "MPF:MPImageLength: exiftool=['10', '20'] oxidex=['10', '20', '30'] (post-fix)")
+
     @patch("model_fix_loop.shared_exiftool_oracle",
            side_effect=exiftool_oracle.OracleError("no usable perl"))
     @patch("model_fix_loop.subprocess.run")
