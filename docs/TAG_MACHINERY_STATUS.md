@@ -174,9 +174,11 @@ shared checks. Follow-up repairs on `codex/ifd-upgrade-triage` address:
   returns. Module constants are no longer attributed to a preceding test.
   Its scope remains direct path literals; aliases and indirect reads are not
   certified by this lexical check.
-- The RealAudio test resolves the genuine fixture beside the configured
-  ExifTool source. It passed with the default developer cache denied, preserving
-  its original metadata assertions. Truly absent optional data is reported.
+- RealAudio, PPM, PICT, SWF and Kyocera tests share fixture lookup beside the
+  configured ExifTool source and in its configured cache. All five original
+  metadata tests passed with the default developer cache denied. Truly absent
+  optional data is reported; present but unreadable files and dangling sample
+  symlinks still fail. These are test-infrastructure fixes, not parser changes.
 - Verification downloads its pinned source outside the checkout and installs
   the container module needed by the DOCX probe. The ordinary dirty-tree refusal
   remains enforced.

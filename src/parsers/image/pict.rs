@@ -171,27 +171,13 @@ pub fn parse_pict_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::MMapReader;
-    use std::path::Path;
-
-    fn fixture_reader() -> MMapReader {
-        // Real ExifTool test-suite fixture, not hand-authored bytes: see
-        // AGENTS.md's rule that regression fixtures must be real files.
-        let candidates = [
-            "/tmp/oxidex-exiftool-cache/combined-samples/PICT.pict",
-            "/tmp/oxidex-exiftool-cache/exiftool/t/images/PICT.pict",
-        ];
-        for candidate in candidates {
-            if let Ok(reader) = MMapReader::new(Path::new(candidate)) {
-                return reader;
-            }
-        }
-        panic!("PICT.pict fixture not found in the oxidex-exiftool-cache");
-    }
+    use crate::test_support::pinned_fixture_reader;
 
     #[test]
     fn matches_exiftool_13_59_on_the_real_fixture() {
-        let reader = fixture_reader();
+        let Some(reader) = pinned_fixture_reader("PICT.pict") else {
+            return;
+        };
         let metadata = parse_pict_metadata(&reader).expect("parses");
 
         // Cross-checked against `exiftool -a -G1 -s` (pinned 13.59) on the

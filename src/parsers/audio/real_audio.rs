@@ -215,92 +215,11 @@ pub fn parse_real_audio_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exiftool_oracle;
-    use crate::io::MMapReader;
-    use std::path::{Path, PathBuf};
-
-    fn fixture_path(exiftool: Option<&Path>, cache: &Path) -> Option<PathBuf> {
-        // CI stages the pinned tree outside the developer cache and names
-        // its script through EXIFTOOL. Prefer that tree's genuine fixture.
-        let cached_binary = exiftool_oracle::pinned_binary(cache);
-        let candidates = [exiftool, Some(cached_binary.as_path())]
-            .into_iter()
-            .flatten()
-            .filter_map(Path::parent)
-            .map(|tree| tree.join("t/images/Real.ra"))
-            .chain([cache.join("combined-samples/Real.ra")]);
-        candidates.into_iter().find(|path| path.is_file())
-    }
-
-    fn fixture_reader() -> Option<MMapReader> {
-        let named = std::env::var(exiftool_oracle::BINARY_ENV).ok();
-        let binary = named
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(Path::new);
-        let cache = exiftool_oracle::cache_dir();
-        let Some(path) = fixture_path(binary, &cache) else {
-            // Like the other optional pinned-corpus tests, a fresh clone
-            // without ExifTool's test data skips explicitly. An existing
-            // but unreadable/corrupt fixture must still fail below.
-            eprintln!(
-                "note: skipping RealAudio fixture test -- Real.ra absent beside \
-                 EXIFTOOL or under {}",
-                cache.display()
-            );
-            return None;
-        };
-        Some(MMapReader::new(&path).unwrap_or_else(|error| {
-            panic!(
-                "could not read RealAudio fixture {}: {error}",
-                path.display()
-            )
-        }))
-    }
-
-    #[test]
-    fn resolves_real_fixture_from_nondefault_source_and_cache_locations() {
-        let Some(reader) = fixture_reader() else {
-            return;
-        };
-        // Relocate the genuine sample unchanged; do not construct media or
-        // an executable pretending to be the pinned oracle.
-        let bytes = reader
-            .read(0, reader.size() as usize)
-            .expect("read fixture");
-        for relative in [
-            "source/t/images/Real.ra",
-            "cache/exiftool/t/images/Real.ra",
-            "cache/combined-samples/Real.ra",
-        ] {
-            let temp = tempfile::tempdir().expect("temporary fixture layout");
-            let expected = temp.path().join(relative);
-            std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
-            std::fs::write(&expected, bytes).unwrap();
-            let binary = temp.path().join("source/exiftool");
-            assert_eq!(
-                fixture_path(Some(&binary), &temp.path().join("cache")),
-                Some(expected)
-            );
-        }
-    }
-
-    #[test]
-    fn missing_optional_fixture_has_no_reader_path() {
-        let temp = tempfile::tempdir().expect("empty fixture layout");
-        assert_eq!(
-            fixture_path(
-                Some(&temp.path().join("source/exiftool")),
-                &temp.path().join("cache")
-            ),
-            None
-        );
-    }
+    use crate::test_support::pinned_fixture_reader;
 
     #[test]
     fn matches_exiftool_13_59_on_the_real_fixture() {
-        let Some(reader) = fixture_reader() else {
+        let Some(reader) = pinned_fixture_reader("Real.ra") else {
             return;
         };
         let metadata = parse_real_audio_metadata(&reader).expect("parses");

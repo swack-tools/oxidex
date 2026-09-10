@@ -157,3 +157,154 @@ pub fn pinned_corpus_available() -> bool {
     }
     present
 }
+
+/// Locate a genuine sample beside the configured pinned ExifTool script, then
+/// in its configured cache. Optional sample data is absent in fresh clones;
+/// metadata or read failures for a present sample must still fail the test.
+pub fn pinned_fixture_path(name: &str) -> Option<std::path::PathBuf> {
+    use crate::exiftool_oracle;
+    use std::path::Path;
+    let named = std::env::var(exiftool_oracle::BINARY_ENV).ok();
+    let binary = named
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(Path::new);
+    let cache = exiftool_oracle::cache_dir();
+    let path = fixture_path_in(name, binary, &cache);
+    if path.is_none() {
+        eprintln!(
+            "note: skipping pinned-fixture test -- {name} absent beside EXIFTOOL or under {}",
+            cache.display()
+        );
+    }
+    path
+}
+
+fn fixture_path_in(
+    name: &str,
+    exiftool: Option<&std::path::Path>,
+    cache: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    use std::path::Path;
+    let cached_binary = crate::exiftool_oracle::pinned_binary(cache);
+    let candidates = [exiftool, Some(cached_binary.as_path())]
+        .into_iter()
+        .flatten()
+        .filter_map(Path::parent)
+        .map(|tree| tree.join("t/images").join(name))
+        .chain([cache.join("combined-samples").join(name)]);
+    candidates
+        .into_iter()
+        .find(|path| match std::fs::symlink_metadata(path) {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => panic!(
+                "could not inspect pinned fixture {}: {error}",
+                path.display()
+            ),
+        })
+}
+
+/// Open an optional pinned sample without hiding a present file's read error.
+pub fn pinned_fixture_reader(name: &str) -> Option<crate::io::MMapReader> {
+    pinned_fixture_path(name).map(|path| {
+        crate::io::MMapReader::new(&path).unwrap_or_else(|error| {
+            panic!("could not read pinned fixture {}: {error}", path.display())
+        })
+    })
+}
+
+#[cfg(test)]
+mod fixture_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_real_fixture_from_nondefault_source_and_cache_locations() {
+        let Some(path) = pinned_fixture_path("Real.ra") else {
+            return;
+        };
+        // Relocate genuine sample bytes unchanged, never a fabricated oracle
+        // executable or hand-authored media pretending to be its fixture.
+        let bytes = std::fs::read(path).expect("read genuine fixture");
+        for relative in [
+            "source/t/images/Real.ra",
+            "cache/exiftool/t/images/Real.ra",
+            "cache/combined-samples/Real.ra",
+        ] {
+            let temp = tempfile::tempdir().expect("temporary fixture layout");
+            let expected = temp.path().join(relative);
+            std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
+            std::fs::write(&expected, &bytes).unwrap();
+            assert_eq!(
+                fixture_path_in(
+                    "Real.ra",
+                    Some(&temp.path().join("source/exiftool")),
+                    &temp.path().join("cache")
+                ),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn configured_source_precedes_cached_samples() {
+        let Some(path) = pinned_fixture_path("Real.ra") else {
+            return;
+        };
+        let bytes = std::fs::read(path).expect("read genuine fixture");
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        for relative in [
+            "source/t/images/Real.ra",
+            "cache/exiftool/t/images/Real.ra",
+            "cache/combined-samples/Real.ra",
+        ] {
+            let target = temp.path().join(relative);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(target, &bytes).unwrap();
+        }
+        assert_eq!(
+            fixture_path_in(
+                "Real.ra",
+                Some(&temp.path().join("source/exiftool")),
+                &temp.path().join("cache")
+            ),
+            Some(temp.path().join("source/t/images/Real.ra"))
+        );
+        assert_eq!(
+            fixture_path_in("Real.ra", None, &temp.path().join("cache")),
+            Some(temp.path().join("cache/exiftool/t/images/Real.ra"))
+        );
+    }
+
+    #[test]
+    fn missing_optional_fixture_has_no_reader_path() {
+        let temp = tempfile::tempdir().expect("empty fixture layout");
+        assert_eq!(
+            fixture_path_in(
+                "Real.ra",
+                Some(&temp.path().join("source/exiftool")),
+                &temp.path().join("cache")
+            ),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_fixture_link_is_present_and_fails_to_open() {
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        let path = temp.path().join("source/t/images/Real.ra");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(temp.path().join("missing-target"), &path).unwrap();
+        assert_eq!(
+            fixture_path_in(
+                "Real.ra",
+                Some(&temp.path().join("source/exiftool")),
+                &temp.path().join("cache")
+            ),
+            Some(path.clone())
+        );
+        assert!(crate::io::MMapReader::new(&path).is_err());
+    }
+}
