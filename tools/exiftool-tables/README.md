@@ -4,6 +4,10 @@ For completed work, known gaps and priorities, start with
 [Tag machinery status](../../docs/TAG_MACHINERY_STATUS.md). This file describes
 the tooling present at the September 10, 2026 review (`c7f5dd81`, pin 13.59).
 
+Follow-up `b36983c2` adds conservative IFD-aware upgrade classification on a
+pending branch. See the [implementation and limits](../../docs/TAG_MACHINERY_STATUS.md#pending-upgrade-classifier-repair);
+the complete upgrade transaction is still unfinished.
+
 ## Commands and scope
 
 ```sh

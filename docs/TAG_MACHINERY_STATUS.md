@@ -5,6 +5,10 @@
 snapshot, not a claim about `main` or a released binary. The documentation
 change itself does not implement or enable any parser behavior.
 
+An implementation completed after this audit is recorded under
+[pending upgrade-classifier repair](#pending-upgrade-classifier-repair).
+Its branch has not landed in the integration snapshot above.
+
 Start here to decide what to work on. Use the
 [implementation backlog](./AUTOMATION-AND-TESTER-PLAN.md) for acceptance criteria,
 [Transcription](./TRANSCRIPTION.md) for the method, and
@@ -105,6 +109,8 @@ bump command. They remain open implementation work.
 4. `triage_bump.py::diff_table` and layout classification only recognize the
    binary pathway and tier-2 manifest; they do not account for supported IFD
    generation. A fresh AUTO/HAND percentage from that classifier is misleading.
+   An unlanded repair now exists; see the follow-up below before starting
+   another implementation of this item.
 5. Four generated-origin files have no committed generator:
    `sony/plain_tables.rs`, `sony/enciphered_tables.rs`,
    `nikon/settings_tables.rs`, `nikon/encrypted_tables.rs` under
@@ -135,6 +141,26 @@ establish today's automation share or an hours-per-upgrade estimate.
   evidence that ExifTool has no declaration.
 - Evaluate remaining old-plan features such as Composite `Override` against a
   concrete upstream use and an observable gap before implementing them.
+
+### Pending upgrade-classifier repair
+
+Commit `b36983c2` on `codex/ifd-upgrade-triage` repairs IFD declaration
+classification using the actual generator's tag/variant emitter and refusal
+counters. Supported fields can receive AUTO; ignored facts, unsupported shapes
+and withheld conversions remain explicit review work. Full-dump context is used
+for subdirectory targets. The existing binary classification is unchanged.
+
+Validation on 2026-09-10: 36 focused triage tests passed; the broader Python
+tool suite ran 269 tests with one dump-dependent skip; formatting and ordinary
+Clippy passed. Independent review found no blocker. An additional strict
+all-targets/all-features Clippy run failed on 11 inherited `print_literal`
+findings in unchanged `tests/raw_metadata_parsing.rs`.
+
+This is pending branch work, not an integration landing or upgrade rehearsal.
+Triage has no oracle-ledger input, so HAND may mean missing verification evidence
+rather than a need for new source code. Equivalent-to-default facts may also
+remain conservatively classified for review. Artifact accounting, complete
+old/new builds, transaction cleanup and a release rehearsal are still open.
 
 ## Work on separate branches
 

@@ -42,6 +42,15 @@ Scope:
 - Keep standing generator-less files and pre-existing refusals separate from
   debt introduced by this release.
 
+**Implementation awaiting integration:** `b36983c2` on
+`codex/ifd-upgrade-triage` addresses IFD declaration classification using the
+generator's emitter/refusal rules. Reuse and land that work rather than rebuild
+it. Its HAND bucket includes unverified cases; it does not provide an
+hours-per-upgrade estimate. The artifact manifest, complete old/new builds and
+transaction repairs above remain open. See the
+[status follow-up](./TAG_MACHINERY_STATUS.md#pending-upgrade-classifier-repair)
+for validation and limits.
+
 Acceptance: every written artifact is accounted for; a dry run restores the
 starting state; a deliberate failure demonstrates cleanup; an IFD declaration
 supported by codegen is classified accordingly; neither comparison build mixes
