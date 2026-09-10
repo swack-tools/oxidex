@@ -5849,7 +5849,8 @@ def default_extract_live_evidence(repo_root, sample_path, tag_keys):
     (post-fix)" per tag found in either output. The oracle is read with
     the corpus gate's lossless `-G0:1:4 -s -j -a` shape and both sides'
     keys are split by their own rule (see lookup below); a tag with
-    several occurrences renders every distinct value.
+    several occurrences renders every occurrence, so `exiftool=['72',
+    '72'] oxidex='72'` shows the IFD1 copy the census scores MISSING.
 
     target/debug is tried first, target/fixloop next (see cargo_build's
     "fixloop" profile -- the one this loop's own build step actually
@@ -5899,62 +5900,97 @@ def default_extract_live_evidence(repo_root, sample_path, tag_keys):
     except (OSError, subprocess.SubprocessError, ValueError, IndexError, RuntimeError):
         return ""
 
-    def lookup(tags, tag_key, split, structure):
-        """Value(s) for tag_key in one side's JSON, keyed by that side's own
-        rule (split_oracle_key for the oracle's 'EXIF:IFD0:Copy1:Make',
-        split_oxidex_key for oxidex's 'IFD0:Make' / 'OOXML:Custom:Division').
+    # family-1 group -> the family-0 group(s) it sits under, read off the
+    # oracle's own keys ('EXIF:ExifIFD:ExposureTime' says ExifIFD sits under
+    # EXIF), so an oxidex 'ExifIFD:...' key can answer a family-0 'EXIF:...'
+    # tag_key exactly, and so tier 2 below can tell IFD1 from JFIF by family
+    # 0. A set, not a scalar: no family-1 group sat under two family-0
+    # groups on the review subset, but a first-wins scalar would hide one.
+    # 'Copy N' is family 4, never a group; ExifTool prints one segment when
+    # the families coincide ('File:FileType', 'JFIF:Copy1:XResolution').
+    parents = {}
+    for k in et_tags:
+        segs = k.split(":")
+        if len(segs) >= 3 and not re.fullmatch(r"Copy\d+", segs[1]):
+            parents.setdefault(segs[1], set()).add(segs[0])
+
+    def family0(g):
+        return parents.get(g, {g})
+
+    def lookup(tags, tag_key, split, families):
+        """-> (values, via) for tag_key in one side's JSON, keyed by that
+        side's own rule (split_oracle_key for the oracle's
+        'EXIF:IFD0:Copy1:Make', split_oxidex_key for oxidex's 'IFD0:Make' /
+        'OOXML:Custom:Division').
 
         tag_key is a fix_gap key -- '<family>:<name>' where the family is a
         family-0 group ('EXIF:Make') or, for value_differences, whatever the
-        comparison spelled ('IFD0:Make'). A group-qualified hit wins: name
-        equal and the tag_key group equal to the split group or to one of
-        the key's structural groups -- the family-1 / Copy N middle segments
-        on the oracle side; on the oxidex side (which spells family-1
-        groups: 'ExifIFD:ExposureTime', 'Canon:ExposureTime') the family-0
-        parent the oracle's own -G0:1 keys assign to that group. Only when
-        no group matches does the bare name stand in, so a group-spelling
-        mismatch between the two tools still yields evidence but a same-
-        named tag in another group no longer does (on t/images/Canon.jpg
-        the old first-hit lookup printed ExifIFD's ExposureTime under
-        'Canon:ExposureTime'). Every occurrence is kept: several
-        (MPImage1/2/3, IFD0/IFD1) render as the ordered list of their
-        distinct values, never just the first.
+        comparison spelled ('IFD0:Make'). Two tiers, the first consuming:
+
+          1. Group-qualified: name equal and the tag_key group equal to the
+             split group or to one of the key's structural groups -- the
+             family-1 / Copy N middle segments on the oracle side; on the
+             oxidex side (which spells family-1 groups: 'ExifIFD:
+             ExposureTime', 'Canon:ExposureTime') the family-0 parent(s)
+             the oracle's own -G0:1 keys assign to that group.
+          2. Same family 0 only: when no key is group-qualified, a key
+             whose family-0 group is the tag_key's ('IFD1:XResolution' <-
+             'IFD0:XResolution', both under EXIF; 'Keys:Album' <-
+             'ItemList:Album', both QuickTime) stands in, and `via` names
+             it so the rendered line says where the value came from. A key
+             from ANOTHER family-0 group never does: the old bare-name
+             fallback rendered JFIF's 300 under 'IFD1:XResolution' and
+             XMP-xmpDM's 'No Album' under 'Keys:Album' on the very files
+             the reviewer was grading, and on t/images/Canon.jpg printed
+             ExifIFD's ExposureTime under 'Canon:ExposureTime'.
+
+        The residual is tier 2 itself: a same-family-0 stand-in still pairs
+        a copy from another family-1 group, which is why it is annotated
+        rather than silent. `values` is every occurrence in key order,
+        duplicates included, never a distinct set -- a count mismatch IS
+        the evidence (an IFD1 copy oxidex lacks, or a duplicate emission
+        the oracle lacks, the structural M3 signal).
         """
         group, name = exiftool_oracle.split_oxidex_key(tag_key)
-        exact, by_name = [], []
+        want = family0(group)
+        exact, near, via = [], [], []
         for k, v in tags.items():
             g, n = split(k)
             if n != name:
                 continue
-            by_name.append(v)
-            if g == group or group in structure(k):
+            structural, fam0 = families(k)
+            if g == group or group in structural:
                 exact.append(v)
-        distinct = []
-        for v in exact or by_name:
-            if v not in distinct:
-                distinct.append(v)
-        if not distinct:
-            return None
-        return distinct[0] if len(distinct) == 1 else distinct
+            elif want & fam0:
+                near.append(v)
+                via.append(k)
+        if exact:
+            return exact, []
+        return near, via
 
-    # family-1 group -> family-0 group, read off the oracle's own keys
-    # ('EXIF:ExifIFD:ExposureTime' says ExifIFD sits under EXIF), so an oxidex
-    # 'ExifIFD:...' key can answer a family-0 'EXIF:...' tag_key exactly.
-    parent = {}
-    for k in et_tags:
-        segs = k.split(":")
-        if len(segs) >= 3 and not re.fullmatch(r"Copy\d+", segs[1]):
-            parent.setdefault(segs[1], segs[0])
+    def render(values):
+        if not values:
+            return None
+        return values[0] if len(values) == 1 else values
 
     lines = []
     for tag_key in tag_keys:
-        et_val = lookup(et_tags, tag_key, exiftool_oracle.split_oracle_key,
-                        lambda k: k.split(":")[1:-1])
-        ox_val = lookup(ox_tags, tag_key, exiftool_oracle.split_oxidex_key,
-                        lambda k: (parent[g],) if (g := k.split(":", 1)[0]) in parent else ())
-        if et_val is None and ox_val is None:
+        et_vals, et_via = lookup(
+            et_tags, tag_key, exiftool_oracle.split_oracle_key,
+            lambda k: (k.split(":")[1:-1], {k.split(":")[0]}))
+        ox_vals, ox_via = lookup(
+            ox_tags, tag_key, exiftool_oracle.split_oxidex_key,
+            lambda k: (parents.get(g := k.split(":", 1)[0], ()), family0(g)))
+        if not et_vals and not ox_vals:
             continue
-        lines.append(f"{tag_key}: exiftool={et_val!r} oxidex={ox_val!r} (post-fix)")
+        line = f"{tag_key}: exiftool={render(et_vals)!r} oxidex={render(ox_vals)!r} (post-fix)"
+        # After "(post-fix)" so _parse_live_evidence_value's non-greedy
+        # match still yields the bare values for the commit trailers.
+        notes = [f"{side} from {', '.join(via)}"
+                 for side, via in (("exiftool", et_via), ("oxidex", ox_via)) if via]
+        if notes:
+            line += f" [{'; '.join(notes)}]"
+        lines.append(line)
     return "\n".join(lines)
 
 
