@@ -1074,7 +1074,8 @@ _IFD_SUBDIR_TAIL_RE = re.compile(
     r'sub_ifd:\s*(?P<sub_ifd>true|false)\s*,\s*'
     r'max_subdirs:\s*(?P<max_subdirs>None|Some\(\d+\))\s*,\s*'
     r'dir_name:\s*(?P<dir_name>None|Some\("(?:[^"\\]|\\.)*"\))\s*,\s*'
-    r'validate:\s*(?P<validate>true|false)\s*,?\s*\}\s*,?\s*\)\s*$',
+    r'validate:\s*(?P<validate>true|false)\s*,\s*'
+    r'unwalked:\s*(?P<unwalked>None|Some\("(?:[^"\\]|\\.)*"\))\s*,?\s*\}\s*,?\s*\)\s*$',
     re.S,
 )
 _OUT_OF_DATE = "-- the verifier's pattern is out of date; fix it before trusting a PASS"
@@ -1153,6 +1154,7 @@ def _parse_ifd_subdir_value(text, k):
         "max_subdirs": _some_int(tm.group("max_subdirs")),
         "dir_name": _some_str_opt(tm.group("dir_name")),
         "validate": tm.group("validate") == "true",
+        "unwalked": _some_str_opt(tm.group("unwalked")),
     }
 
 
@@ -1489,15 +1491,21 @@ _SPEC_BYTE_ORDERS = {
 }
 
 
-def expected_ifd_edge(fact):
+def expected_ifd_edge(fact, enclosing=None):
     """Independently decide, from one oracle SUBDIR row, what edge the
-    generator may emit -> `(edge_facts, spec_refuses)`.
+    generator may emit -> `(edge_facts, spec_refuses)`. `enclosing` is the
+    `(module, table)` the row belongs to.
 
     `edge_facts` is None when the facts put the edge outside the spec's
-    grammar for a reason that makes any emitted edge WRONG (no parseable
-    TagTable; a ProcessProc other than ProcessBinaryData; a Start outside
-    `$valuePtr`/`$val` +- n; a Base outside the arithmetic grammar; a
-    FixFormat the schema cannot spell; a MaxSubdirs that is not a count).
+    grammar for a reason that makes any emitted edge WRONG (a TagTable
+    present but unparseable; a Start outside `$valuePtr`/`$val` +- n; a
+    Base outside the arithmetic grammar; a FixFormat the schema cannot
+    spell; a MaxSubdirs that is not a count). Two shapes are expected
+    EMITTED BUT UNWALKED (`edge_facts["unwalked"]` True; spec v1.1, slice
+    IFD1): no TagTable at all -- ExifTool walks the pointer with the
+    enclosing table (Exif.pm:6939-6944), so the edge must name `enclosing`
+    -- and a ProcessProc other than ProcessBinaryData; the generated edge
+    must carry `unwalked: Some(..)` for exactly these and `None` otherwise.
     `spec_refuses` is True when the only thing outside the spec is the
     ByteOrder spelling: the spec lists six spellings, ExifTool itself
     (Exif.pm:6974-6990) reads `/^Little/i`, `/^Big/i` and treats everything
@@ -1505,12 +1513,20 @@ def expected_ifd_edge(fact):
     `'Little-endian'` with `IfdByteOrder::Little` is not a wrong fact --
     `verify_ifd` accepts either that or a refusal for it, and counts the
     former as a note."""
-    m = _TAGTABLE_RE.match(fact["tagtable"])
-    if not m:
-        return None, False
+    unwalked = False
+    if fact["tagtable"] == "-":
+        if enclosing is None:
+            return None, False
+        module, table = enclosing
+        unwalked = True
+    else:
+        m = _TAGTABLE_RE.match(fact["tagtable"])
+        if not m:
+            return None, False
+        module, table = m.group(1), m.group(2)
     proc = fact["processproc"]
     if proc != "-" and not proc.endswith("::ProcessBinaryData"):
-        return None, False
+        unwalked = True
     start = fact["start"]
     if start == "-":
         start_v = ("ValuePtr", 0)
@@ -1551,8 +1567,8 @@ def expected_ifd_edge(fact):
     else:
         return None, False
     return {
-        "module": m.group(1),
-        "table": m.group(2),
+        "module": module,
+        "table": table,
         "start": start_v,
         "base_present": base != "-",
         "byte_order": bo_v,
@@ -1561,6 +1577,7 @@ def expected_ifd_edge(fact):
         "max_subdirs": max_v,
         "dir_name": None if fact["dirname"] == "-" else fact["dirname"],
         "validate": fact["validate"],
+        "unwalked": unwalked,
     }, spec_refuses
 
 
@@ -1779,7 +1796,7 @@ def verify_ifd(gen, orc, show=10):
             elif fact is None:
                 t_edge.miss((k, "edge emitted but ExifTool has no SubDirectory"))
             else:
-                want, spec_refuses = expected_ifd_edge(fact)
+                want, spec_refuses = expected_ifd_edge(fact, (k[0], k[1]))
                 if want is None:
                     t_edge.miss((k, "edge emitted where the facts require a refusal", fact))
                 else:
@@ -1790,6 +1807,8 @@ def verify_ifd(gen, orc, show=10):
                     ]
                     if (edge["base"] != "None") != want["base_present"]:
                         diffs.append("base")
+                    if (edge["unwalked"] is not None) != want["unwalked"]:
+                        diffs.append("unwalked")
                     if diffs:
                         t_edge.miss((k, {f: edge[f] for f in diffs},
                                      {f: want.get(f, want.get("base_present")) for f in diffs}))
@@ -1798,7 +1817,7 @@ def verify_ifd(gen, orc, show=10):
                         if spec_refuses:
                             note_byteorder_outside_spec += 1
         elif fact is not None and om["subdirectory"]:
-            want, spec_refuses = expected_ifd_edge(fact)
+            want, spec_refuses = expected_ifd_edge(fact, (k[0], k[1]))
             if want is not None and not spec_refuses:
                 note_edge_refused_modelable += 1
 

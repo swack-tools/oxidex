@@ -413,7 +413,7 @@ class SubdirEdges(unittest.TestCase):
         sd = {"TagTable": "Image::ExifTool::Olympus::Equipment", "Start": "$val",
               "MaxSubdirs": "10", "DirName": "SubIFD", "Validate": "$val =~ /^\\0/"}
         src, stats = self._edge(sd, Flags="SubIFD")
-        self.assertIn('max_subdirs: Some(10), dir_name: Some("SubIFD"), validate: true }', src)
+        self.assertIn('max_subdirs: Some(10), dir_name: Some("SubIFD"), validate: true, unwalked: None }', src)
         # Emitted AND counted: the walk refuses it, the census still sees it.
         self.assertEqual(stats["ifd_subdir_edge_modeled"], 1)
         self.assertEqual(stats["ifd_subdir_refused_validate"], 1)
@@ -426,11 +426,26 @@ class SubdirEdges(unittest.TestCase):
         src, stats = self._edge({"TagTable": "Image::ExifTool::Minolta::CameraSettings", "ProcessProc": pp})
         self.assertIn('module: "Minolta", table: "CameraSettings"', src)
         self.assertEqual(stats["ifd_subdir_edge_target_binary"], 1)
+        # Any other ProcessProc is Perl the walk cannot run: the edge is
+        # emitted with the sub's name as its `unwalked` reason and counted
+        # (NOT disqualifying); `descend` returns on it (ifd_engine.rs), the
+        # `validate` precedent.
         for name in ("Image::ExifTool::ProcessTIFF", "Image::ExifTool::MakerNotes::ProcessUnknown"):
             pp = {"__perl": "CODE", "__name": name}
             src, stats = self._edge({"TagTable": "Image::ExifTool::Olympus::Equipment", "ProcessProc": pp})
-            self.assertEqual(src, "None", name)
-            self.assertEqual(_plain(stats), {"ifd_subdir_refused_processproc": 1}, name)
+            self.assertIn('module: "Olympus", table: "Equipment", ', src)
+            self.assertTrue(src.endswith(f'validate: false, unwalked: Some("ProcessProc {name}") }})'), src)
+            self.assertEqual(
+                _plain(stats),
+                {"ifd_subdir_processproc_unwalked": 1, "ifd_subdir_edge_modeled": 1,
+                 "ifd_subdir_edge_target_ifd": 1},
+                name,
+            )
+            self.assertEqual(stats["ifd_subdir_unwalked_reasons"][f"ProcessProc {name}"], 1)
+        src, _ = self._edge({"TagTable": "Image::ExifTool::Olympus::Equipment", "ProcessProc": {"__perl": "CODE"}})
+        self.assertIn('unwalked: Some("ProcessProc <unnamed CODE>")', src)
+        self.assertNotIn("ifd_subdir_processproc_unwalked", codegen.GATE_A_DISQUALIFYING)
+        self.assertNotIn("ifd_subdir_refused_processproc", codegen.GATE_A_DISQUALIFYING)
 
     def test_base_through_the_existing_grammar(self):
         src, _ = self._edge({"TagTable": "Image::ExifTool::Olympus::Equipment",
@@ -479,7 +494,7 @@ class SubdirEdges(unittest.TestCase):
         self.assertIn("subdir: Some(IfdSubdirEdge { module: \"Olympus\", table: \"Equipment\", "
                       "start: IfdStart::ValuePtr(0), base: None, byte_order: IfdByteOrder::Inherit, "
                       "fix_format: None, sub_ifd: false, max_subdirs: None, dir_name: None, "
-                      "validate: false }) }", src)
+                      "validate: false, unwalked: None }) }", src)
 
 
 class VariantGroups(unittest.TestCase):
@@ -583,6 +598,229 @@ class TableLiteral(unittest.TestCase):
                 self.assertIn(key, reported, key)
 
 
+class SliceIfd1GateA(unittest.TestCase):
+    """The Gate A policy change that lets `Exif::Main` be walked at a NAMED
+    directory (docs/superpowers/specs/2026-09-06-ifd-tables-design.md v1.1):
+    `Format => 'binary'` is the unsized undef (G1); a SubDirectory with no
+    `TagTable` or a ProcessProc other than ProcessBinaryData is emitted
+    unwalked (G2); a `_variants` group that could never give the walk
+    anything to get right is classified unreported and emits nothing (G3).
+    Every affected id is absent and counted; nothing here disqualifies."""
+
+    def test_binary_is_the_unsized_undef(self):
+        # ExifTool.pm:6236 `binary => 1` in %formatSize; ReadValue :6308-6309
+        # reads undef/binary/string with one substr and NUL-truncates only
+        # string (:6311). ColorMap: Exif.pm:961-965.
+        src, reason, stats = _emit({"Name": "ColorMap", "Format": "binary", "Binary": "1"}, tag_id=0x0140)
+        self.assertIsNone(reason)
+        self.assertIn('name: "ColorMap", format: Some(Fmt::Undef(0)), count: None', src)
+        self.assertIn("binary: true", src)
+        self.assertEqual(stats["ifd_format_unsized"], 1)
+        self.assertEqual(stats["ifd_format_binary_as_undef"], 1)
+        self.assertEqual(stats["ifd_format_unsupported"], 0)
+        # The domain follows undef (bytes): the same refusal class as a bare
+        # undef under a numeric PrintConv, never a wrong number.
+        _, _, a = _emit({"Name": "A", "Format": "binary", "PrintConv": {"0": "x"}})
+        _, _, b = _emit({"Name": "B", "Format": "undef", "PrintConv": {"0": "x"}})
+        self.assertEqual(
+            {k: v for k, v in _plain(a).items() if k != "ifd_format_binary_as_undef"}, _plain(b)
+        )
+        # A sized `binary[N]` is not a spelling ExifTool has; still refused.
+        _, reason, stats = _emit({"Name": "C", "Format": "binary[4]"})
+        self.assertEqual((reason, stats["ifd_format_unsupported"]), ("ifd_format_unsupported", 1))
+
+    def _same_table(self, sd, enclosing=("Exif", "Main"), **extra):
+        tag = {"Name": "ExifOffset", "SubDirectory": sd}
+        tag.update(extra)
+        stats = codegen.new_ifd_stats()
+        src = codegen.compile_ifd_subdir(codegen.expand_flags(tag, stats), stats, _ctx(), enclosing)
+        return src, stats
+
+    def test_no_tag_table_is_the_enclosing_table_emitted_unwalked(self):
+        # Exif.pm:6939-6944: `$newTagTable = $tagTablePtr; # use existing table`.
+        src, stats = self._same_table({"Start": "$val", "DirName": "ExifIFD"}, SubIFD="1")
+        self.assertEqual(
+            src,
+            'Some(IfdSubdirEdge { module: "Exif", table: "Main", start: IfdStart::Val(0), base: None, '
+            "byte_order: IfdByteOrder::Inherit, fix_format: None, sub_ifd: true, max_subdirs: None, "
+            'dir_name: Some("ExifIFD"), validate: false, '
+            'unwalked: Some("same-table recursion (TagTable absent)") })',
+        )
+        self.assertEqual(
+            _plain(stats),
+            {"ifd_subdir_same_table_unwalked": 1, "ifd_subdir_edge_modeled": 1,
+             "ifd_subdir_edge_target_other": 1, "ifd_subdir_edge_sub_ifd": 1},
+        )
+        self.assertEqual(stats["ifd_subdir_unwalked_reasons"]["same-table recursion (TagTable absent)"], 1)
+        self.assertNotIn("ifd_subdir_same_table_unwalked", codegen.GATE_A_DISQUALIFYING)
+        # With the enclosing table unknown there is no honest name: refused as before.
+        src, stats = self._same_table({"Start": "$val"}, enclosing=None)
+        self.assertEqual((src, _plain(stats)), ("None", {"ifd_subdir_refused_tagtable": 1}))
+        # A TagTable that is present but unparseable is still a refusal.
+        src, stats = self._same_table({"TagTable": "Image::ExifTool::Olympus", "Start": "$val"})
+        self.assertEqual((src, _plain(stats)), ("None", {"ifd_subdir_refused_tagtable": 1}))
+
+    def test_profile_ifd_shape_names_every_reason(self):
+        # Exif::Main 0xc6f5 ProfileIFD: no TagTable, ProcessTiffIFD, and a
+        # `Magic` key the schema does not model -- named, not refused,
+        # because nothing reads an unwalked edge's keys.
+        sd = {"Start": "$val", "Base": "$start", "Magic": "17234", "MaxSubdirs": "10", "DirName": "ProfileIFD",
+              "ProcessProc": {"__perl": "CODE", "__name": "Image::ExifTool::Exif::ProcessTiffIFD"}}
+        src, stats = self._same_table(dict(sd), Flags="SubIFD")
+        self.assertIn(
+            'unwalked: Some("same-table recursion (TagTable absent); '
+            'ProcessProc Image::ExifTool::Exif::ProcessTiffIFD; unmodeled SubDirectory key(s) Magic")',
+            src,
+        )
+        self.assertIn('base: Some(&BaseExpr::Start), byte_order: IfdByteOrder::Inherit, fix_format: None, '
+                      'sub_ifd: true, max_subdirs: Some(10), dir_name: Some("ProfileIFD")', src)
+        self.assertEqual(stats["ifd_subdir_refused_unmodeled_key"], 0)
+        self.assertEqual(stats["ifd_subdir_same_table_unwalked"], 1)
+        self.assertEqual(stats["ifd_subdir_processproc_unwalked"], 1)
+        # An unmodeled key on a WALKABLE edge still refuses (the existing rule).
+        src, stats = self._same_table({"TagTable": "Image::ExifTool::Olympus::Equipment", "Magic": "1"})
+        self.assertEqual((src, stats["ifd_subdir_refused_unmodeled_key"]), ("None", 1))
+        # Every other field must still compile: an unwalked edge with a Start
+        # outside the grammar is refused with exactly that one counter.
+        sd["Start"] = "4"
+        src, stats = self._same_table(sd, Flags="SubIFD")
+        self.assertEqual((src, _plain(stats)), ("None", {"ifd_subdir_refused_start": 1}))
+
+    def _group(self, alternatives, ctx=None, tag_id=0x0111, enclosing=("Exif", "Main")):
+        stats = codegen.new_ifd_stats()
+        src = codegen.compile_ifd_variant_group(
+            {"_variants": alternatives}, tag_id, stats, None, ctx or _ctx(), {}, enclosing=enclosing
+        )
+        return src, stats
+
+    def test_offset_only_group_is_unreported_before_any_condition_compiles(self):
+        # Exif::Main 0x0111 (Exif.pm:601): every alternative IsOffset/OffsetPair,
+        # Conditions outside the grammar. Nothing emitted, nothing partial.
+        alts = [
+            {"Name": "StripOffsets", "Condition": "$$self{TIFF_TYPE} eq 'CR2' and $$self{DIR_NAME} eq 'IFD0'",
+             "Flags": ["IsOffset", "OffsetPair"]},
+            {"Name": "PreviewImageStart", "Condition": '$$self{DIR_NAME} eq "IFD1"',
+             "_extra_keys": ["DataTag", "IsOffset", "OffsetPair"]},
+        ]
+        src, stats = self._group(alts)
+        self.assertIs(src, codegen.IFD_VARIANT_UNREPORTED)
+        self.assertEqual(_plain(stats), {"ifd_variant_unreported_skipped": 1})
+        self.assertEqual(stats["ifd_variant_cond_texts"], Counter())
+        self.assertEqual(
+            stats["ifd_variant_unreported_ids"]["Exif::Main 0x0111 (2 offset-class/unwalkable-SubDirectory alternatives)"], 1
+        )
+        self.assertNotIn("ifd_variant_unreported_skipped", codegen.GATE_A_DISQUALIFYING)
+
+    def test_unwalkable_subdirectory_alternatives_are_unreported(self):
+        # Exif::Main 0x014a (Exif.pm:1006-1040): SubIFD with no TagTable, then
+        # A100DataOffset (IsOffset).
+        alts = [
+            {"Name": "SubIFD", "Condition": '$$self{TIFF_TYPE} ne "ARW"', "Flags": "SubIFD",
+             "SubDirectory": {"Start": "$val", "MaxSubdirs": "10"}},
+            {"Name": "A100DataOffset", "_extra_keys": ["IsOffset"]},
+        ]
+        src, stats = self._group(alts, tag_id=0x014a)
+        self.assertIs(src, codegen.IFD_VARIANT_UNREPORTED)
+        self.assertEqual(_plain(stats), {"ifd_variant_unreported_skipped": 1})
+        # ProcessProc other than ProcessBinaryData is the other unwalkable shape.
+        alts = [{"Name": "X", "Condition": "$$self{Foo}",
+                 "SubDirectory": {"TagTable": "Image::ExifTool::Olympus::Equipment",
+                                  "ProcessProc": {"__perl": "CODE", "__name": "Image::ExifTool::ProcessTIFF"}}}]
+        src, stats = self._group(alts)
+        self.assertIs(src, codegen.IFD_VARIANT_UNREPORTED)
+        self.assertEqual(_plain(stats), {"ifd_variant_unreported_skipped": 1})
+        # An empty group is not "every alternative": it compiles as before.
+        src, stats = self._group([])
+        self.assertEqual(src, "IfdVariantGroup { id: 0x0111, alternatives: &[] }")
+
+    def test_one_reported_alternative_keeps_the_atomic_refusal(self):
+        # A plain tag is reported: the group takes the compiling path and is
+        # refused whole on the first uncompilable Condition, no partial credit.
+        alts = [
+            {"Name": "StripOffsets", "Condition": "$$self{TIFF_TYPE} eq 'CR2'", "Flags": "IsOffset"},
+            {"Name": "Plain", "Writable": "int32u"},
+        ]
+        src, stats = self._group(alts)
+        self.assertIsNone(src)
+        self.assertEqual(_plain(stats), {"tag_variant_cond_unsupported": 1})
+        # So is a SubDirectory with a WALKABLE edge (Olympus::Main 0x2010,
+        # Canon::Main 0x000d): its target's tags are the value.
+        alts = [
+            {"Name": "Equipment", "Condition": "$$self{TIFF_TYPE} eq 'SRW'",
+             "SubDirectory": {"TagTable": "Image::ExifTool::Olympus::Equipment"}},
+            {"Name": "SubIFD", "Flags": "SubIFD", "SubDirectory": {"Start": "$val"}},
+        ]
+        src, stats = self._group(alts)
+        self.assertIsNone(src)
+        self.assertEqual(_plain(stats), {"tag_variant_cond_unsupported": 1})
+        # And the compiling path is unchanged when the Conditions compile.
+        alts[0]["Condition"] = '$format eq "int32u"'
+        src, stats = self._group(alts, enclosing=("Olympus", "Main"))
+        self.assertTrue(src.startswith("IfdVariantGroup { id: 0x0111, alternatives: &[(Cond::FormatEq"), src)
+        self.assertIn('module: "Olympus", table: "Main", start: IfdStart::Val(0)', src)
+        self.assertIn('unwalked: Some("same-table recursion (TagTable absent)")', src)
+        self.assertEqual(stats["tag_variant_emitted"], 1)
+        self.assertEqual(stats["ifd_subdir_same_table_unwalked"], 1)
+
+    def test_makernotes_dispatch_is_recognised_by_identity(self):
+        # Exif.pm:2496 `0x927c => \@Image::ExifTool::MakerNotes::Main`. The
+        # generic rule cannot cover it: MakerNoteMinolta3/Samsung1a/UnknownText/
+        # UnknownBinary are plain Binary values with no SubDirectory. The dump
+        # inlines the array as `_variants` and dumps it under
+        # `modules.MakerNotes.arrays.Main.rows`; equality of the two lists is
+        # the fact (verified on the 13.59 dump: 94 == 94 rows).
+        rows = [
+            {"Name": "MakerNoteApple", "Condition": "$$valPt =~ /^Apple iOS/", "Binary": "1", "Format": "undef",
+             "SubDirectory": {"TagTable": "Image::ExifTool::Apple::Main"}},
+            {"Name": "MakerNoteMinolta3", "Condition": "$$valPt =~ /^\\0\\x1b/", "Binary": "1", "Format": "undef"},
+            {"Name": "MakerNoteUnknownBinary", "Binary": "1", "Format": "undef"},
+        ]
+        doc = {"modules": {"MakerNotes": {"tables": {}, "arrays": {"Main": {
+            "full_name": "Image::ExifTool::MakerNotes::Main", "row_count": 3, "rows": rows}}}}}
+        ctx = codegen.IfdGenContext.from_doc(doc)
+        self.assertEqual(ctx.makernotes_main, rows)
+        src, stats = self._group([dict(r) for r in rows], ctx=ctx, tag_id=0x927c)
+        self.assertIs(src, codegen.IFD_VARIANT_UNREPORTED)
+        self.assertEqual(_plain(stats), {"ifd_variant_makernotes_dispatch": 1})
+        self.assertEqual(stats["ifd_variant_unreported_ids"]["Exif::Main 0x927c MakerNotes::Main dispatch (3 alternatives)"], 1)
+        self.assertNotIn("ifd_variant_makernotes_dispatch", codegen.GATE_A_DISQUALIFYING)
+        # Not the array (a subset), or a dump without it: the compiling path,
+        # where the plain-value alternative makes the group reportable.
+        src, stats = self._group([dict(r) for r in rows[1:]], ctx=ctx, tag_id=0x927c)
+        self.assertIsNot(src, codegen.IFD_VARIANT_UNREPORTED)
+        self.assertEqual(stats["ifd_variant_makernotes_dispatch"], 0)
+        self.assertFalse(codegen.IfdGenContext.from_doc({"modules": {}}).is_makernotes_dispatch(rows))
+        src, stats = self._group([dict(r) for r in rows], tag_id=0x927c)
+        self.assertIsNot(src, codegen.IFD_VARIANT_UNREPORTED)
+
+    def test_table_with_unreported_group_and_unwalked_edge_passes_gate_a(self):
+        tbl = {"meta": {}, "tags": {
+            "273": {"_variants": [
+                {"Name": "StripOffsets", "Condition": "$$self{TIFF_TYPE} eq 'CR2'", "Flags": "IsOffset"},
+                {"Name": "PreviewImageStart", "_extra_keys": ["IsOffset", "OffsetPair"]},
+            ]},
+            "34665": {"Name": "ExifOffset", "SubDirectory": {"DirName": "ExifIFD", "Start": "$val"}, "SubIFD": "1"},
+            "320": {"Name": "ColorMap", "Format": "binary", "Binary": "1"},
+        }}
+        run = codegen.new_ifd_stats()
+        src = codegen.gen_ifd_table("Exif", "Main", tbl, run, None, _ctx())
+        self.assertIn("gate_a: GateA { blocked_by: &[] }", src)
+        self.assertIn("variants: &[]", src)
+        self.assertNotIn("0x0111", src)
+        self.assertIn('module: "Exif", table: "Main", start: IfdStart::Val(0)', src)
+        self.assertIn('unwalked: Some("same-table recursion (TagTable absent)")', src)
+        self.assertIn('name: "ColorMap", format: Some(Fmt::Undef(0))', src)
+        self.assertEqual(run["tag_variant_skipped"], 0)
+        self.assertEqual(run["ifd_variant_unreported_skipped"], 1)
+        self.assertEqual(run["ifd_subdir_same_table_unwalked"], 1)
+        self.assertEqual(run["ifd_tag_emitted"], 2)
+        self.assertEqual(run["ifd_gate_a_pass"], 1)
+        # And the REPORT accounts for every counter this path touches.
+        reported = {key for _, rows in codegen.IFD_REPORT for _, key in rows}
+        touched = {k for k, v in run.items() if not isinstance(v, Counter)}
+        self.assertEqual(touched - reported, set())
+
+
 def _find_dump():
     env = os.environ.get("OXIDEX_TABLES_JSON")
     if env:
@@ -680,6 +918,22 @@ class WholeDump(unittest.TestCase):
         self.assertGreater(self.stats["ifd_flag_unknown"], 100, "Unknown is a flag, never a drop")
         self.assertGreater(self.stats["ifd_subdir_edge_modeled"], 300)
         self.assertEqual(self.stats["ifd_set_group1_flag"], 6, "Exif::Main, Kodak x2, Sony x2, SonyIDC")
+
+    def test_exif_main_passes_gate_a_with_every_unreported_id_absent(self):
+        # Slice IFD1 (spec section 2): Exif::Main's five Gate A counters clear
+        # without a single approximation -- the affected ids are absent and
+        # counted, the five refused edges are emitted unwalked.
+        exif = next(c for c in self.chunks if "pub static IFD_EXIF_MAIN:" in c)
+        self.assertIn("gate_a: GateA { blocked_by: &[] }", exif)
+        for tid in ("0x0111", "0x0117", "0x014a", "0x0201", "0x0202", "0x927c"):
+            self.assertNotIn(f"id: {tid},", exif, f"{tid} must be absent (offset class / dispatch)")
+        self.assertIn('id: 0x0140, name: "ColorMap", format: Some(Fmt::Undef(0))', exif)
+        self.assertIn('id: 0x8649, name: "PhotoshopSettings", format: Some(Fmt::Undef(0))', exif)
+        self.assertEqual(exif.count('unwalked: Some("same-table recursion (TagTable absent)'), 4)
+        self.assertEqual(exif.count('unwalked: Some("ProcessProc Image::ExifTool::ProcessSubTIFF")'), 1)
+        self.assertEqual(self.stats["ifd_variant_makernotes_dispatch"], 1, "0x927c and nothing else")
+        self.assertEqual(self.stats["ifd_subdir_same_table_unwalked"], 4, "all four in Exif::Main")
+        self.assertEqual(self.stats["ifd_format_binary_as_undef"], 2, "ColorMap, PhotoshopSettings")
 
 
 if __name__ == "__main__":

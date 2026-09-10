@@ -55,7 +55,8 @@ RawConvs. The Olympus tree (949 MISSING / 187 files) is entirely IFD-style and h
     conversions are refused with counter `ifd_expr_domain_unknown` (disqualifying) — an
     expression verified in one domain must not run in another.
   - `subdir`: `SubDirectory` -> `IfdSubdirEdge`: `TagTable` split into module/table
-    (`ifd_subdir_refused_tagtable` when absent/odd); `Start` absent -> `IfdStart::ValuePtr(0)`,
+    (`ifd_subdir_refused_tagtable` when odd; absent -> the enclosing table, emitted unwalked:
+    v1.1 below); `Start` absent -> `IfdStart::ValuePtr(0)`,
     `'$valuePtr'` / `'$valuePtr + n'` / `'$valuePtr - n'` -> `ValuePtr(±n)`, `'$val'` / `'$val
     + n'` -> `Val(±n)`, anything else -> `ifd_subdir_refused_start`; `Base` through the existing
     `BaseExpr` compiler (refused -> `ifd_subdir_refused_base`); `ByteOrder` `LittleEndian`/`II`
@@ -66,11 +67,34 @@ RawConvs. The Olympus tree (949 MISSING / 187 files) is entirely IFD-style and h
     `ifd_subdir_refused_fixformat`; `Flags => 'SubIFD'` -> `sub_ifd: true`;
     `MaxSubdirs` -> `max_subdirs`; `DirName` -> `dir_name`; `Validate` present ->
     `validate: true` (edge emitted, walk refuses it: `ifd_subdir_refused_validate`, NOT
-    disqualifying); `ProcessProc` present -> the edge is emitted only if it names
-    `ProcessBinaryData`, else refused `ifd_subdir_refused_processproc` (disqualifying, as today).
+    disqualifying); `ProcessProc` present -> the edge is emitted; if it names anything but
+    `ProcessBinaryData` it carries `unwalked: Some("ProcessProc <sub>")` (v1.1, was refused
+    `ifd_subdir_refused_processproc`). `unwalked: Option<&str>` (v1.1): `Some(reason)` marks an
+    edge the census sees and `descend` returns on, as it does for `validate` -- no `TagTable`
+    (`"same-table recursion (TagTable absent)"`: Exif.pm:6939-6944 walks the pointer with the
+    enclosing table, so `module`/`table` name the table the edge sits in; a same-table walk from a
+    directory the hand parser reached would re-enter IFD0/ExifIFD behind the engine's guard, so it
+    is not walked) or a `ProcessProc` the walk cannot run, with any SubDirectory key the schema does
+    not model named after it; counted `ifd_subdir_same_table_unwalked` /
+    `ifd_subdir_processproc_unwalked`, neither disqualifying. Every other field of an unwalked
+    edge must still compile, or the edge is refused as before.
     A tag with a refused edge is emitted with `omitted.subdirectory: true` and `subdir: None`.
   - `_variants`: `IfdVariantGroup` via the existing `conds.py` compiler, atomic refusal
-    (`tag_variant_skipped` + reasons, disqualifying).
+    (`tag_variant_skipped` + reasons, disqualifying) -- after a classification (v1.1): a group
+    whose EVERY alternative is offset-class (`IsOffset`/`OffsetPair`/`DataTag`/`ChangeBase`) or a
+    SubDirectory the walk could never follow (no `TagTable`, or a non-`ProcessBinaryData`
+    `ProcessProc`; a SubDirectory's own value is never reported, Exif.pm:7103-7104), or the group
+    that IS `\@MakerNotes::Main` (Exif.pm:2496 `0x927c`, recognised by equality with the dump's
+    `MakerNotes.arrays.Main.rows`), can never give the walk a value or a directory to get right
+    whichever alternative wins: NOTHING is emitted for the id (the engine treats an id with no
+    tag and no group as unknown), counted `ifd_variant_unreported_skipped` /
+    `ifd_variant_makernotes_dispatch`, not disqualifying; the hand post-passes stay its only
+    producer. One reportable alternative (a plain tag, or a walkable edge) keeps the group on the
+    compiling path and its atomic refusal.
+  - `Format => 'binary'` (v1.1) is the unsized `Fmt::Undef(0)`: `%formatSize` has `binary => 1`
+    beside `string`/`undef` (ExifTool.pm:6236) and `ReadValue` reads all three with one `substr`,
+    NUL-truncating only `string` (:6308-6311); counted `ifd_format_unsized` +
+    `ifd_format_binary_as_undef`.
 * Gate A for IFD tables: `GATE_A_DISQUALIFYING` + the new `ifd_*` keys named above.
 * `dump_tables.pl`: add `FixFormat` to `@TAG_KEYS` (the only key the design needs that the dump
   lacks). `MaxSubdirs`, `DirName` too if absent.
@@ -156,4 +180,10 @@ pub fn process_exif(table: &'static IfdTable, dir: IfdDir<'_>, ctx: &mut cond::C
 Writing; `-u` output of `unknown` tags; `IsOffset`/`OffsetPair`/`DataTag` previews (refused, counted
 `ifd_isoffset_unsupported`, not disqualifying); conversions that read data members
 (`$$self{X}` inside a ValueConv/PrintConv stay refused by the expression grammar); the standard
-EXIF IFDs (Exif::Main keeps `tag_db` naming until group-1 arbitration is proven on makernotes).
+EXIF IFDs through the engine's own chain -- **v1.1 (slice IFD1):** `Exif::Main` is Gate-A eligible
+(the `unwalked` edges and the unreported variant groups above are what cleared it, with zero
+runtime change for any enabled table) and may be walked at a NAMED directory the hand parser hands
+it, IFD1 first, under `Exif::Main`'s `SET_GROUP1`; IFD0/ExifIFD/InteropIFD through the engine, and
+the same-table edges that would reach them, remain out (`Exif::Main` keeps `tag_db` naming there
+until group-1 arbitration is proven). The offset-class ids (`0x0111/0x0117/0x0201/0x0202/0x014a`)
+and `0x927c` are absent from the static by construction and stay hand-only.

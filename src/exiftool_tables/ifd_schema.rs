@@ -263,4 +263,18 @@ pub struct IfdSubdirEdge {
     /// emitted for the reachability census but never walked
     /// (`ifd_subdir_refused_validate`).
     pub validate: bool,
+    /// Emitted for the reachability census but never walked, and why
+    /// (slice IFD1, `codegen.py::compile_ifd_subdir`):
+    /// `"same-table recursion (TagTable absent)"` -- ExifTool walks the
+    /// pointer with the ENCLOSING table (Exif.pm:6939-6944 `$newTagTable =
+    /// $tagTablePtr; # use existing table`), so `module`/`table` name the
+    /// table the edge sits in; walking it from a directory the hand parser
+    /// reached would re-enter IFD0/ExifIFD behind the engine's guard, so
+    /// the walk does not. Or `"ProcessProc <sub>"` -- Perl the walk cannot
+    /// run (ProcessSubTIFF, ProcessTiffIFD, ...), with any SubDirectory key
+    /// the schema does not model named after it. `descend` returns on
+    /// `Some(_)` exactly as it does on `validate`; counted
+    /// `ifd_subdir_same_table_unwalked` / `ifd_subdir_processproc_unwalked`,
+    /// neither Gate-A disqualifying. `None` is an ordinary, walkable edge.
+    pub unwalked: Option<&'static str>,
 }
