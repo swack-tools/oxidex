@@ -561,8 +561,11 @@ jobs:
           TMPFIX="$RUNNER_TEMP/staleness-fixtures"
           mkdir -p "$TMPFIX"
           python3 tools/exiftool-tables/gen_staleness_facts.py "$DUMP" "$TMPFIX"
+          # The IFD sample is a handwritten verifier-parser fixture, not an
+          # output of gen_staleness_facts.py. Keep it out of this data diff.
           if ! diff -ru tools/exiftool-tables/fixtures "$TMPFIX" \
-              --exclude hand_enum_drift_baseline.json; then
+              --exclude hand_enum_drift_baseline.json \
+              --exclude ifd_tables_sample.rs; then
             echo "::error::committed staleness fixtures are stale relative to ExifTool ${ET_VERSION} -- re-run 'python3 tools/exiftool-tables/gen_staleness_facts.py <dump.json> tools/exiftool-tables/fixtures', update the Rust these fixtures check, and commit both." >&2
             exit 1
           fi
