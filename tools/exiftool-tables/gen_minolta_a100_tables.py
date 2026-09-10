@@ -13,6 +13,8 @@ translation is a HARD-CODED DICTIONARY keyed on the literal (whitespace-
 normalized) Perl `ValueConv`/`PrintConv` text -- plus a handful of single-shape
 *parameterized* regexes for idioms that repeat with different constants
 (`$val / N`, `2 ** (($val-a)/b)`, ...) -- never a general expression parser.
+For `OTHER` bodies, only whitespace outside quoted literals is flexible;
+different B::Deparse spellings require explicit registry entries.
 Anything not recognized is a hard error naming the table, the offset and the
 offending text, UNLESS it is in ALLOWED_SKIPS: a short, by-hand list of
 offsets whose conversion is a genuine bespoke Perl subroutine with no DSL
@@ -179,7 +181,41 @@ OTHER_CODE_DICT = {
     '(my $lens = $Image::ExifTool::Sigma::sigmaLensTypes{$val - 18688}); '
     '($lens and (return ("$lens + MC-11 SA-E"))); } (return (undef)); }':
         "Other::MinoltaLens",
+
+    # Same pinned 13.59 body emitted by Ubuntu's Perl 5.38 B::Deparse.
+    # Register the observed form explicitly; do not rewrite arbitrary Perl.
+    '{ package Image::ExifTool::Minolta; use strict; (my($val, $inv) = @_); '
+    '($inv and (return (undef))); (my($id) = ($val & 65280)); '
+    '(my($mb) = $Image::ExifTool::Minolta::metabonesID{$id}); if ($mb) { '
+    '(ref($mb) or (($id = $mb), ($mb = $Image::ExifTool::Minolta::metabonesID{$id}))); '
+    '(require Image::ExifTool::Canon); '
+    '(my($lens) = $Image::ExifTool::Canon::canonLensTypes{$val - $id}); '
+    '($lens and (return ("$lens + $$mb"))); } elsif (($val >= 18688)) { '
+    '(require Image::ExifTool::Sigma); '
+    '(my($lens) = $Image::ExifTool::Sigma::sigmaLensTypes{$val - 18688}); '
+    '($lens and (return ("$lens + MC-11 SA-E"))); } (return (undef)); }':
+        "Other::MinoltaLens",
 }
+
+
+def other_code_pattern(body):
+    """Allow line wrapping in these known bodies, preserving quoted literals.
+
+    Compile only audited registry text, not arbitrary Perl: its literals use
+    ordinary single/double quotes and its regex contains no whitespace. Every
+    non-whitespace token and all quoted content must match exactly.
+    """
+    pieces = re.split(r'''("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')''', body)
+    return re.compile("".join(
+        re.escape(piece) if i % 2 else
+        "".join(r"\s+" if token.isspace() else re.escape(token)
+                for token in re.split(r"(\s+)", piece))
+        for i, piece in enumerate(pieces)
+    ))
+
+
+OTHER_CODE_PATTERNS = [(other_code_pattern(body), target)
+                       for body, target in OTHER_CODE_DICT.items()]
 
 PC_EXPR_DICT = {
     '"$val s"': 'Pc::Suffix(" s")',
@@ -228,11 +264,13 @@ def translate_pc(table, offset, name, tag, pools):
         other = directives["OTHER"]
         if other.get("__perl") != "CODE":
             raise Unsupported(table, offset, name, f"OTHER is not CODE: {other!r}")
-        key = norm(other.get("__deparse") or "")
-        if key not in OTHER_CODE_DICT:
-            raise Unsupported(table, offset, name, f"unregistered OTHER code: {key!r}")
+        body = (other.get("__deparse") or "").strip()
+        target = next((target for pattern, target in OTHER_CODE_PATTERNS
+                       if pattern.fullmatch(body)), None)
+        if target is None:
+            raise Unsupported(table, offset, name, f"unregistered OTHER code: {body!r}")
         map_name = pools.intern_map(list(pc["map"].items()))
-        return f"Pc::Map({map_name}, {OTHER_CODE_DICT[key]})"
+        return f"Pc::Map({map_name}, {target})"
     if kind == "expr":
         key = norm(pc["expr"])
         if key in PC_EXPR_DICT:
