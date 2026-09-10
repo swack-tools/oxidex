@@ -189,6 +189,19 @@ shared checks. Follow-up repairs on `codex/ifd-upgrade-triage` address:
   counted, including a decoder entry actually removed in `34a16455`. This is
   scanner correction, not new extraction coverage. The other six baselines
   remain unchanged.
+- Minolta's finite conversion dictionary accepts the complete observed Perl
+  5.38 deparse spelling as well as the existing spelling. Quoted text remains
+  exact, and changed operators, thresholds or literal whitespace are rejected.
+  Thirty-four probes against pinned code agreed; both spellings regenerated
+  byte-identical committed Minolta Rust. Native Linux confirmation belongs to CI.
+
+After the fixture repair, `cargo test --all-features --lib -- --test-threads=2`
+passed 4,595 tests with one ignored, with default-cache reads denied and the
+genuine 13.59 source explicitly configured. Optional corpus tests can still
+return early; this is a suite result, not 4,595 observed corpus comparisons.
+Formatter and strict all-feature Clippy passed. The later Minolta repair also
+passed 283 Python table-tool tests with one existing skip. See the exact-head
+PR checks for hosted CI status; earlier failed runs are not current verdicts.
 
 These changes and their CI results belong to
 [PR #737](https://github.com/swack-tools/oxidex/pull/737); they are not present in
