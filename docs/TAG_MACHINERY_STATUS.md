@@ -153,11 +153,12 @@ counters. Supported fields can receive AUTO; ignored facts, unsupported shapes
 and withheld conversions remain explicit review work. Full-dump context is used
 for subdirectory targets. The existing binary classification is unchanged.
 
-Validation on 2026-09-10: 36 focused triage tests passed; the broader Python
-tool suite ran 269 tests with one dump-dependent skip; formatting and ordinary
+Initial validation of `b36983c2` on 2026-09-10: 36 focused triage tests passed;
+the broader Python tool suite ran 269 tests with one dump-dependent skip; formatting and ordinary
 Clippy passed. Independent review found no blocker. An additional strict
 all-targets/all-features Clippy run failed on 11 inherited `print_literal`
-findings in unchanged `tests/raw_metadata_parsing.rs`.
+findings in then-unchanged `tests/raw_metadata_parsing.rs`. Later fixture
+maintenance touched that file; current lint results are recorded below.
 
 This is pending branch work, not an integration landing or upgrade rehearsal.
 Triage has no oracle-ledger input, so HAND may mean missing verification evidence
@@ -202,6 +203,24 @@ return early; this is a suite result, not 4,595 observed corpus comparisons.
 Formatter and strict all-feature Clippy passed. The later Minolta repair also
 passed 283 Python table-tool tests with one existing skip. See the exact-head
 PR checks for hosted CI status; earlier failed runs are not current verdicts.
+
+The subsequent integration-fixture repair centralizes requested-file lookup for
+integration, RAW and CLI projection tests. It avoids selecting an incomplete
+directory and preserves present-file read errors. With the default cache denied
+and genuine 13.59 samples configured, the final normal targets passed: integration
+603 (42 ignored), RAW 29, projection 10. The seven original projection cases
+remain intact. Optional DJI samples were unavailable in this source.
+
+An opt-in run of ignored tests exposed timezone assumptions and an existing
+MOBI `UncompressedTextLength` gap. It also found a stale CZI absence assertion:
+both the current parser and pinned ExifTool report `XML:MicroscopeName` as
+`Axio Observer.Z1`. That test now asserts the exact value and passes; its ignore
+flag is unchanged. The final opt-in suite under `TZ=UTC` had 41 passes and one
+MOBI failure; the pinned oracle independently confirms the missing `172 kB`
+value. MOBI and the environment assumptions remain separate work.
+Strict package Clippy passed. Additional strict test-target linting encountered
+inherited warnings in other integration/forensic tests; ordinary scoped linting
+completed, and no diagnostic named the new helper or changed lines.
 
 These changes and their CI results belong to
 [PR #737](https://github.com/swack-tools/oxidex/pull/737); they are not present in
