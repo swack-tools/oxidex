@@ -98,6 +98,9 @@ bump command. They remain open implementation work.
    Outputs absent from its backup/restore accounting include IFD tables,
    expression/value-conversion ledgers, the generated Composite computation
    companion, recovered Sony/Minolta tables and Macintosh charset tables.
+   Follow-up source inspection found 25 declared outputs across `regen.sh` and
+   `regen-all.sh`, versus 15 paths in the bump lists. This is a static producer
+   inventory, not yet proof of an exhaustive observed write set.
    Derive the list once for generation, backup, restoration and verification.
 2. The temporary BEFORE build regenerates only tier 1. Tier 2 remains at the
    target release, so the comparison is not between complete old/new artifacts.
@@ -162,6 +165,34 @@ rather than a need for new source code. Equivalent-to-default facts may also
 remain conservatively classified for review. Artifact accounting, complete
 old/new builds, transaction cleanup and a release rehearsal are still open.
 
+### CI follow-up on the same branch
+
+The first PR run stopped in existing validation problems before completing the
+shared checks. Follow-up repairs on `codex/ifd-upgrade-triage` address:
+
+- Corpus-path checking now respects test-body boundaries and standalone early
+  returns. Module constants are no longer attributed to a preceding test.
+  Its scope remains direct path literals; aliases and indirect reads are not
+  certified by this lexical check.
+- The RealAudio test resolves the genuine fixture beside the configured
+  ExifTool source. It passed with the default developer cache denied, preserving
+  its original metadata assertions. Truly absent optional data is reported.
+- Verification downloads its pinned source outside the checkout and installs
+  the container module needed by the DOCX probe. The ordinary dirty-tree refusal
+  remains enforced.
+- Staleness comparison excludes the handwritten IFD parser sample while still
+  rejecting a deliberately changed generated version fact.
+- The coarse hand-enum scanner excludes tuples in comments and containing
+  strings. Canon's reviewed baseline becomes 235: two comment examples had been
+  counted, including a decoder entry actually removed in `34a16455`. This is
+  scanner correction, not new extraction coverage. The other six baselines
+  remain unchanged.
+
+These changes and their CI results belong to
+[PR #737](https://github.com/swack-tools/oxidex/pull/737); they are not present in
+the integration snapshot above. They do not complete the upgrade transaction,
+artifact manifest, old/new builds or release rehearsal.
+
 ## Work on separate branches
 
 Local refs inspected on 2026-09-10. None of these tips was an ancestor of the
@@ -170,11 +201,21 @@ status or proof that the work is ready to land.
 
 | Branch | Observed tip | Scope and remaining distinction |
 | --- | --- | --- |
-| `staging/unify-rawconv` | `0bf02cd9` | Shared embedded-EXIF conversion; local handoff reports implementation/reviews complete, integration gate/landing still outstanding |
+| `staging/unify-rawconv` | `0bf02cd9` | Shared embedded-EXIF conversion; full gate subsequently passed on this tip, landing still outstanding |
 | `staging/ifd1-gate-a` | `7a69d2fa` | Initial IFD1 generator-policy work; table eligibility is not activation, and this is not the IFD1 runtime landing |
 | `staging/ifd-4` | `be0df53e` | Further conditions and Olympus retirement; new manufacturer Main routing must not be inferred from the branch name |
 | `staging/png-text-names` | `0bf02cd9` | Same committed base as RawConv; no separate implementation commit at the inspected ref |
 | `staging/embedded-ifd0` | `0bf02cd9` | Same committed base as RawConv; no separate implementation commit at the inspected ref |
+
+RawConv follow-up: `remote-gate.sh staging/unify-rawconv codex-unify-20260910`
+passed at clean `0bf02cd9fa4ad6192b20006457fa422443341fae`, with ExifTool 13.59.
+PASS was observed at 18:27 UTC on September 10; the exact finish time is unknown
+because observations were interrupted. Nextest passed 5,442 tests (64 skipped),
+doctests passed 221 (63 ignored), table/SubDirectory oracles passed, and the JPEG
+baseline passed. `conformance.py` compared 4,238 files: +3 matches, -3 missing,
+-1 extra and unchanged VALUE count against control `380babda`. The separate
+occurrence-aware `i7-ab-diff.py cfix unify` check reported no lost matches, new
+VALUE rows or new EXTRA rows. This is a validated branch result, not a landing.
 
 The local handoff forecasts roughly 15–18k missing occurrences recoverable by
 IFD1 routing. Treat that as a prioritization estimate, not a measured gain or a
