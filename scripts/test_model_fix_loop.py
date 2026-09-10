@@ -8690,6 +8690,175 @@ class DefaultExtractLiveEvidenceTests(unittest.TestCase):
             result = default_extract_live_evidence(repo, "sample.jpg", ["EXIF:FNumber"])
         self.assertIn("exiftool='1.80' oxidex='1.80'", result)
 
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_reads_the_oracle_with_the_census_flags(self, mock_run, mock_oracle):
+        # The corpus gate's lossless shape, byte for byte: under `-j -G`
+        # ExifTool's JSON writer keeps one entry per printed key, so
+        # MPImage1/2/3, IFD0/IFD1 and same-group repeats collapse to the
+        # first copy (402 vs 444 keys on t/images/ExifTool.jpg, pinned 13.59).
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.return_value = MagicMock(stdout='[{"EXIF:IFD0:Make": "Canon"}]')
+            default_extract_live_evidence(repo, "sample.jpg", ["EXIF:Make"])
+        exiftool_argv = mock_run.call_args_list[0].args[0]
+        self.assertEqual(exiftool_argv[2:-1], ["-G0:1:4", "-s", "-j", "-a"])
+        self.assertEqual(tuple(exiftool_argv[2:-1]), exiftool_oracle.CENSUS_ORACLE_FLAGS)
+        self.assertEqual(exiftool_argv[-1], "sample.jpg")
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_splits_each_side_by_its_own_rule(self, mock_run, mock_oracle):
+        # Oracle keys carry family 0 : family 1 [: Copy N] : name and are
+        # read first-segment/last-segment; oxidex keys are first-segment/
+        # REST, so an oxidex colon-in-name key ('OOXML:Custom:Division',
+        # the defect the census keeps exposing) is named 'Custom:Division'.
+        # The last-segment rule on that side -- what the base code did with
+        # rsplit(':', 1) -- would have matched it to 'XML:Division' and
+        # reported the defect closed.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.side_effect = [
+                MagicMock(stdout='[{"EXIF:IFD0:Make": "Canon", "EXIF:IFD0:Copy1:Model": "R6", '
+                                 '"XML:Division": "Sales"}]'),
+                MagicMock(stdout='[{"IFD0:Make": "Canon", "IFD0:Model": "R6", '
+                                 '"OOXML:Custom:Division": "Sales"}]'),
+            ]
+            result = default_extract_live_evidence(
+                repo, "sample.docx",
+                ["EXIF:Make", "IFD0:Model", "XML:Division", "OOXML:Custom:Division"])
+        self.assertEqual(result.splitlines(), [
+            "EXIF:Make: exiftool='Canon' oxidex='Canon' (post-fix)",
+            "IFD0:Model: exiftool='R6' oxidex='R6' (post-fix)",
+            "XML:Division: exiftool='Sales' oxidex=None (post-fix)",
+            "OOXML:Custom:Division: exiftool=None oxidex='Sales' (post-fix)",
+        ])
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_group_qualified_hit_beats_a_same_named_tag_in_another_group(self, mock_run, mock_oracle):
+        # The old bare-name-first-hit lookup rendered IFD0's Make under
+        # 'XMP:Make' -- a plausible, wrong `exiftool=` a reviewer cannot
+        # distinguish from a real one.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.side_effect = [
+                MagicMock(stdout='[{"EXIF:IFD0:Make": "Canon", "XMP:XMP-tiff:Make": "Nikon"}]'),
+                MagicMock(stdout='[{"IFD0:Make": "Canon", "XMP-tiff:Make": "Nikon"}]'),
+            ]
+            result = default_extract_live_evidence(repo, "sample.jpg", ["XMP:Make"])
+        self.assertEqual(result, "XMP:Make: exiftool='Nikon' oxidex='Nikon' (post-fix)")
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_every_occurrence_of_a_repeated_tag_is_rendered(self, mock_run, mock_oracle):
+        # Three MPF sub-images: under -G0:1:4 they are three keys, and the
+        # evidence line carries all three values in order -- duplicates
+        # included, never a distinct set -- rather than whichever copy
+        # printed first.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.side_effect = [
+                MagicMock(stdout='[{"MPF:MPImage1:MPImageLength": "10", '
+                                 '"MPF:MPImage2:MPImageLength": "20", '
+                                 '"MPF:MPImage3:MPImageLength": "20"}]'),
+                MagicMock(stdout='[{"MPImage1:MPImageLength": "10", '
+                                 '"MPImage2:MPImageLength": "20", '
+                                 '"MPImage3:MPImageLength": "30"}]'),
+            ]
+            result = default_extract_live_evidence(repo, "sample.jpg", ["MPF:MPImageLength"])
+        self.assertEqual(
+            result,
+            "MPF:MPImageLength: exiftool=['10', '20', '20'] oxidex=['10', '20', '30'] (post-fix)")
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_an_occurrence_count_mismatch_is_visible_when_the_values_agree(self, mock_run, mock_oracle):
+        # Apple_iPhone11.jpg: the oracle has EXIF:IFD0:XResolution and
+        # EXIF:IFD1:Copy2:XResolution, oxidex only IFD0's. conformance.py
+        # scores the IFD1 copy MISSING; a distinct-value render said
+        # `exiftool='72' oxidex='72'` -- closed. The count is the evidence.
+        # Symmetrically a duplicate emission (oxidex ItemList:AlbumArtist
+        # AND QuickTime:AlbumArtist against one oracle occurrence) is the
+        # structural M3 signal and must not collapse to a matching scalar.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.side_effect = [
+                MagicMock(stdout='[{"EXIF:IFD0:XResolution": 72, "EXIF:IFD1:Copy2:XResolution": 72, '
+                                 '"QuickTime:ItemList:AlbumArtist": "A"}]'),
+                MagicMock(stdout='[{"IFD0:XResolution": 72, '
+                                 '"ItemList:AlbumArtist": "A", "QuickTime:AlbumArtist": "A"}]'),
+            ]
+            result = default_extract_live_evidence(
+                repo, "sample.jpg", ["EXIF:XResolution", "QuickTime:AlbumArtist"])
+        self.assertEqual(result.splitlines(), [
+            "EXIF:XResolution: exiftool=[72, 72] oxidex=72 (post-fix)",
+            "QuickTime:AlbumArtist: exiftool='A' oxidex=['A', 'A'] (post-fix)",
+        ])
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_fallback_stays_inside_the_tag_keys_family_0_group(self, mock_run, mock_oracle):
+        # Apple_iPhone11.jpg, real key shapes: oxidex has no IFD1 copy, so
+        # 'IFD1:XResolution' has no group-qualified oxidex hit. The stand-in
+        # must be a key under the same family-0 group (IFD0 sits under EXIF,
+        # per the oracle's own 'EXIF:IFD1:Copy2:...' spelling) and the line
+        # must say so; JFIF's 300 -- another family 0 -- never appears
+        # under an EXIF name (the bare-name fallback rendered [72, 300]).
+        # QuickTime.mov likewise: 'Keys:Album' may borrow ItemList's and
+        # QuickTime's copies, never XMP-xmpDM's 'No Album'.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.side_effect = [
+                MagicMock(stdout='[{"JFIF:Copy1:XResolution": 300, "EXIF:IFD0:XResolution": 72, '
+                                 '"EXIF:IFD1:Copy2:XResolution": 72, '
+                                 '"QuickTime:Keys:Copy1:Album": "albm", '
+                                 '"XMP:XMP-xmpDM:Copy2:Album": "No Album", '
+                                 '"QuickTime:ItemList:Album": "albm"}]'),
+                MagicMock(stdout='[{"IFD0:XResolution": 72, "JFIF:XResolution": 300, '
+                                 '"JPEG:XResolution": 300, '
+                                 '"ItemList:Album": "albm", "QuickTime:Album": "albm", '
+                                 '"XMP:Album": "No Album"}]'),
+            ]
+            result = default_extract_live_evidence(
+                repo, "sample.jpg", ["IFD1:XResolution", "Keys:Album"])
+        self.assertEqual(result.splitlines(), [
+            "IFD1:XResolution: exiftool=72 oxidex=72 (post-fix) [oxidex from IFD0:XResolution]",
+            "Keys:Album: exiftool='albm' oxidex=['albm', 'albm'] (post-fix) "
+            "[oxidex from ItemList:Album, QuickTime:Album]",
+        ])
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_no_same_family_0_key_renders_none_not_another_groups_value(self, mock_run, mock_oracle):
+        # oxidex has no EXIF-family key named Make at all; the only Make it
+        # prints is XMP-tiff's. The old lookup rendered Nikon under
+        # 'EXIF:Make' -- a plausible, precisely-formatted, wrong `oxidex=`.
+        from model_fix_loop import default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.side_effect = [
+                MagicMock(stdout='[{"EXIF:IFD0:Make": "Canon", "XMP:XMP-tiff:Make": "Nikon"}]'),
+                MagicMock(stdout='[{"XMP-tiff:Make": "Nikon"}]'),
+            ]
+            result = default_extract_live_evidence(repo, "sample.jpg", ["EXIF:Make"])
+        self.assertEqual(result, "EXIF:Make: exiftool='Canon' oxidex=None (post-fix)")
+
+    @patch("model_fix_loop.shared_exiftool_oracle", return_value=FAKE_ORACLE)
+    @patch("model_fix_loop.subprocess.run")
+    def test_fallback_note_does_not_reach_the_commit_trailers(self, mock_run, mock_oracle):
+        # The "[oxidex from ...]" note sits after "(post-fix)" precisely so
+        # _parse_live_evidence_value (the M1 Exiftool-Value/Oxidex-Value
+        # trailers) still recovers the bare values.
+        from model_fix_loop import _parse_live_evidence_value, default_extract_live_evidence
+        with self._built_repo() as repo:
+            mock_run.side_effect = [
+                MagicMock(stdout='[{"EXIF:IFD0:XResolution": 72, "EXIF:IFD1:Copy2:XResolution": 72}]'),
+                MagicMock(stdout='[{"IFD0:XResolution": 72}]'),
+            ]
+            result = default_extract_live_evidence(repo, "sample.jpg", ["IFD1:XResolution"])
+        self.assertTrue(result.endswith("(post-fix) [oxidex from IFD0:XResolution]"), result)
+        self.assertEqual(_parse_live_evidence_value(result, "IFD1:XResolution"), ("72", "72"))
+
     @patch("model_fix_loop.shared_exiftool_oracle",
            side_effect=exiftool_oracle.OracleError("no usable perl"))
     @patch("model_fix_loop.subprocess.run")
