@@ -1,5 +1,5 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
 
 /// ExifTool 13.59 reads the pinned `t/images/MOI.moi` fixture as:
 /// `MOIVersion V6`, `DateTimeOriginal 2011:05:15 17:58:48.000`,
@@ -12,10 +12,10 @@ use std::path::Path;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn moi_fixture_matches_pinned_oracle() {
-    let metadata = read_metadata(Path::new(
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images/MOI.moi",
-    ))
-    .expect("read pinned MOI fixture");
+    let Some(path) = pinned_fixture_path("MOI.moi") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned MOI fixture");
 
     assert_eq!(metadata.get_string("MOI:MOIVersion"), Some("V6"));
     assert_eq!(

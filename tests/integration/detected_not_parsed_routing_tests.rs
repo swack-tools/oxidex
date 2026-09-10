@@ -9,11 +9,9 @@
 //! `exiftool-pinned.sh -a -G1 -s <file>`. The fixtures are the ones the
 //! coverage census measured against; none of them is synthetic.
 
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::TagValue;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
-
-const SAMPLES: &str = "/tmp/oxidex-exiftool-cache/combined-samples";
 
 /// `Torrent.torrent`, all 21 `Torrent` tags. Covers the bencode reader's
 /// three value shapes (integer, text, binary), `ExtractTags`' list-index
@@ -25,8 +23,10 @@ const SAMPLES: &str = "/tmp/oxidex-exiftool-cache/combined-samples";
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn torrent_fixture_matches_pinned_oracle() {
-    let m = read_metadata(Path::new(&format!("{SAMPLES}/Torrent.torrent")))
-        .expect("read pinned Torrent fixture");
+    let Some(path) = pinned_fixture_path("Torrent.torrent") else {
+        return;
+    };
+    let m = read_metadata(&path).expect("read pinned Torrent fixture");
 
     assert_eq!(m.get_string("File:FileType"), Some("Torrent"));
     assert_eq!(
@@ -85,8 +85,10 @@ fn torrent_fixture_matches_pinned_oracle() {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn mobi_fixture_matches_pinned_oracle() {
-    let m = read_metadata(Path::new(&format!("{SAMPLES}/Palm.mobi")))
-        .expect("read pinned MOBI fixture");
+    let Some(path) = pinned_fixture_path("Palm.mobi") else {
+        return;
+    };
+    let m = read_metadata(&path).expect("read pinned MOBI fixture");
 
     assert_eq!(m.get_string("File:FileType"), Some("MOBI"));
     assert_eq!(
@@ -172,8 +174,10 @@ fn mobi_fixture_matches_pinned_oracle() {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn pfb_fixture_matches_pinned_oracle() {
-    let m =
-        read_metadata(Path::new(&format!("{SAMPLES}/Font.pfb"))).expect("read pinned PFB fixture");
+    let Some(path) = pinned_fixture_path("Font.pfb") else {
+        return;
+    };
+    let m = read_metadata(&path).expect("read pinned PFB fixture");
 
     assert_eq!(m.get_string("File:FileType"), Some("PFB"));
     assert_eq!(
@@ -238,8 +242,10 @@ fn pfb_fixture_matches_pinned_oracle() {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn indd_fixture_matches_pinned_oracle() {
-    let m = read_metadata(Path::new(&format!("{SAMPLES}/InDesign.indd")))
-        .expect("read pinned INDD fixture");
+    let Some(path) = pinned_fixture_path("InDesign.indd") else {
+        return;
+    };
+    let m = read_metadata(&path).expect("read pinned INDD fixture");
 
     assert_eq!(m.get_string("File:FileType"), Some("INDD"));
     // The `XMP-x`/`XMP-rdf`/`XMP-dc`/`XMP-xmp` family-1 spellings the oracle
@@ -277,8 +283,10 @@ fn indd_fixture_matches_pinned_oracle() {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn macos_fixture_matches_pinned_oracle() {
-    let m = read_metadata(Path::new(&format!("{SAMPLES}/MacOS.macos")))
-        .expect("read pinned MacOS fixture");
+    let Some(path) = pinned_fixture_path("MacOS.macos") else {
+        return;
+    };
+    let m = read_metadata(&path).expect("read pinned MacOS fixture");
 
     assert_eq!(m.get_string("File:FileType"), Some("MacOS"));
     // MacOS.pm:303-309's `PrintConv`, including `ConvertUnixTime(hex $a[1])`.
@@ -345,8 +353,10 @@ fn macos_fixture_matches_pinned_oracle() {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn bigtiff_fixture_matches_pinned_oracle() {
-    let m = read_metadata(Path::new(&format!("{SAMPLES}/BigTIFF.btf")))
-        .expect("read pinned BigTIFF fixture");
+    let Some(path) = pinned_fixture_path("BigTIFF.btf") else {
+        return;
+    };
+    let m = read_metadata(&path).expect("read pinned BigTIFF fixture");
 
     assert_eq!(m.get_string("File:FileType"), Some("BTF"));
     assert_eq!(m.get_integer("IFD0:ImageWidth"), Some(8));

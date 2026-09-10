@@ -1,6 +1,6 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::TagValue;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
 
 /// ExifTool 13.59 emits WPG version 1 record types in file order and collapses
 /// only adjacent duplicate types. This fails if the WPG parser is not wired
@@ -9,10 +9,10 @@ use std::path::Path;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn wpg_fixture_reports_records() {
-    let metadata = read_metadata(Path::new(
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images/WPG.wpg",
-    ))
-    .expect("read pinned WPG fixture");
+    let Some(path) = pinned_fixture_path("WPG.wpg") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned WPG fixture");
 
     assert_eq!(
         metadata

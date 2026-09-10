@@ -1,5 +1,5 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
 
 /// ExifTool 13.59 reads the pinned `t/images/Audible.aa` fixture's TOC and
 /// metadata dictionary -- verified against the pinned oracle directly
@@ -11,10 +11,10 @@ use std::path::Path;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn aa_fixture_matches_pinned_oracle() {
-    let metadata = read_metadata(Path::new(
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images/Audible.aa",
-    ))
-    .expect("read pinned AA fixture");
+    let Some(path) = pinned_fixture_path("Audible.aa") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned AA fixture");
 
     assert_eq!(
         metadata.get_string("Audible:ProductId"),

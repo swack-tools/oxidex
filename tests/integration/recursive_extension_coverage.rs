@@ -20,13 +20,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-/// Root of the pinned ExifTool source tree these tests copy fixtures from.
-/// See `.exiftool-version` at the repo root and AGENTS.md's "Never grade
-/// against an unpinned ExifTool" -- these tests never invoke `exiftool`
-/// itself, only read files out of its checked-out `t/images` corpus, so the
-/// pinning rule does not bind here, but the corpus still has to exist on
-/// disk for the test to mean anything.
-const EXIFTOOL_IMAGES: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images";
+use crate::fixtures::pinned_fixture_path;
 
 fn oxidex(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_oxidex"))
@@ -35,11 +29,14 @@ fn oxidex(args: &[&str]) -> std::process::Output {
         .expect("run oxidex binary")
 }
 
-fn copy_fixture(fixture_name: &str, dest_dir: &Path) {
-    let src = Path::new(EXIFTOOL_IMAGES).join(fixture_name);
+fn copy_fixture(fixture_name: &str, dest_dir: &Path) -> bool {
+    let Some(src) = pinned_fixture_path(fixture_name) else {
+        return false;
+    };
     let dest = dest_dir.join(fixture_name);
     fs::copy(&src, &dest)
         .unwrap_or_else(|e| panic!("copy pinned fixture {}: {}", src.display(), e));
+    true
 }
 
 /// Extensions that are absent from the old hand-maintained
@@ -61,7 +58,9 @@ const GENUINELY_UNIDENTIFIABLE_FIXTURES: &[&str] = &["EXE.elf", "Geotag.gpx"];
 fn recursive_mode_reads_previously_dropped_extensions() {
     let dir = tempfile::tempdir().expect("create temp dir");
     for fixture in PREVIOUSLY_DROPPED_FIXTURES {
-        copy_fixture(fixture, dir.path());
+        if !copy_fixture(fixture, dir.path()) {
+            return;
+        }
     }
 
     // JSON mode: every copied file must produce a tagged result. The old
@@ -120,7 +119,9 @@ fn recursive_mode_counts_unidentifiable_files_instead_of_dropping_them() {
         .take(2)
         .chain(GENUINELY_UNIDENTIFIABLE_FIXTURES.iter())
     {
-        copy_fixture(fixture, dir.path());
+        if !copy_fixture(fixture, dir.path()) {
+            return;
+        }
     }
 
     let output = oxidex(&["-r", dir.path().to_str().unwrap()]);

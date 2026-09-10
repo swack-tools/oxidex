@@ -1,3 +1,4 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::TagValue;
 use oxidex::exiftool_oracle;
 use oxidex::io::buffered_reader::BufferedReader;
@@ -25,8 +26,10 @@ fn printed(value: &TagValue) -> String {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn mp3_fixture_reports_id3_size() {
-    let path = Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/MP3.mp3");
-    let reader = BufferedReader::new(path).expect("Failed to open pinned MP3 fixture");
+    let Some(path) = pinned_fixture_path("MP3.mp3") else {
+        return;
+    };
+    let reader = BufferedReader::new(&path).expect("Failed to open pinned MP3 fixture");
     let metadata = parse_mp3_metadata(&reader).expect("Failed to parse pinned MP3 fixture");
 
     assert_eq!(

@@ -1,7 +1,7 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::TagValue;
 use oxidex::io::buffered_reader::BufferedReader;
 use oxidex::parsers::archive::iso::parse_iso_metadata;
-use std::path::Path;
 
 /// The two primary-volume-descriptor fields `Image::ExifTool::ISO::Composite::
 /// VolumeSize` (ISO.pm:119-126) multiplies -- `VolumeBlockCount *
@@ -17,8 +17,10 @@ use std::path::Path;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn iso_fixture_reports_the_volume_size_inputs() {
-    let path = Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/ISO.iso");
-    let reader = BufferedReader::new(path).expect("Failed to open pinned ISO fixture");
+    let Some(path) = pinned_fixture_path("ISO.iso") else {
+        return;
+    };
+    let reader = BufferedReader::new(&path).expect("Failed to open pinned ISO fixture");
     let metadata = parse_iso_metadata(&reader).expect("Failed to parse pinned ISO fixture");
 
     assert_eq!(

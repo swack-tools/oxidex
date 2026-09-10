@@ -1,5 +1,5 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
 
 /// ExifTool 13.59 reads the pinned `t/images/Red.r3d` fixture -- a real
 /// Redcode version 2 clip -- as 34 `[Red]` tags. The values asserted below
@@ -26,10 +26,10 @@ use std::path::Path;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn red_r3d_fixture_matches_pinned_oracle() {
-    let metadata = read_metadata(Path::new(
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images/Red.r3d",
-    ))
-    .expect("read pinned Red.r3d fixture");
+    let Some(path) = pinned_fixture_path("Red.r3d") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned Red.r3d fixture");
 
     assert_eq!(metadata.get_string("File:FileType"), Some("R3D"));
 

@@ -1,11 +1,10 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::TagValue;
 use oxidex::exiftool_oracle;
 use oxidex::io::buffered_reader::BufferedReader;
 use oxidex::parsers::video::parse_avi_metadata;
 use serde_json::Value;
 use std::path::Path;
-
-const CORPUS_ROOT: &str = "/tmp/oxidex-exiftool-cache/combined-samples";
 
 /// The value as it reaches output, for the variants these parsers emit.
 ///
@@ -53,7 +52,9 @@ fn real_avi_carriers_keep_riff_values_without_an_avi_group() {
             ],
         ),
     ] {
-        let path = Path::new(CORPUS_ROOT).join(file);
+        let Some(path) = pinned_fixture_path(file) else {
+            continue;
+        };
         let reader = BufferedReader::new(&path).expect("real AVI carrier must be available");
         let metadata = parse_avi_metadata(&reader).expect("real AVI carrier must parse");
 

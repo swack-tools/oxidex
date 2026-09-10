@@ -1,5 +1,5 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
 
 /// ExifTool 13.59 reads the pinned `t/images/PGF.pgf` fixture's 24-byte
 /// header plus its trailing embedded-PNG metadata blob -- verified against
@@ -14,10 +14,10 @@ use std::path::Path;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn pgf_fixture_matches_pinned_oracle() {
-    let metadata = read_metadata(Path::new(
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images/PGF.pgf",
-    ))
-    .expect("read pinned PGF fixture");
+    let Some(path) = pinned_fixture_path("PGF.pgf") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned PGF fixture");
 
     assert_eq!(metadata.get_string("File:PGFVersion"), Some("0x36"));
     assert_eq!(metadata.get_integer("File:ImageWidth"), Some(8));

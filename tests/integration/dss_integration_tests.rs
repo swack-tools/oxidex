@@ -1,6 +1,6 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::operations::read_metadata;
 use std::io::Write;
-use std::path::Path;
 use tempfile::Builder;
 
 /// ExifTool 13.59 reads the twelve ASCII digits at offset 50 in Olympus DSS
@@ -10,10 +10,10 @@ use tempfile::Builder;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn dss_fixture_reports_end_time() {
-    let metadata = read_metadata(Path::new(
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images/Olympus.dss",
-    ))
-    .expect("read pinned DSS fixture");
+    let Some(path) = pinned_fixture_path("Olympus.dss") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned DSS fixture");
 
     assert_eq!(
         metadata

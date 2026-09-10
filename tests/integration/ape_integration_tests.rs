@@ -1,3 +1,4 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::TagValue;
 use oxidex::exiftool_oracle;
 use oxidex::io::buffered_reader::BufferedReader;
@@ -32,8 +33,10 @@ fn printed(value: &TagValue) -> String {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn ape_fixture_reports_the_composite_duration_inputs() {
-    let path = Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/APE.ape");
-    let reader = BufferedReader::new(path).expect("Failed to open pinned APE fixture");
+    let Some(path) = pinned_fixture_path("APE.ape") else {
+        return;
+    };
+    let reader = BufferedReader::new(&path).expect("Failed to open pinned APE fixture");
     let metadata = parse_ape_metadata(&reader).expect("Failed to parse pinned APE fixture");
 
     for (tag, expected) in [

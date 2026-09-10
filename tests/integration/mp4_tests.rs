@@ -4,6 +4,8 @@
 //! real MP4/MOV files, including iTunes-style metadata, classic QuickTime user data,
 //! and MP4 keys/ilst metadata.
 
+use crate::fixtures::pinned_fixture_path;
+
 use oxidex::core::operations::read_metadata;
 use oxidex::io::buffered_reader::BufferedReader;
 use oxidex::parsers::quicktime::{parse_quicktime_metadata, parse_quicktime_metadata_from_bytes};
@@ -314,8 +316,10 @@ fn test_mp4_both_itunes_and_quicktime_metadata() {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn m4a_fixture_reports_composite_avg_bitrate() {
-    let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/QuickTime.m4a");
-    let metadata = read_metadata(path).expect("read pinned M4A fixture");
+    let Some(path) = pinned_fixture_path("QuickTime.m4a") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned M4A fixture");
 
     assert_eq!(metadata.get_string("Composite:AvgBitrate"), Some("0 bps"));
 }

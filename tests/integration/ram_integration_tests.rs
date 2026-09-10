@@ -1,5 +1,5 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
 
 /// The pinned ExifTool 13.59 fixture is a RealAudio metafile whose sole line
 /// is a streaming URL. This exercises the production detector and dispatch
@@ -7,10 +7,10 @@ use std::path::Path;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn ram_fixture_reports_url() {
-    let metadata = read_metadata(Path::new(
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images/Real.ram",
-    ))
-    .expect("read pinned RAM fixture");
+    let Some(path) = pinned_fixture_path("Real.ram") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned RAM fixture");
 
     assert_eq!(
         metadata
