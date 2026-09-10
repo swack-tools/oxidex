@@ -5,40 +5,160 @@ The corpus at /tmp/oxidex-exiftool-cache/combined-samples is a local developer
 cache, absent on CI runners. An unguarded test that reads it panics on NotFound,
 and because nextest is fail-fast, one such panic aborts the whole suite -- which
 is how main stayed red for two days while looking like a single broken test.
+
+This is a lexical check of literal paths in test bodies, not a Rust parser or
+data-flow analysis. Module constants and indirect/helper reads are outside its
+scope. Comments and literals do not contribute braces or guard expressions.
+Accepted guards are standalone negative availability checks with a direct return:
+the repository-wide helper, or Path::new(the same literal).is_file()/exists().
+Unknown guard forms remain review findings rather than silently passing.
 """
-import re, sys, pathlib
+import pathlib
+import re
+import sys
 
 CORPUS = "oxidex-exiftool-cache/combined-samples"
 GUARD = "pinned_corpus_available"
-bad = []
-roots = [pathlib.Path("src"), pathlib.Path("tests")]
-for f in sorted(x for r in roots for x in r.rglob("*.rs")):
-    lines = f.read_text().splitlines()
-    for i, line in enumerate(lines):
-        if CORPUS not in line:
-            continue
-        stripped = line.lstrip()
-        if stripped.startswith("//") or stripped.startswith("*"):
-            continue  # doc/comment reference is fine
-        if "is_file()" in stripped or ".exists()" in stripped or "eprintln!" in stripped:
-            continue  # this line IS the guard, not a guarded read
-        j = i
-        while j >= 0 and not re.match(r"\s*(async\s+)?fn\s+\w+", lines[j]):
-            j -= 1
-        if j < 0:
-            continue
-        if not any("#[test]" in lines[k] for k in range(max(0, j - 6), j)):
-            continue  # not a test fn
-        body = "\n".join(lines[j:i])
-        guarded = GUARD in body or "is_file()" in body or ".exists()" in body
-        if not guarded:
-            bad.append(f"{f}:{i+1}  {stripped[:70]}")
+RAW_STRING = re.compile(r'(?:b|c)?r(#{0,255})"')
+CHARACTER = re.compile(r"'(?:\\(?:u\{[0-9a-fA-F_]+\}|x[0-9a-fA-F]{2}|.)|[^'\\\n])'")
 
-if bad:
-    print("Unguarded pinned-corpus reads in #[test] functions:\n")
-    for b in bad:
-        print("  " + b)
-    print(f"\n{len(bad)} violation(s). Gate each on "
-          f"`if !crate::test_support::{GUARD}() {{ return; }}`.")
-    sys.exit(1)
-print("OK: every pinned-corpus test is guarded.")
+def lexical_source(source):
+    """Keep offsets/newlines, replace strings by @ markers and erase comments."""
+    code = list(source)
+    literals = {}
+    i = 0
+    while i < len(source):
+        start = i
+        literal = False
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            i = len(source) if end < 0 else end
+        elif source.startswith("/*", i):
+            depth = 1
+            i += 2
+            while i < len(source) and depth:
+                if source.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif source.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                else:
+                    i += 1
+        elif raw := RAW_STRING.match(source, i):
+            end = source.find('"' + raw[1], raw.end())
+            i = len(source) if end < 0 else end + 1 + len(raw[1])
+            literal = True
+        elif source[i] == '"':
+            i += 1
+            while i < len(source):
+                if source[i] == "\\":
+                    i += 2
+                elif source[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            i = min(i, len(source))
+            literal = True
+        elif char := CHARACTER.match(source, i):
+            i = char.end()  # Do not mistake Rust lifetimes for character literals.
+        else:
+            i += 1
+            continue
+        code[start:i] = ["\n" if c == "\n" else " " for c in source[start:i]]
+        if literal:
+            code[start] = "@"
+            literals[start] = source[start:i]
+    return "".join(code), literals
+
+
+def delimiter_pairs(code):
+    stack, pairs = [], {}
+    for pos, char in enumerate(code):
+        if char in "{([":
+            stack.append(pos)
+        elif char in "})]" and stack:
+            pairs[stack.pop()] = pos
+    return pairs
+
+
+TEST = re.compile(
+    r"#\s*\[\s*test\s*\]\s*(?:#\[[^\]]*\]\s*)*"
+    r"(?:pub(?:\([^)]*\))?\s+)?(?:(?:async|unsafe)\s+)*fn\s+\w+\s*[^;{]*\{"
+)
+SKIP = re.compile(
+    r"(?<=[;{}])\s*if\s*!\s*(?:"
+    r"(?:crate::test_support::)?pinned_corpus_available\s*\(\s*\)"
+    r"|(?:std::path::)?Path::new\s*\(\s*(?P<path>@)\s*\)\s*"
+    r"\.\s*(?:is_file|exists)\s*\(\s*\))\s*\{"
+)
+# Plain diagnostic strings are not reads. Calls used as formatting arguments
+# are deliberately excluded: eprintln!("{:?}", fs::read("...")) still reads.
+DIAGNOSTIC = re.compile(r"\beprintln!\s*\(\s*@\s*(?:,\s*@\s*)*,?\s*\)")
+RETURN = re.compile(r"[;{}]\s*(?P<statement>return)\s*;")
+
+
+def violations(source):
+    if CORPUS not in source:
+        return []
+    code, literals = lexical_source(source)
+    pairs = delimiter_pairs(code)
+
+    def parents(pos):
+        return {start for start, end in pairs.items() if start < pos < end}
+
+    bad = []
+    for test in TEST.finditer(code):
+        start = test.end() - 1
+        end = pairs.get(start, len(code))
+        guards = []
+        for skip in SKIP.finditer(code, start, end):
+            opening = skip.end() - 1
+            closing = pairs.get(opening, end)
+            # A return inside another if, closure, or macro argument does not
+            # establish this guard. Only a direct return statement counts.
+            returns = RETURN.finditer(code, opening, closing)
+            if not any(parents(ret.start("statement")) == parents(opening) | {opening}
+                       for ret in returns):
+                continue
+            path = literals[skip.start("path")] if skip["path"] else None
+            guards.append((skip.start(), opening, closing, parents(opening), path))
+        diagnostics = list(DIAGNOSTIC.finditer(code, start, end))
+        for pos, literal in literals.items():
+            if not start < pos < end or CORPUS not in literal:
+                continue
+            if any(match.start() < pos < match.end() for match in diagnostics):
+                continue
+            if any(begin < pos < opening or (
+                    closing < pos and scope <= parents(pos)
+                    and (path is None or path == literal))
+                   for begin, opening, closing, scope, path in guards):
+                continue
+            bad.append(pos)
+    return sorted(set(bad))
+
+
+def main():
+    bad = []
+    roots = [pathlib.Path("src"), pathlib.Path("tests")]
+    for path in sorted(x for root in roots for x in root.rglob("*.rs")):
+        source = path.read_text()
+        lines = source.splitlines()
+        for pos in violations(source):
+            line = source.count("\n", 0, pos)
+            bad.append(f"{path}:{line + 1}  {lines[line].lstrip()[:70]}")
+    if bad:
+        print("Unguarded corpus-path literals in #[test] bodies:\n")
+        for finding in bad:
+            print("  " + finding)
+        print(f"\n{len(bad)} violation(s). Gate each on "
+              f"`if !crate::test_support::{GUARD}() {{ return; }}`.")
+        return 1
+    print("OK: no unguarded corpus-path literals in #[test] bodies "
+          "(constant aliases and indirect reads are outside this lexical check).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
