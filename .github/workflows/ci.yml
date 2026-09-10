@@ -424,10 +424,6 @@ jobs:
     # (seconds, vs minutes on the GitHub-hosted pool), not for the cores.
     runs-on: warp-ubuntu-latest-x64-2x
     timeout-minutes: 10
-    env:
-      # Downloaded oracle inputs must not dirty the checkout that the
-      # measurement guard is about to verify. All stages use this same tree.
-      EXIFTOOL_SOURCE: ${{ runner.temp }}/oxidex-table-oracle
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The release comes from .exiftool-version, the repo-wide pin. This job
@@ -460,6 +456,10 @@ jobs:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
         run: |
           set -euo pipefail
+          # runner.temp is not available in job-level env expressions.
+          # Resolve it at runtime and share one external tree with later steps.
+          EXIFTOOL_SOURCE="$RUNNER_TEMP/oxidex-table-oracle"
+          echo "EXIFTOOL_SOURCE=$EXIFTOOL_SOURCE" >> "$GITHUB_ENV"
           curl --fail --silent --show-error --location -o "$RUNNER_TEMP/exiftool-tables.tar.gz" \
             "https://github.com/exiftool/exiftool/archive/refs/tags/${ET_VERSION}.tar.gz"
           mkdir -p "$EXIFTOOL_SOURCE"
