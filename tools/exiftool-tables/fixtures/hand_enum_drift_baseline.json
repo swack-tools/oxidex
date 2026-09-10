@@ -1,6 +1,6 @@
 {
  "src/parsers/tiff/makernotes/canon.rs": {
-  "rust_only_count": 236
+  "rust_only_count": 235
  },
  "src/parsers/tiff/makernotes/minolta_a100_tables.rs": {
   "rust_only_count": 297

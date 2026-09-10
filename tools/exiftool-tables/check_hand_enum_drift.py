@@ -1,33 +1,29 @@
 #!/usr/bin/env python3
-"""Coarse enum-fingerprint drift check for hand-embedded ExifTool PrintConv
-literals that have no committed generator.
+"""Coarse enum-fingerprint drift check for historical ExifTool PrintConv
+transcriptions and inline Canon decoders.
 
-Tag-machinery overhaul Step 16, additional scope: six generated files exist
-with no committed generator at all (see docs/TRANSCRIPTION.md's "Honest
-limits" and OVERHAUL_OXIDEX_PLAN.md's Stage 3 exit criteria) --
-`sony/{enciphered,plain,main_extra}_tables.rs`,
-`nikon/{encrypted,settings}_tables.rs`, `minolta_a100_tables.rs` -- plus
-`canon.rs`'s 175+ `const_decoder!`/`bitfield_decoder!` arms, which carry the
-same problem at smaller scale (a committed generator exists for
-`custom_functions2_tables.rs` but not for the bulk of canon.rs's own inline
-decoders). Each was "read out of ExifTool's own hash in-process rather than
-retyped" by a human, once, and nothing re-checks that reading against a
-version bump.
+Tag-machinery overhaul Step 16 introduced this check for six vendor files
+that then lacked committed generators, plus canon.rs's inline decoders.
+Sony main_extra_tables.rs and minolta_a100_tables.rs now have generators.
+Four vendor files still lack producers: sony/{enciphered,plain}_tables.rs
+and nikon/{encrypted,settings}_tables.rs. The original seven-target check
+remains useful as a separate coarse check; it does not replace regeneration
+or prove the remaining inline Canon decoders correspond to their Perl tables.
 
 None of these files' internal structure (which specific `BinTag`/`SettingsTag`
 uses which named `M<n>`/`PC_<n>` array, at which byte offset, under which
 `Condition`) is mechanically comparable to `dump_tables.pl`'s output without
 re-implementing each file's bespoke DSL -- that is exactly the "distinct DSL
-per file" problem TRANSCRIPTION.md documents, and the reason these six were
-NOT reconstructed as generators in Step 14. This script does NOT attempt that.
+per file" problem TRANSCRIPTION.md documents. This script does NOT attempt that.
 
 What it checks instead, deliberately coarse: it extracts every literal
-`(key, "value")` pair textually present in the target Rust file(s) -- this
+`(key, "value")` pair present in code in the target Rust file(s), excluding
+comment and string-literal examples -- this
 catches every `static M<n>`/`const PC_<n>`/`const_decoder!`/`bitfield_decoder!`
 array regardless of which named constant holds it -- and treats it as a
-multiset of claimed ExifTool facts. Separately, it unions every PrintConv
+set of claimed ExifTool facts. Separately, it unions every PrintConv
 enum-map and list-item entry across every table in the named ExifTool
-module(s) from a `dump_tables.pl` JSON dump, as a multiset of facts ExifTool
+module(s) from a `dump_tables.pl` JSON dump, as a set of facts ExifTool
 actually declares right now. It reports:
 
   * RUST_ONLY: (key, value) pairs the Rust file states that appear in NO
@@ -56,6 +52,9 @@ import json
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from rust_source import lexical_source
 
 # Matches a literal `(KEY, "VALUE")` pair where KEY is a decimal or hex
 # integer literal (optionally negative, optionally suffixed `u32`/`i32`/...,
@@ -101,8 +100,13 @@ def unescape(s: str) -> str:
 
 def extract_rust_pairs(path: Path) -> set[tuple[str, str]]:
     text = path.read_text()
+    code, _ = lexical_source(text)
     pairs = set()
     for m in PAIR_RE.finditer(text):
+        # Inspect the tuple opening in masked code, but extract key/value from
+        # the original text so real string keys and escaped values survive.
+        if code[m.start()] != "(":
+            continue
         key = normalize_key(m.group("key"), m.group("qkey"))
         value = unescape(m.group("value"))
         pairs.add((key, value))
