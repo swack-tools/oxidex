@@ -14,7 +14,7 @@ validation and integration state. No release-delta rehearsal is complete.
 ```sh
 just regen-tables          # primary generation, including binary and IFD tables
 just verify-tables         # independent checks of committed table declarations
-just regen-tables-all      # primary generation plus downstream vendor/charset tables
+just regen-tables-all      # primary generation plus all declared downstream tables
 just regen-tables-tier2    # downstream generation only
 ```
 
@@ -27,9 +27,10 @@ command below when comparing versions in isolated source trees.
 `regen.sh` generates binary and IFD tables, file identification, Composite
 definitions and compiled Composite expressions, FITS names, and expression/value-
 conversion ledgers. `regen-all.sh` adds vendor subdirectory tables, Nikon AF-point
-grids, bespoke transcriptions, recovered Sony/Minolta generators and Macintosh
-CJK charset tables. `artifacts.py` is the single output inventory for these
-currently wired commands: 8 tier-1 and 17 tier-2 artifacts. Both scripts resolve
+grids, bespoke transcriptions, recovered Sony/Minolta generators, Macintosh
+CJK charset tables, GeoTIFF key maps, DICOM dictionaries and lens alternatives.
+`artifacts.py` is the single output inventory: 8 tier-1 and 20 tier-2 artifacts.
+Both scripts resolve
 their output paths and formatting sets from it; the bump's promotion/recovery sets
 and CI's tier-2 comparison use the same inventory. The bump classifier also
 reads it when identifying the four vendor files still lacking producers. Composite's second output
@@ -50,7 +51,7 @@ remaining limits; generated once does not mean automatically refreshable.
 ## Generated-output inventory and write checks
 
 ```sh
-python3 tools/exiftool-tables/artifacts.py paths                 # all 25 outputs
+python3 tools/exiftool-tables/artifacts.py paths                 # all 28 outputs
 python3 tools/exiftool-tables/artifacts.py paths --tier 2        # downstream outputs
 python3 tools/exiftool-tables/artifacts.py paths --tier 1 --kind rust --absolute
 python3 tools/exiftool-tables/artifacts.py path composite-compute
@@ -80,7 +81,7 @@ necessary. Formatting runs directly on manifest Rust paths with the package's
 
 Write accounting does not establish cross-Perl reproducibility. An earlier
 same-pin run omitted `CanonCustom::ConvertPfn` and 29 uses under Perl 5.34. The
-pending Canon repair recognizes both audited deparse bodies and requires the
+implemented Canon repair recognizes both audited deparse bodies and requires the
 named verification entry and correct input domain. Fresh native Perl 5.34 and
 5.38 oracles each passed 16,789 probe comparisons; generated binary and IFD Rust
 match each other and the committed files. See the execution plan for scope.
@@ -88,8 +89,25 @@ match each other and the committed files. See the execution plan for scope.
 The EXIT check preserves a failing producer's status and keeps its entry snapshot
 outside the checkout for diagnosis. It detects violations **without rollback**.
 The separate upgrade transaction supplies build isolation and checked promotion.
-Neither command wires the currently omitted DICOM, GeoTIFF or lens-alternative
-producers, synchronizes tag catalogs, or refreshes validation baselines.
+The runner includes GeoTIFF, DICOM and lens alternatives. After formatting, it runs
+`verify_geotiff.py` (compiled names, map dispatch and lookup over the complete
+u16 domain) and `verify_dicom_dict.py` (all dictionary/UID facts compared with
+the loaded Perl tables), and `verify_lens_alternatives.py` (complete Canon EF/RF
+identity rows and Pentax alternatives, with explicit absence checks for RF and
+Olympus fractional alternatives). All use the same selected source and Perl as
+generation; CI executes them before checking drift. These checks certify the
+declared facts, not file parsing. Canon EF/RF selection preserves raw identity
+with the selected occurrence; RF uses its own lookup table. Catalog
+synchronization and validation-baseline refresh remain separate work.
+
+The inventory counts refreshable files, not extraction coverage or the fraction
+of the codebase that is generated. These producers can regenerate supported
+declaration changes and check their emitted facts automatically. A new Perl
+shape, conversion or runtime dependency deliberately refuses and requires a
+reviewed generator/engine change. The Canon ID collision discovered during
+wiring is an example of runtime work that generation alone cannot solve. Four
+Sony/Nikon outputs still lack producers. Only the planned release-delta exercise
+can establish which manual interventions that particular upgrade needs.
 
 ## Isolated upgrade transaction
 
@@ -115,9 +133,12 @@ produces incomplete evidence, exits nonzero, and cannot be used for promotion.
 The report directory retains stage logs, input identities, generated payloads,
 comparison results and `transaction.json`. A same-pin dry run validates the
 workflow only; it does not measure the cost or compatibility of a release change.
+For a retrospective `--from` exercise, both variants use the current source
+commit with their respective generated artifacts. This isolates the generator
+transition; it does not reconstruct an old released OxiDex implementation.
 
 Dry runs and failures before promotion leave caller source and index untouched.
-A live run rechecks caller identity and promotes only the 25 manifest outputs
+A live run rechecks caller identity and promotes only the 28 manifest outputs
 plus the pin, using journaled payloads and atomic file replacement. It preserves
 the index. Interrupted promotion can be resumed as checked restoration with:
 
@@ -199,3 +220,15 @@ validate the resulting runtime migration.
 Run `expr_coverage.py`/`analyze.py` against the current pinned dump to rank refused
 forms. Historical percentages in [Transcription](../../docs/TRANSCRIPTION.md)
 describe their recorded snapshots, not today's extraction or upgrade automation.
+
+### Expression-oracle execution limits
+
+`verify_exprs.py --build-timeout 1800 --timeout 180` gives Cargo compilation a
+separate deadline from each Perl/Rust oracle execution. The harness is built
+with two Cargo jobs and run at the unique executable path Cargo reports for
+its exact source file. Probe IDs must be complete and unique before any ledger
+is written; an empty or partial pair of outputs cannot establish equivalence.
+An existing harness is preserved and refused. Managed process groups are cleaned
+on failure and interruption; the upgrade journal retains the command status
+and any additional cleanup failure. These limits apply to this oracle, not an
+overall wall-clock limit for the upgrade transaction.

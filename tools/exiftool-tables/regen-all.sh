@@ -241,10 +241,28 @@ python3 "$ROOT/src/parsers/font/mac_charset/generate_tables.py" \
     "$LIB/Image/ExifTool/Charset"
 
 echo "=========================================================="
+echo ">> TIER 2f: GeoTIFF, DICOM and lens alternatives"
+echo "=========================================================="
+python3 "$HERE/gen_geotiff_printconv.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --out "$(artifact_path geotiff)"
+python3 "$HERE/gen_dicom_dict.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --out "$(artifact_path dicom)"
+"$PERL" "$HERE/dump_lens_alternatives.pl" --exiftool-dir "$LIB/.." \
+    --out "$(artifact_path lens-alternatives)"
+
+echo "=========================================================="
 echo ">> formatting tier-2 output"
 echo "=========================================================="
 cd "$ROOT"
 format_artifacts 2
 
+echo ">> independently verifying complete GeoTIFF, DICOM and lens facts"
+python3 "$HERE/verify_geotiff.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --rust-file "$(artifact_path geotiff)"
+python3 "$HERE/verify_dicom_dict.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --input "$(artifact_path dicom)"
+python3 "$HERE/verify_lens_alternatives.py" "$(artifact_path lens-alternatives)" \
+    --exiftool-dir "$LIB/.." --perl "$PERL"
+
 echo
-echo ">> done: tier 1 + tier 2 regenerated from ExifTool $PIN at $LIB"
+echo ">> done: selected tiers regenerated from ExifTool $PIN at $LIB"

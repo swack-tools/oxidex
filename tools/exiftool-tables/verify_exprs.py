@@ -22,7 +22,8 @@ Instruments named, per AGENTS.md doctrine:
   - Perl side:  /usr/bin/perl5.34 -I <pinned ExifTool 13.59 lib>, capability-
     probed before use (never a bare `perl`/`exiftool` off PATH).
   - Rust side:  a throwaway `src/bin/expr_oracle_harness.rs`, auto-discovered
-    by Cargo, built and run via `cargo run` -- i.e. the exact Rust source
+    by Cargo, built with its own deadline and executed at the path reported
+    by Cargo -- i.e. the exact Rust source
     text `exprs.py` emits (for compile()) and the hand-written functions in
     `src/exiftool_tables/exprs.rs` (for the named helpers), not a
     reimplementation of either. The harness file is generated and deleted by
@@ -45,6 +46,7 @@ import sys
 from pathlib import Path
 
 import exprs
+from process_groups import interruptible, run_captured
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS_PATH = REPO_ROOT / "src" / "bin" / "expr_oracle_harness.rs"
@@ -606,7 +608,26 @@ def build_perl_script(jobs, et_lib):
     return "\n".join(lines)
 
 
-def run_perl(perl_bin, script_text, timeout):
+def parse_probe_output(stdout, expected, label):
+    """Require one complete result per job; absent output is never agreement."""
+    out = {}
+    # Split on LF only: other control characters can belong to a value.
+    for line in stdout.split("\n"):
+        if not line:
+            continue
+        if "\t" not in line:
+            raise SystemExit(f"{label}: malformed probe output: {line[:120]!r}")
+        jid, value = line.split("\t", 1)
+        if jid not in expected or jid in out:
+            raise SystemExit(f"{label}: unknown or duplicate probe ID {jid!r}")
+        out[jid] = value
+    missing = expected - out.keys()
+    if missing:
+        raise SystemExit(f"{label}: missing {len(missing)} probe result(s)")
+    return out
+
+
+def run_perl(perl_bin, script_text, timeout, expected):
     # A `-e` argument is subject to the OS argv-length limit; the full probe
     # battery comfortably exceeds it, so the script is always written to a
     # temp file and run as a script, not inlined.
@@ -615,24 +636,16 @@ def run_perl(perl_bin, script_text, timeout):
         fh.write(script_text)
         script_path = fh.name
     try:
-        r = subprocess.run(
+        r = run_captured(
             [perl_bin, script_path],
-            capture_output=True, text=True, timeout=timeout, env=ORACLE_ENV,
+            timeout=timeout, env=ORACLE_ENV,
         )
     finally:
         Path(script_path).unlink(missing_ok=True)
     if r.returncode != 0:
         print("PERL HARNESS STDERR:", r.stderr[-4000:], file=sys.stderr)
         raise SystemExit(f"perl harness exited {r.returncode}")
-    out = {}
-    # LF only: `splitlines()` also splits on a CR/VT/FF inside a result, and
-    # it would do so on BOTH sides alike -- the truncated halves would then
-    # compare equal, and the oracle would have graded half a value.
-    for line in r.stdout.split("\n"):
-        if "\t" in line:
-            jid, val = line.split("\t", 1)
-            out[jid] = val
-    return out
+    return parse_probe_output(r.stdout, expected, "Perl oracle")
 
 
 # --- Rust side --------------------------------------------------------
@@ -731,25 +744,56 @@ def build_rust_harness(jobs, by_expr):
     return src
 
 
-def run_rust(jobs, by_expr, timeout):
+def cargo_harness_path(stdout):
+    candidates = []
+    for line in stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except ValueError:
+            raise SystemExit("Cargo returned malformed JSON build output")
+        if not isinstance(message, dict):
+            raise SystemExit("Cargo returned a non-object build message")
+        target = message.get("target", {})
+        if (message.get("reason") == "compiler-artifact"
+                and target.get("name") == "expr_oracle_harness"
+                and "bin" in target.get("kind", [])
+                and Path(target.get("src_path", "")).resolve() == HARNESS_PATH.resolve()):
+            executable = message.get("executable")
+            if not isinstance(executable, str) or not executable:
+                raise SystemExit("Cargo harness artifact has no executable")
+            path = Path(executable)
+            if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+                raise SystemExit(f"Cargo harness executable is not usable: {path}")
+            candidates.append(path.resolve())
+    if len(candidates) != 1:
+        raise SystemExit(f"Cargo reported {len(candidates)} matching harness artifacts; expected one")
+    return candidates[0]
+
+
+def run_rust(jobs, by_expr, timeout, build_timeout=1800):
     src = build_rust_harness(jobs, by_expr)
     HARNESS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    HARNESS_PATH.write_text(src, encoding="utf-8")
+    # Never overwrite or delete a harness owned by another invocation.
+    stream = HARNESS_PATH.open("x", encoding="utf-8")
     try:
-        r = subprocess.run(
-            ["cargo", "run", "--quiet", "--bin", "expr_oracle_harness"],
-            cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout,
-            env=ORACLE_ENV,
+        with stream:
+            stream.write(src)
+        print(f"building Rust harness (deadline {build_timeout}s) ...", flush=True)
+        build = run_captured(
+            ["cargo", "build", "--locked", "--jobs", "2", "--bin", "expr_oracle_harness",
+             "--message-format=json-render-diagnostics"],
+            cwd=REPO_ROOT, timeout=build_timeout, env=ORACLE_ENV,
         )
+        if build.returncode:
+            print("RUST BUILD STDERR:", build.stderr[-6000:], file=sys.stderr)
+            raise SystemExit(f"rust harness build exited {build.returncode}")
+        executable = cargo_harness_path(build.stdout)
+        print(f"running Rust harness: {executable} (deadline {timeout}s)", flush=True)
+        r = run_captured([str(executable)], cwd=REPO_ROOT, timeout=timeout, env=ORACLE_ENV)
         if r.returncode != 0:
             print("RUST HARNESS STDERR:", r.stderr[-6000:], file=sys.stderr)
             raise SystemExit(f"rust harness exited {r.returncode}")
-        out = {}
-        for line in r.stdout.split("\n"):  # LF only, as in run_perl
-            if "\t" in line:
-                jid, val = line.split("\t", 1)
-                out[jid] = val
-        return out
+        return parse_probe_output(r.stdout, {f"J{j[0]}" for j in jobs}, "Rust harness")
     finally:
         HARNESS_PATH.unlink(missing_ok=True)
 
@@ -770,12 +814,22 @@ def results_match(rust_type, perl_val, rust_val):
     return False
 
 
+def positive_seconds(value):
+    seconds = int(value)
+    if seconds <= 0:
+        raise argparse.ArgumentTypeError("timeout must be a positive number of seconds")
+    return seconds
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("tables_json")
     ap.add_argument("--perl", default="/usr/bin/perl5.34")
     ap.add_argument("--et-lib", default="/tmp/oxidex-exiftool-cache/exiftool/lib")
-    ap.add_argument("--timeout", type=int, default=180)
+    ap.add_argument("--timeout", type=positive_seconds, default=180,
+                    help="deadline in seconds for each oracle execution (default: 180)")
+    ap.add_argument("--build-timeout", type=positive_seconds, default=1800,
+                    help="separate Cargo compilation deadline in seconds (default: 1800)")
     ap.add_argument("--sample-lines", type=int, default=15)
     ap.add_argument(
         "--ledger-out",
@@ -839,20 +893,21 @@ def main():
         for e in sorted(composite_domain):
             print(f"    {re.sub(r'[$]s+', ' ', e.strip())[:88]}")
 
+    if not jobs:
+        raise SystemExit("no translated probe jobs; refusing an empty oracle run")
     perl_script = build_perl_script(jobs, args.et_lib)
     print("running Perl oracle ...")
-    perl_out = run_perl(args.perl, perl_script, args.timeout)
+    perl_out = run_perl(args.perl, perl_script, args.timeout, {f"J{j[0]}" for j in jobs})
 
-    print("running Rust harness (cargo run --bin expr_oracle_harness) ...")
-    rust_out = run_rust(jobs, by_expr, args.timeout)
+    rust_out = run_rust(jobs, by_expr, args.timeout, args.build_timeout)
 
     per_expr = {}  # raw_expr -> [pass, fail, skip]
     fail_examples = []
     skip_examples = []
     for job_id, domain, raw, probe in jobs:
         jid = f"J{job_id}"
-        pv = perl_out.get(jid, "<missing>")
-        rv = rust_out.get(jid, "<missing>")
+        pv = perl_out[jid]
+        rv = rust_out[jid]
         rty = by_expr[raw][0]
         stats = per_expr.setdefault(raw, [0, 0, 0])
         if pv == "ERROR":
@@ -933,7 +988,9 @@ def main():
                 "perl": args.perl,
                 "perl_version": perl_version,
                 "et_lib": str(args.et_lib),
-                "rust": "cargo run --quiet --bin expr_oracle_harness",
+                "rust": "cargo build --locked --jobs 2 --bin expr_oracle_harness; execute reported artifact",
+                "build_timeout_seconds": args.build_timeout,
+                "probe_timeout_seconds": args.timeout,
                 # Both sides ran under this zone (see ORACLE_ENV); a ledger
                 # that does not say so cannot be reproduced on another host.
                 "tz": ORACLE_TZ,
@@ -956,4 +1013,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with interruptible():
+        main()

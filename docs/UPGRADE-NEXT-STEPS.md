@@ -10,15 +10,17 @@ criteria and [status page](./TAG_MACHINERY_STATUS.md) owns historical evidence.
 
 | Order | Work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 0 | Review and integrate PRs [#737](https://github.com/swack-tools/oxidex/pull/737), [#738](https://github.com/swack-tools/oxidex/pull/738) and [#739](https://github.com/swack-tools/oxidex/pull/739) | Implemented, draft and unmerged | Maintainer integration in stack order; reuse the classifier, manifest and verified transaction |
+| 0 | Review and integrate PRs [#737](https://github.com/swack-tools/oxidex/pull/737), [#738](https://github.com/swack-tools/oxidex/pull/738) and [#739](https://github.com/swack-tools/oxidex/pull/739), followed by `codex/wire-remaining-producers` | Implemented, draft and unmerged | Maintainer integration in stack order; reuse the classifier, manifest and verified transaction |
 | 1 | Canon CODE-ref recognition and verification | Implemented and validated; unmerged | Both native Perl oracles pass; missing verification and wrong input domain explicitly refuse |
 | 2 | Complete isolated old/new upgrade transaction | Implemented and validated; unmerged | Fixture controls pass on macOS/Linux; genuine 193-file same-pin run passes with unchanged caller source/index |
-| 3 | Connect three existing omitted generators | Queued | DICOM, GeoTIFF PrintConv and lens-alternative outputs regenerate from the selected source with independent checks |
+| 3 | Connect three existing omitted generators | Implemented and validated; unmerged | 28-output real same-pin transaction passes at `1428b6c7`; 193-file before/after totals identical, caller unchanged |
 | 4 | Rehearse 13.55 to 13.59 | Depends on 1–3 and sound provenance | Versioned artifacts, triage, identical-oracle corpus A/B, actual manual interventions and timings |
 | 5 | Finish existing runtime migrations | Separate owners; awaiting validated integration | IFD1, RawConv and embedded-IFD routing/activation established against the pinned oracle |
 | 6 | Complete producer/coverage accounting and broader walk checks | Queued | Generated, hand-maintained, withheld and unexercised behavior distinguished; deliberate bad offsets/conversions fail |
 
-The current bounded implementation covers items 1 and 2. A passing inventory
+Items 1 and 2 are validated in draft PR #739 at `785ffcfd`; its final CI and
+Docs Build passed. Item 3 is now implemented and validated on `codex/wire-remaining-producers`,
+starting from that verified head and reusing the root task checkout. A passing inventory
 check or same-pin generation run does not complete item 4 or certify runtime
 coverage. Four Sony/Nikon outputs still lack committed producers. Catalog
 synchronization has separate carry-forward semantics and is outside this table
@@ -26,10 +28,11 @@ transaction until that policy is resolved.
 
 ## 1. Repair the observed CODE-ref gaps
 
-The 13.59 dump under Perl 5.34 contains all 29 Canon PersonalFuncs fields but
-the current registry only accepts the equivalent Perl 5.38 spelling. Collection
-drops the conversion before oracle jobs are created. Independently, the
-recognized CODE-ref emission path accepts an empty verified-expression set.
+Before the completed repair, the 13.59 dump under Perl 5.34 contained all 29
+Canon PersonalFuncs fields but the registry only accepted the equivalent Perl
+5.38 spelling. Collection dropped the conversion before oracle jobs were
+created. Independently, recognized CODE references accepted an empty
+verified-expression set. The repair and its validation are recorded below.
 
 - Register both complete audited bodies. Do not match by function name or
   normalize arbitrary syntax into equivalence.
@@ -123,24 +126,122 @@ See the [command contract](https://github.com/swack-tools/oxidex/blob/codex/upgr
 
 ## 3. Wire the existing omitted producers
 
-Read-only inspection identified the smallest next order; none is wired yet:
+Implementation started on 2026-09-10 from `785ffcfd` on
+`codex/wire-remaining-producers`. DICOM was integrated as `b9934841` (author
+`ea6ea1a4`), GeoTIFF and the first two runner additions as `10d20b78`, the
+real-shell controls as `f384b68f`, and the lens repair as `5e40396b` (author
+`78daf9d6`). All three outputs now participate in the shared manifest, tier-2
+runner, formatting, independent verification and CI drift checks: **28 outputs,
+8 in tier 1 and 20 in tier 2**. Final integrated checks and the complete same-pin
+transaction are running; this is not yet a release-delta rehearsal or landing.
 
-1. `gen_geotiff_printconv.py` writes `src/parsers/tiff/geotiff_printconv.rs`.
-   Preserve its loaded-version and `--check` behavior, add explicit Perl/output
-   selection, then independently compare its maps and names.
-2. `gen_dicom_dict.py` writes `src/parsers/specialized/dicom_dict.rs`.
-   Replace the optional cache-stamp check with selected-source identity and
-   compare complete dictionary/UID facts with the loaded Perl tables.
-3. `dump_lens_alternatives.pl` supplies `src/composite/lens_alternatives.rs`.
-   Add a deterministic complete-file contract and pin enforcement; its existing
-   body-only output must not overwrite the module header. Add refusal controls
-   for unmodeled values and label collisions before wiring it.
+| Producer | Output | Independent facts at 13.59 |
+| --- | --- | --- |
+| `gen_geotiff_printconv.py` | `src/parsers/tiff/geotiff_printconv.rs` | Compiled lookups match all 64 names, 19 map associations and 2,089 conversion facts |
+| `gen_dicom_dict.py` | `src/parsers/specialized/dicom_dict.rs` | Loaded Perl agrees with all 5,669 dictionary entries and 1,978 UIDs |
+| `dump_lens_alternatives.pl` | `src/composite/lens_alternatives.rs` | Canon EF 239 bases/296 alternatives; RF 76 bases/no alternatives; Pentax 14 ambiguous rows/45 alternatives; Olympus has no fractional alternatives |
 
-Add each output through the existing manifest and tier-2 runner. Wiring all three
-would expand the manifest from 25 to 28 outputs, not establish new runtime
-coverage. Preserve mixed/header contents, verify deterministic generation and
-selected-source plumbing, run the relevant parser tests and independent fact
-oracles, and repeat the full same-pin transaction before the release rehearsal.
+Each producer binds the selected source and Perl, refuses unsupported facts,
+and has explicit complete-file/check behavior. GeoTIFF and DICOM output remains
+byte-identical. The lens producer now emits the complete module and preserves
+raw IDs in its generated Canon tables. Eleven GeoTIFF, ten DICOM and twenty-three
+lens CLI controls pass. Nineteen manifest controls and four real-shell controls
+pass; the latter deliberately fail each new producer/verifier and reject
+undeclared writes using the production manifest and scripts with synthetic
+leaf tools. They establish orchestration, separately from the native fact checks.
+
+**Runtime defect found and repaired:** Canon IDs 129 and 136 share the display
+name `Canon EF 300mm f/2.8L USM`, but only 136 has the Tamron 15–30mm alternative.
+The old label-keyed table conflated them. The repair preserves display/raw forms
+atomically on the exact occurrence, selects its identity with that occurrence,
+and retains it through TIFF, DNG and CR3 bridges. RF uses its own PrintConv table
+as well as its own label/ID; RF-zero falls back according to the pinned oracle.
+A losing duplicate cannot overwrite the winning occurrence's raw ID.
+
+The first RF regression failed because its fixture used EF IDs as RF IDs, which
+also exposed a real draft defect selecting EF alternatives for RF. That evidence
+is retained and explicitly superseded by native RF Composite checks. Final
+independent core comparisons pass **239/239 Canon EF** and **154/154 RF** cases
+(all 76 RF rows plus unknown 136, each paired with EF129/136). Compound Pentax
+and Olympus values retain their behavior. The public legacy `IfdEntries` helper
+has no raw-value channel; no production caller beyond its export was found.
+With missing identity, the core preserves unambiguous labels and omits only
+EF129/136 in the measured no-optional-input domain (237/239 still match).
+
+Author validation: 91 lens-focused Rust tests pass; the full library passes
+4,600 tests with one ignored. Strict package Clippy and formatting pass. Eight
+real TIFF test carriers match pinned ExifTool's LensType, RFLensType and LensID;
+LensID correctness improves from **5/8 to 8/8**, fixing three EF129 cases.
+Direct `conformance.py` A/B selected **194 files** with no extension exclusions:
+both binaries report 9,969 MATCH, 1,573 MISSING, 31 VALUE, 13 RENAME and 684 EXTRA.
+No per-file semantic result changed after normalizing only list ordering. The
+historical baseline binary's archive, executable hash and 720 Rust/Cargo/config
+inputs were verified against the starting base; the candidate was freshly built.
+This A/B includes `JSON.json`, which the transaction's explicit 193-file selection
+excludes. Keep those two populations and instruments distinct.
+
+The earlier clean `10d20b78` tier-2 run reproduced all 27 then-wired outputs with
+zero net source changes. The final 28-output same-pin transaction passed at `1428b6c7`; its evidence
+is recorded below. A file inventory or table/core oracle does not establish
+complete extraction coverage. No parser retirement or version-pin change is part
+of this continuation. Temporary helpers are removed only after their commits,
+source equivalence and evidence are preserved.
+
+### Cold-build rehearsal failure and repair
+
+The first complete 28-output same-pin attempt at `65d6a791` failed after
+**429.229 seconds**. `verify_exprs.py` gave compilation plus probe execution a
+single 180-second budget; a fresh Cargo build exceeded it. A subsequent macOS
+process-group cleanup error (`EPERM` while descendants were exiting) obscured
+the original timeout. The caller's files and index remained unchanged. The
+failed journal and logs are retained separately from the next attempt.
+
+The repair separates a **1,800-second Cargo build budget** from each oracle's
+**180-second execution budget**, executes the unique harness artifact reported
+by Cargo, and requires exactly one result for every probe. Existing temporary
+harnesses refuse without being overwritten. Shared process-group cleanup waits
+for descendants, preserves the original failure in the transaction journal,
+and refuses persistent cleanup errors. Full-script controls exercise successful
+slow compilation, build/execution failures, bad Cargo output, incomplete probe
+output and ownership. The repaired real rehearsal subsequently passed as recorded below. Neither
+the failed nor successful same-pin run is an upgrade-cost estimate.
+
+Repair validation: the integrated tooling suite passes **415 executed methods**
+in 203.048 seconds, with five WholeDump methods unrun through one missing-fixture
+class skip. An additional native 5.34 dump run passes four of those methods and
+skips ledger validation because the committed ledger records native 5.38
+provenance. The completed transaction generated a matching dump/ledger pair; all five
+WholeDump methods then passed in the regenerated AFTER variant with no skips.
+The suite includes 16 full-script execution controls, 13 owned-process controls
+and command-journal failure preservation. Strict package Clippy, formatting and
+independent source review pass.
+
+
+### Final 28-output acceptance
+
+The real `bump-exiftool.sh 13.59 --dry-run` / `upgrade_transaction.py` run at
+`1428b6c7935afeed52b5ebd008bb7befc4b84902` passed in **668.522 seconds** using
+selected ExifTool 13.59 and native `/usr/bin/perl` 5.34.1. Both variants were
+freshly built. The command selected 193 eligible files from the pinned source's
+`t/images`, with explicit floors of 193 files and 1,000 oracle tags. Both sides
+reported **9,966 MATCH, 1,563 MISSING, 31 VALUE, 13 RENAME and 680 EXTRA**;
+comparison gates passed and the caller's source and index were unchanged.
+
+All 28 outputs were accounted for. Only `expr_oracle_ledger.json` changed,
+recording the fresh interpreter/source/build provenance; all generated Rust
+was unchanged. The expression oracle passed 607/607 expressions and 16,789
+probe comparisons, with 14 inapplicable Perl-error probes separately skipped.
+Complete GeoTIFF, DICOM and lens fact checks passed inside the real runner.
+The five WholeDump checks passed against that regenerated matching ledger.
+
+Evidence is retained in the cleanup audit's
+`handoff-continuation/producer-wiring-xmgiqiui/rehearsal-retry/`: `SUMMARY.json`,
+`driver-result.json`, `whole-dump.log`, and the `bump-sum5o8h1` transaction
+journal, source/artifact identities, reports and preserved measured binaries.
+The earlier failed attempt remains separately under `rehearsal/`. The next
+engineering experiment is item 4, **13.55 to 13.59**, with explicit refusal and
+manual-intervention accounting. It has not been run. Integration of the draft
+stack and the other retained work below remain open.
 
 ## Other retained work
 

@@ -40,7 +40,7 @@ class UpgradeTransactionTests(unittest.TestCase):
         self.root.mkdir()
         self.tools = self.root / "tools/exiftool-tables"
         self.tools.mkdir(parents=True)
-        for name in ("artifacts.py", "upgrade_transaction.py", "bump-exiftool.sh", "bump_conformance_gate.py"):
+        for name in ("artifacts.py", "upgrade_transaction.py", "process_groups.py", "bump-exiftool.sh", "bump_conformance_gate.py"):
             shutil.copy2(HERE / name, self.tools / name)
         for a in artifacts.select():
             write(self.root / a.path, f"committed-13.59|{a.key}\n")
@@ -422,6 +422,27 @@ pathlib.Path(sys.argv[sys.argv.index('--json-out')+1]).write_text(json.dumps(doc
             'GIT_OBJECT_DIRECTORY':str(self.base/'nonexistent-objects')})
         self.assertEqual(result.returncode,0,result.stderr);self.unchanged()
 
+
+
+class CommandJournalTests(unittest.TestCase):
+    def test_cleanup_failure_preserves_actual_command_status_and_journal(self):
+        for exit_code in (0, 7):
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as tmp:
+                transaction = object.__new__(tx.Transaction)
+                transaction.root = transaction.run = Path(tmp)
+                transaction.report = Path(tmp) / 'transaction.json'
+                transaction.doc = {'commands': []}
+                transaction.env = os.environ.copy()
+                with patch.object(tx, 'terminate_group', side_effect=PermissionError('injected cleanup denial')):
+                    with self.assertRaises(tx.Refused) as error:
+                        transaction.command('controlled-command', [sys.executable, '-c', f'raise SystemExit({exit_code})'])
+                journal = json.loads(transaction.report.read_text())['commands'][0]
+                self.assertEqual(journal['returncode'], exit_code)
+                self.assertGreaterEqual(journal['finished'], journal['started'])
+                self.assertIn('injected cleanup denial', journal['cleanup_error'])
+                self.assertIn('cleanup', str(error.exception))
+                if exit_code:
+                    self.assertIn('failed (7)', str(error.exception))
 
 
 if __name__=='__main__': unittest.main()

@@ -8,13 +8,22 @@ acceptance criteria. No parser or generator change is implemented by this plan.
 See the [execution plan](./UPGRADE-NEXT-STEPS.md) for the current bounded work,
 dependencies and milestone updates.
 
+Current continuation: `codex/wire-remaining-producers` builds on validated
+#739 and has completed the three omitted producers. All 28 outputs are wired
+and independently checked. The Canon raw-ID/RF defects and the observed
+cold-build/cleanup failures are repaired. The real 193-file same-pin transaction
+passes at `1428b6c7` with identical before/after totals and unchanged caller
+source/index. The execution plan records the exact checks. Remaining work is
+stack integration and the actual release-delta experiment, not rebuilding this
+infrastructure.
+
 ## What carried forward from the September 9 proposal
 
 | Original item | Disposition |
 | --- | --- |
 | 1.1 Fix the census | Landed as `380babda`; related script correction landed as `c7f5dd81`. Preserve the corrected occurrence accounting. |
 | 1.2 Coverage ledger | Partial foundations already exist. Join existing artifacts and inventory hand producers; do not start a second expression ledger. |
-| 1.3 Version-bump differ | A bump script and classifier already exist. Repair their current gaps, then rehearse a full transition. |
+| 1.3 Version-bump differ | Classifier and isolated transaction repairs are implemented in the draft stack. Complete acceptance/integration and measure a real release transition. |
 | 1.4 Sample-free walk checker | Proposed extension. Existing expression, condition, subdirectory and carrier checks remain useful; begin with the next table/engine migration. |
 | 1.5 Automatic activation | Deferred until certification covers the actual walk and producer conflicts. Keep current activation gates in force meanwhile. |
 | Part 2: bulk hand-code retirement | Choose bounded migrations by demonstrated benefit. Remove an overlapping hand producer only after its replacement is validated. |
@@ -24,26 +33,22 @@ test selected inputs; they do not prove arbitrary Perl/Rust equivalence or
 real-world offset/firmware behavior. The declaration inventory can be exhaustive
 within its extraction scope while runtime testing remains explicitly bounded.
 
-## 1. Repair the existing upgrade workflow
+## 1. Validate and integrate the implemented upgrade stack
 
-**Why first:** without a trustworthy upgrade experiment, neither an AUTO
-percentage nor an estimate of recurring maintenance is reliable.
+**Why first:** a trustworthy upgrade experiment is required before measuring
+recurring manual work. The classifier, shared artifact manifest, isolated
+old/new builds, provenance checks, CODE-ref repair and recoverable promotion
+are implemented in draft PRs #737–#739. The producer continuation extends the
+same manifest to 28 outputs; reuse this implementation.
 
-Scope:
+Remaining acceptance and integration work:
 
-- Integrate the completed shared manifest on `codex/upgrade-artifact-manifest`,
-  then use it for the isolated before/after builds and promotion/recovery below.
-  Regeneration, formatting, current bump path sets and CI already consume its
-  25 outputs, including implicit companions and both conversion ledgers.
-- Use complete old/new artifacts in isolated checkouts. The old comparison must
-  not retain target-version tier-2 outputs.
-- Make IFD classification agree with the generator. Separate declaration
-  transcribability from activation and observed execution.
-- Repair the dirty-tree/provenance handling for a deliberate regeneration and
-  reliable cleanup on success, failure and interruption. Preserve the ordinary
-  measurement guard.
-- Keep standing generator-less files and pre-existing refusals separate from
-  debt introduced by this release.
+- Preserve the completed 28-output acceptance evidence and resolve review or
+  hosted-CI findings against the final submitted head.
+- Review and land the existing draft stack in order, with exact-head CI and
+  preserved local evidence; resolve any review findings in those changes.
+- Keep unsupported declarations, four generator-less Sony/Nikon outputs and
+  catalog carry-forward policy explicit in the subsequent release experiment.
 
 **Implementation awaiting integration:** `b36983c2` on
 `codex/ifd-upgrade-triage` addresses IFD declaration classification using the
@@ -69,8 +74,10 @@ See the [manifest follow-up](./TAG_MACHINERY_STATUS.md#pending-generated-output-
 and [classifier follow-up](./TAG_MACHINERY_STATUS.md#pending-upgrade-classifier-repair)
 for validation and limits.
 
-Acceptance: every written artifact is accounted for; a dry run restores the
-starting state; a deliberate failure demonstrates cleanup; an IFD declaration
+Retained acceptance contract: every selected persistent output and unexpected
+final repository change is accounted for within the documented exclusions; a
+dry run leaves caller source/index unchanged; deliberate failures demonstrate
+cleanup; an IFD declaration
 supported by codegen is classified accordingly; neither comparison build mixes
 releases. Do not use a manually duplicated test manifest to prove completeness.
 

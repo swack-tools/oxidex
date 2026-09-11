@@ -27,6 +27,7 @@ import tempfile
 import time
 
 import artifacts
+from process_groups import terminate_group
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -305,28 +306,35 @@ class Transaction:
             proc = subprocess.Popen(list(map(str, argv)), cwd=cwd or self.root,
                                     env=env or self.env, stdout=output, stderr=stream,
                                     start_new_session=True)
+            command_error = None
+            cleanup_error = None
             try:
                 proc.wait()
+            except BaseException as exc:
+                command_error = exc
             finally:
-                # Also reap a shell's descendants on interruption. Commands in
-                # this transaction have no legitimate detached background work.
+                # A reaped leader does not imply its descendants have exited.
+                # Keep both the original command result and any cleanup error.
                 try:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    pass
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.wait()
-        item.update(returncode=proc.returncode, finished=time.time())
-        save(self.report, self.doc)
+                    # Nested oracle groups get 2s TERM + 2s KILL themselves.
+                    terminate_group(proc, term_timeout=5, kill_timeout=2)
+                except BaseException as exc:
+                    cleanup_error = exc
+                item.update(returncode=proc.returncode, finished=time.time())
+                if command_error is not None:
+                    item["command_error"] = repr(command_error)
+                if cleanup_error is not None:
+                    item["cleanup_error"] = repr(cleanup_error)
+                save(self.report, self.doc)
+        if command_error is not None:
+            if cleanup_error is not None:
+                command_error.add_note(f"process cleanup also failed: {cleanup_error}")
+            raise command_error
         if proc.returncode:
-            raise Refused(f"{name} failed ({proc.returncode}); see {out}")
+            detail = f"; cleanup also failed: {cleanup_error}" if cleanup_error is not None else ""
+            raise Refused(f"{name} failed ({proc.returncode}); see {out}{detail}")
+        if cleanup_error is not None:
+            raise Refused(f"{name} cleanup failed: {cleanup_error}; see {out}")
         return out
 
     def sources(self):

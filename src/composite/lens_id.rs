@@ -22,7 +22,9 @@
 //! `super::compute`'s module doc). Each branch below either reproduces
 //! ExifTool's arithmetic exactly or returns `None`; the omissions are listed
 //! in [`OMITTED`] with their Perl citations.
-use super::lens_alternatives::{CANON_LENS_ALTERNATIVES, PENTAX_LENS_ALTERNATIVES};
+use super::lens_alternatives::{
+    CANON_LENS_ALTERNATIVES, CANON_RF_LENS_ALTERNATIVES, PENTAX_LENS_ALTERNATIVES,
+};
 
 /// The `PrintLensID` branches this port does not implement, each returning
 /// `None` rather than a guess. Kept as data so a test can assert the list is
@@ -460,19 +462,54 @@ fn lens_with_tc(lens: &str, short_focal: f64) -> String {
     lens.to_string()
 }
 
-/// The candidate list for one `LensType` print string: ExifTool's
-/// `$lens =~ s/ or .*//s` plus the fractional-key alternatives.
-///
-/// Returns `None` when the string carries no alternatives at all, which is the
-/// `unless $$printConv{"$lensType.1"}` early return in both `PrintLensID`s.
+/// Build the upstream candidate list without conflating distinct raw IDs.
+/// `Err` means a missing numeric identity leaves more than one possible list.
 fn candidates(
-    table: &'static [(&'static str, &'static [&'static str])],
+    table: LensTable,
+    raw_id: Option<i64>,
     lens: &str,
-) -> Option<Vec<String>> {
-    let alts = table.iter().find(|(base, _)| *base == lens)?.1;
+) -> Result<Option<Vec<String>>, ()> {
+    let alts = match table {
+        LensTable::Canon | LensTable::CanonRf => {
+            let rows = if table == LensTable::Canon {
+                &CANON_LENS_ALTERNATIVES[..]
+            } else {
+                &CANON_RF_LENS_ALTERNATIVES[..]
+            };
+            if let Some(id) = raw_id {
+                let Some((_, base, alts)) = rows.iter().find(|(key, _, _)| *key == id) else {
+                    return Err(());
+                };
+                if *base != lens {
+                    return Err(());
+                }
+                *alts
+            } else {
+                let mut rows = rows.iter().filter(|(_, base, _)| *base == lens);
+                let Some((_, _, alts)) = rows.next() else {
+                    return Err(());
+                };
+                // Duplicate unambiguous labels have the same empty list. A
+                // shared label with different lists cannot recover its raw ID.
+                if rows.any(|(_, _, other)| *other != *alts) {
+                    return Err(());
+                }
+                *alts
+            }
+        }
+        LensTable::Pentax => PENTAX_LENS_ALTERNATIVES
+            .iter()
+            .find(|(base, _)| *base == lens)
+            .map_or(&[][..], |(_, alts)| *alts),
+        LensTable::Olympus => &[],
+        LensTable::None_ => return Err(()),
+    };
+    if alts.is_empty() {
+        return Ok(None);
+    }
     let mut out = vec![strip_or(lens).to_string()];
     out.extend(alts.iter().map(|s| (*s).to_string()));
-    Some(out)
+    Ok(Some(out))
 }
 
 /// `s/ or .*//s` -- everything from the first " or " onwards.
@@ -491,6 +528,8 @@ fn strip_or(lens: &str) -> &str {
 enum LensTable {
     /// `%canonLensTypes` -- a HASH PrintConv, with fractional keys.
     Canon,
+    /// FileInfo RFLensType has its own raw IDs and no fractional keys.
+    CanonRf,
     /// `%pentaxLensTypes` -- a HASH PrintConv, with fractional keys.
     Pentax,
     /// `%olympusLensTypes` -- a HASH PrintConv with *no* fractional keys at
@@ -528,21 +567,13 @@ impl LensTable {
             _ => None,
         }
     }
-
-    fn alternatives(self) -> Option<&'static [(&'static str, &'static [&'static str])]> {
-        match self {
-            Self::Canon => Some(&CANON_LENS_ALTERNATIVES),
-            Self::Pentax => Some(&PENTAX_LENS_ALTERNATIVES),
-            Self::Olympus => Some(&[]),
-            Self::None_ => None,
-        }
-    }
 }
 
 /// The positional inputs of `%Image::ExifTool::Exif::Composite{LensID}`
 /// (Exif.pm:5303-5360), named so the port below reads like the Perl.
 struct Args<'a> {
     lens_type: &'a str,
+    raw_lens_type: Option<i64>,
     focal_length: Option<f64>,
     max_aperture: Option<f64>,
     max_aperture_value: Option<f64>,
@@ -567,6 +598,9 @@ pub(super) fn compute_primary(
     lens_type_group: Option<&str>,
     make: Option<&str>,
     olympus_lens_type_pair: bool,
+    lens_type_raw: Option<&str>,
+    rf_lens_type_raw: Option<&str>,
+    rf_lens_type_group: Option<&str>,
 ) -> Option<String> {
     let get = |i: usize| inputs.get(i).copied().flatten();
     let f = super::compute::f;
@@ -613,8 +647,23 @@ pub(super) fn compute_primary(
         return None;
     }
 
-    let args = Args {
+    let raw_rf_lens_type = if get(12).is_some() {
+        if rf_lens_type_group != Some("Canon") {
+            return None;
+        }
+        rf_lens_type_raw.map(str::parse::<i64>).transpose().ok()?
+    } else {
+        None
+    };
+    let rf_override = get(12).is_some() && raw_rf_lens_type != Some(0);
+    let raw_lens_type = if !rf_override && table == LensTable::Canon {
+        lens_type_raw.map(str::parse::<i64>).transpose().ok()?
+    } else {
+        None
+    };
+    let mut args = Args {
         lens_type,
+        raw_lens_type,
         focal_length: f(get(1)),
         max_aperture: f(get(2)),
         max_aperture_value: f(get(3)),
@@ -626,18 +675,18 @@ pub(super) fn compute_primary(
         rf_lens_type: get(12),
     };
 
-    // PrintConv (Exif.pm:5347-5351): a Canon RFLensType displaces LensType,
-    // together with its own PrintConv -- which is the same %canonLensTypes
-    // hash (Canon.pm:7048's RFLensType shares `SeparateTable => 'canonLensTypes'`
-    // ... in 13.59 it is `PrintConv => \%canonLensTypes` on the RF ids), so the
-    // table selection is unchanged.
-    //
-    // `if ($val[12])` is Perl truth on the *value*, and oxidex stores
-    // RFLensType's print form: the falsy value 0 prints "n/a". Refuse rather
-    // than guess whether a non-"n/a" print came from a zero value.
-    let (lens_type_prt, table) = match args.rf_lens_type {
-        Some(rf) if rf != "n/a" && !rf.is_empty() => (rf, LensTable::Canon),
-        _ => (args.lens_type, table),
+    // The RF substitution takes its own rendered label AND raw ID from the
+    // same winning occurrence. Perl tests the raw value, including zero.
+    let (lens_type_prt, table) = match (args.rf_lens_type, raw_rf_lens_type) {
+        (Some(_), _) if rf_lens_type_group != Some("Canon") => return None,
+        (Some(_), Some(0)) | (None, _) => (args.lens_type, table),
+        (Some(rf), raw) => {
+            if raw.is_none() && (rf == "n/a" || rf.is_empty()) {
+                return None;
+            }
+            args.raw_lens_type = raw;
+            (rf, LensTable::CanonRf)
+        }
     };
 
     let lens = print_lens_id(lens_type_prt, table, &args)?;
@@ -674,7 +723,7 @@ fn has_mm_or_slash_f(s: &str) -> bool {
 fn print_lens_id(lens_type_prt: &str, table: LensTable, args: &Args) -> Option<String> {
     // Exif.pm:5893-5902 -- `unless (ref $printConv eq 'HASH')`. The ARRAY-of-
     // HASH sub-branch is Sony-only and already refused upstream.
-    let Some(alt_table) = table.alternatives() else {
+    if table == LensTable::None_ {
         // return $lensTypePrt if $lensTypePrt =~ /mm/;
         if lens_type_prt.contains("mm") {
             return Some(lens_type_prt.to_string());
@@ -719,6 +768,7 @@ fn print_lens_id(lens_type_prt: &str, table: LensTable, args: &Args) -> Option<S
                 lf,
                 max_aperture,
                 args.lens_model,
+                args.raw_lens_type,
             );
         }
     }
@@ -741,7 +791,7 @@ fn print_lens_id(lens_type_prt: &str, table: LensTable, args: &Args) -> Option<S
                 .to_string(),
         );
     }
-    let Some(lenses) = candidates(alt_table, lens_type_prt) else {
+    let Some(lenses) = candidates(table, args.raw_lens_type, lens_type_prt).ok()? else {
         return Some(lens_type_prt.to_string());
     };
 
@@ -826,9 +876,7 @@ fn print_lens_id(lens_type_prt: &str, table: LensTable, args: &Args) -> Option<S
 /// `Image::ExifTool::Canon::PrintLensID` (Canon.pm:10183-10305), minus the
 /// userLens block (see [`OMITTED`]).
 ///
-/// `lens_type_prt` stands in for both `$lensType` and `$$printConv{$lensType}`:
-/// see [`super::lens_alternatives`] for why the integer-key string is a
-/// sufficient handle.
+/// Keep `$lensType`'s numeric identity separate from its rendered label.
 fn canon_print_lens_id(
     table: LensTable,
     lens_type_prt: &str,
@@ -836,6 +884,7 @@ fn canon_print_lens_id(
     long_focal: f64,
     max_aperture: Option<f64>,
     lens_model: Option<&str>,
+    raw_lens_type: Option<i64>,
 ) -> Option<String> {
     // Canon.pm:10186-10187:
     //     $lens = $$printConv{$lensType} unless $lensType eq '-1' or eq '65535';
@@ -847,7 +896,7 @@ fn canon_print_lens_id(
     if !is_na && unknown_id.is_none() {
         // Canon.pm:10190 -- `return LensWithTC($lens, $shortFocal) unless
         // $$printConv{"$lensType.1"};`
-        let Some(lenses) = candidates(table.alternatives()?, lens_type_prt) else {
+        let Some(lenses) = candidates(table, raw_lens_type, lens_type_prt).ok()? else {
             return Some(lens_with_tc(lens_type_prt, short_focal));
         };
 
@@ -1311,25 +1360,33 @@ mod tests {
 
     #[test]
     fn alternatives_keys_are_unique() {
-        for (label, table) in [
-            ("canon", &CANON_LENS_ALTERNATIVES[..]),
-            ("pentax", &PENTAX_LENS_ALTERNATIVES[..]),
-        ] {
-            let mut keys: Vec<&str> = table.iter().map(|(k, _)| *k).collect();
-            let before = keys.len();
-            keys.sort_unstable();
-            keys.dedup();
-            assert_eq!(
-                keys.len(),
-                before,
-                "{label} has duplicate integer-key strings"
-            );
-            assert!(
-                table.iter().all(|(_, alts)| !alts.is_empty()),
-                "{label} carries an entry with no alternatives"
-            );
-        }
-        assert_eq!(CANON_LENS_ALTERNATIVES.len(), 71);
+        let mut ids: Vec<_> = CANON_LENS_ALTERNATIVES
+            .iter()
+            .map(|(id, _, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), CANON_LENS_ALTERNATIVES.len());
+        assert_eq!(CANON_LENS_ALTERNATIVES.len(), 239);
+        assert_eq!(
+            CANON_LENS_ALTERNATIVES
+                .iter()
+                .filter(|(_, _, alts)| !alts.is_empty())
+                .count(),
+            71
+        );
+        let mut labels: Vec<_> = PENTAX_LENS_ALTERNATIVES
+            .iter()
+            .map(|(label, _)| *label)
+            .collect();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), PENTAX_LENS_ALTERNATIVES.len());
+        assert!(
+            PENTAX_LENS_ALTERNATIVES
+                .iter()
+                .all(|(_, alts)| !alts.is_empty())
+        );
         assert_eq!(PENTAX_LENS_ALTERNATIVES.len(), 14);
     }
 
@@ -1398,7 +1455,16 @@ mod tests {
             None,
         ];
         assert_eq!(
-            compute_primary(&inputs, Some("Canon"), Some("Canon"), false).as_deref(),
+            compute_primary(
+                &inputs,
+                Some("Canon"),
+                Some("Canon"),
+                false,
+                None,
+                None,
+                None
+            )
+            .as_deref(),
             Some("Canon EF 28-70mm f/2.8L USM or Sigma 28-70mm f/2.8 EX")
         );
     }
@@ -1428,7 +1494,10 @@ mod tests {
                 &inputs,
                 Some("Olympus"),
                 Some("OLYMPUS IMAGING CORP."),
-                false
+                false,
+                None,
+                None,
+                None
             )
             .as_deref(),
             Some("Olympus Zuiko Digital ED 7-14mm F4.0")
@@ -1443,12 +1512,30 @@ mod tests {
         let mut inputs = [None; 13];
         inputs[0] = Some("LUMIX G VARIO 12-32/F3.5-5.6");
         assert_eq!(
-            compute_primary(&inputs, Some("Panasonic"), Some("Panasonic"), false).as_deref(),
+            compute_primary(
+                &inputs,
+                Some("Panasonic"),
+                Some("Panasonic"),
+                false,
+                None,
+                None,
+                None
+            )
+            .as_deref(),
             Some("LUMIX G VARIO 12-32mm F3.5-5.6")
         );
         inputs[0] = Some("LEICA DG SUMMILUX 15mm/F1.7");
         assert_eq!(
-            compute_primary(&inputs, Some("Panasonic"), Some("Panasonic"), false).as_deref(),
+            compute_primary(
+                &inputs,
+                Some("Panasonic"),
+                Some("Panasonic"),
+                false,
+                None,
+                None,
+                None
+            )
+            .as_deref(),
             Some("LEICA DG SUMMILUX 15mm/F1.7")
         );
     }
@@ -1463,12 +1550,29 @@ mod tests {
         let mut inputs = [None; 13];
         inputs[0] = Some("LUMIX G VARIO 12-32/F3.5-5.6");
         assert_eq!(
-            compute_primary(&inputs, Some("Panasonic"), Some("Panasonic"), true),
+            compute_primary(
+                &inputs,
+                Some("Panasonic"),
+                Some("Panasonic"),
+                true,
+                None,
+                None,
+                None
+            ),
             None,
             "LensTypeMake+LensTypeModel means %olympusLensTypes owns the answer"
         );
         assert_eq!(
-            compute_primary(&inputs, Some("Panasonic"), Some("Panasonic"), false).as_deref(),
+            compute_primary(
+                &inputs,
+                Some("Panasonic"),
+                Some("Panasonic"),
+                false,
+                None,
+                None,
+                None
+            )
+            .as_deref(),
             Some("LUMIX G VARIO 12-32mm F3.5-5.6"),
             "without both halves, Panasonic's own string stands"
         );
@@ -1482,7 +1586,15 @@ mod tests {
         let mut inputs = [None; 13];
         inputs[0] = Some(dirty);
         assert_eq!(
-            compute_primary(&inputs, Some("Canon"), Some("Canon"), false),
+            compute_primary(
+                &inputs,
+                Some("Canon"),
+                Some("Canon"),
+                false,
+                None,
+                None,
+                None
+            ),
             None
         );
         assert_eq!(compute_fallback(&[Some(dirty), None, None, None]), None);
@@ -1494,7 +1606,7 @@ mod tests {
         let mut inputs = [None; 13];
         inputs[0] = Some("Sony FE 24-70mm F2.8 GM");
         assert_eq!(
-            compute_primary(&inputs, Some("Sony"), Some("SONY"), false),
+            compute_primary(&inputs, Some("Sony"), Some("SONY"), false, None, None, None),
             None
         );
         assert_eq!(OMITTED.len(), 6);
@@ -1510,8 +1622,57 @@ mod tests {
         inputs[1] = Some("55.0 mm"); // FocalLength
         inputs[11] = Some("3.8 mm"); // LensFocalLength, decoded from the wrong byte
         assert_eq!(
-            compute_primary(&inputs, Some("Pentax"), Some("PENTAX"), false).as_deref(),
+            compute_primary(
+                &inputs,
+                Some("Pentax"),
+                Some("PENTAX"),
+                false,
+                None,
+                None,
+                None
+            )
+            .as_deref(),
             Some("smc PENTAX-D FA 645 55mm F2.8 AL [IF] SDM AW"),
+        );
+    }
+
+    #[test]
+    fn lens_identity_parsing_respects_selected_table() {
+        for (group, raw, label) in [
+            (
+                "Pentax",
+                "3 1",
+                "smc PENTAX-D FA 645 55mm F2.8 AL [IF] SDM AW",
+            ),
+            (
+                "Olympus",
+                "0 01 00",
+                "Olympus Zuiko Digital ED 50mm F2.0 Macro",
+            ),
+        ] {
+            let mut inputs = [None; 13];
+            inputs[0] = Some(label);
+            assert_eq!(
+                compute_primary(&inputs, Some(group), None, false, Some(raw), None, None)
+                    .as_deref(),
+                Some(label)
+            );
+        }
+        let mut inputs = [None; 13];
+        inputs[0] = Some("Canon EF 300mm f/2.8L USM");
+        inputs[12] = Some("Canon RF 50mm F1.2L USM");
+        assert_eq!(
+            compute_primary(
+                &inputs,
+                Some("Canon"),
+                None,
+                false,
+                Some("unused malformed identity"),
+                Some("257"),
+                Some("Canon")
+            )
+            .as_deref(),
+            inputs[12]
         );
     }
 
