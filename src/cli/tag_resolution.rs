@@ -279,17 +279,12 @@ pub fn resolve_requested_tags<'a>(
 ///
 /// The pre-PrintConv form is `occurrence.value` when a migrated call site
 /// attached one via `insert_occurrence_with_raw` (`File:FileSize`'s byte
-/// count, for one), else `occurrence.raw` itself -- which, for every
-/// call site not yet migrated, already *is* the pre-PrintConv form (see
-/// `MetadataMap::without_print_conv`'s doc comment for why skipping
-/// PrintConv already gave the right answer for the other ~99.5% of tags
-/// before this step).
+/// count, for one), else the existing APEX ValueConv for legacy rational
+/// storage, else `occurrence.raw`. This matches whole-map raw projection
+/// and composite dependency resolution without inverting printed labels.
 pub fn resolved_display_value(occurrence: &TagOccurrence, no_print_conv: bool) -> TagValue {
     if no_print_conv {
-        occurrence
-            .value
-            .clone()
-            .unwrap_or_else(|| occurrence.raw.clone())
+        occurrence.value_conv()
     } else {
         format_tag_value_rules(&occurrence.lookup_key(), &occurrence.raw)
     }

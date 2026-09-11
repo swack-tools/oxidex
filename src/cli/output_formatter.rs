@@ -270,8 +270,11 @@ impl JsonFormatter {
         let mut json_map = serde_json::Map::new();
 
         for (tag_name, tag_value) in metadata_to_filter.iter() {
-            let json_value =
-                tag_value_to_json((!no_print_conv).then_some(tag_name.as_str()), tag_value);
+            let json_value = if no_print_conv {
+                raw_tag_value_to_json(tag_value)
+            } else {
+                tag_value_to_json(Some(tag_name.as_str()), tag_value)
+            };
             json_map.insert(tag_name.clone(), json_value);
         }
 
@@ -406,6 +409,27 @@ fn json_string_value(s: &str) -> serde_json::Value {
         // EscapeJSON (exiftool:3819) deletes NULs only after its typing
         // checks. "12\0" must stay a quoted "12", not become a number.
         serde_json::Value::String(s.replace('\0', ""))
+    }
+}
+
+/// Raw output stringifies actual numeric values as Perl NVs at the writer.
+/// Numeric-looking strings keep their original bytes and JSON typing. This is
+/// separate from tag_name=None, which also occurs in normal nested structures.
+fn raw_tag_value_to_json(value: &TagValue) -> serde_json::Value {
+    match value {
+        TagValue::Float(number) => json_string_value(
+            &crate::core::formatters::numeric_precision::perl_number(*number),
+        ),
+        TagValue::Array(values) => {
+            serde_json::Value::Array(values.iter().map(raw_tag_value_to_json).collect())
+        }
+        TagValue::Struct(values) => serde_json::Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), raw_tag_value_to_json(value)))
+                .collect(),
+        ),
+        _ => tag_value_to_json(None, value),
     }
 }
 
@@ -840,6 +864,9 @@ pub(crate) fn format_tag_value_with_mode(
         // not just `-s`.
         TagValue::String(s) => printable_text_value(s),
         TagValue::Integer(i) => i.to_string(),
+        TagValue::Float(f) if no_print_conv => {
+            crate::core::formatters::numeric_precision::perl_number(*f)
+        }
         TagValue::Float(f) => f.to_string(),
         TagValue::Rational {
             numerator,
@@ -1900,5 +1927,52 @@ mod tests {
         let output = ShortFormatter.format(&metadata, None);
 
         assert_eq!(output, "GPSAltitudeRef: Below Sea Level\n");
+    }
+}
+
+#[cfg(test)]
+mod raw_float_projection_tests {
+    use super::*;
+
+    #[test]
+    fn raw_float_stringification_keeps_numeric_origin_and_normal_nested_behavior() {
+        let mut map = MetadataMap::new();
+        map.insert("Test:Numeric", TagValue::Float(4.966666666666667));
+        map.insert("Test:Text", TagValue::new_string("0.0043535193409477545"));
+        map.insert("Test:PositiveInf", TagValue::Float(f64::INFINITY));
+        map.insert("Test:NegativeInf", TagValue::Float(f64::NEG_INFINITY));
+        map.insert("Test:NaN", TagValue::Float(f64::NAN));
+        let out: serde_json::Value =
+            serde_json::from_str(&JsonFormatter.format_with_mode(&map, None, true)).unwrap();
+        assert_eq!(out[0]["Test:Numeric"], serde_json::json!(4.96666666666667));
+        assert_eq!(
+            out[0]["Test:Text"],
+            serde_json::json!("0.0043535193409477545")
+        );
+        assert_eq!(out[0]["Test:PositiveInf"], serde_json::json!("Inf"));
+        assert_eq!(out[0]["Test:NegativeInf"], serde_json::json!("-Inf"));
+        assert_eq!(out[0]["Test:NaN"], serde_json::json!("NaN"));
+        assert_eq!(map.get_float("Test:Numeric"), Some(4.966666666666667));
+        for formatter in [
+            &HumanReadableFormatter as &dyn OutputFormatter,
+            &ShortFormatter,
+            &CsvFormatter,
+        ] {
+            let raw = formatter.format_with_mode(&map, None, true);
+            assert!(raw.contains("4.96666666666667"));
+            assert!(raw.contains("0.0043535193409477545"));
+        }
+        let nested = TagValue::new_struct(std::collections::HashMap::from([(
+            "value".to_string(),
+            TagValue::Float(4.966666666666667),
+        )]));
+        assert_eq!(
+            tag_value_to_json(None, &nested)["value"],
+            serde_json::json!(4.966666666666667)
+        );
+        assert_eq!(
+            raw_tag_value_to_json(&nested)["value"],
+            serde_json::json!(4.96666666666667)
+        );
     }
 }

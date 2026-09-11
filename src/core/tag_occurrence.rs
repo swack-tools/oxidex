@@ -143,6 +143,17 @@ pub struct TagOccurrence {
 }
 
 impl TagOccurrence {
+    /// The value after ValueConv and before PrintConv for this exact occurrence.
+    /// Explicit parser/composite forms take precedence. Legacy APEX rational
+    /// storage needs its existing ValueConv; other stored values stay unchanged.
+    /// Keep numeric precision here: only an output writer stringifies a float.
+    pub(crate) fn value_conv(&self) -> TagValue {
+        self.value
+            .clone()
+            .or_else(|| crate::core::exiftool_compat::apex_value_conv(&self.name, &self.raw))
+            .unwrap_or_else(|| self.raw.clone())
+    }
+
     /// Mints an occurrence from a `MetadataMap::insert()` call site.
     ///
     /// This is the Phase-A migration shim described in
@@ -258,5 +269,108 @@ mod tests {
         let occ = TagOccurrence::from_insert_shim("A:B:C", TagValue::new_string("v"), 0);
         assert_eq!(&*occ.group0, "A");
         assert_eq!(&*occ.name, "B:C");
+    }
+}
+
+#[cfg(test)]
+mod value_conv_projection_tests {
+    use super::*;
+    use crate::cli::tag_resolution::{resolve_requested_tags, resolved_display_value};
+    use crate::core::MetadataMap;
+    use crate::core::formatters::numeric_precision::perl_number;
+
+    #[test]
+    fn raw_projections_share_native_apex_readvalue_and_preserve_occurrence_winner() {
+        let mut map = MetadataMap::new();
+        // Actual pinned Canon.jpg EXIF value, plus ExifTool.jpg's different
+        // duplicate. The first value must win even when the loser is later.
+        map.insert_occurrence(
+            "ExifIFD:ApertureValue",
+            TagValue::Rational {
+                numerator: 249519,
+                denominator: 32768,
+            },
+            2,
+            "ExifIFD",
+            Instance::default(),
+        );
+        map.insert_occurrence(
+            "ExifIFD:ApertureValue",
+            TagValue::Rational {
+                numerator: 36,
+                denominator: 10,
+            },
+            0,
+            "ExifIFD",
+            Instance::default(),
+        );
+        let TagValue::Float(default) = map
+            .without_print_conv()
+            .get("ExifIFD:ApertureValue")
+            .unwrap()
+            .clone()
+        else {
+            panic!("APEX numeric ValueConv")
+        };
+        assert_eq!(perl_number(default), "14.0000278113061");
+        let requested = resolve_requested_tags(&map, &["ApertureValue".to_string()], false);
+        assert_eq!(requested.len(), 1);
+        assert_eq!(
+            resolved_display_value(requested[0].occurrence, true),
+            TagValue::Float(default)
+        );
+        assert_eq!(
+            resolved_display_value(requested[0].occurrence, false),
+            TagValue::new_string("14.0")
+        );
+        let all = resolve_requested_tags(&map, &["ApertureValue".to_string()], true);
+        let values: Vec<String> = all
+            .iter()
+            .map(|row| {
+                let TagValue::Float(value) = resolved_display_value(row.occurrence, true) else {
+                    panic!("numeric ValueConv")
+                };
+                perl_number(value)
+            })
+            .collect();
+        assert_eq!(values, ["14.0000278113061", "3.4822022531845"]);
+    }
+
+    #[test]
+    fn explicit_value_prevents_double_apex_conversion_and_unrelated_values_are_untouched() {
+        let mut occurrence = TagOccurrence::from_insert_shim(
+            "ExifIFD:ApertureValue",
+            TagValue::Rational {
+                numerator: 36,
+                denominator: 10,
+            },
+            0,
+        );
+        occurrence.value = Some(TagValue::Float(3.5));
+        assert_eq!(occurrence.value_conv(), TagValue::Float(3.5));
+        let exposure = TagOccurrence::from_insert_shim(
+            "ExifIFD:ExposureTime",
+            TagValue::Rational {
+                numerator: 1,
+                denominator: 125,
+            },
+            0,
+        );
+        assert_eq!(exposure.value_conv(), exposure.raw);
+        let opaque =
+            TagOccurrence::from_insert_shim("ExifIFD:Private", TagValue::Binary(vec![0, 65, 0]), 0);
+        assert_eq!(opaque.value_conv(), opaque.raw);
+        // Native ExifTool.jpg/PDF and Canon.jpg ShutterSpeedValue controls.
+        for (stored, expected) in [(6, 0.015625), (i32::MIN, 0.0)] {
+            let shutter = TagOccurrence::from_insert_shim(
+                "ExifIFD:ShutterSpeedValue",
+                TagValue::Rational {
+                    numerator: stored,
+                    denominator: 1,
+                },
+                0,
+            );
+            assert_eq!(shutter.value_conv(), TagValue::Float(expected));
+        }
     }
 }

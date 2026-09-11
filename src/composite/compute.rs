@@ -249,12 +249,22 @@ fn canon_exposure_mode(value: &str) -> Option<i64> {
 /// its ValueConv uses the input code. Read the forward generated enum; do not
 /// infer a code from a label or reuse a newly attached numeric input as print.
 fn canon_mode_print(name: &str, value: i64) -> Option<String> {
-    crate::exiftool_tables::find_table("Canon", "CameraSettings")?
+    let print = &crate::exiftool_tables::find_table("Canon", "CameraSettings")?
         .fields
         .iter()
         .find(|field| field.name == name)?
-        .print_conv
-        .apply(value)
+        .print_conv;
+    // These two generated declarations are plain integer PrintConv hashes.
+    // A missing key still emits ExifTool's Unknown(value), not an absent tag.
+    // Do not guess this fallback for a future expression or OTHER contract.
+    match print {
+        crate::exiftool_tables::PrintConv::IntEnum(_) => Some(
+            print
+                .apply(value)
+                .unwrap_or_else(|| format!("Unknown ({value})")),
+        ),
+        _ => None,
+    }
 }
 
 fn canon_easy_mode(value: &str) -> Option<i64> {

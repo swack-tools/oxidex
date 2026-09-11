@@ -1149,6 +1149,12 @@ pub(crate) fn format_tag_value_rules(tag_name: &str, value: &TagValue) -> TagVal
 /// value. It must not receive a formatted reciprocal or rounded f-number:
 /// ExifTool's Composite table reads post-ValueConv values before PrintConv.
 pub(crate) fn apex_value_conv(base_name: &str, value: &TagValue) -> Option<TagValue> {
+    if !matches!(
+        base_name,
+        "ApertureValue" | "MaxApertureValue" | "ShutterSpeedValue"
+    ) {
+        return None;
+    }
     // `Float` as well as `Rational`: a rational whose numerator or denominator
     // exceeds `i32::MAX` cannot be held in `TagValue::Rational`'s two i32s, so
     // `core::tag_conversion::handle_rational_type` hands the APEX tags the
@@ -1164,7 +1170,14 @@ pub(crate) fn apex_value_conv(base_name: &str, value: &TagValue) -> Option<TagVa
             if *denominator == 0 {
                 return None;
             }
-            f64::from(*numerator) / f64::from(*denominator)
+            // GetRational64u/GetRational64s stringify ReadValue with 10
+            // significant digits before Exif.pm evaluates this ValueConv.
+            // Canon's 249519/32768 is therefore 7.614715576 at the pow input.
+            crate::core::formatters::numeric_precision::exiftool_rational_number(
+                f64::from(*numerator) / f64::from(*denominator),
+            )
+            .parse::<f64>()
+            .ok()?
         }
         TagValue::Float(v) => *v,
         _ => return None,

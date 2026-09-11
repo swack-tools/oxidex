@@ -106,7 +106,10 @@ fn parse_webp_chunks(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
 
                     // Extract image dimensions (24-bit values, little-endian)
                     let width = (vp8x_reader.u32_at(4).unwrap_or(0) & 0x00FFFFFF) + 1;
-                    let height = (vp8x_reader.u32_at(7).unwrap_or(0) & 0x00FFFFFF) + 1;
+                    // RIFF.pm 13.59 VP8X offset6: int32u, ($val >> 8)+1.
+                    // A four-byte read at7 overruns this ten-byte header and
+                    // silently defaults every canvas height to1.
+                    let height = (vp8x_reader.u32_at(6).unwrap_or(0) >> 8) + 1;
 
                     metadata.insert(
                         "WebP:ImageWidth".to_string(),
@@ -475,6 +478,67 @@ mod tests {
             .parse(&TestReader::new(webp(b"VP8X", &[0x10, 0])))
             .unwrap();
         assert_eq!(metadata.get_string("File:FileType"), Some("Extended WEBP"));
+    }
+
+    #[test]
+    fn vp8x_reads_all_three_height_bytes_without_overrunning_the_header() {
+        // Actual native13.59 VP8X probes establish these complete24-bit
+        // values, including nonzero middle/high bytes and the maximum.
+        for (width, height) in [
+            (100u32, 100u32),
+            (1, 257),
+            (65_537, 66_052),
+            (16_777_216, 16_777_216),
+        ] {
+            let mut payload = vec![0u8; 4];
+            payload.extend(&(width - 1).to_le_bytes()[..3]);
+            payload.extend(&(height - 1).to_le_bytes()[..3]);
+            assert_eq!(payload.len(), 10);
+            let metadata = WebPParser
+                .parse(&TestReader::new(webp(b"VP8X", &payload)))
+                .unwrap();
+            assert_eq!(
+                metadata.get_integer("WebP:ImageWidth"),
+                Some(i64::from(width))
+            );
+            assert_eq!(
+                metadata.get_integer("WebP:ImageHeight"),
+                Some(i64::from(height))
+            );
+        }
+    }
+
+    #[test]
+    fn vp8x_dimensions_win_over_ordinary_embedded_exif_dimensions() {
+        use crate::parsers::image::embedded::test_fixtures::tiff_with_entries;
+        let mut payload = vec![8, 0, 0, 0]; // EXIF flag; canvas100x100
+        payload.extend(&99u32.to_le_bytes()[..3]);
+        payload.extend(&99u32.to_le_bytes()[..3]);
+        let mut file = webp(b"VP8X", &payload);
+        let exif = webp(
+            b"EXIF",
+            &tiff_with_entries(&[(0x0100, 1, &[65]), (0x0101, 1, &[80])]),
+        );
+        file.extend(&exif[12..]);
+        let len = (file.len() - 8) as u32;
+        file[4..8].copy_from_slice(&len.to_le_bytes());
+        let mut metadata = WebPParser.parse(&TestReader::new(file)).unwrap();
+        for name in ["ImageWidth", "ImageHeight"] {
+            let requested = [name.to_string()];
+            let selected =
+                crate::cli::tag_resolution::resolve_requested_tags(&metadata, &requested, false);
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].occurrence.raw.as_integer(), Some(100));
+            assert_eq!(
+                crate::cli::tag_resolution::resolve_requested_tags(&metadata, &requested, true)
+                    .len(),
+                2
+            );
+        }
+        assert_eq!(metadata.get_integer("IFD0:ImageWidth"), Some(65));
+        assert_eq!(metadata.get_integer("IFD0:ImageHeight"), Some(80));
+        crate::composite::apply(&mut metadata);
+        assert_eq!(metadata.get_string("Composite:ImageSize"), Some("100x100"));
     }
 
     #[test]

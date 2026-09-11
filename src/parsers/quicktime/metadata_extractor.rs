@@ -629,12 +629,8 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
     // Extract media data offset and size from mdat atom
     // We need to track position in the original file
     let mut offset = 0u64;
-    let mut total_media_data_size = 0u64;
-    let mut found_media_data = false;
     for atom in root_atoms {
         if atom.atom_type.matches("mdat") {
-            found_media_data = true;
-            total_media_data_size += atom.data.len() as u64;
             metadata.insert(
                 "QuickTime:MediaDataSize".to_string(),
                 TagValue::Integer(atom.data.len() as i64),
@@ -646,9 +642,6 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
         }
         // Calculate atom size (header + data length), accounting for extended headers
         offset += atom.header_size as u64 + atom.data.len() as u64;
-    }
-    if found_media_data {
-        metadata.set_value_form("QuickTime:MediaDataSize", total_media_data_size.to_string());
     }
 }
 
@@ -3492,6 +3485,73 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
 mod tests {
     use super::*;
     use crate::parsers::quicktime::FourCC;
+
+    #[test]
+    fn multiple_mdat_atoms_keep_individual_sizes_and_sum_only_for_bitrate() {
+        // Pinned QuickTime.pm mdat-size has no aggregate ValueConv. Its
+        // AvgBitrate RawConv alone walks every MediaDataSize via NextTagKey.
+        // Native 13.59 reports last size 9 / 5 for these two carriers, every
+        // individual size under -a, and AvgBitrate 56 for both (14*8/2).
+        for sizes in [[5usize, 9], [9, 5]] {
+            let ftyp = child_atom(b"ftyp", b"qt  \0\0\0\0qt  ");
+            let mut mvhd = [0u8; 100];
+            mvhd[12..16].copy_from_slice(&1000u32.to_be_bytes());
+            mvhd[16..20].copy_from_slice(&2000u32.to_be_bytes());
+            let moov = child_atom(b"moov", &child_atom(b"mvhd", &mvhd));
+            let first_offset = (ftyp.len() + moov.len() + 8) as i64;
+            let file = [
+                ftyp,
+                moov,
+                child_atom(b"mdat", &vec![0; sizes[0]]),
+                child_atom(b"mdat", &vec![0; sizes[1]]),
+            ]
+            .concat();
+            let mut metadata =
+                crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&file)
+                    .expect("valid two-mdat carrier");
+            crate::composite::apply(&mut metadata);
+
+            let occurrences = metadata.occurrences_for("QuickTime:MediaDataSize");
+            assert_eq!(occurrences.len(), 2);
+            for (occurrence, size) in occurrences.iter().zip(sizes) {
+                for no_print_conv in [false, true] {
+                    assert_eq!(
+                        crate::cli::tag_resolution::resolved_display_value(
+                            occurrence,
+                            no_print_conv,
+                        ),
+                        TagValue::Integer(size as i64),
+                        "each mdat retains its own size in both output modes",
+                    );
+                }
+            }
+            assert_eq!(
+                metadata
+                    .without_print_conv()
+                    .get_integer("QuickTime:MediaDataSize"),
+                Some(sizes[1] as i64),
+                "default raw output keeps the last block, not their sum",
+            );
+            assert_eq!(
+                metadata
+                    .occurrences_for("QuickTime:MediaDataOffset")
+                    .iter()
+                    .map(|occurrence| occurrence.raw.clone())
+                    .collect::<Vec<_>>(),
+                vec![
+                    TagValue::Integer(first_offset),
+                    TagValue::Integer(first_offset + sizes[0] as i64 + 8),
+                ],
+            );
+            assert_eq!(
+                metadata
+                    .without_print_conv()
+                    .get_string("Composite:AvgBitrate"),
+                Some("56"),
+                "bitrate sums both retained blocks",
+            );
+        }
+    }
 
     #[test]
     fn quicktime_fixture_prefers_media_info_data_handler_class() {

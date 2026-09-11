@@ -722,7 +722,7 @@ mod tests {
             .unwrap()
             .1;
         assert_eq!(occurrence.priority, 0);
-        assert_eq!(occurrence.group1, "Canon");
+        assert_eq!(occurrence.group1.as_ref(), "Canon");
         assert_eq!(
             occurrence.value.as_ref().unwrap().as_string(),
             Some("0.008")

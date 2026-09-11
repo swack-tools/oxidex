@@ -406,23 +406,17 @@ impl MetadataMap {
     ///
     /// For every key whose winning occurrence carries a value attached via
     /// [`MetadataMap::insert_occurrence_with_raw`], that value is used.
-    /// Every other key is unaffected: its stored value already *is* the
-    /// pre-PrintConv form (parsers store raw values and `format_for_exiftool`
-    /// converts them to display strings as a separate pass -- see
-    /// `core::exiftool_compat` -- so skipping that pass, which is what
-    /// `--no-print-conv` has always done, already gave the right answer for
-    /// every tag except the handful of format-before-store sites this step
-    /// migrates). This is the whole-map counterpart to the CLI's
+    /// Legacy APEX storage is converted with the same ValueConv consumed by
+    /// composites. Other keys retain their stored value. This does not infer
+    /// ValueConv from printed labels for parser sites not yet migrated.
+    /// This is the whole-map counterpart to the CLI's
     /// occurrence-aware resolution for a specific `-TAG` request; the
     /// unfiltered/default-listing path uses this one so `--no-print-conv`
     /// behaves consistently whether or not a tag filter is given.
     pub fn without_print_conv(&self) -> MetadataMap {
         let mut out = MetadataMap::with_capacity(self.len());
         for (key, occurrence) in self.winner_occurrences() {
-            let value = occurrence
-                .value
-                .clone()
-                .unwrap_or_else(|| occurrence.raw.clone());
+            let value = occurrence.value_conv();
             out.insert(key.clone(), value);
         }
         out
