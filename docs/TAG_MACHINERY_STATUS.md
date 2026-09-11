@@ -203,7 +203,8 @@ passed 4,595 tests with one ignored, with default-cache reads denied and the
 genuine 13.59 source explicitly configured. Optional corpus tests can still
 return early; this is a suite result, not 4,595 observed corpus comparisons.
 Formatter and strict all-feature Clippy passed. The later Minolta repair also
-ran 283 Python table-tool tests: 282 passed and one was skipped. See the exact-head
+reported 283 Python table-tool tests run and `OK (skipped=1)`; the skip field
+can represent class setup, so it is not subtracted to derive a pass count. See the exact-head
 PR checks for hosted CI status; earlier failed runs are not current verdicts.
 
 The subsequent integration-fixture repair centralizes requested-file lookup for
@@ -247,7 +248,7 @@ files. Formatting is restricted to declared Rust files and failure is fatal.
 This replaces duplicated path lists; it does not add a general generator runner.
 
 Validation: 19 manifest controls and seven Minolta portability tests passed.
-The complete Python table-tool suite ran 302 tests: 301 passed and one was skipped,
+The complete Python table-tool suite reported 302 tests run and `OK (skipped=1)`,
 after updating standing-HAND classification to consume the same inventory.
 Manifest controls cover untracked/ignored writes, deletions, mode changes,
 existing dirty files, staged changes and failed
@@ -258,13 +259,17 @@ restored; it was **not** a byte-identical tier-1 regeneration.
 
 That run omitted the existing `CanonCustom::ConvertPfn` expression and its 29
 field uses compared with committed Perl 5.38 output. The dump still contains
-the fields: the conversion registry does not recognize the older Perl deparse
-spelling, so the expression is excluded before oracle testing. This remains a
-specific portability repair; a passing expression oracle only covers the
-expressions collected for that run. A separate direct `codegen.conv_for` control
-found that recognized code references accept an empty `verified_exprs` set;
-ledger enforcement for that path needs a regression and repair before claiming
-that all code references are gated by oracle membership.
+the fields: that conversion registry did not recognize the older Perl deparse
+spelling, so the expression was excluded before oracle testing. A separate
+direct `codegen.conv_for` control found that recognized code references accepted
+an empty `verified_exprs` set. Both defects are subsequently repaired on the
+unmerged `codex/upgrade-next-steps` branch: finite literal-preserving recognition,
+named ledger membership and input-domain checks now have regression controls.
+Fresh native Perl 5.34/5.38 oracles each verify 607 expressions and retain all 29
+Canon uses; regenerated binary/IFD Rust matches the committed files. See the
+[execution plan](./UPGRADE-NEXT-STEPS.md) for exact validation and remaining
+transaction work. A passing expression oracle still only covers its collected
+and exercised population.
 
 After incorporating the parent repairs, a real tier-2 run passed with zero net
 changes and a clean committed-output comparison. An undeclared ignored source
@@ -273,10 +278,15 @@ probe was preserved as evidence, removed, and the clean state reverified.
 
 Remaining work: the guard detects final net changes without rollback. It cannot
 observe transient writes later undone, writes outside the checkout, or writes
-in excluded build/cache locations. Old/new generation must still move into
-isolated complete variants; source/interpreter identity, binary resolution,
-entry-state preservation, promotion/recovery and a real release-delta rehearsal
-are still open. Four vendor outputs still have no committed producer. See the
+in excluded build/cache locations. The subsequent `codex/upgrade-next-steps`
+branch implements isolated complete variants, explicit source/interpreter and
+fresh Cargo executable identities, caller-state preservation and checked
+promotion/recovery. Reviewed controls pass on macOS/Linux. A genuine same-pin
+exercise at `9100020d` passed over 193 files with unchanged generated Rust and
+caller source/index, zero new VALUE regressions and zero MISSING growth. The
+release-delta rehearsal and integration remain pending. The
+[execution plan](./UPGRADE-NEXT-STEPS.md) records later validation milestones and
+recovery limits. Four vendor outputs still have no committed producer. See the
 [command reference](https://github.com/swack-tools/oxidex/blob/b7e622bf8a2d9569272b854b4d5ba90248950346/tools/exiftool-tables/README.md#generated-output-inventory-and-write-checks)
 and backlog item 1 before starting the next upgrade task.
 

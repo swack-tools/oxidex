@@ -5,6 +5,8 @@ backlog accompanying [Tag machinery status](./TAG_MACHINERY_STATUS.md).
 It replaces the local September 9 proposal's ordering and speculative schedule.
 The status page owns completion history; this page owns remaining work and its
 acceptance criteria. No parser or generator change is implemented by this plan.
+See the [execution plan](./UPGRADE-NEXT-STEPS.md) for the current bounded work,
+dependencies and milestone updates.
 
 ## What carried forward from the September 9 proposal
 
@@ -50,13 +52,19 @@ it. Its HAND bucket includes unverified cases; it does not provide an
 hours-per-upgrade estimate. The artifact manifest is implemented on the stacked
 `codex/upgrade-artifact-manifest` branch, with real positive and undeclared-write
 controls; integrate it rather than creating another inventory. Complete old/new
-builds and transaction repairs remain open. Before a cross-Perl rehearsal, fix
-the known `CanonCustom::ConvertPfn` deparse-registration gap: the Perl 5.34 dump
-contains its 29 fields but the expression collector omits their conversion.
-Do not confuse a passing collected-expression oracle with complete collection.
-Also gate recognized code references on their named key in `verified_exprs`: a
-direct `codegen.conv_for` control currently emits one with an empty set. Missing
-evidence must refuse, and verified evidence must preserve the existing output.
+builds and checked transaction recovery are implemented on the subsequent
+`codex/upgrade-next-steps` branch. Reviewed controls pass on macOS/Linux, and a
+genuine 193-file same-pin dry run passes with unchanged caller source/index and
+zero new comparison regressions. Integration and a release-delta rehearsal remain
+open. The CODE-ref repair is
+implemented on `codex/upgrade-next-steps`: both audited `CanonCustom::ConvertPfn`
+spellings collect all 29 uses, and emission requires the named verified key and
+correct input domain. Both native Perl 5.34 and 5.38 oracles pass, with unchanged
+generated binary/IFD Rust. Integrate that tested repair before a cross-Perl
+rehearsal; do not rebuild it or confuse collected-expression verification with
+complete collection. The [execution plan](./UPGRADE-NEXT-STEPS.md) records its
+exact checks and distinguishes implemented work from the outstanding release
+rehearsal and integration.
 See the [manifest follow-up](./TAG_MACHINERY_STATUS.md#pending-generated-output-inventory)
 and [classifier follow-up](./TAG_MACHINERY_STATUS.md#pending-upgrade-classifier-repair)
 for validation and limits.

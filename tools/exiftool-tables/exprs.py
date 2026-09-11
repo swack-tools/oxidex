@@ -175,7 +175,8 @@ TRANSLATIONS = {
 # WITHHELD instead of reported wrong.
 #
 # The doctrine is TRANSLATIONS' doctrine, unchanged. A deparsed body is
-# recognised only by exact (whitespace-normalised) match, and the value it maps
+# recognised only by a complete match (whitespace outside literals may vary),
+# and the value it maps
 # to is a key in TRANSLATIONS -- so a code ref cannot reach any Rust that has
 # not already been written down, reviewed and oracle-checked as an ordinary
 # translation. Matching on the deparse rather than on the sub's name is what
@@ -206,6 +207,13 @@ CODE_REFS = {
     # CanonCustom::PersonalFuncs.
     "($) { package Image::ExifTool::CanonCustom; use strict; "
     "(my($val) = (shift())); "
+    "(return ($val ? (($val == 1) ? 'On' : (\"On ($val)\")) : 'Off')); }":
+        "Image::ExifTool::CanonCustom::ConvertPfn($val)",
+    # Perl 5.34.1's B::Deparse spells the same declaration without the
+    # parentheses around $val. Keep both complete audited bodies; do not
+    # canonicalise arbitrary declarations into a supposedly equivalent body.
+    "($) { package Image::ExifTool::CanonCustom; use strict; "
+    "(my $val = (shift())); "
     "(return ($val ? (($val == 1) ? 'On' : (\"On ($val)\")) : 'Off')); }":
         "Image::ExifTool::CanonCustom::ConvertPfn($val)",
 
@@ -255,6 +263,25 @@ for _deparse, _key in CODE_REFS.items():
         )
 
 
+def _code_ref_pattern(body):
+    """Match audited registry text, varying only whitespace outside literals.
+
+    These finite bodies use ordinary single/double-quoted Perl strings, not
+    quote-like operators or heredocs. Preserve each literal byte; this is not
+    a Perl normalizer and must never erase a changed output label.
+    """
+    pieces = re.split(r'''("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')''', body)
+    return re.compile("".join(
+        re.escape(piece) if i % 2 else
+        "".join(r"\s+" if token.isspace() else re.escape(token)
+                for token in re.split(r"(\s+)", piece))
+        for i, piece in enumerate(pieces)
+    ))
+
+
+_CODE_REF_PATTERNS = [(_code_ref_pattern(body), key) for body, key in CODE_REFS.items()]
+
+
 def code_ref_expr(deparse):
     """The TRANSLATIONS key naming the ExifTool sub `deparse` is, or None.
 
@@ -265,7 +292,8 @@ def code_ref_expr(deparse):
     """
     if not isinstance(deparse, str):
         return None
-    return CODE_REFS.get(normalize(deparse))
+    return next((key for pattern, key in _CODE_REF_PATTERNS
+                 if pattern.fullmatch(deparse.strip())), None)
 
 
 def normalize(expr):

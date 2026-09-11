@@ -21,10 +21,8 @@
 # carry no version stamp of their own to compare. That is intra-repo
 # mixed-release skew, and it is invisible from either tier alone.
 #
-# Both tiers are now invoked, with `just verify-tables` for tier 1 and a
-# rerun-and-diff in CI for tier 2. Source identity is still a separate gap:
-# tier 2 resolves LIB below, while tier 1 independently resolves its cache.
-# An explicit tier-2 override can therefore select a different source tree.
+# Both tiers use the same explicit library and interpreter. Tier 2 refreshes
+# its dump even when run alone, so a readable cache is never identity evidence.
 #
 # Usage:
 #   tools/exiftool-tables/regen-all.sh              # tier 1 + tier 2
@@ -51,24 +49,10 @@ PIN_FILE="$ROOT/.exiftool-version"
 PIN="$(tr -d '[:space:]' < "$PIN_FILE")"
 [[ -n "$PIN" ]] || { echo "$PIN_FILE is empty" >&2; exit 1; }
 
-# Resolve tier 2's source tree. Tier 1's regen.sh independently uses CACHE
-# and does not honor OXIDEX_EXIFTOOL_LIB; an explicit override can separate
-# the two even when both source trees report the pinned release.
-#
-# If the caller already pointed at a specific tree via $OXIDEX_EXIFTOOL_LIB
-# (CI's verify-tables job points to its externally staged oracle), that wins
-# for tier 2. The release is checked below, as ExiftoolPin.pm does for the
-# tier-2 Perl scripts; this version check is not a source-identity proof.
-#
-# Otherwise this resolves through regen.sh's own cache (target/exiftool-src by
-# default, override with $OXIDEX_ET_CACHE). If that cache does not have $PIN
-# yet but the shared oracle tree every other harness in this repo reads from
-# ($EXIFTOOL_CACHE_DIR/exiftool, default /tmp/oxidex-exiftool-cache/exiftool)
-# already does, symlink it in rather than re-fetching the same tarball;
-# regen.sh only fetches when its own $LIB is still missing.
-# $CACHE is also where tier 2 stashes the JSON dump it shares with tier 1
-# (below), independent of which branch resolved $LIB.
+# Select one library and interpreter for both tiers.
 CACHE="${OXIDEX_ET_CACHE:-$ROOT/target/exiftool-src}"
+PERL="${EXIFTOOL_PERL:-$(command -v perl)}"
+export EXIFTOOL_PERL="$PERL"
 if [[ "$TIER1" == "1" ]]; then
     begin_regeneration all "$CACHE"
 else
@@ -93,11 +77,10 @@ if [[ "$TIER1" == "1" ]]; then
     echo "=========================================================="
     echo ">> TIER 1: binary_tables.rs, filetypes, Composite, FITS"
     echo "=========================================================="
+    # A missing default tree may still be fetched by tier 1. Explicit trees
+    # fail if absent; they never fall back to an unrelated cached source.
+    if [[ -d "$LIB" ]]; then export OXIDEX_EXIFTOOL_LIB="$LIB"; fi
     "$HERE/regen.sh"
-    # regen.sh resolves its own $LIB independently (it does not read
-    # $OXIDEX_EXIFTOOL_LIB); re-derive tier 2's LIB from the pin's default
-    # cache so the two agree, unless the caller explicitly overrode it above.
-    [[ -n "${OXIDEX_EXIFTOOL_LIB:-}" ]] || LIB="${OXIDEX_ET_CACHE:-$ROOT/target/exiftool-src}/exiftool-$PIN/lib"
 fi
 
 [[ -d "$LIB" ]] || { echo "no ExifTool lib at $LIB even after tier 1" >&2; exit 1; }
@@ -115,11 +98,9 @@ if [[ "$LIB_VERSION" != "$PIN" ]]; then
     exit 1
 fi
 JSON="$CACHE/tables-$PIN.json"
-if [[ ! -r "$JSON" ]]; then
-    echo ">> tier-1 JSON dump missing ($JSON); producing it for tier 2"
-    mkdir -p "$CACHE"
-    perl "$HERE/dump_tables.pl" "$LIB" > "$JSON"
-fi
+echo ">> refreshing the tier-2 dump from $LIB with $PERL"
+mkdir -p "$CACHE"
+"$PERL" "$HERE/dump_tables.pl" "$LIB" > "$JSON"
 
 # Every tier-2 generator that shells out to Perl reads $OXIDEX_EXIFTOOL_LIB in
 # preference to its own default (scripts/lib/ExiftoolPin.pm), so this is the
@@ -184,7 +165,7 @@ PATCH
 echo "=========================================================="
 echo ">> TIER 2b: Nikon AF-point name grids"
 echo "=========================================================="
-perl "$HERE/dump_af_points.pl" "$LIB/Image/ExifTool/Nikon.pm" "$(artifact_path af-points-json)"
+"$PERL" "$HERE/dump_af_points.pl" "$LIB/Image/ExifTool/Nikon.pm" "$(artifact_path af-points-json)"
 python3 "$HERE/codegen_af_points.py" "$(artifact_path af-points-json)" \
     "$(artifact_path af-points)"
 
@@ -194,7 +175,7 @@ echo "=========================================================="
 
 run_gen() {
     local script="$1" out="$2"
-    perl "$ROOT/scripts/$script" > "$out"
+    "$PERL" "$ROOT/scripts/$script" > "$out"
 }
 
 run_gen gen_canon_custom_functions2.pl \
@@ -215,7 +196,7 @@ run_gen gen_olympus_lookups.pl \
 # not apply here.
 LEICA_RAW="$(mktemp)"
 REGEN_CLEANUP_FILE="$LEICA_RAW"
-perl "$ROOT/scripts/gen_leica_lens_types.pl" > "$LEICA_RAW"
+"$PERL" "$ROOT/scripts/gen_leica_lens_types.pl" > "$LEICA_RAW"
 python3 "$HERE/splice_leica.py" "$LEICA_RAW" "$(artifact_path leica)"
 
 echo "=========================================================="
