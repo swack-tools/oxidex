@@ -8,25 +8,29 @@ criteria and [status page](./TAG_MACHINERY_STATUS.md) owns historical evidence.
 
 ## Current work
 
-| Order | Work | State | Completion evidence |
+The upgrade tooling is implemented, validated and landed through PRs [#737](https://github.com/swack-tools/oxidex/pull/737), [#738](https://github.com/swack-tools/oxidex/pull/738), [#739](https://github.com/swack-tools/oxidex/pull/739), [#740](https://github.com/swack-tools/oxidex/pull/740)
+on `refactor/tag-machinery` at
+[`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837).
+The completed milestones below retain their original validation commits and
+populations. They are implementation history, not work to restart.
+
+| Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 0 | Review and integrate PRs [#737](https://github.com/swack-tools/oxidex/pull/737), [#738](https://github.com/swack-tools/oxidex/pull/738) and [#739](https://github.com/swack-tools/oxidex/pull/739), followed by `codex/wire-remaining-producers` | Implemented, draft and unmerged | Maintainer integration in stack order; reuse the classifier, manifest and verified transaction |
-| 1 | Canon CODE-ref recognition and verification | Implemented and validated; unmerged | Both native Perl oracles pass; missing verification and wrong input domain explicitly refuse |
-| 2 | Complete isolated old/new upgrade transaction | Implemented and validated; unmerged | Fixture controls pass on macOS/Linux; genuine 193-file same-pin run passes with unchanged caller source/index |
-| 3 | Connect three existing omitted generators | Implemented and validated; unmerged | 28-output real same-pin transaction passes at `1428b6c7`; 193-file before/after totals identical, caller unchanged |
-| 4 | Rehearse 13.55 to 13.59 | Depends on 1–3 and sound provenance | Versioned artifacts, triage, identical-oracle corpus A/B, actual manual interventions and timings |
-| 5 | Finish existing runtime migrations | Separate owners; awaiting validated integration | IFD1, RawConv and embedded-IFD routing/activation established against the pinned oracle |
-| 6 | Complete producer/coverage accounting and broader walk checks | Queued | Generated, hand-maintained, withheld and unexercised behavior distinguished; deliberate bad offsets/conversions fail |
+| 1 | Rehearse 13.55 to 13.59 | **Not run**; tooling prerequisites landed | Versioned artifacts, triage, identical-oracle corpus A/B, actual manual interventions and timings |
+| 2 | Finish existing runtime migrations | Separate owners; awaiting validated integration | IFD1, RawConv and embedded-IFD routing/activation established against the pinned oracle |
+| 3 | Complete producer/coverage accounting and broader walk checks | Queued | Generated, hand-maintained, withheld and unexercised behavior distinguished; deliberate bad offsets/conversions fail |
 
-Items 1 and 2 are validated in draft PR #739 at `785ffcfd`; its final CI and
-Docs Build passed. Item 3 is now implemented and validated on `codex/wire-remaining-producers`,
-starting from that verified head and reusing the root task checkout. A passing inventory
-check or same-pin generation run does not complete item 4 or certify runtime
-coverage. Four Sony/Nikon outputs still lack committed producers. Catalog
-synchronization has separate carry-forward semantics and is outside this table
-transaction until that policy is resolved.
+The real 28-output same-pin transaction passed at `1428b6c7` over 193 eligible
+files. A passing inventory check or same-pin run does not complete the release
+rehearsal or certify runtime coverage. Four Sony/Nikon outputs still lack
+committed producers. Catalog synchronization has separate carry-forward
+semantics and is outside this table transaction until that policy is resolved.
+See the [landing record](./TAG_MACHINERY_STATUS.md#landed-upgrade-tooling) for the
+four verified squash commits.
 
-## 1. Repair the observed CODE-ref gaps
+## Completed implementation and validation
+
+### 1. Canon CODE-ref recognition and verification
 
 Before the completed repair, the 13.59 dump under Perl 5.34 contained all 29
 Canon PersonalFuncs fields but the registry only accepted the equivalent Perl
@@ -58,7 +62,7 @@ match across both interpreters and the existing committed files. Independent
 table verification, formatting and strict package Clippy passed. No generated
 Rust, parser implementation or version pin changed.
 
-## 2. Make the existing bump command a sound transaction
+### 2. Isolated old/new upgrade transaction
 
 Keep the public `bump-exiftool.sh` / `just bump-exiftool` entry points and the
 existing manifest, triage, conformance checker and report formats. Use private
@@ -122,9 +126,9 @@ promotion/recovery evidence comes from the focused controls.
 Recovery restores only known original/prepared contents. Unknown concurrent
 edits and partial or changed staging files stop recovery and retain evidence for
 manual preservation/review. Skipped conformance is incomplete and cannot promote.
-See the [command contract](https://github.com/swack-tools/oxidex/blob/codex/upgrade-next-steps/tools/exiftool-tables/README.md#isolated-upgrade-transaction).
+See the [command contract](https://github.com/swack-tools/oxidex/blob/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837/tools/exiftool-tables/README.md#isolated-upgrade-transaction).
 
-## 3. Wire the existing omitted producers
+### 3. GeoTIFF, DICOM and lens producer integration
 
 Implementation started on 2026-09-10 from `785ffcfd` on
 `codex/wire-remaining-producers`. DICOM was integrated as `b9934841` (author
@@ -133,7 +137,8 @@ real-shell controls as `f384b68f`, and the lens repair as `5e40396b` (author
 `78daf9d6`). All three outputs now participate in the shared manifest, tier-2
 runner, formatting, independent verification and CI drift checks: **28 outputs,
 8 in tier 1 and 20 in tier 2**. Final integrated checks and the complete same-pin
-transaction are running; this is not yet a release-delta rehearsal or landing.
+transaction passed before landing in PR #740. The release-delta rehearsal remains
+unrun.
 
 | Producer | Output | Independent facts at 13.59 |
 | --- | --- | --- |
@@ -184,8 +189,8 @@ The earlier clean `10d20b78` tier-2 run reproduced all 27 then-wired outputs wit
 zero net source changes. The final 28-output same-pin transaction passed at `1428b6c7`; its evidence
 is recorded below. A file inventory or table/core oracle does not establish
 complete extraction coverage. No parser retirement or version-pin change is part
-of this continuation. Temporary helpers are removed only after their commits,
-source equivalence and evidence are preserved.
+of this continuation. Implementation commits and source-equivalence evidence are
+retained separately from the squash landing.
 
 ### Cold-build rehearsal failure and repair
 
@@ -239,9 +244,15 @@ Evidence is retained in the cleanup audit's
 `driver-result.json`, `whole-dump.log`, and the `bump-sum5o8h1` transaction
 journal, source/artifact identities, reports and preserved measured binaries.
 The earlier failed attempt remains separately under `rehearsal/`. The next
-engineering experiment is item 4, **13.55 to 13.59**, with explicit refusal and
-manual-intervention accounting. It has not been run. Integration of the draft
-stack and the other retained work below remain open.
+engineering experiment is **13.55 to 13.59**, with explicit refusal and
+manual-intervention accounting. It has not been run. PRs #737–#740 have landed;
+the separate retained work below remains open.
+
+The implementation inputs from the acceptance commit `1428b6c7` are unchanged:
+only these four status/command documents differ at reviewed head `028f2bb5`.
+The final squash tree was verified equal to that reviewed head. This preserves
+the original acceptance evidence; it does not claim a new corpus run at the
+squash commit.
 
 ## Other retained work
 
@@ -255,7 +266,7 @@ stack and the other retained work below remain open.
 
 ## Handoff discipline
 
-At each milestone record the commit, draft PR state, named validation instrument,
+At each milestone record the commit, PR and landing state, named validation instrument,
 passed/skipped/failed counts, evidence directory, unresolved work and exact next
 command in the root `HANDOFF.md`. Mark an item implemented only after its checks
 finish, and integrated only after its changes actually land. Commit timestamps
