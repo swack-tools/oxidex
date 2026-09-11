@@ -11,7 +11,7 @@
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
-use crate::parsers::image::embedded::parse_embedded_exif;
+use crate::parsers::image::embedded::parse_embedded_exif_at;
 use crate::parsers::xmp::rdf_parser::parse_xmp;
 
 /// WebP signature: "RIFF" + size + "WEBP"
@@ -430,7 +430,7 @@ fn parse_webp_exif(
         None => exif_data,
     };
 
-    if parse_embedded_exif(tiff_data, chunk_data_offset, metadata) {
+    if parse_embedded_exif_at(tiff_data, chunk_data_offset, metadata) {
         Ok(())
     } else {
         Err(ExifToolError::parse_error(

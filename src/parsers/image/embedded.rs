@@ -22,6 +22,14 @@ const EXIF_IFD_POINTER: u16 = 0x8769;
 /// GPS sub-IFD pointer (`GPSInfo`).
 const GPS_IFD_POINTER: u16 = 0x8825;
 
+/// Parses a self-contained TIFF/EXIF block using block-relative offsets.
+///
+/// Preserves the original public two-argument helper. Container readers whose
+/// reported offsets include a file position use [`parse_embedded_exif_at`].
+pub fn parse_embedded_exif(tiff_data: &[u8], metadata: &mut MetadataMap) -> bool {
+    parse_embedded_exif_at(tiff_data, 0, metadata)
+}
+
 /// Parses a self-contained TIFF/EXIF block and inserts its tags.
 ///
 /// `tiff_data` must start at the TIFF header ("II"/"MM"), i.e. any
@@ -60,7 +68,11 @@ const GPS_IFD_POINTER: u16 = 0x8825;
 ///
 /// Returns `false` when the block has no usable TIFF header, so callers can
 /// distinguish "no EXIF here" from "EXIF parsed".
-pub fn parse_embedded_exif(tiff_data: &[u8], tiff_base: u64, metadata: &mut MetadataMap) -> bool {
+pub fn parse_embedded_exif_at(
+    tiff_data: &[u8],
+    tiff_base: u64,
+    metadata: &mut MetadataMap,
+) -> bool {
     if tiff_data.len() < 8 {
         return false;
     }
@@ -164,7 +176,7 @@ pub fn parse_embedded_exif(tiff_data: &[u8], tiff_base: u64, metadata: &mut Meta
 
 /// Walks the thumbnail IFD (IFD1) of a self-contained TIFF/EXIF block.
 ///
-/// [`parse_embedded_exif`] covers IFD0, the EXIF sub-IFD and the GPS sub-IFD
+/// [`parse_embedded_exif_at`] covers IFD0, the EXIF sub-IFD and the GPS sub-IFD
 /// but stops before IFD0's next-IFD pointer, so `Compression`,
 /// `ThumbnailOffset` and `ThumbnailLength` need this second pass, and the
 /// rest of the directory (XResolution, YResolution, ResolutionUnit on the
@@ -237,7 +249,7 @@ pub fn parse_embedded_xmp(xmp_data: &[u8], metadata: &mut MetadataMap) -> bool {
 }
 
 /// Synthetic TIFF blocks shared by the tests of every container that hands
-/// its EXIF payload to [`parse_embedded_exif`], so one builder pins the same
+/// its EXIF payload to [`parse_embedded_exif_at`], so one builder pins the same
 /// bytes for PNG, PSD, WebP, JXL, FLIF and HEIF alike.
 #[cfg(test)]
 pub(crate) mod test_fixtures {
@@ -355,7 +367,7 @@ pub(crate) mod test_fixtures {
     /// carries `OtherImageStart`/`OtherImageLength` (0x0201/0x0202), the
     /// offset pair ExifTool reports as stored value + `Base` (Exif.pm
     /// `IsOffset`). Every container test wraps it to pin the base it passes
-    /// to [`super::parse_embedded_exif`]; the expected numbers were read off
+    /// to [`super::parse_embedded_exif_at`]; the expected numbers were read off
     /// the pinned oracle for the same bytes in the same containers
     /// (`InteropIFD:OtherImageStart`: 1000 + 20 WebP with or without the
     /// introducer, + 44 / + 50 JXL offset word 0 / 6, + 217 HEIC, + 0 PNG,
@@ -574,7 +586,7 @@ mod tests {
             (0xC6D3, 7, &title2),
         ]);
         let mut metadata = MetadataMap::new();
-        assert!(parse_embedded_exif(&block, 0, &mut metadata));
+        assert!(parse_embedded_exif_at(&block, 0, &mut metadata));
         assert_eq!(metadata.get_string("IFD0:Artist"), Some("Ph"));
         assert_eq!(
             metadata.get("IFD0:PanasonicTitle"),
@@ -595,7 +607,7 @@ mod tests {
             (0xC6D3, 7, &[0u8; 128]),
         ]);
         let mut metadata = MetadataMap::new();
-        assert!(parse_embedded_exif(&block, 0, &mut metadata));
+        assert!(parse_embedded_exif_at(&block, 0, &mut metadata));
         assert_eq!(metadata.get_string("IFD0:Artist"), Some("Ph"));
         assert_eq!(metadata.get("IFD0:PanasonicTitle"), None);
         assert_eq!(metadata.get("IFD0:PanasonicTitle2"), None);
@@ -604,7 +616,11 @@ mod tests {
     #[test]
     fn parses_embedded_tiff_block() {
         let mut metadata = MetadataMap::new();
-        assert!(parse_embedded_exif(&tiff_with_artist(), 0, &mut metadata));
+        assert!(parse_embedded_exif_at(
+            &tiff_with_artist(),
+            0,
+            &mut metadata
+        ));
         assert!(
             metadata.keys().any(|k| k.ends_with(":Artist")),
             "expected an Artist tag, got {:?}",
@@ -615,7 +631,11 @@ mod tests {
     #[test]
     fn rejects_non_tiff_block() {
         let mut metadata = MetadataMap::new();
-        assert!(!parse_embedded_exif(b"not a tiff header", 0, &mut metadata));
+        assert!(!parse_embedded_exif_at(
+            b"not a tiff header",
+            0,
+            &mut metadata
+        ));
         assert!(metadata.is_empty());
     }
 
@@ -625,7 +645,7 @@ mod tests {
         let mut data = tiff_with_artist();
         data[2] = 0x2B;
         let mut metadata = MetadataMap::new();
-        assert!(!parse_embedded_exif(&data, 0, &mut metadata));
+        assert!(!parse_embedded_exif_at(&data, 0, &mut metadata));
     }
 
     #[test]

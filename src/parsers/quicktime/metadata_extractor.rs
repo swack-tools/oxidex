@@ -3333,7 +3333,7 @@ fn extract_exif_from_mdat(
     // Image::ExifTool::Exif::Main, so IFD0/ExifIFD/GPS/MakerNotes are exactly
     // the JPEG ones and go through the shared decoder.
     if let Some((data, tiff_base)) = tiff_data {
-        crate::parsers::image::embedded::parse_embedded_exif(data, tiff_base, metadata);
+        crate::parsers::image::embedded::parse_embedded_exif_at(data, tiff_base, metadata);
     }
 }
 

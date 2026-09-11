@@ -383,7 +383,7 @@ pub fn parse_png_metadata_with_diagnostics(
                 // IFD0/ExifIFD/GPS rows are exactly those of the same TIFF
                 // block inside a JPEG APP1 -- the shared decoder, not a PNG
                 // copy of it.
-                if !crate::parsers::image::embedded::parse_embedded_exif(
+                if !crate::parsers::image::embedded::parse_embedded_exif_at(
                     &chunk.data,
                     0,
                     &mut metadata,

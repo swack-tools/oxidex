@@ -23,6 +23,7 @@
 
 use crate::core::FileReader;
 use crate::error::{ExifToolError, Result};
+use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntries, parse_ifd};
 use nom::{
     IResult,
     bytes::complete::{tag, take},
@@ -688,6 +689,74 @@ pub fn parse_time_chunk(data: &[u8]) -> Result<String> {
         "{:04}:{:02}:{:02} {:02}:{:02}:{:02}",
         year, month, day, hour, minute, second
     ))
+}
+
+/// Parses an eXIf chunk and extracts EXIF tags using the TIFF parser.
+///
+/// # Format
+///
+/// The eXIf chunk contains raw TIFF/EXIF data:
+/// ```text
+/// Byte order: 2 bytes (0x4949 = "II" little-endian, 0x4D4D = "MM" big-endian)
+/// TIFF header: 2 bytes (0x002A for TIFF)
+/// IFD offset: 4 bytes (typically 8, pointing to first IFD)
+/// IFD data: variable
+/// ```
+///
+/// # Parameters
+///
+/// - `data`: eXIf chunk data (raw TIFF format)
+///
+/// # Returns
+///
+/// - `Ok(IfdEntries)`: Parsed EXIF tags
+/// - `Err`: Parse error
+pub fn parse_exif_chunk(data: &[u8]) -> Result<IfdEntries> {
+    // Minimum TIFF header size: 2 (byte order) + 2 (magic) + 4 (offset) = 8 bytes
+    if data.len() < 8 {
+        return Err(ExifToolError::parse_error(
+            "eXIf chunk too small for TIFF header",
+        ));
+    }
+
+    // Detect byte order from first 2 bytes
+    let byte_order = match &data[0..2] {
+        b"II" => ByteOrder::LittleEndian,
+        b"MM" => ByteOrder::BigEndian,
+        _ => {
+            return Err(ExifToolError::parse_error(
+                "Invalid byte order marker in eXIf chunk",
+            ));
+        }
+    };
+
+    // Verify TIFF magic number (0x002A)
+    let reader = match byte_order {
+        ByteOrder::LittleEndian => crate::io::EndianReader::little_endian(data),
+        ByteOrder::BigEndian => crate::io::EndianReader::big_endian(data),
+    };
+
+    let magic = reader.u16_at(2).ok_or_else(|| {
+        ExifToolError::parse_error("eXIf chunk too small to read TIFF magic number")
+    })?;
+
+    if magic != 0x002A {
+        return Err(ExifToolError::parse_error(format!(
+            "Invalid TIFF magic number in eXIf chunk: 0x{:04X}",
+            magic
+        )));
+    }
+
+    // Read IFD offset
+    let ifd_offset = reader
+        .u32_at(4)
+        .ok_or_else(|| ExifToolError::parse_error("eXIf chunk too small to read IFD offset"))?;
+
+    // Create an in-memory reader for the EXIF data
+    let exif_reader = crate::io::buffered_reader::BufferedReader::from_bytes(data);
+
+    // Parse the IFD using the TIFF parser
+    parse_ifd(&exif_reader, ifd_offset as u64, byte_order)
 }
 
 #[cfg(test)]

@@ -15,7 +15,7 @@
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::image::embedded::{
-    parse_embedded_exif, parse_embedded_icc, parse_embedded_xmp,
+    parse_embedded_exif_at, parse_embedded_icc, parse_embedded_xmp,
 };
 
 const BPG_SIGNATURE: &[u8] = &[0x42, 0x50, 0x47, 0xFB];
@@ -222,7 +222,7 @@ impl BPGParser {
                 {
                     payload = &payload[1..];
                 }
-                parse_embedded_exif(payload, 0, metadata);
+                parse_embedded_exif_at(payload, 0, metadata);
             } else if ext_type == EXT_ICC_PROFILE {
                 parse_embedded_icc(payload, metadata);
             } else if ext_type == EXT_XMP {

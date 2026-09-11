@@ -17,7 +17,7 @@
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::{ByteOrder as EndianByteOrder, EndianReader};
-use crate::parsers::image::embedded::parse_embedded_exif;
+use crate::parsers::image::embedded::parse_embedded_exif_at;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::xmp::rdf_parser::parse_xmp;
 
@@ -286,7 +286,7 @@ fn parse_flif_exif(exif_data: &[u8], metadata: &mut MetadataMap) {
     // under ExifIFD exactly as JPEG does and hands the block to ProcessTIFF
     // with Exif::Main, so IFD0, the EXIF and GPS sub-IFDs and everything
     // below them go through the shared decoder.
-    parse_embedded_exif(tiff_data, 0, metadata);
+    parse_embedded_exif_at(tiff_data, 0, metadata);
 }
 
 /// Read a FLIF variable-length integer (base-128, high bit continues).

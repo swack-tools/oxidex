@@ -13,7 +13,7 @@ use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::icc::parse_icc_profile_data;
-use crate::parsers::image::embedded::{parse_embedded_exif, parse_embedded_thumbnail_ifd};
+use crate::parsers::image::embedded::{parse_embedded_exif_at, parse_embedded_thumbnail_ifd};
 use crate::parsers::jpeg::iptc_parser::{
     dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
 };
@@ -594,7 +594,7 @@ impl PSDParser {
     /// decoders the JPEG path uses; the PDF Photoshop-resource path takes the
     /// identical route for the identical resource.
     fn parse_exif_data(data: &[u8], metadata: &mut MetadataMap) {
-        parse_embedded_exif(data, 0, metadata);
+        parse_embedded_exif_at(data, 0, metadata);
         parse_embedded_thumbnail_ifd(data, metadata);
     }
     /// Extract metadata from XMP using the proper RDF parser
@@ -1421,7 +1421,7 @@ mod tests {
         // renaming 0x0202 unconditionally would replace real data with a wrong
         // tag name in every one of those directories.
         //
-        // parse_embedded_exif routes IFD0 through lookup_tag_name(id, "IFD0")
+        // parse_embedded_exif_at routes IFD0 through lookup_tag_name(id, "IFD0")
         // and only parse_ifd1_thumbnail names the IFD1 pair, so this pins the
         // scope of the fix at the call site rather than trusting the branch to
         // stay put.

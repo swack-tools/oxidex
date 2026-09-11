@@ -11,7 +11,7 @@
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
-use crate::parsers::image::embedded::parse_embedded_exif;
+use crate::parsers::image::embedded::parse_embedded_exif_at;
 use crate::parsers::xmp::rdf_parser::parse_xmp;
 
 /// Bare codestream signature: 0xFF 0x0A
@@ -279,7 +279,7 @@ impl JXLParser {
                         };
                         if let Some(tiff_data) = exif_data.get(4 + tiff_offset..) {
                             let tiff_base = (offset + 8 + 4 + tiff_offset) as u64;
-                            parse_embedded_exif(tiff_data, tiff_base, metadata);
+                            parse_embedded_exif_at(tiff_data, tiff_base, metadata);
                         }
                     }
                 }
