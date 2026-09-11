@@ -158,10 +158,12 @@ execution plan before implementing anything here.
    generation. A fresh AUTO/HAND percentage from that classifier is misleading.
    The repair subsequently landed in PR #737; see its evidence below.
    Do not start another implementation of this item.
-5. Four generated-origin files have no committed generator:
-   `sony/plain_tables.rs`, `sony/enciphered_tables.rs`,
-   `nikon/settings_tables.rs`, `nikon/encrypted_tables.rs` under
-   `src/parsers/tiff/makernotes/`. `regen-all.sh` explicitly records the limit.
+5. Three generated-origin files still lack producers:
+   `sony/plain_tables.rs`, `sony/enciphered_tables.rs` and
+   `nikon/encrypted_tables.rs` under `src/parsers/tiff/makernotes/`.
+   [Nikon settings recovery](./reference/nikon-settings-generator-recovery.md)
+   now regenerates its existing 197 rows and 131 maps without changing Rust.
+   `regen-all.sh` explicitly records the remaining limit.
    Count these as standing debt, not new work introduced by every release.
 
 The [August 11 rehearsal](./reference/bump-reports/13.58-to-13.59.md) remains

@@ -69,7 +69,7 @@ else:
     elif name=='codegen.py':
         dump(args[0]);output(flag('-o'),'binary');output(flag('--ifd-out'),'ifd')
         output(flag('--value-conv-ledger-out'),'value-ledger')
-    elif name in ('codegen_filetypes.py','codegen_fits.py','gen_sony_main_extra_tables.py','gen_minolta_a100_tables.py'):
+    elif name in ('codegen_filetypes.py','codegen_fits.py','gen_sony_main_extra_tables.py','gen_minolta_a100_tables.py','gen_nikon_settings_tables.py'):
         dump(args[0]);output(flag('-o'),name)
     elif name=='codegen_composite.py':
         dump(args[0]);output(flag('-o'),'composite');output(flag('--generated-out'),'composite-compute')
@@ -95,10 +95,10 @@ else:
         path=pathlib.Path(args[0]).resolve()
         assert path==artifact('dump_lens_alternatives')
         assert path.read_text()=='generated explicit-A dump_lens_alternatives.pl\n'
-    elif name in ('verify_geotiff.py','verify_dicom_dict.py'):
+    elif name in ('verify_geotiff.py','verify_dicom_dict.py','verify_nikon_settings.py'):
         assert flag('--exiftool-dir')==lib.parent
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
-        producer='gen_geotiff_printconv' if name=='verify_geotiff.py' else 'gen_dicom_dict'
+        producer={'verify_geotiff.py':'gen_geotiff_printconv','verify_dicom_dict.py':'gen_dicom_dict','verify_nikon_settings.py':'gen_nikon_settings_tables'}[name]
         path=flag('--rust-file' if name=='verify_geotiff.py' else '--input')
         assert path==artifact(producer)
         assert path.read_text()=='generated explicit-A '+producer+'.py\n'
@@ -187,7 +187,8 @@ class RegenerationShellTests(unittest.TestCase):
         # This is the invocation contract, not another output-path manifest.
         return ['gen_geotiff_printconv.py', 'gen_dicom_dict.py',
                 'dump_lens_alternatives.pl', 'verify_geotiff.py',
-                'verify_dicom_dict.py', 'verify_lens_alternatives.py']
+                'verify_dicom_dict.py', 'verify_lens_alternatives.py',
+                'gen_nikon_settings_tables.py', 'verify_nikon_settings.py']
 
     def test_both_tiers_and_tier2_use_selected_source_and_complete_checks(self):
         for full in (True, False):

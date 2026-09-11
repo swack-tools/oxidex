@@ -148,12 +148,12 @@ class GeneratorLessDerivationTests(unittest.TestCase):
     WIRED = {
         "src/parsers/tiff/makernotes/sony/main_extra_tables.rs",
         "src/parsers/tiff/makernotes/minolta_a100_tables.rs",
+        "src/parsers/tiff/makernotes/nikon/settings_tables.rs",
     }
     STILL_GENERATOR_LESS = {
         "src/parsers/tiff/makernotes/sony/enciphered_tables.rs",
         "src/parsers/tiff/makernotes/sony/plain_tables.rs",
         "src/parsers/tiff/makernotes/nikon/encrypted_tables.rs",
-        "src/parsers/tiff/makernotes/nikon/settings_tables.rs",
     }
 
     def test_every_candidate_file_exists_on_disk(self):

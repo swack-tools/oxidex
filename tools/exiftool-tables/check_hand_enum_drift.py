@@ -4,9 +4,9 @@ transcriptions and inline Canon decoders.
 
 Tag-machinery overhaul Step 16 introduced this check for six vendor files
 that then lacked committed generators, plus canon.rs's inline decoders.
-Sony main_extra_tables.rs and minolta_a100_tables.rs now have generators.
-Four vendor files still lack producers: sony/{enciphered,plain}_tables.rs
-and nikon/{encrypted,settings}_tables.rs. The original seven-target check
+Sony main_extra_tables.rs, minolta_a100_tables.rs and Nikon settings_tables.rs
+now have generators. Three vendor files still lack producers:
+sony/{enciphered,plain}_tables.rs and nikon/encrypted_tables.rs. The original seven-target check
 remains useful as a separate coarse check; it does not replace regeneration
 or prove the remaining inline Canon decoders correspond to their Perl tables.
 
