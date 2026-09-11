@@ -389,9 +389,17 @@ pub fn render_group_display_lines(
         let label = joined_family_label(entry.occurrence, families);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
         let rendered = if short {
-            super::output_formatter::format_tag_value_short(&entry.lookup_key, &value)
+            super::output_formatter::format_tag_value_short_with_mode(
+                &entry.lookup_key,
+                &value,
+                no_print_conv,
+            )
         } else {
-            super::output_formatter::format_tag_value(&entry.lookup_key, &value)
+            super::output_formatter::format_tag_value_with_mode(
+                &entry.lookup_key,
+                &value,
+                no_print_conv,
+            )
         };
         out.push_str(&format!(
             "[{label}] {}: {rendered}\n",
@@ -550,7 +558,14 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     }
 
     let metadata = if no_print_conv {
-        surviving.without_print_conv()
+        // strip_extended_only rebuilt the display map and discarded value
+        // forms. Use its key selection with the original winning occurrences.
+        let values = raw_metadata.without_print_conv();
+        values
+            .iter()
+            .filter(|(key, _)| surviving.contains_key(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
     } else {
         // Keep the complete PrintConv scalar until the chosen renderer:
         // JSON checks numeric/boolean typing before deleting NULs, while
@@ -844,5 +859,152 @@ mod tests {
             resolved_display_value(resolved[0].occurrence, false),
             TagValue::new_string("26 kB")
         );
+    }
+    #[test]
+    fn raw_projection_and_renderers_keep_values_in_default_and_selected_modes() {
+        use crate::cli::args::DetectorMode;
+        use crate::cli::output_formatter::{
+            CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
+        };
+        let mut source = MetadataMap::new();
+        for (name, print, value) in [
+            ("Canon:LensType", "Canon EF 300mm f/2.8L USM", "136"),
+            ("Composite:ShootingMode", "Full auto", "10"),
+            ("Composite:ImageSize", "65x100", "65 100"),
+            ("Composite:Megapixels", "0.006", "0.0065"),
+        ] {
+            source.insert_occurrence_with_raw(
+                name,
+                TagValue::new_string(print),
+                TagValue::new_string(value),
+                1,
+                "",
+                Instance::default(),
+            );
+        }
+        source.insert("IFD0:Orientation", TagValue::new_integer(6));
+        source.insert("IFD0:0xDEAD", TagValue::new_string("hidden"));
+        for (selected, grouped, all_tags) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, true),
+        ] {
+            for raw in [false, true] {
+                let mut args = CliArgs {
+                    detector: DetectorMode::Signature,
+                    json: true,
+                    csv: false,
+                    short_format: false,
+                    all_tags,
+                    group_display: grouped.then_some(vec![0, 1]),
+                    extended_output: false,
+                    recursive: false,
+                    preserve_file_times: false,
+                    backup: false,
+                    readonly: true,
+                    exiftool_compat: !raw,
+                    tags_from_file: None,
+                    date_format: None,
+                    dry_run: false,
+                    strict: false,
+                    args: if selected {
+                        vec![
+                            "-LensType".into(),
+                            "-ShootingMode".into(),
+                            "-ImageSize".into(),
+                            "-Megapixels".into(),
+                            "-Orientation".into(),
+                            "fixture.webp".into(),
+                        ]
+                    } else {
+                        vec!["fixture.webp".into()]
+                    },
+                };
+                let ResolvedFileOutput::Metadata(map) = resolve_file_output(&source, &args) else {
+                    panic!("expected map")
+                };
+                assert!(!map.keys().any(|key| key.contains("0xDEAD")));
+                let json: serde_json::Value =
+                    serde_json::from_str(&JsonFormatter.format_with_mode(&map, None, raw)).unwrap();
+                let field = |name: &str| {
+                    json[0]
+                        .as_object()
+                        .unwrap()
+                        .iter()
+                        .find(|(key, _)| key.rsplit(':').next() == Some(name))
+                        .unwrap()
+                        .1
+                };
+                assert_eq!(
+                    field("Orientation"),
+                    &if raw {
+                        serde_json::json!(6)
+                    } else {
+                        serde_json::json!("Rotate 90 CW")
+                    }
+                );
+                assert_eq!(
+                    field("LensType"),
+                    &if raw {
+                        serde_json::json!(136)
+                    } else {
+                        serde_json::json!("Canon EF 300mm f/2.8L USM")
+                    }
+                );
+                assert_eq!(
+                    field("ShootingMode"),
+                    &if raw {
+                        serde_json::json!(10)
+                    } else {
+                        serde_json::json!("Full auto")
+                    }
+                );
+                assert_eq!(
+                    field("ImageSize"),
+                    &serde_json::json!(if raw { "65 100" } else { "65x100" })
+                );
+                assert_eq!(
+                    field("Megapixels"),
+                    &serde_json::json!(if raw { 0.0065 } else { 0.006 })
+                );
+                if !grouped {
+                    for formatter in [
+                        &ShortFormatter as &dyn OutputFormatter,
+                        &HumanReadableFormatter,
+                        &CsvFormatter,
+                    ] {
+                        let text = formatter.format_with_mode(&map, None, raw);
+                        if raw {
+                            assert!(!text.contains("Canon EF"));
+                            assert!(!text.contains("Full auto"));
+                            assert!(!text.contains("Rotate 90 CW"));
+                            assert!(text.contains("136"));
+                            assert!(text.contains("10"));
+                        } else {
+                            assert!(text.contains("Canon EF"));
+                            assert!(text.contains("Full auto"));
+                            assert!(text.contains("Rotate 90 CW"));
+                        }
+                    }
+                } else {
+                    args.json = false;
+                    args.short_format = true;
+                    let ResolvedFileOutput::Lines(lines) = resolve_file_output(&source, &args)
+                    else {
+                        panic!("expected lines")
+                    };
+                    assert!(lines.contains(if raw {
+                        "LensType: 136"
+                    } else {
+                        "LensType: Canon EF"
+                    }));
+                    assert!(lines.contains(if raw {
+                        "ShootingMode: 10"
+                    } else {
+                        "ShootingMode: Full auto"
+                    }));
+                }
+            }
+        }
     }
 }

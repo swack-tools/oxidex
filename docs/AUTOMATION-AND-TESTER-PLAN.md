@@ -77,7 +77,12 @@ Coordinate with the owners listed in the status page before starting work.
 Reconcile RawConv first (`ad9fdc32`, then `0bf02cd9`) while preserving current
 Canon label/raw-ID attachment; rerun the six-container RawConv/IsOffset carriers,
 PNG writer fixtures and a fresh occurrence-aware baseline/candidate gate. The
-recorded old-head full gate is supporting evidence, not current landing proof.
+[active reconciliation report](./reference/rawconv-reconciliation-2026-09-11.md)
+records the fresh default corpus result and the stricter projection blockers.
+Require native JSON scalar types, raw and printed values, duplicate multiplicity,
+physical cross-name order and container/EXIF priority; an improved aggregate
+score does not compensate for a lost correct occurrence. The recorded old-head
+full gate remains supporting evidence, not current landing proof.
 
 Next port IFD1 prerequisite `7a69d2fa` without weakening the named verified-key
 and input-domain CODE-ref gate, and regenerate using the current pinned pipeline.

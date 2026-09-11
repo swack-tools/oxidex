@@ -43,6 +43,16 @@ improved; MISSING stayed 1,563. This is a bounded generator-refresh measurement,
 not a reconstruction of historical engineering effort. Static declaration
 classification is not raw extraction coverage.
 
+## RawConv reconciliation in progress
+
+The [2026-09-11 report](./reference/rawconv-reconciliation-2026-09-11.md) records
+work from integration `afd3a628` after PR #742. Initial implementation `d2db5d27`
+passed the workspace suite and improved default corpus matching on 4,238 files.
+The stricter 71-file, 12-mode projection found raw JSON typing, numeric forms,
+IFD1 order and embedded-dimension priority blockers. Those repairs are implemented;
+this is unlanded work, with final acceptance and PR state still pending.
+No generated table, version pin or Exif::Main engine activation changed.
+
 ## What the evidence establishes
 
 The original `c7f5dd81` documentation audit inspected committed source, first-parent landing commits, local branch

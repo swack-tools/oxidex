@@ -83,6 +83,18 @@ pub trait OutputFormatter {
     ///
     /// A formatted string representation of the metadata
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String;
+
+    /// Render prepared CLI values without reapplying enum PrintConv in raw mode.
+    /// Existing external implementors retain their legacy formatting default.
+    fn format_with_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        no_print_conv: bool,
+    ) -> String {
+        let _ = no_print_conv;
+        self.format(metadata, filter_tags)
+    }
 }
 
 fn tag_matches_filter(tag_name: &str, filter: &[String]) -> bool {
@@ -121,6 +133,15 @@ pub struct HumanReadableFormatter;
 
 impl OutputFormatter for HumanReadableFormatter {
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
+        self.format_with_mode(metadata, filter_tags, false)
+    }
+
+    fn format_with_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        no_print_conv: bool,
+    ) -> String {
         if metadata.is_empty() {
             return String::new();
         }
@@ -190,7 +211,7 @@ impl OutputFormatter for HumanReadableFormatter {
                 continue;
             }
 
-            let formatted_value = format_tag_value(tag_name, tag_value);
+            let formatted_value = format_tag_value_with_mode(tag_name, tag_value, no_print_conv);
             output.push_str(&format!("{}: {}\n", tag_name, formatted_value));
         }
 
@@ -229,6 +250,7 @@ impl JsonFormatter {
         &self,
         metadata: &MetadataMap,
         filter_tags: Option<&[String]>,
+        no_print_conv: bool,
     ) -> serde_json::Map<String, serde_json::Value> {
         // If filter is specified, create a new filtered metadata map
         let metadata_to_filter = if let Some(filter) = filter_tags {
@@ -248,7 +270,8 @@ impl JsonFormatter {
         let mut json_map = serde_json::Map::new();
 
         for (tag_name, tag_value) in metadata_to_filter.iter() {
-            let json_value = tag_value_to_json(Some(tag_name.as_str()), tag_value);
+            let json_value =
+                tag_value_to_json((!no_print_conv).then_some(tag_name.as_str()), tag_value);
             json_map.insert(tag_name.clone(), json_value);
         }
 
@@ -272,7 +295,20 @@ impl JsonFormatter {
         filter_tags: Option<&[String]>,
         status: Option<crate::core::read_report::ParseStatus>,
     ) -> String {
-        let mut json_map = self.build_json_map(metadata, filter_tags);
+        self.format_with_status_and_mode(metadata, filter_tags, status, false)
+    }
+
+    /// Formats values already selected by the CLI, preserving numeric mode.
+    /// In --no-print-conv mode the JSON writer must not apply friendly enums
+    /// again. The legacy public format/format_with_status defaults stay intact.
+    pub fn format_with_status_and_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        status: Option<crate::core::read_report::ParseStatus>,
+        no_print_conv: bool,
+    ) -> String {
+        let mut json_map = self.build_json_map(metadata, filter_tags, no_print_conv);
 
         if let Some(status) = status
             && status != crate::core::read_report::ParseStatus::Parsed
@@ -291,8 +327,17 @@ impl JsonFormatter {
 }
 
 impl OutputFormatter for JsonFormatter {
+    fn format_with_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        no_print_conv: bool,
+    ) -> String {
+        self.format_with_status_and_mode(metadata, filter_tags, None, no_print_conv)
+    }
+
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
-        let json_map = self.build_json_map(metadata, filter_tags);
+        let json_map = self.build_json_map(metadata, filter_tags, false);
 
         // Serialize to pretty JSON wrapped in an array for Perl ExifTool compatibility
         // Perl ExifTool outputs: [{...}] (array with one object per file)
@@ -462,6 +507,15 @@ pub struct CsvFormatter;
 
 impl OutputFormatter for CsvFormatter {
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
+        self.format_with_mode(metadata, filter_tags, false)
+    }
+
+    fn format_with_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        no_print_conv: bool,
+    ) -> String {
         if metadata.is_empty() {
             return String::new();
         }
@@ -498,7 +552,7 @@ impl OutputFormatter for CsvFormatter {
                 continue;
             }
 
-            let formatted_value = format_tag_value(tag_name, tag_value);
+            let formatted_value = format_tag_value_with_mode(tag_name, tag_value, no_print_conv);
             if wtr.write_record([tag_name, &formatted_value]).is_err() {
                 // Skip this record if write fails, but continue
                 continue;
@@ -546,6 +600,15 @@ pub struct ShortFormatter;
 
 impl OutputFormatter for ShortFormatter {
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
+        self.format_with_mode(metadata, filter_tags, false)
+    }
+
+    fn format_with_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        no_print_conv: bool,
+    ) -> String {
         if metadata.is_empty() {
             return String::new();
         }
@@ -588,7 +651,8 @@ impl OutputFormatter for ShortFormatter {
 
             // Extract short name (after last colon)
             let short_name = tag_name.rsplit(':').next().unwrap_or(tag_name);
-            let formatted_value = format_tag_value_short(tag_name, tag_value);
+            let formatted_value =
+                format_tag_value_short_with_mode(tag_name, tag_value, no_print_conv);
             output.push_str(&format!("{}: {}\n", short_name, formatted_value));
         }
 
@@ -614,8 +678,17 @@ impl OutputFormatter for ShortFormatter {
 /// MakerNote/GPS text is full of 3-byte U+FFFD replacement characters, and 14
 /// files in the sample corpus (Samsung and Canon JPEGs, via
 /// `GPS:GPSProcessingMethod`) killed the whole `oxidex -e -s` invocation on it.
-pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
-    if let Some(label) = friendly_enum_name(tag_name, value) {
+#[cfg(test)]
+fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
+    format_tag_value_short_with_mode(tag_name, value, false)
+}
+
+pub(crate) fn format_tag_value_short_with_mode(
+    tag_name: &str,
+    value: &TagValue,
+    no_print_conv: bool,
+) -> String {
+    if !no_print_conv && let Some(label) = friendly_enum_name(tag_name, value) {
         return label;
     }
 
@@ -677,7 +750,7 @@ pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String
         TagValue::Array(values) => join_list(
             values
                 .iter()
-                .map(|v| format_tag_value_short(tag_name, v))
+                .map(|v| format_tag_value_short_with_mode(tag_name, v, no_print_conv))
                 .collect(),
         ),
     }
@@ -745,8 +818,17 @@ fn join_list(items: Vec<String>) -> String {
 ///
 /// Converts each TagValue variant into a clean string representation
 /// without the enum structure (e.g., "Canon" instead of "String(\"Canon\")").
-pub(crate) fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
-    if let Some(label) = friendly_enum_name(tag_name, value) {
+#[cfg(test)]
+fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
+    format_tag_value_with_mode(tag_name, value, false)
+}
+
+pub(crate) fn format_tag_value_with_mode(
+    tag_name: &str,
+    value: &TagValue,
+    no_print_conv: bool,
+) -> String {
+    if !no_print_conv && let Some(label) = friendly_enum_name(tag_name, value) {
         return label;
     }
 
@@ -783,7 +865,7 @@ pub(crate) fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
         TagValue::Array(values) => join_list(
             values
                 .iter()
-                .map(|v| format_tag_value(tag_name, v))
+                .map(|v| format_tag_value_with_mode(tag_name, v, no_print_conv))
                 .collect(),
         ),
     }

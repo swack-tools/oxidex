@@ -245,6 +245,18 @@ fn canon_exposure_mode(value: &str) -> Option<i64> {
     })
 }
 
+/// Canon ShootingMode's PrintConv uses the chosen input's PrintConv, while
+/// its ValueConv uses the input code. Read the forward generated enum; do not
+/// infer a code from a label or reuse a newly attached numeric input as print.
+fn canon_mode_print(name: &str, value: i64) -> Option<String> {
+    crate::exiftool_tables::find_table("Canon", "CameraSettings")?
+        .fields
+        .iter()
+        .find(|field| field.name == name)?
+        .print_conv
+        .apply(value)
+}
+
 fn canon_easy_mode(value: &str) -> Option<i64> {
     // Only values whose reverse mapping is unambiguous are accepted. Unknown
     // labels are refused rather than assigned a plausible scene-mode number.
@@ -1633,12 +1645,15 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
                 if exposure == 4 && perl_truthy(get(i, 2)) {
                     Computed::new("7", "Bulb")
                 } else {
-                    Computed::new(exposure.to_string(), exposure_print)
+                    Computed::new(
+                        exposure.to_string(),
+                        canon_mode_print("CanonExposureMode", exposure)?,
+                    )
                 }
             } else {
                 let easy_print = get(i, 1)?;
                 let easy = canon_easy_mode(easy_print)?;
-                Computed::new((easy + 10).to_string(), easy_print)
+                Computed::new((easy + 10).to_string(), canon_mode_print("EasyMode", easy)?)
             }
         }
 

@@ -328,18 +328,23 @@ fn print_resolved_metadata(
 ) {
     if args.csv {
         let formatter = CsvFormatter;
-        let output = formatter.format(metadata, None);
+        let output = formatter.format_with_mode(metadata, None, !args.exiftool_compat());
         print!("{}", output);
     } else if args.json {
         // Carries `Status` for any read that didn't fully parse (see
         // `JsonFormatter::format_with_status`); identical to plain `format`
         // for a healthy `Parsed` read.
         let formatter = JsonFormatter;
-        let output = formatter.format_with_status(metadata, None, Some(status));
+        let output = formatter.format_with_status_and_mode(
+            metadata,
+            None,
+            Some(status),
+            !args.exiftool_compat(),
+        );
         println!("{}", output);
     } else if args.short_format {
         let formatter = ShortFormatter;
-        let output = formatter.format(metadata, None);
+        let output = formatter.format_with_mode(metadata, None, !args.exiftool_compat());
         print!("{}", output);
     } else {
         if show_header {
@@ -348,7 +353,7 @@ fn print_resolved_metadata(
             println!();
         }
         let formatter = HumanReadableFormatter;
-        let output = formatter.format(metadata, None);
+        let output = formatter.format_with_mode(metadata, None, !args.exiftool_compat());
         print!("{}", output);
     }
 }

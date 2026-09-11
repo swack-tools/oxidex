@@ -1062,16 +1062,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // duplicates, Pentax's low-priority-retained
                         // duplicate marker).
                         for (tag_name, tag_value) in makernote_tags {
-                            if matches!(tag_name.as_str(), "Canon:LensType" | "Canon:RFLensType")
+                            if tag_name.starts_with("Canon:")
                                 && let Some(raw) = value_forms.remove(&tag_name)
                             {
-                                metadata.insert_occurrence_with_raw(
-                                    tag_name,
-                                    TagValue::new_string(tag_value),
-                                    TagValue::new_string(raw),
-                                    crate::core::SHIM_DEFAULT_PRIORITY,
-                                    "",
-                                    crate::core::Instance::default(),
+                                crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag_with_value(
+                                    &mut metadata, tag_name, TagValue::new_string(tag_value), TagValue::new_string(raw),
                                 );
                                 continue;
                             }
@@ -3246,25 +3241,35 @@ fn extract_dng_adobe_private_data(data: &[u8], make: &str, metadata: &mut Metada
     }
 }
 
-// Lens identity belongs to the occurrence being inserted, before winner
-// arbitration. Other value forms keep each caller's existing behavior.
-fn attach_canon_lens_value(
+// Canon ValueConv belongs to the occurrence being inserted, before winner
+// arbitration. Preserve each caller's pre-existing priority policy.
+fn attach_canon_value(
     metadata: &mut MetadataMap,
     name: &str,
     display: &str,
     forms: &mut std::collections::HashMap<String, String>,
+    maker_priority: bool,
 ) -> bool {
-    if matches!(name, "Canon:LensType" | "Canon:RFLensType")
+    if name.starts_with("Canon:")
         && let Some(raw) = forms.remove(name)
     {
-        metadata.insert_occurrence_with_raw(
-            name,
-            TagValue::new_string(display),
-            TagValue::new_string(raw),
-            crate::core::SHIM_DEFAULT_PRIORITY,
-            "",
-            crate::core::Instance::default(),
-        );
+        if maker_priority {
+            crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag_with_value(
+                metadata,
+                name.to_string(),
+                TagValue::new_string(display),
+                TagValue::new_string(raw),
+            );
+        } else {
+            metadata.insert_occurrence_with_raw(
+                name,
+                TagValue::new_string(display),
+                TagValue::new_string(raw),
+                crate::core::SHIM_DEFAULT_PRIORITY,
+                "",
+                crate::core::Instance::default(),
+            );
+        }
         true
     } else {
         false
@@ -3328,7 +3333,7 @@ fn parse_adobe_makn_record(block: &[u8], make: &str, metadata: &mut MetadataMap)
     // marker and records it as a real, always-losing occurrence rather than
     // a literal `"Tag (N)"` tag name.
     for (tag_name, tag_value) in tags {
-        if attach_canon_lens_value(metadata, &tag_name, &tag_value, &mut forms) {
+        if attach_canon_value(metadata, &tag_name, &tag_value, &mut forms, true) {
             continue;
         }
         crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
@@ -4613,7 +4618,7 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     // `Priority => 0` ExifTool itself declares for them; see that
     // function's doc comment for the `Canon.pm` citations.
     for (tag_name, tag_value) in makernote_tags {
-        if attach_canon_lens_value(metadata, &tag_name, &tag_value, &mut forms) {
+        if attach_canon_value(metadata, &tag_name, &tag_value, &mut forms, true) {
             continue;
         }
         crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
@@ -4733,7 +4738,7 @@ fn parse_cr3_ctmd_makernotes(ctmd: &[u8], metadata: &mut MetadataMap) {
                                 // same `Priority => 0` demotion CMT3's own
                                 // handler applies.
                                 for (name, value) in tags {
-                                    if attach_canon_lens_value(metadata, &name, &value, &mut forms) { continue; }
+                                    if attach_canon_value(metadata, &name, &value, &mut forms, true) { continue; }
                                     crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
                                         metadata,
                                         name,
@@ -5071,7 +5076,7 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
                         eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
                     } else {
                         for (tag_name, tag_value) in makernote_tags {
-                            if attach_canon_lens_value(&mut metadata, &tag_name, &tag_value, &mut forms) { continue; }
+                            if attach_canon_value(&mut metadata, &tag_name, &tag_value, &mut forms, false) { continue; }
                             metadata.insert(tag_name, TagValue::new_string(tag_value));
                         }
                     }
@@ -7517,7 +7522,7 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     for (name, value) in
         parse_canon_ciff_records(&canon_records, model_for_canon, &mut canon_value_forms)
     {
-        if matches!(name.as_str(), "Canon:LensType" | "Canon:RFLensType")
+        if name.starts_with("Canon:")
             && let Some(raw) = canon_value_forms.remove(&name)
         {
             metadata.insert_occurrence_with_raw(

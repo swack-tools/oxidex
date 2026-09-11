@@ -3045,18 +3045,16 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // Add manufacturer tags to metadata
     // Note: tag names already include manufacturer prefix (e.g., "Canon:", "Nikon:")
     for (tag_name, tag_value_str) in makernote_tags {
-        // Attach lens identity before arbitration; a losing occurrence must
-        // never overwrite the winner's numeric identity after insertion.
-        if matches!(tag_name.as_str(), "Canon:LensType" | "Canon:RFLensType")
+        // Canon's display and ValueConv belong to the same occurrence.
+        // Attach before arbitration so a losing copy cannot mutate the winner.
+        if tag_name.starts_with("Canon:")
             && let Some(raw) = value_forms.remove(&tag_name)
         {
-            metadata.insert_occurrence_with_raw(
+            crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag_with_value(
+                metadata,
                 tag_name,
                 TagValue::new_string(tag_value_str),
                 TagValue::new_string(raw),
-                crate::core::SHIM_DEFAULT_PRIORITY,
-                "",
-                crate::core::Instance::default(),
             );
             continue;
         }

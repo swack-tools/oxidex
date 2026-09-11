@@ -489,7 +489,7 @@ fn output_csv_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs
     for (path, result) in results {
         if let Ok(metadata) = result {
             let metadata = resolved_metadata_for_structured_output(metadata, args);
-            let rendered = formatter.format(&metadata, None);
+            let rendered = formatter.format_with_mode(&metadata, None, !args.exiftool_compat());
             let source_file = path.display().to_string();
             // Parse without implicit header handling and skip the formatter's
             // "Tag,Value" header row explicitly, so a formatter change cannot
@@ -543,7 +543,8 @@ fn output_short_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliAr
                     }
                 }
                 ResolvedFileOutput::Metadata(metadata) => {
-                    let output = formatter.format(&metadata, None);
+                    let output =
+                        formatter.format_with_mode(&metadata, None, !args.exiftool_compat());
                     if !output.is_empty() {
                         println!("SourceFile: {}", path.display());
                         print!("{}", output);
@@ -571,7 +572,12 @@ fn output_json_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArg
             match result {
                 Ok(metadata) => {
                     let metadata = resolved_metadata_for_structured_output(metadata, args);
-                    let formatted = formatter.format(&metadata, None);
+                    let formatted = formatter.format_with_status_and_mode(
+                        &metadata,
+                        None,
+                        None,
+                        !args.exiftool_compat(),
+                    );
                     let mut values: Vec<Value> = serde_json::from_str(&formatted).map_err(|e| {
                         ExifToolError::parse_error(format!("Failed to parse formatted JSON: {}", e))
                     })?;
@@ -730,7 +736,8 @@ fn output_human_readable_results(results: &[(PathBuf, Result<MetadataMap>)], arg
                 match resolve_file_output(metadata, args) {
                     ResolvedFileOutput::Lines(lines) => print!("{}", lines),
                     ResolvedFileOutput::Metadata(metadata) => {
-                        let output = formatter.format(&metadata, None);
+                        let output =
+                            formatter.format_with_mode(&metadata, None, !args.exiftool_compat());
                         print!("{}", output);
                     }
                 }

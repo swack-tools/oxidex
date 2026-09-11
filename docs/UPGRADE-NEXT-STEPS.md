@@ -16,7 +16,7 @@ populations. They are implementation history, not work to restart.
 
 | Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Reconcile RawConv, then IFD1 prerequisite/regeneration | Separate owners; awaiting fresh validation | Preserve current raw-ID attachment and verified CODE-ref gates; IFD1 eligibility remains separate from subsequent activation; IFD4/embedded follow independently |
+| 1 | Complete RawConv reconciliation, then IFD1 prerequisite/regeneration | RawConv implementation and initial corpus checks complete; strict projection repairs implemented; final acceptance pending | Close every observed retirement blocker, rerun fresh acceptance and land before the IFD1 port; preserve raw-ID attachment and verified CODE-ref gates |
 | 2 | Correct classifier/producer accounting exposed by the release rehearsal | Queued | Existing Garmin runtime is recognized, standing debt is separated, repeated field changes are joined by cause, and emitted/activated/observed states remain distinct |
 | 3 | Broaden walk checks and reconstruct useful missing producers | Queued | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
 
@@ -33,8 +33,12 @@ semantics and is outside this table transaction until that policy is resolved.
 See the [landing record](./TAG_MACHINERY_STATUS.md#landed-upgrade-tooling) for the
 four verified squash commits.
 
-The runtime work order is RawConv (`ad9fdc32`, then `0bf02cd9`) on a fresh
-integration base, preserving current Canon label/raw-ID attachment, followed by
+The [RawConv reconciliation](./reference/rawconv-reconciliation-2026-09-11.md)
+started on fresh integration `afd3a628` using preserved `ad9fdc32` and `0bf02cd9`.
+The initial full workspace passed and default corpus matching improved, but the
+stricter raw/duplicate/order matrix found blockers. The report distinguishes
+those initial measurements from the later repairs; no retirement is accepted
+from the overall score alone. Complete its validation and landing, followed by
 IFD1 prerequisite `7a69d2fa` with the current verified-key/input-domain CODE-ref
 gate and fresh regeneration. Its committed table changes were `unwalked: None`
 fields; improved eligibility was a scratch preview. Gate A is not Exif::Main
