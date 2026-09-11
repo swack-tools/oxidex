@@ -43,15 +43,17 @@ improved; MISSING stayed 1,563. This is a bounded generator-refresh measurement,
 not a reconstruction of historical engineering effort. Static declaration
 classification is not raw extraction coverage.
 
-## RawConv reconciliation in progress
+## Shared RawConv runtime reconciliation
 
 The [2026-09-11 report](./reference/rawconv-reconciliation-2026-09-11.md) records
-work from integration `afd3a628` after PR #742. Initial implementation `d2db5d27`
-passed the workspace suite and improved default corpus matching on 4,238 files.
-The stricter 71-file, 12-mode projection found raw JSON typing, numeric forms,
-IFD1 order and embedded-dimension priority blockers. Those repairs are implemented;
-this is unlanded work, with final acceptance and PR state still pending.
-No generated table, version pin or Exif::Main engine activation changed.
+this change from integration `afd3a628` after PR #742. Six container paths now
+share embedded EXIF conversion, with public helper APIs retained. Initial default
+corpus gains were insufficient: stricter projection and synthetic native controls
+found raw typing/forms, IFD1 order, dimension and PDF-boundary defects. The final
+implementation, tests, immutable binary and reviewed exceptions are recorded
+separately from those rejected candidates. No generated table, version pin or
+Exif::Main engine activation changed. IFD1 prerequisite/regeneration is next;
+its old scratch eligibility result is not completion evidence.
 
 ## What the evidence establishes
 
@@ -121,7 +123,7 @@ may finish their bounded branches in parallel; this list does not restart them.
 
 | Priority | Work | Why it is useful | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Reconcile RawConv first, then IFD1 prerequisite/regeneration | Reuse the retained shared-runtime work while preserving current raw-ID and verified CODE-ref contracts | Fresh RawConv carrier/corpus gates; IFD1 eligibility reproduced separately from later activation; IFD4/embedded follow-ups remain distinct |
+| 1 | Reconcile IFD1 prerequisite and regenerate | Continue the retained work after the shared RawConv runtime consolidation | Preserve current verified-key/domain checks, use a fresh pinned dump and matching ledger, reproduce eligibility separately from later activation; keep IFD4 and embedded-directory follow-ups distinct |
 | 2 | Correct classifier reasons and connect declaration/producer accounting | The rehearsal exposes existing Garmin runtime mislabeled as needing a parser, standing debt and repeated field rows for one cause | Preserve raw counts, add causal grouping, recognize existing producers, and keep emitted/activated/observed states separate |
 | 3 | Extend shared semantics and synthetic walk checks for the next migration | Removes a demonstrated blocker across multiple tables | Independent differential checks, negative controls and a measured runtime migration |
 | 4 | Retire duplicated hand data and reconstruct needed missing generators | Reduces future upgrade review without losing behavior | Replacement regenerates reproducibly; overlapping producers removed only after parity; remaining hand residuals name their reason |
@@ -382,7 +384,8 @@ and an obscuring macOS cleanup race; both were repaired and tested before this
 successful retry. The execution plan preserves failure and success evidence.
 
 The later [13.55-to-13.59 release rehearsal](./reference/bump-reports/13.55-to-13.59.md)
-passed at `4fb705da`. PRs #737–#740 have landed. This continuation retires no parser and changes no ExifTool pin. See the
+passed at `4fb705da`. PRs #737–#740 have landed. That tooling and rehearsal
+milestone retired no parser and changed no ExifTool pin. See the
 [execution plan](./UPGRADE-NEXT-STEPS.md) for the current queue and exact scope.
 
 ## Work on separate branches
@@ -393,7 +396,7 @@ status or proof that the work is ready to land.
 
 | Branch | Observed tip | Scope and remaining distinction |
 | --- | --- | --- |
-| `staging/unify-rawconv` | `0bf02cd9` | Shared embedded-EXIF conversion; full gate subsequently passed on this tip, landing still outstanding |
+| `staging/unify-rawconv` | `0bf02cd9` | Shared embedded-EXIF source reconciled by the September 11 change above; old-tip gates below remain historical |
 | `staging/ifd1-gate-a` | `7a69d2fa` | Initial IFD1 generator-policy work; table eligibility is not activation, and this is not the IFD1 runtime landing |
 | `staging/ifd-4` | `be0df53e` | Further conditions and Olympus retirement; new manufacturer Main routing must not be inferred from the branch name |
 | `staging/png-text-names` | `0bf02cd9` | Same committed base as RawConv; no separate implementation commit at the inspected ref |
@@ -407,7 +410,9 @@ doctests passed 221 (63 ignored), table/SubDirectory oracles passed, and the JPE
 baseline passed. `conformance.py` compared 4,238 files: +3 matches, -3 missing,
 -1 extra and unchanged VALUE count against control `380babda`. The separate
 occurrence-aware `i7-ab-diff.py cfix unify` check reported no lost matches, new
-VALUE rows or new EXTRA rows. This is a validated branch result, not a landing.
+VALUE rows or new EXTRA rows. This is a validated historical branch result. The subsequent reconciliation and
+fresh acceptance are recorded in the [September 11 report](./reference/rawconv-reconciliation-2026-09-11.md);
+do not restart the old RawConv port from this snapshot.
 
 The local handoff forecasts roughly 15–18k missing occurrences recoverable by
 IFD1 routing. Treat that as a prioritization estimate, not a measured gain or a

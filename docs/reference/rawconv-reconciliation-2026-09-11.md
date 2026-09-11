@@ -1,138 +1,190 @@
 # Shared EXIF conversion reconciliation, 2026-09-11
 
-## Scope and source
+## Implementation and evidence boundary
 
-Control: `afd3a628cbcacb893c2b1d4dc54053eaf64565a4` on
-`refactor/tag-machinery`. Implementation: `d2db5d27b54b46bff8de34d65b49efde610f97cd`.
-The initial measurement used that implementation; the later repairs and final
-acceptance are distinguished below. The preserved RawConv commits `ad9fdc32` and `0bf02cd9` were reconciled onto
-that fresh control; the current Canon occurrence/raw-ID implementation was
-retained. ExifTool remains pinned to **13.59**. No generated output or pin changed.
+This change reconciles preserved RawConv commits `ad9fdc32` and `0bf02cd9`
+onto verified integration `afd3a628cbcacb893c2b1d4dc54053eaf64565a4`.
+The final measured implementation is `0de2c15416188d773eb59aba4c84e9b1c38d54f5`;
+subsequent report updates change documentation only. ExifTool stays pinned to
+**13.59**. Generated tables, generator policy and activation gates are unchanged.
+This is a runtime consolidation, not Exif::Main engine activation or an ExifTool
+release upgrade.
 
-The six duplicated conversion paths in PNG, PSD, WebP, JXL, FLIF and HEIF now
-use the common embedded EXIF reader. BPG and MIFF retain their existing shared
-route and supply their container base explicitly. The old PNG EXIF helper
-modules are removed; PNG text chunk keys consumed by the writer remain intact.
-PDF and PSD share the thumbnail and ordinary IFD1 reader, preserving physical
-occurrence order across both kinds of fields.
-This removes duplicated runtime implementations; it does not activate the
-generated Exif::Main IFD engine or establish all-container IFD1 coverage.
+PNG, PSD, WebP, JXL, FLIF and HEIF now use the shared embedded EXIF converter.
+BPG and MIFF retain their shared route with an explicit container base. The two
+private PNG conversion modules are removed. The public two-argument
+`parse_embedded_exif` and `png::chunk_parser::parse_exif_chunk` helpers remain
+available through shared implementations; containers needing a reported offset
+base use `parse_embedded_exif_at`. PNG text keys used by the writer remain intact.
 
-## Repairs required before retirement
+The consolidation required the following native-backed repairs:
 
-Fresh native/control/initial-port probes found defects outside the real corpus:
+- Read BYTE/SBYTE as numeric scalars or lists. Read the 35 generated, simple
+  UNDEFINED string declarations as strings, retaining the existing refusal
+  boundaries; this census does not establish 35 CLI-exposed names. Within that selected
+  declaration population, count-one UNDEFINED follows the native byte rule;
+  other unknown binary data stays binary.
+- Apply the implemented RawConv whitespace rule before UTF-8 repair. Preserve
+  NUL bytes during decoding; JSON tests boolean/number typing before deleting
+  NULs from its quoted-string fallback. Unicode whitespace survives. The Option
+  wrapper implements the two existing Panasonic omission cases, not arbitrary
+  Perl RawConv.
+- Use the physical IFD entry count for the next-directory pointer, even when an
+  entry was skipped. Replay ordinary and thumbnail IFD1 occurrences in physical
+  order, including omitted duplicate controls. PDF's Photoshop resource path
+  preserves each selected winner's order, value form and priority; its existing
+  one-value-per-key projection remains until cross-resource directory tracking
+  can safely support additional duplicates.
+- Preserve native numeric forms at 25 existing Canon enum decoder sites and
+  retain winning/losing occurrence identity. LensID keeps its original EF value
+  during RF display selection; ShootingMode uses the forward generated map and
+  its native unknown-code form. No inverse display-label lookup is introduced.
+- Preserve raw forms through default filtering and JSON/plain/short/CSV output.
+  Apply APEX ValueConv consistently and format typed raw floats with the existing
+  native numeric formatter. Rational JSON retains numeric typing and native
+  quotient precision. Arbitrary numeric strings are not reinterpreted.
+- Honor embedded IFD0 dimension priority and physical-order full-resolution
+  promotion within one directory. Correct VP8X's three-byte canvas height read.
+  Keep each QuickTime mdat size as its own occurrence; only AvgBitrate sums those
+  sizes, with checked arithmetic.
 
-- BYTE and SBYTE went through a printable-byte/length heuristic in the shared
-  converter. They now use unsigned/signed numeric scalar and list reads.
-- Plain UNDEFINED strings became binary. The repair reads existing generated
-  Exif::Main declarations, accepting 35 simple string declarations without a
-  Format override, reporting flags, unsupported conversion, condition or
-  subdirectory. The four already implemented trim RawConv tags are the only
-  exception to raw-conversion refusal. Writable limits this population; it is
-  not used as a read-format override. Unknown/binary declarations remain binary.
-- NUL and whitespace processing occurred in the wrong order. UNDEFINED strings
-  retain their NULs during decoding. The known RawConv trims terminal ASCII
-  whitespace bytes before UTF-8 repair; Unicode whitespace survives. JSON tests
-  boolean/number typing before deleting NULs from the quoted-string fallback.
-  The existing plain renderer and public compatibility helper keep their behavior.
-- A skipped IFD0 entry shortened the decoded vector, moving the inferred next
-  pointer backwards. The common helper now reads the physical entry count from
-  the directory. PSD keeps valid IFD1 tags after type-zero and bad-offset entries;
-  existing bounds and cycle checks remain in place.
+## Final acceptance
 
-Full WebP tests exercise Canon MakerNote parsing through LensID computation:
-EF129/136 label collisions, real RF substitution, RF-zero fallback, and winning
-and losing duplicate occurrences. They distinguish native full-file expectations
-from internal occurrence-arbitration controls.
+The native oracle is the pinned 13.59 source under `/usr/bin/perl` 5.34.1,
+with a successful DOCX capability probe. Both debug executables were freshly
+built from clean commits and copied to immutable paths. These are correctness
+measurements, not performance comparisons.
 
-A stricter projection check then found retirement blockers that default corpus
-scores could not expose:
-
-- Rational JSON rendering quoted whole numbers. It now uses the existing native
-  ten-significant-digit quotient renderer and JSON typing, including inf/undef.
-- The separate thumbnail and ordinary IFD1 passes changed cross-name order.
-  They now replay complete occurrences in physical directory order; dropped
-  RawConv entries do not consume a later duplicate's position.
-- Raw projection and Canon numeric/printed forms required additional repairs;
-  newly exposed labels are not acceptable substitutes for numeric raw values.
-  Existing decoder sites now attach 25 exact Canon enum values before occurrence
-  arbitration. LensID retains the original EF value during RF display selection,
-  and ShootingMode uses the forward generated display map. Default raw filtering
-  retains the winning occurrence's value form. JSON, short, plain and CSV writers
-  respect raw mode instead of applying display enums again.
-- Embedded IFD0 dimensions need ExifTool's declared priority and physical-order
-  full-resolution promotion so container dimensions and composites agree.
-  The repair is scoped to one embedded IFD0. Cross-block priority state and native
-  repeated-directory omission remain outside this claim; no state is inferred
-  from previously printed metadata.
-
-These repairs are implemented and independently reviewed. Final workspace and
-fresh binary acceptance are pending; this report does not yet establish safe
-retirement or a landed PR.
-
-## Fresh validation
-
-The explicit native oracle is ExifTool 13.59 under `/usr/bin/perl` 5.34.1,
-including the DOCX capability probe. Both executables were freshly built from
-clean source and copied to immutable evidence paths. Control SHA256:
-`be2e9708e391d66f23e81be28a139f4df6dff5d8691e8905f4533250c19ba568`.
-Candidate SHA256:
-`91443833bb855a9e37a7cb79a049afeebd5271436872b0f92d05e8fbc945d3e0`.
-These are correctness measurements of debug executables, not performance results.
+- Control binary SHA256: `be2e9708e391d66f23e81be28a139f4df6dff5d8691e8905f4533250c19ba568`.
+- Candidate binary SHA256: `f2090fdc188af0b292e6bff52524e0b4285a6304dd10cc07ed9776983b024175`.
 
 | Instrument and population | Result |
 | --- | --- |
-| Original-port converter tests | Two intended failures; 60 existing converter tests passed |
-| Strict `cargo clippy --all-features -- -D warnings` | Passed |
-| `cargo test --all-features --lib` | 4,624 passed; one ignored |
-| `cargo test --workspace --all-features --no-fail-fast` | 5,584 runtime tests passed, 50 ignored; 223 doctests passed, 63 ignored; 233.139 seconds |
-| PNG writer and Step 20 real CLI controls | Executed and passed within the workspace suite, with pinned fixtures available |
-| `conformance.py`, nine real container files | MATCH 431→434; MISSING 60→57; VALUE 1 unchanged; RENAME 5 unchanged; EXTRA 46→45 |
-| `conformance.py`, complete combined corpus at d2db5d27 | 4,238 files; MATCH 450,021→450,036, MISSING 30,196→30,193, VALUE 524→512, RENAME 28 unchanged, EXTRA 1,565→1,564 |
-| Strict CLI projection, 71 files × 12 modes at d2db5d27 | Blocked retirement: 50 formerly correct raw JSON facts lost; additional newly emitted raw values required repair |
+| `cargo clippy --all-features -- -D warnings` | Passed; final production patch was checked before commit |
+| `cargo fmt --all -- --check`, CI corpus guards and tag-stat synchronization | Passed on final implementation |
+| `cargo test --workspace --all-features --no-fail-fast -- --test-threads=4` | 5,605 runtime tests passed, 50 ignored; 223 doctests passed, 63 ignored; 173.683 seconds, source stable |
+| `conformance.py`, all 4,238 combined samples | MATCH 450,021→450,036; MISSING 30,196→30,193; VALUE 524→512; RENAME 28 unchanged; EXTRA 1,565→1,564; candidate 395.142 seconds |
+| Complete per-file occurrence comparison | Zero previously correct facts lost, zero new missing facts; 57 changed previously wrong strings individually classified below |
+| Strict CLI projection, 71 files × 12 modes | 852 commands per role, zero execution/parse errors, zero lost correct facts, +2,963 matches; reviewed 39 VALUE and 216 EXTRA warnings |
+| PNG dimension-priority carriers, 12 files × 12 modes | 144 commands per role; zero lost correct facts/new missing/new VALUE; 24 EXTRA warnings classified as correct values in existing slots or changed pairing |
+| Cross-name IFD1 checks | PSD's six-field sequence matches native printed/raw output; PDF's shared six-field sequence matches with `-a`, with its late legacy Compression occurrence and default winner remaining explicit exceptions |
+| Final scoped PDF CLI replay | 12/12 bounded contracts passed; ordinary/shuffled IFD1 layouts and repeated-resource containment; standing native-absent winner remains |
+| Additional native controls on unchanged implementation | Canon 48/48 case/modes; APEX/typed-float 30/30 case/modes (90 field observations); HEIC/MOV 6/6 projections; source and evidence identities retained |
 
-The nine-file changes are exactly three PDF IFD1 resolution matches and removal
-of PSD's spurious ExifOffset. The full control contains 4,238 files, 518,919 raw
-oracle tags, 450,021 MATCH, 30,196 MISSING, 524 VALUE, 28 RENAME and 1,565 EXTRA;
-it completed in 458.069 seconds. The full comparison uses the same bytes and
-requires 4,238 files and at least 400,000 raw oracle tags. Capture wrappers call
-the unchanged `conformance.py` extractor and matcher and preserve every parsed
-input plus per-file results. The stronger retirement audit checks occurrence
-multiplicity and refuses a compensating gain elsewhere as evidence of no loss.
-The d2db5d27 default full-corpus capture completed in 491.298 seconds. No formerly
-correct default-projection facts were lost. Fifty-seven already-wrong facts
-changed only by the newly correct JSON deletion of NULs; each before/after value
-and its source path were independently reviewed. The underlying ASCII reader's
-retention of bytes after the first NUL remains separate debt.
+The final full-corpus fact comparison is identical to the independently reviewed
+c18d result. The final main and PNG projection facts are also identical to those
+reviewed before the bounded PDF change. Fresh IFD1/PDF checks establish its order
+and selection behavior separately. Final reports and plans add no runtime change.
 
-Those default results did not certify raw mode. The 71-file matrix executes
-852 commands per executable across JSON and targeted plain output, with default,
-grouped, duplicate-preserving, printed and raw variants. It exposed the blockers
-above. OxiDex raw mode uses `--no-print-conv`; its `-n` is dry-run. Earlier probes
-using the wrong flag are preserved and explicitly invalidated. Native plain text
-is compared as bytes, without assuming every value is UTF-8. The external
-instruments have negative population, identity, typing, order and parsing controls.
+The full census includes all 4,238 files (132,547,495 bytes), with no exclusion
+or symlink deduplication. It requires at least 4,238 files and 400,000 native
+raw keys; the control has 518,919. Captures call the unchanged conformance
+extractors and matcher and retain per-file inputs, values, identities and
+checkpoints. The stronger occurrence comparison refuses compensating gains as
+proof that a previously correct fact survived. The existing FujiFilmISPro
+native return-code-1 case is retained on both sides, not counted as a new
+execution failure or silently removed from the population.
 
-## Remaining work and useful limits
+The projection instrument executes 71 files in 12 modes: 852 commands per
+executable across JSON and targeted plain output, with default, grouped,
+duplicate-preserving, printed and raw variants. OxiDex raw mode is
+`--no-print-conv`; its `-n` means dry-run. Native plain text is compared as
+bytes. Negative controls cover empty populations, artifact identity, command
+coverage, scalar types, ordering and parse failures. Per-name projection order
+and cross-name physical IFD1 order are separate checks.
 
-The next runtime task is IFD1 prerequisite `7a69d2fa`, reconciled onto the fresh
-integration while preserving the verified-key/input-domain CODE-reference gate,
-then regenerated using a fresh pinned dump and its own verified ledger. Its old
-committed table diff left `unwalked: None`; eligibility improvements existed only
-in a scratch preview. Demonstrate eligibility separately from any later named-IFD
-activation. IFD4/Olympus retirement and embedded-IFD0/PNG follow-ups remain separate.
+The strict instruments retain `REVIEW_REQUIRED`; their warnings have explicit
+independent dispositions. No warning is silently reclassified as complete
+ExifTool parity. The full census's 50 changed VALUE and seven changed EXTRA
+facts are exactly JSON NUL deletion on previously wrong strings. All 57 source
+values, identities and before/after projections were independently checked;
+underlying ASCII termination debt remains.
 
-The RawConv Option wrapper models the two existing Panasonic omission cases,
-not arbitrary Perl RawConv. The PDF Photoshop boundary still flattens metadata
-occurrences, so the WebP Canon test does not certify complete PDF raw identity.
-Generated declarations and the 35-tag converter census do not prove that every
-name is exposed by the CLI registry. Corpus VALUE/MISSING debt remains explicit.
-The external occurrence and projection harnesses are acceptance artifacts;
-promoting useful controls into maintained repository tooling remains separate work.
+The main projection's 39 VALUE warnings consist of 12 correct raw forms exposed
+through existing multi-group/winner behavior, 17 numeric-string values already
+present in the original control's grouped raw output, and ten Latin1 plain-text
+cases already wrong before the change. Those 17 include 11 precision cases,
+two existing Canon arithmetic/dependency last-digit cases and four existing
+Pentax/APP12 reciprocal-input cases. These are separately scoped output debts.
+
+Its 216 EXTRA warnings include 184 correct VP8X height rows: 174 grouped rows
+with WebP versus native RIFF identity, plus ten default duplicate-height slots.
+The remainder are 19 corrected raw forms on prior extras, six unchanged values
+whose pairing changed, six comparison rows for three newly covered correct PDF
+IFD1 fields appearing as additional default-projection duplicates in printed/raw
+modes, and one existing Canon FNumber precision/group-form case. The separate 24 PNG warnings retain the same
+two occurrence slots: 18 correctly decoded EXIF byte values and six unchanged
+container values with different pairing. Exact row-level ledgers remain with
+the evidence; these counts do not mean 216 newly invented parser values.
+
+## What happened when
+
+Times are America/Chicago on September 11. Commit times locate milestones;
+measured command durations come from their own logs and do not measure authoring
+hours. Initial and rejected candidates are retained as diagnostic evidence.
+
+| Time | Milestone and interpretation |
+| --- | --- |
+| 11:58 | Started from freshly verified integration `afd3a628`, reusing the owned checkout. |
+| 12:24 | Initial port `d2db5d27`: workspace passed and the full default corpus improved, but the stricter projection lost 50 previously correct raw JSON facts. This was not retirement acceptance. |
+| 12:45–13:06 | Physical IFD1 order, Rational JSON, dimension priority and Canon raw-form repairs. Candidate `4cf55d71` still lost 55 correct projection facts, primarily exposing the VP8X height bug. |
+| 13:24 | Candidate `c18d153d` repaired VP8X, HEIC and APEX/raw formatting. Its full 4,238-file census preserved every previously correct fact; projection residuals were individually reviewed. |
+| 13:29–13:36 | Full workspace found two old assertions expecting PrintConv during raw output. Pinned ExifTool confirmed both new raw values; tests now assert printed and raw forms separately. All 24 writer tests passed. |
+| 13:43 | Candidate `d666744f`: PDF occurrence boundaries and original public helper APIs preserved; 5,604 runtime tests and 223 doctests passed. A repeated-resource native probe still exposed one additional wrong duplicate. |
+| 13:48 | Candidate `0de2c154`: retained PDF resource winner selection while preserving selected forms, priorities and physical order. Cross-resource directory tracking stays explicitly deferred. |
+
+The d2db full-corpus result alone was insufficient: it improved MATCH by 15
+while concealing raw-mode regressions. Its 233.139-second workspace result and
+the later c18d 441.104-second census remain historical measurements of those
+commits. The final gates above establish the final implementation separately.
+An exploratory `clippy --tests` invocation also encountered existing PE fixture
+identity-operation warnings; the required strict Clippy command is reported
+separately, without changing those unrelated fixtures or weakening CI.
+
+## Work still useful
+
+1. Reconcile IFD1 prerequisite `7a69d2fa` onto the newly verified integration.
+   Preserve the named verified-key/input-domain CODE-reference gate, then run a
+   fresh pinned dump, its own hash-matching verification ledger and regeneration.
+   The old committed table diff only added `unwalked: None`; improved eligibility
+   existed in a scratch preview. The old whole-dump eligibility assertion needs
+   the matching ledger; unwalked-edge accounting and the shared converter's
+   35-declaration population also need rechecking after regeneration.
+   Reproduce eligibility before considering any
+   separate named-IFD activation. IFD4/Olympus and broader embedded-directory
+   state remain separate tasks.
+2. Repair classifier/producer accounting from the release rehearsal: recognize
+   the existing Garmin parser, separate standing debt from release changes and
+   group repeated field rows by cause. Keep emitted, eligible, activated and
+   observed coverage distinct.
+3. Address the explicitly measured output debts below using fresh native
+   carriers and preserved occurrences. Do not approximate conversions merely
+   to make a comparison score rise.
+4. Promote useful external projection/occurrence controls into maintained
+   repository tooling. The acceptance harnesses here are durable artifacts, not
+   newly installed CI gates. Four missing Sony/Nikon producers and catalog
+   carry-forward policy remain in the broader automation backlog.
+
+Repeated PDF EXIFInfo resources can alias earlier IFD or sub-IFD addresses.
+Native ExifTool tracks all visited directory addresses; skipping merely the first
+resource or repeated IFD0 offsets would be incorrect. The adapter retains its
+existing one-winner-per-key output boundary while preserving the winner's forms,
+priority and order. The repeated-offset control still retains one Canon LensType
+winner (raw 136) that native omits. Containment removes the newly exposed second
+occurrence, not that standing wrong winner. Full cross-resource duplicate
+preservation remains deferred.
+The legacy PDF rescanner still lacks source identity and can add a late
+Compression occurrence after the shared six-field IFD1 sequence. Complete PDF
+raw/printed identity is not established. Cross-block full-resolution priority
+and native repeated-directory omission are outside the single-IFD0 proof.
+SEMInfo/DNGPrivateData registry exposure, source strings after their first NUL,
+Latin1 plain-text byte output, numeric-string precision and default group/winner
+semantics remain bounded, explicit debt. Existing corpus VALUE/MISSING counts
+are not zero.
 
 Evidence directory on the validation host:
 `/Users/allen/Documents/Codex/2026-09-10/oxidex-worktree-cleanup-audit/handoff-continuation/rawconv-ro9m336v`.
-It retains native fixtures, exact commands, hashes, failed original-port controls,
-build/test results, corpus checkpoints and independent reviews. The continuation
-reused `/Users/allen/git/oxidex-upgrade-triage`; no registered worktree or preserved
-RawConv/IFD1 branch was removed.
+It retains source/binary hashes, native fixtures, exact commands, original failed
+controls, immutable captures, reviews and the PR/merge record. The continuation
+reuses `/Users/allen/git/oxidex-upgrade-triage`; all 13 registered worktrees and
+the preserved source branches remain. The protected checkout is unchanged.
