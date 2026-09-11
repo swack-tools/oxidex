@@ -12,6 +12,7 @@ use crate::error::{ExifToolError, Result};
 use crate::parsers::png::chunk_parser::{
     PNG_SIGNATURE, PngChunk, PngTextRecord, parse_chunk, parse_text_record,
 };
+use crate::parsers::png::parse_png_metadata;
 use crate::parsers::png::text_names::{TextRow, TextTagNamer, encode_latin, writable_text_name};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::writers::atomic_writer::write_atomic;
@@ -28,10 +29,13 @@ const PNG_CRC: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 /// routes this one into the `XMP:` namespace, so no `PNG:` key names it.
 const XMP_ITXT_KEYWORD: &str = "XML:com.adobe.xmp";
 
-/// Writer-only key for a raw XMP packet to store as a new
-/// `XML:com.adobe.xmp` iTXt chunk: `XMP` is that keyword's `%TextualData`
-/// Name (PNG.pm:680-681). The reader never produces it (it parses the packet
-/// into `XMP-*` keys), so it cannot collide with a read-back map.
+/// Key for a raw XMP packet to store as a new `XML:com.adobe.xmp` iTXt
+/// chunk: `XMP` is that keyword's `%TextualData` Name (PNG.pm:680-681). The
+/// reader parses a real packet into `XMP-*` keys, but it *does* surface
+/// `PNG:XMP` for a text chunk whose keyword is the unknown `XMP`
+/// (PNG.pm:1117-1124), so the key is a packet replacement only when no
+/// original text chunk answers it and its value differs from the baseline
+/// (see [`plan_text_chunks`]).
 const XMP_PACKET_KEY: &str = "PNG:XMP";
 
 /// Calculates CRC-32 checksum for a PNG chunk.
@@ -233,6 +237,12 @@ enum TextFate {
     Rebuild([u8; 4], Vec<u8>),
 }
 
+/// Whether two map values are the same text: equal, or the same string
+/// under different `TagValue` wrappers.
+fn same_value(a: &TagValue, b: &TagValue) -> bool {
+    a == b || a.as_string().is_some_and(|s| Some(s) == b.as_string())
+}
+
 /// Decides every original text chunk's fate. The writer's source for a
 /// chunk's shape (type, keyword bytes, language, translated keyword) is the
 /// original file's own chunk, re-parsed here -- never the public key, which
@@ -241,24 +251,36 @@ enum TextFate {
 ///
 /// Each chunk is named exactly as the reader names it (same
 /// [`TextTagNamer`], same file order), which gives the `PNG:<Name>` key the
-/// map holds it under. Then:
+/// map holds it under. Whether the caller *changed* that key is decided
+/// against `baseline` -- the map the reader produced for the original file,
+/// which is what the caller's map was derived from -- not against the text
+/// chunk's own value: a text keyword can share its `PNG:` name with a
+/// non-text chunk that the reader files later (a tEXt `ModifyDate` and a
+/// tIME, a tEXt `Gamma` and a gAMA), and then the map holds the other
+/// chunk's value. Then:
 ///
 /// - key absent from the map: the caller removed it -- drop;
-/// - key present with the value the reader surfaced: unchanged -- carry the
-///   original bytes (every duplicate of the name, too);
-/// - key present with a new value: rebuild the chunk that surfaced the value
-///   (the last one with that name) in place and drop earlier duplicates;
+/// - key present with its baseline value: unchanged -- carry the original
+///   bytes (every duplicate of the name, too);
+/// - key changed, but its baseline value is not this text's (a non-text
+///   chunk owns the visible value, so the caller cannot have been editing
+///   this text): carry;
+/// - key changed and the text owns it: rebuild the chunk that surfaced the
+///   value (the last one with that name) in place and drop earlier
+///   duplicates; a non-string value cannot be text and is ignored (carry);
 /// - a `(Binary data ...)` placeholder row is never text to write back, so
 ///   while its key is present the chunk is carried;
 /// - chunks the reader surfaces under no `PNG:` key (an XMP packet, a known
 ///   `Raw profile type`, an undecodable chunk) are carried -- except an XMP
-///   packet when the caller supplies a replacement under `PNG:XMP`.
+///   packet when the caller supplies a replacement under `PNG:XMP` that no
+///   original text chunk answers and that differs from the baseline.
 ///
 /// Returns the fate of each text chunk by index, and the set of `PNG:` keys
 /// the original chunks answer (so they are not also written as new chunks).
 fn plan_text_chunks(
     chunks: &[PngChunk],
     metadata: &MetadataMap,
+    baseline: &MetadataMap,
 ) -> (HashMap<usize, TextFate>, HashSet<String>) {
     struct Surfaced {
         index: usize,
@@ -269,6 +291,7 @@ fn plan_text_chunks(
     }
     let mut fates = HashMap::new();
     let mut surfaced = Vec::new();
+    let mut xmp_chunks = Vec::new();
     let mut last_of: HashMap<String, usize> = HashMap::new();
     let mut namer = TextTagNamer::new();
     for (index, chunk) in chunks.iter().enumerate() {
@@ -295,10 +318,8 @@ fn plan_text_chunks(
                     binary,
                 });
             }
-            TextRow::Xmp(_) if metadata.contains_key(XMP_PACKET_KEY) => {
-                fates.insert(index, TextFate::Drop);
-            }
-            TextRow::Xmp(_) | TextRow::Omit => {
+            TextRow::Xmp(_) => xmp_chunks.push(index),
+            TextRow::Omit => {
                 fates.insert(index, TextFate::Carry);
             }
         }
@@ -306,21 +327,41 @@ fn plan_text_chunks(
     let mut answered = HashSet::new();
     for (position, row) in surfaced.iter().enumerate() {
         let last = &surfaced[last_of[&row.key]];
+        let before = baseline.get(&row.key);
         let fate = match metadata.get(&row.key) {
             None => TextFate::Drop,
             Some(_) if row.binary => TextFate::Carry,
-            Some(value) if *value == last.value => TextFate::Carry,
+            Some(value) if before.is_some_and(|b| same_value(value, b)) => TextFate::Carry,
+            Some(value) if same_value(value, &last.value) => TextFate::Carry,
+            // A non-text chunk owns the visible value of this key.
+            Some(_) if before.is_some_and(|b| !same_value(b, &last.value)) => TextFate::Carry,
             Some(value) if last_of[&row.key] == position => match value.as_string() {
                 Some(text) => {
                     let (chunk_type, data) = rebuild_text_chunk(&row.record, text);
                     TextFate::Rebuild(chunk_type, data)
                 }
-                None => TextFate::Drop,
+                None => TextFate::Carry,
             },
+            Some(value) if value.as_string().is_none() => TextFate::Carry,
             Some(_) => TextFate::Drop,
         };
         fates.insert(row.index, fate);
         answered.insert(row.key.clone());
+    }
+    let replace_xmp = !answered.contains(XMP_PACKET_KEY)
+        && metadata.get(XMP_PACKET_KEY).is_some_and(|v| {
+            v.as_string().is_some()
+                && !baseline
+                    .get(XMP_PACKET_KEY)
+                    .is_some_and(|b| same_value(v, b))
+        });
+    for index in xmp_chunks {
+        let fate = if replace_xmp {
+            TextFate::Drop
+        } else {
+            TextFate::Carry
+        };
+        fates.insert(index, fate);
     }
     (fates, answered)
 }
@@ -381,6 +422,10 @@ fn build_new_text_chunk(name: &str, text: &str) -> Option<([u8; 4], Vec<u8>)> {
 
 /// Writes modified metadata to a PNG file.
 ///
+/// Which keys the caller changed is judged against the reader's own map of
+/// the original file (`parse_png_metadata`); callers that already hold the
+/// map theirs was derived from use [`write_png_metadata_with_baseline`].
+///
 /// This function:
 /// 1. Parses existing PNG chunk structure from the original file
 /// 2. Decides each original text chunk's fate from the `PNG:<Name>` key the
@@ -422,6 +467,20 @@ pub fn write_png_metadata(
     original_reader: &dyn FileReader,
     modified_metadata: &MetadataMap,
 ) -> Result<()> {
+    let baseline = parse_png_metadata(original_reader).unwrap_or_default();
+    write_png_metadata_with_baseline(path, original_reader, modified_metadata, &baseline)
+}
+
+/// [`write_png_metadata`] with the caller's baseline: the map read from the
+/// original file that `modified_metadata` was derived from. A `PNG:` key
+/// whose value still equals its baseline value is unchanged, and its
+/// original chunks are carried byte-for-byte (see [`plan_text_chunks`]).
+pub fn write_png_metadata_with_baseline(
+    path: &Path,
+    original_reader: &dyn FileReader,
+    modified_metadata: &MetadataMap,
+    baseline: &MetadataMap,
+) -> Result<()> {
     // Verify PNG signature
     if original_reader.size() < 8 {
         return Err(ExifToolError::parse_error("File too small to be valid PNG"));
@@ -451,7 +510,7 @@ pub fn write_png_metadata(
     }
 
     // Decide the original text chunks' fates (see `plan_text_chunks`).
-    let (mut text_fates, answered) = plan_text_chunks(&chunks, modified_metadata);
+    let (mut text_fates, answered) = plan_text_chunks(&chunks, modified_metadata, baseline);
 
     // Categorize chunks
     let mut ihdr_chunk: Option<&PngChunk> = None;
@@ -503,6 +562,14 @@ pub fn write_png_metadata(
         if answered.contains(tag_name.as_str()) {
             continue;
         }
+        // Unchanged from what the reader surfaced: whatever chunk produced
+        // it is still in the file (a non-text chunk, or nothing writable).
+        if baseline
+            .get(tag_name)
+            .is_some_and(|b| same_value(tag_value, b))
+        {
+            continue;
+        }
         if let Some(text) = tag_value.as_string()
             && let Some(chunk) = build_new_text_chunk(name, text)
         {
@@ -552,8 +619,6 @@ pub fn write_png_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::parsers::png::parse_png_metadata;
     use crate::test_support::TestReader;
 
     fn png_with(text: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
@@ -716,6 +781,166 @@ mod tests {
             text_chunks_of(&written),
             vec![(*b"tEXt", b"Creation Time\02020:01:01 00:00:00".to_vec())]
         );
+    }
+
+    /// A PNG with `pre` between IHDR and IDAT and `post` between IDAT and
+    /// IEND.
+    fn png_around_idat(pre: &[([u8; 4], Vec<u8>)], post: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
+        let mut out = png_with(pre);
+        let iend = out.len() - 12;
+        let mut tail = Vec::new();
+        for (chunk_type, data) in post {
+            write_chunk(&mut tail, chunk_type, data);
+        }
+        out.splice(iend..iend, tail);
+        out
+    }
+
+    /// Every chunk of a PNG, in order.
+    fn all_chunks_of(png: &[u8]) -> Vec<([u8; 4], Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut at = 8;
+        while at + 8 <= png.len() {
+            let len = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
+            let chunk_type: [u8; 4] = png[at + 4..at + 8].try_into().unwrap();
+            out.push((chunk_type, png[at + 8..at + 8 + len].to_vec()));
+            at += 12 + len;
+        }
+        out
+    }
+
+    /// Reads `original`, applies `edit` to the map, writes, and returns the
+    /// written bytes with the original and re-read maps.
+    fn edit_round_trip(
+        original: Vec<u8>,
+        edit: impl FnOnce(&mut MetadataMap),
+    ) -> (Vec<u8>, MetadataMap, MetadataMap) {
+        let before = parse_png_metadata(&TestReader::new(original.clone())).unwrap();
+        let mut map = before.clone();
+        edit(&mut map);
+        let (written, reread) = write_and_read(original, &map);
+        (written, before, reread)
+    }
+
+    fn author(map: &mut MetadataMap) {
+        map.insert("PNG:Author", TagValue::new_string("newauthor"));
+    }
+
+    #[test]
+    fn unrelated_edit_carries_text_whose_name_a_later_chunk_also_answers() {
+        // A tEXt keyword can print under the same PNG: name as a non-text
+        // chunk the reader files later; the map then holds the other
+        // chunk's value, which must not be mistaken for an edit.
+        // c2: tEXt 'ModifyDate' before IDAT, tIME after it.
+        let text = (*b"tEXt", b"ModifyDate\0textdate".to_vec());
+        let time = (*b"tIME", vec![0x07, 0xE5, 2, 3, 4, 5, 6]);
+        let original = png_around_idat(std::slice::from_ref(&text), std::slice::from_ref(&time));
+        let (written, before, reread) = edit_round_trip(original.clone(), author);
+        assert_eq!(
+            before.get_string("PNG:ModifyDate"),
+            Some("2021:02:03 04:05:06")
+        );
+        let chunks = all_chunks_of(&written);
+        assert!(
+            chunks.contains(&text),
+            "tEXt ModifyDate carried: {chunks:?}"
+        );
+        assert!(chunks.contains(&time));
+        assert_eq!(reread.get("PNG:ModifyDate"), before.get("PNG:ModifyDate"));
+        assert_eq!(reread.get_string("PNG:Author"), Some("newauthor"));
+        // Changing that key edits what the map shows (the tIME row), which
+        // is not this text: the text chunk is still carried, not rewritten
+        // with the date.
+        let (written, _, _) = edit_round_trip(original, |m| {
+            m.insert(
+                "PNG:ModifyDate",
+                TagValue::new_string("2022:01:01 00:00:00"),
+            );
+        });
+        assert!(all_chunks_of(&written).contains(&text));
+
+        // c4: tEXt 'Gamma' before gAMA (a float row, so not text at all).
+        let text = (*b"tEXt", b"Gamma\0textgamma".to_vec());
+        let gama = (*b"gAMA", 45455u32.to_be_bytes().to_vec());
+        let (written, before, reread) =
+            edit_round_trip(png_with(&[text.clone(), gama.clone()]), author);
+        assert!(
+            before
+                .get("PNG:Gamma")
+                .is_some_and(|v| v.as_string().is_none())
+        );
+        let chunks = all_chunks_of(&written);
+        assert!(chunks.contains(&text), "tEXt Gamma carried: {chunks:?}");
+        assert!(chunks.contains(&gama));
+        assert_eq!(reread.get("PNG:Gamma"), before.get("PNG:Gamma"));
+
+        // c7: tEXt Palette and BackgroundColor before PLTE and bKGD.
+        let palette = (*b"tEXt", b"Palette\0textpalette".to_vec());
+        let background = (*b"tEXt", b"BackgroundColor\0textbg".to_vec());
+        let plte = (*b"PLTE", vec![1, 2, 3, 4, 5, 6]);
+        let bkgd = (*b"bKGD", vec![0, 1, 0, 2, 0, 3]);
+        let (written, before, reread) = edit_round_trip(
+            png_with(&[palette.clone(), background.clone(), plte, bkgd]),
+            author,
+        );
+        let chunks = all_chunks_of(&written);
+        assert!(
+            chunks.contains(&palette),
+            "tEXt Palette carried: {chunks:?}"
+        );
+        assert!(chunks.contains(&background), "tEXt BackgroundColor carried");
+        assert_eq!(reread.get("PNG:Palette"), before.get("PNG:Palette"));
+        assert_eq!(
+            reread.get("PNG:BackgroundColor"),
+            before.get("PNG:BackgroundColor")
+        );
+    }
+
+    #[test]
+    fn a_text_chunk_named_xmp_is_text_not_a_packet_replacement() {
+        // c1: an unknown tEXt keyword 'XMP' prints as PNG:XMP
+        // (PNG.pm:1117-1124) next to a real XML:com.adobe.xmp packet.
+        let packet = "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF \
+                      xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
+                      <rdf:Description xmlns:dc='http://purl.org/dc/elements/1.1/' \
+                      dc:creator='Phil Harvey'/></rdf:RDF></x:xmpmeta>";
+        let text = (*b"tEXt", b"XMP\0hello".to_vec());
+        let xmp = (
+            *b"iTXt",
+            serialize_itxt_chunk(XMP_ITXT_KEYWORD.as_bytes(), b"", b"", packet),
+        );
+        let original = png_with(&[text.clone(), xmp.clone()]);
+        let (written, before, reread) = edit_round_trip(original.clone(), author);
+        assert_eq!(before.get_string("PNG:XMP"), Some("hello"));
+        let chunks = all_chunks_of(&written);
+        assert!(chunks.contains(&text), "tEXt XMP carried: {chunks:?}");
+        assert!(
+            chunks.contains(&xmp),
+            "the XMP packet carried byte-for-byte"
+        );
+        assert!(reread.iter().any(|(k, _)| k.starts_with("XMP")));
+
+        // Editing PNG:XMP edits that text chunk; the packet stays.
+        let (written, _, reread) = edit_round_trip(original, |m| {
+            m.insert("PNG:XMP", TagValue::new_string("bye"));
+        });
+        let chunks = all_chunks_of(&written);
+        assert!(chunks.contains(&(*b"tEXt", b"XMP\0bye".to_vec())));
+        assert!(chunks.contains(&xmp));
+        assert_eq!(reread.get_string("PNG:XMP"), Some("bye"));
+
+        // With no text chunk answering it, a new PNG:XMP value replaces
+        // the packet.
+        let replacement = packet.replace("Phil Harvey", "Someone Else");
+        let (written, _, _) = edit_round_trip(png_with(std::slice::from_ref(&xmp)), |m| {
+            m.insert("PNG:XMP", TagValue::new_string(replacement.clone()));
+        });
+        let chunks = text_chunks_of(&written);
+        assert!(!chunks.contains(&xmp));
+        assert!(chunks.contains(&(
+            *b"iTXt",
+            serialize_itxt_chunk(XMP_ITXT_KEYWORD.as_bytes(), b"", b"", &replacement)
+        )));
     }
 
     #[test]
