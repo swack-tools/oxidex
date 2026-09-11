@@ -1531,11 +1531,11 @@ fn write_metadata_routes_png_and_pdf_writers() {
     // Keep the test focused on write routing; fixture metadata includes tags
     // that can fail validation before dispatch is reached.
     png_metadata.clear();
-    png_metadata.insert("PNG:tEXt:Author", TagValue::new_string("OxiDex QA"));
+    png_metadata.insert("PNG:Author", TagValue::new_string("OxiDex QA"));
     write_metadata(png.path(), &png_metadata).expect("write png through high-level API");
     let png_after = read_metadata(png.path()).expect("re-read png after write");
     assert_eq!(
-        png_after.get("PNG:tEXt:Author"),
+        png_after.get("PNG:Author"),
         Some(&TagValue::String("OxiDex QA".to_string())),
         "written PNG tag must survive a round-trip"
     );
@@ -1617,39 +1617,62 @@ fn jpeg_write_preserves_scan_data_and_eoi() {
     );
 }
 
+/// Splices one chunk into a PNG just before its IEND chunk.
+fn insert_png_chunk_before_iend(png: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+    use crc::{CRC_32_ISO_HDLC, Crc};
+    let crc = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+    let mut digest = crc.digest();
+    digest.update(chunk_type);
+    digest.update(data);
+    let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+    chunk.extend_from_slice(chunk_type);
+    chunk.extend_from_slice(data);
+    chunk.extend_from_slice(&digest.finalize().to_be_bytes());
+    let iend = png.len() - 12; // IEND is the last, empty chunk
+    png.splice(iend..iend, chunk);
+}
+
 #[test]
 fn png_write_preserves_ztxt_on_unrelated_edit() {
-    // The reader surfaces compressed text as PNG:zTXt:*, and the writer strips
-    // all text chunks before rebuilding. Without re-serializing zTXt, an
-    // unrelated tEXt edit silently drops every compressed text chunk.
+    // The writer rebuilds text chunks from the map; a zTXt chunk the caller
+    // did not touch must survive an unrelated edit, still compressed.
     let png = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
 
-    // Seed a zTXt chunk (exercises the new serializer end to end).
-    let mut seed = MetadataMap::new();
-    seed.insert("PNG:zTXt:Comment", TagValue::new_string("compressed note"));
-    write_metadata(png.path(), &seed).expect("seed zTXt");
+    // Seed a real zTXt 'Comment' chunk into the file.
+    let mut bytes = fs::read(png.path()).expect("read fixture");
+    let mut ztxt = b"Comment\0\0".to_vec();
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(b"compressed note").expect("deflate");
+    ztxt.extend_from_slice(&encoder.finish().expect("deflate"));
+    insert_png_chunk_before_iend(&mut bytes, b"zTXt", &ztxt);
+    fs::write(png.path(), &bytes).expect("write seeded fixture");
     assert_eq!(
         read_metadata(png.path())
             .expect("read seeded png")
-            .get("PNG:zTXt:Comment"),
+            .get("PNG:Comment"),
         Some(&TagValue::String("compressed note".to_string())),
-        "zTXt must round-trip through the writer"
+        "a zTXt chunk surfaces under its ExifTool name"
     );
 
-    // Now make an unrelated tEXt edit and confirm the zTXt survives.
+    // Now make an unrelated edit and confirm the zTXt survives.
     let mut roundtrip = read_metadata(png.path()).expect("read png for round trip");
-    roundtrip.insert("PNG:tEXt:Author", TagValue::new_string("OxiDex QA"));
+    roundtrip.insert("PNG:Author", TagValue::new_string("OxiDex QA"));
     write_metadata(png.path(), &roundtrip).expect("write png round trip");
 
     let after = read_metadata(png.path()).expect("re-read png");
     assert_eq!(
-        after.get("PNG:zTXt:Comment"),
+        after.get("PNG:Comment"),
         Some(&TagValue::String("compressed note".to_string())),
         "unrelated edit must not drop the zTXt chunk"
     );
     assert_eq!(
-        after.get("PNG:tEXt:Author"),
+        after.get("PNG:Author"),
         Some(&TagValue::String("OxiDex QA".to_string())),
+    );
+    let written = fs::read(png.path()).expect("read written png");
+    assert!(
+        written.windows(ztxt.len()).any(|w| w == ztxt.as_slice()),
+        "the untouched zTXt chunk must be carried byte-for-byte"
     );
 }
 
@@ -2129,18 +2152,20 @@ fn write_preserves_file_permissions() {
     }
 }
 
-/// The PNG writer strips text chunks and rebuilds them from `PNG:<type>:*`
-/// keys. An iTXt XMP packet is surfaced under `XMP:*` instead, so rebuilding
-/// silently deleted it -- while a `PNG:tEXt:*` chunk the caller dropped from
-/// the map must still be removed.
+/// The PNG writer rebuilds text chunks from the map's `PNG:<Name>` keys. An
+/// iTXt XMP packet is surfaced under `XMP:*` instead, so rebuilding silently
+/// deleted it -- while a `PNG:<Name>` chunk the caller dropped from the map
+/// must still be removed.
 #[test]
 fn png_write_carries_xmp_chunk_but_still_removes_dropped_text_chunks() {
     let temp = copy_fixture_to_temp("tests/fixtures/png/sample.png", ".png");
 
     let mut seed = read_metadata(temp.path()).expect("read png");
-    seed.insert("PNG:tEXt:Author", TagValue::new_string("OxiDex QA"));
+    seed.insert("PNG:Author", TagValue::new_string("OxiDex QA"));
+    // `PNG:XMP` is the writer's key for a raw packet (the `%TextualData`
+    // Name of the `XML:com.adobe.xmp` keyword).
     seed.insert(
-        "PNG:iTXt:XML:com.adobe.xmp",
+        "PNG:XMP",
         TagValue::new_string(
             "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF \
              xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
@@ -2157,9 +2182,9 @@ fn png_write_carries_xmp_chunk_but_still_removes_dropped_text_chunks() {
     );
 
     // An unrelated edit must carry the XMP chunk (the reader files it under
-    // XMP:, so no PNG:iTXt: key exists to rebuild it from) ...
+    // XMP:, so no PNG: key exists to rebuild it from) ...
     let mut edit = read_metadata(temp.path()).expect("read png for edit");
-    edit.insert("PNG:tEXt:Author", TagValue::new_string("Second Author"));
+    edit.insert("PNG:Author", TagValue::new_string("Second Author"));
     write_metadata(temp.path(), &edit).expect("unrelated png edit");
     let after_edit = read_metadata(temp.path()).expect("re-read edited png");
     assert!(
@@ -2169,12 +2194,12 @@ fn png_write_carries_xmp_chunk_but_still_removes_dropped_text_chunks() {
 
     // ... but dropping a key the reader *does* surface is still a removal.
     let mut removal = read_metadata(temp.path()).expect("read png for removal");
-    removal.remove("PNG:tEXt:Author");
+    removal.remove("PNG:Author");
     write_metadata(temp.path(), &removal).expect("png removal");
     assert!(
         read_metadata(temp.path())
             .expect("re-read png")
-            .get("PNG:tEXt:Author")
+            .get("PNG:Author")
             .is_none(),
         "removing a surfaced PNG: key must still drop its chunk"
     );

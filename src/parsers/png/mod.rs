@@ -22,7 +22,7 @@
 //! let metadata = parse_png_metadata(&reader)?;
 //!
 //! // Access text metadata
-//! if let Some(author) = metadata.get_string("PNG:tEXt:Author") {
+//! if let Some(author) = metadata.get_string("PNG:Author") {
 //!     println!("Author: {}", author);
 //! }
 //!
@@ -37,15 +37,17 @@
 #![allow(dead_code)]
 
 pub mod chunk_parser;
+pub(crate) mod text_names;
 
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use chunk_parser::{
     PNG_SIGNATURE, parse_bkgd_chunk, parse_chrm_chunk, parse_chunk, parse_gama_chunk,
-    parse_hist_chunk, parse_ihdr_chunk, parse_itxt_chunk, parse_phys_chunk, parse_png_signature,
-    parse_sbit_chunk, parse_text_chunk, parse_time_chunk, parse_ztxt_chunk,
+    parse_hist_chunk, parse_ihdr_chunk, parse_phys_chunk, parse_png_signature, parse_sbit_chunk,
+    parse_text_record, parse_time_chunk,
 };
+use text_names::{TextRow, TextTagNamer};
 
 /// Parses PNG file and extracts all metadata.
 ///
@@ -63,7 +65,10 @@ use chunk_parser::{
 ///
 /// # Tag Naming Convention
 ///
-/// - Text chunks: `PNG:tEXt:<keyword>` or `PNG:iTXt:<keyword>`
+/// - Text chunks (tEXt, zTXt, iTXt): `PNG:<Name>`, where `<Name>` is the
+///   ExifTool tag name for the keyword (`Comment`, `CreationTime`,
+///   `ExifMake` for `exif:Make`, `Comment-fr` for an iTXt in French); see
+///   `text_names` for the rule.
 /// - EXIF tags: `EXIF:<tag_name>` (using standard EXIF tag IDs)
 ///
 /// # Errors
@@ -118,6 +123,9 @@ pub fn parse_png_metadata_with_diagnostics(
 
     // Initialize metadata map with estimated capacity
     let mut metadata = MetadataMap::with_capacity(32);
+
+    // Text-chunk naming is order-dependent within one file (text_names).
+    let mut text_namer = TextTagNamer::new();
 
     // Start parsing chunks after signature
     let mut offset = PNG_SIGNATURE.len() as u64;
@@ -298,54 +306,34 @@ pub fn parse_png_metadata_with_diagnostics(
                 );
             }
 
-            b"tEXt" => {
-                // Parse tEXt chunk
-                if let Ok((keyword, text)) = parse_text_chunk(&chunk.data) {
-                    let tag_name = format!("PNG:tEXt:{}", keyword);
-                    metadata.insert(tag_name, TagValue::new_string(text));
-                }
-                // Silently skip malformed tEXt chunks to continue parsing
-            }
-
-            b"iTXt" => {
-                // Parse iTXt chunk
-                if let Ok((keyword, text)) = parse_itxt_chunk(&chunk.data) {
-                    // Check if this iTXt chunk contains XMP metadata
-                    // XMP is stored with keyword "XML:com.adobe.xmp"
-                    if keyword == "XML:com.adobe.xmp" {
-                        // Parse XMP content and insert tags
-                        // Note: XMP parser already returns tags with "XMP-" prefix (e.g., "XMP-xmp:Creator")
-                        match crate::parsers::xmp::parse_xmp(text.as_bytes()) {
+            b"tEXt" | b"zTXt" | b"iTXt" => {
+                // `%PNG::Main` sends all three through `%PNG::TextualData`
+                // (PNG.pm:197-203, :258-261, :294-300); `FoundPNG` names the
+                // tag from the keyword (see `text_names`). A chunk ExifTool's
+                // handler rejects before naming yields no record.
+                if let Some(record) = parse_text_record(&chunk.chunk_type, &chunk.data) {
+                    match text_namer.row(&record) {
+                        TextRow::Tag { name, value, .. } => {
+                            metadata.insert(format!("PNG:{name}"), value);
+                        }
+                        TextRow::Xmp(packet) => match crate::parsers::xmp::parse_xmp(&packet) {
+                            // The XMP parser already returns `XMP-*` keys.
                             Ok(xmp_tags) => {
                                 for (tag_name, value) in xmp_tags {
                                     metadata.insert(tag_name, TagValue::new_string(value));
                                 }
                             }
+                            // ExifTool reports an unparseable packet as a
+                            // warning and emits no PNG row for it.
                             Err(e) => {
                                 diagnostics.push(Diagnostic::warning(format!(
-                                    "Failed to parse XMP in iTXt chunk: {e}"
+                                    "Failed to parse XMP in PNG text chunk: {e}"
                                 )));
-                                // Fall back to storing as regular iTXt
-                                let tag_name = format!("PNG:iTXt:{}", keyword);
-                                metadata.insert(tag_name, TagValue::new_string(text));
                             }
-                        }
-                    } else {
-                        // Regular iTXt metadata - use PNG:iTXt: prefix
-                        let tag_name = format!("PNG:iTXt:{}", keyword);
-                        metadata.insert(tag_name, TagValue::new_string(text));
+                        },
+                        TextRow::Omit => {}
                     }
                 }
-                // Silently skip malformed or compressed iTXt chunks
-            }
-
-            b"zTXt" => {
-                // Parse zTXt chunk (compressed text)
-                if let Ok((keyword, text)) = parse_ztxt_chunk(&chunk.data) {
-                    let tag_name = format!("PNG:zTXt:{}", keyword);
-                    metadata.insert(tag_name, TagValue::new_string(text));
-                }
-                // Silently skip malformed zTXt chunks
             }
 
             b"sBIT" => {
@@ -646,7 +634,7 @@ mod tests {
             "Expected at least 10 IHDR tags + tEXt, got {}",
             metadata.len()
         );
-        assert_eq!(metadata.get_string("PNG:tEXt:Author"), Some("John Doe"));
+        assert_eq!(metadata.get_string("PNG:Author"), Some("John Doe"));
     }
 
     #[test]
@@ -686,7 +674,8 @@ mod tests {
             "Expected at least 10 IHDR tags + iTXt, got {}",
             metadata.len()
         );
-        assert_eq!(metadata.get_string("PNG:iTXt:Title"), Some("My PNG Image"));
+        // An iTXt language tag suffixes the name (PNG.pm:913-927).
+        assert_eq!(metadata.get_string("PNG:Title-en"), Some("My PNG Image"));
     }
 
     #[test]

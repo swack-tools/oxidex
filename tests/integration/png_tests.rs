@@ -197,19 +197,19 @@ fn test_png_with_text_chunks() {
 
     // Verify each text chunk
     assert_eq!(
-        metadata.get_string("PNG:tEXt:Author"),
+        metadata.get_string("PNG:Author"),
         Some("John Doe"),
         "Author tag should be 'John Doe'"
     );
 
     assert_eq!(
-        metadata.get_string("PNG:tEXt:Copyright"),
+        metadata.get_string("PNG:Copyright"),
         Some("(C) 2024 Test Corp"),
         "Copyright tag should be '(C) 2024 Test Corp'"
     );
 
     assert_eq!(
-        metadata.get_string("PNG:tEXt:Description"),
+        metadata.get_string("PNG:Description"),
         Some("A test image with metadata"),
         "Description tag should be 'A test image with metadata'"
     );
@@ -272,14 +272,15 @@ fn test_png_with_mixed_metadata() {
 
     // Verify text chunk
     assert_eq!(
-        metadata.get_string("PNG:tEXt:Title"),
+        metadata.get_string("PNG:Title"),
         Some("Test Image"),
         "Title tag should be 'Test Image'"
     );
 
-    // Verify iTXt chunk
+    // Verify iTXt chunk: its en-US language tag suffixes the name the way
+    // ExifTool does (PNG.pm:913-927 -> `Description-en-US`)
     assert_eq!(
-        metadata.get_string("PNG:iTXt:Description"),
+        metadata.get_string("PNG:Description-en-US"),
         Some("A wonderful test image"),
         "Description iTXt tag should be 'A wonderful test image'"
     );
