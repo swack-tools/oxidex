@@ -5,9 +5,10 @@
 snapshot, not a claim about `main` or a released binary. The documentation
 change itself does not implement or enable any parser behavior.
 
-An implementation completed after this audit is recorded under
-[pending upgrade-classifier repair](#pending-upgrade-classifier-repair).
-Its branch has not landed in the integration snapshot above.
+Implementations completed after this audit are recorded under
+[pending upgrade-classifier repair](#pending-upgrade-classifier-repair) and
+[pending generated-output inventory](#pending-generated-output-inventory).
+Their branches have not landed in the integration snapshot above.
 
 Start here to decide what to work on. Use the
 [implementation backlog](./AUTOMATION-AND-TESTER-PLAN.md) for acceptance criteria,
@@ -91,8 +92,9 @@ may finish their bounded branches in parallel; this list does not restart them.
 
 ### Concrete upgrade gaps at this snapshot
 
-These are source-review findings; the documentation audit did not execute the
-bump command. They remain open implementation work.
+These are findings at the integration snapshot; the documentation audit did
+not execute the bump command. Unlanded follow-ups below address artifact
+accounting and IFD classification. The other gaps remain open.
 
 1. `bump-exiftool.sh`'s `TIER1_FILES`/`TIER2_FILES` lists lag the generators.
    Outputs absent from its backup/restore accounting include IFD tables,
@@ -163,7 +165,7 @@ maintenance touched that file; current lint results are recorded below.
 This is pending branch work, not an integration landing or upgrade rehearsal.
 Triage has no oracle-ledger input, so HAND may mean missing verification evidence
 rather than a need for new source code. Equivalent-to-default facts may also
-remain conservatively classified for review. Artifact accounting, complete
+remain conservatively classified for review. Artifact accounting has a separate unlanded implementation below; complete
 old/new builds, transaction cleanup and a release rehearsal are still open.
 
 ### CI follow-up on the same branch
@@ -201,7 +203,7 @@ passed 4,595 tests with one ignored, with default-cache reads denied and the
 genuine 13.59 source explicitly configured. Optional corpus tests can still
 return early; this is a suite result, not 4,595 observed corpus comparisons.
 Formatter and strict all-feature Clippy passed. The later Minolta repair also
-passed 283 Python table-tool tests with one existing skip. See the exact-head
+ran 283 Python table-tool tests: 282 passed and one was skipped. See the exact-head
 PR checks for hosted CI status; earlier failed runs are not current verdicts.
 
 The subsequent integration-fixture repair centralizes requested-file lookup for
@@ -225,7 +227,58 @@ completed, and no diagnostic named the new helper or changed lines.
 These changes and their CI results belong to
 [PR #737](https://github.com/swack-tools/oxidex/pull/737); they are not present in
 the integration snapshot above. They do not complete the upgrade transaction,
-artifact manifest, old/new builds or release rehearsal.
+old/new builds or release rehearsal. The manifest follow-up is separate.
+
+### Pending generated-output inventory
+
+Implemented on `codex/upgrade-artifact-manifest`, stacked on PR #737; neither
+branch is part of the integration snapshot above. `artifacts.py` declares the
+25 persistent outputs of the currently wired regeneration commands: eight in
+tier 1 and seventeen in tier 2. Regeneration paths, formatting, bump restoration
+sets, standing-HAND classification and CI's tier-2 comparison consume this
+inventory. It includes the implicit Composite computation file, conversion
+ledgers, four charset files and both
+mixed generated/handwritten files (Nikon AF points and Leica lens data).
+
+The exit check compares final file content/modes, symlink entries, HEAD and the
+logical index, on success and failure. It detects undeclared changes even to
+already-dirty or ignored source files. Selected outputs must exist as regular
+files. Formatting is restricted to declared Rust files and failure is fatal.
+This replaces duplicated path lists; it does not add a general generator runner.
+
+Validation: 19 manifest controls and seven Minolta portability tests passed.
+The complete Python table-tool suite ran 302 tests: 301 passed and one was skipped,
+after updating standing-HAND classification to consume the same inventory.
+Manifest controls cover untracked/ignored writes, deletions, mode changes,
+existing dirty files, staged changes and failed
+producers. A full same-pin 13.59 regeneration at `85f26cef`, using system Perl
+5.34, passed the independent table oracle (zero IFD mismatches) and both output
+checks. It produced two declared changes, preserved as evidence and then
+restored; it was **not** a byte-identical tier-1 regeneration.
+
+That run omitted the existing `CanonCustom::ConvertPfn` expression and its 29
+field uses compared with committed Perl 5.38 output. The dump still contains
+the fields: the conversion registry does not recognize the older Perl deparse
+spelling, so the expression is excluded before oracle testing. This remains a
+specific portability repair; a passing expression oracle only covers the
+expressions collected for that run. A separate direct `codegen.conv_for` control
+found that recognized code references accept an empty `verified_exprs` set;
+ledger enforcement for that path needs a regression and repair before claiming
+that all code references are gated by oracle membership.
+
+After incorporating the parent repairs, a real tier-2 run passed with zero net
+changes and a clean committed-output comparison. An undeclared ignored source
+file injected through the actual runner was rejected by its exit check. The
+probe was preserved as evidence, removed, and the clean state reverified.
+
+Remaining work: the guard detects final net changes without rollback. It cannot
+observe transient writes later undone, writes outside the checkout, or writes
+in excluded build/cache locations. Old/new generation must still move into
+isolated complete variants; source/interpreter identity, binary resolution,
+entry-state preservation, promotion/recovery and a real release-delta rehearsal
+are still open. Four vendor outputs still have no committed producer. See the
+[command reference](https://github.com/swack-tools/oxidex/blob/b7e622bf8a2d9569272b854b4d5ba90248950346/tools/exiftool-tables/README.md#generated-output-inventory-and-write-checks)
+and backlog item 1 before starting the next upgrade task.
 
 ## Work on separate branches
 

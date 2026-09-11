@@ -29,9 +29,10 @@ percentage nor an estimate of recurring maintenance is reliable.
 
 Scope:
 
-- Establish one generated-artifact manifest used by regeneration, verification,
-  before/after builds and restoration. Include implicit companion outputs such
-  as `src/composite/generated_compute.rs` and both conversion ledgers.
+- Integrate the completed shared manifest on `codex/upgrade-artifact-manifest`,
+  then use it for the isolated before/after builds and promotion/recovery below.
+  Regeneration, formatting, current bump path sets and CI already consume its
+  25 outputs, including implicit companions and both conversion ledgers.
 - Use complete old/new artifacts in isolated checkouts. The old comparison must
   not retain target-version tier-2 outputs.
 - Make IFD classification agree with the generator. Separate declaration
@@ -46,9 +47,18 @@ Scope:
 `codex/ifd-upgrade-triage` addresses IFD declaration classification using the
 generator's emitter/refusal rules. Reuse and land that work rather than rebuild
 it. Its HAND bucket includes unverified cases; it does not provide an
-hours-per-upgrade estimate. The artifact manifest, complete old/new builds and
-transaction repairs above remain open. See the
-[status follow-up](./TAG_MACHINERY_STATUS.md#pending-upgrade-classifier-repair)
+hours-per-upgrade estimate. The artifact manifest is implemented on the stacked
+`codex/upgrade-artifact-manifest` branch, with real positive and undeclared-write
+controls; integrate it rather than creating another inventory. Complete old/new
+builds and transaction repairs remain open. Before a cross-Perl rehearsal, fix
+the known `CanonCustom::ConvertPfn` deparse-registration gap: the Perl 5.34 dump
+contains its 29 fields but the expression collector omits their conversion.
+Do not confuse a passing collected-expression oracle with complete collection.
+Also gate recognized code references on their named key in `verified_exprs`: a
+direct `codegen.conv_for` control currently emits one with an empty set. Missing
+evidence must refuse, and verified evidence must preserve the existing output.
+See the [manifest follow-up](./TAG_MACHINERY_STATUS.md#pending-generated-output-inventory)
+and [classifier follow-up](./TAG_MACHINERY_STATUS.md#pending-upgrade-classifier-repair)
 for validation and limits.
 
 Acceptance: every written artifact is accounted for; a dry run restores the

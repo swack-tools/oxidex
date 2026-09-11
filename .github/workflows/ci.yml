@@ -507,24 +507,7 @@ jobs:
           set -euo pipefail
           export OXIDEX_EXIFTOOL_LIB="$EXIFTOOL_SOURCE/lib"
           tools/exiftool-tables/regen-all.sh --tier2-only
-          if ! git diff --exit-code -- \
-              src/parsers/tiff/makernotes/fujifilm/settings_tables.rs \
-              src/parsers/tiff/makernotes/panasonic/face_tables.rs \
-              src/parsers/tiff/makernotes/pentax/subdir_tables.rs \
-              src/parsers/tiff/makernotes/nikon/af_points.rs \
-              src/parsers/tiff/makernotes/canon/custom_functions2_tables.rs \
-              src/parsers/jpeg/app_segments/infiray_tables.rs \
-              src/parsers/jpeg/app_segments/qualcomm_tables.rs \
-              src/parsers/tiff/makernotes/samsung/lookups.rs \
-              src/parsers/tiff/makernotes/olympus/lookups.rs \
-              src/parsers/tiff/makernotes/lens_data.rs \
-              src/parsers/tiff/makernotes/sony/main_extra_tables.rs \
-              src/parsers/tiff/makernotes/minolta_a100_tables.rs \
-              src/parsers/font/mac_charset/mac_japanese.rs \
-              src/parsers/font/mac_charset/mac_chinese_tw.rs \
-              src/parsers/font/mac_charset/mac_korean.rs \
-              src/parsers/font/mac_charset/mac_chinese_cn.rs \
-              tools/exiftool-tables/af_points.json; then
+          if ! python3 tools/exiftool-tables/artifacts.py diff --tier 2; then
             echo "::error::a committed tier-2 generated file does not match what its generator produces against ExifTool ${ET_VERSION}. Either the file was hand-edited, or it is stale relative to the pin -- re-run 'tools/exiftool-tables/regen-all.sh --tier2-only' and commit the result." >&2
             exit 1
           fi

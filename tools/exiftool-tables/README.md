@@ -27,12 +27,18 @@ are existing entry points, not a claim that the whole upgrade transaction is sou
 definitions and compiled Composite expressions, FITS names, and expression/value-
 conversion ledgers. `regen-all.sh` adds vendor subdirectory tables, Nikon AF-point
 grids, bespoke transcriptions, recovered Sony/Minolta generators and Macintosh
-CJK charset tables. The scripts and their companion outputs are the source of
-truth for the artifact inventory.
+CJK charset tables. `artifacts.py` is the single output inventory for these
+currently wired commands: 8 tier-1 and 17 tier-2 artifacts. Both scripts resolve
+their output paths and formatting sets from it; the bump's backup/restore sets
+and CI's tier-2 comparison use the same inventory. The bump classifier also
+reads it when identifying the four vendor files still lacking producers. Composite's second output
+and all four implicit charset outputs are included. Nikon AF points and Leica
+lens data preserve handwritten sections and are accounted for as whole mixed
+files, including during backup.
 
-`just bump-exiftool <version>` also exists. Its artifact backup/restore lists and
-triage classifier lag the current generators, and its temporary old-version
-comparison rebuilds only the first generation tier. **Repair and rehearse this
+`just bump-exiftool <version>` also exists. Its artifact sets now follow the
+inventory, but its temporary old-version comparison still rebuilds only the
+first generation tier. **Repair and rehearse this
 workflow before treating it as an unattended upgrade or relying on complete
 `--dry-run` restoration.** See the
 [current gaps](../../docs/TAG_MACHINERY_STATUS.md#concrete-upgrade-gaps-at-this-snapshot)
@@ -43,6 +49,50 @@ Four generated-origin files still have no committed generator: Sony
 `settings_tables.rs`/`encrypted_tables.rs`. The two previously orphaned
 Sony main-extra/Minolta outputs now have generators. `regen-all.sh` names the
 remaining limits; generated once does not mean automatically refreshable.
+
+## Generated-output inventory and write checks
+
+```sh
+python3 tools/exiftool-tables/artifacts.py paths                 # all 25 outputs
+python3 tools/exiftool-tables/artifacts.py paths --tier 2        # downstream outputs
+python3 tools/exiftool-tables/artifacts.py paths --tier 1 --kind rust --absolute
+python3 tools/exiftool-tables/artifacts.py path composite-compute
+python3 tools/exiftool-tables/artifacts.py diff --tier 2         # requires HEAD counterparts
+python3 -m unittest discover -s tools/exiftool-tables -p test_artifacts.py
+```
+
+`regen.sh` and `regen-all.sh` snapshot repository state before generation and
+check it on exit, including when a producer or formatter fails. The check hashes
+file contents and modes, records symlink entries without following them, and
+compares HEAD and logical index entries. Unexpected additions, deletions or
+changes fail, even if a file was already dirty before entry. Required outputs
+must remain regular files without symlink components. A tier-2 run cannot write
+tier-1 artifacts. CI additionally requires every selected output to exist in
+HEAD and compares staged plus unstaged changes against it.
+
+The guarantee is **final net repository state**, not a trace of physical writes.
+Writing the same bytes, creating then removing a temporary harness, changes
+outside the repository, Git metadata, Cargo `target` trees, Python `__pycache__`
+directories and explicitly selected cache/build directories are outside the
+content comparison. Cache exclusions overlapping tracked files or declared
+outputs are rejected. Ignored source files outside these exclusions are still
+checked. The guard does not prove that a permitted mixed file's handwritten
+portion stayed correct; generator-specific tests and the existing oracles remain
+necessary. Formatting runs directly on manifest Rust paths with the package's
+2024 edition and fails if rustfmt fails.
+
+Write accounting does not establish cross-Perl reproducibility. A same-pin 13.59
+run on Perl 5.34 passed these checks but omitted `CanonCustom::ConvertPfn` and its
+29 field uses relative to the committed Perl 5.38 output. Those generated changes
+were preserved for investigation and not adopted by the manifest repair.
+
+The EXIT check preserves a failing producer's status and keeps its entry snapshot
+outside the checkout for diagnosis. It detects violations **without rollback**.
+Old/new build isolation, exact entry-state restoration, promotion/recovery,
+binary resolution and the two tiers' source-tree resolution remain upgrade
+transaction gaps. This phase neither bumps the pin nor wires the currently
+unwired DICOM, GeoTIFF or lens-alternative producers; it also does not synchronize
+tag catalogs or refresh validation baselines.
 
 ## What is generated
 
