@@ -147,21 +147,21 @@ fn resolve_dependency(map: &MetadataMap, key: &str) -> Option<String> {
     occurrence_value_string(occurrence)
 }
 
-/// The family-0 group of whichever occurrence wins the bare tag name `key`,
-/// under the same arbitration [`resolve_dependency`] uses for its value.
-///
-/// Exactly one Composite needs this: `Exif`'s primary `LensID`, whose ExifTool
-/// `PrintConv` is handed `$self` and reads `$$self{TAG_INFO}{LensType}
-/// {PrintConv}` (Exif.pm:5326) -- i.e. *which manufacturer's* LensType lookup
-/// produced the string, which no positional `$val[N]` carries. See
-/// [`lens_id`]'s module doc for why `Make` is not a substitute (a Samsung body
-/// writing `Pentax:LensType`).
-fn resolve_group0(map: &MetadataMap, key: &str) -> Option<String> {
+/// LensID needs display, numeric identity and table identity from one winner.
+/// Taking a value form from another occurrence can silently select another lens.
+fn resolve_lens_occurrence(
+    map: &MetadataMap,
+    key: &str,
+) -> Option<(String, String, Option<String>)> {
     let requested = [key.to_string()];
     let resolved = crate::cli::tag_resolution::resolve_requested_tags(map, &requested, false);
     let occurrence = resolved.into_iter().next()?.occurrence;
-    let group = occurrence.group0.as_ref().to_string();
-    (!group.is_empty()).then_some(group)
+    let display = crate::cli::tag_resolution::resolved_display_value(occurrence, false);
+    Some((
+        occurrence.group0.to_string(),
+        value_string(&display)?,
+        occurrence.value.as_ref().and_then(value_string),
+    ))
 }
 
 /// Resolve a composite input.
@@ -226,7 +226,9 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // of context `Composite:LensID` needs that a positional input cannot carry.
     // Resolved once here rather than per pass; no Composite in this table
     // produces a `LensType`, so it cannot change between passes.
-    let lens_type_group = resolve_group0(map, "LensType");
+    let lens_occurrence = resolve_lens_occurrence(map, "LensType");
+    let rf_lens_occurrence = resolve_lens_occurrence(map, "RFLensType");
+    let lens_type_group = lens_occurrence.as_ref().map(|(group, _, _)| group.clone());
     // `%Image::ExifTool::Olympus::Composite{LensType}` is
     // `Require => {0 => 'LensTypeMake', 1 => 'LensTypeModel'}`,
     // `ValueConv => '"$val[0] $val[1]"'`, `PrintConv => \%olympusLensTypes`.
@@ -350,6 +352,16 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                 continue;
             }
 
+            if comp.module == "Exif" && comp.name == "LensID" && !comp.require.is_empty() {
+                // These PrintConv inputs need labels; preserve the raw IDs in
+                // the separate context from those exact winning occurrences.
+                owned[0] = lens_occurrence.as_ref().map(|(_, label, _)| label.clone());
+                if let Some(slot) = owned.get_mut(12) {
+                    *slot = rf_lens_occurrence
+                        .as_ref()
+                        .map(|(_, label, _)| label.clone());
+                }
+            }
             let inputs: Vec<Option<&str>> = owned.iter().map(|o| o.as_deref()).collect();
             // `Composite:LensID` is the one definition whose ExifTool
             // conversion is not a function of its positional inputs alone --
@@ -395,6 +407,15 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                         lens_type_group.as_deref(),
                         make.as_deref(),
                         olympus_lens_type_pair,
+                        lens_occurrence
+                            .as_ref()
+                            .and_then(|(_, _, id)| id.as_deref()),
+                        rf_lens_occurrence
+                            .as_ref()
+                            .and_then(|(_, _, id)| id.as_deref()),
+                        rf_lens_occurrence
+                            .as_ref()
+                            .map(|(group, _, _)| group.as_str()),
                     )
                     .and_then(compute::Computed::same)
                 }

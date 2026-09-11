@@ -41,9 +41,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import stat
+import tempfile
 import re
 import sys
 from pathlib import Path
+
+from verify_dicom_dict import VerificationError, compare_facts, native_facts, sha256, verify_text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -68,7 +74,7 @@ def rust_str(s: str) -> str:
 
 
 def parse(pm_path: Path):
-    lines = pm_path.read_text().split("\n")
+    lines = pm_path.read_text(encoding="utf-8").split("\n")
     main_start = next(
         i for i, l in enumerate(lines) if l.startswith("%Image::ExifTool::DICOM::Main")
     )
@@ -93,7 +99,7 @@ def parse(pm_path: Path):
         if m:
             main[m.group("key")] = (m.group("name"), None, False, False)
             continue
-        sys.exit(f"unmodeled Main entry (refusing to guess): {line!r}")
+        raise VerificationError(f"unmodeled Main entry (refusing to guess): {line!r}")
 
     uid: dict[str, str] = {}
     for line in lines[uid_start + 1 : uid_end]:
@@ -101,35 +107,18 @@ def parse(pm_path: Path):
             continue
         m = UID_LINE.match(line)
         if not m:
-            sys.exit(f"unmodeled %uid entry (refusing to guess): {line!r}")
+            raise VerificationError(f"unmodeled %uid entry (refusing to guess): {line!r}")
         value = m.group("name")
         if value in ("", "0"):
             # ProcessDICOM gates on Perl truthiness ($uid{$val}); a falsy
             # name would silently disable the conversion and the Rust lookup
             # (a plain map) would not reproduce that.
-            sys.exit(f"falsy %uid value would change semantics: {line!r}")
+            raise VerificationError(f"falsy %uid value would change semantics: {line!r}")
         uid[m.group("key")] = value
     return main, uid
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--exiftool-dir", default="/tmp/oxidex-exiftool-cache/exiftool")
-    ap.add_argument(
-        "--out", default=str(REPO_ROOT / "src/parsers/specialized/dicom_dict.rs")
-    )
-    args = ap.parse_args()
-
-    exiftool_dir = Path(args.exiftool_dir)
-    pin = (REPO_ROOT / ".exiftool-version").read_text().strip()
-    cache_pin_file = exiftool_dir.parent / ".exiftool-version"
-    if cache_pin_file.exists():
-        cache_pin = cache_pin_file.read_text().strip()
-        if cache_pin != pin:
-            sys.exit(f"version skew: repo pins {pin}, {cache_pin_file} says {cache_pin}")
-    pm = exiftool_dir / "lib/Image/ExifTool/DICOM.pm"
-    main_tbl, uid = parse(pm)
-
+def render(main_tbl, uid, pin):
     out = []
     out.append("//! DICOM tag dictionary and registered-UID names, transcribed from the")
     out.append(f"//! pinned ExifTool {pin} (`lib/Image/ExifTool/DICOM.pm`:")
@@ -237,12 +226,64 @@ def main() -> None:
     out.append("}")
     out.append("")
 
-    Path(args.out).write_text("\n".join(out))
-    print(
-        f"wrote {args.out}: {len(main_tbl)} Main entries "
-        f"(from {pm}), {len(uid)} UIDs"
-    )
+    return "\n".join(out)
+
+
+def write_output(path, text):
+    """Publish only a fully validated file; a failed probe leaves old bytes intact."""
+    try:
+        mode = path.lstat().st_mode
+        if not stat.S_ISREG(mode):
+            raise VerificationError(f"output is not a regular file: {path}")
+        mode = stat.S_IMODE(mode)
+    except FileNotFoundError:
+        mode = 0o644
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output:
+            output.write(text)
+            output.flush()
+            os.fchmod(output.fileno(), mode)
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--exiftool-dir", type=Path, default=Path("/tmp/oxidex-exiftool-cache/exiftool"))
+    ap.add_argument("--perl", help="exact interpreter; otherwise EXIFTOOL_PERL or PATH Perl")
+    ap.add_argument("--out", type=Path, default=REPO_ROOT / "src/parsers/specialized/dicom_dict.rs")
+    ap.add_argument("--check", action="store_true", help="compare the complete output without writing it")
+    args = ap.parse_args()
+    print("=== instrument: gen_dicom_dict.py ===")
+    try:
+        pin = (REPO_ROOT / ".exiftool-version").read_text().strip()
+        # The loaded source is authoritative; an optional parent-cache stamp is
+        # neither sufficient proof nor a reason to reject a correctly selected tree.
+        oracle = native_facts(args.exiftool_dir, args.perl, pin)
+        pm = args.exiftool_dir / "lib/Image/ExifTool/DICOM.pm"
+        main_tbl, uid = parse(pm)
+        compare_facts({"main": {k: list(v) for k, v in main_tbl.items()}, "uid": uid}, oracle)
+        text = render(main_tbl, uid, pin)
+        verify_text(text, oracle)
+        if any(sha256(path) != digest for path, digest in oracle["identity"]["sha256"].items()):
+            raise VerificationError("selected source or Perl changed during generation")
+        if args.check:
+            if args.out.read_bytes() != text.encode("utf-8"):
+                raise VerificationError(f"generated output differs: {args.out}")
+        else:
+            write_output(args.out, text)
+        print(json.dumps({"status": "PASS", "mode": "check" if args.check else "write",
+                          "version": pin, "main_rows": len(main_tbl), "uid_rows": len(uid),
+                          "out": str(args.out), "identity": oracle["identity"]}, sort_keys=True))
+        return 0
+    except (OSError, ValueError, StopIteration) as exc:
+        print(f"DICOM generation refused: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

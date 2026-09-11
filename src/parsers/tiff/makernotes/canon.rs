@@ -5819,6 +5819,9 @@ fn parse_canon_makernote_impl_located_with_values(
                                 lookup_lens_name(lens_id)
                                     .unwrap_or_else(|| format!("Unknown ({})", lens_id)),
                             );
+                            if let Some(forms) = value_forms.as_deref_mut() {
+                                forms.insert("Canon:LensType".to_string(), lens_id.to_string());
+                            }
                         }
                     }
 
@@ -6633,6 +6636,12 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:RFLensType".to_string(),
                             decode_file_info_enum("RFLensType", i64::from(rf_lens_type as u16)),
                         );
+                        if let Some(forms) = value_forms.as_deref_mut() {
+                            forms.insert(
+                                "Canon:RFLensType".to_string(),
+                                (rf_lens_type as u16).to_string(),
+                            );
+                        }
                     }
 
                     // Legacy ShutterCount heuristic: slots 2-3 have no counterpart in

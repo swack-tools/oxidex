@@ -56,6 +56,9 @@ ARTIFACTS = (
     Artifact("mac-chinese-tw", 2, "generate_charsets", "src/parsers/font/mac_charset/mac_chinese_tw.rs"),
     Artifact("mac-korean", 2, "generate_charsets", "src/parsers/font/mac_charset/mac_korean.rs"),
     Artifact("mac-chinese-cn", 2, "generate_charsets", "src/parsers/font/mac_charset/mac_chinese_cn.rs"),
+    Artifact("geotiff", 2, "gen_geotiff_printconv", "src/parsers/tiff/geotiff_printconv.rs"),
+    Artifact("dicom", 2, "gen_dicom_dict", "src/parsers/specialized/dicom_dict.rs"),
+    Artifact("lens-alternatives", 2, "dump_lens_alternatives", "src/composite/lens_alternatives.rs"),
 )
 
 

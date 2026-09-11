@@ -21,7 +21,8 @@ range in GeoTiff.pm.
 
 Usage:
     python3 tools/exiftool-tables/gen_geotiff_printconv.py \
-        [--exiftool-dir /tmp/oxidex-exiftool-cache/exiftool] [--check]
+        [--exiftool-dir /tmp/oxidex-exiftool-cache/exiftool] \
+        [--perl /usr/bin/perl] [--out /path/to/output.rs] [--check]
 
 --check regenerates in memory and fails if the committed file differs
 (the same shape as `just verify-tables`' drift check).
@@ -31,9 +32,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -49,17 +54,26 @@ use Image::ExifTool;
 use Image::ExifTool::GeoTiff;
 my $main = \%Image::ExifTool::GeoTiff::Main;
 my %out;
-for my $key (grep { /^\d+$/ } keys %$main) {
+for my $key (keys %$main) {
+    next if $key eq 'GROUPS';
+    die "invalid or unmodeled GeoTIFF key '$key'"
+        unless $key =~ /\A(?:0|[1-9][0-9]*)\z/ && $key <= 65535;
     my $info = $$main{$key};
     my %entry;
     if (ref $info eq 'HASH') {
+        for my $field (keys %$info) {
+            die "unmodeled field $field for GeoTIFF key $key"
+                unless $field =~ /\A(?:Name|PrintConv|SeparateTable)\z/;
+        }
         $entry{name} = $$info{Name};
         my $pc = $$info{PrintConv};
-        if (defined $pc) {
+        if (exists $$info{PrintConv}) {
             die "non-hash PrintConv for key $key" unless ref $pc eq 'HASH';
             for my $k (keys %$pc) {
                 die "non-numeric PrintConv key '$k' for tag $key"
-                    unless $k =~ /^\d+$/;
+                    unless $k =~ /\A(?:0|[1-9][0-9]*)\z/ && $k <= 65535;
+                die "non-string PrintConv value for tag $key key $k"
+                    if !defined($$pc{$k}) || ref($$pc{$k});
             }
             $entry{printconv} = $pc;
             $entry{refaddr} = refaddr($pc);
@@ -71,16 +85,33 @@ for my $key (grep { /^\d+$/ } keys %$main) {
     }
     $out{$key} = \%entry;
 }
-print JSON::PP->new->canonical->encode(\%out);
+die "empty GeoTIFF key table" unless keys %out;
+print JSON::PP->new->canonical->encode({
+    version => "$Image::ExifTool::VERSION", table => \%out,
+    loaded => [map { $INC{$_} } qw(Image/ExifTool.pm Image/ExifTool/GeoTiff.pm)]
+});
 """
 
 
-def dump_main_table(exiftool_dir: Path) -> dict:
-    version = subprocess.run(
-        ["perl", "-I", str(exiftool_dir / "lib"), "-MImage::ExifTool",
-         "-e", "print $Image::ExifTool::VERSION"],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
+def dump_main_table(exiftool_dir: Path, perl: str | None = None) -> tuple[str, dict]:
+    exiftool_dir = exiftool_dir.resolve()
+    modules = [exiftool_dir / "lib" / p for p in
+               ("Image/ExifTool.pm", "Image/ExifTool/GeoTiff.pm")]
+    for module in modules:
+        if not module.is_file():
+            raise ValueError(f"selected source module missing: {module}")
+    interpreter = shutil.which(perl or os.environ.get("EXIFTOOL_PERL") or "perl")
+    if not interpreter:
+        raise ValueError("selected Perl executable does not exist")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PERL")}
+    result = subprocess.run(
+        [interpreter, "-I", str(exiftool_dir / "lib"), "-e", PERL_DUMP],
+        capture_output=True, text=True, check=True, env=env,
+    )
+    doc = json.loads(result.stdout)
+    if [Path(p).resolve() for p in doc["loaded"]] != [p.resolve() for p in modules]:
+        raise ValueError("Perl loaded modules outside the selected source tree")
+    version = doc["version"]
     pinned = (REPO_ROOT / ".exiftool-version").read_text().strip()
     if version != pinned:
         sys.exit(
@@ -88,11 +119,7 @@ def dump_main_table(exiftool_dir: Path) -> dict:
             f".exiftool-version pins {pinned}; refusing to transcribe from "
             f"an unpinned tree"
         )
-    result = subprocess.run(
-        ["perl", "-I", str(exiftool_dir / "lib"), "-e", PERL_DUMP],
-        capture_output=True, text=True, check=True,
-    )
-    return version, json.loads(result.stdout)
+    return version, doc["table"]
 
 
 def hash_line_ranges(exiftool_dir: Path) -> dict[str, str]:
@@ -105,14 +132,16 @@ def hash_line_ranges(exiftool_dir: Path) -> dict[str, str]:
         for i in range(start, len(lines)):
             if lines[i].rstrip() == closer:
                 return i + 1
-        raise AssertionError(f"no closer {closer!r} after line {start}")
+        raise ValueError(f"no closer {closer!r} after line {start}")
 
     for i, line in enumerate(lines):
         m = re.match(r"my %(epsg_units|epsg_vertcs) = \($", line)
         if m:
             ranges[m.group(1)] = f"lines {i + 1}-{block_end(i, ');')}"
-    m = next(i for i, l in enumerate(lines)
-             if l.startswith("%Image::ExifTool::GeoTiff::Main"))
+    m = next((i for i, l in enumerate(lines)
+              if l.startswith("%Image::ExifTool::GeoTiff::Main")), None)
+    if m is None:
+        raise ValueError("GeoTIFF Main source anchor is missing")
     ranges["Main"] = f"lines {m + 1}-{block_end(m, ');')}"
     return ranges
 
@@ -140,13 +169,13 @@ INLINE_NAMES = {
 
 
 def rust_str(s: str) -> str:
-    if not s.isascii():
-        sys.exit(f"error: non-ASCII PrintConv string {s!r}; extend rust_str")
+    if not isinstance(s, str) or not s or not s.isascii() or any(ord(c) < 32 or ord(c) == 127 for c in s):
+        raise ValueError(f"unmodeled empty, non-string, control or non-ASCII value: {s!r}")
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def generate(exiftool_dir: Path) -> str:
-    version, table = dump_main_table(exiftool_dir)
+def generate(exiftool_dir: Path, perl: str | None = None) -> str:
+    version, table = dump_main_table(exiftool_dir, perl)
     ranges = hash_line_ranges(exiftool_dir)
 
     keys = sorted(int(k) for k in table)
@@ -178,6 +207,9 @@ def generate(exiftool_dir: Path) -> str:
         for k in tag_keys:
             map_name_for_key[k] = name
         maps.append((name, cite, table[str(tag_keys[0])]["printconv"]))
+
+    if not maps or any(not entries for _, _, entries in maps):
+        raise ValueError("empty GeoTIFF conversion population")
 
     out = []
     out.append("//! GeoTIFF key names and PrintConv maps, transcribed EXACTLY from the")
@@ -244,28 +276,50 @@ def generate(exiftool_dir: Path) -> str:
     out.append("        .map(|i| map[i].1)")
     out.append("}")
 
-    return "\n".join(out) + "\n"
+    # The check must compare the same representation that regen-all's scoped
+    # rustfmt produces, including when a future release lengthens a string.
+    return subprocess.run(["rustfmt", "--edition", "2024", "--emit", "stdout"],
+                          input="\n".join(out) + "\n", text=True,
+                          capture_output=True, check=True, cwd=REPO_ROOT).stdout
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--exiftool-dir", type=Path, default=DEFAULT_EXIFTOOL_DIR)
+    ap.add_argument("--perl", default=os.environ.get("EXIFTOOL_PERL"),
+                    help="exact Perl executable (otherwise resolve perl from PATH)")
+    ap.add_argument("--out", type=Path, default=OUT_PATH)
     ap.add_argument("--check", action="store_true",
                     help="fail if the committed file is not what this "
                          "generator produces")
     args = ap.parse_args()
 
-    text = generate(args.exiftool_dir)
+    if args.out.is_symlink() or (args.out.exists() and not stat.S_ISREG(args.out.stat().st_mode)):
+        raise ValueError("output must be a regular file, not a symlink or special file")
+    text = generate(args.exiftool_dir, args.perl)
     if args.check:
-        current = OUT_PATH.read_text() if OUT_PATH.exists() else ""
+        current = args.out.read_text() if args.out.exists() else ""
         if current != text:
-            sys.exit(f"error: {OUT_PATH} is stale; rerun {sys.argv[0]}")
-        print(f"{OUT_PATH} matches the generator output")
+            sys.exit(f"error: {args.out} is stale; rerun {sys.argv[0]}")
+        print(f"{args.out} matches the generator output")
         return 0
-    OUT_PATH.write_text(text)
-    print(f"wrote {OUT_PATH}")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=".geotiff-", dir=args.out.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(text)
+            os.fchmod(stream.fileno(), (args.out.stat().st_mode & 0o777) if args.out.exists() else 0o644)
+        os.replace(name, args.out)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+    print(f"wrote {args.out}")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else str(exc)
+        sys.exit(f"GeoTIFF generation refused: {detail}")

@@ -1062,6 +1062,19 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // duplicates, Pentax's low-priority-retained
                         // duplicate marker).
                         for (tag_name, tag_value) in makernote_tags {
+                            if matches!(tag_name.as_str(), "Canon:LensType" | "Canon:RFLensType")
+                                && let Some(raw) = value_forms.remove(&tag_name)
+                            {
+                                metadata.insert_occurrence_with_raw(
+                                    tag_name,
+                                    TagValue::new_string(tag_value),
+                                    TagValue::new_string(raw),
+                                    crate::core::SHIM_DEFAULT_PRIORITY,
+                                    "",
+                                    crate::core::Instance::default(),
+                                );
+                                continue;
+                            }
                             crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
                                 &mut metadata,
                                 tag_name,
@@ -3233,6 +3246,31 @@ fn extract_dng_adobe_private_data(data: &[u8], make: &str, metadata: &mut Metada
     }
 }
 
+// Lens identity belongs to the occurrence being inserted, before winner
+// arbitration. Other value forms keep each caller's existing behavior.
+fn attach_canon_lens_value(
+    metadata: &mut MetadataMap,
+    name: &str,
+    display: &str,
+    forms: &mut std::collections::HashMap<String, String>,
+) -> bool {
+    if matches!(name, "Canon:LensType" | "Canon:RFLensType")
+        && let Some(raw) = forms.remove(name)
+    {
+        metadata.insert_occurrence_with_raw(
+            name,
+            TagValue::new_string(display),
+            TagValue::new_string(raw),
+            crate::core::SHIM_DEFAULT_PRIORITY,
+            "",
+            crate::core::Instance::default(),
+        );
+        true
+    } else {
+        false
+    }
+}
+
 /// Decode one `MakN` record from DNGPrivateData and hand the recovered
 /// MakerNote to the manufacturer dispatcher.
 ///
@@ -3271,9 +3309,12 @@ fn parse_adobe_makn_record(block: &[u8], make: &str, metadata: &mut MetadataMap)
     };
 
     let mut tags = std::collections::HashMap::new();
-    if let Err(error) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
-        make, &rebuilt, byte_order, &mut tags,
-    ) {
+    let mut forms = std::collections::HashMap::new();
+    if let Err(error) =
+        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model_and_values(
+            make, None, &rebuilt, byte_order, &mut tags, &mut forms,
+        )
+    {
         eprintln!(
             "Warning: Failed to parse DNGPrivateData MakerNote for {}: {}",
             make, error
@@ -3287,6 +3328,9 @@ fn parse_adobe_makn_record(block: &[u8], make: &str, metadata: &mut MetadataMap)
     // marker and records it as a real, always-losing occurrence rather than
     // a literal `"Tag (N)"` tag name.
     for (tag_name, tag_value) in tags {
+        if attach_canon_lens_value(metadata, &tag_name, &tag_value, &mut forms) {
+            continue;
+        }
         crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
             metadata,
             tag_name,
@@ -4544,18 +4588,22 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     );
 
     let mut makernote_tags = std::collections::HashMap::new();
+    let mut forms = std::collections::HashMap::new();
     // CMT1 has already supplied the camera model. Canon.pm's ShotInfo table
     // uses it to gate EOS-only fields such as CameraTemperature.
     let model = metadata
         .get_string("IFD0:Model")
         .or_else(|| metadata.get_string("EXIF:Model"));
-    if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context(
-        "Canon",
-        model,
-        &ctx,
-        byte_order,
-        &mut makernote_tags,
-    ) {
+    if let Err(e) =
+        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values(
+            "Canon",
+            model,
+            &ctx,
+            byte_order,
+            &mut makernote_tags,
+            &mut forms,
+        )
+    {
         eprintln!("Warning: Failed to parse CR3 CMT3 MakerNote: {}", e);
         return;
     }
@@ -4565,6 +4613,9 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     // `Priority => 0` ExifTool itself declares for them; see that
     // function's doc comment for the `Canon.pm` citations.
     for (tag_name, tag_value) in makernote_tags {
+        if attach_canon_lens_value(metadata, &tag_name, &tag_value, &mut forms) {
+            continue;
+        }
         crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
             metadata,
             tag_name,
@@ -4665,12 +4716,14 @@ fn parse_cr3_ctmd_makernotes(ctmd: &[u8], metadata: &mut MetadataMap) {
                                 0,
                             );
                             let mut tags = std::collections::HashMap::new();
-                            if crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context(
+                            let mut forms = std::collections::HashMap::new();
+                            if crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values(
                                 "Canon",
                                 None,
                                 &ctx,
                                 byte_order,
                                 &mut tags,
+                                &mut forms,
                             )
                             .is_ok()
                             {
@@ -4680,6 +4733,7 @@ fn parse_cr3_ctmd_makernotes(ctmd: &[u8], metadata: &mut MetadataMap) {
                                 // same `Priority => 0` demotion CMT3's own
                                 // handler applies.
                                 for (name, value) in tags {
+                                    if attach_canon_lens_value(metadata, &name, &value, &mut forms) { continue; }
                                     crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
                                         metadata,
                                         name,
@@ -5005,15 +5059,19 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
                 if let (Some(make), Some(mn_data)) = (camera_make.as_ref(), makernote_data.as_ref())
                 {
                     let mut makernote_tags = std::collections::HashMap::new();
-                    if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote(
+                    let mut forms = std::collections::HashMap::new();
+                    if let Err(e) = crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model_and_values(
                         make,
+                        None,
                         mn_data,
                         byte_order,
                         &mut makernote_tags,
+                        &mut forms,
                     ) {
                         eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
                     } else {
                         for (tag_name, tag_value) in makernote_tags {
+                            if attach_canon_lens_value(&mut metadata, &tag_name, &tag_value, &mut forms) { continue; }
                             metadata.insert(tag_name, TagValue::new_string(tag_value));
                         }
                     }
@@ -7459,7 +7517,20 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     for (name, value) in
         parse_canon_ciff_records(&canon_records, model_for_canon, &mut canon_value_forms)
     {
-        metadata.insert(name, TagValue::new_string(value));
+        if matches!(name.as_str(), "Canon:LensType" | "Canon:RFLensType")
+            && let Some(raw) = canon_value_forms.remove(&name)
+        {
+            metadata.insert_occurrence_with_raw(
+                name,
+                TagValue::new_string(value),
+                TagValue::new_string(raw),
+                crate::core::SHIM_DEFAULT_PRIORITY,
+                "",
+                crate::core::Instance::default(),
+            );
+        } else {
+            metadata.insert(name, TagValue::new_string(value));
+        }
     }
     // The unrounded ValueConv forms ride the same channel the JPEG MakerNote
     // route uses (`set_value_form`), so `Composite:Aperture` and
@@ -11265,6 +11336,69 @@ mod rational_array_tests {
     /// carries the bytes across: `AEBBracketValue` at key 17 renders through
     /// `%Canon::ShotInfo`'s own conversion, and `ControlMode` at key 18 through
     /// its `PrintConv` hash.
+    #[test]
+    fn canon_lens_values_cross_cr3_and_adobe_bridges() {
+        // Complete Canon MakerNote TIFF: raw EF136, raw RF0. Keep RF0's
+        // identity so its printed n/a cannot be mistaken for a substitution.
+        let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+        tiff.extend(2u16.to_le_bytes());
+        for (tag, count, offset) in [(1u16, 23u32, 38u32), (0x93, 62, 84)] {
+            tiff.extend(tag.to_le_bytes());
+            tiff.extend(3u16.to_le_bytes());
+            tiff.extend(count.to_le_bytes());
+            tiff.extend(offset.to_le_bytes());
+        }
+        tiff.extend(0u32.to_le_bytes());
+        let mut settings = [0u16; 23];
+        settings[0] = 46;
+        settings[22] = 136;
+        for value in settings {
+            tiff.extend(value.to_le_bytes());
+        }
+        let mut info = [0u16; 62];
+        info[0] = 124;
+        for value in info {
+            tiff.extend(value.to_le_bytes());
+        }
+        let mut cmt3 = ((tiff.len() + 8) as u32).to_be_bytes().to_vec();
+        cmt3.extend(b"CMT3");
+        cmt3.extend(&tiff);
+        let mut ctmd = ((tiff.len() + 20) as u32).to_le_bytes().to_vec();
+        ctmd.extend(8u16.to_le_bytes());
+        ctmd.extend([0u8; 6]);
+        ctmd.extend(((tiff.len() + 8) as u32).to_le_bytes());
+        ctmd.extend(0x927cu32.to_le_bytes());
+        ctmd.extend(&tiff);
+        let mut adobe = b"II".to_vec();
+        adobe.extend(8u32.to_be_bytes());
+        adobe.extend(&tiff[8..]);
+        for route in 0..3 {
+            let mut metadata = MetadataMap::new();
+            match route {
+                0 => parse_cr3_cmt3_makernotes(&cmt3, &mut metadata),
+                1 => parse_cr3_ctmd_makernotes(&ctmd, &mut metadata),
+                _ => parse_adobe_makn_record(&adobe, "Canon", &mut metadata),
+            }
+            assert_eq!(
+                metadata.value_form("Canon:LensType"),
+                Some("136"),
+                "route {route}"
+            );
+            assert_eq!(
+                metadata.value_form("Canon:RFLensType"),
+                Some("0"),
+                "route {route}"
+            );
+            metadata.insert("EXIF:FocalLength", TagValue::new_string("20"));
+            crate::composite::apply(&mut metadata);
+            assert_eq!(
+                metadata.get_string("Composite:LensID"),
+                Some("Tamron SP 15-30mm f/2.8 Di VC USD (A012)"),
+                "route {route}"
+            );
+        }
+    }
+
     #[test]
     fn ciff_canon_records_reach_the_makernote_decoders() {
         // FORMAT int16s, FIRST_ENTRY 1, leading length word.

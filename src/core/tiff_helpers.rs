@@ -2900,6 +2900,21 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // Add manufacturer tags to metadata
     // Note: tag names already include manufacturer prefix (e.g., "Canon:", "Nikon:")
     for (tag_name, tag_value_str) in makernote_tags {
+        // Attach lens identity before arbitration; a losing occurrence must
+        // never overwrite the winner's numeric identity after insertion.
+        if matches!(tag_name.as_str(), "Canon:LensType" | "Canon:RFLensType")
+            && let Some(raw) = value_forms.remove(&tag_name)
+        {
+            metadata.insert_occurrence_with_raw(
+                tag_name,
+                TagValue::new_string(tag_value_str),
+                TagValue::new_string(raw),
+                crate::core::SHIM_DEFAULT_PRIORITY,
+                "",
+                crate::core::Instance::default(),
+            );
+            continue;
+        }
         // ExifTool gives the standard IFD0 PrintIM directory higher priority
         // than a MakerNote copy. Minolta.jpg carries 0250 in IFD0 and 0100 in
         // its MakerNote; the default visible value is 0250. This used to
@@ -4556,6 +4571,145 @@ mod ifd2_preview_image_tests {
             Some(&TagValue::new_string(
                 "(Binary data 26 bytes, use -b option to extract)".to_string()
             ))
+        );
+    }
+}
+
+#[cfg(test)]
+mod canon_lens_identity_tests {
+    use super::*;
+
+    const LABEL: &str = "Canon EF 300mm f/2.8L USM";
+    const TAMRON: &str = "Tamron SP 15-30mm f/2.8 Di VC USD (A012)";
+
+    fn makernote(lens: u16, rf: Option<u16>) -> Vec<u8> {
+        let count = if rf.is_some() { 2u16 } else { 1 };
+        let start = 2 + usize::from(count) * 12 + 4;
+        let mut bytes = count.to_le_bytes().to_vec();
+        for (tag, count, offset) in [(1u16, 23u32, start as u32)] {
+            bytes.extend(tag.to_le_bytes());
+            bytes.extend(3u16.to_le_bytes());
+            bytes.extend(count.to_le_bytes());
+            bytes.extend(offset.to_le_bytes());
+        }
+        if rf.is_some() {
+            bytes.extend(0x93u16.to_le_bytes());
+            bytes.extend(3u16.to_le_bytes());
+            bytes.extend(62u32.to_le_bytes());
+            bytes.extend((start as u32 + 46).to_le_bytes());
+        }
+        bytes.extend(0u32.to_le_bytes());
+        let mut settings = [0u16; 23];
+        settings[0] = 46;
+        settings[22] = lens;
+        for value in settings {
+            bytes.extend(value.to_le_bytes());
+        }
+        if let Some(rf) = rf {
+            let mut info = [0u16; 62];
+            info[0] = 124;
+            info[61] = rf;
+            for value in info {
+                bytes.extend(value.to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    fn parse(lens: u16, rf: Option<u16>, map: &mut MetadataMap) {
+        map.insert("IFD0:Make", TagValue::new_string("Canon"));
+        let bytes = makernote(lens, rf);
+        parse_makernote(
+            &MakerNoteContext::detached(&bytes),
+            ByteOrder::LittleEndian,
+            map,
+        );
+    }
+
+    #[test]
+    fn canon_lens_raw_ids_preserve_distinct_upstream_results() {
+        for (raw, expected) in [(129, LABEL), (136, TAMRON)] {
+            let mut map = MetadataMap::new();
+            parse(raw, None, &mut map);
+            assert_eq!(map.get_string("Canon:LensType"), Some(LABEL));
+            assert_eq!(
+                map.value_form("Canon:LensType"),
+                Some(raw.to_string().as_str())
+            );
+            map.insert("EXIF:FocalLength", TagValue::new_string("20"));
+            crate::composite::apply(&mut map);
+            assert_eq!(map.get_string("Composite:LensID"), Some(expected));
+            assert!(!map.keys().any(|key| key.contains("RawLens")));
+        }
+        let mut map = MetadataMap::new();
+        parse(136, None, &mut map);
+        crate::composite::apply(&mut map);
+        assert_eq!(
+            map.get_string("Composite:LensID"),
+            Some(format!("{LABEL} or {TAMRON}").as_str())
+        );
+    }
+
+    #[test]
+    fn canon_lens_losing_occurrence_cannot_replace_winner_raw_id() {
+        let mut map = MetadataMap::new();
+        map.insert_occurrence_with_raw(
+            "Canon:LensType",
+            TagValue::new_string(LABEL),
+            TagValue::new_string("129"),
+            2,
+            "Canon",
+            crate::core::Instance(7),
+        );
+        parse(136, None, &mut map);
+        let occurrences = map.occurrences_for("Canon:LensType");
+        assert_eq!(occurrences.len(), 2);
+        assert!(
+            occurrences.iter().any(|o| o.priority == 1
+                && o.value.as_ref().and_then(TagValue::as_string) == Some("136"))
+        );
+        assert_eq!(map.value_form("Canon:LensType"), Some("129"));
+        map.insert("EXIF:FocalLength", TagValue::new_string("20"));
+        crate::composite::apply(&mut map);
+        assert_eq!(map.get_string("Composite:LensID"), Some(LABEL));
+    }
+
+    #[test]
+    fn canon_rf_lens_substitution_swaps_its_own_label_and_identity() {
+        for (lens, rf, expected) in [
+            (129, 257, "Canon RF 50mm F1.2L USM"),
+            (136, 324, "Canon RF-S 14-30mm F4-6.3 IS STM PZ"),
+            (129, 0, LABEL),
+            (129, 136, "Unknown (136)"),
+        ] {
+            let mut map = MetadataMap::new();
+            parse(lens, Some(rf), &mut map);
+            assert_eq!(
+                map.value_form("Canon:RFLensType"),
+                Some(rf.to_string().as_str())
+            );
+            map.insert("EXIF:FocalLength", TagValue::new_string("20"));
+            crate::composite::apply(&mut map);
+            assert_eq!(map.get_string("Composite:LensID"), Some(expected));
+        }
+    }
+
+    #[test]
+    fn canon_lens_missing_identity_omits_only_indeterminate_candidate_sets() {
+        let mut map = MetadataMap::new();
+        map.insert("Canon:LensType", TagValue::new_string(LABEL));
+        map.insert("EXIF:FocalLength", TagValue::new_string("20"));
+        crate::composite::apply(&mut map);
+        assert_eq!(map.get_string("Composite:LensID"), None);
+        let mut map = MetadataMap::new();
+        map.insert(
+            "Canon:LensType",
+            TagValue::new_string("Canon EF 50mm f/1.8"),
+        );
+        crate::composite::apply(&mut map);
+        assert_eq!(
+            map.get_string("Composite:LensID"),
+            Some("Canon EF 50mm f/1.8")
         );
     }
 }

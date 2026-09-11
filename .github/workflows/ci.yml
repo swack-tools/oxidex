@@ -500,7 +500,9 @@ jobs:
       # step above and diffing the result against what is committed is the
       # tier-2 analogue of verify.py: it fails on a stale or hand-edited
       # generated file instead of on a formatting guess.
-      - name: Rerun tier-2 generators and diff against committed output
+      # regen-all also verifies complete GeoTIFF, DICOM and lens facts against
+      # loaded Perl independently of their producers before the drift check.
+      - name: Regenerate tier 2, verify independent facts and check drift
         env:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
         run: |
