@@ -1,5 +1,8 @@
 # Ten Unique Tag Fixes Implementation Plan
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close ten unique, unclaimed ExifTool tag gaps with exactly one fresh agent assignment per tag.
@@ -10,7 +13,7 @@
 
 ## Global Constraints
 
-- Work only in `/home/allen/git/oxidex/.worktrees/ten-unique-tag-fixes`.
+- Work only in `.worktrees/ten-unique-tag-fixes`.
 - Exactly one bare tag name belongs to each fresh agent assignment; no neighboring tags may be added.
 - Before starting, run `ps -eo pid=,args=` and stop if the assigned bare tag appears in another process's arguments.
 - Reserved names are `BatteryLevel`, `ComponentsConfiguration`, `DustRemovalData`, `LensInfo`, `ImageWidth`, `PreviewImageWidth`, `SignType`, `SourceImageWidth`, `ThermalData`, `PreviewImageStart`, `ThumbnailTIFF`, `AntiFlicker`, `DarkFocusEnvironment`, `Annotation`, `AmbientTemperature`, `Azimuth`, `SensorID`, `UniformResourceName`, and `TimeZoneOffset`.

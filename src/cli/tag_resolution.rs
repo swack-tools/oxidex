@@ -25,7 +25,7 @@
 //! arbitration and keeps every match, in file order.
 
 use crate::cli::args::CliArgs;
-use crate::core::exiftool_compat::format_for_exiftool;
+use crate::core::exiftool_compat::format_tag_value_rules;
 use crate::core::read_options::ReadOptions;
 use crate::core::tag_occurrence::{Instance, TagOccurrence};
 use crate::core::{MetadataMap, TagValue};
@@ -273,25 +273,20 @@ pub fn resolve_requested_tags<'a>(
 }
 
 /// The value to display for `occurrence`: PrintConv-formatted (matching
-/// `exiftool_compat::format_for_exiftool`'s per-key transform, applied here
-/// per-occurrence instead of over a whole map) when `no_print_conv` is
+/// `exiftool_compat`'s per-tag rules, without final output escaping)
+/// per occurrence when `no_print_conv` is
 /// false, or the pre-PrintConv form when true.
 ///
 /// The pre-PrintConv form is `occurrence.value` when a migrated call site
 /// attached one via `insert_occurrence_with_raw` (`File:FileSize`'s byte
-/// count, for one), else `occurrence.raw` itself -- which, for every
-/// call site not yet migrated, already *is* the pre-PrintConv form (see
-/// `MetadataMap::without_print_conv`'s doc comment for why skipping
-/// PrintConv already gave the right answer for the other ~99.5% of tags
-/// before this step).
+/// count, for one), else the existing APEX ValueConv for legacy rational
+/// storage, else `occurrence.raw`. This matches whole-map raw projection
+/// and composite dependency resolution without inverting printed labels.
 pub fn resolved_display_value(occurrence: &TagOccurrence, no_print_conv: bool) -> TagValue {
     if no_print_conv {
-        occurrence
-            .value
-            .clone()
-            .unwrap_or_else(|| occurrence.raw.clone())
+        occurrence.value_conv()
     } else {
-        crate::core::exiftool_compat::format_tag_value(&occurrence.lookup_key(), &occurrence.raw)
+        format_tag_value_rules(&occurrence.lookup_key(), &occurrence.raw)
     }
 }
 
@@ -389,9 +384,17 @@ pub fn render_group_display_lines(
         let label = joined_family_label(entry.occurrence, families);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
         let rendered = if short {
-            super::output_formatter::format_tag_value_short(&entry.lookup_key, &value)
+            super::output_formatter::format_tag_value_short_with_mode(
+                &entry.lookup_key,
+                &value,
+                no_print_conv,
+            )
         } else {
-            super::output_formatter::format_tag_value(&entry.lookup_key, &value)
+            super::output_formatter::format_tag_value_with_mode(
+                &entry.lookup_key,
+                &value,
+                no_print_conv,
+            )
         };
         out.push_str(&format!(
             "[{label}] {}: {rendered}\n",
@@ -440,8 +443,8 @@ pub enum ResolvedFileOutput {
 ///   [`ReadOptions::strip_extended_only`] (Step 21's extended-namespace
 ///   filter -- moot for the specific-request branch above, since a
 ///   filtered-out tag can still be reached there by explicit name) and then
-///   `without_print_conv`/`format_for_exiftool`, unchanged from before this
-///   step.
+///   pre-PrintConv selection or the per-tag PrintConv rules. Final output
+///   escaping belongs to the selected formatter.
 pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> ResolvedFileOutput {
     let tag_filter = args.specific_tags();
     let no_print_conv = !args.exiftool_compat();
@@ -541,18 +544,32 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         // occurrences that share one key the `" (N)"` suffix `FoundTag` itself
         // uses (`ExifTool.pm:9532`), so two `File:Comment`s survive into the
         // synthesized map instead of overwriting each other. Values go through
-        // `resolved_display_value`, which is `format_for_exiftool`'s own
-        // per-key `format_tag_value` applied one occurrence at a time -- the
-        // whole-map transform below is purely per-key, so the winner's
+        // `resolved_display_value`, which applies the PrintConv rules one
+        // occurrence at a time, without final output escaping. The
+        // whole-map transform below uses those same rules, so the winner's
         // rendering is unchanged either way.
         let metadata = build_display_map(&resolved, None, no_print_conv, !args.json);
         return ResolvedFileOutput::Metadata(metadata);
     }
 
     let metadata = if no_print_conv {
-        surviving.without_print_conv()
+        // strip_extended_only rebuilt the display map and discarded value
+        // forms. Use its key selection with the original winning occurrences.
+        let values = raw_metadata.without_print_conv();
+        values
+            .iter()
+            .filter(|(key, _)| surviving.contains_key(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
     } else {
-        format_for_exiftool(&surviving)
+        // Keep the complete PrintConv scalar until the chosen renderer:
+        // JSON checks numeric/boolean typing before deleting NULs, while
+        // plain output applies Printable's own control/whitespace rules.
+        let mut formatted = MetadataMap::with_capacity(surviving.len());
+        for (key, value) in surviving.iter() {
+            formatted.insert(key.clone(), format_tag_value_rules(key, value));
+        }
+        formatted
     };
     ResolvedFileOutput::Metadata(metadata)
 }
@@ -570,6 +587,111 @@ mod tests {
         metadata.insert("IFD0:Make", TagValue::new_string("FUJIFILM"));
         metadata.insert("CIFF:Make", TagValue::new_string("Canon"));
         metadata
+    }
+
+    #[test]
+    fn json_resolution_preserves_nuls_until_serialization() {
+        use crate::cli::args::DetectorMode;
+        use crate::cli::output_formatter::{JsonFormatter, OutputFormatter};
+
+        let mut source = MetadataMap::new();
+        source.insert_occurrence(
+            "IFD0:DocumentName",
+            TagValue::new_string("12\0"),
+            1,
+            "IFD0",
+            Instance::default(),
+        );
+        source.insert_occurrence(
+            "IFD0:DocumentName",
+            TagValue::new_string("34\0"),
+            0,
+            "IFD0",
+            Instance::default(),
+        );
+        source.insert("IFD0:Orientation", TagValue::new_integer(6));
+        source.insert("ExifIFD:FNumber", TagValue::new_rational(28, 10));
+        // Exercise unfiltered, selected, grouped and duplicate projection;
+        // --no-print-conv must preserve the same complete string as well.
+        for (selected, grouped, all_tags) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (true, true, true),
+        ] {
+            for no_print_conv in [false, true] {
+                let args = CliArgs {
+                    detector: DetectorMode::Signature,
+                    json: true,
+                    csv: false,
+                    short_format: false,
+                    all_tags,
+                    group_display: grouped.then_some(vec![0, 1]),
+                    extended_output: false,
+                    recursive: false,
+                    preserve_file_times: false,
+                    backup: false,
+                    readonly: true,
+                    exiftool_compat: !no_print_conv,
+                    tags_from_file: None,
+                    date_format: None,
+                    dry_run: false,
+                    strict: false,
+                    args: if selected {
+                        vec!["-DocumentName".into(), "fixture.webp".into()]
+                    } else {
+                        vec!["fixture.webp".into()]
+                    },
+                };
+                let ResolvedFileOutput::Metadata(map) = resolve_file_output(&source, &args) else {
+                    panic!("JSON resolution unexpectedly returned plain lines");
+                };
+                let values: Vec<_> = map
+                    .iter()
+                    .filter(|(key, _)| key.contains("DocumentName"))
+                    .map(|(_, value)| value.as_string().unwrap())
+                    .collect();
+                assert_eq!(values.len(), if all_tags { 2 } else { 1 });
+                assert!(values.contains(&"12\0"));
+                if all_tags {
+                    assert!(values.contains(&"34\0"));
+                }
+                let output = JsonFormatter.format(&map, None);
+                let json: serde_json::Value = serde_json::from_str(&output).unwrap();
+                let rendered: Vec<_> = json[0]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .filter(|(key, _)| key.contains("DocumentName"))
+                    .map(|(_, value)| value)
+                    .collect();
+                assert!(rendered.contains(&&serde_json::json!("12")));
+                assert!(rendered.iter().all(|value| value.is_string()));
+                if all_tags {
+                    assert!(rendered.contains(&&serde_json::json!("34")));
+                }
+                if !selected && !no_print_conv {
+                    assert_eq!(
+                        map.get_string(if grouped {
+                            "EXIF:IFD0:Orientation"
+                        } else {
+                            "IFD0:Orientation"
+                        }),
+                        Some("Rotate 90 CW")
+                    );
+                    assert_eq!(
+                        map.get_string(if grouped {
+                            "EXIF:ExifIFD:FNumber"
+                        } else {
+                            "ExifIFD:FNumber"
+                        }),
+                        Some("2.8")
+                    );
+                }
+            }
+        }
+        assert_eq!(source.get_string("IFD0:DocumentName"), Some("12\0"));
     }
 
     #[test]
@@ -732,5 +854,152 @@ mod tests {
             resolved_display_value(resolved[0].occurrence, false),
             TagValue::new_string("26 kB")
         );
+    }
+    #[test]
+    fn raw_projection_and_renderers_keep_values_in_default_and_selected_modes() {
+        use crate::cli::args::DetectorMode;
+        use crate::cli::output_formatter::{
+            CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
+        };
+        let mut source = MetadataMap::new();
+        for (name, print, value) in [
+            ("Canon:LensType", "Canon EF 300mm f/2.8L USM", "136"),
+            ("Composite:ShootingMode", "Full auto", "10"),
+            ("Composite:ImageSize", "65x100", "65 100"),
+            ("Composite:Megapixels", "0.006", "0.0065"),
+        ] {
+            source.insert_occurrence_with_raw(
+                name,
+                TagValue::new_string(print),
+                TagValue::new_string(value),
+                1,
+                "",
+                Instance::default(),
+            );
+        }
+        source.insert("IFD0:Orientation", TagValue::new_integer(6));
+        source.insert("IFD0:0xDEAD", TagValue::new_string("hidden"));
+        for (selected, grouped, all_tags) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, true),
+        ] {
+            for raw in [false, true] {
+                let mut args = CliArgs {
+                    detector: DetectorMode::Signature,
+                    json: true,
+                    csv: false,
+                    short_format: false,
+                    all_tags,
+                    group_display: grouped.then_some(vec![0, 1]),
+                    extended_output: false,
+                    recursive: false,
+                    preserve_file_times: false,
+                    backup: false,
+                    readonly: true,
+                    exiftool_compat: !raw,
+                    tags_from_file: None,
+                    date_format: None,
+                    dry_run: false,
+                    strict: false,
+                    args: if selected {
+                        vec![
+                            "-LensType".into(),
+                            "-ShootingMode".into(),
+                            "-ImageSize".into(),
+                            "-Megapixels".into(),
+                            "-Orientation".into(),
+                            "fixture.webp".into(),
+                        ]
+                    } else {
+                        vec!["fixture.webp".into()]
+                    },
+                };
+                let ResolvedFileOutput::Metadata(map) = resolve_file_output(&source, &args) else {
+                    panic!("expected map")
+                };
+                assert!(!map.keys().any(|key| key.contains("0xDEAD")));
+                let json: serde_json::Value =
+                    serde_json::from_str(&JsonFormatter.format_with_mode(&map, None, raw)).unwrap();
+                let field = |name: &str| {
+                    json[0]
+                        .as_object()
+                        .unwrap()
+                        .iter()
+                        .find(|(key, _)| key.rsplit(':').next() == Some(name))
+                        .unwrap()
+                        .1
+                };
+                assert_eq!(
+                    field("Orientation"),
+                    &if raw {
+                        serde_json::json!(6)
+                    } else {
+                        serde_json::json!("Rotate 90 CW")
+                    }
+                );
+                assert_eq!(
+                    field("LensType"),
+                    &if raw {
+                        serde_json::json!(136)
+                    } else {
+                        serde_json::json!("Canon EF 300mm f/2.8L USM")
+                    }
+                );
+                assert_eq!(
+                    field("ShootingMode"),
+                    &if raw {
+                        serde_json::json!(10)
+                    } else {
+                        serde_json::json!("Full auto")
+                    }
+                );
+                assert_eq!(
+                    field("ImageSize"),
+                    &serde_json::json!(if raw { "65 100" } else { "65x100" })
+                );
+                assert_eq!(
+                    field("Megapixels"),
+                    &serde_json::json!(if raw { 0.0065 } else { 0.006 })
+                );
+                if !grouped {
+                    for formatter in [
+                        &ShortFormatter as &dyn OutputFormatter,
+                        &HumanReadableFormatter,
+                        &CsvFormatter,
+                    ] {
+                        let text = formatter.format_with_mode(&map, None, raw);
+                        if raw {
+                            assert!(!text.contains("Canon EF"));
+                            assert!(!text.contains("Full auto"));
+                            assert!(!text.contains("Rotate 90 CW"));
+                            assert!(text.contains("136"));
+                            assert!(text.contains("10"));
+                        } else {
+                            assert!(text.contains("Canon EF"));
+                            assert!(text.contains("Full auto"));
+                            assert!(text.contains("Rotate 90 CW"));
+                        }
+                    }
+                } else {
+                    args.json = false;
+                    args.short_format = true;
+                    let ResolvedFileOutput::Lines(lines) = resolve_file_output(&source, &args)
+                    else {
+                        panic!("expected lines")
+                    };
+                    assert!(lines.contains(if raw {
+                        "LensType: 136"
+                    } else {
+                        "LensType: Canon EF"
+                    }));
+                    assert!(lines.contains(if raw {
+                        "ShootingMode: 10"
+                    } else {
+                        "ShootingMode: Full auto"
+                    }));
+                }
+            }
+        }
     }
 }

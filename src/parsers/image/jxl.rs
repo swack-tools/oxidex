@@ -10,11 +10,9 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::io::buffered_reader::BufferedReader;
-use crate::io::{ByteOrder as EndianByteOrder, EndianReader};
-use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
+use crate::io::EndianReader;
+use crate::parsers::image::embedded::parse_embedded_exif_at;
 use crate::parsers::xmp::rdf_parser::parse_xmp;
-use crate::tag_db::lookup_tag_name;
 
 /// Bare codestream signature: 0xFF 0x0A
 const JXL_CODESTREAM_SIGNATURE: &[u8] = &[0xFF, 0x0A];
@@ -259,13 +257,29 @@ impl JXLParser {
                     }
                 }
                 "Exif" => {
-                    // EXIF box: 4-byte offset + TIFF data
+                    // Jpeg2000.pm 13.59:469-476: the box is a big-endian
+                    // offset word followed by the TIFF header at
+                    // `4 + (length > 4 ? unpack("N") : 0)` (:474), and the
+                    // block is handed to ProcessTIFF with Exif::Main, so it
+                    // decodes exactly as a JPEG APP1 does. Its `Base` is the
+                    // TIFF header's own file position (:1245 `Base => $base +
+                    // $dataPos + $subdirStart`, the Start expression included):
+                    // box start + 8 (box header) + 4 (offset word) + offset.
                     if box_size > 12 {
                         let exif_data = reader.read((offset + 8) as u64, box_size - 8)?;
-                        if exif_data.len() >= 10 {
-                            // Skip 4-byte offset prefix
-                            let tiff_data = &exif_data[4..];
-                            Self::parse_exif_data(tiff_data, metadata);
+                        let tiff_offset = if exif_data.len() > 4 {
+                            u32::from_be_bytes([
+                                exif_data[0],
+                                exif_data[1],
+                                exif_data[2],
+                                exif_data[3],
+                            ]) as usize
+                        } else {
+                            0
+                        };
+                        if let Some(tiff_data) = exif_data.get(4 + tiff_offset..) {
+                            let tiff_base = (offset + 8 + 4 + tiff_offset) as u64;
+                            parse_embedded_exif_at(tiff_data, tiff_base, metadata);
                         }
                     }
                 }
@@ -294,96 +308,6 @@ impl JXLParser {
         }
 
         Ok(())
-    }
-
-    /// Parse embedded EXIF data
-    fn parse_exif_data(tiff_data: &[u8], metadata: &mut MetadataMap) {
-        if tiff_data.len() < 8 {
-            return;
-        }
-
-        // Detect byte order
-        let byte_order = match &tiff_data[0..2] {
-            b"II" => ByteOrder::LittleEndian,
-            b"MM" => ByteOrder::BigEndian,
-            _ => return,
-        };
-
-        // Create EndianReader with appropriate byte order
-        let endian_order = match byte_order {
-            ByteOrder::LittleEndian => EndianByteOrder::Little,
-            ByteOrder::BigEndian => EndianByteOrder::Big,
-        };
-        let header_reader = EndianReader::new(tiff_data, endian_order);
-
-        // Verify TIFF magic
-        let magic = header_reader.u16_at(2).unwrap_or(0);
-        if magic != 0x002A {
-            return;
-        }
-
-        // Get IFD0 offset
-        let ifd0_offset = header_reader.u32_at(4).unwrap_or(0);
-
-        // Create a BufferedReader from the TIFF data
-        let reader = BufferedReader::from_bytes(tiff_data);
-
-        // Parse IFD0
-        if let Ok(entries) = parse_ifd(&reader, ifd0_offset as u64, byte_order) {
-            for (tag_id, field_type, value_count, raw_bytes) in &entries {
-                let tag_name = lookup_tag_name(*tag_id, "IFD0");
-                let value = raw_bytes_to_tag_value(
-                    raw_bytes.as_ref(),
-                    *field_type,
-                    *value_count,
-                    *tag_id,
-                    byte_order,
-                );
-                metadata.insert(tag_name, value);
-
-                // Check for ExifIFD pointer (tag 0x8769)
-                if *tag_id == 0x8769 && raw_bytes.len() >= 4 {
-                    let tag_reader = EndianReader::new(raw_bytes, endian_order);
-                    let exif_offset = tag_reader.u32_at(0).unwrap_or(0);
-                    if let Ok(exif_entries) = parse_ifd(&reader, exif_offset as u64, byte_order) {
-                        for (exif_tag_id, exif_field_type, exif_value_count, exif_raw_bytes) in
-                            &exif_entries
-                        {
-                            let exif_tag_name = lookup_tag_name(*exif_tag_id, "ExifIFD");
-                            let value = raw_bytes_to_tag_value(
-                                exif_raw_bytes.as_ref(),
-                                *exif_field_type,
-                                *exif_value_count,
-                                *exif_tag_id,
-                                byte_order,
-                            );
-                            metadata.insert(exif_tag_name, value);
-                        }
-                    }
-                }
-
-                // Check for GPS IFD pointer (tag 0x8825)
-                if *tag_id == 0x8825 && raw_bytes.len() >= 4 {
-                    let tag_reader = EndianReader::new(raw_bytes, endian_order);
-                    let gps_offset = tag_reader.u32_at(0).unwrap_or(0);
-                    if let Ok(gps_entries) = parse_ifd(&reader, gps_offset as u64, byte_order) {
-                        for (gps_tag_id, gps_field_type, gps_value_count, gps_raw_bytes) in
-                            &gps_entries
-                        {
-                            let gps_tag_name = lookup_tag_name(*gps_tag_id, "GPS");
-                            let value = raw_bytes_to_tag_value(
-                                gps_raw_bytes.as_ref(),
-                                *gps_field_type,
-                                *gps_value_count,
-                                *gps_tag_id,
-                                byte_order,
-                            );
-                            metadata.insert(gps_tag_name, value);
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// Extract metadata from XMP using the proper RDF parser
@@ -454,87 +378,6 @@ pub fn parse_jxl_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
     parser.parse(reader).map_err(|e| e.to_string())
 }
 
-/// Converts raw bytes to TagValue
-fn raw_bytes_to_tag_value(
-    bytes: &[u8],
-    field_type: u16,
-    _value_count: u32,
-    tag_id: u16,
-    byte_order: ByteOrder,
-) -> TagValue {
-    use crate::parsers::common::exif_types::ExifType;
-
-    // Create EndianReader with appropriate byte order
-    let endian_order = match byte_order {
-        ByteOrder::LittleEndian => EndianByteOrder::Little,
-        ByteOrder::BigEndian => EndianByteOrder::Big,
-    };
-    let reader = EndianReader::new(bytes, endian_order);
-
-    if let Some(exif_type) = ExifType::from_u16(field_type) {
-        match exif_type {
-            ExifType::Ascii => {
-                let text = String::from_utf8_lossy(bytes);
-                return TagValue::String(text.trim_end_matches('\0').to_string());
-            }
-            ExifType::Short if bytes.len() >= 2 => {
-                let value = reader.u16_at(0).unwrap_or(0);
-                return TagValue::Integer(value as i64);
-            }
-            ExifType::Long if bytes.len() >= 4 => {
-                let value = reader.u32_at(0).unwrap_or(0);
-                return TagValue::Integer(value as i64);
-            }
-            ExifType::Rational if bytes.len() >= 8 => {
-                if let Some((num, den)) = reader.rational_at(0) {
-                    if den == 1 {
-                        return TagValue::Integer(num as i64);
-                    }
-                    return TagValue::Rational {
-                        numerator: num as i32,
-                        denominator: den as i32,
-                    };
-                }
-            }
-            ExifType::Undefined => {
-                // Special handling for ExifVersion
-                if tag_id == 0x9000 && bytes.len() >= 4 {
-                    let version = String::from_utf8_lossy(&bytes[0..4]);
-                    return TagValue::String(version.to_string());
-                }
-                // ComponentsConfiguration
-                if tag_id == 0x9101 && bytes.len() >= 4 {
-                    let components: Vec<&str> = bytes
-                        .iter()
-                        .take(4)
-                        .map(|&b| match b {
-                            0 => "-",
-                            1 => "Y",
-                            2 => "Cb",
-                            3 => "Cr",
-                            4 => "R",
-                            5 => "G",
-                            6 => "B",
-                            _ => "?",
-                        })
-                        .collect();
-                    return TagValue::String(components.join(", "));
-                }
-                return TagValue::Binary(bytes.to_vec());
-            }
-            _ => {}
-        }
-    }
-
-    // Fallback: try ASCII
-    if bytes.iter().all(|&b| b.is_ascii() || b == 0) {
-        let text = String::from_utf8_lossy(bytes);
-        TagValue::String(text.trim_end_matches('\0').to_string())
-    } else {
-        TagValue::Binary(bytes.to_vec())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,6 +420,70 @@ mod tests {
         assert_eq!(metadata.get_string("JXLFormat"), Some("Container"));
         // No `File:FileType` -- the identification layer's `JXL` stands.
         assert_eq!(metadata.get_string("File:FileType"), None);
+    }
+
+    /// An `Exif` box: size, type, the big-endian offset word, `pad` bytes,
+    /// then the TIFF block (Jpeg2000.pm 13.59:474).
+    fn exif_box(tiff_offset: u32, pad: &[u8], tiff: &[u8]) -> Vec<u8> {
+        let mut data = ((8 + 4 + pad.len() + tiff.len()) as u32)
+            .to_be_bytes()
+            .to_vec();
+        data.extend_from_slice(b"Exif");
+        data.extend_from_slice(&tiff_offset.to_be_bytes());
+        data.extend_from_slice(pad);
+        data.extend_from_slice(tiff);
+        data
+    }
+
+    /// Exif.pm 13.59:3849-3873 through the Exif box: an all-NUL
+    /// PanasonicTitle creates no tag, a NUL-padded PanasonicTitle2 prints
+    /// exactly, and Make loses its trailing blank (Exif.pm:585) -- the rows
+    /// the same TIFF block prints inside a JPEG. The second case carries a
+    /// non-zero offset word, which Jpeg2000.pm:474 adds to the TIFF start.
+    #[test]
+    fn exif_box_panasonic_title_rawconv_matches_jpeg_path() {
+        use crate::parsers::image::embedded::test_fixtures::{
+            assert_block_a, assert_block_b, panasonic_title_block_a, panasonic_title_block_b,
+        };
+
+        let block = panasonic_title_block_a();
+        let mut file = container();
+        file.extend_from_slice(&exif_box(0, &[], &block));
+        let metadata = JXLParser.parse(&TestReader::new(file)).unwrap();
+        assert_block_a(&metadata);
+
+        let mut file = container();
+        file.extend_from_slice(&exif_box(6, &[0u8; 6], &block));
+        let metadata = JXLParser.parse(&TestReader::new(file)).unwrap();
+        assert_block_a(&metadata);
+
+        let mut file = container();
+        file.extend_from_slice(&exif_box(0, &[], &panasonic_title_block_b()));
+        let metadata = JXLParser.parse(&TestReader::new(file)).unwrap();
+        assert_block_b(&metadata);
+    }
+
+    /// Jpeg2000.pm 13.59:474 / :1245: the `Base` added to the offsets
+    /// reported from the Exif box is the TIFF header's file position --
+    /// signature box 12 + ftyp 20 + box header 8 + offset word 4 = 44, plus
+    /// the offset word's value (50 for 6 bytes of padding); the oracle
+    /// prints 1044 and 1050 for these two layouts.
+    #[test]
+    fn exif_box_offsets_are_reported_from_the_tiff_header_position() {
+        use crate::parsers::image::embedded::test_fixtures::{
+            assert_other_image_start, interop_offset_block,
+        };
+
+        let block = interop_offset_block();
+        let mut file = container();
+        file.extend_from_slice(&exif_box(0, &[], &block));
+        let metadata = JXLParser.parse(&TestReader::new(file)).unwrap();
+        assert_other_image_start(&metadata, 44);
+
+        let mut file = container();
+        file.extend_from_slice(&exif_box(6, &[0u8; 6], &block));
+        let metadata = JXLParser.parse(&TestReader::new(file)).unwrap();
+        assert_other_image_start(&metadata, 50);
     }
 
     #[test]

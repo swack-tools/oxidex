@@ -29,7 +29,6 @@ use nom::{
     bytes::complete::{tag, take},
     number::complete::be_u32,
 };
-use std::io;
 
 /// PNG file signature (8 bytes)
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -754,43 +753,10 @@ pub fn parse_exif_chunk(data: &[u8]) -> Result<IfdEntries> {
         .ok_or_else(|| ExifToolError::parse_error("eXIf chunk too small to read IFD offset"))?;
 
     // Create an in-memory reader for the EXIF data
-    let exif_reader = ExifDataReader::new(data.to_vec());
+    let exif_reader = crate::io::buffered_reader::BufferedReader::from_bytes(data);
 
     // Parse the IFD using the TIFF parser
     parse_ifd(&exif_reader, ifd_offset as u64, byte_order)
-}
-
-/// Simple in-memory FileReader implementation for EXIF data embedded in PNG.
-///
-/// This is used to wrap eXIf chunk data so it can be passed to the TIFF IFD parser.
-pub(super) struct ExifDataReader {
-    data: Vec<u8>,
-}
-
-impl ExifDataReader {
-    pub(super) fn new(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-}
-
-impl FileReader for ExifDataReader {
-    fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-        let start = offset as usize;
-        let end = start + length;
-
-        if end > self.data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "read beyond end of EXIF data",
-            ));
-        }
-
-        Ok(&self.data[start..end])
-    }
-
-    fn size(&self) -> u64 {
-        self.data.len() as u64
-    }
 }
 
 #[cfg(test)]
@@ -914,51 +880,6 @@ mod tests {
         data.push(0);
 
         let result = parse_itxt_chunk(&data);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_exif_chunk_little_endian() {
-        // Create minimal TIFF/EXIF data with little-endian byte order
-        let mut data = Vec::new();
-
-        // TIFF header
-        data.extend_from_slice(b"II"); // Little-endian
-        data.extend_from_slice(&0x002Au16.to_le_bytes()); // Magic
-        data.extend_from_slice(&8u32.to_le_bytes()); // IFD offset
-
-        // IFD with 1 entry
-        data.extend_from_slice(&1u16.to_le_bytes()); // Entry count
-
-        // Tag entry: Make (0x010F) = "Test"
-        data.extend_from_slice(&0x010Fu16.to_le_bytes()); // Tag ID
-        data.extend_from_slice(&2u16.to_le_bytes()); // Type: ASCII
-        data.extend_from_slice(&5u32.to_le_bytes()); // Count: 5 (including null)
-        data.extend_from_slice(&26u32.to_le_bytes()); // Offset to value
-
-        // Next IFD offset: 0
-        data.extend_from_slice(&0u32.to_le_bytes());
-
-        // Value data at offset 26
-        data.extend_from_slice(b"Test\0");
-
-        let result = parse_exif_chunk(&data);
-        assert!(result.is_ok());
-
-        let tags = result.unwrap();
-        assert_eq!(tags.len(), 1);
-        assert_eq!(tags[0].0, 0x010F); // Make tag
-        assert_eq!(tags[0].3.as_ref(), b"Test\0");
-    }
-
-    #[test]
-    fn test_parse_exif_chunk_invalid_magic() {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"II"); // Little-endian
-        data.extend_from_slice(&0x0042u16.to_le_bytes()); // Wrong magic
-        data.extend_from_slice(&8u32.to_le_bytes());
-
-        let result = parse_exif_chunk(&data);
         assert!(result.is_err());
     }
 

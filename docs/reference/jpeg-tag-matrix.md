@@ -2,6 +2,8 @@
 outline: 2
 ---
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
 # JPEG Tag Matrix
 
 ::: info Auto-Generated
@@ -769,9 +771,9 @@ references are into this repo.
 | `GlobalAltitude` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `GlobalAngle` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `IPTCDigest` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `new` |
-| `PhotoshopBGRThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/Users/allen/git/oxidex_refactor/tests/fixtures/jpeg/tag_mat` |
+| `PhotoshopBGRThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `tests/fixtures/jpeg/tag_mat` |
 | `PhotoshopQuality` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `3` |
-| `PhotoshopThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `/Users/allen/git/oxidex_refactor/tests/fixtures/jpeg/tag_mat` |
+| `PhotoshopThumbnail` | ❔ untestable (exiftool could not synthesize a sample) | — unsupported (silent no-op) | `tests/fixtures/jpeg/tag_mat` |
 | `URL` | ✅ ok | — unsupported (silent no-op) | `OxTest` |
 | `XResolution` | ✅ ok | — unsupported (silent no-op) | `3` |
 | `YResolution` | ✅ ok | — unsupported (silent no-op) | `3` |

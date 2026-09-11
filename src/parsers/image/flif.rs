@@ -16,11 +16,10 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::io::buffered_reader::BufferedReader;
 use crate::io::{ByteOrder as EndianByteOrder, EndianReader};
-use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
+use crate::parsers::image::embedded::parse_embedded_exif_at;
+use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::xmp::rdf_parser::parse_xmp;
-use crate::tag_db::lookup_tag_name;
 
 const FLIF_SIGNATURE: &[u8] = b"FLIF";
 
@@ -283,36 +282,11 @@ fn parse_flif_exif(exif_data: &[u8], metadata: &mut MetadataMap) {
         ),
     );
 
-    let ifd_offset = tiff_reader.u32_at(4).unwrap_or(0);
-    let ifd_reader = BufferedReader::from_bytes(tiff_data);
-
-    let Ok(ifd0_tags) = parse_ifd(&ifd_reader, ifd_offset as u64, byte_order) else {
-        return;
-    };
-
-    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
-        let tag_value = raw_bytes_to_tag_value(raw_bytes, *field_type, *value_count, byte_order);
-        metadata.insert(lookup_tag_name(*tag_id, "IFD0"), tag_value);
-
-        // Follow the ExifIFD (0x8769) and GPS (0x8825) pointers.
-        let sub_ifd = match tag_id {
-            0x8769 => "ExifIFD",
-            0x8825 => "GPS",
-            _ => continue,
-        };
-        if raw_bytes.len() < 4 {
-            continue;
-        }
-        let pointer = EndianReader::new(raw_bytes, endian_order)
-            .u32_at(0)
-            .unwrap_or(0);
-        if let Ok(sub_tags) = parse_ifd(&ifd_reader, pointer as u64, byte_order) {
-            for (sub_id, sub_type, sub_count, sub_bytes) in &sub_tags {
-                let value = raw_bytes_to_tag_value(sub_bytes, *sub_type, *sub_count, byte_order);
-                metadata.insert(lookup_tag_name(*sub_id, sub_ifd), value);
-            }
-        }
-    }
+    // FLIF.pm 13.59:27-33 maps the chunk's MakerNotes/InteropIFD groups
+    // under ExifIFD exactly as JPEG does and hands the block to ProcessTIFF
+    // with Exif::Main, so IFD0, the EXIF and GPS sub-IFDs and everything
+    // below them go through the shared decoder.
+    parse_embedded_exif_at(tiff_data, 0, metadata);
 }
 
 /// Read a FLIF variable-length integer (base-128, high bit continues).
@@ -341,77 +315,6 @@ fn read_varint(reader: &dyn FileReader, offset: u64) -> Result<(u32, u64)> {
             return Ok((value, consumed));
         }
     }
-}
-
-/// Convert raw EXIF bytes to TagValue
-fn raw_bytes_to_tag_value(
-    bytes: &[u8],
-    field_type: u16,
-    value_count: u32,
-    byte_order: ByteOrder,
-) -> TagValue {
-    use crate::parsers::common::exif_types::ExifType;
-
-    // Create EndianReader with appropriate byte order
-    let endian_order = match byte_order {
-        ByteOrder::LittleEndian => EndianByteOrder::Little,
-        ByteOrder::BigEndian => EndianByteOrder::Big,
-    };
-    let reader = EndianReader::new(bytes, endian_order);
-
-    if let Some(exif_type) = ExifType::from_u16(field_type) {
-        match exif_type {
-            ExifType::Byte if !bytes.is_empty() => {
-                if value_count == 1 {
-                    return TagValue::Integer(reader.u8_at(0).unwrap_or(0) as i64);
-                }
-                return TagValue::Binary(bytes.to_vec());
-            }
-            ExifType::Ascii => {
-                let text = String::from_utf8_lossy(bytes);
-                return TagValue::String(text.trim_end_matches('\0').to_string());
-            }
-            ExifType::Short if bytes.len() >= 2 => {
-                if value_count == 1 {
-                    let val = reader.u16_at(0).unwrap_or(0);
-                    return TagValue::Integer(val as i64);
-                }
-            }
-            ExifType::Long if bytes.len() >= 4 => {
-                if value_count == 1 {
-                    let val = reader.u32_at(0).unwrap_or(0);
-                    return TagValue::Integer(val as i64);
-                }
-            }
-            ExifType::Rational if bytes.len() >= 8 => {
-                if value_count == 1 {
-                    let numerator = reader.u32_at(0).unwrap_or(0) as i64;
-                    let denominator = reader.u32_at(4).unwrap_or(0) as i64;
-                    return TagValue::String(
-                        crate::core::value_formatter::format_rational_as_decimal(
-                            numerator,
-                            denominator,
-                        ),
-                    );
-                }
-            }
-            ExifType::SRational if bytes.len() >= 8 => {
-                if value_count == 1 {
-                    let numerator = reader.u32_at(0).unwrap_or(0) as i32 as i64;
-                    let denominator = reader.u32_at(4).unwrap_or(0) as i32 as i64;
-                    return TagValue::String(
-                        crate::core::value_formatter::format_rational_as_decimal(
-                            numerator,
-                            denominator,
-                        ),
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-
-    TagValue::Binary(bytes.to_vec())
 }
 
 /// Parses metadata from FLIF files.
@@ -613,6 +516,52 @@ mod tests {
         assert_eq!(metadata.get_integer("IFD0:Orientation"), Some(1));
         assert_eq!(metadata.get_integer("ExifIFD:ExifImageWidth"), Some(640));
         assert_eq!(metadata.get_string("GPS:GPSLatitudeRef"), Some("N"));
+        // The pointers are SubDirectory entries (Exif.pm 13.59:2130-2140):
+        // ExifTool follows them and prints no tag for either.
+        assert_eq!(metadata.get("IFD0:ExifOffset"), None);
+        assert_eq!(metadata.get("IFD0:GPSInfo"), None);
+    }
+
+    /// Exif.pm 13.59:3849-3873 through the eXif chunk (FLIF.pm:96 keeps the
+    /// `Exif\0\0` introducer ahead of the TIFF header): an all-NUL
+    /// PanasonicTitle creates no tag, a NUL-padded PanasonicTitle2 prints
+    /// exactly, and Make loses its trailing blank (Exif.pm:585) -- the rows
+    /// the same TIFF block prints inside a JPEG. ExifByteOrder stays: ExifTool
+    /// prints it for FLIF (ExifTool.pm:8702 FoundTag in ProcessTIFF).
+    #[test]
+    fn test_exif_chunk_panasonic_title_rawconv_matches_jpeg_path() {
+        use crate::parsers::image::embedded::test_fixtures::{
+            assert_block_a, assert_block_b, panasonic_title_block_a, panasonic_title_block_b,
+        };
+
+        let chunk = [b"Exif\0\0".as_slice(), &panasonic_title_block_a()].concat();
+        let metadata =
+            parse_flif_metadata(&TestReader::new(flif_with_chunk(b"eXif", &chunk))).unwrap();
+        assert_block_a(&metadata);
+        assert_eq!(
+            metadata.get_string("ExifByteOrder"),
+            Some("Little-endian (Intel, II)")
+        );
+
+        let chunk = [b"Exif\0\0".as_slice(), &panasonic_title_block_b()].concat();
+        let metadata =
+            parse_flif_metadata(&TestReader::new(flif_with_chunk(b"eXif", &chunk))).unwrap();
+        assert_block_b(&metadata);
+    }
+
+    /// FLIF.pm 13.59:90-96 hands the inflated chunk to ProcessTIFF with no
+    /// `Base`, so the offsets reported from it stay block-relative (the
+    /// oracle prints 1000 for this chunk).
+    #[test]
+    fn test_exif_chunk_offsets_stay_block_relative() {
+        use crate::parsers::image::embedded::test_fixtures::{
+            assert_other_image_start, interop_offset_block,
+        };
+
+        let chunk = [b"Exif\0\0".as_slice(), &interop_offset_block()].concat();
+        let metadata =
+            parse_flif_metadata(&TestReader::new(flif_with_chunk(b"eXif", &chunk))).unwrap();
+        assert_other_image_start(&metadata, 0);
     }
 
     #[test]

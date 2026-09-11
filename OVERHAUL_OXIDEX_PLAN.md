@@ -1,5 +1,8 @@
 # OxiDex Overhaul Plan: wire tag handling up like ExifTool, with coverage as a computable ledger
 
+> **Path notation:** Paths are relative to the checkout root; the merged review is a historical sibling artifact and is not implied to be tracked or currently present.
+
+
 > **Historical specification, August 10, 2026.** Read
 > [Tag machinery status](docs/TAG_MACHINERY_STATUS.md) for what has landed,
 > what remains useful and which original steps are partial or superseded.
@@ -8,7 +11,7 @@
 > they are not a claim that each stage passed. The appendix is an archived session
 > prompt, not an instruction to restart the overhaul. Current repository rules apply.
 
-**Provenance.** This is Part VI of `~/git/MERGED_EXIFTOOL_OXIDEX_TAG_REVIEW.md` (2026-08-10), extracted verbatim as the operative plan. It was produced by merging two independent reviews — the in-house architecture review (Parts I–IV of that document: ExifTool 13.59 Perl machinery vs oxidex, recommendations R1–R9) and an independent ChatGPT review whose 38 claims were re-verified at oxidex tip `d4456ebc` (36 confirmed, 2 already fixed by #676/#678, 0 refuted). Every work item below rests on a verified finding or on Parts I–IV analysis; the evidence and citations live in that document (Part V holds the verified runtime-correctness findings; Appendix B holds the per-claim disposition).
+**Provenance.** This is Part VI of `../MERGED_EXIFTOOL_OXIDEX_TAG_REVIEW.md` (2026-08-10), extracted verbatim as the operative plan. It was produced by merging two independent reviews — the in-house architecture review (Parts I–IV of that document: ExifTool 13.59 Perl machinery vs oxidex, recommendations R1–R9) and an independent ChatGPT review whose 38 claims were re-verified at oxidex tip `d4456ebc` (36 confirmed, 2 already fixed by #676/#678, 0 refuted). Every work item below rests on a verified finding or on Parts I–IV analysis; the evidence and citations live in that document (Part V holds the verified runtime-correctness findings; Appendix B holds the per-claim disposition).
 
 ## Execution rules for agent sessions running this plan
 
@@ -16,7 +19,7 @@
 2. **Line numbers below are pinned at commit `d4456ebc`.** They will drift; locate code by content (`rg`), not by trusting the line number.
 3. **One step branch per step, squash-merged into the integration branch after the local gates pass (rule 9).** Steps within Stage 1 are independent and parallelizable across agents (but the Pentax seven are one file — one agent). Later stages have explicit `Deps:`; do not start a step whose deps or whose stage's entry conditions aren't met. Do not start Stage N+1's gated work before Stage N's exit criteria hold.
 4. **Gates are hard.** No step is done because the diff "looks right" — it is done when its named *Verify* instrument passes and the acceptance-gate checklist (bottom of this file) is satisfied. When a measurement argues against adding a safety check, re-run it with the instrument the harness itself uses before believing it.
-5. **Supporting artifacts.** The full merged review: `~/git/MERGED_EXIFTOOL_OXIDEX_TAG_REVIEW.md`. Raw verification memos (commands, outputs, per-claim rationale): `.claude/worktrees/exiftool-oxidex-tag-review-4ea82c/target/tag-review/verify-*.md` — worktree-local and gitignored, may not survive; Part V of the merged review preserves their substance. The pinned ExifTool 13.59 source: fetchable per `.exiftool-version` (see `tools/exiftool-tables/regen.sh` for the cache layout); oracle samples at `<exiftool-tree>/t/images/`.
+5. **Supporting artifacts.** The full merged review: `../MERGED_EXIFTOOL_OXIDEX_TAG_REVIEW.md`. Raw verification memos (commands, outputs, per-claim rationale): `.claude/worktrees/exiftool-oxidex-tag-review-4ea82c/target/tag-review/verify-*.md` — worktree-local and gitignored, may not survive; Part V of the merged review preserves their substance. The pinned ExifTool 13.59 source: fetchable per `.exiftool-version` (see `tools/exiftool-tables/regen.sh` for the cache layout); oracle samples at `<exiftool-tree>/t/images/`.
 6. **Sequencing intent.** Stage 1 stops active data corruption (small independent fixes). Stage 2 is the heart of the plan — it makes coverage a computable ledger. Stage 3 builds the version-bump machinery and executes a real bump. Stage 4 is the occurrence-store refactor. Stage 5 is the schema/engine build. Stage 6 is routing, retirement, and evidence-driven coverage. Design-review checkpoints (maintainer sign-off before proceeding): Step 10's bypass-proof API shape, Step 15's grammar scope + its decision gate, Step 18's `TagOccurrence` type design, Step 28's enablement policy.
 7. **Session topology and models.** One orchestrator session per stage — Fable 5 (or Opus) at high effort — and never two orchestrator sessions running this plan concurrently (the progress ledger is the race point; parallelism lives *inside* a session as subagents). Implementation steps are delegated to Sonnet subagents (pass the model override on the agent call; reasoning effort inherits from the session). The design checkpoints in rule 6 are produced by the orchestrator itself — never delegated to an implementation subagent — and stop for maintainer sign-off before any implementation begins.
 8. **Progress ledger.** `OVERHAUL_PROGRESS.md` at the repo root, local and deliberately untracked: one line per step — status, branch, PR #, instrument result. Every session reads it before starting and updates it after every step and at stage end. Keep it out of step PRs (it would conflict across parallel branches).
@@ -255,7 +258,7 @@ STAGE = 1
   record per-criterion pass/fail against the stage's exit criteria.
 - Line numbers in the plan are pinned at commit d4456ebc and will have drifted —
   locate code by content with rg. Deeper evidence when a step's rationale needs
-  it: ~/git/MERGED_EXIFTOOL_OXIDEX_TAG_REVIEW.md (Part V findings, Appendix B
+  it: ../MERGED_EXIFTOOL_OXIDEX_TAG_REVIEW.md (Part V findings, Appendix B
   claim disposition).
 
 Start now: confirm you have read both files, list this stage's steps with your

@@ -449,8 +449,15 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // /ImageResources). ExifTool walks it and reports the Photoshop, IPTC and
     // EXIF tags it carries.
     if let Ok(photoshop_metadata) = photoshop_resources::parse_photoshop_image_resources(reader) {
-        for (key, value) in photoshop_metadata.iter() {
-            metadata.insert(key.clone(), value.clone());
+        // Preserve this PDF boundary's existing one-winner-per-key projection.
+        // Repeated EXIFInfo resources need ExifTool's shared processed-directory
+        // address state before their additional occurrences can be exposed.
+        // Carry each selected winner's forms/priority in its recorded order;
+        // HashMap iteration and plain insert would discard that information.
+        let mut winners = photoshop_metadata.winner_occurrences().collect::<Vec<_>>();
+        winners.sort_by_key(|(_, occurrence)| occurrence.order);
+        for (key, occurrence) in winners {
+            metadata.insert_renamed_occurrence(key.clone(), occurrence);
         }
     }
 
@@ -458,12 +465,11 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // metadata from these payloads after the PDF-level resource parsers have
     // run so the standard IFD tag database determines the canonical key.
     //
-    // This runs AFTER the resource-block walk on purpose. Both reach the same
-    // TIFF bytes, but the shared IFD walk still lacks several EXIF PrintConvs
-    // (APEX aperture/shutter, FileSource, FocalPlaneResolutionUnit - the same
-    // values JPEG gets wrong today), while the arms below transcribe them
-    // from Exif.pm. Letting the narrower-but-converted walk have the last
-    // word keeps those tags matching ExifTool.
+    // Preserve the legacy rescanner's existing converted-value precedence.
+    // It may overlap the resource-block walk, but neither path establishes
+    // shared source identity (resources may also be inflated). Its late
+    // occurrences therefore remain separate; this does not establish complete
+    // PDF raw/printed equivalence or justify dropping apparent duplicates.
     if let Ok(exif_metadata) = extract_embedded_exif_metadata(reader) {
         for (key, value) in exif_metadata.iter() {
             metadata.insert(key.clone(), value.clone());

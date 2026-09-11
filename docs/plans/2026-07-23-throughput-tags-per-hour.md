@@ -1,5 +1,8 @@
 # Throughput (Tags Per Hour) Implementation Plan
 
+> **Path notation:** Command blocks with an explicit `cd` start from the historical `sweep-tags` worktree root (`.`). Test commands without `cd` run from `scripts/`, as specified under Global Constraints. Sibling worktrees use `../`; `../../logs/` is relative to that worktree in the historical OxiDex state layout. These aliases do not assert that the old worktrees still exist.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Raise tags/hour via a cross-process rate governor, sibling-tag clustering, differential target-tag verification, neighbor-precedent prompting, cheaper test rounds, and a landed-tags skip set.
@@ -12,12 +15,12 @@
 
 ## Global Constraints
 
-- Working dir for tests: `/Users/allen/.oxidex/worktrees/sweep-tags/scripts`; commits from `/Users/allen/.oxidex/worktrees/sweep-tags` (branch `feat/model-fix-loop-context`). NEVER push.
+- Working dir for tests: `./scripts`; commits from `.` (branch `feat/model-fix-loop-context`). NEVER push.
 - Suites: `python3 -m unittest test_model_fix_loop` and `python3 -m unittest discover -p "test_*.py"` — discover currently passes with **466 tests**; must pass after every task with new tests added.
 - No new dependencies (`dependencies = []` uv scripts).
 - Every commit message ends with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 - All new config knobs read via `config.get("<name>", DEFAULT_<NAME>)`.
-- A concurrent session occasionally edits these files. Before starting, run `git -C /Users/allen/.oxidex/worktrees/sweep-tags status --short` — if a file you must edit is dirty, STOP and report rather than committing someone else's work. Only commit paths you changed.
+- A concurrent session occasionally edits these files. Before starting, run `git -C . status --short` — if a file you must edit is dirty, STOP and report rather than committing someone else's work. Only commit paths you changed.
 
 ---
 
@@ -227,7 +230,7 @@ def governor_report(path, limited, cooldown_seconds=DEFAULT_GOVERNOR_COOLDOWN_SE
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: cross-process rate governor (shared token bucket + global cooldown)
 
@@ -325,7 +328,7 @@ Add to the `_normalize_model_config` test class:
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: govern every model call; 429s become governed retries
 
@@ -495,7 +498,7 @@ and in the `remaining >= gap["gap_count"]` branch, `reason = recheck_detail or "
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "fix: differential target-tag verification closes the wrong-value escape
 
@@ -673,7 +676,7 @@ Bookkeeping after `result = fix_gap_fn(...)`: where status "fixed"/"duplicate" p
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: cluster sibling tags into one fix conversation
 
@@ -828,7 +831,7 @@ def build_neighbor_precedent_block(gap, repo_root, git_runner_fn=None):
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: neighbor-precedent block -- show how the sibling tag was added
 
@@ -987,7 +990,7 @@ Existing tests to repair (semantics preserved): any test asserting the OLD order
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "perf: targeted tests gate candidates; full suite only before commit; sccache
 
@@ -1090,7 +1093,7 @@ def load_landed_tags(path):
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py scripts/log_sweep_review.py scripts/test_log_sweep_review.py
 git commit -m "feat: landed-tags skip set -- sweep acceptances stop worker re-derivation
 
@@ -1144,7 +1147,7 @@ Live `config.toml`: same six lines in `[worker]`. Sanity-load:
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py config.example.toml
 git commit -m "feat: config defaults + docs for the throughput features
 
@@ -1157,6 +1160,6 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 1. Full discover suite once more; push `feat/model-fix-loop-context` → PR #41 + summary comment.
 2. Merge into local `main`; suite there.
-3. Propagate `model_fix_loop.py`, `log_sweep_review.py`, `config.toml` to every `~/.oxidex/worktrees/parallel-fix/model-fix-*`.
+3. Propagate `model_fix_loop.py`, `log_sweep_review.py`, `config.toml` to every `../parallel-fix/model-fix-*`.
 4. Seed `landed-tags.log` with today's sweep-landed tags (PSD:EXIF:Compression family, JPEG:APP12:MODE3-6, CR3 CMT1 Artist — exact keys from the sweep commits).
 5. Remind: dispatcher restart required; suggest `--max-parallel 10` is now safe to try because of the governor.

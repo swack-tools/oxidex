@@ -13,7 +13,7 @@
 //! | 8BIM id | Payload | Decoder |
 //! |---|---|---|
 //! | 0x0404 | IPTC IIM records | [`parse_all_iptc_records`] |
-//! | 0x0422 | A self-contained TIFF/EXIF block | [`parse_embedded_exif`] |
+//! | 0x0422 | A self-contained TIFF/EXIF block | [`parse_embedded_exif_at`] |
 //! | others | Photoshop resources | [`parse_photoshop_irb`] |
 //!
 //! Nothing here invents a value: when the `/ImageResources` reference is
@@ -22,7 +22,7 @@
 
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::Result;
-use crate::parsers::image::embedded::parse_embedded_exif;
+use crate::parsers::image::embedded::{parse_embedded_exif_at, parse_embedded_thumbnail_ifd};
 use crate::parsers::jpeg::app_segments::photoshop::parse_photoshop_irb;
 use crate::parsers::jpeg::iptc_parser::{
     dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
@@ -70,9 +70,7 @@ pub fn parse_photoshop_image_resources(reader: &dyn FileReader) -> Result<Metada
     with_signature.extend_from_slice(PHOTOSHOP_SIGNATURE);
     with_signature.extend_from_slice(&resources);
     if let Ok(photoshop_tags) = parse_photoshop_irb(&with_signature) {
-        for (key, value) in photoshop_tags.iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
+        metadata.merge(photoshop_tags);
     }
 
     // IPTC (0x0404) and EXIF (0x0422) are sub-directories the APP13 decoder
@@ -100,18 +98,20 @@ pub fn parse_photoshop_image_resources(reader: &dyn FileReader) -> Result<Metada
                     }
                     _ => {}
                 }
-                parse_embedded_exif(payload, &mut exif);
-                insert_thumbnail_ifd_tags(payload, &mut exif);
-                for (key, value) in exif.iter() {
+                parse_embedded_exif_at(payload, 0, &mut exif);
+                parse_embedded_thumbnail_ifd(payload, &mut exif);
+                // Replay the shared walk in file order, keeping each value
+                // form and occurrence through this PDF-specific name filter.
+                for (key, occurrence) in exif.all_occurrences() {
                     // A tag id the generated registry has no name for comes
                     // back as `Group:0xNNNN`. ExifTool reports no such tag
                     // without -u, so emitting one would only add a key that
                     // can never match. Drop them here rather than teach the
                     // shared walk a PDF-specific rule.
-                    if is_unnamed_tag_key(key) {
+                    if is_unnamed_tag_key(&key) {
                         continue;
                     }
-                    metadata.insert(key.clone(), value.clone());
+                    metadata.insert_renamed_occurrence(key, occurrence);
                 }
             }
             _ => {}
@@ -243,47 +243,6 @@ fn insert_iptc_tags(payload: &[u8], metadata: &mut MetadataMap) {
         };
         metadata.insert(tag_name, value);
     }
-}
-
-/// Walks the thumbnail IFD (IFD1) of the TIFF block in resource 0x0422.
-///
-/// [`parse_embedded_exif`] covers IFD0, the EXIF sub-IFD and the GPS sub-IFD
-/// but stops before IFD0's next-IFD pointer, so `Compression`,
-/// `ThumbnailOffset` and `ThumbnailLength` need this second pass. The block
-/// is self-contained -- its offsets are relative to its own TIFF header and
-/// its position inside the PDF is not part of them -- so the TIFF base added
-/// to `ThumbnailOffset` is 0, which is the 842 ExifTool prints for
-/// ExifTool's own PDF.pdf.
-fn insert_thumbnail_ifd_tags(tiff: &[u8], metadata: &mut MetadataMap) {
-    use crate::core::tiff_helpers::parse_ifd1_thumbnail;
-    use crate::io::buffered_reader::BufferedReader;
-    use crate::io::{ByteOrder as IoByteOrder, EndianReader};
-    use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
-
-    if tiff.len() < 8 {
-        return;
-    }
-    let (byte_order, io_order) = match &tiff[0..2] {
-        b"II" => (ByteOrder::LittleEndian, IoByteOrder::Little),
-        b"MM" => (ByteOrder::BigEndian, IoByteOrder::Big),
-        _ => return,
-    };
-
-    let header = EndianReader::new(tiff, io_order);
-    // BigTIFF (0x002B) uses 8-byte offsets `parse_ifd` cannot walk.
-    if header.u16_at(2).unwrap_or(0) != 0x002A {
-        return;
-    }
-    let Some(ifd0_offset) = header.u32_at(4).map(u64::from) else {
-        return;
-    };
-
-    let reader = BufferedReader::from_bytes(tiff);
-    let Ok(entries) = parse_ifd(&reader, ifd0_offset, byte_order) else {
-        return;
-    };
-
-    parse_ifd1_thumbnail(&reader, ifd0_offset, entries.len(), byte_order, 0, metadata);
 }
 
 /// Locates and decodes the `/ImageResources` stream.
@@ -592,5 +551,202 @@ mod tests {
             metadata.get("IPTC:ApplicationRecordVersion"),
             Some(&TagValue::Integer(2))
         );
+    }
+    /// Complete PDF with a real page/resource path, object offsets and xref.
+    fn resource_pdf(resources: &[u8]) -> Vec<u8> {
+        let mut stream = format!("<< /Length {} >>\nstream\n", resources.len()).into_bytes();
+        stream.extend_from_slice(resources);
+        stream.extend_from_slice(b"\nendstream");
+        let objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] /PieceInfo << /AdobePhotoshop << /Private << /ImageResources 4 0 R >> >> >> >>".to_vec(),
+            stream,
+        ];
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+            pdf.extend_from_slice(object);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+        );
+        pdf
+    }
+
+    fn ordered_thumbnail_tiff(order: &[u16; 6]) -> Vec<u8> {
+        let mut tiff = b"II*\0".to_vec();
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&0u16.to_le_bytes()); // empty IFD0
+        tiff.extend_from_slice(&14u32.to_le_bytes()); // IFD1
+        tiff.extend_from_slice(&6u16.to_le_bytes());
+        for &tag in order {
+            let (kind, value): (u16, u32) = match tag {
+                0x0103 => (3, 6),
+                0x011a => (5, 92),
+                0x011b => (5, 100),
+                0x0128 => (3, 2),
+                0x0201 => (4, 108),
+                0x0202 => (4, 0),
+                _ => panic!("unexpected fixture tag"),
+            };
+            tiff.extend_from_slice(&tag.to_le_bytes());
+            tiff.extend_from_slice(&kind.to_le_bytes());
+            tiff.extend_from_slice(&1u32.to_le_bytes());
+            tiff.extend_from_slice(&value.to_le_bytes());
+        }
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        for value in [72u32, 1, 144, 1] {
+            tiff.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(tiff.len(), 108);
+        tiff
+    }
+
+    #[test]
+    fn full_pdf_preserves_resource_and_ifd1_physical_order() {
+        use crate::cli::output_formatter::format_tag_value_short_with_mode;
+        use crate::cli::tag_resolution::resolved_display_value;
+        use crate::io::buffered_reader::BufferedReader;
+
+        // Native 13.59 -a -G0:1:4 -s, with and without -n, follows each
+        // physical order below. No sorting by tag number is appropriate.
+        let ordinary = [0x0103, 0x011a, 0x011b, 0x0128, 0x0201, 0x0202];
+        let shuffled = [0x0128, 0x011b, 0x0103, 0x0201, 0x011a, 0x0202];
+        for order in [ordinary, shuffled] {
+            let mut resources = block(0x040b, b"https://example.test/");
+            resources.extend(block(0x040a, &[1]));
+            resources.extend(block(RES_EXIF, &ordered_thumbnail_tiff(&order)));
+            let pdf = resource_pdf(&resources);
+            let metadata =
+                crate::parsers::pdf::parse_pdf_metadata(&BufferedReader::from_bytes(&pdf)).unwrap();
+            let photoshop = metadata
+                .all_occurrences()
+                .filter(|(key, _)| key.starts_with("Photoshop:"))
+                .map(|(key, _)| key)
+                .collect::<Vec<_>>();
+            assert_eq!(photoshop, ["Photoshop:URL", "Photoshop:CopyrightFlag"]);
+            let ifd1 = metadata
+                .all_occurrences()
+                .filter(|(key, _)| key.starts_with("IFD1:"))
+                .collect::<Vec<_>>();
+            // Six shared entries plus the existing late legacy rescanner's
+            // Compression. The two paths do not establish source identity,
+            // so this repair deliberately does not suppress that duplicate.
+            assert_eq!(ifd1.len(), 7);
+            assert_eq!(ifd1[6].0, "IFD1:Compression");
+            assert_eq!(ifd1[6].1.raw, TagValue::new_string("JPEG (old-style)"));
+            for raw in [false, true] {
+                let expected = order
+                    .iter()
+                    .map(|tag| match tag {
+                        0x0103 => (
+                            "IFD1:Compression",
+                            if raw { "6" } else { "JPEG (old-style)" },
+                        ),
+                        0x011a => ("IFD1:XResolution", "72"),
+                        0x011b => ("IFD1:YResolution", "144"),
+                        0x0128 => ("IFD1:ResolutionUnit", if raw { "2" } else { "inches" }),
+                        0x0201 => ("IFD1:ThumbnailOffset", "108"),
+                        0x0202 => ("IFD1:ThumbnailLength", "0"),
+                        _ => unreachable!(),
+                    })
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect::<Vec<_>>();
+                let actual = ifd1[..6]
+                    .iter()
+                    .map(|(key, occurrence)| {
+                        (
+                            key.clone(),
+                            format_tag_value_short_with_mode(
+                                key,
+                                &resolved_display_value(occurrence, raw),
+                                raw,
+                            ),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, expected, "raw={raw}, order={order:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn full_pdf_preserves_exif_value_forms_and_priority() {
+        use crate::io::buffered_reader::BufferedReader;
+        use crate::parsers::image::embedded::test_fixtures::{canon_lens_tiff, tiff_with_entries};
+
+        // Native 13.59 on this same complete PDF resource prints the shared
+        // EF label while -n reports 136. Reuse the complete Canon TIFF fixture
+        // so this tests actual parser-created forms across both PDF boundaries.
+        let pdf = resource_pdf(&block(RES_EXIF, &canon_lens_tiff(136, None)));
+        let metadata =
+            crate::parsers::pdf::parse_pdf_metadata(&BufferedReader::from_bytes(&pdf)).unwrap();
+        let lenses = metadata.occurrences_for("Canon:LensType");
+        assert_eq!(lenses.len(), 1);
+        assert_eq!(
+            lenses[0].raw,
+            TagValue::new_string("Canon EF 300mm f/2.8L USM")
+        );
+        assert_eq!(lenses[0].value, Some(TagValue::new_string("136")));
+        assert_eq!(
+            metadata.without_print_conv().get_string("Canon:LensType"),
+            Some("136")
+        );
+
+        // No SubfileType override: the shared walk records this Exif::Main
+        // dimension at priority 0. Re-insertion through the legacy map shim
+        // used to silently promote it to the default priority 1.
+        let tiff = tiff_with_entries(&[(0x0100, 1, &[65])]);
+        let pdf = resource_pdf(&block(RES_EXIF, &tiff));
+        let metadata =
+            crate::parsers::pdf::parse_pdf_metadata(&BufferedReader::from_bytes(&pdf)).unwrap();
+        let widths = metadata.occurrences_for("IFD0:ImageWidth");
+        assert_eq!(widths.len(), 1);
+        assert_eq!(widths[0].raw, TagValue::Integer(65));
+        assert_eq!(widths[0].priority, 0);
+    }
+    #[test]
+    fn full_pdf_retains_existing_winner_projection_for_repeated_exif_resources() {
+        use crate::io::buffered_reader::BufferedReader;
+        use crate::parsers::image::embedded::test_fixtures::{canon_lens_tiff, tiff_with_entries};
+
+        // All three TIFFs start IFD0 at offset 8. Native 13.59's shared
+        // processed-directory address state rejects the latter two, whereas
+        // this existing PDF loop still reads them. Do not expose extra copies
+        // until that state is modeled; retain the existing last-winner scope.
+        // This is containment of standing debt, not a native parity assertion:
+        // native reports only ImageWidth here, not this surviving LensType.
+        let width = tiff_with_entries(&[(0x0100, 1, &[65])]);
+        let mut resources = block(RES_EXIF, &width);
+        resources.extend(block(RES_EXIF, &canon_lens_tiff(129, None)));
+        resources.extend(block(RES_EXIF, &canon_lens_tiff(136, None)));
+        let pdf = resource_pdf(&resources);
+        let metadata =
+            crate::parsers::pdf::parse_pdf_metadata(&BufferedReader::from_bytes(&pdf)).unwrap();
+        let lenses = metadata.occurrences_for("Canon:LensType");
+        assert_eq!(
+            lenses.len(),
+            1,
+            "the outer PDF boundary still selects one winner"
+        );
+        assert_eq!(
+            lenses[0].raw,
+            TagValue::new_string("Canon EF 300mm f/2.8L USM")
+        );
+        assert_eq!(lenses[0].value, Some(TagValue::new_string("136")));
+        let widths = metadata.occurrences_for("IFD0:ImageWidth");
+        assert_eq!(widths.len(), 1);
+        assert_eq!(widths[0].raw, TagValue::Integer(65));
+        assert_eq!(widths[0].priority, 0);
+        assert!(widths[0].order < lenses[0].order);
     }
 }

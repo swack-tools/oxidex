@@ -10,11 +10,9 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::io::{ByteOrder as EndianByteOrder, EndianReader};
-use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
+use crate::io::EndianReader;
+use crate::parsers::image::embedded::parse_embedded_exif_at;
 use crate::parsers::xmp::rdf_parser::parse_xmp;
-use crate::tag_db::lookup_tag_name;
-use std::io;
 
 /// WebP signature: "RIFF" + size + "WEBP"
 const RIFF_SIGNATURE: &[u8] = b"RIFF";
@@ -108,7 +106,10 @@ fn parse_webp_chunks(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
 
                     // Extract image dimensions (24-bit values, little-endian)
                     let width = (vp8x_reader.u32_at(4).unwrap_or(0) & 0x00FFFFFF) + 1;
-                    let height = (vp8x_reader.u32_at(7).unwrap_or(0) & 0x00FFFFFF) + 1;
+                    // RIFF.pm 13.59 VP8X offset6: int32u, ($val >> 8)+1.
+                    // A four-byte read at7 overruns this ten-byte header and
+                    // silently defaults every canvas height to1.
+                    let height = (vp8x_reader.u32_at(6).unwrap_or(0) >> 8) + 1;
 
                     metadata.insert(
                         "WebP:ImageWidth".to_string(),
@@ -266,7 +267,7 @@ fn parse_webp_chunks(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
                 // EXIF metadata - contains TIFF/EXIF data
                 if chunk_size > 0 && chunk_data_offset + chunk_size <= file_size {
                     let exif_data = reader.read(chunk_data_offset, chunk_size as usize)?;
-                    if parse_webp_exif(exif_data, metadata).is_err() {
+                    if parse_webp_exif(exif_data, chunk_data_offset, metadata).is_err() {
                         // Silently ignore EXIF parsing errors
                     }
                 }
@@ -400,203 +401,43 @@ fn parse_webp_chunks(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
     Ok(())
 }
 
-/// Parse EXIF data from WebP EXIF chunk
-fn parse_webp_exif(exif_data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
+/// Parses the WebP `EXIF` chunk.
+///
+/// RIFF.pm 13.59:557-577 declares the chunk as a SubDirectory of
+/// Image::ExifTool::Exif::Main processed by ProcessTIFF, in two variants: the
+/// TIFF header first (:559-564), or JPEG's `Exif\0\0` introducer ahead of it
+/// (:566-572, `Start => 6`, with a minor "Improper EXIF header" warning). The
+/// block is then exactly what a JPEG APP1 carries, so it goes through the
+/// shared decoder rather than a WebP copy of it.
+///
+/// `chunk_data_offset` is the chunk payload's file position, which is the
+/// `Base` ExifTool adds to the offsets it reports from the block
+/// (`Pentax:PreviewImageStart`, `InteropIFD:OtherImageStart`) -- for both
+/// variants: `Start => 6` moves the directory start, not the base, so the
+/// introducer's six bytes are not part of the printed number (oracle: 2476
+/// either way for the same block, chunk data at 60).
+fn parse_webp_exif(
+    exif_data: &[u8],
+    chunk_data_offset: u64,
+    metadata: &mut MetadataMap,
+) -> Result<()> {
     if exif_data.len() < 8 {
         return Err(ExifToolError::parse_error("EXIF data too short"));
     }
 
-    // WebP EXIF chunk can start with "Exif\0\0" header (like JPEG) or directly with TIFF header
-    let tiff_data = if exif_data.len() >= 6 && &exif_data[0..4] == b"Exif" {
-        // Skip "Exif\0\0" header
-        &exif_data[6..]
+    let tiff_data = match exif_data.strip_prefix(b"Exif\0\0") {
+        Some(rest) => rest,
+        None => exif_data,
+    };
+
+    if parse_embedded_exif_at(tiff_data, chunk_data_offset, metadata) {
+        Ok(())
     } else {
-        exif_data
-    };
-
-    if tiff_data.len() < 8 {
-        return Err(ExifToolError::parse_error("TIFF data too short"));
-    }
-
-    // Detect byte order
-    let byte_order = match &tiff_data[0..2] {
-        b"II" => ByteOrder::LittleEndian,
-        b"MM" => ByteOrder::BigEndian,
-        _ => return Err(ExifToolError::parse_error("Invalid TIFF byte order")),
-    };
-
-    // Create EndianReader for TIFF header parsing
-    let endian_order = match byte_order {
-        ByteOrder::LittleEndian => EndianByteOrder::Little,
-        ByteOrder::BigEndian => EndianByteOrder::Big,
-    };
-    let header_reader = EndianReader::new(tiff_data, endian_order);
-
-    // Verify TIFF magic
-    let magic = header_reader.u16_at(2).unwrap_or(0);
-    if magic != 0x002A {
-        return Err(ExifToolError::parse_error("Invalid TIFF magic number"));
-    }
-
-    // Get IFD0 offset
-    let ifd_offset = header_reader.u32_at(4).unwrap_or(0);
-
-    // Create in-memory reader
-    let exif_reader = WebPExifReader::new(tiff_data.to_vec());
-
-    // Track sub-IFD offsets
-    let mut exif_ifd_offset = None;
-    let mut gps_ifd_offset = None;
-
-    // Parse IFD0
-    if let Ok(ifd0_tags) = parse_ifd(&exif_reader, ifd_offset as u64, byte_order) {
-        for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
-            let tag_reader = EndianReader::new(raw_bytes, endian_order);
-
-            // Check for ExifIFD pointer
-            if *tag_id == 0x8769 && raw_bytes.len() >= 4 {
-                let offset = tag_reader.u32_at(0).unwrap_or(0);
-                exif_ifd_offset = Some(offset as u64);
-                continue;
-            }
-
-            // Check for GPS pointer
-            if *tag_id == 0x8825 && raw_bytes.len() >= 4 {
-                let offset = tag_reader.u32_at(0).unwrap_or(0);
-                gps_ifd_offset = Some(offset as u64);
-                continue;
-            }
-
-            let tag_name = lookup_tag_name(*tag_id, "IFD0");
-            let tag_value =
-                raw_bytes_to_tag_value(raw_bytes, *field_type, *value_count, byte_order);
-            metadata.insert(tag_name, tag_value);
-        }
-    }
-
-    // Parse ExifIFD
-    if let Some(offset) = exif_ifd_offset
-        && let Ok(exif_tags) = parse_ifd(&exif_reader, offset, byte_order)
-    {
-        for (tag_id, field_type, value_count, raw_bytes) in exif_tags {
-            let tag_name = lookup_tag_name(tag_id, "ExifIFD");
-            let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, value_count, byte_order);
-            metadata.insert(tag_name, tag_value);
-        }
-    }
-
-    // Parse GPS IFD
-    if let Some(offset) = gps_ifd_offset
-        && let Ok(gps_tags) = parse_ifd(&exif_reader, offset, byte_order)
-    {
-        for (tag_id, field_type, value_count, raw_bytes) in gps_tags {
-            let tag_name = lookup_tag_name(tag_id, "GPS");
-            let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, value_count, byte_order);
-            metadata.insert(tag_name, tag_value);
-        }
-    }
-
-    Ok(())
-}
-
-/// In-memory FileReader for WebP EXIF data
-struct WebPExifReader {
-    data: Vec<u8>,
-}
-
-impl WebPExifReader {
-    fn new(data: Vec<u8>) -> Self {
-        Self { data }
+        Err(ExifToolError::parse_error(
+            "invalid TIFF header in EXIF chunk",
+        ))
     }
 }
-
-impl FileReader for WebPExifReader {
-    fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-        let start = offset as usize;
-        let end = start + length;
-        if end > self.data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "read beyond end of EXIF data",
-            ));
-        }
-        Ok(&self.data[start..end])
-    }
-
-    fn size(&self) -> u64 {
-        self.data.len() as u64
-    }
-}
-
-/// Convert raw EXIF bytes to TagValue
-fn raw_bytes_to_tag_value(
-    bytes: &[u8],
-    field_type: u16,
-    value_count: u32,
-    byte_order: ByteOrder,
-) -> TagValue {
-    use crate::parsers::common::exif_types::ExifType;
-
-    // Create EndianReader with appropriate byte order
-    let endian_order = match byte_order {
-        ByteOrder::LittleEndian => EndianByteOrder::Little,
-        ByteOrder::BigEndian => EndianByteOrder::Big,
-    };
-    let reader = EndianReader::new(bytes, endian_order);
-
-    if let Some(exif_type) = ExifType::from_u16(field_type) {
-        match exif_type {
-            ExifType::Byte if !bytes.is_empty() => {
-                if value_count == 1 {
-                    return TagValue::Integer(reader.u8_at(0).unwrap_or(0) as i64);
-                }
-                return TagValue::Binary(bytes.to_vec());
-            }
-            ExifType::Ascii => {
-                let text = String::from_utf8_lossy(bytes);
-                return TagValue::String(text.trim_end_matches('\0').to_string());
-            }
-            ExifType::Short if bytes.len() >= 2 => {
-                let value = reader.u16_at(0).unwrap_or(0);
-                return TagValue::Integer(value as i64);
-            }
-            ExifType::Long if bytes.len() >= 4 => {
-                let value = reader.u32_at(0).unwrap_or(0);
-                return TagValue::Integer(value as i64);
-            }
-            ExifType::Rational if bytes.len() >= 8 => {
-                if let Some((num, den)) = reader.rational_at(0)
-                    && den != 0
-                {
-                    return TagValue::Float(num as f64 / den as f64);
-                }
-            }
-            ExifType::Undefined => {
-                if bytes
-                    .iter()
-                    .all(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace() || b == 0)
-                {
-                    let text = String::from_utf8_lossy(bytes);
-                    let trimmed = text.trim_end_matches('\0');
-                    if !trimmed.is_empty() {
-                        return TagValue::String(trimmed.to_string());
-                    }
-                }
-                return TagValue::Binary(bytes.to_vec());
-            }
-            ExifType::SRational if bytes.len() >= 8 => {
-                if let Some((num, den)) = reader.srational_at(0)
-                    && den != 0
-                {
-                    return TagValue::Float(num as f64 / den as f64);
-                }
-            }
-            _ => {}
-        }
-    }
-    TagValue::Binary(bytes.to_vec())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,12 +481,283 @@ mod tests {
     }
 
     #[test]
+    fn vp8x_reads_all_three_height_bytes_without_overrunning_the_header() {
+        // Actual native13.59 VP8X probes establish these complete24-bit
+        // values, including nonzero middle/high bytes and the maximum.
+        for (width, height) in [
+            (100u32, 100u32),
+            (1, 257),
+            (65_537, 66_052),
+            (16_777_216, 16_777_216),
+        ] {
+            let mut payload = vec![0u8; 4];
+            payload.extend(&(width - 1).to_le_bytes()[..3]);
+            payload.extend(&(height - 1).to_le_bytes()[..3]);
+            assert_eq!(payload.len(), 10);
+            let metadata = WebPParser
+                .parse(&TestReader::new(webp(b"VP8X", &payload)))
+                .unwrap();
+            assert_eq!(
+                metadata.get_integer("WebP:ImageWidth"),
+                Some(i64::from(width))
+            );
+            assert_eq!(
+                metadata.get_integer("WebP:ImageHeight"),
+                Some(i64::from(height))
+            );
+        }
+    }
+
+    #[test]
+    fn vp8x_dimensions_win_over_ordinary_embedded_exif_dimensions() {
+        use crate::parsers::image::embedded::test_fixtures::tiff_with_entries;
+        let mut payload = vec![8, 0, 0, 0]; // EXIF flag; canvas100x100
+        payload.extend(&99u32.to_le_bytes()[..3]);
+        payload.extend(&99u32.to_le_bytes()[..3]);
+        let mut file = webp(b"VP8X", &payload);
+        let exif = webp(
+            b"EXIF",
+            &tiff_with_entries(&[(0x0100, 1, &[65]), (0x0101, 1, &[80])]),
+        );
+        file.extend(&exif[12..]);
+        let len = (file.len() - 8) as u32;
+        file[4..8].copy_from_slice(&len.to_le_bytes());
+        let mut metadata = WebPParser.parse(&TestReader::new(file)).unwrap();
+        for name in ["ImageWidth", "ImageHeight"] {
+            let requested = [name.to_string()];
+            let selected =
+                crate::cli::tag_resolution::resolve_requested_tags(&metadata, &requested, false);
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].occurrence.raw.as_integer(), Some(100));
+            assert_eq!(
+                crate::cli::tag_resolution::resolve_requested_tags(&metadata, &requested, true)
+                    .len(),
+                2
+            );
+        }
+        assert_eq!(metadata.get_integer("IFD0:ImageWidth"), Some(65));
+        assert_eq!(metadata.get_integer("IFD0:ImageHeight"), Some(80));
+        crate::composite::apply(&mut metadata);
+        assert_eq!(metadata.get_string("Composite:ImageSize"), Some("100x100"));
+    }
+
+    #[test]
     fn a_simple_webp_keeps_the_plain_name() {
         let metadata = WebPParser
             .parse(&TestReader::new(webp(b"VP8 ", &[0u8; 16])))
             .unwrap();
         // No `File:FileType` -- the identification layer's `WEBP` stands.
         assert_eq!(metadata.get_string("File:FileType"), None);
+    }
+
+    #[test]
+    fn exif_chunk_preserves_scalar_tiff_types() {
+        use crate::parsers::image::embedded::test_fixtures::tiff_with_entries;
+        let tiff = tiff_with_entries(&[
+            (0x0100, 1, &[65]),
+            (0x0108, 6, &[255]),
+            (0x010f, 7, b"Canon\0"),
+            (0x010d, 7, b"Plan Scan \0"),
+        ]);
+        for prefix in [false, true] {
+            let payload = if prefix {
+                [b"Exif\0\0".as_slice(), &tiff].concat()
+            } else {
+                tiff.clone()
+            };
+            let file = webp(b"EXIF", &payload);
+            let metadata = WebPParser
+                .parse(&TestReader::new(file))
+                .expect("WebP parses");
+            assert_eq!(metadata.get_integer("IFD0:ImageWidth"), Some(65));
+            assert_eq!(metadata.get_integer("IFD0:CellWidth"), Some(-1));
+            assert_eq!(metadata.get_string("IFD0:Make"), Some("Canon\0"));
+            assert_eq!(
+                metadata.get_string("IFD0:DocumentName"),
+                Some("Plan Scan \0")
+            );
+        }
+    }
+
+    /// Exif.pm 13.59:3849-3873 through the EXIF chunk, in both RIFF.pm
+    /// variants (bare TIFF header, and `Exif\0\0` ahead of it): an all-NUL
+    /// PanasonicTitle creates no tag, a NUL-padded PanasonicTitle2 prints
+    /// exactly, and Make loses its trailing blank (Exif.pm:585) -- the rows
+    /// the same TIFF block prints inside a JPEG.
+    #[test]
+    fn exif_chunk_panasonic_title_rawconv_matches_jpeg_path() {
+        use crate::parsers::image::embedded::test_fixtures::{
+            assert_block_a, assert_block_b, panasonic_title_block_a, panasonic_title_block_b,
+        };
+
+        let block = panasonic_title_block_a();
+        let metadata = WebPParser
+            .parse(&TestReader::new(webp(b"EXIF", &block)))
+            .unwrap();
+        assert_block_a(&metadata);
+
+        let with_header = [b"Exif\0\0".as_slice(), &block].concat();
+        let metadata = WebPParser
+            .parse(&TestReader::new(webp(b"EXIF", &with_header)))
+            .unwrap();
+        assert_block_a(&metadata);
+
+        let metadata = WebPParser
+            .parse(&TestReader::new(webp(b"EXIF", &panasonic_title_block_b())))
+            .unwrap();
+        assert_block_b(&metadata);
+    }
+
+    /// RIFF.pm 13.59:557-577 / ExifTool.pm DoProcessTIFF: the `Base` added
+    /// to the offsets reported from the EXIF chunk is the chunk data's file
+    /// position (20 here: RIFF header 12 + chunk header 8), and `Start => 6`
+    /// for the `Exif\0\0` variant moves the directory start only, so the
+    /// oracle prints the same 1020 for both layouts (not 1026).
+    #[test]
+    fn exif_chunk_offsets_are_reported_from_the_chunk_data_position() {
+        use crate::parsers::image::embedded::test_fixtures::{
+            assert_other_image_start, interop_offset_block,
+        };
+
+        let block = interop_offset_block();
+        let metadata = WebPParser
+            .parse(&TestReader::new(webp(b"EXIF", &block)))
+            .unwrap();
+        assert_other_image_start(&metadata, 20);
+
+        let with_header = [b"Exif\0\0".as_slice(), &block].concat();
+        let metadata = WebPParser
+            .parse(&TestReader::new(webp(b"EXIF", &with_header)))
+            .unwrap();
+        assert_other_image_start(&metadata, 20);
+    }
+
+    /// Pinned 13.59 on these complete WebP carriers: the same EF display
+    /// label denotes distinct raw IDs; RF identity belongs to its own table.
+    #[test]
+    fn exif_chunk_canon_identity_survives_into_lens_id() {
+        use crate::parsers::image::embedded::test_fixtures::canon_lens_tiff;
+
+        const EF: &str = "Canon EF 300mm f/2.8L USM";
+        const TAMRON: &str = "Tamron SP 15-30mm f/2.8 Di VC USD (A012)";
+        const RF50: &str = "Canon RF 50mm F1.2L USM";
+        const RFS: &str = "Canon RF-S 14-30mm F4-6.3 IS STM PZ";
+        for (lens, rf, rf_label, expected) in [
+            (129, None, None, EF),
+            (136, None, None, TAMRON),
+            (129, Some(257), Some(RF50), RF50),
+            (136, Some(324), Some(RFS), RFS),
+            (136, Some(0), Some("n/a"), TAMRON),
+        ] {
+            let block = canon_lens_tiff(lens, rf);
+            for prefix in [b"".as_slice(), b"Exif\0\0".as_slice()] {
+                let payload = [prefix, &block].concat();
+                let mut map = WebPParser
+                    .parse(&TestReader::new(webp(b"EXIF", &payload)))
+                    .unwrap();
+                assert_eq!(map.get_string("Canon:LensType"), Some(EF));
+                let raw = lens.to_string();
+                assert_eq!(map.value_form("Canon:LensType"), Some(raw.as_str()));
+                assert_eq!(map.occurrences_for("Canon:LensType").len(), 1);
+                assert_eq!(map.get_string("Canon:RFLensType"), rf_label);
+                let raw_rf = rf.map(|n| n.to_string());
+                assert_eq!(map.value_form("Canon:RFLensType"), raw_rf.as_deref());
+                crate::composite::apply(&mut map);
+                assert_eq!(
+                    map.get_string("Composite:LensID"),
+                    Some(expected),
+                    "EF {lens}, RF {rf:?}, introducer bytes {}",
+                    prefix.len()
+                );
+                assert!(!map.keys().any(|key| key.contains("RawLens")));
+            }
+        }
+    }
+
+    /// Seed a distinct occurrence, then traverse the real container chunk
+    /// loop. A later losing raw ID must not mutate the winner; an incoming
+    /// winner must retain its own value rather than the earlier occurrence's.
+    #[test]
+    fn exif_chunk_canon_identity_stays_with_its_occurrence() {
+        use crate::core::Instance;
+        use crate::parsers::image::embedded::test_fixtures::canon_lens_tiff;
+
+        const EF: &str = "Canon EF 300mm f/2.8L USM";
+        const TAMRON: &str = "Tamron SP 15-30mm f/2.8 Di VC USD (A012)";
+        const RF50: &str = "Canon RF 50mm F1.2L USM";
+        const RFS: &str = "Canon RF-S 14-30mm F4-6.3 IS STM PZ";
+        for (key, seed_raw, seed_label, seed_priority, rf, incoming_raw, expected_raw, expected) in [
+            ("Canon:LensType", "129", EF, 2, None, "136", "129", EF),
+            ("Canon:LensType", "129", EF, 0, None, "136", "136", TAMRON),
+            (
+                "Canon:RFLensType",
+                "257",
+                RF50,
+                2,
+                Some(324),
+                "324",
+                "257",
+                RF50,
+            ),
+            (
+                "Canon:RFLensType",
+                "257",
+                RF50,
+                0,
+                Some(324),
+                "324",
+                "324",
+                RFS,
+            ),
+        ] {
+            let mut map = MetadataMap::new();
+            map.insert_occurrence_with_raw(
+                key,
+                TagValue::new_string(seed_label),
+                TagValue::new_string(seed_raw),
+                seed_priority,
+                "Canon",
+                Instance(7),
+            );
+            let block = canon_lens_tiff(136, rf);
+            parse_webp_chunks(&TestReader::new(webp(b"EXIF", &block)), &mut map).unwrap();
+            let occurrences = map.occurrences_for(key);
+            assert_eq!(occurrences.len(), 2);
+            assert_eq!(
+                occurrences[0].value.as_ref().and_then(TagValue::as_string),
+                Some(seed_raw)
+            );
+            assert_eq!(occurrences[0].raw.as_string(), Some(seed_label));
+            assert_eq!(occurrences[0].priority, seed_priority);
+            assert_eq!(occurrences[0].group1.as_ref(), "Canon");
+            assert_eq!(occurrences[0].instance, Instance(7));
+            assert_eq!(
+                occurrences[1].value.as_ref().and_then(TagValue::as_string),
+                Some(incoming_raw)
+            );
+            assert_eq!(occurrences[1].priority, 1);
+            assert_eq!(occurrences[1].group1.as_ref(), "");
+            assert_eq!(occurrences[1].instance, Instance::default());
+            assert!(occurrences[0].order < occurrences[1].order);
+            assert_eq!(map.value_form(key), Some(expected_raw));
+            let winner = map
+                .winner_occurrences()
+                .find(|(k, _)| k.as_str() == key)
+                .unwrap()
+                .1;
+            let expected_instance = if seed_priority > 1 {
+                Instance(7)
+            } else {
+                Instance::default()
+            };
+            assert_eq!(winner.instance, expected_instance);
+            assert_eq!(
+                winner.value.as_ref().and_then(TagValue::as_string),
+                Some(expected_raw)
+            );
+            crate::composite::apply(&mut map);
+            assert_eq!(map.get_string("Composite:LensID"), Some(expected));
+        }
     }
 
     #[test]

@@ -447,7 +447,7 @@ def ensure_integration_branch(repo_root, log_fn=print):
     single ref shared by every worktree of the repo -- including the
     operator's own checkout, which is precisely where an earlier fleet
     run leaves it. Measured 2026-08-09 on a local `fleet_up.sh --workers
-    2`: /Users/allen/git/oxidex sat on SWEEP_LOCAL_BRANCH, so the pinned
+    2`: the main checkout sat on SWEEP_LOCAL_BRANCH, so the pinned
     dispatcher checkout could never take it, and EVERY round skipped --
     eleven consecutive rounds, zero workers dispatched, one WARNING
     apiece. That is a permanent deadlock, not a stall: nothing in the

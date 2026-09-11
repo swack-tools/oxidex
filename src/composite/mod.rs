@@ -92,15 +92,7 @@ fn value_string(v: &TagValue) -> Option<String> {
 /// form for every tag that has no separate PrintConv step -- which is every
 /// case not covered by `value`/`apex_value_conv` here.
 fn occurrence_value_string(occurrence: &TagOccurrence) -> Option<String> {
-    if let Some(v) = &occurrence.value {
-        return value_string(v);
-    }
-    if let Some(converted) =
-        crate::core::exiftool_compat::apex_value_conv(&occurrence.name, &occurrence.raw)
-    {
-        return value_string(&converted);
-    }
-    value_string(&occurrence.raw)
+    value_string(&occurrence.value_conv())
 }
 
 /// Resolves one Composite dependency key (already normalized to `Group:Tag`
@@ -330,6 +322,19 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             for &(index, dep) in comp.desire {
                 owned[index] = resolve(map, dep);
             }
+            if comp.module == "QuickTime" && comp.name == "AvgBitrate" {
+                // QuickTime.pm:8657-8665 walks every MediaDataSize occurrence
+                // with NextTagKey. The sum belongs only to this composite's
+                // input: each mdat-size's own ValueConv is its payload length.
+                let total = map
+                    .all_occurrences()
+                    .filter(|(key, _)| key == "QuickTime:MediaDataSize")
+                    .try_fold(0u64, |sum, (_, occurrence)| {
+                        sum.checked_add(occurrence_value_string(occurrence)?.parse::<u64>().ok()?)
+                    });
+                let Some(total) = total else { continue };
+                owned[0] = Some(total.to_string());
+            }
             // Exif.pm ImageSize ValueConv (Exif.pm:4384-4390) prefers
             // ExifImageWidth/Height over the required IFD0 ImageWidth/Height
             // pair, but only for these four TIFF-based RAW types:
@@ -400,8 +405,8 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                             .and_then(|(print, value)| compute::Computed::new(value, print))
                     }
                 } else {
-                    // The primary (Exif.pm:5303-5360): PrintConv only, so the
-                    // value and print forms are the same string.
+                    // Exif.pm:5331 ValueConv is the original LensType scalar.
+                    // RF replacement happens later, inside PrintConv only.
                     lens_id::compute_primary(
                         &inputs,
                         lens_type_group.as_deref(),
@@ -417,7 +422,16 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                             .as_ref()
                             .map(|(group, _, _)| group.as_str()),
                     )
-                    .and_then(compute::Computed::same)
+                    .and_then(|print| {
+                        match lens_occurrence.as_ref() {
+                            Some((group, _, Some(value))) if group == "Canon" => {
+                                compute::Computed::new(value.clone(), print)
+                            }
+                            // Other makers and legacy label-only API callers
+                            // retain their existing forms; no numeric ID is guessed.
+                            _ => compute::Computed::same(print),
+                        }
+                    })
                 }
             } else {
                 compute::compute(comp.module, comp.name, &inputs, make.as_deref())
@@ -1378,5 +1392,94 @@ mod step29_generated_expression_regression {
             composite_string(CANON_EOS10D_JPG, "Composite:FocalLength35efl"),
             Some("365.0 mm (35 mm equivalent: 565.8 mm)".to_string())
         );
+    }
+    #[test]
+    fn canon_primary_lens_id_keeps_original_ef_value_when_rf_print_wins() {
+        use super::apply;
+        use crate::core::{MetadataMap, TagValue};
+        for (ef, rf, printed) in [
+            (129, 257, "Canon RF 50mm F1.2L USM"),
+            (136, 324, "Canon RF-S 14-30mm F4-6.3 IS STM PZ"),
+            (129, 0, "Canon EF 300mm f/2.8L USM"),
+        ] {
+            let mut map = MetadataMap::new();
+            map.insert("IFD0:Make", TagValue::new_string("Canon"));
+            map.insert("ExifIFD:FocalLength", TagValue::new_integer(20));
+            map.insert_occurrence_with_raw(
+                "Canon:LensType",
+                TagValue::new_string("Canon EF 300mm f/2.8L USM"),
+                TagValue::new_string(ef.to_string()),
+                2,
+                "Canon",
+                crate::core::Instance::default(),
+            );
+            // A losing EF record must not change either the composite code or print.
+            map.insert_occurrence_with_raw(
+                "Canon:LensType",
+                TagValue::new_string("Unknown (999)"),
+                TagValue::new_string("999"),
+                0,
+                "Canon",
+                crate::core::Instance::default(),
+            );
+            let rf_print = match rf {
+                257 => "Canon RF 50mm F1.2L USM",
+                324 => "Canon RF-S 14-30mm F4-6.3 IS STM PZ",
+                _ => "n/a",
+            };
+            map.insert_occurrence_with_raw(
+                "Canon:RFLensType",
+                TagValue::new_string(rf_print),
+                TagValue::new_string(rf.to_string()),
+                1,
+                "Canon",
+                crate::core::Instance::default(),
+            );
+            apply(&mut map);
+            assert_eq!(map.get_string("Composite:LensID"), Some(printed));
+            assert_eq!(
+                map.value_form("Composite:LensID"),
+                Some(ef.to_string().as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn canon_numeric_dependencies_preserve_shooting_mode_print() {
+        use super::apply;
+        use crate::core::{MetadataMap, TagValue};
+        for (exposure, easy, expected_value, expected_print) in [
+            (0, 0, "10", "Full auto"),
+            (4, 0, "4", "Manual"),
+            (0, 83, "93", "Unknown (83)"),
+            (120, 111, "120", "Unknown (120)"),
+        ] {
+            let mut map = MetadataMap::new();
+            map.insert_occurrence_with_raw(
+                "Canon:CanonExposureMode",
+                TagValue::new_string("label deliberately not inverted"),
+                TagValue::new_string(exposure.to_string()),
+                1,
+                "Canon",
+                crate::core::Instance::default(),
+            );
+            map.insert_occurrence_with_raw(
+                "Canon:EasyMode",
+                TagValue::new_string("another non-invertible label"),
+                TagValue::new_string(easy.to_string()),
+                1,
+                "Canon",
+                crate::core::Instance::default(),
+            );
+            apply(&mut map);
+            assert_eq!(
+                map.get_string("Composite:ShootingMode"),
+                Some(expected_print)
+            );
+            assert_eq!(
+                map.value_form("Composite:ShootingMode"),
+                Some(expected_value)
+            );
+        }
     }
 }

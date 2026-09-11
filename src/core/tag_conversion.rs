@@ -41,6 +41,34 @@ pub fn exif_raw_conv_drops_entry(tag_id: u16, bytes: &[u8]) -> bool {
     matches!(tag_id, 0xC6D2 | 0xC6D3) && exif_string_read(bytes).is_empty()
 }
 
+/// An Exif::Main directory entry as the tag ExifTool would create from it,
+/// or `None` when its `RawConv` returns undef (Exif.pm 13.59:3849-3873) and
+/// no tag exists at all.
+///
+/// This is the one entry point for a loop over `parse_ifd` entries that has
+/// nothing to do between "should this entry become a tag" and "what is its
+/// value"; the two questions are asked separately only where a site must
+/// inspect pointer or MakerNote entries in between.
+#[must_use]
+pub fn exif_entry_to_tag_value(
+    bytes: &[u8],
+    field_type: u16,
+    value_count: u32,
+    tag_id: u16,
+    byte_order: ByteOrder,
+) -> Option<TagValue> {
+    if exif_raw_conv_drops_entry(tag_id, bytes) {
+        return None;
+    }
+    Some(raw_bytes_to_tag_value(
+        bytes,
+        field_type,
+        value_count,
+        tag_id,
+        byte_order,
+    ))
+}
+
 /// ExifTool's `ReadValue` for `Format => 'string'` (ExifTool.pm:6308-6311):
 /// the raw bytes with the first NUL and everything after it removed
 /// (`$vals[0] =~ s/\0.*//s if $format eq 'string'`). Nothing else is
@@ -253,13 +281,63 @@ pub fn raw_bytes_to_tag_value(
                 return value;
             }
 
-            // BYTE (type 1) and UNDEFINED (type 7): binary or heuristic conversion
-            ExifType::Byte | ExifType::Undefined => {
-                // For UNDEFINED type, if no specific handler matched, return binary
-                if field_type == 7 {
-                    return TagValue::new_binary(bytes.to_vec());
+            // ExifTool.pm ReadValue/Get8u/Get8s: BYTE and SBYTE are
+            // numeric even when a byte happens to be printable ASCII.
+            ExifType::Byte | ExifType::SByte
+                if value_count > 0 && bytes.len() >= value_count as usize =>
+            {
+                let signed = exif_type == ExifType::SByte;
+                let number = |byte: u8| {
+                    if signed {
+                        i64::from(byte as i8)
+                    } else {
+                        i64::from(byte)
+                    }
+                };
+                return if value_count == 1 {
+                    TagValue::Integer(number(bytes[0]))
+                } else {
+                    TagValue::new_string(
+                        bytes
+                            .iter()
+                            .take(value_count as usize)
+                            .map(|byte| number(*byte).to_string())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    )
+                };
+            }
+
+            ExifType::Undefined => {
+                if let Some(tag) = crate::exiftool_tables::ifd_tables::IFD_EXIF_MAIN.tag(tag_id)
+                    && is_plain_undefined_exif_tag(tag)
+                {
+                    // Exif.pm:6682 substitutes int8u for UNDEFINED count1
+                    // before any explicit Format override. This selected
+                    // population has no Format override.
+                    if value_count == 1 && !bytes.is_empty() {
+                        return TagValue::Integer(i64::from(bytes[0]));
+                    }
+                    // ReadValue (ExifTool.pm:6308-6311) retains all NULs
+                    // for undef. Only Format=string truncates at the first
+                    // NUL. RawConv runs before the output writer cleans up.
+                    // FoundTag runs RawConv on the original byte scalar,
+                    // before FixUTF8. Perl's byte-string \s is 09..0d/20;
+                    // Unicode NBSP/em-space must survive this trim.
+                    let bytes = if exif_raw_conv_trims_text(tag_id) {
+                        let end = bytes
+                            .iter()
+                            .rposition(|byte| !matches!(*byte, 0x09..=0x0d | 0x20))
+                            .map_or(0, |index| index + 1);
+                        &bytes[..end]
+                    } else {
+                        bytes
+                    };
+                    let text = crate::exiftool_tables::runtime::fix_utf8(bytes)
+                        .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned());
+                    return TagValue::new_string(text);
                 }
-                // Fall through to heuristic conversion for BYTE type
+                return TagValue::new_binary(bytes.to_vec());
             }
 
             _ => {
@@ -270,6 +348,32 @@ pub fn raw_bytes_to_tag_value(
 
     // Fallback heuristic conversion for unknown types or when type-specific logic doesn't apply
     heuristic_bytes_to_tag_value(bytes, byte_order)
+}
+
+/// The existing Exif::Main RawConv trims implemented by this converter.
+fn exif_raw_conv_trims_text(tag_id: u16) -> bool {
+    matches!(tag_id, 0x010f | 0x0110 | 0x0131 | 0x013b)
+}
+
+/// A bounded set of plain scalar-string declarations, using the generated
+/// source facts instead of another handwritten tag list. Writable bounds the
+/// population; it does NOT override the on-disk read format. ReadValue and
+/// GetValue (ExifTool.pm:6308-6311, 3550-3559) supply the scalar semantics.
+/// Every unimplemented conversion/condition or nontrivial flag is refused.
+/// This does not enable the generated Exif::Main IFD walk.
+fn is_plain_undefined_exif_tag(tag: &crate::exiftool_tables::IfdTag) -> bool {
+    let mut omitted = tag.omitted;
+    if exif_raw_conv_trims_text(tag.id) {
+        omitted.raw_conv = false;
+    }
+    tag.writable == Some("string")
+        && tag.format.is_none()
+        && tag.flags == crate::exiftool_tables::IfdFlags::NONE
+        && !omitted.any()
+        && tag.raw_conv.is_none()
+        && tag.value_conv.is_none()
+        && matches!(tag.print_conv, crate::exiftool_tables::PrintConv::None)
+        && tag.subdir.is_none()
 }
 
 /// Applies ExifTool 13.59's `%longBin` ValueConv for the covered DNG tags.
@@ -1326,6 +1430,186 @@ mod tests {
     use super::*;
     use crate::parsers::tiff::ifd_parser::ByteOrder;
 
+    /// ExifTool 13.59 ReadValue uses Get8u/Get8s, independently of whether
+    /// the byte is printable or of the directory byte order.
+    #[test]
+    fn byte_fields_are_numeric_in_both_byte_orders() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            for (kind, bytes, expected) in [
+                (1, &[65][..], TagValue::Integer(65)),
+                (1, &[7][..], TagValue::Integer(7)),
+                (6, &[255][..], TagValue::Integer(-1)),
+                (6, &[127][..], TagValue::Integer(127)),
+                (1, &[0, 65, 255][..], TagValue::new_string("0 65 255")),
+                (6, &[128, 0, 127][..], TagValue::new_string("-128 0 127")),
+            ] {
+                assert_eq!(
+                    raw_bytes_to_tag_value(bytes, kind, bytes.len() as u32, 0x0108, order),
+                    expected,
+                    "field type {kind}, bytes {bytes:?}, order {order:?}"
+                );
+            }
+        }
+    }
+
+    /// Native Raw/ValueConv/PrintConv retain NULs in UNDEFINED scalar
+    /// strings. JSON removes them later. A string declaration's Writable
+    /// is not a Format override, so neither first-NUL truncation nor a
+    /// generic printable-byte heuristic is appropriate here.
+    #[test]
+    fn undefined_exif_text_keeps_rawconv_and_output_order() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            for (id, bytes, expected) in [
+                (0x010d, &b"Plan Scan \0"[..], "Plan Scan \0"),
+                (0x010d, &b"AB\0CD\0"[..], "AB\0CD\0"),
+                (0x010d, &b"true\0"[..], "true\0"),
+                (0x010d, &b"123\0"[..], "123\0"),
+                (0x010d, &b""[..], ""),
+                (0x010d, "café\0".as_bytes(), "café\0"),
+                (0x010d, &b"caf\xe9\0"[..], "caf?\0"),
+                (0x010f, &b"Canon \0"[..], "Canon \0"),
+                (0x010f, &b"Canon\0 "[..], "Canon\0"),
+                (0x010f, "Canon\u{a0}".as_bytes(), "Canon\u{a0}"),
+                (0x010f, "Canon\0\u{2003}".as_bytes(), "Canon\0\u{2003}"),
+                (0x010f, &b"Canon\xa0"[..], "Canon?"),
+                (0x010f, &b"Canon\0\x0b\x0c\t\n\r "[..], "Canon\0"),
+                (
+                    0x010f,
+                    &b"Canon\x0b\x0c\t\n\r \0"[..],
+                    "Canon\x0b\x0c\t\n\r \0",
+                ),
+            ] {
+                assert_eq!(
+                    raw_bytes_to_tag_value(bytes, 7, bytes.len() as u32, id, order),
+                    TagValue::new_string(expected),
+                    "tag {id:#06x}, bytes {bytes:?}, order {order:?}"
+                );
+            }
+            // Exif.pm:6682 changes an UNDEFINED count1 to int8u before
+            // reading, unless the tag has an explicit Format override.
+            for byte in [0, 32, 65] {
+                assert_eq!(
+                    raw_bytes_to_tag_value(&[byte], 7, 1, 0x010d, order),
+                    TagValue::Integer(i64::from(byte)),
+                );
+            }
+            // DNGPrivateData is explicitly Binary, and an unknown tag has
+            // no declaration proving scalar-string semantics.
+            for id in [0xc634, 0xffff] {
+                assert_eq!(
+                    raw_bytes_to_tag_value(b"Canon\0", 7, 6, id, order),
+                    TagValue::new_binary(b"Canon\0".to_vec()),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn undefined_scalar_declaration_scope_is_explicit() {
+        use crate::exiftool_tables::ifd_tables::IFD_EXIF_MAIN;
+        use crate::exiftool_tables::{Fmt, IfdFlags, Omitted};
+        let names: Vec<_> = IFD_EXIF_MAIN
+            .tags
+            .iter()
+            .filter(|tag| is_plain_undefined_exif_tag(tag))
+            .map(|tag| tag.name)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "ProcessingSoftware",
+                "DocumentName",
+                "Make",
+                "Model",
+                "PageName",
+                "Software",
+                "Artist",
+                "HostComputer",
+                "TargetPrinter",
+                "SEMInfo",
+                "SpectralSensitivity",
+                "OffsetTime",
+                "OffsetTimeOriginal",
+                "OffsetTimeDigitized",
+                "ImageHistory",
+                "RelatedSoundFile",
+                "ImageUniqueID",
+                "OwnerName",
+                "SerialNumber",
+                "LensMake",
+                "LensModel",
+                "LensSerialNumber",
+                "ImageTitle",
+                "Photographer",
+                "ImageEditor",
+                "CameraFirmware",
+                "RAWDevelopingSoftware",
+                "ImageEditingSoftware",
+                "MetadataEditingSoftware",
+                "GDALMetadata",
+                "GDALNoData",
+                "UniqueCameraModel",
+                "CameraSerialNumber",
+                "ReelName",
+                "CameraLabel",
+            ]
+        );
+        let plain = *IFD_EXIF_MAIN.tag(0x010d).unwrap();
+        for flags in [
+            IfdFlags {
+                binary: true,
+                ..IfdFlags::NONE
+            },
+            IfdFlags {
+                unknown: true,
+                ..IfdFlags::NONE
+            },
+            IfdFlags {
+                list: true,
+                ..IfdFlags::NONE
+            },
+        ] {
+            assert!(!is_plain_undefined_exif_tag(
+                &crate::exiftool_tables::IfdTag { flags, ..plain }
+            ));
+        }
+        // Even a known trim tag must still refuse a new unimplemented
+        // conversion or a format override on a future regenerated table.
+        let make = *IFD_EXIF_MAIN.tag(0x010f).unwrap();
+        for omitted in [
+            Omitted {
+                value_conv: true,
+                ..make.omitted
+            },
+            Omitted {
+                print_conv: true,
+                ..make.omitted
+            },
+            Omitted {
+                condition: true,
+                ..make.omitted
+            },
+            Omitted {
+                hook: true,
+                ..make.omitted
+            },
+            Omitted {
+                subdirectory: true,
+                ..make.omitted
+            },
+        ] {
+            assert!(!is_plain_undefined_exif_tag(
+                &crate::exiftool_tables::IfdTag { omitted, ..make }
+            ));
+        }
+        assert!(!is_plain_undefined_exif_tag(
+            &crate::exiftool_tables::IfdTag {
+                format: Some(Fmt::Str(0)),
+                ..plain
+            }
+        ));
+    }
+
     /// An APEX rational too large for `TagValue::Rational`'s i32 pair must
     /// still reach `apex_value_conv` as a number.
     ///
@@ -1716,6 +2000,27 @@ mod tests {
         bytes.resize(64, 0);
         let value = raw_bytes_to_tag_value(&bytes, 7, 64, 0xC6D2, ByteOrder::LittleEndian);
         assert_eq!(value.as_string(), Some("caf\u{e9} \u{1f600}"));
+    }
+
+    /// The Option-returning entry point is the guard and the converter in
+    /// one call: `None` exactly where the RawConv returns undef, the
+    /// converter's value everywhere else.
+    #[test]
+    fn exif_entry_to_tag_value_is_none_only_where_rawconv_is_undef() {
+        let le = ByteOrder::LittleEndian;
+        assert_eq!(exif_entry_to_tag_value(&[0u8; 64], 7, 64, 0xC6D2, le), None);
+        assert_eq!(exif_entry_to_tag_value(b"\0", 2, 1, 0xC6D3, le), None);
+
+        let mut padded = b"9999:99:99 00:00:00".to_vec();
+        padded.resize(128, 0);
+        let value = exif_entry_to_tag_value(&padded, 7, 128, 0xC6D3, le);
+        assert_eq!(
+            value.as_ref().and_then(TagValue::as_string),
+            Some("9999:99:99 00:00:00")
+        );
+
+        // Any other tag is converted, however empty its payload.
+        assert!(exif_entry_to_tag_value(&[0u8; 64], 7, 64, 0x010F, le).is_some());
     }
 
     #[test]

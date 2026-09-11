@@ -2032,12 +2032,20 @@ const MAX_THUMBNAIL_BYTES: u64 = 1 << 20;
 fn next_ifd_offset(
     reader: &dyn FileReader,
     ifd_offset: u64,
-    entry_count: usize,
+    _entry_count: usize,
     byte_order: ByteOrder,
 ) -> Option<u64> {
+    // Callers may supply the number of decoded entries, but parse_ifd skips
+    // bad formats and unreadable values. Only the physical count locates the
+    // pointer after the complete entry array. Keep the existing helper/API
+    // arguments while deriving this structural fact from the directory.
+    if ifd_offset.checked_add(2)? > reader.size() {
+        return None;
+    }
+    let entry_count = u64::from(ifd_entry_count(reader, ifd_offset, byte_order)?);
     let pointer_offset = ifd_offset
         .checked_add(2)?
-        .checked_add((entry_count as u64).checked_mul(12)?)?;
+        .checked_add(entry_count.checked_mul(12)?)?;
 
     if pointer_offset.checked_add(4)? > reader.size() {
         return None;
@@ -2390,7 +2398,7 @@ fn rebuild_thumbnail_tiff(
 ///
 /// * `reader` - Reader addressing the TIFF structure (TIFF-relative offsets)
 /// * `ifd0_offset` - Offset of IFD0 within the TIFF structure
-/// * `ifd0_entry_count` - Number of entries in IFD0, used to find its next-IFD pointer
+/// * `ifd0_entry_count` - Retained for callers; the physical count is read from IFD0
 /// * `byte_order` - Byte order for interpreting multi-byte values
 /// * `tiff_base` - Absolute file offset of the TIFF header, added to `ThumbnailOffset`
 /// * `metadata` - MetadataMap to populate
@@ -2400,6 +2408,30 @@ pub fn parse_ifd1_thumbnail(
     ifd0_entry_count: usize,
     byte_order: ByteOrder,
     tiff_base: u64,
+    metadata: &mut MetadataMap,
+) {
+    let mut collected = MetadataMap::new();
+    collect_ifd1_thumbnail(
+        reader,
+        ifd0_offset,
+        ifd0_entry_count,
+        byte_order,
+        tiff_base,
+        metadata,
+        &mut collected,
+    );
+    metadata.merge(collected);
+}
+
+// Separate incoming precedence context from newly emitted occurrences so a
+// complete directory can order the same thumbnail results among ordinary tags.
+fn collect_ifd1_thumbnail(
+    reader: &dyn FileReader,
+    ifd0_offset: u64,
+    ifd0_entry_count: usize,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    context: &MetadataMap,
     metadata: &mut MetadataMap,
 ) {
     let Some(ifd1_offset) = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
@@ -2465,7 +2497,7 @@ pub fn parse_ifd1_thumbnail(
                 // At family 0 the IFD0 copy has precedence over IFD1, as it
                 // does for Compression below. AppleQT-200.jpg has these only
                 // in IFD1, where ExifTool reports all three.
-                if metadata.get(&format!("IFD0:{base_name}")).is_none() {
+                if context.get(&format!("IFD0:{base_name}")).is_none() {
                     let tag_value = if *tag_id == TAG_STRIP_OFFSETS && *value_count == 1 {
                         // TIFF stores IFD1 strip locations relative to the
                         // APP1 TIFF header, while ExifTool reports the file
@@ -2525,8 +2557,8 @@ pub fn parse_ifd1_thumbnail(
     // with both copies at ExifTool priority 0 the first-extracted one is the
     // one ExifTool displays.
     if let Some(value) = compression
-        && metadata.get("IFD0:Compression").is_none()
-        && metadata.get("InteropIFD:Compression").is_none()
+        && context.get("IFD0:Compression").is_none()
+        && context.get("InteropIFD:Compression").is_none()
     {
         metadata.insert(
             lookup_tag_name(TAG_COMPRESSION, "IFD1"),
@@ -2568,6 +2600,119 @@ pub fn parse_ifd1_thumbnail(
         "IFD1:ThumbnailImage",
         read_or_placeholder(reader, offset, length),
     );
+}
+
+/// Parses all supported IFD1 entries, preserving their physical order.
+///
+/// The thumbnail collector owns specialized names, offsets, precedence and
+/// derived images. Ordinary entries use the shared Exif::Main converter. Both
+/// sets are replayed in directory order without flattening occurrence forms,
+/// priority, group or instance identity. This does not enable generated IFD
+/// table activation or add general subdirectory traversal.
+pub fn parse_ifd1_directory(
+    reader: &dyn FileReader,
+    ifd0_offset: u64,
+    ifd0_entry_count: usize,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    metadata: &mut MetadataMap,
+) {
+    let Some(ifd1_offset) = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
+    else {
+        return;
+    };
+    if visited_directory_offsets(reader, ifd0_offset, byte_order).contains(&ifd1_offset) {
+        return;
+    }
+    let Ok(entries) = parse_ifd(reader, ifd1_offset, byte_order) else {
+        return;
+    };
+
+    let mut collected = MetadataMap::new();
+    collect_ifd1_thumbnail(
+        reader,
+        ifd0_offset,
+        ifd0_entry_count,
+        byte_order,
+        tiff_base,
+        metadata,
+        &mut collected,
+    );
+
+    let mut positions =
+        std::collections::HashMap::<String, std::collections::VecDeque<usize>>::new();
+    for (index, (tag_id, field_type, value_count, raw_bytes)) in entries.iter().enumerate() {
+        if matches!(
+            *tag_id,
+            TAG_SUBFILE_TYPE
+                | TAG_COMPRESSION
+                | TAG_STRIP_OFFSETS
+                | TAG_ROWS_PER_STRIP
+                | TAG_STRIP_BYTE_COUNTS
+                | TAG_THUMBNAIL_OFFSET
+                | TAG_THUMBNAIL_LENGTH
+        ) {
+            continue;
+        }
+        let Some(value) = crate::core::tag_conversion::exif_entry_to_tag_value(
+            raw_bytes,
+            *field_type,
+            *value_count,
+            *tag_id,
+            byte_order,
+        ) else {
+            continue;
+        };
+        let key = lookup_tag_name(*tag_id, "IFD1");
+        collected.insert(key.clone(), value);
+        // A RawConv-omitted duplicate must not claim the surviving value's
+        // position. Record ordinary positions only after conversion succeeds.
+        positions.entry(key).or_default().push_back(index);
+    }
+
+    // ExifTool reports directory tags in physical entry order. The existing
+    // thumbnail collector deliberately emits its validated offset/length pair
+    // together, after reading the whole IFD; interleave those results with the
+    // ordinary tags here. Queues preserve interleaved duplicate names, and
+    // stable sorting leaves derived images after the directory's own entries.
+    for (index, (id, _, _, _)) in entries.iter().enumerate() {
+        let key = match *id {
+            TAG_THUMBNAIL_OFFSET => "IFD1:ThumbnailOffset".to_string(),
+            TAG_THUMBNAIL_LENGTH => "IFD1:ThumbnailLength".to_string(),
+            TAG_SUBFILE_TYPE
+            | TAG_COMPRESSION
+            | TAG_STRIP_OFFSETS
+            | TAG_ROWS_PER_STRIP
+            | TAG_STRIP_BYTE_COUNTS => lookup_tag_name(*id, "IFD1"),
+            _ => continue,
+        };
+        positions.entry(key).or_default().push_back(index);
+    }
+    let mut occurrences: Vec<_> = collected
+        .all_occurrences()
+        .map(|(key, occurrence)| {
+            let position = positions
+                .get_mut(&key)
+                .and_then(|queue| {
+                    // The thumbnail collector keeps the last value of these
+                    // aggregated fields; anchor that result at its own entry.
+                    if matches!(
+                        key.as_str(),
+                        "IFD1:Compression" | "IFD1:ThumbnailOffset" | "IFD1:ThumbnailLength"
+                    ) {
+                        queue.pop_back()
+                    } else {
+                        queue.pop_front()
+                    }
+                })
+                .unwrap_or(entries.len());
+            (position, key, occurrence)
+        })
+        .collect();
+    occurrences.sort_by_key(|(position, _, _)| *position);
+    for (_, key, occurrence) in occurrences {
+        metadata.insert_renamed_occurrence(key, occurrence);
+    }
 }
 
 /// Parses the Leica-preview IFD (IFD2) that follows IFD1 and emits
@@ -2900,18 +3045,16 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // Add manufacturer tags to metadata
     // Note: tag names already include manufacturer prefix (e.g., "Canon:", "Nikon:")
     for (tag_name, tag_value_str) in makernote_tags {
-        // Attach lens identity before arbitration; a losing occurrence must
-        // never overwrite the winner's numeric identity after insertion.
-        if matches!(tag_name.as_str(), "Canon:LensType" | "Canon:RFLensType")
+        // Canon's display and ValueConv belong to the same occurrence.
+        // Attach before arbitration so a losing copy cannot mutate the winner.
+        if tag_name.starts_with("Canon:")
             && let Some(raw) = value_forms.remove(&tag_name)
         {
-            metadata.insert_occurrence_with_raw(
+            crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag_with_value(
+                metadata,
                 tag_name,
                 TagValue::new_string(tag_value_str),
                 TagValue::new_string(raw),
-                crate::core::SHIM_DEFAULT_PRIORITY,
-                "",
-                crate::core::Instance::default(),
             );
             continue;
         }
@@ -3350,6 +3493,92 @@ mod ifd1_tests {
 
     const SHORT: u16 = 3;
     const LONG: u16 = 4;
+
+    #[test]
+    fn full_ifd1_dropped_duplicate_does_not_move_surviving_occurrence() {
+        // Native 13.59 -a -G1 -s emits Artist before PanasonicTitle: the
+        // first title's RawConv returns undef, so it has no output position.
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes()); // Empty IFD0.
+        data.extend_from_slice(&14u32.to_le_bytes()); // Next directory.
+        data.extend_from_slice(&3u16.to_le_bytes());
+        for (id, field_type, bytes) in [
+            (0xc6d2u16, 7u16, [0, 0, 0, 0]),
+            (0x013b, 2, *b"Art\0"),
+            (0xc6d2, 7, *b"Hi\0\0"),
+        ] {
+            data.extend_from_slice(&id.to_le_bytes());
+            data.extend_from_slice(&field_type.to_le_bytes());
+            data.extend_from_slice(&4u32.to_le_bytes());
+            data.extend_from_slice(&bytes);
+        }
+        data.extend_from_slice(&0u32.to_le_bytes());
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_ifd1_directory(&reader, 8, 0, ByteOrder::LittleEndian, 0, &mut metadata);
+        let observed: Vec<_> = metadata
+            .all_occurrences()
+            .map(|(key, occurrence)| (key, occurrence.raw.clone()))
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                ("IFD1:Artist".into(), TagValue::new_string("Art")),
+                ("IFD1:PanasonicTitle".into(), TagValue::new_string("Hi")),
+            ]
+        );
+    }
+
+    #[test]
+    fn full_ifd1_interleaves_occurrences_and_places_derived_image_last() {
+        // Ordinary duplicates stay on either side of the specialized tags.
+        // The existing thumbnail collector retains only the last Compression
+        // value, which belongs at that last field's physical position.
+        let entries = [
+            (TAG_COMPRESSION, SHORT, 6),
+            (0x0128, SHORT, 2),
+            (TAG_SUBFILE_TYPE, LONG, 1),
+            (TAG_COMPRESSION, SHORT, 1),
+            (0x0128, SHORT, 3),
+            (TAG_THUMBNAIL_OFFSET, LONG, 116),
+            (TAG_THUMBNAIL_LENGTH, LONG, 4),
+        ];
+        let (data, _) = build_tiff(&entries, &[0xff, 0xd8, 0xff, 0xd9]);
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_ifd1_directory(&reader, 8, 0, ByteOrder::LittleEndian, 0, &mut metadata);
+        let observed: Vec<_> = metadata
+            .all_occurrences()
+            .map(|(key, occurrence)| (key, occurrence.raw.clone()))
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                ("IFD1:ResolutionUnit".into(), TagValue::Integer(2)),
+                ("IFD1:SubfileType".into(), TagValue::Integer(1)),
+                ("IFD1:Compression".into(), TagValue::Integer(1)),
+                ("IFD1:ResolutionUnit".into(), TagValue::Integer(3)),
+                ("IFD1:ThumbnailOffset".into(), TagValue::Integer(116)),
+                ("IFD1:ThumbnailLength".into(), TagValue::Integer(4)),
+                (
+                    "IFD1:ThumbnailImage".into(),
+                    TagValue::new_string("(Binary data 4 bytes, use -b option to extract)")
+                ),
+            ]
+        );
+        // Precedence still consults the incoming IFD0/Interop context, and
+        // collecting IFD1 does not rewrite that context.
+        for parent in ["IFD0:Compression", "InteropIFD:Compression"] {
+            let mut metadata = MetadataMap::new();
+            metadata.insert(parent, TagValue::Integer(7));
+            parse_ifd1_directory(&reader, 8, 0, ByteOrder::LittleEndian, 0, &mut metadata);
+            assert_eq!(metadata.get_integer(parent), Some(7));
+            assert!(metadata.get("IFD1:Compression").is_none());
+        }
+    }
 
     #[test]
     fn apple_qt_200_ifd1_strip_metadata_matches_pinned_exiftool() {

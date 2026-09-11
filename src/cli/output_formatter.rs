@@ -83,6 +83,18 @@ pub trait OutputFormatter {
     ///
     /// A formatted string representation of the metadata
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String;
+
+    /// Render prepared CLI values without reapplying enum PrintConv in raw mode.
+    /// Existing external implementors retain their legacy formatting default.
+    fn format_with_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        no_print_conv: bool,
+    ) -> String {
+        let _ = no_print_conv;
+        self.format(metadata, filter_tags)
+    }
 }
 
 fn tag_matches_filter(tag_name: &str, filter: &[String]) -> bool {
@@ -121,6 +133,15 @@ pub struct HumanReadableFormatter;
 
 impl OutputFormatter for HumanReadableFormatter {
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
+        self.format_with_mode(metadata, filter_tags, false)
+    }
+
+    fn format_with_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        no_print_conv: bool,
+    ) -> String {
         if metadata.is_empty() {
             return String::new();
         }
@@ -190,7 +211,7 @@ impl OutputFormatter for HumanReadableFormatter {
                 continue;
             }
 
-            let formatted_value = format_tag_value(tag_name, tag_value);
+            let formatted_value = format_tag_value_with_mode(tag_name, tag_value, no_print_conv);
             output.push_str(&format!("{}: {}\n", tag_name, formatted_value));
         }
 
@@ -229,6 +250,7 @@ impl JsonFormatter {
         &self,
         metadata: &MetadataMap,
         filter_tags: Option<&[String]>,
+        no_print_conv: bool,
     ) -> serde_json::Map<String, serde_json::Value> {
         // If filter is specified, create a new filtered metadata map
         let metadata_to_filter = if let Some(filter) = filter_tags {
@@ -248,7 +270,11 @@ impl JsonFormatter {
         let mut json_map = serde_json::Map::new();
 
         for (tag_name, tag_value) in metadata_to_filter.iter() {
-            let json_value = tag_value_to_json(Some(tag_name.as_str()), tag_value);
+            let json_value = if no_print_conv {
+                raw_tag_value_to_json(tag_value)
+            } else {
+                tag_value_to_json(Some(tag_name.as_str()), tag_value)
+            };
             json_map.insert(tag_name.clone(), json_value);
         }
 
@@ -272,7 +298,20 @@ impl JsonFormatter {
         filter_tags: Option<&[String]>,
         status: Option<crate::core::read_report::ParseStatus>,
     ) -> String {
-        let mut json_map = self.build_json_map(metadata, filter_tags);
+        self.format_with_status_and_mode(metadata, filter_tags, status, false)
+    }
+
+    /// Formats values already selected by the CLI, preserving numeric mode.
+    /// In --no-print-conv mode the JSON writer must not apply friendly enums
+    /// again. The legacy public format/format_with_status defaults stay intact.
+    pub fn format_with_status_and_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        status: Option<crate::core::read_report::ParseStatus>,
+        no_print_conv: bool,
+    ) -> String {
+        let mut json_map = self.build_json_map(metadata, filter_tags, no_print_conv);
 
         if let Some(status) = status
             && status != crate::core::read_report::ParseStatus::Parsed
@@ -291,8 +330,17 @@ impl JsonFormatter {
 }
 
 impl OutputFormatter for JsonFormatter {
+    fn format_with_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        no_print_conv: bool,
+    ) -> String {
+        self.format_with_status_and_mode(metadata, filter_tags, None, no_print_conv)
+    }
+
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
-        let json_map = self.build_json_map(metadata, filter_tags);
+        let json_map = self.build_json_map(metadata, filter_tags, false);
 
         // Serialize to pretty JSON wrapped in an array for Perl ExifTool compatibility
         // Perl ExifTool outputs: [{...}] (array with one object per file)
@@ -358,7 +406,30 @@ fn json_string_value(s: &str) -> serde_json::Value {
     } else if let Some(n) = exiftool_json_number(s) {
         n
     } else {
-        serde_json::Value::String(s.to_string())
+        // EscapeJSON (exiftool:3819) deletes NULs only after its typing
+        // checks. "12\0" must stay a quoted "12", not become a number.
+        serde_json::Value::String(s.replace('\0', ""))
+    }
+}
+
+/// Raw output stringifies actual numeric values as Perl NVs at the writer.
+/// Numeric-looking strings keep their original bytes and JSON typing. This is
+/// separate from tag_name=None, which also occurs in normal nested structures.
+fn raw_tag_value_to_json(value: &TagValue) -> serde_json::Value {
+    match value {
+        TagValue::Float(number) => json_string_value(
+            &crate::core::formatters::numeric_precision::perl_number(*number),
+        ),
+        TagValue::Array(values) => {
+            serde_json::Value::Array(values.iter().map(raw_tag_value_to_json).collect())
+        }
+        TagValue::Struct(values) => serde_json::Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), raw_tag_value_to_json(value)))
+                .collect(),
+        ),
+        _ => tag_value_to_json(None, value),
     }
 }
 
@@ -370,7 +441,7 @@ fn json_string_value(s: &str) -> serde_json::Value {
 ///   number, unquoted, matching `exiftool -j`)
 /// - Integer → JSON number
 /// - Float → JSON number
-/// - Rational → JSON string "numerator/denominator"
+/// - Rational → JSON number from the native rounded quotient, or inf/undef string
 /// - Binary → JSON string "(Binary data N bytes, use -b option to extract)"
 /// - DateTime → JSON string (EXIF format: "YYYY:MM:DD HH:MM:SS")
 /// - Struct → JSON object (recursive)
@@ -398,29 +469,16 @@ fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Va
             numerator,
             denominator,
         } => {
-            // Normalize rational display to match Perl ExifTool
-            if *denominator == 0 {
-                // Invalid rational, output as string
-                serde_json::Value::String(format!("{}/0", numerator))
-            } else if *denominator == 1 {
-                // Output as integer string (e.g., "100/1" → "100")
-                serde_json::Value::String(format!("{}", numerator))
-            } else if *numerator == 0 {
-                // Zero rational
-                serde_json::Value::String("0".to_string())
+            // GetRational64u/GetRational64s (ExifTool.pm:6107-6119) return
+            // the quotient rounded to 10 significant digits, or inf/undef
+            // for a zero denominator. EscapeJSON then decides number vs.
+            // quoted sentinel exactly as for a rendered String value.
+            let rendered = if *denominator == 0 {
+                if *numerator == 0 { "undef" } else { "inf" }.to_string()
             } else {
-                // Check if this should be output as a decimal number (like Perl ExifTool does for FNumber)
-                // For typical aperture/focal length values, output as decimal
-                let decimal = *numerator as f64 / *denominator as f64;
-                if decimal < 1000.0 && decimal.fract() != 0.0 {
-                    // This looks like an aperture or similar value, output as JSON Number
-                    if let Some(num) = serde_json::Number::from_f64(decimal) {
-                        return serde_json::Value::Number(num);
-                    }
-                }
-                // Otherwise keep as fraction string
-                serde_json::Value::String(format!("{}/{}", numerator, denominator))
-            }
+                exiftool_rational_number(f64::from(*numerator) / f64::from(*denominator))
+            };
+            json_string_value(&rendered)
         }
         TagValue::Binary(bytes) => serde_json::Value::String(binary_placeholder(bytes.len())),
         TagValue::DateTime(dt) => {
@@ -473,6 +531,15 @@ pub struct CsvFormatter;
 
 impl OutputFormatter for CsvFormatter {
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
+        self.format_with_mode(metadata, filter_tags, false)
+    }
+
+    fn format_with_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        no_print_conv: bool,
+    ) -> String {
         if metadata.is_empty() {
             return String::new();
         }
@@ -509,7 +576,7 @@ impl OutputFormatter for CsvFormatter {
                 continue;
             }
 
-            let formatted_value = format_tag_value(tag_name, tag_value);
+            let formatted_value = format_tag_value_with_mode(tag_name, tag_value, no_print_conv);
             if wtr.write_record([tag_name, &formatted_value]).is_err() {
                 // Skip this record if write fails, but continue
                 continue;
@@ -557,6 +624,15 @@ pub struct ShortFormatter;
 
 impl OutputFormatter for ShortFormatter {
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
+        self.format_with_mode(metadata, filter_tags, false)
+    }
+
+    fn format_with_mode(
+        &self,
+        metadata: &MetadataMap,
+        filter_tags: Option<&[String]>,
+        no_print_conv: bool,
+    ) -> String {
         if metadata.is_empty() {
             return String::new();
         }
@@ -599,7 +675,8 @@ impl OutputFormatter for ShortFormatter {
 
             // Extract short name (after last colon)
             let short_name = tag_name.rsplit(':').next().unwrap_or(tag_name);
-            let formatted_value = format_tag_value_short(tag_name, tag_value);
+            let formatted_value =
+                format_tag_value_short_with_mode(tag_name, tag_value, no_print_conv);
             output.push_str(&format!("{}: {}\n", short_name, formatted_value));
         }
 
@@ -625,8 +702,17 @@ impl OutputFormatter for ShortFormatter {
 /// MakerNote/GPS text is full of 3-byte U+FFFD replacement characters, and 14
 /// files in the sample corpus (Samsung and Canon JPEGs, via
 /// `GPS:GPSProcessingMethod`) killed the whole `oxidex -e -s` invocation on it.
-pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
-    if let Some(label) = friendly_enum_name(tag_name, value) {
+#[cfg(test)]
+fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String {
+    format_tag_value_short_with_mode(tag_name, value, false)
+}
+
+pub(crate) fn format_tag_value_short_with_mode(
+    tag_name: &str,
+    value: &TagValue,
+    no_print_conv: bool,
+) -> String {
+    if !no_print_conv && let Some(label) = friendly_enum_name(tag_name, value) {
         return label;
     }
 
@@ -688,7 +774,7 @@ pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String
         TagValue::Array(values) => join_list(
             values
                 .iter()
-                .map(|v| format_tag_value_short(tag_name, v))
+                .map(|v| format_tag_value_short_with_mode(tag_name, v, no_print_conv))
                 .collect(),
         ),
     }
@@ -717,9 +803,8 @@ pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String
 /// trim first would silently delete it.
 ///
 /// This is display only, and deliberately not applied to `-j`: ExifTool's JSON
-/// writer escapes control characters as `\uXXXX` (`exiftool`:3821) rather than
-/// replacing them, and oxidex's JSON path emits the real character, which
-/// decodes to the same string.
+/// writer removes NULs after typing, and escapes other control characters
+/// as `\uXXXX` (`exiftool`:3819-3821) rather than replacing them.
 fn printable_text_value(value: &str) -> String {
     let translated: String = value
         .chars()
@@ -757,8 +842,17 @@ fn join_list(items: Vec<String>) -> String {
 ///
 /// Converts each TagValue variant into a clean string representation
 /// without the enum structure (e.g., "Canon" instead of "String(\"Canon\")").
-pub(crate) fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
-    if let Some(label) = friendly_enum_name(tag_name, value) {
+#[cfg(test)]
+fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
+    format_tag_value_with_mode(tag_name, value, false)
+}
+
+pub(crate) fn format_tag_value_with_mode(
+    tag_name: &str,
+    value: &TagValue,
+    no_print_conv: bool,
+) -> String {
+    if !no_print_conv && let Some(label) = friendly_enum_name(tag_name, value) {
         return label;
     }
 
@@ -770,6 +864,9 @@ pub(crate) fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
         // not just `-s`.
         TagValue::String(s) => printable_text_value(s),
         TagValue::Integer(i) => i.to_string(),
+        TagValue::Float(f) if no_print_conv => {
+            crate::core::formatters::numeric_precision::perl_number(*f)
+        }
         TagValue::Float(f) => f.to_string(),
         TagValue::Rational {
             numerator,
@@ -795,7 +892,7 @@ pub(crate) fn format_tag_value(tag_name: &str, value: &TagValue) -> String {
         TagValue::Array(values) => join_list(
             values
                 .iter()
-                .map(|v| format_tag_value(tag_name, v))
+                .map(|v| format_tag_value_with_mode(tag_name, v, no_print_conv))
                 .collect(),
         ),
     }
@@ -976,6 +1073,118 @@ fn lookup_tiff_enum_tag_id(tag_name: &str) -> Option<u16> {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+
+    /// These signed/unsigned 64-bit rational sentinels were checked as real
+    /// TIFF XResolution fields against pinned 13.59, in both -j and -j -n.
+    #[test]
+    fn rational_json_uses_native_readvalue_number_typing() {
+        for (numerator, denominator, expected_json) in [
+            (20, 1, "20"),
+            (72, 1, "72"),
+            (0, 1, "0"),
+            (0, 2, "0"),
+            (0, 0, "\"undef\""),
+            (1, 0, "\"inf\""),
+            (-1, 0, "\"inf\""),
+            (1, 3, "0.3333333333"),
+            (2, 4, "0.5"),
+            (6000000, 921, "6514.65798"),
+            (2000, 2, "1000"),
+            (2147483647, 1, "2147483647"),
+            (-2147483648, 1, "-2147483648"),
+            (-2147483648, -1, "2147483648"),
+            (1, 2147483647, "4.656612875e-10"),
+            (2147483647, 3, "715827882.3"),
+            (0, -1, "0"),
+            (1, -3, "-0.3333333333"),
+        ] {
+            let expected: serde_json::Value = serde_json::from_str(expected_json).unwrap();
+            assert_eq!(
+                tag_value_to_json(None, &TagValue::new_rational(numerator, denominator)),
+                expected,
+                "{numerator}/{denominator}"
+            );
+        }
+    }
+
+    #[test]
+    fn rational_json_keeps_raw_and_printconv_routes_distinct() {
+        let raw = TagValue::new_rational(20, 1);
+        for key in [
+            "ExifIFD:FocalLength",
+            "EXIF:ExifIFD:FocalLength",
+            "IFD1:XResolution",
+        ] {
+            assert_eq!(tag_value_to_json(Some(key), &raw), serde_json::json!(20));
+        }
+        // Normal output already applies tag-specific PrintConv before JSON.
+        let printed =
+            crate::core::exiftool_compat::format_tag_value_rules("ExifIFD:FocalLength", &raw);
+        assert_eq!(
+            tag_value_to_json(Some("ExifIFD:FocalLength"), &printed),
+            serde_json::json!("20.0 mm")
+        );
+        let fnumber = crate::core::exiftool_compat::format_tag_value_rules(
+            "ExifIFD:FNumber",
+            &TagValue::new_rational(28, 10),
+        );
+        assert_eq!(
+            tag_value_to_json(Some("ExifIFD:FNumber"), &fnumber),
+            serde_json::json!(2.8)
+        );
+        assert_eq!(
+            tag_value_to_json(Some("IFD0:Orientation"), &TagValue::new_integer(6)),
+            serde_json::json!("Rotate 90 CW")
+        );
+        let values = TagValue::Array(vec![
+            TagValue::new_rational(20, 1),
+            TagValue::new_rational(1, 3),
+            TagValue::new_rational(0, 0),
+        ]);
+        assert_eq!(
+            tag_value_to_json(None, &values),
+            serde_json::json!([20, 0.3333333333, "undef"])
+        );
+    }
+
+    #[test]
+    fn json_typing_precedes_nul_removal() {
+        for (input, expected) in [
+            ("12", serde_json::json!(12)),
+            ("true", serde_json::json!(true)),
+            ("false", serde_json::json!(false)),
+            ("12\0", serde_json::json!("12")),
+            ("true\0", serde_json::json!("true")),
+            ("false\0", serde_json::json!("false")),
+            ("1\02", serde_json::json!("12")),
+            ("AB\0CD\0", serde_json::json!("ABCD")),
+            ("Canon\0 ", serde_json::json!("Canon ")),
+            ("A\x01B\0", serde_json::json!("A\x01B")),
+            ("\0\0", serde_json::json!("")),
+            ("01", serde_json::json!("01")),
+        ] {
+            let value = TagValue::new_string(input);
+            assert_eq!(
+                tag_value_to_json(Some("IFD0:DocumentName"), &value),
+                expected
+            );
+        }
+        // Ordinary EXIF typing/PrintConv paths still use their existing rules.
+        assert_eq!(
+            tag_value_to_json(Some("IFD0:Orientation"), &TagValue::new_integer(6)),
+            serde_json::json!("Rotate 90 CW")
+        );
+        // Plain output uses Printable, not EscapeJSON's PHP branch:
+        // delete every NUL, translate controls, then trim trailing whitespace.
+        assert_eq!(
+            format_tag_value("IFD0:DocumentName", &TagValue::new_string("A\0B\x01 \0")),
+            "AB."
+        );
+        assert_eq!(
+            format_tag_value_short("IFD0:DocumentName", &TagValue::new_string("A\0B\x01 \0")),
+            "AB."
+        );
+    }
 
     #[test]
     fn test_human_readable_formatter_empty_metadata() {
@@ -1718,5 +1927,52 @@ mod tests {
         let output = ShortFormatter.format(&metadata, None);
 
         assert_eq!(output, "GPSAltitudeRef: Below Sea Level\n");
+    }
+}
+
+#[cfg(test)]
+mod raw_float_projection_tests {
+    use super::*;
+
+    #[test]
+    fn raw_float_stringification_keeps_numeric_origin_and_normal_nested_behavior() {
+        let mut map = MetadataMap::new();
+        map.insert("Test:Numeric", TagValue::Float(4.966666666666667));
+        map.insert("Test:Text", TagValue::new_string("0.0043535193409477545"));
+        map.insert("Test:PositiveInf", TagValue::Float(f64::INFINITY));
+        map.insert("Test:NegativeInf", TagValue::Float(f64::NEG_INFINITY));
+        map.insert("Test:NaN", TagValue::Float(f64::NAN));
+        let out: serde_json::Value =
+            serde_json::from_str(&JsonFormatter.format_with_mode(&map, None, true)).unwrap();
+        assert_eq!(out[0]["Test:Numeric"], serde_json::json!(4.96666666666667));
+        assert_eq!(
+            out[0]["Test:Text"],
+            serde_json::json!("0.0043535193409477545")
+        );
+        assert_eq!(out[0]["Test:PositiveInf"], serde_json::json!("Inf"));
+        assert_eq!(out[0]["Test:NegativeInf"], serde_json::json!("-Inf"));
+        assert_eq!(out[0]["Test:NaN"], serde_json::json!("NaN"));
+        assert_eq!(map.get_float("Test:Numeric"), Some(4.966666666666667));
+        for formatter in [
+            &HumanReadableFormatter as &dyn OutputFormatter,
+            &ShortFormatter,
+            &CsvFormatter,
+        ] {
+            let raw = formatter.format_with_mode(&map, None, true);
+            assert!(raw.contains("4.96666666666667"));
+            assert!(raw.contains("0.0043535193409477545"));
+        }
+        let nested = TagValue::new_struct(std::collections::HashMap::from([(
+            "value".to_string(),
+            TagValue::Float(4.966666666666667),
+        )]));
+        assert_eq!(
+            tag_value_to_json(None, &nested)["value"],
+            serde_json::json!(4.966666666666667)
+        );
+        assert_eq!(
+            raw_tag_value_to_json(&nested)["value"],
+            serde_json::json!(4.96666666666667)
+        );
     }
 }

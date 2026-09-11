@@ -1,5 +1,8 @@
 # CLAUDE.md Redundancy Removal Design
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
+
 **Date:** 2025-12-03
 **Phase:** 1 - Remove redundancy and reorganize content
 **Goal:** Eliminate duplication between root and oxidex CLAUDE.md files using inheritance model
@@ -7,8 +10,8 @@
 ## Problem
 
 Two CLAUDE.md files with redundant content:
-- Root: `/Users/allen/Documents/git/CLAUDE.md` (general configuration)
-- Project: `/Users/allen/Documents/git/oxidex/CLAUDE.md` (project-specific)
+- Root: `../CLAUDE.md` (general configuration)
+- Project: `CLAUDE.md` (project-specific)
 
 **Redundancies identified:**
 - Cargo commands in both files

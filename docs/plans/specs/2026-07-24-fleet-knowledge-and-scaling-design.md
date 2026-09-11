@@ -1,5 +1,8 @@
 # Fleet Knowledge & Scaling: Squads, Job Tiers, Evidence-Bearing Merges
 
+> **Path notation:** `worktrees/` paths are relative to the historical OxiDex state directory, not this repository; no worktree is relocated or implied to remain present.
+
+
 **Date:** 2026-07-24
 **Supersedes/extends:** `2026-07-23-throughput-tags-per-hour-design.md` (F1–F6 all landed; this builds on them).
 **Files under change:** `scripts/model_fix_loop.py`, `scripts/parallel_model_fix_loop.py`,
@@ -293,7 +296,7 @@ multi-slot squads (382/2 = 191 vs sony-minolta's 259), so it yields the slot.
 **100**: no table — deferred to the second host (§5 sketch, §8).
 
 **Worker identity at >1 worker per squad** (this was unspecified in the critiqued
-design and is now explicit): worktree `~/.oxidex/worktrees/parallel-fix/
+design and is now explicit): worktree `worktrees/parallel-fix/
 model-fix-<squad>-<n>`, branch `model-fix-parallel-<squad>-<n>`, `--worker-id <squad>-<n>`.
 The worker id flows into: the claim record, `/tmp/tagcmp-*` suffix,
 `tag-fix-prompts/process-<id>-prompt.log`, and **all `model-fix-diffs/` /
@@ -398,7 +401,7 @@ critiqued single-sample version, it is built to catch rejection class (a):
 
 ### M2 — Squad staging branches + merger daemon (`scripts/squad_merge_loop.py`)
 
-One staging worktree per squad (`~/.oxidex/worktrees/squad-staging/<squad>`, branch
+One staging worktree per squad (`worktrees/squad-staging/<squad>`, branch
 `squad/<squad>` **cut from origin/main**). One merger process per squad; lock file
 carries `{pid, script_git_sha, heartbeat}` with stale/mismatch takeover (same rule
 as the distiller), and `stop_parallel_fix.py` learns to reap merger pgids.

@@ -1,5 +1,8 @@
 # Fixer Harness Hardening: Perl→Rust Guardrails, Protocol Discipline, and Tiered Model Routing
 
+> **Path notation:** `worktrees/` paths are relative to the historical OxiDex state directory, not this repository; no worktree is relocated or implied to remain present. Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
+
 **Date:** 2026-07-23
 **Branch:** `feat/model-fix-loop-context` (PR #41)
 **File under change:** `scripts/model_fix_loop.py` (+ `config.toml`, `config.example.toml`, tests)
@@ -292,9 +295,9 @@ established hermetic style:
 ## Rollout
 
 1. Land on `feat/model-fix-loop-context`, push to PR #41.
-2. Merge into local `main` (`/Users/allen/git/oxidex`).
+2. Merge into local `main` (`.`).
 3. Update master `config.toml` + `config.example.toml` and copy both
    `model_fix_loop.py` and `config.toml` into all 20 live worker worktrees
-   (`~/.oxidex/worktrees/parallel-fix/model-fix-*`).
+   (`worktrees/parallel-fix/model-fix-*`).
 4. Restart of the dispatcher picks everything up (config and code load at
    process start).

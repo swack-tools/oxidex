@@ -168,7 +168,7 @@ the human a `fleet status` that says *why* nothing is starting.
   `FLEET_HOST` explicitly (per host, hand-substituted like the other launchd literals), and a host
   absent from `refs/fleet/desired` now refuses with `unknown-host (<name> not in
   refs/fleet/desired …; set FLEET_HOST …)` instead of `disabled`.
-- `rg -n "work2.oxidex.net|/home/allen/git/oxidex.git|/tmp/oxidex-exiftool-cache" tools/fleet`
+- `rg -n "work2.oxidex.net|git/oxidex[.]git|/tmp/oxidex-exiftool-cache" tools/fleet`
   (instrument: that ripgrep). **L3, 2026-08-28:** this line used to end `tools/fleet units`, two
   paths, and `units` is not one — there is no top-level `units/` directory, it is
   `tools/fleet/units/`. Ripgrep printed `units: No such file or directory (os error 2)` and exited

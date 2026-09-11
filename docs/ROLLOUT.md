@@ -1,5 +1,8 @@
 # Fleet Wave 3 — Go-Live Runbook
 
+> **Path notation:** Hub repository paths below are relative to the historical `fleet-checkout/` directory; SSH paths without a leading slash remain relative to the remote login home. This changes documentation notation, not the recorded topology.
+
+
 > **HISTORICAL (2026-08-22):** the ryzen — `ubuntuwork`, the work2 pod, and the
 > `work2.oxidex.net:2244` hub this runbook installs against — was removed from the fleet by
 > operator decision, and the topology moved to the GitHub spine (`docs/AGENT-SERVER-SPEC.md`).
@@ -26,7 +29,7 @@ to the next step with a wobbly previous one.
   `~/oxidex-cache` (symlink + persistent home copy). **On the Macs the
   home copy is mandatory** — macOS purges `/tmp` periodically; it deleted
   the m5's cache mid-day on 2026-08-15. `rsync -a -e "ssh -p 2244"
-  allen@work2.oxidex.net:/home/allen/oxidex-cache/ ~/oxidex-cache/` then
+  allen@work2.oxidex.net:oxidex-cache/ ~/oxidex-cache/` then
   `ln -sfn ~/oxidex-cache /tmp/oxidex-exiftool-cache`.
 - `python3 tools/fleet/doctor.py <host>` green (or explained) per host.
 
@@ -35,8 +38,8 @@ to the next step with a wobbly previous one.
 ```
 ssh -p 2244 allen@work2.oxidex.net
 cd ~/fleet-checkout && git pull
-tools/fleet/rollout/install_hook.sh ~/git/oxidex.git            # review dry-run
-tools/fleet/rollout/install_hook.sh ~/git/oxidex.git --execute
+tools/fleet/rollout/install_hook.sh ../git/oxidex.git            # review dry-run
+tools/fleet/rollout/install_hook.sh ../git/oxidex.git --execute
 ```
 
 The installer preserves the existing fastcheck hook verbatim as
@@ -45,7 +48,7 @@ both halves). Its `~/.train-queue` append becomes dead weight after step
 4 — harmless, and keeping it preserves byte-exact rollback.
 
 **Verify:** push any throwaway staging branch; then
-`git --git-dir ~/git/oxidex.git for-each-ref refs/fleet/signals/` must
+`git --git-dir ../git/oxidex.git for-each-ref refs/fleet/signals/` must
 show `tip` after the NEXT tip advance (not after a staging push — the
 fleet half only bumps on `refactor/tag-machinery`).
 
@@ -88,7 +91,7 @@ EMPTY reason — with no `m5` row at all, which reads as "an operator took this
 host down" and was the opposite of the truth. The committed `fleetd.service`,
 `com.oxidex.fleetd.plist` and `cron-backstop.txt` now carry `FLEET_HOST`; the
 plist's and the cron line's values are hand-substituted per host, exactly like
-the `/Users/allen/...` paths beside them. A wrong or missing name now refuses
+the machine-specific checkout paths beside them. A wrong or missing name now refuses
 with `unknown-host` instead of `disabled`.
 
 **Both units also set `PATH` with `~/.cargo/bin` first.** `fleetd.service` did

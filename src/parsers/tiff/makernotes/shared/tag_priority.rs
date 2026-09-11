@@ -163,6 +163,32 @@ pub(crate) fn record_makernote_tag(
     metadata.insert(tag_name, tag_value);
 }
 
+/// Records display and ValueConv from one parsed occurrence before arbitration.
+/// Mirrors record_makernote_tag's priority/group choices; a losing value must
+/// not be attached later to whichever occurrence happened to win the key.
+pub(crate) fn record_makernote_tag_with_value(
+    metadata: &mut crate::core::MetadataMap,
+    tag_name: String,
+    display: crate::core::TagValue,
+    value: crate::core::TagValue,
+) {
+    let (key, priority, group1) = if let Some(base) = strip_duplicate_marker(&tag_name) {
+        (base, 0, "")
+    } else if let Some(group1) = priority_zero_duplicate_group1(&tag_name) {
+        (tag_name.as_str(), 0, group1)
+    } else {
+        (tag_name.as_str(), crate::core::SHIM_DEFAULT_PRIORITY, "")
+    };
+    metadata.insert_occurrence_with_raw(
+        key,
+        display,
+        value,
+        priority,
+        group1,
+        crate::core::Instance::default(),
+    );
+}
+
 /// MakerNote tags ExifTool itself declares `Priority => 0` for, mapped to
 /// the family-1 group their manufacturer prefix implies -- a small, explicit
 /// allowlist rather than a manufacturer-wide rule, because MakerNote tags
@@ -653,5 +679,53 @@ mod tests {
         // `ExifTool.jpg` (see `cli::tag_resolution`'s own pinned test).
         assert_eq!(priority_zero_duplicate_group1("CIFF:Make"), None);
         assert_eq!(priority_zero_duplicate_group1("Canon:LensModel"), None);
+    }
+    #[test]
+    fn value_forms_stay_with_losing_and_winning_makernote_occurrences() {
+        use crate::core::{Instance, MetadataMap, TagValue};
+        let mut metadata = MetadataMap::new();
+        metadata.insert_occurrence_with_raw(
+            "Canon:MacroMode",
+            TagValue::new_string("winner"),
+            TagValue::new_string("8"),
+            2,
+            "Canon",
+            Instance::default(),
+        );
+        record_makernote_tag_with_value(
+            &mut metadata,
+            "Canon:MacroMode".into(),
+            TagValue::new_string("loser"),
+            TagValue::new_string("99"),
+        );
+        assert_eq!(metadata.get_string("Canon:MacroMode"), Some("winner"));
+        assert_eq!(metadata.value_form("Canon:MacroMode"), Some("8"));
+        let pairs: Vec<_> = metadata
+            .all_occurrences()
+            .map(|(_, o)| {
+                (
+                    o.raw.as_string().unwrap(),
+                    o.value.as_ref().unwrap().as_string().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(pairs, [("winner", "8"), ("loser", "99")]);
+        record_makernote_tag_with_value(
+            &mut metadata,
+            "Canon:ExposureTime".into(),
+            TagValue::new_string("1/125"),
+            TagValue::new_string("0.008"),
+        );
+        let occurrence = metadata
+            .winner_occurrences()
+            .find(|(key, _)| key.as_str() == "Canon:ExposureTime")
+            .unwrap()
+            .1;
+        assert_eq!(occurrence.priority, 0);
+        assert_eq!(occurrence.group1.as_ref(), "Canon");
+        assert_eq!(
+            occurrence.value.as_ref().unwrap().as_string(),
+            Some("0.008")
+        );
     }
 }

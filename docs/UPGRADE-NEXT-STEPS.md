@@ -16,7 +16,7 @@ populations. They are implementation history, not work to restart.
 
 | Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Reconcile RawConv, then IFD1 prerequisite/regeneration | Separate owners; awaiting fresh validation | Preserve current raw-ID attachment and verified CODE-ref gates; IFD1 eligibility remains separate from subsequent activation; IFD4/embedded follow independently |
+| 1 | Reconcile IFD1 prerequisite and regenerate | Next after the shared RawConv runtime consolidation recorded below | Preserve the verified CODE-ref key/domain gate; regenerate with a fresh pinned dump and its matching ledger; demonstrate eligibility separately from activation |
 | 2 | Correct classifier/producer accounting exposed by the release rehearsal | Queued | Existing Garmin runtime is recognized, standing debt is separated, repeated field changes are joined by cause, and emitted/activated/observed states remain distinct |
 | 3 | Broaden walk checks and reconstruct useful missing producers | Queued | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
 
@@ -33,16 +33,27 @@ semantics and is outside this table transaction until that policy is resolved.
 See the [landing record](./TAG_MACHINERY_STATUS.md#landed-upgrade-tooling) for the
 four verified squash commits.
 
-The runtime work order is RawConv (`ad9fdc32`, then `0bf02cd9`) on a fresh
-integration base, preserving current Canon label/raw-ID attachment, followed by
-IFD1 prerequisite `7a69d2fa` with the current verified-key/input-domain CODE-ref
-gate and fresh regeneration. Its committed table changes were `unwalked: None`
-fields; improved eligibility was a scratch preview. Gate A is not Exif::Main
-activation or an extraction result. Separate later named-directory activation
-from IFD4 conditions/Olympus retirement and the incomplete embedded-IFD0/PNG
-follow-ups. IFD4 can reconcile independently without delaying RawConv. Existing
-old-head gates support review; fresh baseline/candidate and occurrence-aware
-acceptance are required before any landing.
+The [RawConv reconciliation](./reference/rawconv-reconciliation-2026-09-11.md)
+uses fresh integration `afd3a628` and preserved `ad9fdc32`/`0bf02cd9`. This change
+completes the six-container shared-runtime consolidation with native-backed
+scalar, raw-form, occurrence, dimension and output repairs. Both original public
+EXIF helper signatures remain available. The report distinguishes rejected
+candidates from final workspace, projection and full-corpus acceptance, including
+explicit PDF and output residuals. Generated tables and the version pin did not
+change; this is not Exif::Main activation.
+
+Next reconcile IFD1 prerequisite `7a69d2fa`, preserving the current verified-key
+and input-domain CODE-ref gate, then regenerate from a fresh pinned dump and
+its own verification ledger. Its old committed table changes were `unwalked:
+None`; improved eligibility existed only in a scratch preview. A clean patch
+apply-check is preparation, not a port, regenerated output or eligibility proof.
+Update the old whole-dump eligibility assertion to use the matching ledger, keep
+unwalked-edge diagnostics in the HAND accounting, and recheck the shared
+converter's 35 simple UNDEFINED declarations after regeneration.
+Separate subsequent named-directory activation from IFD4 conditions/Olympus
+retirement and broader embedded-directory state. IFD4 can reconcile independently.
+Existing old-head gates support review; each landing needs fresh source, binary,
+corpus and occurrence-aware acceptance.
 
 ### Operational preservation on 2026-09-11
 

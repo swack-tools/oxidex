@@ -1,5 +1,8 @@
 # VitePress Documentation Site Implementation Plan
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Build a VitePress documentation site on gh-pages branch with migrated content, preserving CI/CD benchmark deployment.
@@ -1169,7 +1172,7 @@ Each following the same pattern:
 **Step 1: Switch to main branch**
 
 ```bash
-cd /Users/allen/Documents/git/exiftool-rs
+cd .
 ```
 
 **Step 2: Create workflow file**
@@ -1329,7 +1332,7 @@ Test on:
 **Step 1: Delete obsolete files in main branch**
 
 ```bash
-cd /Users/allen/Documents/git/exiftool-rs
+cd .
 
 # Delete release docs
 git rm RELEASE_ANNOUNCEMENT.md RELEASE_CHECKLIST.md

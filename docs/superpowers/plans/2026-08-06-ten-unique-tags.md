@@ -1,5 +1,8 @@
 # Ten Unique Metadata Tags Implementation Plan
 
+> **Path notation:** Named `../` worktree paths are relative to the primary repository checkout in the historical checkout-parent layout; the recorded worktree identity is preserved.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close and verify exactly ten unique extraction gaps, with one fresh agent assigned to each tag.
@@ -17,7 +20,7 @@
 - Check `src::exiftool_tables::find_table(module, table)` before writing parser layouts.
 - Never approximate conversions. Omit the tag if its exact conversion cannot be proved.
 - Follow red-green TDD and record both failing and passing commands in the agent report.
-- Work only in `/home/allen/git/oxidex-tags10` on branch `tags10-20260806`.
+- Work only in `../oxidex-tags10` on branch `tags10-20260806`.
 
 ---
 

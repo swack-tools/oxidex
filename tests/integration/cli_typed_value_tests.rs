@@ -72,19 +72,20 @@ fn write_to_copy(fixture: &str, suffix: &str, spec: &str) -> NamedTempFile {
 
 /// The value as the CLI's own reader renders it, e.g. "ExifIFD:ISO: 1600".
 ///
-/// Read with `--no-print-conv`, because what these tests assert is the *stored*
-/// value: `-IFD0:XResolution=300` must land as the rational `300/1` and not the
-/// ASCII string `300`, which is a claim about the writer. Applying PrintConv
-/// here would print `300` for both and the test would pass on the wrong bytes --
-/// exactly the type-blind assertion this file's header warns against. These
-/// reads were raw when the flag was opt-in; naming it keeps them raw now that
-/// conversion is the default.
-///
-/// Assertions that do expect a converted form (`Rotate 90 CW`, ApertureValue's
-/// `1.5`) are unaffected: those come from `output_formatter::friendly_enum_name`,
-/// which runs in the raw renderer too.
+/// Read without PrintConv; storage type is asserted separately from the TIFF
+/// bytes. Raw output still applies ValueConv (for example, stored APEX becomes
+/// an f-number), but must not reapply display enums or PrintConv rounding.
 fn read_tag(path: &Path, key: &str) -> Option<String> {
-    let output = oxidex(&["--no-print-conv", path.to_str().expect("utf-8 path")]);
+    read_tag_mode(path, key, true)
+}
+
+fn read_tag_mode(path: &Path, key: &str, raw: bool) -> Option<String> {
+    let path = path.to_str().expect("utf-8 path");
+    let output = if raw {
+        oxidex(&["--no-print-conv", path])
+    } else {
+        oxidex(&[path])
+    };
     assert!(output.status.success(), "read-back failed");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let prefix = format!("{key}: ");
@@ -170,8 +171,14 @@ fn jpeg_aperture_value_inverts_f_number_to_stored_apex() {
     let entry = jpeg_entry(file.path(), IfdKind::ExifIfd, APERTURE_VALUE);
     assert_eq!(entry.field_type, RATIONAL);
     assert_eq!(entry.count, 1);
+    // Pinned ExifTool 13.59 reads this written rational as the following
+    // ValueConv result under -n, and rounds it to 1.5 only with PrintConv.
     assert_eq!(
         read_tag(file.path(), "ExifIFD:ApertureValue").as_deref(),
+        Some("1.49999999769062")
+    );
+    assert_eq!(
+        read_tag_mode(file.path(), "ExifIFD:ApertureValue", false).as_deref(),
         Some("1.5")
     );
 }
@@ -311,6 +318,10 @@ fn tiff_integer_tag_is_settable_and_serialized_as_an_integer() {
     assert_eq!(entry.count, 1);
     assert_eq!(
         read_tag(file.path(), "IFD0:Orientation").as_deref(),
+        Some("6"),
+    );
+    assert_eq!(
+        read_tag_mode(file.path(), "IFD0:Orientation", false).as_deref(),
         Some("Rotate 90 CW"),
     );
 }

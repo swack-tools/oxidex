@@ -9,46 +9,14 @@
 
 use super::atom_parser::Atom;
 use super::tag_mapping::atom_to_exiftool_tag;
-use crate::core::{FileReader, Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue};
+use crate::core::{Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue};
 use crate::exiftool_tables::{
     Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
 };
 use crate::io::timestamp::{mac_time_to_exif_datetime, mac_time_to_local_exif_datetime};
 use crate::io::{ByteOrder, EndianReader};
-use crate::parsers::tiff::ifd_parser::{ByteOrder as TiffByteOrder, parse_ifd};
-use crate::tag_db::lookup_tag_name;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io;
-
-/// Helper function to compute rational value as f64
-/// Used when we need the computed float value rather than the (num, denom) tuple
-fn rational_to_f64(reader: &EndianReader, offset: usize) -> Option<f64> {
-    let (num, den) = reader.rational_at(offset)?;
-    if den != 0 {
-        Some(num as f64 / den as f64)
-    } else {
-        None
-    }
-}
-
-/// Helper function to compute signed rational value as f64
-fn srational_to_f64(reader: &EndianReader, offset: usize) -> Option<f64> {
-    let (num, den) = reader.srational_at(offset)?;
-    if den != 0 {
-        Some(num as f64 / den as f64)
-    } else {
-        None
-    }
-}
-
-/// Convert TiffByteOrder to the crate's ByteOrder type
-fn tiff_to_byte_order(order: TiffByteOrder) -> ByteOrder {
-    match order {
-        TiffByteOrder::LittleEndian => ByteOrder::Little,
-        TiffByteOrder::BigEndian => ByteOrder::Big,
-    }
-}
 
 /// Renders an mvhd/tkhd/mdhd Mac timestamp the way QuickTime.pm's shared
 /// `%timeInfo` PrintConv does (QuickTime.pm:242-291): local time with a UTC
@@ -661,12 +629,8 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
     // Extract media data offset and size from mdat atom
     // We need to track position in the original file
     let mut offset = 0u64;
-    let mut total_media_data_size = 0u64;
-    let mut found_media_data = false;
     for atom in root_atoms {
         if atom.atom_type.matches("mdat") {
-            found_media_data = true;
-            total_media_data_size += atom.data.len() as u64;
             metadata.insert(
                 "QuickTime:MediaDataSize".to_string(),
                 TagValue::Integer(atom.data.len() as i64),
@@ -678,9 +642,6 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
         }
         // Calculate atom size (header + data length), accounting for extended headers
         offset += atom.header_size as u64 + atom.data.len() as u64;
-    }
-    if found_media_data {
-        metadata.set_value_form("QuickTime:MediaDataSize", total_media_data_size.to_string());
     }
 }
 
@@ -3319,41 +3280,60 @@ fn extract_exif_from_mdat(
 
     let exif_length = length as usize;
 
-    // Try to find EXIF data with different header size assumptions
+    // The item is a 4-byte offset word, `Exif\0\0`, then the TIFF header
+    // (QuickTime.pm 13.59:9470-9471 `$start = 4 + $n`); this locator still
+    // assumes the usual `$n = 6`, i.e. a 10-byte item header.
+    const ITEM_HEADER: u64 = 10;
+
+    // Position of the mdat payload, from the 8-byte atom headers that
+    // precede it (`header_size` tries the 8- and 16-byte mdat header).
+    let atoms_before_mdat: u64 = root_atoms
+        .iter()
+        .take_while(|a| !a.atom_type.matches("mdat"))
+        .map(|a| 8 + a.data.len() as u64)
+        .sum();
+
+    // Try to find EXIF data with different header size assumptions. Each
+    // hit carries the TIFF header's file position alongside the block:
+    // ExifTool's `Base` for the item is `$pos + $start` (:9461, :9513), the
+    // extent's absolute offset plus the item header.
     let tiff_data = [8u64, 16u64].iter().find_map(|&header_size| {
-        let file_offset: u64 = root_atoms
-            .iter()
-            .take_while(|a| !a.atom_type.matches("mdat"))
-            .map(|a| 8 + a.data.len() as u64)
-            .sum();
-        let mdat_start = file_offset + header_size;
+        let mdat_start = atoms_before_mdat + header_size;
 
         if offset >= mdat_start {
             let mdat_offset = (offset - mdat_start) as usize;
             if mdat_offset + exif_length <= mdat.data.len() {
                 let exif_data = &mdat.data[mdat_offset..mdat_offset + exif_length];
                 if exif_data.len() >= 10 && &exif_data[4..8] == b"Exif" {
-                    return Some(&exif_data[10..]);
+                    return Some((&exif_data[10..], offset + ITEM_HEADER));
                 }
             }
         }
         None
     });
 
-    // Fallback: try direct offset
+    // Fallback: try direct offset. The extent then reads as mdat-relative,
+    // so the header's file position is the mdat payload's (8-byte header
+    // assumed, as above) plus the extent plus the item header.
     let tiff_data = tiff_data.or_else(|| {
         let off = offset as usize;
         if off + exif_length <= mdat.data.len() {
             let exif_data = &mdat.data[off..off + exif_length];
             if exif_data.len() >= 10 && &exif_data[4..8] == b"Exif" {
-                return Some(&exif_data[10..]);
+                return Some((
+                    &exif_data[10..],
+                    atoms_before_mdat + 8 + offset + ITEM_HEADER,
+                ));
             }
         }
         None
     });
 
-    if let Some(data) = tiff_data {
-        let _ = parse_heif_exif_data(data, metadata);
+    // QuickTime.pm 13.59:9464-9483 hands the Exif item to ProcessTIFF with
+    // Image::ExifTool::Exif::Main, so IFD0/ExifIFD/GPS/MakerNotes are exactly
+    // the JPEG ones and go through the shared decoder.
+    if let Some((data, tiff_base)) = tiff_data {
+        crate::parsers::image::embedded::parse_embedded_exif_at(data, tiff_base, metadata);
     }
 }
 
@@ -3374,222 +3354,6 @@ fn read_variable_size(data: &[u8], pos: &mut usize, size: usize) -> u64 {
     };
     *pos += size;
     value
-}
-
-/// Simple in-memory FileReader for EXIF data embedded in HEIF files
-struct HeifExifDataReader {
-    data: Vec<u8>,
-}
-
-impl HeifExifDataReader {
-    fn new(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-}
-
-impl FileReader for HeifExifDataReader {
-    fn read(&self, offset: u64, length: usize) -> io::Result<&[u8]> {
-        let start = offset as usize;
-        let end = start + length;
-
-        if end > self.data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "read beyond end of EXIF data",
-            ));
-        }
-
-        Ok(&self.data[start..end])
-    }
-
-    fn size(&self) -> u64 {
-        self.data.len() as u64
-    }
-}
-
-/// Parse TIFF/EXIF data from HEIF Exif item and insert into metadata
-fn parse_heif_exif_data(tiff_data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
-    if tiff_data.len() < 8 {
-        return Err("TIFF data too short".to_string());
-    }
-
-    // Detect byte order from TIFF header
-    let byte_order = match &tiff_data[0..2] {
-        b"II" => TiffByteOrder::LittleEndian,
-        b"MM" => TiffByteOrder::BigEndian,
-        _ => return Err("Invalid TIFF byte order marker".to_string()),
-    };
-
-    // Create EndianReader with detected byte order
-    let r = EndianReader::new(tiff_data, tiff_to_byte_order(byte_order));
-
-    // Verify TIFF magic number (0x002A)
-    let magic = r.u16_at(2).ok_or("Failed to read TIFF magic number")?;
-
-    if magic != 0x002A {
-        return Err(format!("Invalid TIFF magic number: 0x{:04X}", magic));
-    }
-
-    // Read IFD0 offset
-    let ifd_offset = r.u32_at(4).ok_or("Failed to read IFD0 offset")?;
-
-    // Create a reader for the TIFF data
-    let exif_reader = HeifExifDataReader::new(tiff_data.to_vec());
-
-    // Track sub-IFD offsets
-    let mut exif_ifd_offset = None;
-    let mut gps_ifd_offset = None;
-
-    // Parse IFD0
-    let ifd0_tags = parse_ifd(&exif_reader, ifd_offset as u64, byte_order)
-        .map_err(|e| format!("Failed to parse IFD0: {}", e))?;
-
-    for (tag_id, field_type, value_count, raw_bytes) in &ifd0_tags {
-        // Create reader for raw bytes with detected byte order
-        let raw_reader = EndianReader::new(raw_bytes, tiff_to_byte_order(byte_order));
-
-        // Check for ExifIFD pointer (tag 0x8769)
-        if *tag_id == 0x8769 && raw_bytes.len() >= 4 {
-            if let Some(offset) = raw_reader.u32_at(0) {
-                exif_ifd_offset = Some(offset as u64);
-            }
-            continue;
-        }
-
-        // Check for GPS Sub-IFD pointer (tag 0x8825)
-        if *tag_id == 0x8825 && raw_bytes.len() >= 4 {
-            if let Some(offset) = raw_reader.u32_at(0) {
-                gps_ifd_offset = Some(offset as u64);
-            }
-            continue;
-        }
-
-        // Convert tag to name and value
-        let tag_name = lookup_tag_name(*tag_id, "IFD0");
-        let tag_value = raw_bytes_to_tag_value(raw_bytes, *field_type, *value_count, byte_order);
-        metadata.insert(tag_name, tag_value);
-    }
-
-    // Parse ExifIFD if present
-    if let Some(offset) = exif_ifd_offset
-        && let Ok(exif_tags) = parse_ifd(&exif_reader, offset, byte_order)
-    {
-        for (tag_id, field_type, value_count, raw_bytes) in exif_tags {
-            let tag_name = lookup_tag_name(tag_id, "ExifIFD");
-            let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, value_count, byte_order);
-            metadata.insert(tag_name, tag_value);
-        }
-    }
-
-    // Parse GPS IFD if present
-    if let Some(offset) = gps_ifd_offset
-        && let Ok(gps_tags) = parse_ifd(&exif_reader, offset, byte_order)
-    {
-        for (tag_id, field_type, value_count, raw_bytes) in gps_tags {
-            let tag_name = lookup_tag_name(tag_id, "GPS");
-            let tag_value = raw_bytes_to_tag_value(&raw_bytes, field_type, value_count, byte_order);
-            metadata.insert(tag_name, tag_value);
-        }
-    }
-
-    Ok(())
-}
-
-/// Convert raw EXIF bytes to TagValue
-fn raw_bytes_to_tag_value(
-    bytes: &[u8],
-    field_type: u16,
-    value_count: u32,
-    byte_order: TiffByteOrder,
-) -> TagValue {
-    use crate::parsers::common::exif_types::ExifType;
-
-    // Create EndianReader with the TIFF byte order (converted to crate's ByteOrder)
-    let r = EndianReader::new(bytes, tiff_to_byte_order(byte_order));
-
-    let Some(exif_type) = ExifType::from_u16(field_type) else {
-        return TagValue::Binary(bytes.to_vec());
-    };
-
-    match exif_type {
-        ExifType::Byte if !bytes.is_empty() => {
-            if value_count == 1 {
-                TagValue::Integer(bytes[0] as i64)
-            } else {
-                TagValue::Binary(bytes.to_vec())
-            }
-        }
-        ExifType::Ascii => {
-            let text = String::from_utf8_lossy(bytes);
-            TagValue::String(text.trim_end_matches('\0').to_string())
-        }
-        ExifType::Short if r.len() >= 2 => {
-            if value_count == 1 {
-                r.u16_at(0)
-                    .map(|v| TagValue::Integer(v as i64))
-                    .unwrap_or_else(|| TagValue::Binary(bytes.to_vec()))
-            } else {
-                let values: Vec<_> = (0..value_count as usize)
-                    .filter_map(|i| r.u16_at(i * 2).map(|v| v.to_string()))
-                    .collect();
-                TagValue::String(values.join(" "))
-            }
-        }
-        ExifType::Long if r.len() >= 4 => r
-            .u32_at(0)
-            .map(|v| TagValue::Integer(v as i64))
-            .unwrap_or_else(|| TagValue::Binary(bytes.to_vec())),
-        ExifType::Rational if r.len() >= 8 => {
-            if value_count == 1 {
-                // Use helper function to compute rational as f64
-                rational_to_f64(&r, 0)
-                    .map(TagValue::Float)
-                    .unwrap_or_else(|| TagValue::Binary(bytes.to_vec()))
-            } else {
-                let values: Vec<_> = (0..value_count as usize)
-                    .filter_map(|i| rational_to_f64(&r, i * 8).map(|v| format!("{}", v)))
-                    .collect();
-                TagValue::String(values.join(" "))
-            }
-        }
-        ExifType::SByte if !bytes.is_empty() => TagValue::Integer(bytes[0] as i8 as i64),
-        ExifType::Undefined => {
-            if bytes
-                .iter()
-                .all(|&b| b.is_ascii_graphic() || b.is_ascii_whitespace() || b == 0)
-            {
-                let text = String::from_utf8_lossy(bytes);
-                let trimmed = text.trim_end_matches('\0');
-                if !trimmed.is_empty() {
-                    return TagValue::String(trimmed.to_string());
-                }
-            }
-            TagValue::Binary(bytes.to_vec())
-        }
-        ExifType::SShort if r.len() >= 2 => r
-            .i16_at(0)
-            .map(|v| TagValue::Integer(v as i64))
-            .unwrap_or_else(|| TagValue::Binary(bytes.to_vec())),
-        ExifType::SLong if r.len() >= 4 => r
-            .i32_at(0)
-            .map(|v| TagValue::Integer(v as i64))
-            .unwrap_or_else(|| TagValue::Binary(bytes.to_vec())),
-        ExifType::SRational if r.len() >= 8 => {
-            // Use helper function to compute signed rational as f64
-            srational_to_f64(&r, 0)
-                .map(TagValue::Float)
-                .unwrap_or_else(|| TagValue::Binary(bytes.to_vec()))
-        }
-        ExifType::Float if r.len() >= 4 => r
-            .f32_at(0)
-            .map(|v| TagValue::Float(v as f64))
-            .unwrap_or_else(|| TagValue::Binary(bytes.to_vec())),
-        ExifType::Double if r.len() >= 8 => r
-            .f64_at(0)
-            .map(TagValue::Float)
-            .unwrap_or_else(|| TagValue::Binary(bytes.to_vec())),
-        _ => TagValue::Binary(bytes.to_vec()),
-    }
 }
 
 /// Formats an exposure time in seconds the way ExifTool's `PrintExposureTime`
@@ -3721,6 +3485,73 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
 mod tests {
     use super::*;
     use crate::parsers::quicktime::FourCC;
+
+    #[test]
+    fn multiple_mdat_atoms_keep_individual_sizes_and_sum_only_for_bitrate() {
+        // Pinned QuickTime.pm mdat-size has no aggregate ValueConv. Its
+        // AvgBitrate RawConv alone walks every MediaDataSize via NextTagKey.
+        // Native 13.59 reports last size 9 / 5 for these two carriers, every
+        // individual size under -a, and AvgBitrate 56 for both (14*8/2).
+        for sizes in [[5usize, 9], [9, 5]] {
+            let ftyp = child_atom(b"ftyp", b"qt  \0\0\0\0qt  ");
+            let mut mvhd = [0u8; 100];
+            mvhd[12..16].copy_from_slice(&1000u32.to_be_bytes());
+            mvhd[16..20].copy_from_slice(&2000u32.to_be_bytes());
+            let moov = child_atom(b"moov", &child_atom(b"mvhd", &mvhd));
+            let first_offset = (ftyp.len() + moov.len() + 8) as i64;
+            let file = [
+                ftyp,
+                moov,
+                child_atom(b"mdat", &vec![0; sizes[0]]),
+                child_atom(b"mdat", &vec![0; sizes[1]]),
+            ]
+            .concat();
+            let mut metadata =
+                crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&file)
+                    .expect("valid two-mdat carrier");
+            crate::composite::apply(&mut metadata);
+
+            let occurrences = metadata.occurrences_for("QuickTime:MediaDataSize");
+            assert_eq!(occurrences.len(), 2);
+            for (occurrence, size) in occurrences.iter().zip(sizes) {
+                for no_print_conv in [false, true] {
+                    assert_eq!(
+                        crate::cli::tag_resolution::resolved_display_value(
+                            occurrence,
+                            no_print_conv,
+                        ),
+                        TagValue::Integer(size as i64),
+                        "each mdat retains its own size in both output modes",
+                    );
+                }
+            }
+            assert_eq!(
+                metadata
+                    .without_print_conv()
+                    .get_integer("QuickTime:MediaDataSize"),
+                Some(sizes[1] as i64),
+                "default raw output keeps the last block, not their sum",
+            );
+            assert_eq!(
+                metadata
+                    .occurrences_for("QuickTime:MediaDataOffset")
+                    .iter()
+                    .map(|occurrence| occurrence.raw.clone())
+                    .collect::<Vec<_>>(),
+                vec![
+                    TagValue::Integer(first_offset),
+                    TagValue::Integer(first_offset + sizes[0] as i64 + 8),
+                ],
+            );
+            assert_eq!(
+                metadata
+                    .without_print_conv()
+                    .get_string("Composite:AvgBitrate"),
+                Some("56"),
+                "bitrate sums both retained blocks",
+            );
+        }
+    }
 
     #[test]
     fn quicktime_fixture_prefers_media_info_data_handler_class() {
@@ -4316,5 +4147,127 @@ mod tests {
         } else {
             panic!("Expected float value for VideoFrameRate");
         }
+    }
+
+    /// A minimal HEIC whose `meta` declares an `Exif` item (QuickTime.pm
+    /// 13.59:9464-9483) located in `mdat`: `ftyp` | `meta` (hdlr pict, pitm 1,
+    /// iinf with items 1 `hvc1` and 2 `Exif`, iloc v0 with absolute 4-byte
+    /// offsets) | `mdat` (16 dummy bytes for item 1, then item 2 = the
+    /// big-endian offset word 6, `Exif\0\0`, and the TIFF block).
+    fn heic_with_exif_item(tiff: &[u8]) -> Vec<u8> {
+        let ftyp = child_atom(b"ftyp", b"heic\0\0\0\0mif1heic");
+
+        // hdlr: version/flags, pre_defined, handler_type, 3 x reserved, name.
+        let mut hdlr = vec![0u8; 8];
+        hdlr.extend_from_slice(b"pict");
+        hdlr.extend_from_slice(&[0u8; 12]);
+        hdlr.push(0);
+        let pitm = [0, 0, 0, 0, 0, 1];
+
+        // infe v2: version, flags, item_id, protection_index, item_type, name.
+        let infe = |id: u16, item_type: &[u8; 4]| {
+            let mut data = vec![2, 0, 0, 0];
+            data.extend_from_slice(&id.to_be_bytes());
+            data.extend_from_slice(&[0, 0]);
+            data.extend_from_slice(item_type);
+            data.push(0);
+            child_atom(b"infe", &data)
+        };
+        let mut iinf = vec![0, 0, 0, 0];
+        iinf.extend_from_slice(&2u16.to_be_bytes());
+        iinf.extend_from_slice(&infe(1, b"hvc1"));
+        iinf.extend_from_slice(&infe(2, b"Exif"));
+
+        let exif_item = [6u32.to_be_bytes().as_slice(), b"Exif\0\0", tiff].concat();
+
+        // iloc v0: offset_size 4, length_size 4, base_offset_size 0; one
+        // extent per item at an absolute file offset.
+        let iloc = |off1: u32, off2: u32| {
+            let mut data = vec![0, 0, 0, 0, 0x44, 0x00];
+            data.extend_from_slice(&2u16.to_be_bytes());
+            for (id, offset, length) in [(1u16, off1, 16u32), (2, off2, exif_item.len() as u32)] {
+                data.extend_from_slice(&id.to_be_bytes());
+                data.extend_from_slice(&0u16.to_be_bytes()); // data_reference_index
+                data.extend_from_slice(&1u16.to_be_bytes()); // extent_count
+                data.extend_from_slice(&offset.to_be_bytes());
+                data.extend_from_slice(&length.to_be_bytes());
+            }
+            child_atom(b"iloc", &data)
+        };
+        let meta = |off1: u32, off2: u32| {
+            let mut data = vec![0, 0, 0, 0];
+            data.extend_from_slice(&child_atom(b"hdlr", &hdlr));
+            data.extend_from_slice(&child_atom(b"pitm", &pitm));
+            data.extend_from_slice(&child_atom(b"iinf", &iinf));
+            data.extend_from_slice(&iloc(off1, off2));
+            child_atom(b"meta", &data)
+        };
+
+        // The meta box's size does not depend on the offsets it carries.
+        let off1 = (ftyp.len() + meta(0, 0).len() + 8) as u32;
+        let off2 = off1 + 16;
+        let mut mdat = vec![0xAAu8; 16];
+        mdat.extend_from_slice(&exif_item);
+
+        [ftyp, meta(off1, off2), child_atom(b"mdat", &mdat)].concat()
+    }
+
+    #[test]
+    fn heif_exif_item_preserves_scalar_tiff_types() {
+        use crate::parsers::image::embedded::test_fixtures::tiff_with_entries;
+        let tiff = tiff_with_entries(&[
+            (0x0100, 1, &[65]),
+            (0x0108, 6, &[255]),
+            (0x010f, 7, b"Canon\0"),
+            (0x010d, 7, b"Plan Scan \0"),
+        ]);
+        let file = heic_with_exif_item(&tiff);
+        let metadata = crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&file)
+            .expect("HEIC parses");
+        assert_eq!(metadata.get_integer("IFD0:ImageWidth"), Some(65));
+        assert_eq!(metadata.get_integer("IFD0:CellWidth"), Some(-1));
+        assert_eq!(metadata.get_string("IFD0:Make"), Some("Canon\0"));
+        assert_eq!(
+            metadata.get_string("IFD0:DocumentName"),
+            Some("Plan Scan \0")
+        );
+    }
+
+    /// Exif.pm 13.59:3849-3873 through a HEIC Exif item: an all-NUL
+    /// PanasonicTitle creates no tag, a NUL-padded PanasonicTitle2 prints
+    /// exactly, and Make loses its trailing blank (Exif.pm:585) -- the rows
+    /// the same TIFF block prints inside a JPEG, which is what the pinned
+    /// oracle prints for this layout too.
+    #[test]
+    fn heif_exif_item_panasonic_title_rawconv_matches_jpeg_path() {
+        use crate::parsers::image::embedded::test_fixtures::{
+            assert_block_a, assert_block_b, panasonic_title_block_a, panasonic_title_block_b,
+        };
+
+        let file = heic_with_exif_item(&panasonic_title_block_a());
+        let metadata = crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&file)
+            .expect("synthetic HEIC must parse");
+        assert_block_a(&metadata);
+
+        let file = heic_with_exif_item(&panasonic_title_block_b());
+        let metadata = crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&file)
+            .expect("synthetic HEIC must parse");
+        assert_block_b(&metadata);
+    }
+
+    /// QuickTime.pm 13.59:9461/:9513: the `Base` added to the offsets
+    /// reported from the Exif item is `$pos + $start`, the extent's absolute
+    /// offset plus the 4 + 6 item header -- 207 + 10 = 217 for
+    /// [`heic_with_exif_item`], and the oracle prints 1217 for this file.
+    #[test]
+    fn heif_exif_item_offsets_are_reported_from_the_tiff_header_position() {
+        use crate::parsers::image::embedded::test_fixtures::{
+            assert_other_image_start, interop_offset_block,
+        };
+
+        let file = heic_with_exif_item(&interop_offset_block());
+        let metadata = crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&file)
+            .expect("synthetic HEIC must parse");
+        assert_other_image_start(&metadata, 217);
     }
 }

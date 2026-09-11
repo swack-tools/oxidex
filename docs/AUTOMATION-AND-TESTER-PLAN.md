@@ -73,11 +73,16 @@ cost and limits rather than extrapolate this run's 611.006-second elapsed time.
 
 ## 1. Finish the existing runtime migrations
 
-Coordinate with the owners listed in the status page before starting work.
-Reconcile RawConv first (`ad9fdc32`, then `0bf02cd9`) while preserving current
-Canon label/raw-ID attachment; rerun the six-container RawConv/IsOffset carriers,
-PNG writer fixtures and a fresh occurrence-aware baseline/candidate gate. The
-recorded old-head full gate is supporting evidence, not current landing proof.
+The [shared RawConv reconciliation](./reference/rawconv-reconciliation-2026-09-11.md)
+completes the six-container runtime consolidation in this change, preserving
+current Canon raw-ID forms and both original public EXIF helper APIs. Its
+acceptance includes native scalar types, raw/printed output, occurrence
+multiplicity, physical IFD1 order and container/EXIF priority. Initial aggregate
+gains concealed real regressions; rejected candidates and final measured results
+remain separate. PDF retains its existing winner projection until shared visited directory
+state is modeled, and other reviewed output debts remain explicit.
+Do not restart the old preserved RawConv port or treat its historical gates as
+the final implementation's proof.
 
 Next port IFD1 prerequisite `7a69d2fa` without weakening the named verified-key
 and input-domain CODE-ref gate, and regenerate using the current pinned pipeline.

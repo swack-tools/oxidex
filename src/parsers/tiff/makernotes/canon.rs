@@ -5313,6 +5313,20 @@ fn parse_canon_makernote_impl_located(
     )
 }
 
+/// Preserve the scalar BEFORE enum PrintConv, at the same guarded insertion
+/// site. The migrated CameraSettings/FileInfo entries have no ValueConv;
+/// Canon.pm's RawConv vetoes still run in their existing branches. SelfTimer
+/// retains its complete int16u code: masking/dividing belongs to PrintConv.
+fn record_canon_value(
+    forms: &mut Option<&mut HashMap<String, String>>,
+    name: &str,
+    value: impl ToString,
+) {
+    if let Some(forms) = forms.as_deref_mut() {
+        forms.insert(name.to_string(), value.to_string());
+    }
+}
+
 /// [`parse_canon_makernote_impl_located`], plus the unrounded `ValueConv`
 /// forms of tags whose printed string alone is not enough for a downstream
 /// Composite to reproduce ExifTool's arithmetic.
@@ -5605,6 +5619,11 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:MacroMode".to_string(),
                             MACRO_MODE.decode(array[CAMERA_SETTINGS_MACRO_MODE]),
                         );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:MacroMode",
+                            array[CAMERA_SETTINGS_MACRO_MODE],
+                        );
                     }
 
                     // SelfTimer (index 2). ExifTool `%Canon::CameraSettings` key 2
@@ -5635,6 +5654,7 @@ fn parse_canon_makernote_impl_located_with_values(
                             )
                         };
                         tags.insert("Canon:SelfTimer".to_string(), rendered);
+                        record_canon_value(&mut value_forms, "Canon:SelfTimer", raw_timer);
                     }
 
                     // Quality (index 3) - Image quality setting
@@ -5643,6 +5663,11 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:Quality".to_string(),
                             QUALITY.decode(array[CAMERA_SETTINGS_QUALITY]),
                         );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:Quality",
+                            array[CAMERA_SETTINGS_QUALITY],
+                        );
                     }
 
                     // CanonFlashMode (index 4) - Flash mode setting. Canon.pm names
@@ -5650,6 +5675,11 @@ fn parse_canon_makernote_impl_located_with_values(
                     if array.len() > CAMERA_SETTINGS_FLASH_MODE {
                         let flash_mode = FLASH_MODE.decode(array[CAMERA_SETTINGS_FLASH_MODE]);
                         tags.insert("Canon:CanonFlashMode".to_string(), flash_mode);
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:CanonFlashMode",
+                            array[CAMERA_SETTINGS_FLASH_MODE],
+                        );
                     }
 
                     // ContinuousDrive (index 5) - Drive mode setting. Canon.pm defines
@@ -5659,6 +5689,11 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:ContinuousDrive".to_string(),
                             DRIVE_MODE.decode(array[CAMERA_SETTINGS_DRIVE_MODE]),
                         );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:ContinuousDrive",
+                            array[CAMERA_SETTINGS_DRIVE_MODE],
+                        );
                     }
 
                     // FocusMode (index 7) - Focus mode setting
@@ -5666,6 +5701,11 @@ fn parse_canon_makernote_impl_located_with_values(
                         tags.insert(
                             "Canon:FocusMode".to_string(),
                             FOCUS_MODE.decode(array[CAMERA_SETTINGS_FOCUS_MODE]),
+                        );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:FocusMode",
+                            array[CAMERA_SETTINGS_FOCUS_MODE],
                         );
                     }
 
@@ -5678,6 +5718,7 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:RecordMode".to_string(),
                             RECORD_MODE.decode(record_mode),
                         );
+                        record_canon_value(&mut value_forms, "Canon:RecordMode", record_mode);
                     }
 
                     // CanonImageSize (index 10) - Image size setting
@@ -5685,6 +5726,11 @@ fn parse_canon_makernote_impl_located_with_values(
                         tags.insert(
                             "Canon:CanonImageSize".to_string(),
                             CANON_IMAGE_SIZE.decode(array[CAMERA_SETTINGS_IMAGE_SIZE]),
+                        );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:CanonImageSize",
+                            array[CAMERA_SETTINGS_IMAGE_SIZE],
                         );
                     }
 
@@ -5694,6 +5740,11 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:EasyMode".to_string(),
                             EASY_MODE.decode(array[CAMERA_SETTINGS_EASY_MODE]),
                         );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:EasyMode",
+                            array[CAMERA_SETTINGS_EASY_MODE],
+                        );
                     }
 
                     // DigitalZoom (index 12) - Digital zoom setting
@@ -5701,6 +5752,11 @@ fn parse_canon_makernote_impl_located_with_values(
                         tags.insert(
                             "Canon:DigitalZoom".to_string(),
                             DIGITAL_ZOOM.decode(array[CAMERA_SETTINGS_DIGITAL_ZOOM]),
+                        );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:DigitalZoom",
+                            array[CAMERA_SETTINGS_DIGITAL_ZOOM],
                         );
                     }
 
@@ -5712,12 +5768,14 @@ fn parse_canon_makernote_impl_located_with_values(
                         && contrast != 0x7fff
                     {
                         tags.insert("Canon:Contrast".to_string(), print_parameter(contrast));
+                        record_canon_value(&mut value_forms, "Canon:Contrast", contrast);
                     }
 
                     if let Some(&saturation) = array.get(CAMERA_SETTINGS_SATURATION)
                         && saturation != 0x7fff
                     {
                         tags.insert("Canon:Saturation".to_string(), print_parameter(saturation));
+                        record_canon_value(&mut value_forms, "Canon:Saturation", saturation);
                     }
 
                     // ImageStabilization (index 34). Canon.pm drops only the
@@ -5760,6 +5818,11 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:MeteringMode".to_string(),
                             METERING_MODE.decode(array[CAMERA_SETTINGS_METERING_MODE]),
                         );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:MeteringMode",
+                            array[CAMERA_SETTINGS_METERING_MODE],
+                        );
                     }
 
                     // FocusRange (index 18) - Focus range/type setting
@@ -5767,6 +5830,11 @@ fn parse_canon_makernote_impl_located_with_values(
                         tags.insert(
                             "Canon:FocusRange".to_string(),
                             FOCUS_RANGE.decode(array[CAMERA_SETTINGS_FOCUS_RANGE]),
+                        );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:FocusRange",
+                            array[CAMERA_SETTINGS_FOCUS_RANGE],
                         );
                     }
 
@@ -5795,6 +5863,11 @@ fn parse_canon_makernote_impl_located_with_values(
                         let exposure_mode =
                             EXPOSURE_MODE.decode(array[CAMERA_SETTINGS_EXPOSURE_MODE]);
                         tags.insert("Canon:CanonExposureMode".to_string(), exposure_mode);
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:CanonExposureMode",
+                            array[CAMERA_SETTINGS_EXPOSURE_MODE],
+                        );
                     }
 
                     // LensType (`%Canon::CameraSettings` key 22, Canon.pm:2499):
@@ -6530,6 +6603,7 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:BracketMode".to_string(),
                             BRACKET_MODE.decode(bracket_mode),
                         );
+                        record_canon_value(&mut value_forms, "Canon:BracketMode", bracket_mode);
                     }
 
                     // BracketValue (Perl key 4)
@@ -6553,6 +6627,7 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:RawJpgSize".to_string(),
                             CANON_IMAGE_SIZE.decode(raw_jpg_size),
                         );
+                        record_canon_value(&mut value_forms, "Canon:RawJpgSize", raw_jpg_size);
                     }
 
                     // LongExposureNoiseReduction2 (Perl key 8). `RawConv => '$val<0 ? undef'`.
@@ -6563,6 +6638,11 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:LongExposureNoiseReduction2".to_string(),
                             LONG_EXPOSURE_NOISE_REDUCTION2.decode(long_exposure_nr),
                         );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:LongExposureNoiseReduction2",
+                            long_exposure_nr,
+                        );
                     }
 
                     // WBBracketMode (Perl key 9)
@@ -6570,6 +6650,11 @@ fn parse_canon_makernote_impl_located_with_values(
                         tags.insert(
                             "Canon:WBBracketMode".to_string(),
                             WB_BRACKET_MODE.decode(wb_bracket_mode),
+                        );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:WBBracketMode",
+                            wb_bracket_mode,
                         );
                     }
 
@@ -6590,6 +6675,7 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:FilterEffect".to_string(),
                             FILTER_EFFECT.decode(filter_effect),
                         );
+                        record_canon_value(&mut value_forms, "Canon:FilterEffect", filter_effect);
                     }
                     if let Some(&toning_effect) = array.get(FILE_INFO_TONING_EFFECT)
                         && toning_effect != -1
@@ -6598,6 +6684,7 @@ fn parse_canon_makernote_impl_located_with_values(
                             "Canon:ToningEffect".to_string(),
                             TONING_EFFECT.decode(toning_effect),
                         );
+                        record_canon_value(&mut value_forms, "Canon:ToningEffect", toning_effect);
                     }
 
                     for (index, name) in [
@@ -6611,6 +6698,7 @@ fn parse_canon_makernote_impl_located_with_values(
                                 format!("Canon:{name}"),
                                 decode_file_info_enum(name, i64::from(value)),
                             );
+                            record_canon_value(&mut value_forms, &format!("Canon:{name}"), value);
                         }
                     }
 
@@ -10612,6 +10700,669 @@ mod tests {
         assert_eq!(decode_canon_model_id(0x4007d673), "DC19/DC21/DC22");
         assert_eq!(decode_canon_model_id(0x80000285), "EOS 5D Mark III");
         assert_eq!(decode_canon_model_id(0xdeadbeef), "Unknown (3735928559)");
+    }
+    /// Actual pinned13.59 complete WebP controls: zero, distinct nonzero
+    /// codes, and RawConv vetoes. Expected print forms are native outputs.
+    #[test]
+    fn canon_enum_value_forms_follow_native_slots_and_vetoes() {
+        let cases = [
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                1usize,
+                0i16,
+                "Canon:MacroMode",
+                Some("Unknown (0)"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                2usize,
+                0i16,
+                "Canon:SelfTimer",
+                Some("Off"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                3usize,
+                0i16,
+                "Canon:Quality",
+                Some("Unknown (0)"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                4usize,
+                0i16,
+                "Canon:CanonFlashMode",
+                Some("Off"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                5usize,
+                0i16,
+                "Canon:ContinuousDrive",
+                Some("Single"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                7usize,
+                0i16,
+                "Canon:FocusMode",
+                Some("One-shot AF"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                9usize,
+                0i16,
+                "Canon:RecordMode",
+                Some("Unknown (0)"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                10usize,
+                0i16,
+                "Canon:CanonImageSize",
+                Some("Large"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                11usize,
+                0i16,
+                "Canon:EasyMode",
+                Some("Full auto"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                12usize,
+                0i16,
+                "Canon:DigitalZoom",
+                Some("None"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                13usize,
+                0i16,
+                "Canon:Contrast",
+                Some("Normal"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                14usize,
+                0i16,
+                "Canon:Saturation",
+                Some("Normal"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                17usize,
+                0i16,
+                "Canon:MeteringMode",
+                Some("Default"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                18usize,
+                0i16,
+                "Canon:FocusRange",
+                Some("Manual"),
+            ),
+            (
+                "zero",
+                CANON_CAMERA_SETTINGS,
+                20usize,
+                0i16,
+                "Canon:CanonExposureMode",
+                Some("Easy"),
+            ),
+            (
+                "zero",
+                CANON_FILE_INFO,
+                3usize,
+                0i16,
+                "Canon:BracketMode",
+                Some("Off"),
+            ),
+            (
+                "zero",
+                CANON_FILE_INFO,
+                7usize,
+                0i16,
+                "Canon:RawJpgSize",
+                Some("Large"),
+            ),
+            (
+                "zero",
+                CANON_FILE_INFO,
+                8usize,
+                0i16,
+                "Canon:LongExposureNoiseReduction2",
+                Some("Off"),
+            ),
+            (
+                "zero",
+                CANON_FILE_INFO,
+                9usize,
+                0i16,
+                "Canon:WBBracketMode",
+                Some("Off"),
+            ),
+            (
+                "zero",
+                CANON_FILE_INFO,
+                14usize,
+                0i16,
+                "Canon:FilterEffect",
+                Some("None"),
+            ),
+            (
+                "zero",
+                CANON_FILE_INFO,
+                15usize,
+                0i16,
+                "Canon:ToningEffect",
+                Some("None"),
+            ),
+            (
+                "zero",
+                CANON_FILE_INFO,
+                19usize,
+                0i16,
+                "Canon:LiveViewShooting",
+                Some("Off"),
+            ),
+            (
+                "zero",
+                CANON_FILE_INFO,
+                23usize,
+                0i16,
+                "Canon:ShutterMode",
+                Some("Mechanical"),
+            ),
+            (
+                "zero",
+                CANON_FILE_INFO,
+                25usize,
+                0i16,
+                "Canon:FlashExposureLock",
+                Some("Off"),
+            ),
+            (
+                "zero",
+                CANON_FILE_INFO,
+                32usize,
+                0i16,
+                "Canon:AntiFlicker",
+                Some("Off"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                1usize,
+                101i16,
+                "Canon:MacroMode",
+                Some("Unknown (101)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                2usize,
+                16404i16,
+                "Canon:SelfTimer",
+                Some("2 s, Custom"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                3usize,
+                103i16,
+                "Canon:Quality",
+                Some("Unknown (103)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                4usize,
+                104i16,
+                "Canon:CanonFlashMode",
+                Some("Unknown (104)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                5usize,
+                105i16,
+                "Canon:ContinuousDrive",
+                Some("Unknown (105)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                7usize,
+                107i16,
+                "Canon:FocusMode",
+                Some("Unknown (107)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                9usize,
+                109i16,
+                "Canon:RecordMode",
+                Some("Unknown (109)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                10usize,
+                110i16,
+                "Canon:CanonImageSize",
+                Some("Unknown (110)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                11usize,
+                111i16,
+                "Canon:EasyMode",
+                Some("Unknown (111)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                12usize,
+                112i16,
+                "Canon:DigitalZoom",
+                Some("Unknown (112)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                13usize,
+                -2i16,
+                "Canon:Contrast",
+                Some("-2"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                14usize,
+                2i16,
+                "Canon:Saturation",
+                Some("+2"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                17usize,
+                117i16,
+                "Canon:MeteringMode",
+                Some("Unknown (117)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                18usize,
+                118i16,
+                "Canon:FocusRange",
+                Some("Unknown (118)"),
+            ),
+            (
+                "nonzero",
+                CANON_CAMERA_SETTINGS,
+                20usize,
+                120i16,
+                "Canon:CanonExposureMode",
+                Some("Unknown (120)"),
+            ),
+            (
+                "nonzero",
+                CANON_FILE_INFO,
+                3usize,
+                203i16,
+                "Canon:BracketMode",
+                Some("Unknown (203)"),
+            ),
+            (
+                "nonzero",
+                CANON_FILE_INFO,
+                7usize,
+                207i16,
+                "Canon:RawJpgSize",
+                Some("Unknown (207)"),
+            ),
+            (
+                "nonzero",
+                CANON_FILE_INFO,
+                8usize,
+                208i16,
+                "Canon:LongExposureNoiseReduction2",
+                Some("Unknown (208)"),
+            ),
+            (
+                "nonzero",
+                CANON_FILE_INFO,
+                9usize,
+                209i16,
+                "Canon:WBBracketMode",
+                Some("Unknown (209)"),
+            ),
+            (
+                "nonzero",
+                CANON_FILE_INFO,
+                14usize,
+                214i16,
+                "Canon:FilterEffect",
+                Some("Unknown (214)"),
+            ),
+            (
+                "nonzero",
+                CANON_FILE_INFO,
+                15usize,
+                215i16,
+                "Canon:ToningEffect",
+                Some("Unknown (215)"),
+            ),
+            (
+                "nonzero",
+                CANON_FILE_INFO,
+                19usize,
+                219i16,
+                "Canon:LiveViewShooting",
+                Some("Unknown (219)"),
+            ),
+            (
+                "nonzero",
+                CANON_FILE_INFO,
+                23usize,
+                223i16,
+                "Canon:ShutterMode",
+                Some("Unknown (223)"),
+            ),
+            (
+                "nonzero",
+                CANON_FILE_INFO,
+                25usize,
+                225i16,
+                "Canon:FlashExposureLock",
+                Some("Unknown (225)"),
+            ),
+            (
+                "nonzero",
+                CANON_FILE_INFO,
+                32usize,
+                232i16,
+                "Canon:AntiFlicker",
+                Some("Unknown (232)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                1usize,
+                101i16,
+                "Canon:MacroMode",
+                Some("Unknown (101)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                2usize,
+                16404i16,
+                "Canon:SelfTimer",
+                Some("2 s, Custom"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                3usize,
+                103i16,
+                "Canon:Quality",
+                Some("Unknown (103)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                4usize,
+                104i16,
+                "Canon:CanonFlashMode",
+                Some("Unknown (104)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                5usize,
+                105i16,
+                "Canon:ContinuousDrive",
+                Some("Unknown (105)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                7usize,
+                107i16,
+                "Canon:FocusMode",
+                Some("Unknown (107)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                9usize,
+                -1i16,
+                "Canon:RecordMode",
+                None,
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                10usize,
+                110i16,
+                "Canon:CanonImageSize",
+                Some("Unknown (110)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                11usize,
+                111i16,
+                "Canon:EasyMode",
+                Some("Unknown (111)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                12usize,
+                112i16,
+                "Canon:DigitalZoom",
+                Some("Unknown (112)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                13usize,
+                32767i16,
+                "Canon:Contrast",
+                None,
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                14usize,
+                32767i16,
+                "Canon:Saturation",
+                None,
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                17usize,
+                117i16,
+                "Canon:MeteringMode",
+                Some("Unknown (117)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                18usize,
+                118i16,
+                "Canon:FocusRange",
+                Some("Unknown (118)"),
+            ),
+            (
+                "veto",
+                CANON_CAMERA_SETTINGS,
+                20usize,
+                120i16,
+                "Canon:CanonExposureMode",
+                Some("Unknown (120)"),
+            ),
+            (
+                "veto",
+                CANON_FILE_INFO,
+                3usize,
+                203i16,
+                "Canon:BracketMode",
+                Some("Unknown (203)"),
+            ),
+            (
+                "veto",
+                CANON_FILE_INFO,
+                7usize,
+                -1i16,
+                "Canon:RawJpgSize",
+                None,
+            ),
+            (
+                "veto",
+                CANON_FILE_INFO,
+                8usize,
+                -1i16,
+                "Canon:LongExposureNoiseReduction2",
+                None,
+            ),
+            (
+                "veto",
+                CANON_FILE_INFO,
+                9usize,
+                209i16,
+                "Canon:WBBracketMode",
+                Some("Unknown (209)"),
+            ),
+            (
+                "veto",
+                CANON_FILE_INFO,
+                14usize,
+                -1i16,
+                "Canon:FilterEffect",
+                None,
+            ),
+            (
+                "veto",
+                CANON_FILE_INFO,
+                15usize,
+                -1i16,
+                "Canon:ToningEffect",
+                None,
+            ),
+            (
+                "veto",
+                CANON_FILE_INFO,
+                19usize,
+                219i16,
+                "Canon:LiveViewShooting",
+                Some("Unknown (219)"),
+            ),
+            (
+                "veto",
+                CANON_FILE_INFO,
+                23usize,
+                223i16,
+                "Canon:ShutterMode",
+                Some("Unknown (223)"),
+            ),
+            (
+                "veto",
+                CANON_FILE_INFO,
+                25usize,
+                225i16,
+                "Canon:FlashExposureLock",
+                Some("Unknown (225)"),
+            ),
+            (
+                "veto",
+                CANON_FILE_INFO,
+                32usize,
+                232i16,
+                "Canon:AntiFlicker",
+                Some("Unknown (232)"),
+            ),
+        ];
+        for case in ["zero", "nonzero", "veto"] {
+            for tag in [CANON_CAMERA_SETTINGS, CANON_FILE_INFO] {
+                let mut words = vec![0i16; if tag == CANON_CAMERA_SETTINGS { 23 } else { 62 }];
+                words[0] = (words.len() * 2) as i16;
+                for &(name, table, index, raw, _, _) in &cases {
+                    if name == case && table == tag {
+                        words[index] = raw;
+                    }
+                }
+                let data = canon_makernote_with_short_array(tag, &words);
+                let mut values = HashMap::new();
+                let printed = parse_canon_makernote_impl_located_with_values(
+                    &data,
+                    &data,
+                    ByteOrder::LittleEndian,
+                    None,
+                    None,
+                    Some(&mut values),
+                )
+                .unwrap();
+                for &(name, table, _, raw, key, expected) in &cases {
+                    if name != case || table != tag {
+                        continue;
+                    }
+                    assert_eq!(
+                        printed.get(key).map(String::as_str),
+                        expected,
+                        "{case}/{key}"
+                    );
+                    assert_eq!(
+                        values.get(key).cloned(),
+                        expected.map(|_| raw.to_string()),
+                        "{case}/{key}"
+                    );
+                }
+            }
+        }
+        // A shortened array may not create a value form for an unread slot.
+        let data = canon_makernote_with_short_array(CANON_CAMERA_SETTINGS, &[6, 2, 20]);
+        let mut values = HashMap::new();
+        let printed = parse_canon_makernote_impl_located_with_values(
+            &data,
+            &data,
+            ByteOrder::LittleEndian,
+            None,
+            None,
+            Some(&mut values),
+        )
+        .unwrap();
+        assert_eq!(values.get("Canon:MacroMode").map(String::as_str), Some("2"));
+        assert_eq!(
+            values.get("Canon:SelfTimer").map(String::as_str),
+            Some("20")
+        );
+        assert!(!printed.contains_key("Canon:Quality"));
+        assert!(!values.contains_key("Canon:Quality"));
     }
 }
 
