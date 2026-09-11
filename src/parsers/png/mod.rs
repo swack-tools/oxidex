@@ -37,8 +37,6 @@
 #![allow(dead_code)]
 
 pub mod chunk_parser;
-mod exif;
-mod value_conversion;
 
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
 use crate::core::{FileReader, MetadataMap, TagValue};
@@ -379,14 +377,20 @@ pub fn parse_png_metadata_with_diagnostics(
             }
 
             b"eXIf" => {
-                // Parse eXIf chunk and extract EXIF tags
-                // The eXIf chunk contains raw TIFF/EXIF data which needs to be parsed
-                // to extract tags from IFD0, ExifIFD, and GPS IFD
-                if let Err(e) = exif::parse_and_insert_exif_tags(&chunk.data, &mut metadata) {
-                    diagnostics.push(Diagnostic::warning(format!(
-                        "Failed to parse eXIf chunk: {e}"
-                    )));
-                    // Skip malformed eXIf chunks (recorded above, not fatal)
+                // PNG.pm 13.59:308-316 declares eXIf as a SubDirectory of
+                // Image::ExifTool::Exif::Main and ProcessPNG_eXIf
+                // (PNG.pm:1358-1394) hands the chunk to ProcessTIFF, so the
+                // IFD0/ExifIFD/GPS rows are exactly those of the same TIFF
+                // block inside a JPEG APP1 -- the shared decoder, not a PNG
+                // copy of it.
+                if !crate::parsers::image::embedded::parse_embedded_exif(
+                    &chunk.data,
+                    0,
+                    &mut metadata,
+                ) {
+                    diagnostics.push(Diagnostic::warning(
+                        "Failed to parse eXIf chunk: invalid TIFF header",
+                    ));
                 }
             }
 
@@ -731,6 +735,57 @@ mod tests {
         );
         // Tag 0x010F is Make - parser now uses "IFD0:Make" instead of "EXIF:0x010F"
         assert_eq!(metadata.get_string("IFD0:Make"), Some("Tst"));
+    }
+
+    /// Splices an eXIf chunk carrying `tiff` before IEND of a minimal PNG.
+    fn png_with_exif_chunk(tiff: &[u8]) -> Vec<u8> {
+        let mut data = create_minimal_png();
+        let iend_pos = data.len() - 12;
+        let mut chunk = (tiff.len() as u32).to_be_bytes().to_vec();
+        chunk.extend_from_slice(b"eXIf");
+        chunk.extend_from_slice(tiff);
+        chunk.extend_from_slice(&0u32.to_be_bytes()); // CRC (dummy)
+        data.splice(iend_pos..iend_pos, chunk);
+        data
+    }
+
+    /// Exif.pm 13.59:3849-3873 through the eXIf chunk (PNG.pm:308-316 hands
+    /// it to Exif::Main via ProcessTIFF): an all-NUL PanasonicTitle creates
+    /// no tag, a NUL-padded PanasonicTitle2 prints exactly, and Make loses
+    /// its trailing blank (Exif.pm:585) -- the rows the same TIFF block
+    /// prints inside a JPEG. No fabricated `PNG:Exif*` duplicate exists.
+    #[test]
+    fn test_exif_chunk_panasonic_title_rawconv_matches_jpeg_path() {
+        use crate::parsers::image::embedded::test_fixtures::{
+            assert_block_a, assert_block_b, panasonic_title_block_a, panasonic_title_block_b,
+        };
+
+        let reader = TestReader::new(png_with_exif_chunk(&panasonic_title_block_a()));
+        let metadata = parse_png_metadata(&reader).unwrap();
+        assert_block_a(&metadata);
+        assert!(
+            metadata.keys().all(|k| !k.starts_with("PNG:Exif")),
+            "eXIf rows are IFD0/ExifIFD/GPS only, got {:?}",
+            metadata.keys().collect::<Vec<_>>()
+        );
+
+        let reader = TestReader::new(png_with_exif_chunk(&panasonic_title_block_b()));
+        let metadata = parse_png_metadata(&reader).unwrap();
+        assert_block_b(&metadata);
+    }
+
+    /// PNG.pm 13.59:1190 hands the eXIf chunk to ProcessTIFF with
+    /// `Base => 0`, so the offsets reported from it stay block-relative
+    /// (the oracle prints 1000 for this chunk wherever it sits in the file).
+    #[test]
+    fn test_exif_chunk_offsets_stay_block_relative() {
+        use crate::parsers::image::embedded::test_fixtures::{
+            assert_other_image_start, interop_offset_block,
+        };
+
+        let reader = TestReader::new(png_with_exif_chunk(&interop_offset_block()));
+        let metadata = parse_png_metadata(&reader).unwrap();
+        assert_other_image_start(&metadata, 0);
     }
 
     #[test]

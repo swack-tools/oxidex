@@ -2032,12 +2032,20 @@ const MAX_THUMBNAIL_BYTES: u64 = 1 << 20;
 fn next_ifd_offset(
     reader: &dyn FileReader,
     ifd_offset: u64,
-    entry_count: usize,
+    _entry_count: usize,
     byte_order: ByteOrder,
 ) -> Option<u64> {
+    // Callers may supply the number of decoded entries, but parse_ifd skips
+    // bad formats and unreadable values. Only the physical count locates the
+    // pointer after the complete entry array. Keep the existing helper/API
+    // arguments while deriving this structural fact from the directory.
+    if ifd_offset.checked_add(2)? > reader.size() {
+        return None;
+    }
+    let entry_count = u64::from(ifd_entry_count(reader, ifd_offset, byte_order)?);
     let pointer_offset = ifd_offset
         .checked_add(2)?
-        .checked_add((entry_count as u64).checked_mul(12)?)?;
+        .checked_add(entry_count.checked_mul(12)?)?;
 
     if pointer_offset.checked_add(4)? > reader.size() {
         return None;
@@ -2568,6 +2576,60 @@ pub fn parse_ifd1_thumbnail(
         "IFD1:ThumbnailImage",
         read_or_placeholder(reader, offset, length),
     );
+}
+
+/// Inserts the IFD1 entries [`parse_ifd1_thumbnail`] leaves out.
+///
+/// ProcessTIFF walks IFD1 as a full Exif::Main directory, so ExifTool prints
+/// every entry it holds (`exiftool -G1 -a` on Photoshop.psd and PDF.pdf:
+/// Compression, XResolution, YResolution, ResolutionUnit, ThumbnailOffset,
+/// ThumbnailLength). `parse_ifd1_thumbnail` names the thumbnail family --
+/// SubfileType, Compression, the strip tags and the offset/length pair -- and
+/// this pass hands the rest of the directory to the core converter under the
+/// `IFD1` group, so a self-contained block loses no row its container copy
+/// used to print.
+pub fn parse_ifd1_other_tags(
+    reader: &dyn FileReader,
+    ifd0_offset: u64,
+    ifd0_entry_count: usize,
+    byte_order: ByteOrder,
+    metadata: &mut MetadataMap,
+) {
+    let Some(ifd1_offset) = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
+    else {
+        return;
+    };
+    if visited_directory_offsets(reader, ifd0_offset, byte_order).contains(&ifd1_offset) {
+        return;
+    }
+    let Ok(entries) = parse_ifd(reader, ifd1_offset, byte_order) else {
+        return;
+    };
+
+    for (tag_id, field_type, value_count, raw_bytes) in &entries {
+        if matches!(
+            *tag_id,
+            TAG_SUBFILE_TYPE
+                | TAG_COMPRESSION
+                | TAG_STRIP_OFFSETS
+                | TAG_ROWS_PER_STRIP
+                | TAG_STRIP_BYTE_COUNTS
+                | TAG_THUMBNAIL_OFFSET
+                | TAG_THUMBNAIL_LENGTH
+        ) {
+            continue;
+        }
+        let Some(value) = crate::core::tag_conversion::exif_entry_to_tag_value(
+            raw_bytes,
+            *field_type,
+            *value_count,
+            *tag_id,
+            byte_order,
+        ) else {
+            continue;
+        };
+        metadata.insert(lookup_tag_name(*tag_id, "IFD1"), value);
+    }
 }
 
 /// Parses the Leica-preview IFD (IFD2) that follows IFD1 and emits

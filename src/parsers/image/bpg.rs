@@ -222,7 +222,7 @@ impl BPGParser {
                 {
                     payload = &payload[1..];
                 }
-                parse_embedded_exif(payload, metadata);
+                parse_embedded_exif(payload, 0, metadata);
             } else if ext_type == EXT_ICC_PROFILE {
                 parse_embedded_icc(payload, metadata);
             } else if ext_type == EXT_XMP {

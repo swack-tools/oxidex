@@ -22,7 +22,7 @@
 
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::error::Result;
-use crate::parsers::image::embedded::parse_embedded_exif;
+use crate::parsers::image::embedded::{parse_embedded_exif, parse_embedded_thumbnail_ifd};
 use crate::parsers::jpeg::app_segments::photoshop::parse_photoshop_irb;
 use crate::parsers::jpeg::iptc_parser::{
     dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
@@ -100,8 +100,8 @@ pub fn parse_photoshop_image_resources(reader: &dyn FileReader) -> Result<Metada
                     }
                     _ => {}
                 }
-                parse_embedded_exif(payload, &mut exif);
-                insert_thumbnail_ifd_tags(payload, &mut exif);
+                parse_embedded_exif(payload, 0, &mut exif);
+                parse_embedded_thumbnail_ifd(payload, &mut exif);
                 for (key, value) in exif.iter() {
                     // A tag id the generated registry has no name for comes
                     // back as `Group:0xNNNN`. ExifTool reports no such tag
@@ -243,47 +243,6 @@ fn insert_iptc_tags(payload: &[u8], metadata: &mut MetadataMap) {
         };
         metadata.insert(tag_name, value);
     }
-}
-
-/// Walks the thumbnail IFD (IFD1) of the TIFF block in resource 0x0422.
-///
-/// [`parse_embedded_exif`] covers IFD0, the EXIF sub-IFD and the GPS sub-IFD
-/// but stops before IFD0's next-IFD pointer, so `Compression`,
-/// `ThumbnailOffset` and `ThumbnailLength` need this second pass. The block
-/// is self-contained -- its offsets are relative to its own TIFF header and
-/// its position inside the PDF is not part of them -- so the TIFF base added
-/// to `ThumbnailOffset` is 0, which is the 842 ExifTool prints for
-/// ExifTool's own PDF.pdf.
-fn insert_thumbnail_ifd_tags(tiff: &[u8], metadata: &mut MetadataMap) {
-    use crate::core::tiff_helpers::parse_ifd1_thumbnail;
-    use crate::io::buffered_reader::BufferedReader;
-    use crate::io::{ByteOrder as IoByteOrder, EndianReader};
-    use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
-
-    if tiff.len() < 8 {
-        return;
-    }
-    let (byte_order, io_order) = match &tiff[0..2] {
-        b"II" => (ByteOrder::LittleEndian, IoByteOrder::Little),
-        b"MM" => (ByteOrder::BigEndian, IoByteOrder::Big),
-        _ => return,
-    };
-
-    let header = EndianReader::new(tiff, io_order);
-    // BigTIFF (0x002B) uses 8-byte offsets `parse_ifd` cannot walk.
-    if header.u16_at(2).unwrap_or(0) != 0x002A {
-        return;
-    }
-    let Some(ifd0_offset) = header.u32_at(4).map(u64::from) else {
-        return;
-    };
-
-    let reader = BufferedReader::from_bytes(tiff);
-    let Ok(entries) = parse_ifd(&reader, ifd0_offset, byte_order) else {
-        return;
-    };
-
-    parse_ifd1_thumbnail(&reader, ifd0_offset, entries.len(), byte_order, 0, metadata);
 }
 
 /// Locates and decodes the `/ImageResources` stream.

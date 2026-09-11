@@ -358,7 +358,9 @@ fn json_string_value(s: &str) -> serde_json::Value {
     } else if let Some(n) = exiftool_json_number(s) {
         n
     } else {
-        serde_json::Value::String(s.to_string())
+        // EscapeJSON (exiftool:3819) deletes NULs only after its typing
+        // checks. "12\0" must stay a quoted "12", not become a number.
+        serde_json::Value::String(s.replace('\0', ""))
     }
 }
 
@@ -717,9 +719,8 @@ pub(crate) fn format_tag_value_short(tag_name: &str, value: &TagValue) -> String
 /// trim first would silently delete it.
 ///
 /// This is display only, and deliberately not applied to `-j`: ExifTool's JSON
-/// writer escapes control characters as `\uXXXX` (`exiftool`:3821) rather than
-/// replacing them, and oxidex's JSON path emits the real character, which
-/// decodes to the same string.
+/// writer removes NULs after typing, and escapes other control characters
+/// as `\uXXXX` (`exiftool`:3819-3821) rather than replacing them.
 fn printable_text_value(value: &str) -> String {
     let translated: String = value
         .chars()
@@ -976,6 +977,45 @@ fn lookup_tiff_enum_tag_id(tag_name: &str) -> Option<u16> {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn json_typing_precedes_nul_removal() {
+        for (input, expected) in [
+            ("12", serde_json::json!(12)),
+            ("true", serde_json::json!(true)),
+            ("false", serde_json::json!(false)),
+            ("12\0", serde_json::json!("12")),
+            ("true\0", serde_json::json!("true")),
+            ("false\0", serde_json::json!("false")),
+            ("1\02", serde_json::json!("12")),
+            ("AB\0CD\0", serde_json::json!("ABCD")),
+            ("Canon\0 ", serde_json::json!("Canon ")),
+            ("A\x01B\0", serde_json::json!("A\x01B")),
+            ("\0\0", serde_json::json!("")),
+            ("01", serde_json::json!("01")),
+        ] {
+            let value = TagValue::new_string(input);
+            assert_eq!(
+                tag_value_to_json(Some("IFD0:DocumentName"), &value),
+                expected
+            );
+        }
+        // Ordinary EXIF typing/PrintConv paths still use their existing rules.
+        assert_eq!(
+            tag_value_to_json(Some("IFD0:Orientation"), &TagValue::new_integer(6)),
+            serde_json::json!("Rotate 90 CW")
+        );
+        // Plain output uses Printable, not EscapeJSON's PHP branch:
+        // delete every NUL, translate controls, then trim trailing whitespace.
+        assert_eq!(
+            format_tag_value("IFD0:DocumentName", &TagValue::new_string("A\0B\x01 \0")),
+            "AB."
+        );
+        assert_eq!(
+            format_tag_value_short("IFD0:DocumentName", &TagValue::new_string("A\0B\x01 \0")),
+            "AB."
+        );
+    }
 
     #[test]
     fn test_human_readable_formatter_empty_metadata() {

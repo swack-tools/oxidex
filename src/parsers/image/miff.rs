@@ -238,7 +238,7 @@ pub fn parse_miff_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
                 && let Some(tiff_data) = profile.strip_prefix(b"Exif\0\0")
             {
                 let mut embedded = MetadataMap::new();
-                if parse_embedded_exif(tiff_data, &mut embedded) {
+                if parse_embedded_exif(tiff_data, 0, &mut embedded) {
                     for (key, value) in embedded {
                         let base_name = key.split_once(':').map_or(key.as_str(), |(_, name)| name);
                         if MIFF_EXIF_TAGS.contains(&base_name) {

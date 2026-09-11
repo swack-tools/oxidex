@@ -7,7 +7,7 @@ use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
 use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
-use crate::core::tag_conversion::{exif_raw_conv_drops_entry, raw_bytes_to_tag_value};
+use crate::core::tag_conversion::exif_entry_to_tag_value;
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
 use crate::exiftool_tables::{decode_binary_table, find_table};
 use crate::io::EndianReader;
@@ -411,16 +411,14 @@ fn process_ifd0_tags(
         // An Exif::Main RawConv that returns undef creates no tag at all
         // (PanasonicTitle / PanasonicTitle2 when Panasonic's fixed-size field
         // is all NUL, Exif.pm 13.59:3849-3873).
-        if exif_raw_conv_drops_entry(*tag_id, bytes) {
+        let Some(tag_value) =
+            exif_entry_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
+        else {
             continue;
-        }
+        };
 
         // Convert tag ID to tag name (IFD0 for main JPEG EXIF)
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
-
-        // Convert raw bytes to TagValue
-        let tag_value =
-            raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order);
 
         metadata.insert(tag_name, tag_value);
     }
