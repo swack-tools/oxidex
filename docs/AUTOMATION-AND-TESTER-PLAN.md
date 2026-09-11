@@ -1,21 +1,24 @@
 # Remaining automation work
 
-**Reviewed 2026-09-10 at `c7f5dd81`, ExifTool 13.59.** This is the maintained
-backlog accompanying [Tag machinery status](./TAG_MACHINERY_STATUS.md).
+**Original audit: 2026-09-10 at `c7f5dd81`, ExifTool 13.59.** The current queue
+reflects the verified PR #737–#740 landings through
+[`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837).
+This is the maintained backlog accompanying [Tag machinery status](./TAG_MACHINERY_STATUS.md).
 It replaces the local September 9 proposal's ordering and speculative schedule.
 The status page owns completion history; this page owns remaining work and its
 acceptance criteria. No parser or generator change is implemented by this plan.
 See the [execution plan](./UPGRADE-NEXT-STEPS.md) for the current bounded work,
 dependencies and milestone updates.
 
-Current continuation: `codex/wire-remaining-producers` builds on validated
-#739 and has completed the three omitted producers. All 28 outputs are wired
-and independently checked. The Canon raw-ID/RF defects and the observed
-cold-build/cleanup failures are repaired. The real 193-file same-pin transaction
-passes at `1428b6c7` with identical before/after totals and unchanged caller
-source/index. The execution plan records the exact checks. Remaining work is
-stack integration and the actual release-delta experiment, not rebuilding this
-infrastructure.
+The classifier, shared manifest, Canon CODE-ref checks, isolated transaction and
+three producer integrations are implemented, validated and landed in PRs
+#737–#740. All 28 outputs are wired and independently checked. The Canon raw-ID/RF
+defects and cold-build/cleanup failures are repaired. The real 193-file same-pin
+transaction passed at `1428b6c7` with identical before/after totals and unchanged
+caller source/index. The [execution plan](./UPGRADE-NEXT-STEPS.md) preserves the
+original evidence and the [landing record](./TAG_MACHINERY_STATUS.md#landed-upgrade-tooling)
+identifies the verified squash commits. The actual release-delta experiment has
+**not been run** and is the next task.
 
 ## What carried forward from the September 9 proposal
 
@@ -23,7 +26,7 @@ infrastructure.
 | --- | --- |
 | 1.1 Fix the census | Landed as `380babda`; related script correction landed as `c7f5dd81`. Preserve the corrected occurrence accounting. |
 | 1.2 Coverage ledger | Partial foundations already exist. Join existing artifacts and inventory hand producers; do not start a second expression ledger. |
-| 1.3 Version-bump differ | Classifier and isolated transaction repairs are implemented in the draft stack. Complete acceptance/integration and measure a real release transition. |
+| 1.3 Version-bump differ | Classifier, inventory and isolated transaction repairs landed in PRs #737–#740 with same-pin acceptance. Measure a real release transition next. |
 | 1.4 Sample-free walk checker | Proposed extension. Existing expression, condition, subdirectory and carrier checks remain useful; begin with the next table/engine migration. |
 | 1.5 Automatic activation | Deferred until certification covers the actual walk and producer conflicts. Keep current activation gates in force meanwhile. |
 | Part 2: bulk hand-code retirement | Choose bounded migrations by demonstrated benefit. Remove an overlapping hand producer only after its replacement is validated. |
@@ -33,57 +36,16 @@ test selected inputs; they do not prove arbitrary Perl/Rust equivalence or
 real-world offset/firmware behavior. The declaration inventory can be exhaustive
 within its extraction scope while runtime testing remains explicitly bounded.
 
-## 1. Validate and integrate the implemented upgrade stack
+The landed classifier uses the generator's emitter/refusal rules. Its HAND
+bucket includes missing verification evidence and conservatively classified
+facts; it is not a count of changes that require handwritten code or an
+hours-per-upgrade estimate. Generated declaration and artifact counts are not
+raw extraction coverage. Keep the manifest, transaction and existing oracles
+as the basis of the following work.
 
-**Why first:** a trustworthy upgrade experiment is required before measuring
-recurring manual work. The classifier, shared artifact manifest, isolated
-old/new builds, provenance checks, CODE-ref repair and recoverable promotion
-are implemented in draft PRs #737–#739. The producer continuation extends the
-same manifest to 28 outputs; reuse this implementation.
+## 1. Measure a real upgrade
 
-Remaining acceptance and integration work:
-
-- Preserve the completed 28-output acceptance evidence and resolve review or
-  hosted-CI findings against the final submitted head.
-- Review and land the existing draft stack in order, with exact-head CI and
-  preserved local evidence; resolve any review findings in those changes.
-- Keep unsupported declarations, four generator-less Sony/Nikon outputs and
-  catalog carry-forward policy explicit in the subsequent release experiment.
-
-**Implementation awaiting integration:** `b36983c2` on
-`codex/ifd-upgrade-triage` addresses IFD declaration classification using the
-generator's emitter/refusal rules. Reuse and land that work rather than rebuild
-it. Its HAND bucket includes unverified cases; it does not provide an
-hours-per-upgrade estimate. The artifact manifest is implemented on the stacked
-`codex/upgrade-artifact-manifest` branch, with real positive and undeclared-write
-controls; integrate it rather than creating another inventory. Complete old/new
-builds and checked transaction recovery are implemented on the subsequent
-`codex/upgrade-next-steps` branch. Reviewed controls pass on macOS/Linux, and a
-genuine 193-file same-pin dry run passes with unchanged caller source/index and
-zero new comparison regressions. Integration and a release-delta rehearsal remain
-open. The CODE-ref repair is
-implemented on `codex/upgrade-next-steps`: both audited `CanonCustom::ConvertPfn`
-spellings collect all 29 uses, and emission requires the named verified key and
-correct input domain. Both native Perl 5.34 and 5.38 oracles pass, with unchanged
-generated binary/IFD Rust. Integrate that tested repair before a cross-Perl
-rehearsal; do not rebuild it or confuse collected-expression verification with
-complete collection. The [execution plan](./UPGRADE-NEXT-STEPS.md) records its
-exact checks and distinguishes implemented work from the outstanding release
-rehearsal and integration.
-See the [manifest follow-up](./TAG_MACHINERY_STATUS.md#pending-generated-output-inventory)
-and [classifier follow-up](./TAG_MACHINERY_STATUS.md#pending-upgrade-classifier-repair)
-for validation and limits.
-
-Retained acceptance contract: every selected persistent output and unexpected
-final repository change is accounted for within the documented exclusions; a
-dry run leaves caller source/index unchanged; deliberate failures demonstrate
-cleanup; an IFD declaration
-supported by codegen is classified accordingly; neither comparison build mixes
-releases. Do not use a manually duplicated test manifest to prove completeness.
-
-## 2. Measure a real upgrade
-
-Rehearse 13.55 to 13.59 after item 1. This published interval is a test input,
+Rehearse 13.55 to 13.59 using the landed workflow. This published interval is a test input,
 not a change to the repository's supported pin. Retain the smaller 13.58 to
 13.59 report as historical evidence.
 
@@ -105,7 +67,7 @@ a known incorrect declaration and an unaccounted generated output fail. Report
 manual interventions and elapsed time for this run, without extrapolating a
 fixed cost for every future release.
 
-## 3. Finish the existing runtime migrations
+## 2. Finish the existing runtime migrations
 
 Coordinate with the owners listed in the status page before starting work.
 IFD1 is the next high-value candidate identified by the corrected census;
@@ -123,7 +85,7 @@ Acceptance for each landing:
 4. Retire replaced hand code only after these checks pass. Keep unexercised
    behavior explicitly unverified and preserve a bounded reversal path.
 
-## 4. Complete accounting by joining existing evidence
+## 3. Complete accounting by joining existing evidence
 
 Reuse codegen's reports, the expression/value-conversion ledgers, static
 reachability and existing occurrence/read-status data. Inventory declarations
@@ -146,7 +108,7 @@ exceptions, deterministic diffs and a negative control for a silently omitted
 declaration. Add conformance's status/family hooks when their data sources are
 ready; avoid creating a parallel model with the same unresolved seams.
 
-## 5. Broaden verification and retire hand code incrementally
+## 4. Broaden verification and retire hand code incrementally
 
 For the next selected engine/table, synthesize inputs from its declarations and
 compare the actual Rust walk with ExifTool, including conditions, nested offsets

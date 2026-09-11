@@ -1,21 +1,40 @@
 # Tag machinery: completed work and useful next steps
 
-**Status reviewed:** 2026-09-10 against `refactor/tag-machinery` at
-`c7f5dd81eac5` (ExifTool pin **13.59**). This is a dated integration-branch
-snapshot, not a claim about `main` or a released binary. The documentation
-change itself does not implement or enable any parser behavior.
+**Current integration:** `refactor/tag-machinery` at
+[`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837),
+after the verified PR #737–#740 squash merges. ExifTool remains pinned to **13.59**.
+This is not a claim about `main` or a released binary. The documentation change
+itself does not implement or enable parser behavior.
 
-Implementations completed after this audit are recorded under
-[pending upgrade-classifier repair](#pending-upgrade-classifier-repair) and
-[pending generated-output inventory](#pending-generated-output-inventory), with
-the latest continuation under [pending producer wiring](#pending-producer-wiring).
-Their branches have not landed in the integration snapshot above.
+**Historical audit:** 2026-09-10 at `c7f5dd81eac5`. Its static census, original
+defect list and branch observations remain labeled below. The subsequent
+[classifier repair](#pending-upgrade-classifier-repair),
+[generated-output inventory](#pending-generated-output-inventory) and
+[producer integration](#pending-producer-wiring) are now landed. The current
+queue supersedes the original audit's integration tasks.
 
 Start here to decide what to work on. Use the
 [implementation backlog](./AUTOMATION-AND-TESTER-PLAN.md) for acceptance criteria,
 [Transcription](./TRANSCRIPTION.md) for the method, and
 `tools/exiftool-tables/README.md` for commands. Older plans are design records;
 their unchecked steps and old measurements are not a current task queue.
+
+## Landed upgrade tooling
+
+| PR | Landed change | Squash commit |
+| --- | --- | --- |
+| [#737](https://github.com/swack-tools/oxidex/pull/737) | IFD classification and validation repairs | [`b0ad1337`](https://github.com/swack-tools/oxidex/commit/b0ad13376c48cdd46370350ec864d5a94fdfdd5d) |
+| [#738](https://github.com/swack-tools/oxidex/pull/738) | Shared generated-output inventory and write checks | [`d63b1f5a`](https://github.com/swack-tools/oxidex/commit/d63b1f5a0656e15814ca5100f3462378fbe22eff) |
+| [#739](https://github.com/swack-tools/oxidex/pull/739) | Verified Canon CODE references and isolated upgrade transaction | [`5c6e8380`](https://github.com/swack-tools/oxidex/commit/5c6e8380b70999df83439f448f4f4aa65be76c81) |
+| [#740](https://github.com/swack-tools/oxidex/pull/740) | Three producer integrations, Canon lens identity and oracle execution repairs | [`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837) |
+
+Every squash commit has the same complete source tree as its reviewed PR head,
+and the four commits form the verified integration sequence. The final tree
+matches reviewed `028f2bb5`; that head differs from acceptance commit `1428b6c7`
+only in these four documentation files. The 28-output, 193-file same-pin result
+therefore remains valid evidence for the unchanged implementation. It was not
+rerun by this documentation update. The actual 13.55-to-13.59 rehearsal is
+**not run**. Static declaration classification is not raw extraction coverage.
 
 ## What the evidence establishes
 
@@ -36,9 +55,9 @@ Status terms:
 - **Proposed:** a useful next step with no completed implementation established.
 - **Historical/deferred:** retained for context; do not execute it as the next task.
 
-## What is already implemented
+## What was implemented at the historical audit
 
-| Area | Status at the reviewed commit | Evidence and limit |
+| Area | Status at `c7f5dd81` | Evidence and limit |
 | --- | --- | --- |
 | Tag-name catalog | Landed | `src/tag_sync/` and the tag crates consume the documentation view. Knowing a name does not establish a parser, layout or output. |
 | Binary table transcription | Landed | `dump_tables.pl`, `codegen.py`, `src/exiftool_tables/binary_tables.rs`, independent `oracle.pl`/`verify.py`. Unsupported behavior remains. |
@@ -84,19 +103,21 @@ may finish their bounded branches in parallel; this list does not restart them.
 
 | Priority | Work | Why it is useful | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Integrate the validated upgrade stack | Makes upgrade maintenance measurable and prevents mixed-version artifacts | Classifier, manifest, transaction and 28-output wiring are validated; review and land the draft stack in order |
-| 2 | Rehearse 13.55 to 13.59 with the repaired workflow | Separates actual new-release work from accumulated compatibility debt | Reproducible work order and artifact/probe/corpus results for both releases, with explicit unsupported and unexercised changes |
-| 3 | Finish the IFD1/shared EXIF work already started | Reuses the Exif table for a large missing-output cluster instead of adding individual thumbnail tags | Landed routing plus measured occurrence-preserving comparison and residual ownership; predicted gains are not yet results |
-| 4 | Connect existing accounting into a declaration/producer inventory | Exposes generated-but-off tables, handwritten ownership and completely unemitted tables | Every upstream declaration gets an explicit disposition; preserve separate static, enabled and actually observed execution states |
-| 5 | Extend shared semantics and synthetic walk checks for the next migration | Removes a demonstrated blocker across multiple tables | Independent differential checks, negative controls and a measured runtime migration |
-| 6 | Retire duplicated hand data and reconstruct needed missing generators | Reduces future upgrade review without losing behavior | Replacement regenerates reproducibly; overlapping producers removed only after parity; remaining hand residuals name their reason |
+| 1 | Rehearse 13.55 to 13.59 with the repaired workflow | Separates actual new-release work from accumulated compatibility debt | Reproducible work order and artifact/probe/corpus results for both releases, with explicit unsupported and unexercised changes |
+| 2 | Finish the IFD1/shared EXIF work already started | Reuses the Exif table for a large missing-output cluster instead of adding individual thumbnail tags | Landed routing plus measured occurrence-preserving comparison and residual ownership; predicted gains are not yet results |
+| 3 | Connect existing accounting into a declaration/producer inventory | Exposes generated-but-off tables, handwritten ownership and completely unemitted tables | Every upstream declaration gets an explicit disposition; preserve separate static, enabled and actually observed execution states |
+| 4 | Extend shared semantics and synthetic walk checks for the next migration | Removes a demonstrated blocker across multiple tables | Independent differential checks, negative controls and a measured runtime migration |
+| 5 | Retire duplicated hand data and reconstruct needed missing generators | Reduces future upgrade review without losing behavior | Replacement regenerates reproducibly; overlapping producers removed only after parity; remaining hand residuals name their reason |
 
-### Concrete upgrade gaps at this snapshot
+<a id="concrete-upgrade-gaps-at-this-snapshot"></a>
 
-These are findings at the integration snapshot; the documentation audit did
-not execute the bump command. Subsequent unlanded work below addresses items
-1–4, including the isolated transaction. This historical defect list is not
-the current task queue; use the execution plan before implementing anything here.
+### Historical upgrade gaps at `c7f5dd81`
+
+These are findings at the original integration snapshot; that documentation
+audit did not execute the bump command. PRs #737–#740 subsequently addressed
+items 1–4, including the isolated transaction. The four producer gaps in item 5
+remain. This historical defect list is not the current task queue; use the
+execution plan before implementing anything here.
 
 1. `bump-exiftool.sh`'s `TIER1_FILES`/`TIER2_FILES` lists lag the generators.
    Outputs absent from its backup/restore accounting include IFD tables,
@@ -116,8 +137,8 @@ the current task queue; use the execution plan before implementing anything here
 4. `triage_bump.py::diff_table` and layout classification only recognize the
    binary pathway and tier-2 manifest; they do not account for supported IFD
    generation. A fresh AUTO/HAND percentage from that classifier is misleading.
-   An unlanded repair now exists; see the follow-up below before starting
-   another implementation of this item.
+   The repair subsequently landed in PR #737; see its evidence below.
+   Do not start another implementation of this item.
 5. Four generated-origin files have no committed generator:
    `sony/plain_tables.rs`, `sony/enciphered_tables.rs`,
    `nikon/settings_tables.rs`, `nikon/encrypted_tables.rs` under
@@ -149,7 +170,9 @@ establish today's automation share or an hours-per-upgrade estimate.
 - Evaluate remaining old-plan features such as Composite `Override` against a
   concrete upstream use and an observable gap before implementing them.
 
-### Pending upgrade-classifier repair
+<a id="pending-upgrade-classifier-repair"></a>
+
+### Landed upgrade-classifier repair
 
 Commit `b36983c2` on `codex/ifd-upgrade-triage` repairs IFD declaration
 classification using the actual generator's tag/variant emitter and refusal
@@ -164,13 +187,13 @@ all-targets/all-features Clippy run failed on 11 inherited `print_literal`
 findings in then-unchanged `tests/raw_metadata_parsing.rs`. Later fixture
 maintenance touched that file; current lint results are recorded below.
 
-This is pending branch work, not an integration landing or upgrade rehearsal.
+The classifier and CI repairs landed in PR #737 at
+[`b0ad1337`](https://github.com/swack-tools/oxidex/commit/b0ad13376c48cdd46370350ec864d5a94fdfdd5d).
 Triage has no oracle-ledger input, so HAND may mean missing verification evidence
 rather than a need for new source code. Equivalent-to-default facts may also
-remain conservatively classified for review. Artifact accounting has a separate
-unlanded implementation below. Complete old/new builds and checked recovery
-subsequently passed validation in PR #739; integration and a release-delta
-rehearsal remain open.
+remain conservatively classified for review. Artifact accounting landed
+separately in PR #738; complete old/new builds and checked recovery landed in
+PR #739. The actual release-delta rehearsal remains unrun.
 
 ### CI follow-up on the same branch
 
@@ -230,15 +253,17 @@ inherited warnings in other integration/forensic tests; ordinary scoped linting
 completed, and no diagnostic named the new helper or changed lines.
 
 These changes and their CI results belong to
-[PR #737](https://github.com/swack-tools/oxidex/pull/737); they are not present in
-the integration snapshot above. They do not complete the upgrade transaction,
-old/new builds or release rehearsal. The manifest follow-up is separate.
+[PR #737](https://github.com/swack-tools/oxidex/pull/737), now landed after the
+historical `c7f5dd81` snapshot. The manifest and transaction landed separately
+in PRs #738 and #739. None of those results completes a release-delta rehearsal.
 
-### Pending generated-output inventory
+<a id="pending-generated-output-inventory"></a>
 
-Implemented on `codex/upgrade-artifact-manifest`, stacked on PR #737; neither
-branch is part of the integration snapshot above. `artifacts.py` declares the
-25 persistent outputs wired at that milestone: eight in
+### Landed generated-output inventory
+
+Implemented on `codex/upgrade-artifact-manifest` and landed in PR #738 at
+[`d63b1f5a`](https://github.com/swack-tools/oxidex/commit/d63b1f5a0656e15814ca5100f3462378fbe22eff).
+At that milestone, `artifacts.py` declared 25 persistent outputs: eight in
 tier 1 and seventeen in tier 2. Regeneration paths, formatting, bump restoration
 sets, standing-HAND classification and CI's tier-2 comparison consume this
 inventory. It includes the implicit Composite computation file, conversion
@@ -266,13 +291,13 @@ field uses compared with committed Perl 5.38 output. The dump still contains
 the fields: that conversion registry did not recognize the older Perl deparse
 spelling, so the expression was excluded before oracle testing. A separate
 direct `codegen.conv_for` control found that recognized code references accepted
-an empty `verified_exprs` set. Both defects are subsequently repaired on the
-unmerged `codex/upgrade-next-steps` branch: finite literal-preserving recognition,
+an empty `verified_exprs` set. Both defects were subsequently repaired in
+PR #739: finite literal-preserving recognition,
 named ledger membership and input-domain checks now have regression controls.
 Fresh native Perl 5.34/5.38 oracles each verify 607 expressions and retain all 29
 Canon uses; regenerated binary/IFD Rust matches the committed files. See the
-[execution plan](./UPGRADE-NEXT-STEPS.md) for exact validation and remaining
-transaction work. A passing expression oracle still only covers its collected
+[execution plan](./UPGRADE-NEXT-STEPS.md) for exact validation and transaction
+limits. A passing expression oracle still only covers its collected
 and exercised population.
 
 After incorporating the parent repairs, a real tier-2 run passed with zero net
@@ -280,28 +305,30 @@ changes and a clean committed-output comparison. An undeclared ignored source
 file injected through the actual runner was rejected by its exit check. The
 probe was preserved as evidence, removed, and the clean state reverified.
 
-Remaining work: the guard detects final net changes without rollback. It cannot
+Scope limit: the guard detects final net changes without rollback. It cannot
 observe transient writes later undone, writes outside the checkout, or writes
-in excluded build/cache locations. The subsequent `codex/upgrade-next-steps`
-branch implements isolated complete variants, explicit source/interpreter and
+in excluded build/cache locations. PR #739 subsequently
+landed isolated complete variants, explicit source/interpreter and
 fresh Cargo executable identities, caller-state preservation and checked
 promotion/recovery. Reviewed controls pass on macOS/Linux. A genuine same-pin
 exercise at `9100020d` passed over 193 files with unchanged generated Rust and
 caller source/index, zero new VALUE regressions and zero MISSING growth. The
-release-delta rehearsal and integration remain pending. The
+release-delta rehearsal remains unrun. The
 [execution plan](./UPGRADE-NEXT-STEPS.md) records later validation milestones and
 recovery limits. Four vendor outputs still have no committed producer. See the
 [command reference](https://github.com/swack-tools/oxidex/blob/b7e622bf8a2d9569272b854b4d5ba90248950346/tools/exiftool-tables/README.md#generated-output-inventory-and-write-checks)
 and backlog item 1 before starting the next upgrade task.
 
-## Pending producer wiring
+<a id="pending-producer-wiring"></a>
 
-The `codex/wire-remaining-producers` continuation starts from validated draft
-PR #739 at `785ffcfd`. `b9934841` integrates the DICOM producer repair;
-`10d20b78` integrates GeoTIFF and wires both into the shared runner, expanding
-the manifest from 25 to 27 outputs. The plans and handoff are maintained as
-implementation progresses; these commits have not landed on the protected
-integration branch.
+## Landed producer integration
+
+The `codex/wire-remaining-producers` continuation started from validated
+PR #739 at `785ffcfd` and landed as PR #740 at
+[`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837).
+Implementation commit `b9934841` integrated the DICOM producer repair;
+`10d20b78` integrated GeoTIFF and wired both into the shared runner, expanding
+the manifest from 25 to 27 outputs at that intermediate milestone.
 
 A real tier-2 run at clean `10d20b78` reproduced every declared output with
 zero net source changes under selected ExifTool 13.59 / native Perl 5.34.1.
@@ -311,7 +338,7 @@ GeoTIFF CLI controls and ten DICOM controls pass; the relevant Rust modules pass
 24 and 16 tests, including the available real DICOM sample. The initial combined
 Python suite executed and passed 357 tests; five WholeDump methods were unrun
 because class setup skipped its unavailable fixture. That suite predates the
-eleventh GeoTIFF control and the pending lens/shell controls.
+eleventh GeoTIFF control and the later lens/shell controls.
 
 The lens audit found and repaired a real defect in the generated representation:
 Canon IDs 129 and 136 share a display name but require different alternatives.
@@ -321,7 +348,7 @@ identity through the RAW bridges and selects the distinct RF table. The full
 library passes 4,600 tests (one ignored), all eight targeted TIFF carriers match
 the pinned oracle, and direct `conformance.py` A/B has no per-file semantic
 regressions across 194 files. That selection includes JSON.json; the transaction
-uses 193 files. The working manifest now has 28 outputs (8 tier 1, 20 tier 2),
+uses 193 files. The landed manifest has 28 outputs (8 tier 1, 20 tier 2),
 and four real-shell orchestration controls pass.
 
 Final acceptance at `1428b6c7`: the real 28-output same-pin transaction passed
@@ -335,14 +362,14 @@ at `65d6a791` failed after 429.229 seconds due a combined cold-build/probe timeo
 and an obscuring macOS cleanup race; both were repaired and tested before this
 successful retry. The execution plan preserves failure and success evidence.
 
-The actual 13.55-to-13.59 release rehearsal and draft-stack integration remain
-open. This continuation retires no parser and changes no ExifTool pin. See the
+The actual 13.55-to-13.59 release rehearsal remains unrun. PRs #737–#740 have
+landed. This continuation retires no parser and changes no ExifTool pin. See the
 [execution plan](./UPGRADE-NEXT-STEPS.md) for the current queue and exact scope.
 
 ## Work on separate branches
 
-Local refs inspected on 2026-09-10. None of these tips was an ancestor of the
-reviewed integration commit. Branch names and comments are not live process
+Historical local refs inspected on 2026-09-10. None of these tips was an ancestor
+of the original `c7f5dd81` integration snapshot. Branch names and comments are not live process
 status or proof that the work is ready to land.
 
 | Branch | Observed tip | Scope and remaining distinction |
@@ -400,7 +427,7 @@ current comparison script on both binaries in a new A/B.
 | --- | --- |
 | Stage 1: specific wrong-value fixes | Historical landed fixes and tests exist; the original blanket exit checklist was not re-executed in this audit. Do not restart from step 1 or claim all present formats are correct. |
 | Stage 2: accounting and refusal APIs | Useful foundations landed. Complete inventory and comparison-hook integration remain partial. |
-| Stage 3: regeneration, staleness and bump | Implemented tools with known integration gaps. Repair and rehearse them before replacing them. |
+| Stage 3: regeneration, staleness and bump | Classifier, manifest, isolated transaction and 28-output integration landed in PRs #737–#740. Same-pin acceptance passed; the actual release-delta rehearsal remains unrun. |
 | Stage 4: occurrence/output contract | Store and major follow-up fixes landed. Full producer/value-form/provenance migration remains incomplete. |
 | Stage 5: schema and engine | Binary and IFD engines exist; semantics and routing remain partial. Extend the existing engine for a demonstrated blocker. |
 | Stage 6: routing, retirement and coverage | Ongoing. Olympus/ICC are concrete landed migrations; IFD1 and other branches above are unfinished at this snapshot. |

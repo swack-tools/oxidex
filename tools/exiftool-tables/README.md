@@ -2,12 +2,15 @@
 
 For completed work, known gaps and priorities, start with
 [Tag machinery status](../../docs/TAG_MACHINERY_STATUS.md). This file describes
-the tooling on the pending upgrade branch; the pin remains 13.59.
+the tooling landed through [PR #740](https://github.com/swack-tools/oxidex/pull/740)
+at [`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837);
+the pin remains 13.59.
 
-The pending changes add conservative IFD-aware upgrade classification, one
-generated-output inventory, verified Canon CODE references, and isolated upgrade
-orchestration. See the [execution plan](../../docs/UPGRADE-NEXT-STEPS.md) for
-validation and integration state. No release-delta rehearsal is complete.
+Conservative IFD-aware upgrade classification, one generated-output inventory,
+verified Canon CODE references, isolated upgrade orchestration and all 28 declared
+outputs are implemented and validated. See the
+[execution plan](../../docs/UPGRADE-NEXT-STEPS.md) for original validation evidence
+and the remaining work. The actual 13.55-to-13.59 release rehearsal has not run.
 
 ## Commands and scope
 
