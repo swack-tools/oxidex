@@ -1310,6 +1310,33 @@ mod tests {
     }
 
     #[test]
+    fn real_psd_ifd1_occurrences_follow_native_directory_order() {
+        let Some(reader) = crate::test_support::pinned_fixture_reader("Photoshop.psd") else {
+            return;
+        };
+        let metadata = PSDParser.parse(&reader).expect("pinned PSD parses");
+        let keys: Vec<_> = metadata
+            .all_occurrences()
+            .map(|(key, _)| key)
+            .filter(|key| key.starts_with("IFD1:"))
+            .collect();
+        // Native 13.59 and the pre-consolidation control agree in both
+        // -a -G0:1 -s and numeric mode. Aggregate JSON scores cannot detect
+        // moving the thumbnail pair before the three resolution fields.
+        assert_eq!(
+            keys,
+            [
+                "IFD1:Compression",
+                "IFD1:XResolution",
+                "IFD1:YResolution",
+                "IFD1:ResolutionUnit",
+                "IFD1:ThumbnailOffset",
+                "IFD1:ThumbnailLength",
+            ]
+        );
+    }
+
+    #[test]
     fn parses_compression_from_embedded_exif_ifd1() {
         let mut metadata = MetadataMap::new();
         PSDParser::parse_exif_data(&photoshop_psd_ifd1(), &mut metadata);

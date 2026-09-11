@@ -9,9 +9,7 @@
 //! BPG extension instead of an APP1 segment.
 
 use crate::core::tag_conversion::exif_entry_to_tag_value;
-use crate::core::tiff_helpers::{
-    parse_exif_subifd, parse_gps_subifd, parse_ifd1_other_tags, parse_ifd1_thumbnail,
-};
+use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd, parse_ifd1_directory};
 use crate::core::{MetadataMap, TagValue};
 use crate::io::buffered_reader::BufferedReader;
 use crate::io::{ByteOrder as IoByteOrder, EndianReader};
@@ -144,7 +142,7 @@ pub fn parse_embedded_exif(tiff_data: &[u8], tiff_base: u64, metadata: &mut Meta
 /// but stops before IFD0's next-IFD pointer, so `Compression`,
 /// `ThumbnailOffset` and `ThumbnailLength` need this second pass, and the
 /// rest of the directory (XResolution, YResolution, ResolutionUnit on the
-/// Photoshop blocks) follows through [`parse_ifd1_other_tags`] -- ProcessTIFF
+/// Photoshop blocks) follows in physical order through [`parse_ifd1_directory`] -- ProcessTIFF
 /// walks IFD1 as a full Exif::Main directory and ExifTool prints every entry.
 /// The block is self-contained -- its offsets are relative to its own TIFF
 /// header and its position inside the container is not part of them -- so
@@ -175,8 +173,7 @@ pub fn parse_embedded_thumbnail_ifd(tiff_data: &[u8], metadata: &mut MetadataMap
         return;
     };
 
-    parse_ifd1_thumbnail(&reader, ifd0_offset, entries.len(), byte_order, 0, metadata);
-    parse_ifd1_other_tags(&reader, ifd0_offset, entries.len(), byte_order, metadata);
+    parse_ifd1_directory(&reader, ifd0_offset, entries.len(), byte_order, 0, metadata);
 }
 
 /// Parses an embedded ICC profile and inserts its tags under the
