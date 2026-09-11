@@ -116,7 +116,8 @@ inside emitted tables.
 
 Start with the concrete rehearsal findings: make new-module reasons aware of
 existing runtime producers without declaring those producers complete; separate
-the four standing generator-less outputs from release-caused changes; and group
+standing generator-less outputs from release-caused changes (three remain
+after Nikon settings recovery; the recorded rehearsal had four); and group
 the four EXPR rows for `Exif::Main` tag 41998 by their one unsupported UTF-8 Decode
 cause. Preserve the raw row counts alongside that causal view. The Garmin dump
 change does not authorize writing a second FIT parser. Review actual routing and
@@ -153,7 +154,13 @@ measured migration. Keep real-file comparisons for container quirks. Generated
 Composite computations need checks for their distinct input domain; the scalar
 expression oracle does not cover them.
 
-Reconstruct a missing Sony/Nikon generator or extend a shared expression rule
+Nikon settings now has a [recovered producer](./reference/nikon-settings-generator-recovery.md)
+for its unchanged 197 rows and 131 maps. Independent declaration verification
+exposes the AFAreaMode state and BracketProgram mask limitations without claiming
+new coverage. Sony plain is next, subject to a native packed-word regression for
+its separate 276/276.1 keys; Sony enciphered and Nikon encrypted remain larger jobs.
+
+Reconstruct the next missing Sony/Nikon generator or extend a shared expression rule
 when it removes demonstrated release work or unblocks useful runtime behavior.
 Measure the resulting change before choosing the next family. Defer automatic
 activation until both walk validation and producer-conflict checks cover it.

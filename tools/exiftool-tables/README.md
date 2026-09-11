@@ -2,13 +2,14 @@
 
 For completed work, known gaps and priorities, start with
 [Tag machinery status](../../docs/TAG_MACHINERY_STATUS.md). This file describes
-the tooling landed through [PR #740](https://github.com/swack-tools/oxidex/pull/740)
+the tooling based on [PR #740](https://github.com/swack-tools/oxidex/pull/740)
 at [`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837);
 the pin remains 13.59.
 
 Conservative IFD-aware upgrade classification, one generated-output inventory,
-verified Canon CODE references, isolated upgrade orchestration and all 28 declared
-outputs are implemented and validated. See the
+verified Canon CODE references and isolated upgrade orchestration are implemented.
+The inventory now contains 29 outputs after the
+[Nikon settings producer recovery](../../docs/reference/nikon-settings-generator-recovery.md). See the
 [execution plan](../../docs/UPGRADE-NEXT-STEPS.md) for original validation evidence
 and the remaining work. The
 [13.55-to-13.59 retrospective rehearsal](../../docs/reference/bump-reports/13.55-to-13.59.md)
@@ -35,13 +36,13 @@ command below when comparing versions in isolated source trees.
 `regen.sh` generates binary and IFD tables, file identification, Composite
 definitions and compiled Composite expressions, FITS names, and expression/value-
 conversion ledgers. `regen-all.sh` adds vendor subdirectory tables, Nikon AF-point
-grids, bespoke transcriptions, recovered Sony/Minolta generators, Macintosh
+grids, bespoke transcriptions, recovered Sony/Minolta/Nikon generators, Macintosh
 CJK charset tables, GeoTIFF key maps, DICOM dictionaries and lens alternatives.
-`artifacts.py` is the single output inventory: 8 tier-1 and 20 tier-2 artifacts.
+`artifacts.py` is the single output inventory: 8 tier-1 and 21 tier-2 artifacts.
 Both scripts resolve
 their output paths and formatting sets from it; the bump's promotion/recovery sets
 and CI's tier-2 comparison use the same inventory. The bump classifier also
-reads it when identifying the four vendor files still lacking producers. Composite's second output
+reads it when identifying the three vendor files still lacking producers. Composite's second output
 and all four implicit charset outputs are included. Nikon AF points and Leica
 lens data preserve handwritten sections and are accounted for as whole mixed
 files, including during backup.
@@ -50,16 +51,21 @@ files, including during backup.
 existing shell entry point. See the transaction contract below and the historical
 [13.58 to 13.59 exercise](../../docs/reference/bump-reports/13.58-to-13.59.md).
 
-Four generated-origin files still have no committed generator: Sony
-`plain_tables.rs`/`enciphered_tables.rs` and Nikon
-`settings_tables.rs`/`encrypted_tables.rs`. The two previously orphaned
-Sony main-extra/Minolta outputs now have generators. `regen-all.sh` names the
-remaining limits; generated once does not mean automatically refreshable.
+Three generated-origin files still lack producers: Sony `plain_tables.rs` /
+`enciphered_tables.rs` and Nikon `encrypted_tables.rs`. Sony main-extra, Minolta
+A100 and Nikon settings now have producers. `regen-all.sh` names the remaining
+limits; generated once does not mean automatically refreshable.
+
+Nikon settings is checked against freshly loaded Perl by
+`verify_nikon_settings.py` after regeneration. Its 197 rows and 131 maps are
+unchanged. The custom handwritten processor remains; the verifier checks
+transcribed facts, not whole-parser equivalence. `AFAreaMode` state propagation
+and the existing `BracketProgram` mask behavior remain explicit residuals.
 
 ## Generated-output inventory and write checks
 
 ```sh
-python3 tools/exiftool-tables/artifacts.py paths                 # all 28 outputs
+python3 tools/exiftool-tables/artifacts.py paths                 # all 29 outputs
 python3 tools/exiftool-tables/artifacts.py paths --tier 2        # downstream outputs
 python3 tools/exiftool-tables/artifacts.py paths --tier 1 --kind rust --absolute
 python3 tools/exiftool-tables/artifacts.py path composite-compute
@@ -113,7 +119,7 @@ of the codebase that is generated. These producers can regenerate supported
 declaration changes and check their emitted facts automatically. A new Perl
 shape, conversion or runtime dependency deliberately refuses and requires a
 reviewed generator/engine change. The Canon ID collision discovered during
-wiring is an example of runtime work that generation alone cannot solve. Four
+wiring is an example of runtime work that generation alone cannot solve. Three
 Sony/Nikon outputs still lack producers. Only the planned release-delta exercise
 can establish which manual interventions that particular upgrade needs.
 
@@ -146,7 +152,7 @@ commit with their respective generated artifacts. This isolates the generator
 transition; it does not reconstruct an old released OxiDex implementation.
 
 Dry runs and failures before promotion leave caller source and index untouched.
-A live run rechecks caller identity and promotes only the 28 manifest outputs
+A live run rechecks caller identity and promotes only the 29 manifest outputs
 plus the pin, using journaled payloads and atomic file replacement. It preserves
 the index. Interrupted promotion can be resumed as checked restoration with:
 

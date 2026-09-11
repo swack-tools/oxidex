@@ -52,6 +52,7 @@ ARTIFACTS = (
     Artifact("leica", 2, "splice_leica", "src/parsers/tiff/makernotes/lens_data.rs", "mixed"),
     Artifact("sony-main", 2, "gen_sony_main_extra_tables", "src/parsers/tiff/makernotes/sony/main_extra_tables.rs"),
     Artifact("minolta-a100", 2, "gen_minolta_a100_tables", "src/parsers/tiff/makernotes/minolta_a100_tables.rs"),
+    Artifact("nikon-settings", 2, "gen_nikon_settings_tables", "src/parsers/tiff/makernotes/nikon/settings_tables.rs"),
     Artifact("mac-japanese", 2, "generate_charsets", "src/parsers/font/mac_charset/mac_japanese.rs"),
     Artifact("mac-chinese-tw", 2, "generate_charsets", "src/parsers/font/mac_charset/mac_chinese_tw.rs"),
     Artifact("mac-korean", 2, "generate_charsets", "src/parsers/font/mac_charset/mac_korean.rs"),

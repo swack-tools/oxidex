@@ -200,22 +200,23 @@ REGEN_CLEANUP_FILE="$LEICA_RAW"
 python3 "$HERE/splice_leica.py" "$LEICA_RAW" "$(artifact_path leica)"
 
 echo "=========================================================="
-echo ">> TIER 2d: bespoke sony::binary_data-DSL tables"
+echo ">> TIER 2d: recovered Sony, Minolta and Nikon table producers"
 echo "=========================================================="
 # docs/TRANSCRIPTION.md's "Honest limits" section names six generated files
 # that had no committed generator at all -- each targets a bespoke, per-file
 # Rust DSL hand-matched against ExifTool's Condition/RawConv/ValueConv/
 # PrintConv text, closer in spirit to gen_canon_custom_functions2.pl's
 # hard-coded expression dictionary than to codegen_subdirs.py's general
-# ProcessBinaryData walk. Two of the six -- the smallest -- were reconstructed
-# this way; the other four (sony/plain_tables.rs, sony/enciphered_tables.rs,
-# nikon/settings_tables.rs, nikon/encrypted_tables.rs) remain unreconstructed
-# and are still called out in that section, each its own similarly-sized
-# project.
+# ProcessBinaryData walk. Three now have producers; sony/plain_tables.rs,
+# sony/enciphered_tables.rs and nikon/encrypted_tables.rs remain unreconstructed.
+# Nikon settings preserves the current table exactly and independently checks
+# its ordered variants against live Perl, including the named state projection.
 python3 "$HERE/gen_sony_main_extra_tables.py" "$JSON" \
     -o "$(artifact_path sony-main)"
 python3 "$HERE/gen_minolta_a100_tables.py" "$JSON" \
     -o "$(artifact_path minolta-a100)"
+python3 "$HERE/gen_nikon_settings_tables.py" "$JSON" \
+    -o "$(artifact_path nikon-settings)"
 
 echo "=========================================================="
 echo ">> TIER 2e: Macintosh CJK charset tables (TrueType name records)"
@@ -256,12 +257,14 @@ echo "=========================================================="
 cd "$ROOT"
 format_artifacts 2
 
-echo ">> independently verifying complete GeoTIFF, DICOM and lens facts"
+echo ">> independently verifying GeoTIFF, DICOM, lens and Nikon settings facts"
 python3 "$HERE/verify_geotiff.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --rust-file "$(artifact_path geotiff)"
 python3 "$HERE/verify_dicom_dict.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --input "$(artifact_path dicom)"
 python3 "$HERE/verify_lens_alternatives.py" "$(artifact_path lens-alternatives)" \
+    --exiftool-dir "$LIB/.." --perl "$PERL"
+python3 "$HERE/verify_nikon_settings.py" --input "$(artifact_path nikon-settings)" \
     --exiftool-dir "$LIB/.." --perl "$PERL"
 
 echo

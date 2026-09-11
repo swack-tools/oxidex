@@ -16,9 +16,9 @@ populations. They are implementation history, not work to restart.
 
 | Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Reconcile IFD1 prerequisite and regenerate | Next after the shared RawConv runtime consolidation recorded below | Preserve the verified CODE-ref key/domain gate; regenerate with a fresh pinned dump and its matching ledger; demonstrate eligibility separately from activation |
+| 1 | Reconcile IFD1 prerequisite and regenerate | Prepared; fresh regeneration waits for the shared i7 queue | Preserve the verified CODE-ref key/domain gate; regenerate with a fresh pinned dump and its matching ledger; demonstrate eligibility separately from activation |
 | 2 | Correct classifier/producer accounting exposed by the release rehearsal | Queued | Existing Garmin runtime is recognized, standing debt is separated, repeated field changes are joined by cause, and emitted/activated/observed states remain distinct |
-| 3 | Broaden walk checks and reconstruct useful missing producers | Queued | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
+| 3 | Broaden walk checks and reconstruct useful missing producers | Nikon settings producer recovered; independent verification and pipeline acceptance recorded below | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
 
 The [13.55-to-13.59 retrospective rehearsal](./reference/bump-reports/13.55-to-13.59.md)
 passed on 2026-09-11 at `4fb705da` in **611.006 seconds**, with zero source-edit
@@ -27,8 +27,8 @@ interventions and unchanged caller source/index/pin. Both sides regenerated all
 oracle and 193 files, MATCH rose 9,963 to 9,966 and VALUE fell 34 to 31; only
 three Garmin file-identity values improved. MISSING remained 1,563. This measures
 one controlled refresh, not historical upgrade effort or complete coverage.
-The earlier 28-output same-pin acceptance at `1428b6c7` remains recorded below. Four Sony/Nikon outputs still lack
-committed producers. Catalog synchronization has separate carry-forward
+The earlier 28-output same-pin acceptance at `1428b6c7` remains recorded below. Three Sony/Nikon outputs still lack
+committed producers after the Nikon settings recovery below. Catalog synchronization has separate carry-forward
 semantics and is outside this table transaction until that policy is resolved.
 See the [landing record](./TAG_MACHINERY_STATUS.md#landed-upgrade-tooling) for the
 four verified squash commits.
@@ -54,6 +54,28 @@ Separate subsequent named-directory activation from IFD4 conditions/Olympus
 retirement and broader embedded-directory state. IFD4 can reconcile independently.
 Existing old-head gates support review; each landing needs fresh source, binary,
 corpus and occurrence-aware acceptance.
+
+### Nikon settings producer recovery
+
+The [recovery record](./reference/nikon-settings-generator-recovery.md) starts
+from freshly fetched `79101d7d`, after the RawConv squash merge in #743.
+`gen_nikon_settings_tables.py` reproduces the complete existing file from a
+fresh pinned dump: 197 rows, 131 maps, 37 Unknown omissions. The shared manifest
+now owns 29 outputs (8 tier 1, 21 tier 2); the historical 28-output rehearsal
+above is unchanged. No extraction or attribution percentage is credited to this
+maintenance change. `AFAreaMode` state propagation and the `BracketProgram`
+mask behavior remain explicit limitations.
+
+Next generator target: Sony plain tables, but first prove and repair the
+separate upstream keys `CameraSettings3[276]` and `[276.1]` being treated as
+alternatives at the same integer offset. A packed-word fixture must establish
+both `FolderNumber` and `ImageNumber` before claiming a faithful replacement.
+Sony enciphered and Nikon encrypted remain larger producer recoveries.
+
+The other session owns the PNG text landing and paired normal/union-disabled
+censuses at `79101d7d`. Its reported 7.63% remains evidence at `afd3a628`
+until the per-file tip comparison finishes. Heavy i7 work must acquire
+`flock /tmp/i7-heavy.lock`; process-name checks are not a reservation.
 
 ### Operational preservation on 2026-09-11
 

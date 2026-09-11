@@ -13,9 +13,9 @@ class ManifestTests(unittest.TestCase):
     def test_unique_valid_partition_and_selectors(self):
         artifacts.validate()
         all_items = artifacts.select()
-        self.assertEqual(len(all_items), 28)
+        self.assertEqual(len(all_items), 29)
         self.assertEqual(len(artifacts.select(1)), 8)
-        self.assertEqual(len(artifacts.select(2)), 20)
+        self.assertEqual(len(artifacts.select(2)), 21)
         self.assertEqual(set(all_items), set(artifacts.select(1) + artifacts.select(2)))
         self.assertTrue(all(a.path.endswith('.rs') for a in artifacts.select(kind='rust')))
         for producer in {a.producer for a in all_items}:
