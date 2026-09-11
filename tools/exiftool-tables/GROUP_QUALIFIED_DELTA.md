@@ -1,5 +1,10 @@
 # Step 12 delta note: bare-name vs group-qualified matching
 
+> **Historical instrument comparison, August 11, 2026.** Preserve these results
+> as evidence of that change. The September 9 duplicate-key correction changed
+> the counting contract again; see [CONFORMANCE.md](CONFORMANCE.md) and
+> [current status](../../docs/TAG_MACHINERY_STATUS.md).
+
 Dual-run of `conformance.py` before and after the group-qualified matcher
 (OVERHAUL_OXIDEX_PLAN.md Step 12), same corpus, same oracle, same binary, run
 back to back so nothing else could have moved the numbers.

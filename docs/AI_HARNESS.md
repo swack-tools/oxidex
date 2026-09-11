@@ -1,5 +1,12 @@
 # The OxiDex AI Harness
 
+> **Scope of this document:** harness architecture and recorded experiments.
+> The current metadata-coverage priority is shared generation and measured runtime
+> adoption; fleet expansion is deferred. See
+> [Tag machinery status](./TAG_MACHINERY_STATUS.md) and the
+> [remaining-work backlog](./AUTOMATION-AND-TESTER-PLAN.md) before treating this
+> historical workflow as the next implementation task.
+
 OxiDex is a Rust reimplementation of ExifTool. The **AI harness** — referred to internally as
 "the fleet" — is an autonomous system that runs continuously against the repository to find
 metadata tags that real ExifTool reports but OxiDex does not, and to write the parser code that

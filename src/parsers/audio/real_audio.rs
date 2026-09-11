@@ -215,27 +215,13 @@ pub fn parse_real_audio_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::MMapReader;
-    use std::path::Path;
-
-    fn fixture_reader() -> MMapReader {
-        // Real ExifTool test-suite fixture, not hand-authored bytes: see
-        // AGENTS.md's rule that regression fixtures must be real files.
-        let candidates = [
-            "/tmp/oxidex-exiftool-cache/combined-samples/Real.ra",
-            "/tmp/oxidex-exiftool-cache/exiftool/t/images/Real.ra",
-        ];
-        for candidate in candidates {
-            if let Ok(reader) = MMapReader::new(Path::new(candidate)) {
-                return reader;
-            }
-        }
-        panic!("Real.ra fixture not found in the oxidex-exiftool-cache");
-    }
+    use crate::test_support::pinned_fixture_reader;
 
     #[test]
     fn matches_exiftool_13_59_on_the_real_fixture() {
-        let reader = fixture_reader();
+        let Some(reader) = pinned_fixture_reader("Real.ra") else {
+            return;
+        };
         let metadata = parse_real_audio_metadata(&reader).expect("parses");
 
         // Cross-checked against `exiftool -a -G1 -s` (pinned 13.59) on the

@@ -1,5 +1,5 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
 
 /// ExifTool 13.59 reads the pinned `t/images/MRC.mrc` fixture's 1024-byte
 /// `MRC::Main` header, then its `FEI1` extended header's `MRC::FEI12` table
@@ -13,10 +13,10 @@ use std::path::Path;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn mrc_fixture_matches_pinned_oracle_main_table() {
-    let metadata = read_metadata(Path::new(
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images/MRC.mrc",
-    ))
-    .expect("read pinned MRC fixture");
+    let Some(path) = pinned_fixture_path("MRC.mrc") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned MRC fixture");
 
     assert_eq!(metadata.get_integer("File:ImageWidth"), Some(4096));
     assert_eq!(metadata.get_integer("File:ImageHeight"), Some(4096));

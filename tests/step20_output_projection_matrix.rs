@@ -24,36 +24,15 @@
 //! substitution only; the semantic being tested (raw/ValueConv form instead
 //! of PrintConv) is the same one the oracle exercised.
 //!
-//! Two fixture roots are checked because the two places this repo's own
-//! tooling stages a pinned ExifTool checkout differ: the developer sandbox
-//! convention used throughout this repo's other pinned-fixture tests
-//! (`/tmp/oxidex-exiftool-cache/exiftool`, see e.g. `tests/mie_trailer_signature.rs`)
-//! and CI's own `.github/workflows/ci.yml` download target
-//! (`/tmp/exiftool-src`, populated by the "Download pinned ExifTool" step
-//! that already runs ahead of `cargo nextest run --all-features` -- the same
-//! job this file's tests execute in). Checking both is what makes this a
-//! real CI job rather than a local-only one: no new workflow file is
-//! needed, because `t/images/ExifTool.jpg` and `t/images/Canon.jpg` are
-//! already present in the tarball CI downloads for the tag-table verifier.
-//! A run with neither root present (a stripped-down environment) skips with
-//! a message instead of failing, matching this repo's existing convention
-//! for pinned-fixture tests.
+//! Resolve each requested real sample beside the configured pinned ExifTool
+//! script or in its configured sample cache. Optional absence is explicit; a
+//! present but unreadable sample must fail instead of masking an assertion.
 
-use std::path::{Path, PathBuf};
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
+use fixtures::pinned_fixture_path;
 use std::process::Command;
-
-fn fixture_root() -> Option<PathBuf> {
-    for candidate in [
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images",
-        "/tmp/exiftool-src/t/images",
-    ] {
-        let path = Path::new(candidate);
-        if path.is_dir() {
-            return Some(path.to_path_buf());
-        }
-    }
-    None
-}
 
 fn oxidex_bin() -> &'static str {
     env!("CARGO_BIN_EXE_oxidex")
@@ -72,21 +51,6 @@ fn run(args: &[&str]) -> String {
         .unwrap_or_else(|e| panic!("oxidex {args:?} produced non-UTF8 stdout: {e}"))
 }
 
-macro_rules! skip_without_fixtures {
-    ($root:expr) => {
-        match $root {
-            Some(root) => root,
-            None => {
-                eprintln!(
-                    "skip: neither /tmp/oxidex-exiftool-cache/exiftool/t/images nor \
-                     /tmp/exiftool-src/t/images is present"
-                );
-                return;
-            }
-        }
-    };
-}
-
 /// `-Make` resolves to the priority winner across every group sharing the
 /// short name `Make` -- CIFF's `Canon`, not `IFD0`'s `FUJIFILM` -- proving
 /// the cross-group arbitration works at all (the naive "first/only group
@@ -95,8 +59,9 @@ macro_rules! skip_without_fixtures {
 /// occurrence this row depends on existing).
 #[test]
 fn bare_make_request_resolves_to_the_priority_winner() {
-    let root = skip_without_fixtures!(fixture_root());
-    let file = root.join("ExifTool.jpg");
+    let Some(file) = pinned_fixture_path("ExifTool.jpg") else {
+        return;
+    };
     let output = run(&["-s", "-Make", file.to_str().unwrap()]);
     assert!(
         output.contains("Canon"),
@@ -113,8 +78,9 @@ fn bare_make_request_resolves_to_the_priority_winner() {
 /// stores as `group0` -- `cli::tag_resolution::resolve_family0`.
 #[test]
 fn group_qualified_request_resolves_against_family_zero() {
-    let root = skip_without_fixtures!(fixture_root());
-    let file = root.join("ExifTool.jpg");
+    let Some(file) = pinned_fixture_path("ExifTool.jpg") else {
+        return;
+    };
     let output = run(&["-s", "-EXIF:Make", file.to_str().unwrap()]);
     assert!(
         output.contains("FUJIFILM"),
@@ -126,8 +92,9 @@ fn group_qualified_request_resolves_against_family_zero() {
 /// file order: `IFD0` before `CIFF`.
 #[test]
 fn all_occurrences_with_group_display_lists_both_in_file_order() {
-    let root = skip_without_fixtures!(fixture_root());
-    let file = root.join("ExifTool.jpg");
+    let Some(file) = pinned_fixture_path("ExifTool.jpg") else {
+        return;
+    };
     let output = run(&["-a", "-G1", "-s", "-Make", file.to_str().unwrap()]);
 
     let ifd0_line = output.lines().position(|line| line.contains("[IFD0]"));
@@ -156,8 +123,9 @@ fn all_occurrences_with_group_display_lists_both_in_file_order() {
 /// exist (AGENTS.md's tagmodel/1.5 finding).
 #[test]
 fn no_print_conv_selects_the_raw_file_size() {
-    let root = skip_without_fixtures!(fixture_root());
-    let file = root.join("ExifTool.jpg");
+    let Some(file) = pinned_fixture_path("ExifTool.jpg") else {
+        return;
+    };
     let output = run(&["--no-print-conv", "-s", "-FileSize", file.to_str().unwrap()]);
     assert!(
         output.contains("26106"),
@@ -177,8 +145,9 @@ fn no_print_conv_selects_the_raw_file_size() {
 /// pinned oracle).
 #[test]
 fn multi_family_group_display_labels_file_size_correctly() {
-    let root = skip_without_fixtures!(fixture_root());
-    let file = root.join("ExifTool.jpg");
+    let Some(file) = pinned_fixture_path("ExifTool.jpg") else {
+        return;
+    };
     let output = run(&["-G0:1", "-s", "-FileSize", file.to_str().unwrap()]);
     assert!(
         output.contains("[File:System]"),
@@ -202,8 +171,9 @@ fn multi_family_group_display_labels_file_size_correctly() {
 /// otherwise tying on priority.
 #[test]
 fn focal_length_request_resolves_to_the_standard_exif_tag() {
-    let root = skip_without_fixtures!(fixture_root());
-    let file = root.join("Canon.jpg");
+    let Some(file) = pinned_fixture_path("Canon.jpg") else {
+        return;
+    };
     let output = run(&["-s", "-FocalLength", file.to_str().unwrap()]);
     assert!(
         output.contains("34.0 mm"),
@@ -216,8 +186,9 @@ fn focal_length_request_resolves_to_the_standard_exif_tag() {
 /// source could otherwise show.
 #[test]
 fn no_print_conv_focal_length_selects_the_raw_quotient() {
-    let root = skip_without_fixtures!(fixture_root());
-    let file = root.join("Canon.jpg");
+    let Some(file) = pinned_fixture_path("Canon.jpg") else {
+        return;
+    };
     let output = run(&[
         "--no-print-conv",
         "-s",

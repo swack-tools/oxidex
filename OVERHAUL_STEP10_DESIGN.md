@@ -1,5 +1,10 @@
 # Step 10 design checkpoint — a bypass-proof `DecodedField` API
 
+> **Design record.** This preserves the original decision and its then-current
+> measurements. Approval of this design is not evidence of complete implementation.
+> See [Tag machinery status](docs/TAG_MACHINERY_STATUS.md) for landed work,
+> remaining limits and the current backlog.
+
 **Status: SIGNED OFF by the maintainer 2026-08-11. Implementation authorized.**
 
 Decisions as answered:

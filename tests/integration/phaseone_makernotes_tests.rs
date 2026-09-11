@@ -4,7 +4,7 @@
 //! `%Image::ExifTool::PhaseOne::Main` in
 //! `/opt/homebrew/Cellar/exiftool/13.55/libexec/lib/perl5/Image/ExifTool/PhaseOne.pm`
 //! and, for the fixture test, `exiftool -G1 -s` on
-//! `/tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq`.
+//! `PhaseOne.iiq` from the pinned source or configured sample cache.
 //!
 //! This file replaced an earlier version built entirely around a fabricated
 //! tag table (`SystemType`, `ExposureMode`, `DriveMode`, `MirrorLockup`,
@@ -162,24 +162,16 @@ fn test_phaseone_makernote_parser_trait_implementation() {
 
 #[test]
 fn test_phaseone_iiq_fixture_reachable_via_dispatcher() {
-    if !std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq").is_file() {
-        eprintln!(
-            "skipping: corpus fixture not present at {}",
-            "/tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq"
-        );
+    let Some(path) = crate::fixtures::pinned_fixture_path("PhaseOne.iiq") else {
         return;
-    }
+    };
     // Regression: dispatch used to key strictly on Make ("phase one"/"phase
     // one a/s"), so a Leaf-branded (Make: "Leaf") .IIQ carrying this exact
     // signature matched nothing and produced zero PhaseOne: tags. Dispatch
     // must key off the signature, independent of Make.
     use oxidex::parsers::tiff::makernote_dispatcher::dispatch_makernote;
 
-    let path = "/tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq";
-    let Ok(file) = std::fs::read(path) else {
-        eprintln!("skipping: corpus fixture not present at {path}");
-        return;
-    };
+    let file = std::fs::read(&path).expect("read pinned PhaseOne fixture");
     let mn = &file[8..]; // MakerNote value starts right after the 8-byte TIFF header (PutFirst => 1)
 
     let mut tags = HashMap::new();

@@ -1,149 +1,113 @@
-# exiftool-tables — mechanical transcription of ExifTool's tag tables
+# ExifTool table generation and verification
 
-Generates Rust binary tag tables directly from ExifTool's own Perl data
-structures, verified back against ExifTool.
+For completed work, known gaps and priorities, start with
+[Tag machinery status](../../docs/TAG_MACHINERY_STATUS.md). This file describes
+the tooling present at the September 10, 2026 review (`c7f5dd81`, pin 13.59).
+
+Follow-up `b36983c2` adds conservative IFD-aware upgrade classification on a
+pending branch. See the [implementation and limits](../../docs/TAG_MACHINERY_STATUS.md#pending-upgrade-classifier-repair);
+the complete upgrade transaction is still unfinished.
+
+## Commands and scope
 
 ```sh
-just regen-tables          # fetch + extract + generate + verify (tier 1 only)
-just verify-tables         # re-check committed tier-1 output against ExifTool
-just regen-tables-all      # tier 1 AND tier 2, from one resolved ExifTool tree
-just regen-tables-tier2    # tier 2 only -- what CI's verify-tables job runs
-just bump-exiftool <ver>   # the whole release-bump pipeline: pin, fetch,
-                            # capability-probe, regen-all, verify, triage
-                            # every JSON-to-JSON delta AUTO/EXPR/COND/HAND,
-                            # conformance double-run, gate check. --dry-run
-                            # exercises it and reverts every change -- see
-                            # tools/exiftool-tables/bump-exiftool.sh and
-                            # docs/reference/bump-reports/13.58-to-13.59.md
-                            # for a worked example.
+just regen-tables          # primary generation, including binary and IFD tables
+just verify-tables         # independent checks of committed table declarations
+just regen-tables-all      # primary generation plus downstream vendor/charset tables
+just regen-tables-tier2    # downstream generation only
 ```
 
-`regen-tables` (this directory's `regen.sh`) only ever produced
-`binary_tables.rs` and its three siblings. A second generation tier sits
-downstream of it and `regen-tables` never called it: the MakerNote
-sub-directory tables (`codegen_subdirs.py`), the Nikon AF-point name grids
-(`dump_af_points.pl` + `codegen_af_points.py`), and six one-off
-`scripts/gen_*.pl` transcriptions. `regen-all.sh` is the sibling that invokes
-both tiers against the SAME resolved ExifTool tree, so a bump cannot refresh
-one tier and silently leave the other on an older release -- see its own
-header for the full rationale, and `docs/TRANSCRIPTION.md`'s "Honest limits"
-section for six further files (Sony/Nikon/Minolta binary-data tables) that
-are generated but still have no committed generator at all.
+Run generation in an owned worktree with the intended pin and a capability-probed
+Perl/ExifTool pair. Generation modifies tracked artifacts; ordinary measurement
+scripts refuse a dirty tree unless the explicit override is provided and recorded.
+The current wrapper/provenance gap is listed in the status page: these commands
+are existing entry points, not a claim that the whole upgrade transaction is sound.
 
-## Why
+`regen.sh` generates binary and IFD tables, file identification, Composite
+definitions and compiled Composite expressions, FITS names, and expression/value-
+conversion ledgers. `regen-all.sh` adds vendor subdirectory tables, Nikon AF-point
+grids, bespoke transcriptions, recovered Sony/Minolta generators and Macintosh
+CJK charset tables. The scripts and their companion outputs are the source of
+truth for the artifact inventory.
 
-ExifTool is not 16,000 hand-written tag implementations. It is a generic engine
-plus roughly 1,300 declarative tag tables. Those tables are *data*, and data can
-be transcribed rather than reimplemented.
+`just bump-exiftool <version>` also exists. Its artifact backup/restore lists and
+triage classifier lag the current generators, and its temporary old-version
+comparison rebuilds only the first generation tier. **Repair and rehearse this
+workflow before treating it as an unattended upgrade or relying on complete
+`--dry-run` restoration.** See the
+[current gaps](../../docs/TAG_MACHINERY_STATUS.md#concrete-upgrade-gaps-at-this-snapshot)
+and the historical [13.58 to 13.59 exercise](../../docs/reference/bump-reports/13.58-to-13.59.md).
 
-OxiDex already reads `exiftool -f -listx` (`src/tag_sync`) to learn tag **names**.
-That is why the project can say it knows 16,677 tags while extracting far fewer:
-`-listx` is the documentation view. It gives you name, id, writability and
-description, and it discards everything you need in order to actually read a
-value out of a file:
+Four generated-origin files still have no committed generator: Sony
+`plain_tables.rs`/`enciphered_tables.rs` and Nikon
+`settings_tables.rs`/`encrypted_tables.rs`. The two previously orphaned
+Sony main-extra/Minolta outputs now have generators. `regen-all.sh` names the
+remaining limits; generated once does not mean automatically refreshable.
 
-| needed to read a tag        | in `-listx` | in the Perl tables |
-| --------------------------- | ----------- | ------------------ |
-| tag name / id               | yes         | yes                |
-| `FORMAT`, `FIRST_ENTRY`     | **no**      | yes                |
-| per-field `Format` override | **no**      | yes                |
-| `SubDirectory` → `TagTable` | **no**      | yes                |
-| `ValueConv` / `RawConv`     | **no**      | yes                |
-| `Condition` variants        | **no**      | yes                |
-| `Mask`, `DataMember`, `Hook`| **no**      | yes                |
+## What is generated
 
-The missing rows are exactly the MakerNote layout information. That is why
-coverage lagged in JPEG and RAW formats specifically, and it is recoverable
-mechanically — it was never a knowledge problem.
+ExifTool combines a generic engine with declarative tables and procedural
+behavior. `dump_tables.pl` loads Perl modules and walks their in-memory tables,
+including tables assembled dynamically; it does not try to parse the Perl source
+with regular expressions.
 
-## How
+`src/tag_sync` separately consumes the `-listx` documentation view. That catalog
+provides names and descriptions, but not byte layouts, subdirectory dispatch,
+conditions or conversion semantics. Catalog size is not extraction coverage.
 
-`dump_tables.pl` does **not** parse Perl. ExifTool builds its tables at
-`require` time: some are assembled in loops, some inherit by copying another
-table, some are patched afterwards. Any regex over the `.pm` text sees the
-source, not the structure ExifTool actually dispatches on. Instead the script
-loads each module and walks the symbol table, so what it reads is the real
-in-memory table. Full extraction of all 146 modules takes about 1.3 seconds.
+```text
+ExifTool loaded tables -> dump_tables.pl -> tables.json
+  -> verify_exprs.py -> expression PASS ledger
+  -> codegen.py -> binary_tables.rs + ifd_tables.rs + conversion accounting
+  -> codegen_composite.py -> Composite definitions and expression computations
+  -> downstream generators -> vendor-specific artifacts
 
-```
-dump_tables.pl     Perl symbol table  ->  tables.json     (146 modules, 1,281 tables)
-analyze.py         tables.json        ->  coverage report (what is safe to emit)
-codegen.py         tables.json        ->  binary_tables.rs
-codegen_subdirs.py tables.json        ->  a vendor's MakerNote sub-tables
-oracle.pl          Perl symbol table  ->  ground-truth TSV
-verify.py          Rust + TSV         ->  PASS / FAIL
+ExifTool loaded tables -> oracle.pl -> independent declaration facts
+  -> verify.py compares the generated Rust against those facts
 ```
 
-`codegen_subdirs.py` is the narrow, strict sibling of `codegen.py`. It takes a
-named list of tables and emits them for the `ProcessBinaryData` interpreter in
-`src/parsers/tiff/makernotes/shared/binary_subdir.rs`, which the MakerNote
-parsers use to descend into a `SubDirectory` tag instead of reading its pointer
-as a value. Where `codegen.py` counts what it skipped, this one **raises** on any
-construct it has not been taught and names the table, the tag and the construct;
-`--allow-skip` downgrades that to a logged line, and the log is the deliverable.
-The difference matters: these tables are wired into a parser one at a time, so an
-unhandled field has to stop the run rather than land in an aggregate statistic.
+`codegen.py` handles both `ProcessBinaryData` and `ProcessExif`-style IFD tables.
+It does not implement arbitrary custom processing procedures. Unsupported
+semantics require explicit refusal or further implementation; an ungenerated
+table is not evidence that the upstream table does not exist.
 
-`verify.py` parses the **generated Rust back out** and compares it against a
-fresh dump produced by `oracle.pl`, which shares no code with `dump_tables.pl`.
-Comparing against the generator's own JSON would only prove self-consistency —
-it would cheerfully confirm a bug both sides inherited.
+`codegen_subdirs.py` targets the separate vendor subdirectory interpreter in
+`src/parsers/tiff/makernotes/shared/binary_subdir.rs`. It takes an explicit table
+list and raises on unsupported constructs; any intentional `--allow-skip` must
+remain visible in the resulting evidence.
 
-Slice I-1 (IFD-style tables, `docs/superpowers/specs/2026-09-06-ifd-tables-
-design.md` §4) gives both a second scope: `oracle.pl` emits `IFD`-prefixed rows
-for every ProcessExif-style table (its header lists the row formats), and
-`verify.py` runs an IFD stage over `src/exiftool_tables/ifd_tables.rs` from the
-same oracle output — skipped with a message while that file is absent. The
-hand-written `fixtures/ifd_tables_sample.rs` is the spec's exact shape with
-real 13.59 facts; `test_verify_ifd.py` pins that each kind of wrong fact fails
-and that a refusal never does, and `verify.py --ifd-generated
-fixtures/ifd_tables_sample.rs` must PASS against the pinned tree.
-`reachability.py` prints the matching IFD census (`ALL_IFD_TABLES` /
-`ENABLED_IFD` / `find_ifd_table` call sites) after the binary one.
+## Translation and verification
 
-## The rule: never approximate
+Conversions use reviewed exact translations or the closed expression compiler
+in `exprs.py`. Oracle-gated ValueConv/PrintConv expressions must appear in the
+matching PASS ledger. Unsupported semantics are refused and counted, not
+approximated. Named helper implementations in `src/exiftool_tables/exprs.rs`
+remain maintained Rust.
 
-A conversion is translated only if its exact expression is registered in
-`exprs.py`. Anything else is dropped and counted.
+Keep these checks separate:
 
-This is deliberate under-claiming. A wrong `PrintConv` does not crash. It emits
-a confident, plausible, wrong number under a genuine ExifTool tag name, into an
-archival pipeline, and nothing downstream can detect it. A missing tag is loud
-and recoverable. Given the asymmetry, the generator always chooses the loud
-failure.
+- `verify.py` compares generated binary/IFD declaration facts with the independent
+  Perl oracle. It is not the expression execution checker.
+- `verify_exprs.py` differentially evaluates translated scalar/list expressions
+  on its defined probes. Generated Composite computations use a different domain
+  excluded from this oracle; they need their own validation.
+- `verify_cond.py` and `verify_subdirs.py` check conditions and Start/Base semantics
+  within their declared scopes.
+- Codegen reports identify omissions inside the scopes they enumerate. They do
+  not yet constitute an exhaustive declaration-to-runtime producer inventory.
+- `reachability.py` reports emitted, enabled, eligible and refused binary/IFD
+  tables from static artifacts. Its lookup scan is not observed runtime execution.
+- Engine/carrier tests and `conformance.py` compare actual behavior. A finite
+  probe suite does not prove equivalence for every possible input.
 
-Soundness and completeness are reported **separately**, and neither number is
-allowed to stand in for the other:
+## Where to spend effort
 
-* `verify.py` measures soundness — is everything emitted correct?
-* `codegen.py` measures completeness — how much was skipped, and why?
+Use the [remaining-work backlog](../../docs/AUTOMATION-AND-TESTER-PLAN.md).
+Check whether a missing output is caused by absent declarations, an unsupported
+shared rule, disabled routing or a hand-specific procedure before writing a new
+parser. Prefer a shared rule when it unblocks several relevant tables, then
+validate the resulting runtime migration.
 
-## Where the effort goes
-
-Of 27,747 extracted tag entries:
-
-| tier    | count  | share | meaning                              |
-| ------- | ------ | ----- | ------------------------------------ |
-| pure    | 18,690 | 67.4% | no conversions; pure transcription   |
-| enum    | 4,480  | 16.1% | `PrintConv` lookup maps; pure data   |
-| expr    | 3,993  | 14.4% | Perl expression; needs a translation |
-| code    | 210    | 0.8%  | Perl code ref; needs real porting    |
-| variant | 374    | 1.3%  | `Condition` dispatch; needs a port   |
-
-**83.5% is mechanically safe** and should never have cost a model call.
-
-The remaining tail is smaller than it looks: 3,993 expression tags share only
-1,409 distinct expressions, and the 20 most common cover 1,535 tags. Adding one
-entry to `exprs.py` fixes every tag sharing that expression, permanently, across
-all 146 modules — so the marginal cost per tag *falls* as the registry grows.
-
-That is the property to protect. Run `analyze.py`, work down the ranked list of
-unsupported expressions, and let each fix compound.
-
-## Scope
-
-`codegen.py` currently emits only `ProcessBinaryData` tables — those with a
-`FORMAT` and a field per offset. That is where the coverage gap lives and where
-`-listx` helps least. The extractor already captures the subdirectory graph,
-conditions and value conversions for everything else; extending the generator to
-IFD-style tables is the obvious next step and needs no new extraction work.
+Run `expr_coverage.py`/`analyze.py` against the current pinned dump to rank refused
+forms. Historical percentages in [Transcription](../../docs/TRANSCRIPTION.md)
+describe their recorded snapshots, not today's extraction or upgrade automation.

@@ -1,5 +1,12 @@
 # Transcription: closing the ExifTool gap mechanically
 
+> **Current status:** see [Tag machinery status](./TAG_MACHINERY_STATUS.md) and
+> the [remaining-work backlog](./AUTOMATION-AND-TESTER-PLAN.md). This document
+> preserves the method and historical experiments; old counts and comparisons
+> below are snapshots, not the current implementation status or upgrade forecast.
+> IFD generation and its first runtime migrations have landed. This September 10
+> reconciliation corrects obsolete scope claims without rewriting past results.
+
 OxiDex is a Rust reimplementation of ExifTool. This document describes the
 **transcription methodology** — a way of closing the compatibility gap by
 generating code from ExifTool's own data structures, and by measuring the gap
@@ -25,6 +32,9 @@ stand in for the other. That conflation is how the project previously arrived at
 
 ## The premise
 
+The following declaration census is a historical measurement from the original
+transcription work. Re-run `analyze.py` on the intended dump for current counts.
+
 ExifTool is not 16,000 hand-written tag implementations. It is a generic engine
 plus roughly 1,300 declarative tag tables, and those tables are *data*:
 
@@ -48,8 +58,9 @@ Classifying all 27,747 extracted entries by how safely they can be generated:
 | code    | 210    | 0.8%  | Perl code ref; needs real porting    |
 | variant | 374    | 1.3%  | `Condition` dispatch; needs a port   |
 
-**83.5% is mechanically safe.** And the remaining tail is shallower than it
-looks: those 3,993 expression tags share only **1,409 distinct expressions**, and
+**83.5% fell into the pure/enum categories in that census.** This is not
+a runtime-coverage or release-automation percentage. In the same historical
+snapshot, those 3,993 expression tags share only **1,409 distinct expressions**, and
 the twenty most common cover 1,535 tags. Run `analyze.py` to see the ranked list.
 
 ## Why `-listx` was not enough
@@ -101,8 +112,9 @@ Two consequences worth knowing:
 
 ## The rule: never approximate
 
-**A conversion is emitted only if its exact expression is registered in
-`exprs.py`. Anything else is dropped and counted.**
+**Conversions use reviewed exact translations or the closed expression compiler
+in `exprs.py`. Oracle-gated ValueConv/PrintConv expressions must also appear in
+the matching PASS ledger. Unsupported semantics are refused and counted.**
 
 This is deliberate under-claiming, and the reason is asymmetry. A wrong
 `PrintConv` does not crash. It emits a confident, plausible, wrong number under
@@ -112,8 +124,10 @@ generator always chooses the loud failure.
 
 The same rule governs every layer:
 
-- a Composite with no implementation in `compute.rs` never fires;
-- a magic number with no corroborating extension does not identify a file;
+- a Composite with neither a registered hand implementation nor a generated
+  expression computation never fires; `codegen_composite.py` reports these cases;
+- the fallback identity lookup generally requires extension/header agreement;
+  the primary signature detector and text fallback have separate content-based rules;
 - a tag whose `Format` cannot be reproduced is omitted, not guessed.
 
 Every one of those refusals is counted and printed. A generator that silently
@@ -136,8 +150,8 @@ against the generator's own JSON would only prove self-consistency — it would
 cheerfully confirm a bug both sides inherited.
 
 - **Soundness** — is everything emitted correct? Answered by `verify.py`.
-  Currently 6,351/6,351 fields and 47,216/47,216 enum entries match ExifTool
-  exactly.
+  The original recorded run matched 6,351/6,351 fields and 47,216/47,216
+  enum entries. These are historical counts, not a fresh verification.
 - **Completeness** — how much was skipped, and why? Answered by `codegen.py`'s
   own accounting, printed on every run.
 
@@ -175,7 +189,7 @@ It does not say why, and the why decides what the work actually costs:
 | class     | meaning                                       | cost              |
 | --------- | --------------------------------------------- | ----------------- |
 | `RENAME`  | value read correctly, under a different name  | a string edit     |
-| `MISSING` | ExifTool emits it, OxiDex does not            | real parsing work |
+| `MISSING` | ExifTool emits it, OxiDex does not            | investigate generation, routing, refusal or parsing |
 | `VALUE`   | both emit it, values disagree                 | usually PrintConv |
 | `EXTRA`   | OxiDex-only, no counterpart                   | investigate       |
 
@@ -212,6 +226,10 @@ the tarball, no installation.
 :::
 
 ## Work the measurement pointed at
+
+This section records the early transcription experiment on its named small
+corpus. Its before/after scores are historical and do not include the September
+2026 correction to duplicate-preserving census accounting.
 
 Following the ranked gap rather than intuition produced four layers, in order.
 
@@ -297,7 +315,8 @@ registry grows. Protect that property.
    inside.
 2. **Prefer the layer over the instance.** If a tag is missing in one format,
    ask whether the mechanism is missing in all of them. One entry in `exprs.py`
-   fixes every tag sharing that expression across all 146 modules, permanently.
+   can serve every supported tag sharing that expression. Its output still
+   needs routing, activation and re-verification after relevant upstream changes.
    One entry in `compute.rs` fixes a Composite in every format at once.
 3. **Quote the original.** Every hand-ported function carries ExifTool's source
    above it, so a reviewer can check the translation without opening `Exif.pm`.
@@ -312,6 +331,10 @@ registry grows. Protect that property.
    Fix the expectation against ExifTool, never the other way round.
 
 ## Honest limits
+
+September 10 status and remaining implementation work are centralized in the
+[status page](./TAG_MACHINERY_STATUS.md). Measurements in the numbered history
+below retain their original scope; they are not current census results.
 
 - `verify.py` checks field names and enum maps, and does **not** verify
   translated expressions — that is still true of `verify.py`, and it is where
@@ -342,13 +365,11 @@ registry grows. Protect that property.
      prints an instrument header of its own): translated **4654/6993 uses =
      66.6%**, 478/1529 distinct = 31.3%. The other **2339 uses / 1051 distinct**
      are refused by the closed grammar and therefore never reach the oracle at
-     all — omitted and counted, per "refuse rather than approximate", but a
-     PASS says nothing about them. Ranked by uses the refusals are headed by
-     named helper subs not yet ported (`ConvertDuration($val)` 73,
-     `Image::ExifTool::ConvertUnixTime($val + 631065600, 1)` 46,
-     `ConvertBitrate($val)` 36, `Image::ExifTool::Exif::PrintFraction($val)`
-     35), `%g` sprintf (`sprintf("%.2g",$val)` 30), and split/unpack/regex
-     shapes (`unpack("H*",$val)` 26, `$val || undef` 25).
+     all in that historical run — omitted and counted, per "refuse rather than
+     approximate", but a PASS said nothing about them. Several former blockers
+     (ConvertDuration, ConvertBitrate, PrintFraction, ConvertUnixTime, `%g`,
+     unpack and undef forms) gained compiler support in September. Use
+     `expr_coverage.py` against the current dump for today's refusal ranking.
   2. **Composite-domain expressions are outside the oracle by name.**
      `verify_exprs.py` skips any translation whose emitted code carries
      `compile_composite`'s `{vN}` placeholders — ExifTool's `@val`/`$val[N]`
@@ -360,31 +381,31 @@ registry grows. Protect that property.
      first place. Read correctly, that zero means `compile_composite` /
      `codegen_composite.py` output is **not covered by this oracle**, not that
      it passed one.
-  3. **The ledger is bound to one Perl.** Its `tables_sha256` digests the
-     `dump_tables.pl` output byte for byte, and Perl 5.34.1 and 5.38.2 emit
-     genuinely different bytes for the same ExifTool 13.59 (`79412ee8…` vs
-     `6b6bd4f8…`, both measured). A ledger is therefore only loadable on a
-     host whose Perl matches its recorded `perl_version`; `regen.sh` refreshes
-     it before `codegen.py` reads it, and `test_load_oracle_ledger.py`'s
-     `CommittedLedgerTests` grades every host-independent field of the
-     committed artifact so a dead one cannot sit there unnoticed again.
-- File identification deliberately under-claims. A JPEG named `.dat`, or a file
-  with no extension, is not identified, because OxiDex cannot run ExifTool's
-  confirming parse.
-- The generator currently emits only `ProcessBinaryData` tables. The extractor
-  already captures the subdirectory graph, conditions and value conversions
-  needed to extend it to IFD-style tables; that work has not been done.
-- 11 of the 1004 fractional keys (`12.1`, a slice of the word at 12) declare no
+  3. **The ledger is bound to the exact dump.** Codegen validates its schema,
+     ExifTool version, `tables_sha256` and zero-failure verdict, and the ledger
+     records Perl provenance. Different Perl versions have produced different
+     dump bytes for the same ExifTool release. Regenerate the ledger from the
+     exact dump used for generation; matching Perl version alone is not the
+     acceptance check. `test_load_oracle_ledger.py` checks the artifact contract.
+- The `filetype::identify` fallback deliberately under-claims and generally
+  requires extension/header agreement. This is not a restriction on OxiDex's
+  primary signature detector; the fallback also has a text exception. See
+  `src/filetype/mod.rs` for the boundary.
+- The generator emits both `ProcessBinaryData` and `ProcessExif`-style IFD
+  tables. Their runtime adoption remains partial: declaration emission, static
+  eligibility, activation and observed execution are separate states. Arbitrary
+  custom processing procedures still need explicit handling.
+- In the original recorded census, 11 of the 1004 fractional keys (`12.1`, a slice of the word at 12) declare no
   `Mask`, so which bits they name is unrecorded and `decode_binary_table`
   refuses them; the other 993 decode. The runtime counts both halves
   (`all_fractional_census`) and the generator reports them, because an
   under-claim nobody measures reads exactly like a complete transcription.
 - Some inferred renames still want human confirmation — `LNK
   TargetFileAttributes -> RunWindow` looks doubtful.
-- **What remains is genuinely not transcription.** CR3 (250 missing tags in the
-  corpus), CRW (156) and DICOM (101) need real format implementations. This
-  methodology has no shortcut for them, and claiming otherwise would repeat the
-  mistake this document is written to avoid.
+- **Custom format behavior may require maintained implementation.** The old
+  CR3/CRW/DICOM gap counts described an earlier corpus and codebase; subsequent
+  format implementations have landed. Re-measure the particular remaining gap
+  before deciding it needs a new parser rather than shared generation/routing.
 - **Four of six generated files still have no committed generator** (found
   while wiring the second generation tier, tag-machinery overhaul Step 14;
   two of the original six were reconstructed in a later pass -- see the
@@ -495,15 +516,10 @@ registry grows. Protect that property.
 
   `sony/plain_tables.rs`, `sony/enciphered_tables.rs`,
   `nikon/settings_tables.rs` and `nikon/encrypted_tables.rs` remain
-  unreconstructed; they were not attempted in this pass. One known residual
-  gap from reconstructing only two of six: `check_hand_enum_drift.py`'s
-  baseline and `triage_bump.py`'s per-bump HAND classification still list
-  all six files uniformly (including the two that now have generators),
-  because neither script's file list was updated in this pass. That is
-  over-conservative rather than wrong -- a bump still gets flagged for
-  human attention on `main_extra_tables.rs`/`minolta_a100_tables.rs` even
-  though `regen-all.sh` can now refresh them unattended -- but it is next
-  in line to tighten, not a correctness bug.
+  unreconstructed. The historical Step 18 pass temporarily left all six in
+  the HAND classification even after two gained generators. The following
+  update records that classifier repair; the old six-file classification is
+  not a current task.
 
   **Step 30 update:** that residual gap is closed on the `triage_bump.py`
   side, and closed by *derivation* rather than by editing a second literal.
@@ -546,12 +562,15 @@ registry grows. Protect that property.
 [AI harness](./AI_HARNESS.md) the exception.** The ordering is not a matter of
 taste — it follows from the economics.
 
-The harness delivered 67 tags over five days from 7,522 diffs: roughly **112
+In the historical experiment documented by that report, the harness delivered
+67 tags over five days from 7,522 diffs: roughly **112
 model calls per delivered tag**, with a 56% delivery rate on a pre-filtered
 candidate list. Its cost per tag is flat, because each fix is independent and
 nothing accumulates. Transcription extracted 27,747 tag entries in 1.3 seconds,
 and its cost per tag *falls*, because every entry in `exprs.py` or `compute.rs`
-serves every tag that shares it, across all 146 modules, permanently.
+can serve supported tags that share it. These historical throughput figures
+are not a present cost forecast; runtime adoption and upstream verification
+still require work.
 
 The expensive failure is reaching for search where transcription applies —
 paying ~112 model calls to rediscover a table row that could have been
@@ -583,10 +602,9 @@ directly, and more cheaply:
   rather than declared done.
 - **The corpus makes regressions visible.** 190 files, one command, every format
   at once.
-- **Extend the extractor before writing a parser by hand.** The subdirectory
-  graph, `Condition` variants and `ValueConv` expressions are already captured
-  in `tables.json` and simply not yet code-generated. Emitting IFD-style tables
-  is more leverage than any single format implementation.
+- **Check existing generation before writing a parser by hand.** Binary and
+  IFD table emission already exists. Identify the specific unsupported shared
+  semantic or missing runtime route, then validate the smallest useful change.
 
 If the harness is used at all, use it narrowly, on a named list of tags that
 survived all of the above, and hold its output to the same rule as everything
@@ -607,10 +625,10 @@ python3 tools/exiftool-tables/conformance.py <corpus> --recursive --exiftool-dir
 | `dump_tables.pl`        | tag tables, via the Perl symbol table         |
 | `dump_filetypes.pl`     | `%magicNumber` / `%fileTypeLookup` / `%mimeType` |
 | `analyze.py`            | safety tiers; ranked untranslated expressions |
-| `codegen.py`            | binary tables → Rust                          |
+| `codegen.py`            | binary and IFD declarations → Rust             |
 | `codegen_composite.py`  | Composite dependency graph → Rust             |
 | `codegen_filetypes.py`  | identification tables → Rust                  |
-| `exprs.py`              | hand-verified Perl → Rust translations        |
+| `exprs.py`              | reviewed translations and closed compiler     |
 | `oracle.pl`             | independent ground truth for verification     |
 | `verify.py`             | soundness check                               |
 | `conformance.py`        | gap measurement and classification            |

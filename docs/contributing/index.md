@@ -1,5 +1,9 @@
 # Contributing to OxiDex
 
+For metadata-generation work, start with [Tag machinery status](../TAG_MACHINERY_STATUS.md)
+and the [automation backlog](../AUTOMATION-AND-TESTER-PLAN.md). They distinguish
+landed implementation, remaining gaps and historical plans on the refactor branch.
+
 Thank you for your interest in contributing to OxiDex! This guide will help you get started with development, testing, and submitting contributions.
 
 ## Getting Started

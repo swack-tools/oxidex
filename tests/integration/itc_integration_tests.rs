@@ -1,5 +1,5 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
 
 /// ExifTool 13.59 reads the pinned `t/images/ITC.itc` fixture's `itch` and
 /// `item` blocks -- verified against the pinned oracle directly
@@ -10,10 +10,10 @@ use std::path::Path;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn itc_fixture_matches_pinned_oracle() {
-    let metadata = read_metadata(Path::new(
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images/ITC.itc",
-    ))
-    .expect("read pinned ITC fixture");
+    let Some(path) = pinned_fixture_path("ITC.itc") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned ITC fixture");
 
     assert_eq!(metadata.get_string("ITC:DataType"), Some("Artwork"));
     assert_eq!(

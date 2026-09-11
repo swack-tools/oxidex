@@ -50,6 +50,8 @@ export default defineConfig({
         items: [
           { text: 'Changelog', link: '/changelog' },
           { text: 'Contributing', link: '/contributing/' },
+          { text: 'Tag Machinery Status', link: '/TAG_MACHINERY_STATUS' },
+          { text: 'Automation Backlog', link: '/AUTOMATION-AND-TESTER-PLAN' },
           { text: 'Transcription', link: '/TRANSCRIPTION' },
           { text: 'AI Harness', link: '/AI_HARNESS' }
         ]
@@ -159,6 +161,8 @@ export default defineConfig({
         {
           text: 'Development',
           items: [
+            { text: 'Tag Machinery Status', link: '/TAG_MACHINERY_STATUS' },
+            { text: 'Automation Backlog', link: '/AUTOMATION-AND-TESTER-PLAN' },
             { text: 'Development Guide', link: '/contributing/development/' },
             { text: 'Code Quality Patterns', link: '/contributing/development/code-quality-patterns' },
             { text: 'TagRegistry Refactoring', link: '/contributing/development/tagregistry-refactoring' },

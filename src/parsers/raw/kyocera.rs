@@ -236,27 +236,21 @@ pub fn parse_kyocera_raw_metadata(data: &[u8]) -> Result<MetadataMap> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::path::Path;
+    use crate::test_support::pinned_fixture_path;
 
-    fn fixture() -> Vec<u8> {
-        // Real ExifTool test-suite fixture, not hand-authored bytes: see
-        // AGENTS.md's rule that regression fixtures must be real files.
-        let candidates = [
-            "/tmp/oxidex-exiftool-cache/combined-samples/KyoceraRaw.raw",
-            "/tmp/oxidex-exiftool-cache/exiftool/t/images/KyoceraRaw.raw",
-        ];
-        for candidate in candidates {
-            if let Ok(bytes) = fs::read(Path::new(candidate)) {
-                return bytes;
-            }
-        }
-        panic!("KyoceraRaw.raw fixture not found in the oxidex-exiftool-cache");
+    fn fixture() -> Option<Vec<u8>> {
+        pinned_fixture_path("KyoceraRaw.raw").map(|path| {
+            std::fs::read(&path).unwrap_or_else(|error| {
+                panic!("could not read pinned fixture {}: {error}", path.display())
+            })
+        })
     }
 
     #[test]
     fn recognizes_the_signature() {
-        let data = fixture();
+        let Some(data) = fixture() else {
+            return;
+        };
         assert!(looks_like_kyocera_raw(&data));
     }
 
@@ -268,7 +262,9 @@ mod tests {
 
     #[test]
     fn matches_exiftool_13_59_on_the_real_fixture() {
-        let data = fixture();
+        let Some(data) = fixture() else {
+            return;
+        };
         let metadata = parse_kyocera_raw_metadata(&data).expect("parses");
 
         // Cross-checked against `exiftool -a -G1 -s` (pinned 13.59) on the

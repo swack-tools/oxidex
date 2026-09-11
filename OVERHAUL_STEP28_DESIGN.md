@@ -1,5 +1,10 @@
 # Step 28 design checkpoint — one BinaryData engine, instrument-gated enablement
 
+> **Design record.** This preserves the original decision and its then-current
+> measurements. Approval of this design is not evidence of complete implementation.
+> See [Tag machinery status](docs/TAG_MACHINERY_STATUS.md) for landed work,
+> remaining limits and the current backlog.
+
 **Status: DECIDED by the maintainer 2026-08-13. Implementation authorized, with one
 strategy change that is larger than the questions I asked.**
 

@@ -4,6 +4,11 @@ outline: 2
 
 # The BinaryData engine and its two enablement gates (Step 28)
 
+> **Step 28 implementation record.** The counts and A/B below are historical.
+> The IFD engine and later migrations are tracked in
+> [Tag machinery status](../TAG_MACHINERY_STATUS.md). This page does not imply
+> that every parser now uses the shared engine or has retired its hand conversions.
+
 ::: info Instrument
 Everything measured here used the pinned **exiftool 13.59**
 (`.exiftool-version`) via `/tmp/oxidex-exiftool-cache/exiftool-pinned.sh`,

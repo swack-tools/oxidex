@@ -1,5 +1,5 @@
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
 
 /// ExifTool 13.59 reads the pinned `t/images/PCX.pcx` fixture's every tag
 /// under the `File` group -- verified against the pinned oracle directly
@@ -10,10 +10,10 @@ use std::path::Path;
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn pcx_fixture_matches_pinned_oracle() {
-    let metadata = read_metadata(Path::new(
-        "/tmp/oxidex-exiftool-cache/exiftool/t/images/PCX.pcx",
-    ))
-    .expect("read pinned PCX fixture");
+    let Some(path) = pinned_fixture_path("PCX.pcx") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned PCX fixture");
 
     assert_eq!(metadata.get_string("File:Manufacturer"), Some("ZSoft"));
     assert_eq!(

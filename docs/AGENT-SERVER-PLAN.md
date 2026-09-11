@@ -1,5 +1,9 @@
 # Keel — staged migration plan
 
+> **Historical fleet design.** This records the original infrastructure proposal,
+> not current metadata-work priorities or proof that its stages deployed. See
+> [Tag machinery status](./TAG_MACHINERY_STATUS.md) for the current disposition.
+
 Companion to `docs/AGENT-SERVER-SPEC.md`. Seven stages; each lands on a `staging/keel-N-*` branch
 of the code repo and must PASS `tools/fleet/gate.sh` (GATE_VERSION 8 since 2026-08-22 — v7 plus a
 1800 s fleet-tests budget, `gate.sh`'s version-history block — whose fleet-tests stage runs
@@ -417,8 +421,8 @@ runbook with numbers; `fleetd --autonomous` path kept only as `autonomous_when_s
 | Burn-in review (every `job.lost`/`runner.down` explained) | Opus |  | 1.0 |
 
 **Acceptance (instrument).** `/etc/hosts` blackhole of github.com on m5 for 15 min with the server
-up → its gate finishes and the verdict lands via the brokered route (instrument: `git ls-remote
-<state>`); blackhole on the i7 (server + runner) for 15 min → runners elsewhere continue, gates on
+up → its gate finishes and the verdict lands via the brokered route (instrument:
+`git ls-remote <state>`); blackhole on the i7 (server + runner) for 15 min → runners elsewhere continue, gates on
 the i7 are killed at ≈ TTL−renew with `claim.lost` reason logged, no duplicate verdict (`conflict`
 count 0) (instrument: events + verdict refs); `pmset sleepnow` 20 min on m5 mid-gate → on wake
 either renew-within-TTL continues or `lost → killed`, never a duplicate landing (instrument:

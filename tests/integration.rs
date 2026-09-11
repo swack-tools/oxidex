@@ -1,6 +1,9 @@
 // Integration tests module
 // This file makes the tests/integration/ subdirectory visible to Cargo
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 #[path = "integration/jpeg_tests.rs"]
 mod jpeg_tests;
 

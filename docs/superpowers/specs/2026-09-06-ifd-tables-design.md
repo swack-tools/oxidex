@@ -1,5 +1,10 @@
 # IFD-style tag tables: generate, walk, gate — design (2026-09-06)
 
+> **Design baseline: September 6, 2026.** The opening problem statement describes
+> the pre-IFD implementation. I-1 through I-3 have since landed; I-4 and IFD1 work
+> must be checked separately. See [current status](../../TAG_MACHINERY_STATUS.md)
+> before using this original sequence as a task list.
+
 Status: approved direction (maintainer, 2026-09-06 evening: "direction A, after the two parked
 binary slices"; then "just do whatever is the fastest, parallel if that works"). This file is the
 contract the parallel workers build against. Measurements are in

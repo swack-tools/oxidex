@@ -250,27 +250,13 @@ pub fn parse_swf_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::MMapReader;
-    use std::path::Path;
-
-    fn fixture_reader() -> MMapReader {
-        // Real ExifTool test-suite fixture, not hand-authored bytes: see
-        // AGENTS.md's rule that regression fixtures must be real files.
-        let candidates = [
-            "/tmp/oxidex-exiftool-cache/combined-samples/Flash.swf",
-            "/tmp/oxidex-exiftool-cache/exiftool/t/images/Flash.swf",
-        ];
-        for candidate in candidates {
-            if let Ok(reader) = MMapReader::new(Path::new(candidate)) {
-                return reader;
-            }
-        }
-        panic!("Flash.swf fixture not found in the oxidex-exiftool-cache");
-    }
+    use crate::test_support::pinned_fixture_reader;
 
     #[test]
     fn matches_exiftool_13_59_on_the_real_fixture() {
-        let reader = fixture_reader();
+        let Some(reader) = pinned_fixture_reader("Flash.swf") else {
+            return;
+        };
         let metadata = parse_swf_metadata(&reader).expect("parses");
 
         // Cross-checked against `exiftool -a -G1 -s` (pinned 13.59) on the

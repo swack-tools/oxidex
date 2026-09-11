@@ -103,6 +103,7 @@ jobs:
       # is a developer cache) and panics on NotFound in CI, and because nextest
       # is fail-fast one panic aborts the whole suite -- which is how main
       # stayed red for two days looking like a single broken test.
+      - run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
       - run: python3 tools/ci/check-corpus-guards.py
       # Also pure-Python and buildless. update-coverage-docs rewrites these
       # numbers on every push to main, so this is not what keeps them correct
@@ -455,9 +456,20 @@ jobs:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
         run: |
           set -euo pipefail
-          curl -sSL -o et.tar.gz \
+          # runner.temp is not available in job-level env expressions.
+          # Resolve it at runtime and share one external tree with later steps.
+          EXIFTOOL_SOURCE="$RUNNER_TEMP/oxidex-table-oracle"
+          echo "EXIFTOOL_SOURCE=$EXIFTOOL_SOURCE" >> "$GITHUB_ENV"
+          curl --fail --silent --show-error --location -o "$RUNNER_TEMP/exiftool-tables.tar.gz" \
             "https://github.com/exiftool/exiftool/archive/refs/tags/${ET_VERSION}.tar.gz"
-          tar xzf et.tar.gz
+          mkdir -p "$EXIFTOOL_SOURCE"
+          tar xzf "$RUNNER_TEMP/exiftool-tables.tar.gz" -C "$EXIFTOOL_SOURCE" --strip-components=1
+      - name: Install oracle container support
+        run: |
+          # verify_subdirs.py probes DOCX parsing as well as the version.
+          # A Perl without Archive::Zip reports ZIP and is not a valid oracle.
+          sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
+          perl -MArchive::Zip -e 1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt
@@ -467,15 +479,15 @@ jobs:
         run: |
           python3 tools/exiftool-tables/verify.py \
             src/exiftool_tables/binary_tables.rs \
-            "exiftool-${ET_VERSION}/lib" \
+            "$EXIFTOOL_SOURCE/lib" \
             --oracle tools/exiftool-tables/oracle.pl
           # verify.py independently checks which edges should be present;
           # this runs their actual Start/Base arithmetic against the pinned
           # ProcessBinaryData Perl eval scope (ExifTool.pm:10118-10137).
           python3 tools/exiftool-tables/verify_subdirs.py \
             src/exiftool_tables/binary_tables.rs \
-            "exiftool-${ET_VERSION}/lib" \
-            --exiftool "exiftool-${ET_VERSION}/exiftool"
+            "$EXIFTOOL_SOURCE/lib" \
+            --exiftool "$EXIFTOOL_SOURCE/exiftool"
       # Step 14 (tag-machinery overhaul): tier 1 above is binary_tables.rs;
       # tier 2 is everything downstream of it that regen.sh never touches --
       # the MakerNote sub-directory tables, the Nikon AF-point grids and the
@@ -493,7 +505,7 @@ jobs:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
         run: |
           set -euo pipefail
-          export OXIDEX_EXIFTOOL_LIB="$PWD/exiftool-${ET_VERSION}/lib"
+          export OXIDEX_EXIFTOOL_LIB="$EXIFTOOL_SOURCE/lib"
           tools/exiftool-tables/regen-all.sh --tier2-only
           if ! git diff --exit-code -- \
               src/parsers/tiff/makernotes/fujifilm/settings_tables.rs \
@@ -541,7 +553,7 @@ jobs:
           # runner).
           (cd tools/exiftool-tables && python3 -m unittest discover -p 'test_*.py' -v)
 
-          ROOT="$PWD/exiftool-${ET_VERSION}"
+          ROOT="$EXIFTOOL_SOURCE"
           LIB="$ROOT/lib"
           DUMP="$RUNNER_TEMP/tables-${ET_VERSION}.json"
           perl tools/exiftool-tables/dump_tables.pl "$LIB" > "$DUMP"
@@ -549,8 +561,11 @@ jobs:
           TMPFIX="$RUNNER_TEMP/staleness-fixtures"
           mkdir -p "$TMPFIX"
           python3 tools/exiftool-tables/gen_staleness_facts.py "$DUMP" "$TMPFIX"
+          # The IFD sample is a handwritten verifier-parser fixture, not an
+          # output of gen_staleness_facts.py. Keep it out of this data diff.
           if ! diff -ru tools/exiftool-tables/fixtures "$TMPFIX" \
-              --exclude hand_enum_drift_baseline.json; then
+              --exclude hand_enum_drift_baseline.json \
+              --exclude ifd_tables_sample.rs; then
             echo "::error::committed staleness fixtures are stale relative to ExifTool ${ET_VERSION} -- re-run 'python3 tools/exiftool-tables/gen_staleness_facts.py <dump.json> tools/exiftool-tables/fixtures', update the Rust these fixtures check, and commit both." >&2
             exit 1
           fi

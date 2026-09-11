@@ -7,12 +7,8 @@
 //! crate's output, and every fixture is a real file from the pinned
 //! ExifTool tree's `t/images`.
 
+use crate::fixtures::pinned_fixture_path;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
-
-fn fixture(name: &str) -> std::path::PathBuf {
-    Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images").join(name)
-}
 
 /// `t/images/PSP.psp`, a Paint Shop Pro X3 image.
 ///
@@ -29,7 +25,10 @@ fn fixture(name: &str) -> std::path::PathBuf {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn psp_fixture_matches_pinned_oracle() {
-    let metadata = read_metadata(&fixture("PSP.psp")).expect("read pinned PSP fixture");
+    let Some(path) = pinned_fixture_path("PSP.psp") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned PSP fixture");
 
     assert_eq!(metadata.get_string("File:FileType"), Some("PSP"));
     assert_eq!(metadata.get_string("PSP:FileVersion"), Some("10.0"));
@@ -82,7 +81,10 @@ fn psp_fixture_matches_pinned_oracle() {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn pmp_fixture_matches_pinned_oracle() {
-    let metadata = read_metadata(&fixture("Sony.pmp")).expect("read pinned PMP fixture");
+    let Some(path) = pinned_fixture_path("Sony.pmp") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned PMP fixture");
 
     assert_eq!(metadata.get_string("File:FileType"), Some("PMP"));
     // Sony.pm:11377-11378 stamps both unconditionally.
@@ -125,7 +127,10 @@ fn pmp_fixture_matches_pinned_oracle() {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn dv_fixture_matches_pinned_oracle() {
-    let metadata = read_metadata(&fixture("DV.dv")).expect("read pinned DV fixture");
+    let Some(path) = pinned_fixture_path("DV.dv") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned DV fixture");
 
     assert_eq!(metadata.get_string("File:FileType"), Some("DV"));
 
@@ -158,14 +163,16 @@ fn dv_fixture_matches_pinned_oracle() {
 
 /// `t/images/ZISRAW.czi`, a Zeiss CZI microscopy image.
 ///
-/// Only the three `ZISRAW::Main` header fields are routed; the XML-derived
-/// tags are deliberately absent (see `czi.rs`'s module docs on
-/// `ShortenTagNames`). `MicroscopeName` is asserted absent so that a future
-/// partial implementation of that chain cannot land unnoticed.
+/// The three `ZISRAW::Main` header fields and the parsed XML microscope name
+/// match the pinned oracle. ExifTool 13.59 reports `XML:MicroscopeName` as
+/// `Axio Observer.Z1`; the XML parser now preserves that value too.
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn czi_header_matches_pinned_oracle() {
-    let metadata = read_metadata(&fixture("ZISRAW.czi")).expect("read pinned CZI fixture");
+    let Some(path) = pinned_fixture_path("ZISRAW.czi") else {
+        return;
+    };
+    let metadata = read_metadata(&path).expect("read pinned CZI fixture");
 
     assert_eq!(metadata.get_string("File:FileType"), Some("CZI"));
     // int32u[2] through `tr/ /./`.
@@ -180,6 +187,8 @@ fn czi_header_matches_pinned_oracle() {
         Some("8fae1a521bc8714e97e12b82ec8fa652")
     );
 
-    // Deliberately not implemented.
-    assert_eq!(metadata.get("XML:MicroscopeName"), None);
+    assert_eq!(
+        metadata.get_string("XML:MicroscopeName"),
+        Some("Axio Observer.Z1")
+    );
 }

@@ -4,6 +4,10 @@ outline: 2
 
 # Corpus Synthesis (Step 28 enablement gate)
 
+> **Historical feasibility study.** Measurements below belong to their named
+> August commits and corpus. This is not the proposed general differential walk
+> checker. See [current status and remaining checks](../TAG_MACHINERY_STATUS.md).
+
 ::: info Manual measurement run, not auto-regenerated
 Run 2026-08-13 against the pinned **exiftool 13.59** (`.exiftool-version`) on the
 remote build host, capability-probed (`-ver` → `13.59`; `OOXML.docx` →
