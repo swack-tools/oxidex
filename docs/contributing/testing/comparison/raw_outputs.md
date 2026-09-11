@@ -1,10 +1,13 @@
 # Raw Output Comparisons
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present. Only the displayed `Directory` fields are normalized for this documentation; this is not a new capture. Other output values remain unchanged.
+
+
 ## JPEG Comparison
 ### Perl ExifTool Output
 ```
 File Name                       : sample_with_exif_xmp.jpg
-Directory                       : /Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/complex
+Directory                       : tests/fixtures/jpeg/complex
 File Size                       : 624 bytes
 File Modification Date/Time     : 2025:10:30 06:06:49-05:00
 File Access Date/Time           : 2025:11:09 18:16:24-06:00
@@ -37,7 +40,7 @@ XMP-xmp:Rating: 5
 ### Perl ExifTool Output
 ```
 File Name                       : synthetic_exif_001.png
-Directory                       : /Users/allen/Documents/git/exiftool-rs/tests/fixtures/png/complex
+Directory                       : tests/fixtures/png/complex
 File Size                       : 3.5 kB
 File Modification Date/Time     : 2025:10:30 06:57:59-05:00
 File Access Date/Time           : 2025:11:15 20:40:21-06:00
@@ -161,7 +164,7 @@ PNG:tEXt:exif:YCbCrPositioning: 1
 ### Perl ExifTool Output
 ```
 File Name                       : big_endian_001.tif
-Directory                       : /Users/allen/Documents/git/exiftool-rs/tests/fixtures/tiff/complex
+Directory                       : tests/fixtures/tiff/complex
 File Size                       : 180 kB
 File Modification Date/Time     : 2025:11:09 18:07:08-06:00
 File Access Date/Time           : 2025:11:15 20:40:21-06:00
@@ -214,7 +217,7 @@ IFD0:WhitePoint: 0.3127000034 0.3289999962
 ### Perl ExifTool Output
 ```
 File Name                       : Allen Swackhamer Resume.pdf
-Directory                       : /Users/allen/Documents/git/exiftool-rs
+Directory                       : .
 File Size                       : 144 kB
 File Modification Date/Time     : 2025:11:15 20:24:23-06:00
 File Access Date/Time           : 2025:11:15 20:39:58-06:00
@@ -328,7 +331,7 @@ Profile:ViewingCondSurround: 3.92889404296875 4.0743865966796875 3.3617858886718
 ### Perl ExifTool Output
 ```
 File Name                       : sample.mp4
-Directory                       : /Users/allen/Documents/git/exiftool-rs/tests/fixtures/mp4
+Directory                       : tests/fixtures/mp4
 File Size                       : 507 bytes
 File Modification Date/Time     : 2025:11:09 09:00:25-06:00
 File Access Date/Time           : 2025:11:09 18:16:24-06:00

@@ -1,5 +1,8 @@
 # Test Coverage - Metadata Extraction Verification
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
+
 ## Test Methodology
 
 Each file type was tested by:
@@ -12,23 +15,23 @@ Each file type was tested by:
 ## Files Tested
 
 ### JPEG
-**Primary Test File**: `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/complex/sample_with_exif_xmp.jpg`
+**Primary Test File**: `tests/fixtures/jpeg/complex/sample_with_exif_xmp.jpg`
 - **Size**: 624 bytes
 - **Features**: EXIF metadata, XMP metadata
 - **Metadata Tags**: Make, Model, Creator, Rating, Title, Rights
 - **Result**: 100% parity (7 fields extracted by both)
 
 **Additional JPEG Files Available**:
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/simple/sample_with_exif.jpg`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/complex/synthetic_gps_001.jpg`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/complex/synthetic_gps_002.jpg`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/complex/synthetic_gps_003.jpg`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/edge_cases/orientation_1.jpg`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/edge_cases/orientation_2.jpg`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/edge_cases/large_dimension.jpg`
+- `tests/fixtures/jpeg/simple/sample_with_exif.jpg`
+- `tests/fixtures/jpeg/complex/synthetic_gps_001.jpg`
+- `tests/fixtures/jpeg/complex/synthetic_gps_002.jpg`
+- `tests/fixtures/jpeg/complex/synthetic_gps_003.jpg`
+- `tests/fixtures/jpeg/edge_cases/orientation_1.jpg`
+- `tests/fixtures/jpeg/edge_cases/orientation_2.jpg`
+- `tests/fixtures/jpeg/edge_cases/large_dimension.jpg`
 
 ### PNG
-**Primary Test File**: `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/png/complex/synthetic_exif_001.png`
+**Primary Test File**: `tests/fixtures/png/complex/synthetic_exif_001.png`
 - **Size**: 3.5 KB
 - **Features**: PNG chunks (IHDR, PLTE, pHYs, tIME, eXIf, tEXt), embedded EXIF
 - **Dimensions**: 800×600, 8-bit palette
@@ -36,12 +39,12 @@ Each file type was tested by:
 - **Result**: 98% parity (46/48 fields, missing only computed fields)
 
 **Additional PNG Files Available**:
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/png/simple/synthetic_text_001.png`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/png/edge_cases/large_plasma.png`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/png/sample.png`
+- `tests/fixtures/png/simple/synthetic_text_001.png`
+- `tests/fixtures/png/edge_cases/large_plasma.png`
+- `tests/fixtures/png/sample.png`
 
 ### TIFF
-**Primary Test File**: `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/tiff/complex/big_endian_001.tif`
+**Primary Test File**: `tests/fixtures/tiff/complex/big_endian_001.tif`
 - **Size**: 180 KB
 - **Features**: Big-endian byte order, uncompressed, RGB color
 - **Dimensions**: 200×150, 16-bit per sample
@@ -49,25 +52,25 @@ Each file type was tested by:
 - **Result**: 89% parity (16/18 fields, missing only computed fields)
 
 **Additional TIFF Files Available**:
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/tiff/edge_cases/lzw_compressed.tif`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/tiff/edge_cases/zip_compressed.tif`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/tiff/edge_cases/very_large.tif`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/tiff/complex/multipage.tif`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/tiff/sample.tif`
+- `tests/fixtures/tiff/edge_cases/lzw_compressed.tif`
+- `tests/fixtures/tiff/edge_cases/zip_compressed.tif`
+- `tests/fixtures/tiff/edge_cases/very_large.tif`
+- `tests/fixtures/tiff/complex/multipage.tif`
+- `tests/fixtures/tiff/sample.tif`
 
 ### PDF
-**Primary Test File**: `/Users/allen/Documents/git/exiftool-rs/Allen Swackhamer Resume.pdf`
+**Primary Test File**: `Allen Swackhamer Resume.pdf`
 - **Size**: 144 KB
 - **Features**: PDF 1.3, 2 pages, embedded ICC color profile (sRGB)
 - **Metadata Tags**: PDF version, page count, creation/modification dates, producer, extensive ICC profile data
 - **Result**: 107% parity (49/46 fields, Rust extracts MORE data)
 
 **Additional PDF Files Available**:
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/pdf/sample.pdf`
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/pdf/simple/sample.pdf`
+- `tests/fixtures/pdf/sample.pdf`
+- `tests/fixtures/pdf/simple/sample.pdf`
 
 ### MP4/QuickTime
-**Primary Test File**: `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/mp4/sample.mp4`
+**Primary Test File**: `tests/fixtures/mp4/sample.mp4`
 - **Size**: 507 bytes
 - **Features**: MP4 Base Media v1, QuickTime metadata, item list metadata
 - **Duration**: 1.00 second (test file)
@@ -75,7 +78,7 @@ Each file type was tested by:
 - **Result**: 103% parity (31/30 fields, Rust extracts Year field)
 
 **Additional MP4 Files Available**:
-- `/Users/allen/Documents/git/exiftool-rs/tests/fixtures/mp4/simple/sample.mp4`
+- `tests/fixtures/mp4/simple/sample.mp4`
 
 ## Coverage Summary
 
@@ -142,32 +145,32 @@ These could be used for:
 
 ### JPEG
 ```bash
-exiftool /Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/complex/sample_with_exif_xmp.jpg
-/Users/allen/Documents/git/exiftool-rs/target/release/exiftool-rs /Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/complex/sample_with_exif_xmp.jpg
+exiftool tests/fixtures/jpeg/complex/sample_with_exif_xmp.jpg
+target/release/exiftool-rs tests/fixtures/jpeg/complex/sample_with_exif_xmp.jpg
 ```
 
 ### PNG
 ```bash
-exiftool /Users/allen/Documents/git/exiftool-rs/tests/fixtures/png/complex/synthetic_exif_001.png
-/Users/allen/Documents/git/exiftool-rs/target/release/exiftool-rs /Users/allen/Documents/git/exiftool-rs/tests/fixtures/png/complex/synthetic_exif_001.png
+exiftool tests/fixtures/png/complex/synthetic_exif_001.png
+target/release/exiftool-rs tests/fixtures/png/complex/synthetic_exif_001.png
 ```
 
 ### TIFF
 ```bash
-exiftool /Users/allen/Documents/git/exiftool-rs/tests/fixtures/tiff/complex/big_endian_001.tif
-/Users/allen/Documents/git/exiftool-rs/target/release/exiftool-rs /Users/allen/Documents/git/exiftool-rs/tests/fixtures/tiff/complex/big_endian_001.tif
+exiftool tests/fixtures/tiff/complex/big_endian_001.tif
+target/release/exiftool-rs tests/fixtures/tiff/complex/big_endian_001.tif
 ```
 
 ### PDF
 ```bash
-exiftool "/Users/allen/Documents/git/exiftool-rs/Allen Swackhamer Resume.pdf"
-/Users/allen/Documents/git/exiftool-rs/target/release/exiftool-rs "/Users/allen/Documents/git/exiftool-rs/Allen Swackhamer Resume.pdf"
+exiftool "Allen Swackhamer Resume.pdf"
+target/release/exiftool-rs "Allen Swackhamer Resume.pdf"
 ```
 
 ### MP4
 ```bash
-exiftool /Users/allen/Documents/git/exiftool-rs/tests/fixtures/mp4/sample.mp4
-/Users/allen/Documents/git/exiftool-rs/target/release/exiftool-rs /Users/allen/Documents/git/exiftool-rs/tests/fixtures/mp4/sample.mp4
+exiftool tests/fixtures/mp4/sample.mp4
+target/release/exiftool-rs tests/fixtures/mp4/sample.mp4
 ```
 
 ## Conclusion

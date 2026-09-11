@@ -1,53 +1,53 @@
-.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-fleetd[adoptionhost] ORPHAN process group 87554 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp6i7l0kzz/adoption-) has no live claim -- killed: fake-killed
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 87554 (/bin/bash test-work/tmp6i7l0kzz/adoption-) has no live claim -- killed: fake-killed
 .fleetd[adoptionhost] ORPHAN SWEEP SKIPPED -- 1 claim(s) unreadable: refs/fleet/claims/gate/staging-one. An unreadable claim is not an unowned one: its pgid cannot be excluded, so nothing is killed this pass.
 .fleetd[adoptionhost] RELEASED orphaned claim refs/fleet/claims/gate/staging-recycled: recorded pgid 87949 is not a scoped fleet worker (recycled, or pre-scope)
-fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-fleetd[adoptionhost] worker-shaped group 88507 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp089vnldi/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] worker-shaped group 88507 (/bin/bash test-work/tmp089vnldi/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
 .fleetd[adoptionhost] RELEASED orphaned claim refs/fleet/claims/agent/staging-one: no adoptable process group (pgid=None)
-fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-fleetd[adoptionhost] ORPHAN process group 88995 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpdfs5jtk9/adoption-) has no live claim -- killed: fake-killed
+fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 88995 (/bin/bash test-work/tmpdfs5jtk9/adoption-) has no live claim -- killed: fake-killed
 .fleetd[adoptionhost] RELEASED orphaned claim refs/fleet/claims/gate/staging-one: process group 89239 is gone
-fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
 .fleetd[adoptionhost] ORPHAN process group 424242 (a real orphan fleet-scope=c3e1aaf96689) has no live claim -- killed: fake
-.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-fleetd[adoptionhost] ORPHAN process group 89852 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpztwdhmxw/adoption-) has no live claim -- killed: exited on SIGTERM
-.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-fleetd[adoptionhost] ORPHAN process group 89991 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpl373wsjt/adoption-) has no live claim -- killed: fake-killed
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 89852 (/bin/bash test-work/tmpztwdhmxw/adoption-) has no live claim -- killed: exited on SIGTERM
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 89991 (/bin/bash test-work/tmpl373wsjt/adoption-) has no live claim -- killed: fake-killed
 .fleetd[adoptionhost] ORPHAN SWEEP SKIPPED -- 1 claim(s) unreadable: refs/fleet/claims/gate/staging-one. An unreadable claim is not an unowned one: its pgid cannot be excluded, so nothing is killed this pass.
-.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-fleetd[adoptionhost] ORPHAN process group 90414 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpg7ws5sbl/adoption-) has no live claim -- killed: fake-killed
-.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-fleetd[adoptionhost] worker-shaped group 90574 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp9r5ojyn7/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
-fleetd[adoptionhost] ORPHAN process group 90584 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp9r5ojyn7/adoption-) has no live claim -- killed: fake-killed
-.........../Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1067: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpgc1bta0x/fleetd-a.log'>
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 90414 (/bin/bash test-work/tmpg7ws5sbl/adoption-) has no live claim -- killed: fake-killed
+.fleetd[adoptionhost] worker-shaped group 87103 (/bin/bash test-work/tmpccqxud2q/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] worker-shaped group 90574 (/bin/bash test-work/tmp9r5ojyn7/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+fleetd[adoptionhost] ORPHAN process group 90584 (/bin/bash test-work/tmp9r5ojyn7/adoption-) has no live claim -- killed: fake-killed
+............./keel-2-cli/tools/fleet/tests/test_adoption.py:1067: ResourceWarning: unclosed file <_io.BufferedWriter name='test-work/tmpgc1bta0x/fleetd-a.log'>
   a = self.start_fleetd("a")
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-/Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1084: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpgc1bta0x/fleetd-b.log'>
+../keel-2-cli/tools/fleet/tests/test_adoption.py:1084: ResourceWarning: unclosed file <_io.BufferedWriter name='test-work/tmpgc1bta0x/fleetd-b.log'>
   self.start_fleetd("b")
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-./Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1211: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpxl_8bfp5/fleetd-b.log'>
+.../keel-2-cli/tools/fleet/tests/test_adoption.py:1211: ResourceWarning: unclosed file <_io.BufferedWriter name='test-work/tmpxl_8bfp5/fleetd-b.log'>
   self.start_fleetd("b")
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-./Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1142: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpw43obvyz/fleetd-a.log'>
+.../keel-2-cli/tools/fleet/tests/test_adoption.py:1142: ResourceWarning: unclosed file <_io.BufferedWriter name='test-work/tmpw43obvyz/fleetd-a.log'>
   a = self.start_fleetd("a")
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-/Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1151: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpw43obvyz/fleetd-b.log'>
+../keel-2-cli/tools/fleet/tests/test_adoption.py:1151: ResourceWarning: unclosed file <_io.BufferedWriter name='test-work/tmpw43obvyz/fleetd-b.log'>
   self.start_fleetd("b")
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-./Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1171: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp645et1dy/fleetd-a.log'>
+.../keel-2-cli/tools/fleet/tests/test_adoption.py:1171: ResourceWarning: unclosed file <_io.BufferedWriter name='test-work/tmp645et1dy/fleetd-a.log'>
   a = self.start_fleetd("a")
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-/Users/allen/git/keel-2-cli/tools/fleet/tests/test_adoption.py:1184: ResourceWarning: unclosed file <_io.BufferedWriter name='/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp645et1dy/fleetd-b.log'>
+../keel-2-cli/tools/fleet/tests/test_adoption.py:1184: ResourceWarning: unclosed file <_io.BufferedWriter name='test-work/tmp645et1dy/fleetd-b.log'>
   self.start_fleetd("b")
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-..........agentworker[t] staging/alpha: push to /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp3ouc5b2s/code.git failed (exit 128): ! [rejected]  HEAD -> staging/alpha (stale info)
+..........agentworker[t] staging/alpha: push to test-work/tmp3ouc5b2s/code.git failed (exit 128): ! [rejected]  HEAD -> staging/alpha (stale info)
 error: failed to push some refs
-.agentworker[t] staging/alpha: PUSH AUTHENTICATION FAILED to /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpq6i4rinr/code.git -- the agent's work is committed locally and could NOT be delivered. This is a host credential condition, not a verdict on the branch: check FLEET_GIT_TOKEN_FILE / /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpq6i4rinr/home/.keel/secrets/git-token. git said: remote: Invalid username or password.
+.agentworker[t] staging/alpha: PUSH AUTHENTICATION FAILED to test-work/tmpq6i4rinr/code.git -- the agent's work is committed locally and could NOT be delivered. This is a host credential condition, not a verdict on the branch: check FLEET_GIT_TOKEN_FILE / test-work/tmpq6i4rinr/home/.keel/secrets/git-token. git said: remote: Invalid username or password.
 fatal: Authentication failed for 'https://github.com/swack-tools/oxidex.git/'
 .......................agentworker[t] staging/alpha: launching stub (timeout 3600s)
 agentworker[t] staging/alpha: stub exited 0 in 0s; tail: CONVERGED stub
@@ -74,11 +74,11 @@ agentworker[t] staging/alpha: stub exited 0 in 0s; tail: CONVERGED stub
 agentworker[t] staging/alpha: CONVERGED 994d26bb -> e6efed0a (tip-ancestry verified: False) under stub exit 0
 /opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/popen_fork.py:76: DeprecationWarning: This process (pid=86867) is multi-threaded, use of fork() may lead to deadlocks in the child.
   self.pid = os.fork()
-...................................................................................train: WARNING FLEET_TRAIN_DEPLOY_KEY=/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpqyj29j3z/absent does not name an existing file -- pushing the tip without the deploy key
-train: WARNING FLEET_TRAIN_DEPLOY_KEY=/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpqyj29j3z/absent does not name an existing file -- pushing the tip without the deploy key
+...................................................................................train: WARNING FLEET_TRAIN_DEPLOY_KEY=test-work/tmpqyj29j3z/absent does not name an existing file -- pushing the tip without the deploy key
+train: WARNING FLEET_TRAIN_DEPLOY_KEY=test-work/tmpqyj29j3z/absent does not name an existing file -- pushing the tip without the deploy key
 ..train: WARNING refs/heads/staging/alpha NOT retired: expected 9e285946fa8d, hub has f4ae5a6e779c -- the branch moved while the train gated. staging/alpha IS in the new tip; its staging ref is kept and requeued.
-................................................fleetlib: WARNING /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/doctor-token-w48n5iss/home/.keel/secrets/git-token is group/world accessible (mode 0644); expected 0600 -- the host PAT is readable by other users
-...........agentworker: missing tip or refs/heads/staging/alpha on the code repo /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpjh461p7j/state.git; exiting
+................................................fleetlib: WARNING test-work/doctor-token-w48n5iss/home/.keel/secrets/git-token is group/world accessible (mode 0644); expected 0600 -- the host PAT is readable by other users
+...........agentworker: missing tip or refs/heads/staging/alpha on the code repo test-work/tmpjh461p7j/state.git; exiting
   staging/alpha                            BATCH  (1 files)
 train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)
 train: intent 'alpha' not marked done -- no open intent at 'refs/fleet/intents/alpha' (never registered, already closed, or a lost race)
@@ -113,14 +113,14 @@ fleetd[testhost] RECONCILE DEGRADED (2/5 consecutive): HubError: ls-remote refs/
 fleetd[testhost] RECONCILE DEGRADED (3/5 consecutive): HubError: ls-remote refs/fleet/desired failed: exit 128: could not read from remote -- skipping this step, 0 worker(s) left running and still renewing
 fleetd[testhost] RECONCILE DEGRADED (4/5 consecutive): HubError: ls-remote refs/fleet/desired failed: exit 128: could not read from remote -- skipping this step, 0 worker(s) left running and still renewing
 fleetd[testhost] RECONCILE DEGRADED (5/5 consecutive): HubError: ls-remote refs/fleet/desired failed: exit 128: could not read from remote -- skipping this step, 0 worker(s) left running and still renewing
-fleetd[testhost] HUB UNUSABLE: 5 consecutive reconcile steps failed against /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp8wwtseyn/hub.git (last: ls-remote refs/fleet/desired failed: exit 128: could not read from remote) -- exiting for the supervisor to restart, leaving 0 live worker(s) alone
+fleetd[testhost] HUB UNUSABLE: 5 consecutive reconcile steps failed against test-work/tmp8wwtseyn/hub.git (last: ls-remote refs/fleet/desired failed: exit 128: could not read from remote) -- exiting for the supervisor to restart, leaving 0 live worker(s) alone
 .fleetd[testhost] adoption: adopted=[] released=[] orphans_killed=[] skipped=0
 fleetd[testhost] RECONCILE DEGRADED (1/5 consecutive): HubError: refs/fleet/claims/gate/x@abc has no readable payload.json: simulated -- skipping this step, 0 worker(s) left running and still renewing
 fleetd[testhost] RECONCILE DEGRADED (2/5 consecutive): HubError: refs/fleet/claims/gate/x@abc has no readable payload.json: simulated -- skipping this step, 0 worker(s) left running and still renewing
 fleetd[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
 .fleetd[testhost] adoption: adopted=[] released=[] orphans_killed=[] skipped=0
 fleetd[testhost] RECONCILE DEGRADED (1/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
-.fleetd[testhost] worker-shaped group 86004 (/bin/bash /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp9r9p9_vz/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
+.fleetd[testhost] worker-shaped group 86004 (/bin/bash test-work/tmp9r9p9_vz/adoption-) has no live claim but does not carry this daemon's scope token -- not ours to signal, left alone
 fleetd[testhost] adoption: adopted=[] released=[] orphans_killed=[] skipped=0 unscoped=[86004]
 fleetd[testhost] RECONCILE DEGRADED (1/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
 fleetd[testhost] RECONCILE DEGRADED (2/5 consecutive): HubError: simulated blip -- skipping this step, 0 worker(s) left running and still renewing
@@ -141,35 +141,35 @@ fleetd[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
   self.pid = os.fork()
 ...................................................s.............................ss.............................ERROR:root:keel-server: unhandled error handling PUT /v1/refs/refs/fleet/test/def7326f81b3/f
 Traceback (most recent call last):
-  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/hubstore.py", line 161, in _write
+  File "../keel-2-cli/tools/fleet/keel/hubstore.py", line 161, in _write
     ok = cas()
-  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/hubstore.py", line 150, in <lambda>
+  File "../keel-2-cli/tools/fleet/keel/hubstore.py", line 150, in <lambda>
     return self._write("update", ref, lambda: self._cached.update(ref, payload, expect_sha))
                                               ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/cachedhub.py", line 447, in update
+  File "../keel-2-cli/tools/fleet/keel/cachedhub.py", line 447, in update
     return self._write(ref, lambda: self._hub.update(ref, payload, expect_sha, push_options=push_options))
            ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/cachedhub.py", line 465, in _write
+  File "../keel-2-cli/tools/fleet/keel/cachedhub.py", line 465, in _write
     ok = cas()
-  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/cachedhub.py", line 447, in <lambda>
+  File "../keel-2-cli/tools/fleet/keel/cachedhub.py", line 447, in <lambda>
     return self._write(ref, lambda: self._hub.update(ref, payload, expect_sha, push_options=push_options))
                                     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/allen/git/keel-2-cli/tools/fleet/tests/test_hubstore.py", line 119, in broken
+  File "../keel-2-cli/tools/fleet/tests/test_hubstore.py", line 119, in broken
     raise HubUnreachableError(f"injected: {method} unreachable")
 fleetlib.HubUnreachableError: injected: update unreachable
 
 The above exception was the direct cause of the following exception:
 
 Traceback (most recent call last):
-  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/server.py", line 837, in _dispatch
+  File "../keel-2-cli/tools/fleet/keel/server.py", line 837, in _dispatch
     route.handler(self, params, query, principal)
     ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/server.py", line 448, in handle_refs_put
+  File "../keel-2-cli/tools/fleet/keel/server.py", line 448, in handle_refs_put
     result = handler.server.store.update(ref, payload, expect_sha=if_match)
-  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/hubstore.py", line 150, in update
+  File "../keel-2-cli/tools/fleet/keel/hubstore.py", line 150, in update
     return self._write("update", ref, lambda: self._cached.update(ref, payload, expect_sha))
            ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/allen/git/keel-2-cli/tools/fleet/keel/hubstore.py", line 163, in _write
+  File "../keel-2-cli/tools/fleet/keel/hubstore.py", line 163, in _write
     raise WriteOutcomeUnknownError(op, ref, exc) from exc
 hubstore.WriteOutcomeUnknownError: update refs/fleet/test/def7326f81b3/f raised in transport; outcome unknown: HubUnreachableError: injected: update unreachable
 .................ssssss/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/popen_fork.py:76: DeprecationWarning: This process (pid=86867) is multi-threaded, use of fork() may lead to deadlocks in the child.
@@ -200,20 +200,20 @@ train: intent 'sig' not marked done -- no open intent at 'refs/fleet/intents/sig
 /opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/popen_fork.py:76: DeprecationWarning: This process (pid=86867) is multi-threaded, use of fork() may lead to deadlocks in the child.
   self.pid = os.fork()
 .train: WARNING tip signal bump to 75c8e0a51648 failed (train run continues): boom
-...train: WARNING train token /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpw_s83jom/train.token is group/world accessible (mode 0644); expected 0600
+...train: WARNING train token test-work/tmpw_s83jom/train.token is group/world accessible (mode 0644); expected 0600
 train: WARNING hub does not advertise push options (receive.advertisePushOptions); retrying the tip push WITHOUT the train token -- the update hook cannot be enforcing one in this state
-.train: WARNING train token /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp9n7khard/tok is group/world accessible (mode 0644); expected 0600
-train: WARNING train token /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp9n7khard/tok is empty -- pushing without it
-...train: WARNING FLEET_TRAIN_DEPLOY_KEY=/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpdvvyomvs/no-such-key does not name an existing file -- pushing the tip without the deploy key
-..........train: WARNING FLEET_TRAIN_DEPLOY_KEY=/var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpsbtqwdi4/no-such-key does not name an existing file -- pushing the tip without the deploy key
-........train: WARNING verdict-store-failed train-alpha-7594: gate.sh could not push its verdict to the hub cache (see /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpkeapi8wc/home/gatelogs/gate-train-alpha-7594.log); this gate's own PASS/FAIL is unaffected, but the next train run on this tree will pay for the gate again
-..train: WARNING verdict-store-failed train-alpha-7598: gate.sh could not push its verdict to the hub cache (see /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpy_b03nxc/home/gatelogs/gate-train-alpha-7598.log); this gate's own PASS/FAIL is unaffected, but the next train run on this tree will pay for the gate again
+.train: WARNING train token test-work/tmp9n7khard/tok is group/world accessible (mode 0644); expected 0600
+train: WARNING train token test-work/tmp9n7khard/tok is empty -- pushing without it
+...train: WARNING FLEET_TRAIN_DEPLOY_KEY=test-work/tmpdvvyomvs/no-such-key does not name an existing file -- pushing the tip without the deploy key
+..........train: WARNING FLEET_TRAIN_DEPLOY_KEY=test-work/tmpsbtqwdi4/no-such-key does not name an existing file -- pushing the tip without the deploy key
+........train: WARNING verdict-store-failed train-alpha-7594: gate.sh could not push its verdict to the hub cache (see test-work/tmpkeapi8wc/home/gatelogs/gate-train-alpha-7594.log); this gate's own PASS/FAIL is unaffected, but the next train run on this tree will pay for the gate again
+..train: WARNING verdict-store-failed train-alpha-7598: gate.sh could not push its verdict to the hub cache (see test-work/tmpy_b03nxc/home/gatelogs/gate-train-alpha-7598.log); this gate's own PASS/FAIL is unaffected, but the next train run on this tree will pay for the gate again
 ........................................................................
 ======================================================================
 FAIL: test_every_setup_calls_super_so_the_scrub_runs (test_env_hermetic.TestEveryFixtureIsHermetic.test_every_setup_calls_super_so_the_scrub_runs)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/Users/allen/git/keel-2-cli/tools/fleet/tests/test_env_hermetic.py", line 242, in test_every_setup_calls_super_so_the_scrub_runs
+  File "../keel-2-cli/tools/fleet/tests/test_env_hermetic.py", line 242, in test_every_setup_calls_super_so_the_scrub_runs
     self.assertEqual(missing, [], "these setUp/setUpClass never call super(), so "
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
                      "HermeticEnvMixin never scrubs for them:\n" + "\n".join(missing))
@@ -238,7 +238,7 @@ test_server_transport.py:136 ServerTestCase.setUp
 FAIL: test_no_fixture_inherits_unittest_testcase_directly (test_env_hermetic.TestEveryFixtureIsHermetic.test_no_fixture_inherits_unittest_testcase_directly)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/Users/allen/git/keel-2-cli/tools/fleet/tests/test_env_hermetic.py", line 232, in test_no_fixture_inherits_unittest_testcase_directly
+  File "../keel-2-cli/tools/fleet/tests/test_env_hermetic.py", line 232, in test_no_fixture_inherits_unittest_testcase_directly
     self.assertEqual(bare, [], "these fixtures bypass _env.HermeticCase:\n" + "\n".join(bare))
     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: Lists differ: ['test_cachedhub.py:61 CachedHubTestCase(u[534 chars]se)'] != []

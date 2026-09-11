@@ -5,7 +5,9 @@
 This change reconciles preserved RawConv commits `ad9fdc32` and `0bf02cd9`
 onto verified integration `afd3a628cbcacb893c2b1d4dc54053eaf64565a4`.
 The final measured implementation is `0de2c15416188d773eb59aba4c84e9b1c38d54f5`;
-subsequent report updates change documentation only. ExifTool stays pinned to
+subsequent updates change documentation, saved capture path presentation, and
+two Python docstrings only. See [path notation](path-normalization.md) for the
+normalization scope and preserved evidence. ExifTool stays pinned to
 **13.59**. Generated tables, generator policy and activation gates are unchanged.
 This is a runtime consolidation, not Exif::Main engine activation or an ExifTool
 release upgrade.
@@ -182,9 +184,10 @@ Latin1 plain-text byte output, numeric-string precision and default group/winner
 semantics remain bounded, explicit debt. Existing corpus VALUE/MISSING counts
 are not zero.
 
-Evidence directory on the validation host:
-`/Users/allen/Documents/Codex/2026-09-10/oxidex-worktree-cleanup-audit/handoff-continuation/rawconv-ro9m336v`.
+The external acceptance bundle is named `rawconv-ro9m336v/`. Paths such as
+`acceptance/` and `review/candidate-v5-final-audit/` are relative to that bundle;
+the local retrieval path is recorded in the untracked `HANDOFF.md`.
 It retains source/binary hashes, native fixtures, exact commands, original failed
 controls, immutable captures, reviews and the PR/merge record. The continuation
-reuses `/Users/allen/git/oxidex-upgrade-triage`; all 13 registered worktrees and
-the preserved source branches remain. The protected checkout is unchanged.
+reuses the existing checkout; all 13 registered worktrees and preserved source
+branches remain. The protected checkout is unchanged.

@@ -1,7 +1,10 @@
 # Qualcomm MakerNote Parser Refactoring Summary
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
+
 **Date:** 2025-11-18
-**File:** `/Users/allen/Documents/git/exiftool-rs/src/parsers/tiff/makernotes/qualcomm.rs`
+**File:** `src/parsers/tiff/makernotes/qualcomm.rs`
 **Status:** ✅ Complete
 
 ## Objectives

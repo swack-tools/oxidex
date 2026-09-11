@@ -1,5 +1,8 @@
 # Ten Unique Tag Fixes Design
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
+
 ## Goal
 
 Close exactly ten independently verified ExifTool coverage gaps, with one fresh
@@ -8,7 +11,7 @@ agent assignment owning exactly one unique tag.
 ## Base and isolation
 
 Work takes place in the linked worktree
-`/home/allen/git/oxidex/.worktrees/ten-unique-tag-fixes` on branch
+`.worktrees/ten-unique-tag-fixes` on branch
 `tag-ten-unique-fixes-20260806`, based on local branch `codex` at
 `49eaf84d0733ec8c435ed00c94abaa4596114991`.
 

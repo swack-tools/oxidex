@@ -1,5 +1,8 @@
 # Fixer Harness Hardening Implementation Plan
 
+> **Path notation:** Command blocks with an explicit `cd` start from the historical `sweep-tags` worktree root (`.`). Test commands without `cd` run from `scripts/`, as specified under Global Constraints. Sibling worktrees use `../`; `../../logs/` is relative to that worktree in the historical OxiDex state layout. These aliases do not assert that the old worktrees still exist.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Harden the model-fix loop's single-conversation harness with Perl→Rust architecture guardrails, a four-shape reply protocol (REQUEST ranges, VERIFY trial-compiles, dead-end aborts, context compaction), cache-friendly prompt ordering, and tiered explore/patch model routing.
@@ -12,7 +15,7 @@
 
 ## Global Constraints
 
-- Working directory for all commands: `/Users/allen/.oxidex/worktrees/sweep-tags/scripts` (git worktree on branch `feat/model-fix-loop-context`).
+- Working directory for all commands: `./scripts` (git worktree on branch `feat/model-fix-loop-context`).
 - Test command: `python3 -m unittest test_model_fix_loop` (full-file). Full sweep: `python3 -m unittest discover -p "test_*.py"`. The discover suite currently passes with **405 tests**; it must pass after every task with the new tests added.
 - No new dependencies — this is a uv inline script with `dependencies = []`. No tiktoken, no third-party anything.
 - The working tree starts with **uncommitted changes**: the `RUST_ARCHITECTURE_CONSTRAINTS` block (6 bullets) already exists at ~line 927 of `model_fix_loop.py` and is already interpolated into `build_prompt`'s return. Task 1 finishes and commits it — do not re-create it.
@@ -80,7 +83,7 @@ Run: `python3 -m unittest test_model_fix_loop` → OK (0 failures).
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: RUST_ARCHITECTURE_CONSTRAINTS prompt block (Perl->Rust guardrails)
 
@@ -256,7 +259,7 @@ Run: `python3 -m unittest test_model_fix_loop` → OK.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: line-range REQUEST reads (REQUEST: path:START-END)
 
@@ -420,7 +423,7 @@ Run: `python3 -m unittest test_model_fix_loop` → OK.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: dead-end abort -- pivot nudge on the 3rd identical REQUEST
 
@@ -681,7 +684,7 @@ Run: `python3 -m unittest test_model_fix_loop` → OK (fix_gap fakes absorb the 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: VERIFY incremental compile-check protocol
 
@@ -872,7 +875,7 @@ Run: `python3 -m unittest test_model_fix_loop` → OK.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: context compaction for long fixer conversations
 
@@ -1118,7 +1121,7 @@ Run: `python3 -m unittest test_model_fix_loop` → OK. (The pre-existing `test_p
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: tiered explore/patch model routing + per-entry reasoning effort
 
@@ -1261,7 +1264,7 @@ Then: `python3 -m unittest test_model_fix_loop` → OK, and `python3 -m unittest
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat: four-shape reply manifest + cache-friendly prompt ordering
 
@@ -1383,7 +1386,7 @@ Sanity-load the live config: `python3 -c "import model_fix_loop as m; import tom
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/allen/.oxidex/worktrees/sweep-tags
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py config.example.toml
 git commit -m "feat: config knobs + tiered terra/sol defaults for the hardened harness
 
@@ -1401,6 +1404,6 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 1. `python3 -m unittest discover -p "test_*.py"` one last time in the worktree.
 2. Push `feat/model-fix-loop-context` → PR #41; comment summarizing the feature set.
-3. Merge into local `main` (`/Users/allen/git/oxidex`), run the discover suite there.
-4. Propagate `scripts/model_fix_loop.py` AND `config.toml` to all 20 live worker worktrees (`~/.oxidex/worktrees/parallel-fix/model-fix-*`).
+3. Merge into local `main` (`the main checkout`), run the discover suite there.
+4. Propagate `scripts/model_fix_loop.py` AND `config.toml` to all 20 live worker worktrees (`../parallel-fix/model-fix-*`).
 5. Note to user: dispatcher restart required to pick up code+config.

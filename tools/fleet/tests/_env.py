@@ -14,7 +14,7 @@ fixture that believed itself hermetic:
      `train.main`, `cli.main`, `agentworker.main`, `fleetd.main` and
      `install_secrets.sh` all default their arguments from
      `os.environ` -- inherited the gate's real hub. `install_secrets.sh`
-     saw `FLEET_HUB_URL=/home/allen/git/afx-local.git` and refused it as
+     saw `FLEET_HUB_URL=external-repos/afx-local.git` and refused it as
      "not https", so the usage-error test never saw the usage error;
      `test_verdict_marker_seam`'s `bash -c` inherited the real suffix, so
      its "unset variable" control could not unset it.

@@ -1,8 +1,11 @@
 # Data.lfs Comprehensive Testing and Fix Implementation Plan
 
+> **Path notation:** `../examples/data.lfs/` is relative to the checkout root in the historical checkout-parent layout; the corpus is external and is not moved or newly bundled.
+
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Test all 4,026 files in `/Users/allen/Documents/git/examples/data.lfs/` directory, identify parsing errors, fix them, and ensure 100% compatibility with camera raw formats and metadata extraction.
+**Goal:** Test all 4,026 files in `../examples/data.lfs/` directory, identify parsing errors, fix them, and ensure 100% compatibility with camera raw formats and metadata extraction.
 
 **Architecture:** Systematic testing approach with error categorization, targeted fixes for each error type, regression testing, and verification. Uses batch processing with error collection, analysis of error patterns, implementation of fixes, and re-verification.
 
@@ -24,7 +27,7 @@ Create `tests/data_lfs_testing.sh`:
 #!/bin/bash
 # Comprehensive test script for data.lfs directory
 
-DATA_DIR="/Users/allen/Documents/git/examples/data.lfs"
+DATA_DIR="../examples/data.lfs"
 EXIFTOOL_RS="./target/release/exiftool-rs"
 ERROR_LOG="tests/data_lfs_errors.log"
 SUCCESS_LOG="tests/data_lfs_success.log"
@@ -91,7 +94,7 @@ Expected: Binary built successfully
 
 ```bash
 # Test just Leaf directory first (smaller subset)
-find "/Users/allen/Documents/git/examples/data.lfs/Leaf" -type f | head -10 | while read f; do
+find "../examples/data.lfs/Leaf" -type f | head -10 | while read f; do
     ./target/release/exiftool-rs "$f" > /dev/null 2>&1 || echo "ERROR: $f"
 done
 ```
@@ -615,7 +618,7 @@ Create `tests/data_lfs_performance.sh`:
 #!/bin/bash
 # Performance test for data.lfs directory
 
-DATA_DIR="/Users/allen/Documents/git/examples/data.lfs"
+DATA_DIR="../examples/data.lfs"
 EXIFTOOL_RS="./target/release/exiftool-rs"
 
 echo "Performance Test - Recursive Processing"
@@ -640,7 +643,7 @@ Expected: Performance metrics
 
 ```bash
 echo "Perl ExifTool Performance:"
-time exiftool -r "/Users/allen/Documents/git/examples/data.lfs" > /dev/null 2>&1
+time exiftool -r "../examples/data.lfs" > /dev/null 2>&1
 ```
 
 Expected: Performance comparison

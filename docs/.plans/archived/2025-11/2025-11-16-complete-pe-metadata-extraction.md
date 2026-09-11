@@ -1,5 +1,8 @@
 # Complete PE Metadata Extraction Implementation Plan
 
+> **Path notation:** Run command examples from the checkout root. `test-data/` denotes the externally supplied sample-input directory for this historical plan; no sample is added or relocated by this notation change.
+
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Implement ALL PE tags that Perl ExifTool supports, achieving 100% feature parity for Windows executable metadata extraction.
@@ -994,7 +997,7 @@ In `tests/integration/pe_tests.rs`:
 ```rust
 #[test]
 fn test_complete_pe_metadata_extraction() {
-    let test_file = "/Users/allen/Downloads/Lennox S40 Virtual Trainer Full.exe";
+    let test_file = "test-data/Lennox S40 Virtual Trainer Full.exe";
     if !std::path::Path::new(test_file).exists() {
         eprintln!("Skipping test - file not found: {}", test_file);
         return;
@@ -1586,9 +1589,9 @@ Expected: Most tests should PASS
 
 **Step 2: Test with Lennox EXE file**
 
-Run: `cargo run --release --bin oxidex -- "/Users/allen/Downloads/Lennox S40 Virtual Trainer Full.exe" > /tmp/oxidex_output.txt`
+Run: `cargo run --release --bin oxidex -- "test-data/Lennox S40 Virtual Trainer Full.exe" > /tmp/oxidex_output.txt`
 
-Run: `exiftool "/Users/allen/Downloads/Lennox S40 Virtual Trainer Full.exe" > /tmp/exiftool_output.txt`
+Run: `exiftool "test-data/Lennox S40 Virtual Trainer Full.exe" > /tmp/exiftool_output.txt`
 
 Compare outputs:
 ```bash
@@ -1631,7 +1634,7 @@ In `tests/integration/exiftool_comparison_tests.rs`, add:
 fn test_pe_metadata_comparison() {
     use std::collections::HashSet;
 
-    let test_file = "/Users/allen/Downloads/Lennox S40 Virtual Trainer Full.exe";
+    let test_file = "test-data/Lennox S40 Virtual Trainer Full.exe";
     if !std::path::Path::new(test_file).exists() {
         eprintln!("Skipping PE comparison test - file not found");
         return;
@@ -1902,7 +1905,7 @@ Run final verification:
 ```bash
 cargo test --all-features
 cargo clippy --all-features
-oxidex "/Users/allen/Downloads/Lennox S40 Virtual Trainer Full.exe" | wc -l
+oxidex "test-data/Lennox S40 Virtual Trainer Full.exe" | wc -l
 # Should show 60+ lines (52+ PE tags + File tags)
 ```
 

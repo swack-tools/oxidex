@@ -1,5 +1,8 @@
 # Nikon AFPointsUsed / PrimaryAFPoint Implementation Plan
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Decode Nikon `AFPointsUsed` and `PrimaryAFPoint` (currently deliberately unimplemented in `af_info2.rs`) across all `AFInfo2` versions (0100–0402), by transcribing ExifTool's ten per-body point-name grids mechanically instead of guessing them.
@@ -1274,10 +1277,9 @@ Expected: clean build.
 
 Run, from the repo root, the exiftool-parity harness against every Nikon sample carrying either tag (54 files per the task's original count):
 ```bash
-cd /tmp/oxidex-exiftool-cache/combined-samples/Nikon
-for f in *.jpg; do
+for f in /tmp/oxidex-exiftool-cache/combined-samples/Nikon/*.jpg; do
   et=$(exiftool -G1 -s -Nikon:AFPointsUsed -Nikon:PrimaryAFPoint "$f" 2>/dev/null)
-  ox=$(/Users/allen/git/oxidex/.claude/worktrees/infallible-kilby-15388e/target/release/oxidex -e -s "$f" 2>/dev/null | grep -i "AFPointsUsed\|PrimaryAFPoint")
+  ox=$(.claude/worktrees/infallible-kilby-15388e/target/release/oxidex -e -s "$f" 2>/dev/null | grep -i "AFPointsUsed\|PrimaryAFPoint")
   if [ -n "$et" ] || [ -n "$ox" ]; then
     echo "=== $f ==="
     echo "exiftool: $et"

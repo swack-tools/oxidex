@@ -2,7 +2,7 @@
   "single_file": {
     "results": [
       {
-        "command": "exiftool '/Users/allen/Documents/git/exiftools/tests/fixtures/jpeg/simple/sample_with_exif.jpg' > /dev/null",
+        "command": "exiftool 'tests/fixtures/jpeg/simple/sample_with_exif.jpg' > /dev/null",
         "mean": 0.03753141582,
         "stddev": 0.0005300072400547323,
         "median": 0.0374770627,
@@ -116,7 +116,7 @@
         ]
       },
       {
-        "command": "'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' '/Users/allen/Documents/git/exiftools/tests/fixtures/jpeg/simple/sample_with_exif.jpg' > /dev/null",
+        "command": "'target/release/exiftool-rs' 'tests/fixtures/jpeg/simple/sample_with_exif.jpg' > /dev/null",
         "mean": 0.00233610104,
         "stddev": 0.00010014487204058381,
         "median": 0.0023088337000000004,
@@ -234,7 +234,7 @@
   "batch": {
     "results": [
       {
-        "command": "exiftool -r '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/batch_test' > /dev/null 2>&1",
+        "command": "exiftool -r 'benchmark-work/batch_test' > /dev/null 2>&1",
         "mean": 0.9163643128000001,
         "stddev": 0.00795925679021569,
         "median": 0.9197176380000001,
@@ -258,7 +258,7 @@
         ]
       },
       {
-        "command": "'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' -r '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/batch_test' > /dev/null 2>&1",
+        "command": "'target/release/exiftool-rs' -r 'benchmark-work/batch_test' > /dev/null 2>&1",
         "mean": 0.014110438,
         "stddev": 0.0003170144980367615,
         "median": 0.014011304,
@@ -286,7 +286,7 @@
   "write": {
     "results": [
       {
-        "command": "exiftool -Artist='BenchmarkTest' -overwrite_original '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/write_test/test_perl.jpg' > /dev/null 2>&1",
+        "command": "exiftool -Artist='BenchmarkTest' -overwrite_original 'benchmark-work/write_test/test_perl.jpg' > /dev/null 2>&1",
         "mean": 0.09683352612,
         "stddev": 0.001273026935924505,
         "median": 0.09640109002000002,
@@ -360,7 +360,7 @@
         ]
       },
       {
-        "command": "'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' -EXIF:Artist=BenchmarkTest '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/write_test/test_rust.jpg' > /dev/null 2>&1",
+        "command": "'target/release/exiftool-rs' -EXIF:Artist=BenchmarkTest 'benchmark-work/write_test/test_rust.jpg' > /dev/null 2>&1",
         "mean": 0.007267169186666667,
         "stddev": 0.0006001636304788246,
         "median": 0.00749244402,
@@ -438,7 +438,7 @@
   "detection": {
     "results": [
       {
-        "command": "exiftool '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/detection_test/test.jpg' > /dev/null",
+        "command": "exiftool 'benchmark-work/detection_test/test.jpg' > /dev/null",
         "mean": 0.039296532970000006,
         "stddev": 0.00035315122911635366,
         "median": 0.03926686622,
@@ -652,7 +652,7 @@
         ]
       },
       {
-        "command": "'/Users/allen/Documents/git/exiftools/target/release/exiftool-rs' '/var/folders/t6/nf3m4kn14ks5kxcqqd6f4h5w0000gp/T/tmp.ZKslmJGFc0/detection_test/test.jpg' > /dev/null",
+        "command": "'target/release/exiftool-rs' 'benchmark-work/detection_test/test.jpg' > /dev/null",
         "mean": 0.0027663200399999995,
         "stddev": 0.00011839997808437898,
         "median": 0.0027694912199999993,

@@ -1,5 +1,8 @@
 # Fix-Throughput Engine Implementation Plan
 
+> **Path notation:** Run each standalone command block from the historical `fleet-ops` worktree root (`.`). Sibling worktrees use `../`; `../../logs/` is relative to that worktree in the historical OxiDex state layout. These aliases do not assert that the old worktrees still exist.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Cut total wall-clock time to close all 4,333 open ExifTool tag gaps by removing the measured losses between "a correct fix exists on disk" and "the gap is closed on `main`".
@@ -16,7 +19,7 @@
 - **Never break these invariants** (spec §3): no-discard (M5), consume handshake (M2/M5), detached-HEAD publish, fail-safe review (unparseable ⇒ reject), no stale-report fall-through.
 - **The fleet is live.** Every change must be safe to land while ~20 workers and 14 mergers are running. `config.toml` is gitignored and auto-copied to worktrees each round (no restart needed); `scripts/*.py` changes need a dispatcher/merger restart to take effect.
 - **Commit style:** `fix(fleet): ...` / `feat(fleet): ...`, body explains the measured defect. End with `Co-Authored-By: Claude <noreply@anthropic.com>`.
-- **Repo for all work:** `~/.oxidex/worktrees/fleet-ops`.
+- **Repo for all work:** `.`.
 - **Squad list (14):** canon, nikon, sony-minolta, xmp, exif-core, olympus, pentax-samsung, panasonic-leica, mobile, thermal, sigma-c2pa, ps-docs, standards-appn, tail.
 
 ---
@@ -111,7 +114,7 @@ if __name__ == "__main__":
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_measure_throughput -v
+cd ./scripts && python3 -m unittest test_measure_throughput -v
 ```
 Expected: FAIL — `ModuleNotFoundError: No module named 'measure_throughput'`
 
@@ -208,21 +211,21 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_measure_throughput -v
+cd ./scripts && python3 -m unittest test_measure_throughput -v
 ```
 Expected: PASS, 6 tests
 
 - [ ] **Step 5: Take the real Phase 1 baseline**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops && python3 scripts/measure_throughput.py --since 2026-07-25T05:30:00
+cd . && python3 scripts/measure_throughput.py --since 2026-07-25T05:30:00
 ```
 Record the printed RATE. **Gate:** if it is still ≈0.24 gaps/h after ≥4 hours, STOP and re-derive per spec §9.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git add scripts/measure_throughput.py scripts/test_measure_throughput.py
 git commit -m "feat(fleet): measure published gaps/hour, the spec headline metric
 
@@ -301,7 +304,7 @@ class ClassifyFlagsTests(unittest.TestCase):
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_validate_fix_commit.ClassifyFlagsTests -v
+cd ./scripts && python3 -m unittest test_validate_fix_commit.ClassifyFlagsTests -v
 ```
 Expected: FAIL — `ImportError: cannot import name 'classify_flags'`
 
@@ -347,14 +350,14 @@ def classify_flags(flags):
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_validate_fix_commit -v
+cd ./scripts && python3 -m unittest test_validate_fix_commit -v
 ```
 Expected: PASS — 36 tests (29 existing + 7 new)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git add scripts/validate_fix_commit.py scripts/test_validate_fix_commit.py
 git commit -m "feat(fleet): classify validator flags as permanent vs transient
 
@@ -457,7 +460,7 @@ class AppendQuarantinePermanentFieldTests(unittest.TestCase):
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_squad_merge_loop.QuarantineRetryTests -v
+cd ./scripts && python3 -m unittest test_squad_merge_loop.QuarantineRetryTests -v
 ```
 Expected: FAIL — `AttributeError: module 'squad_merge_loop' has no attribute 'should_skip_quarantined'`
 
@@ -547,14 +550,14 @@ with:
 - [ ] **Step 6: Run the full suite**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_squad_merge_loop -v
+cd ./scripts && python3 -m unittest test_squad_merge_loop -v
 ```
 Expected: PASS — 72 tests (63 existing + 9 new)
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git add scripts/squad_merge_loop.py scripts/test_squad_merge_loop.py
 git commit -m "feat(fleet): retry transient quarantines, keep permanent ones permanent
 
@@ -616,7 +619,7 @@ class CheckPerlLibTests(unittest.TestCase):
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_squad_merge_loop.CheckPerlLibTests -v
+cd ./scripts && python3 -m unittest test_squad_merge_loop.CheckPerlLibTests -v
 ```
 Expected: FAIL — `AttributeError: ... has no attribute 'check_perl_lib'`
 
@@ -674,14 +677,14 @@ with:
 - [ ] **Step 5: Run tests**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_squad_merge_loop -v
+cd ./scripts && python3 -m unittest test_squad_merge_loop -v
 ```
 Expected: PASS — 77 tests
 
 - [ ] **Step 6: Verify against the real lib**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops && python3 -c "
+cd . && python3 -c "
 import sys; sys.path.insert(0,'scripts')
 import squad_merge_loop as s
 print('OK:', s.check_perl_lib('/opt/homebrew/Cellar/exiftool/13.55/libexec/lib/perl5'))"
@@ -691,7 +694,7 @@ Expected: prints `OK: /opt/homebrew/Cellar/exiftool/13.55/libexec/lib/perl5`
 - [ ] **Step 7: Commit**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git add scripts/squad_merge_loop.py scripts/test_squad_merge_loop.py
 git commit -m "fix(fleet): refuse to start a merger with an unusable --perl-lib
 
@@ -779,7 +782,7 @@ class ReviewVerdictTruncationRetryTests(unittest.TestCase):
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_model_fix_loop.ReviewVerdictTruncationRetryTests -v
+cd ./scripts && python3 -m unittest test_model_fix_loop.ReviewVerdictTruncationRetryTests -v
 ```
 Expected: FAIL — `test_truncated_reply_is_retried_once_then_parsed` asserts 2 calls, gets 1
 
@@ -823,14 +826,14 @@ In `review_verdict`, replace the single `try: reply = call_model_fn(...) except 
 - [ ] **Step 4: Run tests**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_model_fix_loop -v 2>&1 | tail -5
+cd ./scripts && python3 -m unittest test_model_fix_loop -v 2>&1 | tail -5
 ```
 Expected: PASS — all tests, including 3 new
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "fix(fleet): retry once when the provider truncates a review reply
 
@@ -849,7 +852,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - [ ] **Step 1: Run every affected suite**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest \
+cd ./scripts && python3 -m unittest \
   test_model_fix_loop test_squad_merge_loop test_validate_fix_commit \
   test_parallel_model_fix_loop test_measure_throughput 2>&1 | tail -5
 ```
@@ -858,14 +861,14 @@ Expected: `OK`
 - [ ] **Step 2: Verify the Rust workspace is unaffected**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops && cargo test --workspace 2>&1 | grep -E "^test result:" | grep -v "0 failed" || echo "all green"
+cd . && cargo test --workspace 2>&1 | grep -E "^test result:" | grep -v "0 failed" || echo "all green"
 ```
 Expected: `all green`
 
 - [ ] **Step 3: PR, merge, sync**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 gh auth switch --hostname github.com --user swackhamer
 git push -u origin HEAD
 gh pr create --base main --title "feat(fleet): Phase 2 -- validator taxonomy and quarantine retry" \
@@ -875,7 +878,7 @@ Then merge and sync:
 ```bash
 gh pr merge <N> --squash --admin --delete-branch
 git fetch origin main && git fetch . origin/main:main && git checkout -B fleet-ops-local main
-for d in ~/.oxidex/worktrees/squad-staging/*/; do
+for d in ../squad-staging/*/; do
   sq=$(basename "$d"); [ -z "$(git -C "$d" status --short)" ] && git -C "$d" checkout -B "squad/$sq" main --quiet
 done
 ```
@@ -893,13 +896,13 @@ Expected: 28 (14 squads × 2 procs)
 
 Wait ≥2 hours, then:
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 python3 scripts/measure_throughput.py --since <phase2-deploy-timestamp>
 python3 -c "
 import json
 from collections import Counter
 c=Counter()
-for line in open('/Users/allen/.oxidex/logs/quarantine.jsonl'):
+for line in open('../../logs/quarantine.jsonl'):
     line=line.strip()
     if line: c['permanent' if json.loads(line).get('permanent',True) else 'transient']+=1
 print(c)"
@@ -966,7 +969,7 @@ class ModuleClaimCapTests(unittest.TestCase):
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_model_fix_loop.ModuleClaimCapTests -v
+cd ./scripts && python3 -m unittest test_model_fix_loop.ModuleClaimCapTests -v
 ```
 Expected: FAIL — `ImportError: cannot import name 'module_claim_count'`
 
@@ -1023,14 +1026,14 @@ Thread the parameter: add `max_claims_per_module=DEFAULT_MAX_CLAIMS_PER_MODULE` 
 - [ ] **Step 5: Run tests**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_model_fix_loop -v 2>&1 | tail -5
+cd ./scripts && python3 -m unittest test_model_fix_loop -v 2>&1 | tail -5
 ```
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat(fleet): cap concurrent claims per ExifTool module
 
@@ -1088,7 +1091,7 @@ class ClassifyDifficultyTests(unittest.TestCase):
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_attribute_gaps.ClassifyDifficultyTests -v
+cd ./scripts && python3 -m unittest test_attribute_gaps.ClassifyDifficultyTests -v
 ```
 Expected: FAIL — `ImportError: cannot import name 'classify_difficulty'`
 
@@ -1131,18 +1134,18 @@ Then in `attribute_gap`, add `"difficulty": classify_difficulty(fmt, family, nam
 - [ ] **Step 4: Run tests**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_attribute_gaps -v 2>&1 | tail -5
+cd ./scripts && python3 -m unittest test_attribute_gaps -v 2>&1 | tail -5
 ```
 Expected: PASS
 
 - [ ] **Step 5: Regenerate attribution and sanity-check the distribution**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops && python3 scripts/attribute_gaps.py
+cd . && python3 scripts/attribute_gaps.py
 python3 -c "
 import json
 from collections import Counter
-d=json.load(open('/Users/allen/.oxidex/logs/gap-attribution.json'))
+d=json.load(open('../../logs/gap-attribution.json'))
 print(Counter(t.get('difficulty') for t in d['tags'].values()))"
 ```
 Expected: a Counter with meaningful counts in tiers 0–3 (tier 0 ≈ 500).
@@ -1150,7 +1153,7 @@ Expected: a Counter with meaningful counts in tiers 0–3 (tier 0 ≈ 500).
 - [ ] **Step 6: Commit**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git add scripts/attribute_gaps.py scripts/test_attribute_gaps.py
 git commit -m "feat(fleet): classify each gap into a difficulty tier
 
@@ -1223,7 +1226,7 @@ class GapSortKeyTests(unittest.TestCase):
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_model_fix_loop.GapSortKeyTests -v
+cd ./scripts && python3 -m unittest test_model_fix_loop.GapSortKeyTests -v
 ```
 Expected: FAIL — `ImportError: cannot import name 'gap_sort_key'`
 
@@ -1267,14 +1270,14 @@ with:
 - [ ] **Step 4: Run tests**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_model_fix_loop -v 2>&1 | tail -5
+cd ./scripts && python3 -m unittest test_model_fix_loop -v 2>&1 | tail -5
 ```
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git add scripts/model_fix_loop.py scripts/test_model_fix_loop.py
 git commit -m "feat(fleet): select gaps cheapest-first instead of list order
 
@@ -1338,7 +1341,7 @@ class WeightedFormatsTests(unittest.TestCase):
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_parallel_model_fix_loop.WeightedFormatsTests -v
+cd ./scripts && python3 -m unittest test_parallel_model_fix_loop.WeightedFormatsTests -v
 ```
 Expected: FAIL — `AttributeError: ... has no attribute 'weighted_formats'`
 
@@ -1395,7 +1398,7 @@ def weighted_formats(squad, attribution, squads_toml_path, slots):
 - [ ] **Step 4: Run tests**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest test_parallel_model_fix_loop -v 2>&1 | tail -5
+cd ./scripts && python3 -m unittest test_parallel_model_fix_loop -v 2>&1 | tail -5
 ```
 Expected: PASS
 
@@ -1406,7 +1409,7 @@ In `run_squad_round`, replace the per-slot round-robin format pick with a single
 - [ ] **Step 6: Commit**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git add scripts/parallel_model_fix_loop.py scripts/test_parallel_model_fix_loop.py
 git commit -m "feat(fleet): apportion slots to formats by open-gap weight
 
@@ -1424,23 +1427,23 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - [ ] **Step 1: Full test sweep**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops/scripts && python3 -m unittest \
+(cd ./scripts && python3 -m unittest \
   test_model_fix_loop test_squad_merge_loop test_validate_fix_commit \
-  test_parallel_model_fix_loop test_attribute_gaps test_measure_throughput 2>&1 | tail -5
-cd ~/.oxidex/worktrees/fleet-ops && cargo test --workspace 2>&1 | grep -E "^test result:" | grep -v "0 failed" || echo "rust green"
+  test_parallel_model_fix_loop test_attribute_gaps test_measure_throughput 2>&1 | tail -5)
+cd . && cargo test --workspace 2>&1 | grep -E "^test result:" | grep -v "0 failed" || echo "rust green"
 ```
 Expected: `OK` and `rust green`
 
 - [ ] **Step 2: PR, merge, sync, restart dispatcher AND mergers**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git push -u origin HEAD && gh pr create --base main --title "feat(fleet): Phase 3 -- work selection"
 # after merge:
 git fetch origin main && git fetch . origin/main:main && git checkout -B fleet-ops-local main
 python3 scripts/stop_parallel_fix.py && sleep 5
 nohup uv run scripts/parallel_model_fix_loop.py --infinite --squad-mode --max-parallel 20 \
-  --worktree-dir ~/.oxidex/worktrees/parallel-fix --log-dir ~/.oxidex/logs/parallel-model-fix \
+  --worktree-dir ../parallel-fix --log-dir ~/.oxidex/logs/parallel-model-fix \
   --home ~/.oxidex >> ~/.oxidex/logs/parallel-model-fix-wrapper.log 2>&1 &
 disown
 ```
@@ -1449,7 +1452,7 @@ disown
 
 Wait ≥4 hours, then:
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops && python3 scripts/measure_throughput.py --since <phase3-deploy-timestamp>
+cd . && python3 scripts/measure_throughput.py --since <phase3-deploy-timestamp>
 ```
 **Gate for Phase 4:** published rate ≈ production rate (publishing is no longer the constraint). If publishing still lags, Phase 4 is premature — return to §6.
 
@@ -1482,7 +1485,7 @@ Three call details matter, all verified:
 - `max_chars` truncates, so pass a large value to measure TRUE size rather than the capped size.
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops && python3 -c "
+cd . && python3 -c "
 import sys; sys.path.insert(0,'scripts')
 from model_fix_loop import extract_perl_table_source, DEFAULT_MAX_TABLE_SOURCE_CHARS
 LIB='/opt/homebrew/Cellar/exiftool/13.55/libexec/lib/perl5/Image/ExifTool'
@@ -1523,7 +1526,7 @@ Drive `attempt_table_port` directly for `('JPEG', 'Sony', 'AFStatus79')` in a sc
 - [ ] **Step 6: Commit the pilot result either way**
 
 ```bash
-cd ~/.oxidex/worktrees/fleet-ops
+cd .
 git add docs/plans/specs/2026-07-25-fix-throughput-engine-design.md
 git commit -m "docs: record Sony::AFStatus79 table-port pilot result
 

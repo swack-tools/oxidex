@@ -1,4 +1,7 @@
 # METADATA EXTRACTION PARITY REPORT
+
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
 ## exiftool-rs vs Perl ExifTool
 
 ### Executive Summary
@@ -10,7 +13,7 @@ exiftool-rs achieves EXCELLENT parity with Perl ExifTool across all tested forma
 ### Test Results by Format
 
 #### 1. JPEG (.jpg)
-**Test File**: /Users/allen/Documents/git/exiftool-rs/tests/fixtures/jpeg/complex/sample_with_exif_xmp.jpg
+**Test File**: tests/fixtures/jpeg/complex/sample_with_exif_xmp.jpg
 
 **Field Count:**
 - Perl ExifTool: 7 metadata fields (excluding file-level)
@@ -38,7 +41,7 @@ Rust:  XMP-dc:Title: Sample Photo
 ---
 
 #### 2. PNG (.png)
-**Test File**: /Users/allen/Documents/git/exiftool-rs/tests/fixtures/png/complex/synthetic_exif_001.png
+**Test File**: tests/fixtures/png/complex/synthetic_exif_001.png
 
 **Field Count:**
 - Perl ExifTool: 48 metadata fields (excluding file-level)
@@ -69,7 +72,7 @@ Rust:  PNG:tEXt:date:create: 2025-10-30T11:57:59+00:00
 ---
 
 #### 3. TIFF (.tif)
-**Test File**: /Users/allen/Documents/git/exiftool-rs/tests/fixtures/tiff/complex/big_endian_001.tif
+**Test File**: tests/fixtures/tiff/complex/big_endian_001.tif
 
 **Field Count:**
 - Perl ExifTool: 18 metadata fields (excluding file-level)
@@ -100,7 +103,7 @@ Rust:  IFD0:WhitePoint: 0.3127000034 0.3289999962
 ---
 
 #### 4. PDF (.pdf)
-**Test File**: /Users/allen/Documents/git/exiftool-rs/Allen Swackhamer Resume.pdf
+**Test File**: Allen Swackhamer Resume.pdf
 
 **Field Count:**
 - Perl ExifTool: 46 metadata fields (excluding file-level)
@@ -134,7 +137,7 @@ Rust:  Profile:ProfileDescription: sRGB IEC61966-2.1
 ---
 
 #### 5. MP4/QuickTime (.mp4)
-**Test File**: /Users/allen/Documents/git/exiftool-rs/tests/fixtures/mp4/sample.mp4
+**Test File**: tests/fixtures/mp4/sample.mp4
 
 **Field Count:**
 - Perl ExifTool: 30 metadata fields (excluding file-level)

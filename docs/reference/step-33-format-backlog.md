@@ -1,5 +1,8 @@
 # Step 33 format backlog (measurement, 2026-08-14)
 
+> **Path notation:** Named `../` worktree paths are relative to the primary repository checkout in the historical checkout-parent layout; the recorded worktree identity is preserved.
+
+
 This is the ranking half of Step 33 only.  It deliberately does not add a
 parser or enable a table.  The MakerNote data-half migration belongs to Step
 31 and is out of scope.
@@ -10,7 +13,7 @@ All file-level comparison numbers below are from
 `python3 tools/exiftool-tables/conformance.py` against the single named
 carrier in `/tmp/oxidex-exiftool-cache/combined-samples`, with
 `--exiftool-dir /tmp/oxidex-exiftool-cache/exiftool` and
-`--oxidex /home/allen/git/s33-codex/target/debug/oxidex`.  The oracle was
+`--oxidex ../s33-codex/target/debug/oxidex`.  The oracle was
 capability-probed immediately before the corpus run: the pinned wrapper
 `/tmp/oxidex-exiftool-cache/exiftool-pinned.sh -ver` printed `13.59`, and
 `... -s -FileType .../combined-samples/OOXML.docx` printed `DOCX`.
@@ -127,7 +130,7 @@ identified above) was:
 ```sh
 python3 tools/exiftool-tables/conformance.py /tmp/oxidex-exiftool-cache/combined-samples \
   --exiftool-dir /tmp/oxidex-exiftool-cache/exiftool \
-  --oxidex /home/allen/git/s33-codex/target/debug/oxidex \
+  --oxidex ../s33-codex/target/debug/oxidex \
   --recursive --min-files 3875 --min-tags 5000
 ```
 

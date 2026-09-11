@@ -1,5 +1,8 @@
 # GPS Movement and Tracking Tags Implementation
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
+
 ## Overview
 Implemented support for 9 GPS movement and tracking tags critical for forensic geolocation analysis. These tags enable reconstruction of movement patterns, navigation analysis, and GPS accuracy assessment.
 
@@ -37,7 +40,7 @@ Implemented support for 9 GPS movement and tracking tags critical for forensic g
 ## Implementation Details
 
 ### Files Modified
-- `/Users/allen/Documents/git/oxidex/src/core/tag_conversion.rs`
+- `src/core/tag_conversion.rs`
   - Added GPS movement tag constants (0x000C-0x001F)
   - Added special formatting for RATIONAL GPS movement tags
   - Tags format as decimal values with appropriate precision
@@ -74,7 +77,7 @@ GPSHPositioningError: "8.50 m" // Meters with unit suffix
 ## Testing
 
 ### Unit Tests (11 tests - all passing)
-Location: `/Users/allen/Documents/git/oxidex/src/core/tag_conversion.rs`
+Location: `src/core/tag_conversion.rs`
 
 1. `test_gps_speed_formatting` - Verifies GPSSpeed decimal formatting
 2. `test_gps_speed_ref_formatting` - Verifies GPSSpeedRef ASCII handling
@@ -89,7 +92,7 @@ Location: `/Users/allen/Documents/git/oxidex/src/core/tag_conversion.rs`
 11. `test_gps_movement_tags_forensic_scenario` - Complete movement scenario
 
 ### Integration Tests
-Location: `/Users/allen/Documents/git/oxidex/tests/forensic/gps_movement_tests.rs`
+Location: `tests/forensic/gps_movement_tests.rs`
 
 - Creates test TIFF files with GPS movement tags
 - Verifies end-to-end tag extraction

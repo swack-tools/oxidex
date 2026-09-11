@@ -1,5 +1,8 @@
 # OxiDex "Oxide Terminal" Design System Implementation Plan
 
+> **Path notation:** Repository file paths are relative to the checkout root used for the recorded work. Historical filenames and results are preserved; this notation does not imply that every old fixture is still present.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a reusable dark-only Claude Design design-system project ("OxiDex Design System") encoding the Oxide Terminal identity: tokens, 13 components, foundation galleries, and a showcase page.
@@ -325,7 +328,7 @@ Pressed primary darkens to --ox-accent-deep. Never bold; the mono + tracking IS 
 - Modify: `readme.md` (complete)
 
 **Interfaces:**
-- Consumes: `/Users/allen/git/oxidex/docs/public/logo.svg` (repo file) as the source artwork.
+- Consumes: `docs/public/logo.svg` (repo file) as the source artwork.
 - Produces: flat dark-bg logo variant used by the showcase; finished readme (the file the design-system loader surfaces).
 
 - [x] **Step 1: Create the flat logo variant** — take the repo `docs/public/logo.svg` geometry and recolor for dark: background circle fill `#16191f` stroke `#2a2f3a`; document rect fill `none` stroke `#e8824a` stroke-width 2; mountain path + sun circle fill `#e8824a` opacity .7/1; metadata lines stroke `#e8824a`; cog: outer circle fill `#b5551e`, inner white → `#0d0f12`, teeth `#e8824a`. This is recoloring existing paths (allowed), not drawing new SVG art. Write via `write_files` as `assets/logo-mark.svg`.
