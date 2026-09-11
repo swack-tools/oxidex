@@ -372,7 +372,7 @@ fn json_string_value(s: &str) -> serde_json::Value {
 ///   number, unquoted, matching `exiftool -j`)
 /// - Integer → JSON number
 /// - Float → JSON number
-/// - Rational → JSON string "numerator/denominator"
+/// - Rational → JSON number from the native rounded quotient, or inf/undef string
 /// - Binary → JSON string "(Binary data N bytes, use -b option to extract)"
 /// - DateTime → JSON string (EXIF format: "YYYY:MM:DD HH:MM:SS")
 /// - Struct → JSON object (recursive)
@@ -400,29 +400,16 @@ fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Va
             numerator,
             denominator,
         } => {
-            // Normalize rational display to match Perl ExifTool
-            if *denominator == 0 {
-                // Invalid rational, output as string
-                serde_json::Value::String(format!("{}/0", numerator))
-            } else if *denominator == 1 {
-                // Output as integer string (e.g., "100/1" → "100")
-                serde_json::Value::String(format!("{}", numerator))
-            } else if *numerator == 0 {
-                // Zero rational
-                serde_json::Value::String("0".to_string())
+            // GetRational64u/GetRational64s (ExifTool.pm:6107-6119) return
+            // the quotient rounded to 10 significant digits, or inf/undef
+            // for a zero denominator. EscapeJSON then decides number vs.
+            // quoted sentinel exactly as for a rendered String value.
+            let rendered = if *denominator == 0 {
+                if *numerator == 0 { "undef" } else { "inf" }.to_string()
             } else {
-                // Check if this should be output as a decimal number (like Perl ExifTool does for FNumber)
-                // For typical aperture/focal length values, output as decimal
-                let decimal = *numerator as f64 / *denominator as f64;
-                if decimal < 1000.0 && decimal.fract() != 0.0 {
-                    // This looks like an aperture or similar value, output as JSON Number
-                    if let Some(num) = serde_json::Number::from_f64(decimal) {
-                        return serde_json::Value::Number(num);
-                    }
-                }
-                // Otherwise keep as fraction string
-                serde_json::Value::String(format!("{}/{}", numerator, denominator))
-            }
+                exiftool_rational_number(f64::from(*numerator) / f64::from(*denominator))
+            };
+            json_string_value(&rendered)
         }
         TagValue::Binary(bytes) => serde_json::Value::String(binary_placeholder(bytes.len())),
         TagValue::DateTime(dt) => {
@@ -977,6 +964,79 @@ fn lookup_tiff_enum_tag_id(tag_name: &str) -> Option<u16> {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+
+    /// These signed/unsigned 64-bit rational sentinels were checked as real
+    /// TIFF XResolution fields against pinned 13.59, in both -j and -j -n.
+    #[test]
+    fn rational_json_uses_native_readvalue_number_typing() {
+        for (numerator, denominator, expected_json) in [
+            (20, 1, "20"),
+            (72, 1, "72"),
+            (0, 1, "0"),
+            (0, 2, "0"),
+            (0, 0, "\"undef\""),
+            (1, 0, "\"inf\""),
+            (-1, 0, "\"inf\""),
+            (1, 3, "0.3333333333"),
+            (2, 4, "0.5"),
+            (6000000, 921, "6514.65798"),
+            (2000, 2, "1000"),
+            (2147483647, 1, "2147483647"),
+            (-2147483648, 1, "-2147483648"),
+            (-2147483648, -1, "2147483648"),
+            (1, 2147483647, "4.656612875e-10"),
+            (2147483647, 3, "715827882.3"),
+            (0, -1, "0"),
+            (1, -3, "-0.3333333333"),
+        ] {
+            let expected: serde_json::Value = serde_json::from_str(expected_json).unwrap();
+            assert_eq!(
+                tag_value_to_json(None, &TagValue::new_rational(numerator, denominator)),
+                expected,
+                "{numerator}/{denominator}"
+            );
+        }
+    }
+
+    #[test]
+    fn rational_json_keeps_raw_and_printconv_routes_distinct() {
+        let raw = TagValue::new_rational(20, 1);
+        for key in [
+            "ExifIFD:FocalLength",
+            "EXIF:ExifIFD:FocalLength",
+            "IFD1:XResolution",
+        ] {
+            assert_eq!(tag_value_to_json(Some(key), &raw), serde_json::json!(20));
+        }
+        // Normal output already applies tag-specific PrintConv before JSON.
+        let printed =
+            crate::core::exiftool_compat::format_tag_value_rules("ExifIFD:FocalLength", &raw);
+        assert_eq!(
+            tag_value_to_json(Some("ExifIFD:FocalLength"), &printed),
+            serde_json::json!("20.0 mm")
+        );
+        let fnumber = crate::core::exiftool_compat::format_tag_value_rules(
+            "ExifIFD:FNumber",
+            &TagValue::new_rational(28, 10),
+        );
+        assert_eq!(
+            tag_value_to_json(Some("ExifIFD:FNumber"), &fnumber),
+            serde_json::json!(2.8)
+        );
+        assert_eq!(
+            tag_value_to_json(Some("IFD0:Orientation"), &TagValue::new_integer(6)),
+            serde_json::json!("Rotate 90 CW")
+        );
+        let values = TagValue::Array(vec![
+            TagValue::new_rational(20, 1),
+            TagValue::new_rational(1, 3),
+            TagValue::new_rational(0, 0),
+        ]);
+        assert_eq!(
+            tag_value_to_json(None, &values),
+            serde_json::json!([20, 0.3333333333, "undef"])
+        );
+    }
 
     #[test]
     fn json_typing_precedes_nul_removal() {

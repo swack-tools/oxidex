@@ -90,6 +90,7 @@ pub fn parse_embedded_exif(tiff_data: &[u8], tiff_base: u64, metadata: &mut Meta
 
     let mut exif_ifd_offset = None;
     let mut gps_ifd_offset = None;
+    let mut full_resolution_ifd0 = false;
 
     for (tag_id, field_type, value_count, raw_bytes) in &entries {
         let bytes = raw_bytes.as_ref();
@@ -114,7 +115,32 @@ pub fn parse_embedded_exif(tiff_data: &[u8], tiff_base: u64, metadata: &mut Meta
         };
 
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
-        metadata.insert(tag_name, tag_value);
+        // Exif.pm 13.59:445-501: only SubfileType=0/OldSubfileType=1
+        // marks this IFD0 as the full-resolution directory. Do this in physical
+        // entry order: a marker after ImageWidth cannot promote that earlier
+        // arrival retroactively (ExifTool.pm:9554-9555,9633-9636).
+        if matches!(
+            (*tag_id, tag_value.as_integer()),
+            (0x00fe, Some(0)) | (0x00ff, Some(1))
+        ) {
+            full_resolution_ifd0 = true;
+        }
+        if matches!(*tag_id, 0x0100 | 0x0101) {
+            // The EXIF table declares Priority=>0 for these two tags. PNG's
+            // IHDR dimensions have ordinary priority1 and therefore win
+            // unless this arrival is in the selected priority directory.
+            // Keep the existing family-1-flavored key and empty group1 so
+            // recording real priority does not change group/name identity.
+            metadata.insert_occurrence(
+                tag_name,
+                tag_value,
+                u8::from(full_resolution_ifd0),
+                "",
+                crate::core::tag_occurrence::Instance::default(),
+            );
+        } else {
+            metadata.insert(tag_name, tag_value);
+        }
     }
 
     if let Some(offset) = exif_ifd_offset {
@@ -413,6 +439,111 @@ pub(crate) mod test_fixtures {
 mod tests {
     use super::test_fixtures::tiff_with_entries;
     use super::*;
+
+    fn dimension_tiff(entries: &[(u16, u16, u32)]) -> Vec<u8> {
+        let mut data = b"II".to_vec();
+        data.extend(42u16.to_le_bytes());
+        data.extend(8u32.to_le_bytes());
+        data.extend((entries.len() as u16).to_le_bytes());
+        for (tag, kind, value) in entries {
+            data.extend(tag.to_le_bytes());
+            data.extend(kind.to_le_bytes());
+            data.extend(1u32.to_le_bytes());
+            data.extend(value.to_le_bytes());
+        }
+        data.extend(0u32.to_le_bytes());
+        data
+    }
+
+    fn dimension_png(entries: &[(u16, u16, u32)]) -> Vec<u8> {
+        fn chunk(data: &mut Vec<u8>, kind: &[u8; 4], payload: &[u8]) {
+            data.extend((payload.len() as u32).to_be_bytes());
+            data.extend(kind);
+            data.extend(payload);
+            data.extend(0u32.to_be_bytes()); // metadata parser does not check CRC
+        }
+        let mut data = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = 100u32.to_be_bytes().to_vec();
+        ihdr.extend(100u32.to_be_bytes());
+        ihdr.extend([8, 2, 0, 0, 0]);
+        chunk(&mut data, b"IHDR", &ihdr);
+        chunk(&mut data, b"eXIf", &dimension_tiff(entries));
+        chunk(&mut data, b"IEND", &[]);
+        data
+    }
+
+    fn resolved_dimension(metadata: &MetadataMap, name: &str) -> i64 {
+        let resolved = crate::cli::tag_resolution::resolve_requested_tags(
+            metadata,
+            &[name.to_string()],
+            false,
+        );
+        assert_eq!(resolved.len(), 1, "{name}");
+        resolved[0].occurrence.raw.as_integer().unwrap()
+    }
+
+    #[test]
+    fn png_exif_dimensions_follow_native_priority_and_physical_marker_order() {
+        // Genuine 13.59 PNG probes with IHDR=100x100 and the same TIFF
+        // entries establish these winners. BYTE ImageWidth=65 also pins the
+        // scalar conversion which first exposed this precedence defect.
+        let width = (0x0100, 1, 65);
+        let height = (0x0101, 4, 80);
+        let cases = [
+            (vec![width, height], (100, 100)),
+            (vec![(0x00fe, 4, 0), width, height], (65, 80)),
+            (vec![(0x00fe, 4, 1), width, height], (100, 100)),
+            (vec![(0x00fe, 4, 2), width, height], (100, 100)),
+            (vec![width, (0x00fe, 4, 0), height], (100, 80)),
+            (vec![width, height, (0x00fe, 4, 0)], (100, 100)),
+            (vec![(0x00ff, 3, 1), width, height], (65, 80)),
+            (vec![(0x00ff, 3, 0), width, height], (100, 100)),
+            (vec![(0x00ff, 3, 2), width, height], (100, 100)),
+            (vec![width, (0x00ff, 3, 1), height], (100, 80)),
+            (vec![width, height, (0x00ff, 3, 1)], (100, 100)),
+            (
+                vec![(0x00fe, 4, 0), (0x00fe, 4, 1), width, height],
+                (65, 80),
+            ),
+        ];
+        for (entries, (expected_width, expected_height)) in cases {
+            let png = dimension_png(&entries);
+            let mut metadata =
+                crate::parsers::png::parse_png_metadata(&BufferedReader::from_bytes(&png)).unwrap();
+            assert_eq!(resolved_dimension(&metadata, "ImageWidth"), expected_width);
+            assert_eq!(
+                resolved_dimension(&metadata, "ImageHeight"),
+                expected_height
+            );
+            // Lower priority changes arbitration, not extraction or names.
+            let all_widths = crate::cli::tag_resolution::resolve_requested_tags(
+                &metadata,
+                &["ImageWidth".to_string()],
+                true,
+            );
+            assert_eq!(all_widths.len(), 2);
+            assert_eq!(metadata.get_integer("PNG:Width"), Some(100));
+            assert_eq!(metadata.get_integer("PNG:ImageWidth"), Some(100));
+            assert_eq!(metadata.get_integer("IFD0:ImageWidth"), Some(65));
+            let exif_width = all_widths
+                .iter()
+                .find(|r| r.lookup_key == "IFD0:ImageWidth")
+                .unwrap();
+            assert_eq!(
+                crate::cli::tag_resolution::family0_label(exif_width.occurrence),
+                "EXIF"
+            );
+            assert_eq!(
+                crate::cli::tag_resolution::family1_label(exif_width.occurrence),
+                "IFD0"
+            );
+            crate::composite::apply(&mut metadata);
+            assert_eq!(
+                metadata.get_string("Composite:ImageSize"),
+                Some(format!("{expected_width}x{expected_height}").as_str())
+            );
+        }
+    }
 
     /// Minimal little-endian TIFF block carrying a single ASCII Artist tag.
     fn tiff_with_artist() -> Vec<u8> {

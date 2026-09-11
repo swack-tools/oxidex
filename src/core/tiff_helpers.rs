@@ -2639,7 +2639,9 @@ pub fn parse_ifd1_directory(
         &mut collected,
     );
 
-    for (tag_id, field_type, value_count, raw_bytes) in &entries {
+    let mut positions =
+        std::collections::HashMap::<String, std::collections::VecDeque<usize>>::new();
+    for (index, (tag_id, field_type, value_count, raw_bytes)) in entries.iter().enumerate() {
         if matches!(
             *tag_id,
             TAG_SUBFILE_TYPE
@@ -2661,7 +2663,11 @@ pub fn parse_ifd1_directory(
         ) else {
             continue;
         };
-        collected.insert(lookup_tag_name(*tag_id, "IFD1"), value);
+        let key = lookup_tag_name(*tag_id, "IFD1");
+        collected.insert(key.clone(), value);
+        // A RawConv-omitted duplicate must not claim the surviving value's
+        // position. Record ordinary positions only after conversion succeeds.
+        positions.entry(key).or_default().push_back(index);
     }
 
     // ExifTool reports directory tags in physical entry order. The existing
@@ -2669,13 +2675,16 @@ pub fn parse_ifd1_directory(
     // together, after reading the whole IFD; interleave those results with the
     // ordinary tags here. Queues preserve interleaved duplicate names, and
     // stable sorting leaves derived images after the directory's own entries.
-    let mut positions =
-        std::collections::HashMap::<String, std::collections::VecDeque<usize>>::new();
     for (index, (id, _, _, _)) in entries.iter().enumerate() {
         let key = match *id {
             TAG_THUMBNAIL_OFFSET => "IFD1:ThumbnailOffset".to_string(),
             TAG_THUMBNAIL_LENGTH => "IFD1:ThumbnailLength".to_string(),
-            _ => lookup_tag_name(*id, "IFD1"),
+            TAG_SUBFILE_TYPE
+            | TAG_COMPRESSION
+            | TAG_STRIP_OFFSETS
+            | TAG_ROWS_PER_STRIP
+            | TAG_STRIP_BYTE_COUNTS => lookup_tag_name(*id, "IFD1"),
+            _ => continue,
         };
         positions.entry(key).or_default().push_back(index);
     }
@@ -3486,6 +3495,44 @@ mod ifd1_tests {
 
     const SHORT: u16 = 3;
     const LONG: u16 = 4;
+
+    #[test]
+    fn full_ifd1_dropped_duplicate_does_not_move_surviving_occurrence() {
+        // Native 13.59 -a -G1 -s emits Artist before PanasonicTitle: the
+        // first title's RawConv returns undef, so it has no output position.
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes()); // Empty IFD0.
+        data.extend_from_slice(&14u32.to_le_bytes()); // Next directory.
+        data.extend_from_slice(&3u16.to_le_bytes());
+        for (id, field_type, bytes) in [
+            (0xc6d2u16, 7u16, [0, 0, 0, 0]),
+            (0x013b, 2, *b"Art\0"),
+            (0xc6d2, 7, *b"Hi\0\0"),
+        ] {
+            data.extend_from_slice(&id.to_le_bytes());
+            data.extend_from_slice(&field_type.to_le_bytes());
+            data.extend_from_slice(&4u32.to_le_bytes());
+            data.extend_from_slice(&bytes);
+        }
+        data.extend_from_slice(&0u32.to_le_bytes());
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_ifd1_directory(&reader, 8, 0, ByteOrder::LittleEndian, 0, &mut metadata);
+        let observed: Vec<_> = metadata
+            .all_occurrences()
+            .map(|(key, occurrence)| (key, occurrence.raw.clone()))
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                ("IFD1:Artist".into(), TagValue::new_string("Art")),
+                ("IFD1:PanasonicTitle".into(), TagValue::new_string("Hi")),
+            ]
+        );
+    }
 
     #[test]
     fn full_ifd1_interleaves_occurrences_and_places_derived_image_last() {
