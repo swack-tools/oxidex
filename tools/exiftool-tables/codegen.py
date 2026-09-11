@@ -593,6 +593,13 @@ def conv_for(tag, stats, input_domain, verified_exprs):
         # maps exactly to a named, oracle-verified expression translation.
         named = exprs.code_ref_expr(pc.get("deparse"))
         if named:
+            domain, _rty, _code = exprs.translate_or_compile_any(named)
+            if domain != input_domain:
+                stats["expr_refused_input_domain"] += 1
+                return "PrintConv::None", True
+            if verified_exprs is None or named not in verified_exprs:
+                stats["expr_refused_oracle"] += 1
+                return "PrintConv::None", True
             stats["expr_translated_code_ref"] += 1
             return f"PrintConv::Expr(ExprId::{expr_ident(named)})", False
         stats["conv_dropped"] += 1

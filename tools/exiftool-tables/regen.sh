@@ -39,7 +39,10 @@ if [[ "$VERSION" != "$PIN" ]]; then
     exit 1
 fi
 CACHE="${OXIDEX_ET_CACHE:-$ROOT/target/exiftool-src}"
-LIB="$CACHE/exiftool-$VERSION/lib"
+LIB="${OXIDEX_EXIFTOOL_LIB:-$CACHE/exiftool-$VERSION/lib}"
+PERL="${EXIFTOOL_PERL:-$(command -v perl)}"
+export EXIFTOOL_PERL="$PERL"
+mkdir -p "$CACHE"
 begin_regeneration 1 "$CACHE"
 OUT="$(artifact_path binary)"
 # Slice I-1: the IFD-style (`Exif::ProcessExif`) tables, one generator run,
@@ -50,7 +53,7 @@ JSON="$CACHE/tables-$VERSION.json"
 EXPR_LEDGER="$(artifact_path expr-ledger)"
 VALUE_CONV_LEDGER="$(artifact_path value-ledger)"
 
-if [[ ! -d "$LIB" ]]; then
+if [[ ! -d "$LIB" && -z "${OXIDEX_EXIFTOOL_LIB:-}" ]]; then
     echo ">> fetching ExifTool $VERSION"
     mkdir -p "$CACHE"
     curl -sSL -o "$CACHE/et.tar.gz" \
@@ -60,7 +63,7 @@ fi
 [[ -d "$LIB" ]] || { echo "no ExifTool lib at $LIB" >&2; exit 1; }
 
 echo ">> extracting tag tables from Perl symbol table"
-perl "$HERE/dump_tables.pl" "$LIB" > "$JSON"
+"$PERL" "$HERE/dump_tables.pl" "$LIB" > "$JSON"
 
 echo ">> coverage analysis"
 python3 "$HERE/analyze.py" "$JSON"
@@ -71,7 +74,7 @@ echo ">> differential expression oracle (must PASS before conversion rollout)"
 # grammar-shaped expression.  verify_exprs.py capability-probes the pinned
 # Perl library before evaluating any conversion (Image/ExifTool.pm:9378).
 python3 "$HERE/verify_exprs.py" "$JSON" \
-    --perl "$(command -v perl)" --et-lib "$LIB" --ledger-out "$EXPR_LEDGER"
+    --perl "$PERL" --et-lib "$LIB" --ledger-out "$EXPR_LEDGER"
 
 echo
 echo ">> generating Rust"
@@ -80,7 +83,7 @@ python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
 
 echo
 echo ">> extracting file-identification tables"
-perl "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
+"$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \
     -o "$(artifact_path filetypes)"
 

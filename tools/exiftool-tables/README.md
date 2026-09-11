@@ -2,11 +2,12 @@
 
 For completed work, known gaps and priorities, start with
 [Tag machinery status](../../docs/TAG_MACHINERY_STATUS.md). This file describes
-the tooling present at the September 10, 2026 review (`c7f5dd81`, pin 13.59).
+the tooling on the pending upgrade branch; the pin remains 13.59.
 
-Follow-up `b36983c2` adds conservative IFD-aware upgrade classification on a
-pending branch. See the [implementation and limits](../../docs/TAG_MACHINERY_STATUS.md#pending-upgrade-classifier-repair);
-the complete upgrade transaction is still unfinished.
+The pending changes add conservative IFD-aware upgrade classification, one
+generated-output inventory, verified Canon CODE references, and isolated upgrade
+orchestration. See the [execution plan](../../docs/UPGRADE-NEXT-STEPS.md) for
+validation and integration state. No release-delta rehearsal is complete.
 
 ## Commands and scope
 
@@ -20,8 +21,8 @@ just regen-tables-tier2    # downstream generation only
 Run generation in an owned worktree with the intended pin and a capability-probed
 Perl/ExifTool pair. Generation modifies tracked artifacts; ordinary measurement
 scripts refuse a dirty tree unless the explicit override is provided and recorded.
-The current wrapper/provenance gap is listed in the status page: these commands
-are existing entry points, not a claim that the whole upgrade transaction is sound.
+These direct generation commands modify the caller's artifacts. Use the bump
+command below when comparing versions in isolated source trees.
 
 `regen.sh` generates binary and IFD tables, file identification, Composite
 definitions and compiled Composite expressions, FITS names, and expression/value-
@@ -29,20 +30,16 @@ conversion ledgers. `regen-all.sh` adds vendor subdirectory tables, Nikon AF-poi
 grids, bespoke transcriptions, recovered Sony/Minolta generators and Macintosh
 CJK charset tables. `artifacts.py` is the single output inventory for these
 currently wired commands: 8 tier-1 and 17 tier-2 artifacts. Both scripts resolve
-their output paths and formatting sets from it; the bump's backup/restore sets
+their output paths and formatting sets from it; the bump's promotion/recovery sets
 and CI's tier-2 comparison use the same inventory. The bump classifier also
 reads it when identifying the four vendor files still lacking producers. Composite's second output
 and all four implicit charset outputs are included. Nikon AF points and Leica
 lens data preserve handwritten sections and are accounted for as whole mixed
 files, including during backup.
 
-`just bump-exiftool <version>` also exists. Its artifact sets now follow the
-inventory, but its temporary old-version comparison still rebuilds only the
-first generation tier. **Repair and rehearse this
-workflow before treating it as an unattended upgrade or relying on complete
-`--dry-run` restoration.** See the
-[current gaps](../../docs/TAG_MACHINERY_STATUS.md#concrete-upgrade-gaps-at-this-snapshot)
-and the historical [13.58 to 13.59 exercise](../../docs/reference/bump-reports/13.58-to-13.59.md).
+`just bump-exiftool <version>` invokes `upgrade_transaction.py` through the
+existing shell entry point. See the transaction contract below and the historical
+[13.58 to 13.59 exercise](../../docs/reference/bump-reports/13.58-to-13.59.md).
 
 Four generated-origin files still have no committed generator: Sony
 `plain_tables.rs`/`enciphered_tables.rs` and Nikon
@@ -81,18 +78,59 @@ portion stayed correct; generator-specific tests and the existing oracles remain
 necessary. Formatting runs directly on manifest Rust paths with the package's
 2024 edition and fails if rustfmt fails.
 
-Write accounting does not establish cross-Perl reproducibility. A same-pin 13.59
-run on Perl 5.34 passed these checks but omitted `CanonCustom::ConvertPfn` and its
-29 field uses relative to the committed Perl 5.38 output. Those generated changes
-were preserved for investigation and not adopted by the manifest repair.
+Write accounting does not establish cross-Perl reproducibility. An earlier
+same-pin run omitted `CanonCustom::ConvertPfn` and 29 uses under Perl 5.34. The
+pending Canon repair recognizes both audited deparse bodies and requires the
+named verification entry and correct input domain. Fresh native Perl 5.34 and
+5.38 oracles each passed 16,789 probe comparisons; generated binary and IFD Rust
+match each other and the committed files. See the execution plan for scope.
 
 The EXIT check preserves a failing producer's status and keeps its entry snapshot
 outside the checkout for diagnosis. It detects violations **without rollback**.
-Old/new build isolation, exact entry-state restoration, promotion/recovery,
-binary resolution and the two tiers' source-tree resolution remain upgrade
-transaction gaps. This phase neither bumps the pin nor wires the currently
-unwired DICOM, GeoTIFF or lens-alternative producers; it also does not synchronize
-tag catalogs or refresh validation baselines.
+The separate upgrade transaction supplies build isolation and checked promotion.
+Neither command wires the currently omitted DICOM, GeoTIFF or lens-alternative
+producers, synchronizes tag catalogs, or refreshes validation baselines.
+
+## Isolated upgrade transaction
+
+Start from a clean owned branch, including ordinary untracked files. The command
+captures that commit, source contents and index before creating two private
+clones in a unique external report directory. It does not register Git worktrees.
+An ordinary BEFORE builds committed artifacts; `--from` on a retrospective dry
+run regenerates every selected tier for BEFORE. AFTER always regenerates every
+selected tier. Both variants use exact copied ExifTool sources, the selected
+capable Perl, fresh dumps, separate oracle/build targets and the fresh executable
+reported by Cargo. Corpus A/B uses one target-version oracle and the same inputs.
+
+```sh
+bash tools/exiftool-tables/bump-exiftool.sh 13.59 --dry-run \
+  --old-exiftool-dir /absolute/path/to/ExifTool-13.59 \
+  --new-exiftool-dir /absolute/path/to/ExifTool-13.59 \
+  --perl /usr/bin/perl --corpus /absolute/path/to/corpus \
+  --report-dir /absolute/path/to/external/reports
+```
+
+Use `--help` for selection and population-floor options. `--skip-conformance`
+produces incomplete evidence, exits nonzero, and cannot be used for promotion.
+The report directory retains stage logs, input identities, generated payloads,
+comparison results and `transaction.json`. A same-pin dry run validates the
+workflow only; it does not measure the cost or compatibility of a release change.
+
+Dry runs and failures before promotion leave caller source and index untouched.
+A live run rechecks caller identity and promotes only the 25 manifest outputs
+plus the pin, using journaled payloads and atomic file replacement. It preserves
+the index. Interrupted promotion can be resumed as checked restoration with:
+
+```sh
+bash tools/exiftool-tables/bump-exiftool.sh --recover
+```
+
+Recovery refuses altered payloads, changed caller HEAD/index, unknown concurrent
+source changes, and partially written or changed staging files. It reports the
+conflicting path and retains evidence; manual preservation/review is required
+before retrying that case. Do not delete recovery evidence or overwrite the
+caller to force a retry. The transaction is final-state accounting, not a sandbox
+against arbitrary generator writes or a guarantee of unattended upgrades.
 
 ## What is generated
 
