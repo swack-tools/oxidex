@@ -449,7 +449,16 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // /ImageResources). ExifTool walks it and reports the Photoshop, IPTC and
     // EXIF tags it carries.
     if let Ok(photoshop_metadata) = photoshop_resources::parse_photoshop_image_resources(reader) {
-        metadata.merge(photoshop_metadata);
+        // Preserve this PDF boundary's existing one-winner-per-key projection.
+        // Repeated EXIFInfo resources need ExifTool's shared processed-directory
+        // address state before their additional occurrences can be exposed.
+        // Carry each selected winner's forms/priority in its recorded order;
+        // HashMap iteration and plain insert would discard that information.
+        let mut winners = photoshop_metadata.winner_occurrences().collect::<Vec<_>>();
+        winners.sort_by_key(|(_, occurrence)| occurrence.order);
+        for (key, occurrence) in winners {
+            metadata.insert_renamed_occurrence(key.clone(), occurrence);
+        }
     }
 
     // PDF image streams may contain complete TIFF/EXIF payloads. Extract

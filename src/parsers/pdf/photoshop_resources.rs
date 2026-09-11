@@ -714,4 +714,39 @@ mod tests {
         assert_eq!(widths[0].raw, TagValue::Integer(65));
         assert_eq!(widths[0].priority, 0);
     }
+    #[test]
+    fn full_pdf_retains_existing_winner_projection_for_repeated_exif_resources() {
+        use crate::io::buffered_reader::BufferedReader;
+        use crate::parsers::image::embedded::test_fixtures::{canon_lens_tiff, tiff_with_entries};
+
+        // All three TIFFs start IFD0 at offset 8. Native 13.59's shared
+        // processed-directory address state rejects the latter two, whereas
+        // this existing PDF loop still reads them. Do not expose extra copies
+        // until that state is modeled; retain the existing last-winner scope.
+        // This is containment of standing debt, not a native parity assertion:
+        // native reports only ImageWidth here, not this surviving LensType.
+        let width = tiff_with_entries(&[(0x0100, 1, &[65])]);
+        let mut resources = block(RES_EXIF, &width);
+        resources.extend(block(RES_EXIF, &canon_lens_tiff(129, None)));
+        resources.extend(block(RES_EXIF, &canon_lens_tiff(136, None)));
+        let pdf = resource_pdf(&resources);
+        let metadata =
+            crate::parsers::pdf::parse_pdf_metadata(&BufferedReader::from_bytes(&pdf)).unwrap();
+        let lenses = metadata.occurrences_for("Canon:LensType");
+        assert_eq!(
+            lenses.len(),
+            1,
+            "the outer PDF boundary still selects one winner"
+        );
+        assert_eq!(
+            lenses[0].raw,
+            TagValue::new_string("Canon EF 300mm f/2.8L USM")
+        );
+        assert_eq!(lenses[0].value, Some(TagValue::new_string("136")));
+        let widths = metadata.occurrences_for("IFD0:ImageWidth");
+        assert_eq!(widths.len(), 1);
+        assert_eq!(widths[0].raw, TagValue::Integer(65));
+        assert_eq!(widths[0].priority, 0);
+        assert!(widths[0].order < lenses[0].order);
+    }
 }
