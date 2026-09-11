@@ -55,6 +55,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+source "$HERE/artifact-env.sh"
 cd "$ROOT"
 
 NEW_VERSION="${1:?usage: bump-exiftool.sh <new-version> [--dry-run] [--from <old-version>] [options]}"
@@ -112,26 +113,15 @@ mkdir -p "$CACHE"
 # forward (NEW) state before the conformance double-run temporarily
 # regenerates an OLD comparison build, and (b) revert cleanly at the end of
 # a --dry-run.
-TIER1_FILES=(
-    "src/exiftool_tables/binary_tables.rs"
-    "src/composite/tables.rs"
-    "src/filetype/tables.rs"
-    "src/parsers/specialized/fits/tables.rs"
-)
-TIER2_FILES=(
-    "src/parsers/tiff/makernotes/fujifilm/settings_tables.rs"
-    "src/parsers/tiff/makernotes/panasonic/face_tables.rs"
-    "src/parsers/tiff/makernotes/pentax/subdir_tables.rs"
-    "src/parsers/tiff/makernotes/nikon/af_points.rs"
-    "src/parsers/tiff/makernotes/canon/custom_functions2_tables.rs"
-    "src/parsers/jpeg/app_segments/infiray_tables.rs"
-    "src/parsers/jpeg/app_segments/qualcomm_tables.rs"
-    "src/parsers/tiff/makernotes/samsung/lookups.rs"
-    "src/parsers/tiff/makernotes/olympus/lookups.rs"
-    "src/parsers/tiff/makernotes/lens_data.rs"
-    "tools/exiftool-tables/af_points.json"
-)
-ALL_GENERATED_FILES=("${TIER1_FILES[@]}" "${TIER2_FILES[@]}")
+load_artifact_paths --tier 1
+TIER1_FILES=("${ARTIFACT_PATHS[@]}")
+load_artifact_paths
+ALL_GENERATED_FILES=("${ARTIFACT_PATHS[@]}")
+
+# This complete inventory fixes path omissions only. The temporary BEFORE
+# build still mixes OLD tier 1 with NEW tier 2, and restoration still targets
+# the index instead of preserving entry state. Isolated builds and checked
+# promotion/recovery are separate work; do not treat this as a safe transaction.
 
 fetch_tree() {
     local v="$1"
@@ -240,7 +230,7 @@ echo "=========================================================="
 echo "=========================================================="
 echo ">> STEP 5: verify committed tables against ExifTool $NEW_VERSION"
 echo "=========================================================="
-python3 "$HERE/verify.py" "$ROOT/src/exiftool_tables/binary_tables.rs" \
+python3 "$HERE/verify.py" "$(artifact_path binary)" \
     "$CACHE/exiftool-$NEW_VERSION/lib" --oracle "$HERE/oracle.pl"
 
 NEW_DUMP="$CACHE/tables-$NEW_VERSION.json"

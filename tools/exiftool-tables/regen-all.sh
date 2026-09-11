@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Run EVERY committed ExifTool-table generator in this repo -- both
-# generation tiers -- against the SAME pinned ExifTool source tree.
+# Run both currently wired ExifTool-table generation tiers against the
+# pinned release. Remaining source-resolution/transaction gaps are in README.md.
 #
 # Tier 1 (tools/exiftool-tables/regen.sh) produces binary_tables.rs, the
 # filetype tables, Composite definitions and FITS keywords. Tier 2 is
@@ -21,11 +21,10 @@
 # carry no version stamp of their own to compare. That is intra-repo
 # mixed-release skew, and it is invisible from either tier alone.
 #
-# The fix is running everything from ONE resolved source tree in one process
-# (see LIB below) rather than trusting N independently-cached ExifTool
-# checkouts to agree, plus `just verify-tables` (tier 1) and this script's own
-# rerun-and-diff (tier 2, wired into CI's verify-tables job) so a skew is a
-# red check, not a fact nobody happened to notice.
+# Both tiers are now invoked, with `just verify-tables` for tier 1 and a
+# rerun-and-diff in CI for tier 2. Source identity is still a separate gap:
+# tier 2 resolves LIB below, while tier 1 independently resolves its cache.
+# An explicit tier-2 override can therefore select a different source tree.
 #
 # Usage:
 #   tools/exiftool-tables/regen-all.sh              # tier 1 + tier 2
@@ -39,6 +38,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+source "$HERE/artifact-env.sh"
 
 TIER1=1
 if [[ "${1:-}" == "--tier2-only" ]]; then
@@ -51,15 +51,14 @@ PIN_FILE="$ROOT/.exiftool-version"
 PIN="$(tr -d '[:space:]' < "$PIN_FILE")"
 [[ -n "$PIN" ]] || { echo "$PIN_FILE is empty" >&2; exit 1; }
 
-# One resolved tree for the whole run, so tier 1 and tier 2 cannot end up
-# reading two different checkouts of "the same" release.
+# Resolve tier 2's source tree. Tier 1's regen.sh independently uses CACHE
+# and does not honor OXIDEX_EXIFTOOL_LIB; an explicit override can separate
+# the two even when both source trees report the pinned release.
 #
 # If the caller already pointed at a specific tree via $OXIDEX_EXIFTOOL_LIB
-# (CI's verify-tables job does this: it already fetched exiftool-$PIN/lib for
-# the tier-1 verify.py step above, so tier 2 reuses that exact checkout rather
-# than fetching a second copy), that wins outright -- it is verified below the
-# same way ExiftoolPin.pm verifies it for every tier-2 Perl script, so this is
-# not a trust-it-blindly fallback.
+# (CI's verify-tables job points to its externally staged oracle), that wins
+# for tier 2. The release is checked below, as ExiftoolPin.pm does for the
+# tier-2 Perl scripts; this version check is not a source-identity proof.
 #
 # Otherwise this resolves through regen.sh's own cache (target/exiftool-src by
 # default, override with $OXIDEX_ET_CACHE). If that cache does not have $PIN
@@ -70,6 +69,11 @@ PIN="$(tr -d '[:space:]' < "$PIN_FILE")"
 # $CACHE is also where tier 2 stashes the JSON dump it shares with tier 1
 # (below), independent of which branch resolved $LIB.
 CACHE="${OXIDEX_ET_CACHE:-$ROOT/target/exiftool-src}"
+if [[ "$TIER1" == "1" ]]; then
+    begin_regeneration all "$CACHE"
+else
+    begin_regeneration 2 "$CACHE"
+fi
 if [[ -n "${OXIDEX_EXIFTOOL_LIB:-}" ]]; then
     LIB="$OXIDEX_EXIFTOOL_LIB"
 else
@@ -139,13 +143,13 @@ gen_subdir() {
     python3 "$HERE/codegen_subdirs.py" "$JSON" "${args[@]}"
 }
 
-gen_subdir FujiFilm "$ROOT/src/parsers/tiff/makernotes/fujifilm/settings_tables.rs" \
+gen_subdir FujiFilm "$(artifact_path fujifilm)" \
     PrioritySettings FocusSettings AFCSettings DriveSettings
 
-gen_subdir Panasonic "$ROOT/src/parsers/tiff/makernotes/panasonic/face_tables.rs" \
+gen_subdir Panasonic "$(artifact_path panasonic)" \
     FaceDetInfo FaceRecInfo
 
-PENTAX_OUT="$ROOT/src/parsers/tiff/makernotes/pentax/subdir_tables.rs"
+PENTAX_OUT="$(artifact_path pentax)"
 gen_subdir Pentax "$PENTAX_OUT" \
     SRInfo2 FaceInfo AWBInfo TimeInfo LensCorr FlashInfo KelvinWB EVStepInfo \
     FacePos FaceSize LevelInfo WBLevels LensInfoQ AFInfo BatteryInfo TempInfo \
@@ -180,9 +184,9 @@ PATCH
 echo "=========================================================="
 echo ">> TIER 2b: Nikon AF-point name grids"
 echo "=========================================================="
-perl "$HERE/dump_af_points.pl" "$LIB/Image/ExifTool/Nikon.pm" "$HERE/af_points.json"
-python3 "$HERE/codegen_af_points.py" "$HERE/af_points.json" \
-    "$ROOT/src/parsers/tiff/makernotes/nikon/af_points.rs"
+perl "$HERE/dump_af_points.pl" "$LIB/Image/ExifTool/Nikon.pm" "$(artifact_path af-points-json)"
+python3 "$HERE/codegen_af_points.py" "$(artifact_path af-points-json)" \
+    "$(artifact_path af-points)"
 
 echo "=========================================================="
 echo ">> TIER 2c: scripts/gen_*.pl one-off transcriptions"
@@ -194,15 +198,15 @@ run_gen() {
 }
 
 run_gen gen_canon_custom_functions2.pl \
-    "$ROOT/src/parsers/tiff/makernotes/canon/custom_functions2_tables.rs"
+    "$(artifact_path canon-custom)"
 run_gen gen_infiray_tables.pl \
-    "$ROOT/src/parsers/jpeg/app_segments/infiray_tables.rs"
+    "$(artifact_path infiray)"
 run_gen gen_qualcomm_tables.pl \
-    "$ROOT/src/parsers/jpeg/app_segments/qualcomm_tables.rs"
+    "$(artifact_path qualcomm)"
 run_gen gen_samsung_lookups.pl \
-    "$ROOT/src/parsers/tiff/makernotes/samsung/lookups.rs"
+    "$(artifact_path samsung)"
 run_gen gen_olympus_lookups.pl \
-    "$ROOT/src/parsers/tiff/makernotes/olympus/lookups.rs"
+    "$(artifact_path olympus)"
 
 # gen_leica_lens_types.pl is the one generator with no dedicated output file:
 # LEICA_LENS_TYPES lives inside lens_data.rs, a file several OTHER
@@ -210,9 +214,9 @@ run_gen gen_olympus_lookups.pl \
 # that array in place; see its header for why a whole-file overwrite does
 # not apply here.
 LEICA_RAW="$(mktemp)"
-trap 'rm -f "$LEICA_RAW"' EXIT
+REGEN_CLEANUP_FILE="$LEICA_RAW"
 perl "$ROOT/scripts/gen_leica_lens_types.pl" > "$LEICA_RAW"
-python3 "$HERE/splice_leica.py" "$LEICA_RAW" "$ROOT/src/parsers/tiff/makernotes/lens_data.rs"
+python3 "$HERE/splice_leica.py" "$LEICA_RAW" "$(artifact_path leica)"
 
 echo "=========================================================="
 echo ">> TIER 2d: bespoke sony::binary_data-DSL tables"
@@ -228,9 +232,9 @@ echo "=========================================================="
 # and are still called out in that section, each its own similarly-sized
 # project.
 python3 "$HERE/gen_sony_main_extra_tables.py" "$JSON" \
-    -o "$ROOT/src/parsers/tiff/makernotes/sony/main_extra_tables.rs"
+    -o "$(artifact_path sony-main)"
 python3 "$HERE/gen_minolta_a100_tables.py" "$JSON" \
-    -o "$ROOT/src/parsers/tiff/makernotes/minolta_a100_tables.rs"
+    -o "$(artifact_path minolta-a100)"
 
 echo "=========================================================="
 echo ">> TIER 2e: Macintosh CJK charset tables (TrueType name records)"
@@ -250,7 +254,7 @@ echo "=========================================================="
 # The generator reads the `.pm` files directly (they are Perl hash literals,
 # not runtime tables, so there is no dump to route through) and writes
 # beside itself; its output is byte-identical to what is committed once
-# rustfmt has run, which is why it is in the cargo fmt list below and why
+# rustfmt has run, which is why all four implicit outputs are in artifacts.py and why
 # CI's rerun-and-diff step can gate it.
 python3 "$ROOT/src/parsers/font/mac_charset/generate_tables.py" \
     "$LIB/Image/ExifTool/Charset"
@@ -259,24 +263,7 @@ echo "=========================================================="
 echo ">> formatting tier-2 output"
 echo "=========================================================="
 cd "$ROOT"
-cargo fmt -- \
-    src/parsers/tiff/makernotes/fujifilm/settings_tables.rs \
-    src/parsers/tiff/makernotes/panasonic/face_tables.rs \
-    src/parsers/tiff/makernotes/pentax/subdir_tables.rs \
-    src/parsers/tiff/makernotes/nikon/af_points.rs \
-    src/parsers/tiff/makernotes/canon/custom_functions2_tables.rs \
-    src/parsers/jpeg/app_segments/infiray_tables.rs \
-    src/parsers/jpeg/app_segments/qualcomm_tables.rs \
-    src/parsers/tiff/makernotes/sony/main_extra_tables.rs \
-    src/parsers/tiff/makernotes/minolta_a100_tables.rs \
-    src/parsers/tiff/makernotes/samsung/lookups.rs \
-    src/parsers/tiff/makernotes/olympus/lookups.rs \
-    src/parsers/tiff/makernotes/lens_data.rs \
-    src/parsers/font/mac_charset/mac_japanese.rs \
-    src/parsers/font/mac_charset/mac_chinese_tw.rs \
-    src/parsers/font/mac_charset/mac_korean.rs \
-    src/parsers/font/mac_charset/mac_chinese_cn.rs \
-    2>/dev/null || echo "   (rustfmt unavailable; output left unformatted)"
+format_artifacts 2
 
 echo
 echo ">> done: tier 1 + tier 2 regenerated from ExifTool $PIN at $LIB"

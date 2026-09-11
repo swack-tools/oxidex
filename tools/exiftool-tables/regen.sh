@@ -15,6 +15,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+source "$HERE/artifact-env.sh"
 
 # The release comes from the repo pin, never from a literal here. A hardcoded
 # default drifted 29 releases behind `.exiftool-version` and, because verify.py
@@ -39,14 +40,15 @@ if [[ "$VERSION" != "$PIN" ]]; then
 fi
 CACHE="${OXIDEX_ET_CACHE:-$ROOT/target/exiftool-src}"
 LIB="$CACHE/exiftool-$VERSION/lib"
-OUT="$ROOT/src/exiftool_tables/binary_tables.rs"
+begin_regeneration 1 "$CACHE"
+OUT="$(artifact_path binary)"
 # Slice I-1: the IFD-style (`Exif::ProcessExif`) tables, one generator run,
 # second output file. Written together with $OUT so the two can never come
 # from different dumps (their EXIFTOOL_VERSION stamps are tested equal).
-IFD_OUT="$ROOT/src/exiftool_tables/ifd_tables.rs"
+IFD_OUT="$(artifact_path ifd)"
 JSON="$CACHE/tables-$VERSION.json"
-EXPR_LEDGER="$ROOT/tools/exiftool-tables/expr_oracle_ledger.json"
-VALUE_CONV_LEDGER="$ROOT/tools/exiftool-tables/value_conv_ledger.json"
+EXPR_LEDGER="$(artifact_path expr-ledger)"
+VALUE_CONV_LEDGER="$(artifact_path value-ledger)"
 
 if [[ ! -d "$LIB" ]]; then
     echo ">> fetching ExifTool $VERSION"
@@ -80,25 +82,24 @@ echo
 echo ">> extracting file-identification tables"
 perl "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \
-    -o "$ROOT/src/filetype/tables.rs"
+    -o "$(artifact_path filetypes)"
 
 echo
 echo ">> generating Composite definitions"
-python3 "$HERE/codegen_composite.py" "$JSON" -o "$ROOT/src/composite/tables.rs"
+python3 "$HERE/codegen_composite.py" "$JSON" -o "$(artifact_path composite)" \
+    --generated-out "$(artifact_path composite-compute)"
 
 echo
 echo ">> generating FITS keyword names"
 python3 "$HERE/codegen_fits.py" "$JSON" \
-    -o "$ROOT/src/parsers/specialized/fits/tables.rs"
+    -o "$(artifact_path fits)"
 
 echo
 echo ">> formatting generated sources"
 # rustfmt is part of generation, not an afterthought: without it the committed
 # files (which do get formatted) differ from freshly generated ones on every
 # run, and a generator whose output churns cannot be reviewed in a diff.
-cargo fmt -- "$OUT" "$IFD_OUT" "$ROOT/src/composite/tables.rs" "$ROOT/src/filetype/tables.rs" \
-    "$ROOT/src/parsers/specialized/fits/tables.rs" \
-    2>/dev/null || echo "   (rustfmt unavailable; output left unformatted)"
+format_artifacts 1
 
 echo
 echo ">> verifying generated Rust against ExifTool (independent path)"

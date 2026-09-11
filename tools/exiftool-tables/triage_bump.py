@@ -61,9 +61,9 @@ OVERHAUL_OXIDEX_PLAN.md Step 17 and this repo's AGENTS.md). They are counted
 into the totals precisely because "nothing changed here" is not the same
 claim as "this is covered".
 
-Which of them are *still* generator-less is DERIVED from the regen scripts
-(`generator_less_files()`), not hard-coded. The hard-coded version of this
-list is the exact defect that motivated the change: Step 18 added
+Which of them are *still* generator-less is DERIVED from the shared output
+inventory (`generator_less_files()`), not hard-coded. The hard-coded version
+of this list is the exact defect that motivated the change: Step 18 added
 `gen_sony_main_extra_tables.py` and `gen_minolta_a100_tables.py` at
 2026-08-13T19:20:45-05:00 and wired both into `regen-all.sh` tier 2d, while
 the last edit to this file (`cbc6618f`, 1 h 33 m later) left all six in the
@@ -94,6 +94,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -130,68 +131,28 @@ BESPOKE_DSL_FILES = [
      "%Image::ExifTool::Minolta::* (A100 subset)"),
 ]
 
-# The committed scripts that regenerate tier-1 and tier-2 output. A file
-# named by one of these has a generator; a file named by neither does not.
-REGEN_SCRIPTS = (
-    "tools/exiftool-tables/regen.sh",
-    "tools/exiftool-tables/regen-all.sh",
-)
-
-
-def _strip_shell_comments(text: str) -> str:
-    """Drop `#` comments from a shell script, respecting quotes.
-
-    Necessary, not decorative: `regen-all.sh`'s tier-2d banner comment
-    *names* the four files it explicitly did NOT build a generator for, so a
-    plain substring search over the raw text concludes all six are wired.
-    This is the same failure `reachability.py`'s docstring records for
-    `ricoh.rs:215`, where a comment explaining that a `find_table(...)` call
-    is NOT made got counted as a call site and allowlisted a table on the
-    strength of a sentence (docs/reference/corpus-synthesis.md).
-    """
-    out = []
-    for line in text.splitlines():
-        quote = None
-        cut = len(line)
-        for i, ch in enumerate(line):
-            if quote:
-                if ch == quote:
-                    quote = None
-            elif ch in "'\"":
-                quote = ch
-            elif ch == "#" and (i == 0 or line[i - 1].isspace()):
-                cut = i
-                break
-        out.append(line[:cut])
-    return "\n".join(out)
-
-
 def generator_less_files(root: Path = REPO_ROOT):
-    """The `BESPOKE_DSL_FILES` entries no committed regen script regenerates.
+    """Bespoke DSL files absent from the shared regeneration output inventory.
 
-    Derived rather than listed: the previous hard-coded literal went stale
-    the same afternoon two of the six got generators (see module docstring),
-    and a bump report that over-states standing HAND work is a measurement
-    error in exactly the direction AGENTS.md warns about. A file drops off
-    this list automatically the moment a regen script names its path.
-
-    A missing regen script is a hard error, not a shrug: silently treating
-    "cannot read regen-all.sh" as "nothing is wired" would flip every one of
-    these back to HAND with no signal at all.
+    Regeneration now resolves symbolic artifact keys, so scraping literal paths
+    from shell source would misclassify wired Sony/Minolta outputs as HAND again.
+    Read the same CLI used by those scripts. The root argument still selects a
+    checkout explicitly, and an unreadable or invalid inventory fails closed.
     """
-    named = []
-    for rel in REGEN_SCRIPTS:
-        path = root / rel
-        try:
-            named.append(_strip_shell_comments(path.read_text(encoding="utf-8")))
-        except OSError as exc:
-            raise SystemExit(
-                f"triage_bump.py: cannot read {rel} ({exc}); refusing to guess "
-                "which generated files still have no generator -- that guess "
-                "would silently inflate every bump report's HAND count."
-            ) from exc
-    body = "\n".join(named)
-    return [entry for entry in BESPOKE_DSL_FILES if entry[1] not in body]
+    manifest = root / "tools/exiftool-tables/artifacts.py"
+    try:
+        result = subprocess.run(
+            [sys.executable, str(manifest), "paths"],
+            check=True, capture_output=True, text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        raise SystemExit(
+            f"triage_bump.py: cannot read output inventory {manifest} ({detail}); "
+            "refusing to guess which generated files still have no generator."
+        ) from exc
+    named = set(result.stdout.splitlines())
+    return [item for item in BESPOKE_DSL_FILES if item[1] not in named]
 
 
 GENERATOR_LESS_FILES = generator_less_files()

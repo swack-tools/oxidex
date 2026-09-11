@@ -14,6 +14,9 @@ refusing construct -- the moment one does not.
 
 import importlib.util
 import unittest
+import tempfile
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -172,33 +175,32 @@ class GeneratorLessDerivationTests(unittest.TestCase):
         for path in self.WIRED:
             with self.subTest(path=path):
                 self.assertNotIn(path, derived)
-                # ...and for the right reason: a regen script really does
-                # name it outside a comment.
-                named = any(
-                    path in triage_bump._strip_shell_comments(
-                        (self.REPO_ROOT / rel).read_text(encoding="utf-8"))
-                    for rel in triage_bump.REGEN_SCRIPTS
-                )
-                self.assertTrue(named, f"{path} is excluded but no regen script names it")
+                # The inventory read by regeneration also names the output.
+                output = subprocess.check_output([
+                    sys.executable,
+                    str(self.REPO_ROOT / "tools/exiftool-tables/artifacts.py"),
+                    "paths",
+                ], text=True)
+                self.assertIn(path, output.splitlines())
 
-    def test_a_comment_naming_a_file_does_not_count_as_a_generator(self):
-        # regen-all.sh's tier-2d banner names the four unreconstructed files
-        # in prose. Counting that sentence is the `ricoh.rs:215` failure
-        # (reachability.py's docstring; docs/reference/corpus-synthesis.md),
-        # so the derivation strips comments first. Negative control: a
-        # script whose ONLY mention of a path is inside a comment must leave
-        # that path on the list.
-        script = (
-            '#!/usr/bin/env bash\n'
-            '# note: src/parsers/tiff/makernotes/sony/main_extra_tables.rs '
-            'is deliberately not generated here\n'
-            'echo "unrelated # not a comment"\n'
-        )
-        stripped = triage_bump._strip_shell_comments(script)
-        self.assertNotIn("main_extra_tables.rs", stripped)
-        self.assertIn('echo "unrelated # not a comment"', stripped)
+    def test_shell_comments_cannot_override_the_inventory(self):
+        # All six paths appear in a shell comment; only the two actual manifest
+        # declarations count. Use the real inventory, not another output list.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = root / "tools/exiftool-tables"
+            tools.mkdir(parents=True)
+            (tools / "artifacts.py").write_text(
+                (self.REPO_ROOT / "tools/exiftool-tables/artifacts.py").read_text()
+            )
+            (tools / "regen-all.sh").write_text("\n".join(
+                f"# {path} is not a generator invocation"
+                for _module, path, _source in triage_bump.BESPOKE_DSL_FILES
+            ))
+            derived = {path for _m, path, _s in triage_bump.generator_less_files(root)}
+            self.assertEqual(derived, self.STILL_GENERATOR_LESS)
 
-    def test_unreadable_regen_script_is_a_loud_refusal_not_an_empty_list(self):
+    def test_unreadable_inventory_is_a_loud_refusal_not_an_empty_list(self):
         with self.assertRaises(SystemExit) as cm:
             triage_bump.generator_less_files(Path("/nonexistent-oxidex-root"))
         self.assertIn("refusing to guess", str(cm.exception))
