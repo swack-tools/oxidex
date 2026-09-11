@@ -30,7 +30,7 @@
 use crate::core::TagValue;
 use crate::parsers::png::chunk_parser::{PngTextRecord, TextPayload};
 use crate::parsers::text::html::decode_latin;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The value conversion a `%TextualData` entry applies before printing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,6 +139,47 @@ const TEXTUAL_DATA: &[Known] = &[
     profile("Raw profile type 8bim", "Photoshop_Profile"),
 ];
 
+/// `%Image::ExifTool::specialTags` (`ExifTool.pm:1230-1236`): table keys
+/// that hold table metadata, not tags. `GetTagInfoList` finds no tag under
+/// them (`ExifTool.pm:9130-9132`, warning "conflicts with internal ExifTool
+/// variable") and `AddTagToTable` never registers one (`:9269`), so a text
+/// keyword equal to one of these is an unknown tag on every sighting and
+/// never gains a language copy.
+const SPECIAL_TAGS: [&str; 28] = [
+    "TABLE_NAME",
+    "SHORT_NAME",
+    "PROCESS_PROC",
+    "WRITE_PROC",
+    "CHECK_PROC",
+    "GROUPS",
+    "FORMAT",
+    "FIRST_ENTRY",
+    "TAG_PREFIX",
+    "PRINT_CONV",
+    "WRITABLE",
+    "TABLE_DESC",
+    "NOTES",
+    "IS_OFFSET",
+    "IS_SUBDIR",
+    "EXTRACT_UNKNOWN",
+    "NAMESPACE",
+    "PREFERRED",
+    "SRC_TABLE",
+    "PRIORITY",
+    "AVOID",
+    "WRITE_GROUP",
+    "LANG_INFO",
+    "VARS",
+    "DATAMEMBER",
+    "SET_GROUP1",
+    "PERMANENT",
+    "INIT_TABLE",
+];
+
+fn is_special_tag(id: &str) -> bool {
+    SPECIAL_TAGS.contains(&id)
+}
+
 /// A resolved table entry: a static `%TextualData` row or a run-time
 /// registration.
 #[derive(Clone, Debug)]
@@ -182,6 +223,15 @@ pub(crate) struct TextTagNamer {
     /// overrides an existing key (`ExifTool.pm:9268`), and the static rows
     /// are consulted first, so a dynamic entry can never shadow one.
     dynamic: HashMap<String, Entry>,
+    /// Static rows whose `RawConv` `FoundPNG` has deleted. For a value that
+    /// is still compressed (unknown method, or an inflate that failed) and a
+    /// tag with no `ValueConv`, `FoundPNG` sets `$$tagInfo{RawConv} =
+    /// '\$val'` and afterwards `delete`s it (`PNG.pm:1140-1147`) -- from the
+    /// shared table hash, so the tag's own static `RawConv` (only `Creation
+    /// Time`'s `ConvertPNGDate`, `PNG.pm:635`) is gone for every later chunk,
+    /// and language copies made afterwards copy the stripped hash
+    /// (`Writer.pl:4114`). Dynamic entries are stripped in place.
+    stripped: HashSet<String>,
 }
 
 impl TextTagNamer {
@@ -190,16 +240,41 @@ impl TextTagNamer {
     }
 
     fn lookup(&self, id: &str) -> Option<Entry> {
+        if is_special_tag(id) {
+            return None;
+        }
         if let Some(k) = TEXTUAL_DATA.iter().find(|k| k.keyword == id) {
+            let conv = if self.stripped.contains(k.keyword) {
+                TextConv::None
+            } else {
+                k.conv
+            };
             return Some(Entry {
                 tag_id: k.keyword.to_string(),
                 name: k.name.to_string(),
-                conv: k.conv,
+                conv,
                 binary: false,
                 kind: k.kind,
             });
         }
         self.dynamic.get(id).cloned()
+    }
+
+    /// `delete $$tagInfo{RawConv} if $delRawConv` (`PNG.pm:1147`) for the
+    /// entry registered under `tag_id`. Only `ConvertPNGDate` is a `RawConv`
+    /// here; an `XmpDate` entry has a `ValueConv`, so `:1142` never set
+    /// `$delRawConv` for it.
+    fn strip_raw_conv(&mut self, tag_id: &str) {
+        if TEXTUAL_DATA
+            .iter()
+            .any(|k| k.keyword == tag_id && k.conv == TextConv::PngDate)
+        {
+            self.stripped.insert(tag_id.to_string());
+        } else if let Some(entry) = self.dynamic.get_mut(tag_id)
+            && entry.conv == TextConv::PngDate
+        {
+            entry.conv = TextConv::None;
+        }
     }
 
     /// `Image::ExifTool::PNG::GetLangInfo` (`PNG.pm:890-899`) followed by the
@@ -235,6 +310,12 @@ impl TextTagNamer {
     /// `FoundPNG`'s name resolution (`PNG.pm:908-927`, `:1115-1124`) for a
     /// chunk keyword and, for iTXt, its language tag.
     pub(crate) fn resolve(&mut self, keyword: &str, lang: Option<&str>) -> TextTagRoute {
+        self.resolve_entry(keyword, lang).0
+    }
+
+    /// [`Self::resolve`], plus the table key (`TagID`) of the entry the
+    /// chunk resolved to, which `FoundPNG`'s `RawConv` deletion acts on.
+    fn resolve_entry(&mut self, keyword: &str, lang: Option<&str>) -> (TextTagRoute, String) {
         // `if ($lang)` (:914): Perl truthiness, so '' and '0' mean no tag.
         let lang = lang.filter(|l| !l.is_empty() && *l != "0");
         // "case of language code must be normalized since they are case
@@ -257,7 +338,7 @@ impl TextTagNamer {
             }
         }
         if let Some(entry) = info {
-            return match entry.kind {
+            let route = match entry.kind {
                 EntryKind::Text => TextTagRoute::Tag {
                     name: entry.name,
                     conv: entry.conv,
@@ -272,25 +353,30 @@ impl TextTagNamer {
                         .unwrap_or("Profile"),
                 ),
             };
+            return (route, entry.tag_id);
         }
         // Unknown keyword: PNG.pm:1115-1124.
         let name = add_tag_to_table_name(&collapse_whitespace(keyword));
         // "make unknown profiles binary data type" (:1121-1122)
         let binary = keyword.starts_with("Raw profile type ");
         // AddTagToTable($tagTablePtr, $tag, $tagInfo) (:1124) registers the
-        // raw keyword; an existing key is never overridden (ExifTool.pm:9268).
-        self.dynamic.entry(keyword.to_string()).or_insert(Entry {
-            tag_id: keyword.to_string(),
-            name: name.clone(),
-            conv: TextConv::None,
-            binary,
-            kind: EntryKind::Text,
-        });
-        TextTagRoute::Tag {
+        // raw keyword; an existing key is never overridden, and a special
+        // table key is never registered (ExifTool.pm:9268-9269).
+        if !is_special_tag(keyword) {
+            self.dynamic.entry(keyword.to_string()).or_insert(Entry {
+                tag_id: keyword.to_string(),
+                name: name.clone(),
+                conv: TextConv::None,
+                binary,
+                kind: EntryKind::Text,
+            });
+        }
+        let route = TextTagRoute::Tag {
             name,
             conv: TextConv::None,
             binary,
-        }
+        };
+        (route, keyword.to_string())
     }
 }
 
@@ -361,7 +447,22 @@ impl TextTagNamer {
         // naming step either compares ASCII or deletes non-ASCII.
         let keyword = decode_latin(&rec.keyword);
         let lang = rec.lang.as_deref().map(decode_latin);
-        match (self.resolve(&keyword, lang.as_deref()), &rec.payload) {
+        let (route, tag_id) = self.resolve_entry(&keyword, lang.as_deref());
+        if matches!(
+            rec.payload,
+            TextPayload::UnknownMethod(_) | TextPayload::InflateError
+        ) && let TextTagRoute::Tag {
+            conv: TextConv::PngDate,
+            ..
+        } = route
+        {
+            // `$compressed` is still true here, so FoundPNG overrides and
+            // then deletes the entry's RawConv (PNG.pm:1140-1147). This
+            // chunk's own value is binary (or omitted) either way; what
+            // changes is every later chunk that resolves to the same entry.
+            self.strip_raw_conv(&tag_id);
+        }
+        match (route, &rec.payload) {
             (TextTagRoute::Tag { name, conv, binary }, TextPayload::Bytes(bytes)) => {
                 // `$val = $et->Decode($val, $enc)` (:963-966): 'Latin'
                 // (cp1252) for tEXt/zTXt, 'UTF8' for iTXt.
@@ -371,10 +472,20 @@ impl TextTagNamer {
                     String::from_utf8_lossy(bytes).into_owned()
                 };
                 if binary {
-                    // Length of the decoded (UTF-8) byte string.
+                    // Length of `$val` after `Decode` (:965): tEXt/zTXt went
+                    // Latin -> UTF-8, so count the UTF-8 string; iTXt went
+                    // UTF8 -> UTF8, which `Decode` returns untouched
+                    // (`$from ne $to` is false, ExifTool.pm:6349), so
+                    // count the raw bytes -- invalid UTF-8 included, not the
+                    // U+FFFD-widened lossy string.
+                    let len = if rec.is_latin() {
+                        text.len()
+                    } else {
+                        bytes.len()
+                    };
                     return TextRow::Tag {
                         name,
-                        value: binary_placeholder(text.len()),
+                        value: binary_placeholder(len),
                         binary: true,
                     };
                 }
@@ -1087,6 +1198,171 @@ mod tests {
             )),
             tag("XMLcomadobexmp", "<x/>")
         );
+    }
+
+    /// Hex of a PNG file's tEXt/zTXt/iTXt chunks, in order, as
+    /// `(chunk_type, data)`.
+    fn text_chunks(png_hex: &str) -> Vec<([u8; 4], Vec<u8>)> {
+        let d: Vec<u8> = (0..png_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&png_hex[i..i + 2], 16).unwrap())
+            .collect();
+        let mut out = Vec::new();
+        let mut i = 8;
+        while i + 8 <= d.len() {
+            let n = u32::from_be_bytes(d[i..i + 4].try_into().unwrap()) as usize;
+            let t: [u8; 4] = d[i + 4..i + 8].try_into().unwrap();
+            if matches!(&t, b"tEXt" | b"zTXt" | b"iTXt") {
+                out.push((t, d[i + 8..i + 8 + n].to_vec()));
+            }
+            i += 12 + n;
+        }
+        out
+    }
+
+    fn rows_of(png_hex: &str) -> Vec<TextRow> {
+        let mut n = TextTagNamer::new();
+        text_chunks(png_hex)
+            .iter()
+            .map(|(t, d)| n.row(&record(t, d)))
+            .collect()
+    }
+
+    fn binary(name: &str, len: usize) -> TextRow {
+        TextRow::Tag {
+            name: name.into(),
+            value: binary_placeholder(len),
+            binary: true,
+        }
+    }
+
+    #[test]
+    fn a_still_compressed_creation_time_deletes_its_rawconv_for_later_chunks() {
+        // FoundPNG sets and then deletes $$tagInfo{RawConv} on the shared
+        // 'Creation Time' hash (PNG.pm:1140-1147). Every expectation is
+        // ExifTool 13.59 `-a -G1 -s -PNG:all` on the file whose hex is given.
+        const IHDR: &str = "89504e470d0a1a0a0000000d49484452000000010000000108000000003a7e9b55";
+        const TAIL: &str = "0000000a49444154789c636000000002000148afa4710000000049454e44ae426082";
+        let date = "Mon, 1 Jan 2018 12:10:22 EST";
+        // e10_rawconv_del.png: zTXt method 1, then tEXt: the tEXt value is
+        // printed raw, not converted.
+        let e10 = format!(
+            "{IHDR}000000127a5458744372656174696f6e2054696d650001010203d56235c9\
+             0000002a744558744372656174696f6e2054696d65004d6f6e2c2031204a616e2032\
+             3031382031323a31303a323220455354fefb7633{TAIL}"
+        );
+        assert_eq!(
+            rows_of(&e10),
+            vec![binary("CreationTime", 3), tag("CreationTime", date)]
+        );
+        // e11_inflate_fail.png: a method-0 stream that never reaches
+        // Z_STREAM_END strips it too (the failed row itself is omitted).
+        let e11 = format!(
+            "{IHDR}000000137a5458744372656174696f6e2054696d650000789c0102308da75e\
+             0000002a744558744372656174696f6e2054696d65004d6f6e2c2031204a616e2032\
+             3031382031323a31303a323220455354fefb7633{TAIL}"
+        );
+        assert_eq!(
+            rows_of(&e11),
+            vec![TextRow::Omit, tag("CreationTime", date)]
+        );
+        // g05_ct_lang_after_del.png: a language copy made after the
+        // deletion copies the stripped hash (Writer.pl:4114).
+        let g05 = format!(
+            "{IHDR}000000107a5458744372656174696f6e2054696d65000205501dde74\
+             00000030695458744372656174696f6e2054696d65000000656e00004d6f6e2c2031\
+             204a616e20323031382031323a31303a323220455354942d83b9{TAIL}"
+        );
+        assert_eq!(
+            rows_of(&g05),
+            vec![binary("CreationTime", 1), tag("CreationTime-en", date)]
+        );
+        // Without a compressed chunk first, the conversion still applies,
+        // and a language copy made *before* a deletion keeps its own RawConv.
+        let mut n = TextTagNamer::new();
+        let text = |kw: &[u8], v: &[u8]| {
+            let mut d = kw.to_vec();
+            d.push(0);
+            d.extend_from_slice(v);
+            d
+        };
+        assert_eq!(
+            n.row(&record(
+                b"iTXt",
+                &itxt(b"Creation Time", b"en", date.as_bytes(), false)
+            )),
+            tag("CreationTime-en", "2018:01:01 12:10:22-05:00")
+        );
+        assert_eq!(
+            n.row(&record(b"zTXt", b"Creation Time\0\x01zz")),
+            binary("CreationTime", 2)
+        );
+        assert_eq!(
+            n.row(&record(b"tEXt", &text(b"Creation Time", date.as_bytes()))),
+            tag("CreationTime", date)
+        );
+        assert_eq!(
+            n.row(&record(
+                b"iTXt",
+                &itxt(b"Creation Time", b"en", date.as_bytes(), false)
+            )),
+            tag("CreationTime-en", "2018:01:01 12:10:22-05:00")
+        );
+        // create-date has a ValueConv, so :1142 never deletes anything and
+        // the conversion survives a still-compressed chunk.
+        assert_eq!(
+            n.row(&record(b"zTXt", b"create-date\0\x01zz")),
+            TextRow::Omit
+        );
+        assert_eq!(
+            n.row(&record(
+                b"tEXt",
+                &text(b"create-date", b"2020-01-02T03:04:05Z")
+            )),
+            tag("CreateDate", "2020:01:02 03:04:05Z")
+        );
+    }
+
+    #[test]
+    fn itxt_binary_placeholder_counts_raw_bytes() {
+        // f03_badutf8.png: ExifTool 13.59 prints RawProfileTypeQ as 3 bytes
+        // for the invalid UTF-8 value ff fe fd (Decode UTF8->UTF8 is a
+        // no-op, ExifTool.pm:6349), not 9 (three U+FFFD).
+        let mut n = TextTagNamer::new();
+        assert_eq!(
+            n.row(&record(
+                b"iTXt",
+                &itxt(b"Raw profile type q", b"", b"\xff\xfe\xfd", false)
+            )),
+            binary("RawProfileTypeQ", 3)
+        );
+        // tEXt still counts the cp1252-decoded UTF-8 string: 0xE9 -> 2 bytes
+        assert_eq!(
+            n.row(&record(b"tEXt", b"Raw profile type r\0\xe9")),
+            binary("RawProfileTypeR", 2)
+        );
+    }
+
+    #[test]
+    fn special_table_keys_are_never_found_or_registered() {
+        // e12_special.png: ExifTool 13.59 `-a` prints NOTES, GROUPS (g1) and
+        // GROUPS (g2) with no language suffix, warning "Tag GROUPS conflicts
+        // with internal ExifTool variable" (ExifTool.pm:9130-9132, 9269).
+        let mut n = TextTagNamer::new();
+        assert_eq!(n.row(&record(b"tEXt", b"NOTES\0n")), tag("NOTES", "n"));
+        assert_eq!(
+            n.row(&record(b"iTXt", &itxt(b"GROUPS", b"en", b"g1", false))),
+            tag("GROUPS", "g1")
+        );
+        assert_eq!(
+            n.row(&record(b"iTXt", &itxt(b"GROUPS", b"fr", b"g2", false))),
+            tag("GROUPS", "g2")
+        );
+        // ucfirst of a special key is special too; a lower-case spelling is
+        // an ordinary unknown keyword and registers.
+        assert_eq!(name(&mut n, "nOTES", Some("de")), "NOTES");
+        assert_eq!(name(&mut n, "notes", None), "Notes");
+        assert_eq!(name(&mut n, "notes", Some("de")), "Notes-de");
     }
 
     #[test]
