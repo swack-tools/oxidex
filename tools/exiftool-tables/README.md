@@ -10,7 +10,12 @@ Conservative IFD-aware upgrade classification, one generated-output inventory,
 verified Canon CODE references, isolated upgrade orchestration and all 28 declared
 outputs are implemented and validated. See the
 [execution plan](../../docs/UPGRADE-NEXT-STEPS.md) for original validation evidence
-and the remaining work. The actual 13.55-to-13.59 release rehearsal has not run.
+and the remaining work. The
+[13.55-to-13.59 retrospective rehearsal](../../docs/reference/bump-reports/13.55-to-13.59.md)
+passed at `4fb705da` on 2026-09-11: both variants regenerated all 28 outputs and
+built fresh binaries, with no source-edit intervention and unchanged caller
+source/index/pin. Its 193-file A/B uses current handwritten runtime on both
+sides; classifier AUTO/HAND percentages do not measure upgrade coding effort.
 
 ## Commands and scope
 

@@ -1,8 +1,8 @@
 # Tag machinery: completed work and useful next steps
 
-**Current integration:** `refactor/tag-machinery` at
-[`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837),
-after the verified PR #737–#740 squash merges. ExifTool remains pinned to **13.59**.
+**Integration baseline measured below:** `refactor/tag-machinery` at
+[`4fb705da`](https://github.com/swack-tools/oxidex/commit/4fb705da43ec97c4c8d1786617021984e3a943e7),
+after PR #737–#740 and the #741 status documentation landing. ExifTool remains pinned to **13.59**.
 This is not a claim about `main` or a released binary. The documentation change
 itself does not implement or enable parser behavior.
 
@@ -29,21 +29,29 @@ their unchecked steps and old measurements are not a current task queue.
 | [#740](https://github.com/swack-tools/oxidex/pull/740) | Three producer integrations, Canon lens identity and oracle execution repairs | [`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837) |
 
 Every squash commit has the same complete source tree as its reviewed PR head,
-and the four commits form the verified integration sequence. The final tree
+and the four commits form the verified integration sequence. The PR #740 tree
 matches reviewed `028f2bb5`; that head differs from acceptance commit `1428b6c7`
 only in these four documentation files. The 28-output, 193-file same-pin result
 therefore remains valid evidence for the unchanged implementation. It was not
-rerun by this documentation update. The actual 13.55-to-13.59 rehearsal is
-**not run**. Static declaration classification is not raw extraction coverage.
+rerun by that documentation update. The later
+[13.55-to-13.59 retrospective rehearsal](./reference/bump-reports/13.55-to-13.59.md)
+passed at `4fb705da` on 2026-09-11 in **611.006 seconds**, with all 28 outputs
+regenerated on both sides and no source-edit intervention. Both fresh binaries
+used the same current handwritten runtime and target 13.59 oracle. MATCH rose
+9,963 to 9,966 and VALUE fell 34 to 31 on 193 files: three Garmin identity values
+improved; MISSING stayed 1,563. This is a bounded generator-refresh measurement,
+not a reconstruction of historical engineering effort. Static declaration
+classification is not raw extraction coverage.
 
 ## What the evidence establishes
 
-The audit inspected committed source, first-parent landing commits, local branch
+The original `c7f5dd81` documentation audit inspected committed source, first-parent landing commits, local branch
 ancestry and the existing reports. It ran `reachability.py` on a clean checkout.
 It did **not** rerun the full Rust acceptance gates, the expression oracle, a
 corpus comparison or a version bump. A gate result quoted below is a **recorded
 result** in the named commit/report, not a new test result from this
-documentation audit.
+documentation audit. The separately dated release rehearsal above did execute
+the transaction, independent verifiers and corpus A/B at its named commit.
 
 Status terms:
 
@@ -103,11 +111,10 @@ may finish their bounded branches in parallel; this list does not restart them.
 
 | Priority | Work | Why it is useful | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Rehearse 13.55 to 13.59 with the repaired workflow | Separates actual new-release work from accumulated compatibility debt | Reproducible work order and artifact/probe/corpus results for both releases, with explicit unsupported and unexercised changes |
-| 2 | Finish the IFD1/shared EXIF work already started | Reuses the Exif table for a large missing-output cluster instead of adding individual thumbnail tags | Landed routing plus measured occurrence-preserving comparison and residual ownership; predicted gains are not yet results |
-| 3 | Connect existing accounting into a declaration/producer inventory | Exposes generated-but-off tables, handwritten ownership and completely unemitted tables | Every upstream declaration gets an explicit disposition; preserve separate static, enabled and actually observed execution states |
-| 4 | Extend shared semantics and synthetic walk checks for the next migration | Removes a demonstrated blocker across multiple tables | Independent differential checks, negative controls and a measured runtime migration |
-| 5 | Retire duplicated hand data and reconstruct needed missing generators | Reduces future upgrade review without losing behavior | Replacement regenerates reproducibly; overlapping producers removed only after parity; remaining hand residuals name their reason |
+| 1 | Reconcile RawConv first, then IFD1 prerequisite/regeneration | Reuse the retained shared-runtime work while preserving current raw-ID and verified CODE-ref contracts | Fresh RawConv carrier/corpus gates; IFD1 eligibility reproduced separately from later activation; IFD4/embedded follow-ups remain distinct |
+| 2 | Correct classifier reasons and connect declaration/producer accounting | The rehearsal exposes existing Garmin runtime mislabeled as needing a parser, standing debt and repeated field rows for one cause | Preserve raw counts, add causal grouping, recognize existing producers, and keep emitted/activated/observed states separate |
+| 3 | Extend shared semantics and synthetic walk checks for the next migration | Removes a demonstrated blocker across multiple tables | Independent differential checks, negative controls and a measured runtime migration |
+| 4 | Retire duplicated hand data and reconstruct needed missing generators | Reduces future upgrade review without losing behavior | Replacement regenerates reproducibly; overlapping producers removed only after parity; remaining hand residuals name their reason |
 
 <a id="concrete-upgrade-gaps-at-this-snapshot"></a>
 
@@ -193,7 +200,8 @@ Triage has no oracle-ledger input, so HAND may mean missing verification evidenc
 rather than a need for new source code. Equivalent-to-default facts may also
 remain conservatively classified for review. Artifact accounting landed
 separately in PR #738; complete old/new builds and checked recovery landed in
-PR #739. The actual release-delta rehearsal remains unrun.
+PR #739. The subsequent [release-delta rehearsal](./reference/bump-reports/13.55-to-13.59.md)
+passed at `4fb705da`; its static triage limitations remain explicit.
 
 ### CI follow-up on the same branch
 
@@ -313,7 +321,8 @@ fresh Cargo executable identities, caller-state preservation and checked
 promotion/recovery. Reviewed controls pass on macOS/Linux. A genuine same-pin
 exercise at `9100020d` passed over 193 files with unchanged generated Rust and
 caller source/index, zero new VALUE regressions and zero MISSING growth. The
-release-delta rehearsal remains unrun. The
+later [release-delta rehearsal](./reference/bump-reports/13.55-to-13.59.md)
+passed at `4fb705da`. The
 [execution plan](./UPGRADE-NEXT-STEPS.md) records later validation milestones and
 recovery limits. Four vendor outputs still have no committed producer. See the
 [command reference](https://github.com/swack-tools/oxidex/blob/b7e622bf8a2d9569272b854b4d5ba90248950346/tools/exiftool-tables/README.md#generated-output-inventory-and-write-checks)
@@ -362,8 +371,8 @@ at `65d6a791` failed after 429.229 seconds due a combined cold-build/probe timeo
 and an obscuring macOS cleanup race; both were repaired and tested before this
 successful retry. The execution plan preserves failure and success evidence.
 
-The actual 13.55-to-13.59 release rehearsal remains unrun. PRs #737–#740 have
-landed. This continuation retires no parser and changes no ExifTool pin. See the
+The later [13.55-to-13.59 release rehearsal](./reference/bump-reports/13.55-to-13.59.md)
+passed at `4fb705da`. PRs #737–#740 have landed. This continuation retires no parser and changes no ExifTool pin. See the
 [execution plan](./UPGRADE-NEXT-STEPS.md) for the current queue and exact scope.
 
 ## Work on separate branches
@@ -427,7 +436,7 @@ current comparison script on both binaries in a new A/B.
 | --- | --- |
 | Stage 1: specific wrong-value fixes | Historical landed fixes and tests exist; the original blanket exit checklist was not re-executed in this audit. Do not restart from step 1 or claim all present formats are correct. |
 | Stage 2: accounting and refusal APIs | Useful foundations landed. Complete inventory and comparison-hook integration remain partial. |
-| Stage 3: regeneration, staleness and bump | Classifier, manifest, isolated transaction and 28-output integration landed in PRs #737–#740. Same-pin acceptance passed; the actual release-delta rehearsal remains unrun. |
+| Stage 3: regeneration, staleness and bump | Classifier, manifest, isolated transaction and 28-output integration landed in PRs #737–#740. Same-pin acceptance and the 13.55-to-13.59 retrospective rehearsal passed; broader producer accounting and runtime coverage remain incomplete. |
 | Stage 4: occurrence/output contract | Store and major follow-up fixes landed. Full producer/value-form/provenance migration remains incomplete. |
 | Stage 5: schema and engine | Binary and IFD engines exist; semantics and routing remain partial. Extend the existing engine for a demonstrated blocker. |
 | Stage 6: routing, retirement and coverage | Ongoing. Olympus/ICC are concrete landed migrations; IFD1 and other branches above are unfinished at this snapshot. |
