@@ -17,8 +17,11 @@ defects and cold-build/cleanup failures are repaired. The real 193-file same-pin
 transaction passed at `1428b6c7` with identical before/after totals and unchanged
 caller source/index. The [execution plan](./UPGRADE-NEXT-STEPS.md) preserves the
 original evidence and the [landing record](./TAG_MACHINERY_STATUS.md#landed-upgrade-tooling)
-identifies the verified squash commits. The actual release-delta experiment has
-**not been run** and is the next task.
+identifies the verified squash commits. The
+[13.55-to-13.59 retrospective rehearsal](./reference/bump-reports/13.55-to-13.59.md)
+then passed at `4fb705da` on 2026-09-11 in 611.006 seconds, with no source-edit
+intervention. Current runtime migrations and the classifier/accounting follow-ups
+exposed by that experiment are next.
 
 ## What carried forward from the September 9 proposal
 
@@ -26,7 +29,7 @@ identifies the verified squash commits. The actual release-delta experiment has
 | --- | --- |
 | 1.1 Fix the census | Landed as `380babda`; related script correction landed as `c7f5dd81`. Preserve the corrected occurrence accounting. |
 | 1.2 Coverage ledger | Partial foundations already exist. Join existing artifacts and inventory hand producers; do not start a second expression ledger. |
-| 1.3 Version-bump differ | Classifier, inventory and isolated transaction repairs landed in PRs #737–#740 with same-pin acceptance. Measure a real release transition next. |
+| 1.3 Version-bump differ | Repairs landed in PRs #737–#740; same-pin acceptance and the 13.55-to-13.59 retrospective rehearsal passed. Classifier reasons and producer accounting still need the follow-ups below. |
 | 1.4 Sample-free walk checker | Proposed extension. Existing expression, condition, subdirectory and carrier checks remain useful; begin with the next table/engine migration. |
 | 1.5 Automatic activation | Deferred until certification covers the actual walk and producer conflicts. Keep current activation gates in force meanwhile. |
 | Part 2: bulk hand-code retirement | Choose bounded migrations by demonstrated benefit. Remove an overlapping hand producer only after its replacement is validated. |
@@ -43,35 +46,47 @@ hours-per-upgrade estimate. Generated declaration and artifact counts are not
 raw extraction coverage. Keep the manifest, transaction and existing oracles
 as the basis of the following work.
 
-## 1. Measure a real upgrade
+<a id="1-measure-a-real-upgrade"></a>
 
-Rehearse 13.55 to 13.59 using the landed workflow. This published interval is a test input,
-not a change to the repository's supported pin. Retain the smaller 13.58 to
-13.59 report as historical evidence.
+## Completed release rehearsal
 
-The work order must identify:
+The [recorded 13.55-to-13.59 run](./reference/bump-reports/13.55-to-13.59.md)
+regenerated all 28 outputs in both private variants and built fresh binaries from
+the current `4fb705da` runtime. It required no generator or handwritten-runtime
+source edit. The same target oracle and 193-file corpus showed three improved
+Garmin identity values and no other semantic change; 1,563 missing occurrences
+remain. This is neither a historical-runtime replay nor a complete compatibility
+result. The older 13.58-to-13.59 report remains historical evidence.
 
-- Supported declaration changes regenerated without source edits, with verifier
-  scope and runtime activation shown separately.
-- Unsupported expression/condition/procedure changes, with upstream source and
-  the shared rule or hand implementation requiring work.
-- Changes in upstream declarations with no current OxiDex producer.
-- Changed upstream behavior implemented by hand that needs review; a source hash
-  change is a review signal, not proof of a regression.
-- Old compatibility debt, unexercised changes and unavailable evidence.
+Static triage reports 5,031 rows, including four standing HAND rows; the
+release-only view has 5,027 rows. Those rows are field/metadata review events,
+not tags, independent implementation tasks or coding hours. The Garmin module
+already has a handwritten FIT parser in both variants, so a HAND message saying
+it needs a parser/dispatch is not an accurate statement of current runtime state.
 
-Acceptance: retain source SHAs, ExifTool versions, Perl/capability provenance,
-commands, artifact diffs, classifier output, verifier results and a corpus A/B
-with the same comparison script and explicit floors. Include controls that make
-a known incorrect declaration and an unaccounted generated output fail. Report
-manual interventions and elapsed time for this run, without extrapolating a
-fixed cost for every future release.
+Preserve the run's source/interpreter/dump/binary identities, same-oracle corpus
+results, artifact diffs, verifier logs and explicit zero-intervention record.
+Future release experiments should retain the same evidence and report their own
+cost and limits rather than extrapolate this run's 611.006-second elapsed time.
 
-## 2. Finish the existing runtime migrations
+<a id="2-finish-the-existing-runtime-migrations"></a>
+
+## 1. Finish the existing runtime migrations
 
 Coordinate with the owners listed in the status page before starting work.
-IFD1 is the next high-value candidate identified by the corrected census;
-RawConv and embedded-IFD work are related existing branches.
+Reconcile RawConv first (`ad9fdc32`, then `0bf02cd9`) while preserving current
+Canon label/raw-ID attachment; rerun the six-container RawConv/IsOffset carriers,
+PNG writer fixtures and a fresh occurrence-aware baseline/candidate gate. The
+recorded old-head full gate is supporting evidence, not current landing proof.
+
+Next port IFD1 prerequisite `7a69d2fa` without weakening the named verified-key
+and input-domain CODE-ref gate, and regenerate using the current pinned pipeline.
+Its committed generated-file change only added `unwalked: None` fields; scratch
+eligibility results must be reproduced. This remains Gate A, with no Exif::Main
+enablement or extraction-gain claim. Later named-directory activation and
+retained occurrences are distinct from IFD4 conditions/Olympus retirement and
+the incomplete embedded-IFD0/PNG follow-ups. IFD4 can reconcile independently;
+respect each existing owner and coordinate heavy gates.
 
 Acceptance for each landing:
 
@@ -85,12 +100,22 @@ Acceptance for each landing:
 4. Retire replaced hand code only after these checks pass. Keep unexercised
    behavior explicitly unverified and preserve a bounded reversal path.
 
-## 3. Complete accounting by joining existing evidence
+<a id="3-complete-accounting-by-joining-existing-evidence"></a>
+
+## 2. Complete accounting by joining existing evidence
 
 Reuse codegen's reports, the expression/value-conversion ledgers, static
 reachability and existing occurrence/read-status data. Inventory declarations
 whose entire custom processing table is currently skipped, not just fields
 inside emitted tables.
+
+Start with the concrete rehearsal findings: make new-module reasons aware of
+existing runtime producers without declaring those producers complete; separate
+the four standing generator-less outputs from release-caused changes; and group
+the four EXPR rows for `Exif::Main` tag 41998 by their one unsupported UTF-8 Decode
+cause. Preserve the raw row counts alongside that causal view. The Garmin dump
+change does not authorize writing a second FIT parser. Review actual routing and
+residual behavior first.
 
 Keep independent axes rather than treating these states as interchangeable:
 
@@ -108,7 +133,9 @@ exceptions, deterministic diffs and a negative control for a silently omitted
 declaration. Add conformance's status/family hooks when their data sources are
 ready; avoid creating a parallel model with the same unresolved seams.
 
-## 4. Broaden verification and retire hand code incrementally
+<a id="4-broaden-verification-and-retire-hand-code-incrementally"></a>
+
+## 3. Broaden verification and retire hand code incrementally
 
 For the next selected engine/table, synthesize inputs from its declarations and
 compare the actual Rust walk with ExifTool, including conditions, nested offsets

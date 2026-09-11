@@ -16,17 +16,43 @@ populations. They are implementation history, not work to restart.
 
 | Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Rehearse 13.55 to 13.59 | **Not run**; tooling prerequisites landed | Versioned artifacts, triage, identical-oracle corpus A/B, actual manual interventions and timings |
-| 2 | Finish existing runtime migrations | Separate owners; awaiting validated integration | IFD1, RawConv and embedded-IFD routing/activation established against the pinned oracle |
-| 3 | Complete producer/coverage accounting and broader walk checks | Queued | Generated, hand-maintained, withheld and unexercised behavior distinguished; deliberate bad offsets/conversions fail |
+| 1 | Reconcile RawConv, then IFD1 prerequisite/regeneration | Separate owners; awaiting fresh validation | Preserve current raw-ID attachment and verified CODE-ref gates; IFD1 eligibility remains separate from subsequent activation; IFD4/embedded follow independently |
+| 2 | Correct classifier/producer accounting exposed by the release rehearsal | Queued | Existing Garmin runtime is recognized, standing debt is separated, repeated field changes are joined by cause, and emitted/activated/observed states remain distinct |
+| 3 | Broaden walk checks and reconstruct useful missing producers | Queued | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
 
-The real 28-output same-pin transaction passed at `1428b6c7` over 193 eligible
-files. A passing inventory check or same-pin run does not complete the release
-rehearsal or certify runtime coverage. Four Sony/Nikon outputs still lack
+The [13.55-to-13.59 retrospective rehearsal](./reference/bump-reports/13.55-to-13.59.md)
+passed on 2026-09-11 at `4fb705da` in **611.006 seconds**, with zero source-edit
+interventions and unchanged caller source/index/pin. Both sides regenerated all
+28 outputs using the same current handwritten runtime. Against the same 13.59
+oracle and 193 files, MATCH rose 9,963 to 9,966 and VALUE fell 34 to 31; only
+three Garmin file-identity values improved. MISSING remained 1,563. This measures
+one controlled refresh, not historical upgrade effort or complete coverage.
+The earlier 28-output same-pin acceptance at `1428b6c7` remains recorded below. Four Sony/Nikon outputs still lack
 committed producers. Catalog synchronization has separate carry-forward
 semantics and is outside this table transaction until that policy is resolved.
 See the [landing record](./TAG_MACHINERY_STATUS.md#landed-upgrade-tooling) for the
 four verified squash commits.
+
+The runtime work order is RawConv (`ad9fdc32`, then `0bf02cd9`) on a fresh
+integration base, preserving current Canon label/raw-ID attachment, followed by
+IFD1 prerequisite `7a69d2fa` with the current verified-key/input-domain CODE-ref
+gate and fresh regeneration. Its committed table changes were `unwalked: None`
+fields; improved eligibility was a scratch preview. Gate A is not Exif::Main
+activation or an extraction result. Separate later named-directory activation
+from IFD4 conditions/Olympus retirement and the incomplete embedded-IFD0/PNG
+follow-ups. IFD4 can reconcile independently without delaying RawConv. Existing
+old-head gates support review; fresh baseline/candidate and occurrence-aware
+acceptance are required before any landing.
+
+### Operational preservation on 2026-09-11
+
+A verified recovery archive preserved **1,396 Git refs and 28 working-file
+payloads**. After restore/dependency checks, an atomic retirement removed five
+redundant local branch names: **212 to 207** local heads, with **13 registered
+worktrees retained**. Other refs, caller/protected source and indexes were
+unchanged. Remote/fleet branches remain held because their ownership was not
+established by these local checks. This is repository housekeeping, not parser
+retirement or a coverage improvement.
 
 ## Completed implementation and validation
 
@@ -137,8 +163,9 @@ real-shell controls as `f384b68f`, and the lens repair as `5e40396b` (author
 `78daf9d6`). All three outputs now participate in the shared manifest, tier-2
 runner, formatting, independent verification and CI drift checks: **28 outputs,
 8 in tier 1 and 20 in tier 2**. Final integrated checks and the complete same-pin
-transaction passed before landing in PR #740. The release-delta rehearsal remains
-unrun.
+transaction passed before landing in PR #740. The later
+[release-delta rehearsal](./reference/bump-reports/13.55-to-13.59.md) passed at
+`4fb705da`; the original validation populations below remain historical.
 
 | Producer | Output | Independent facts at 13.59 |
 | --- | --- | --- |
@@ -243,10 +270,10 @@ Evidence is retained in the cleanup audit's
 `handoff-continuation/producer-wiring-xmgiqiui/rehearsal-retry/`: `SUMMARY.json`,
 `driver-result.json`, `whole-dump.log`, and the `bump-sum5o8h1` transaction
 journal, source/artifact identities, reports and preserved measured binaries.
-The earlier failed attempt remains separately under `rehearsal/`. The next
-engineering experiment is **13.55 to 13.59**, with explicit refusal and
-manual-intervention accounting. It has not been run. PRs #737–#740 have landed;
-the separate retained work below remains open.
+The earlier failed attempt remains separately under `rehearsal/`. The subsequent
+[13.55-to-13.59 experiment](./reference/bump-reports/13.55-to-13.59.md) passed at
+`4fb705da`, with its own release, artifact and corpus evidence. PRs #737–#740
+have landed; the separate retained runtime work below remains open.
 
 The implementation inputs from the acceptance commit `1428b6c7` are unchanged:
 only these four status/command documents differ at reviewed head `028f2bb5`.
@@ -270,5 +297,6 @@ At each milestone record the commit, PR and landing state, named validation inst
 passed/skipped/failed counts, evidence directory, unresolved work and exact next
 command in the root `HANDOFF.md`. Mark an item implemented only after its checks
 finish, and integrated only after its changes actually land. Commit timestamps
-are not elapsed engineering time. Do not publish a recurring upgrade-cost estimate
-until the real rehearsal supplies measured evidence.
+are not elapsed engineering time. The completed rehearsal records one automated
+run on current runtime source; it does not establish a recurring upgrade-cost
+estimate or the historical work needed to reach this implementation.
