@@ -628,11 +628,15 @@ pub(crate) fn standard_lang_case(lang: &str) -> String {
                 Some(c) => !(c.is_ascii_alphanumeric() || *c == b'_'),
             };
             if boundary {
+                // `(.*)` is $3: Perl's `.` does not match "\n" (no /s on the
+                // regex at PNG.pm:800), so the tail stops at the first newline
+                // and anything after it is dropped from the returned name.
+                let tail = lang[n + 3..].split('\n').next().unwrap_or_default();
                 return format!(
                     "{}{}{}",
                     lang[..n].to_ascii_lowercase(),
                     lang[n..n + 3].to_ascii_uppercase(),
-                    lang[n + 3..].to_ascii_lowercase()
+                    tail.to_ascii_lowercase()
                 );
             }
         }
@@ -1418,6 +1422,12 @@ mod tests {
         assert_eq!(standard_lang_case("en-us-x"), "en-US-x");
         assert_eq!(standard_lang_case("de_DE"), "de_de");
         assert_eq!(standard_lang_case("i-klingon"), "i-klingon");
+        // PNG.pm:800: `.` stops at "\n", so the tail after a newline is dropped
+        // (pinned oracle: iTXt lang "en-us\nXY" -> Title-en-US).
+        assert_eq!(standard_lang_case("en-us\nXY"), "en-US");
+        assert_eq!(standard_lang_case("fr-ca\nq"), "fr-CA");
+        // No match: lc($lang) keeps the whole string, newline included.
+        assert_eq!(standard_lang_case("EN\nX"), "en\nx");
     }
 
     #[test]
