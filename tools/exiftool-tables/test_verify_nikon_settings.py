@@ -138,6 +138,12 @@ class NikonSettingsVerifierTests(unittest.TestCase):
         self.core.write_text(f"package Image::ExifTool; our $VERSION='{PIN}'; 1;\n")
         self.pm.write_text(TABLE+'\n$INC{"Image/ExifTool/NikonSettings.pm"}="elsewhere";\n'); self.run_cli()
 
+    def test_matching_but_perl_false_names_still_refuse(self):
+        for name in ('', '0'):
+            self.pm.write_text(TABLE.replace("Name=>'Fine'", f"Name=>'{name}'"))
+            self.output.write_text(RUST.replace('name: "Fine"', f'name: "{name}"'))
+            self.run_cli()
+
     def test_missing_selected_module_refuses_ambient_fallback(self):
         ambient = self.root/'ambient/Image/ExifTool'; ambient.mkdir(parents=True)
         (ambient/'NikonSettings.pm').write_text(TABLE)

@@ -150,8 +150,8 @@ def render(data):
                 extra = set(row) - FIELDS
                 if extra:
                     raise Unsupported(f"unregistered fields: {sorted(extra)}")
-                if not isinstance(row.get("Name"), str) or not row["Name"]:
-                    raise Unsupported("tag Name must be a nonempty string")
+                if not isinstance(row.get("Name"), str) or row["Name"] in ("", "0"):
+                    raise Unsupported("tag Name must be a Perl-truthy string")
                 name = rust_string(row["Name"])
                 mask = uint(row.get("Mask", 0), 32)
                 if mask:

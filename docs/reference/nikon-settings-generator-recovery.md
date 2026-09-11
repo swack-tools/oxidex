@@ -64,7 +64,7 @@ on the pre-existing `clippy::duplicate_mod` in `tests/unit/audio/../../common/mo
 this recovery changes no Rust source or Cargo configuration.
 
 The independent verifier passes all 197 rows / 131 maps / 37 Unknown omissions;
-its 15 CLI controls pass. Two producer runs reproduce the same complete-file
+its 16 CLI controls pass. Two producer runs reproduce the same complete-file
 SHA above. The complete `regen-all.sh --tier2-only` pipeline passes in 32.925
 seconds with zero declared net changes; all 21 tier-2 outputs match HEAD under
 `artifacts.py diff --tier 2`. The full 29-output inventory is not a claim that
@@ -75,7 +75,9 @@ OK (skipped=1)**. Four structural WholeDump methods run against the fresh native
 13.59 dump; only its committed-ledger correspondence check skips because that
 ledger records the other Perl/dump provenance. No ledger is weakened or rewritten.
 The earlier 425-method run lacked the full dump and the 15 verifier controls;
-its class-level skip left all five WholeDump methods unavailable.
+its class-level skip left all five WholeDump methods unavailable. A final
+false-name refusal control was then added: all 26 producer/verifier methods
+pass, and the native declaration check still reproduces the same file.
 
 ## Useful next work
 

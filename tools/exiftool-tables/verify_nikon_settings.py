@@ -78,7 +78,7 @@ for my $id (sort grep { !$meta{$_} } keys %$table) {
                 $copy{$key} = "$value";
             }
         }
-        die "empty name $id\n" unless defined($copy{Name}) and length($copy{Name});
+        die "false name $id\n" unless $copy{Name};
         die "unmodeled Unknown $id\n" if exists($copy{Unknown}) and $copy{Unknown} ne '0' and $copy{Unknown} ne '1';
         die "unmodeled Mask $id\n" if exists($copy{Mask}) and ($copy{Mask} !~ /^(0|[1-9][0-9]*)$/ or $copy{Mask} > 4294967295);
         push @rows, { id => 0+$id, variant => $ordinal++, facts => \%copy };

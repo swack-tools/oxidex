@@ -69,6 +69,7 @@ class NikonSettingsGeneratorTests(unittest.TestCase):
             ("BitShift", "1"), ("Format", "int16u"),
             ("Mask", "15"),
             ("Name", ""),
+            ("Name", "0"),
             ("PrintConv", {"kind": "enum", "map": {"1": "One"},
                            "directives": {"OTHER": "fallback"}}),
         ]
