@@ -230,8 +230,16 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // trailing type-0 entries no longer overwrite it with ""); `oxidex -j`
     // differs by that one value; `--no-print-conv` 1 wrong -> match, 0 match
     // -> non-match. Revert that commit alone to undo it.
-    // Gate B of record (i7, i7-missing-census.sh + i7-ab-diff.py, 4,238 files):
-    // FUJI_GATEB_PENDING
+    // Gate B of record (i7-missing-census.sh: conformance.py over 4,238 files,
+    // pinned 13.59, clean trees, on the i7; per-file diff i7-ab-diff.py):
+    //     control   census canonm (e8a7c12a tree)  TOTAL 4238 467935 22 508 12304 1563
+    //     treatment census fujim  (158ad985)       TOTAL 4238 467986 22 493 12268 1562
+    // 36 files: 36 MISSING -> matched (Clarity 17, RollAngle 9,
+    // Contrast 5, CompositeImageMode/Count1/Count2 3, CropFlag 1, Sharpness 1),
+    // 15 VALUE -> matched (ImageCount 10, ColorTemperature 2, ColorMode 1,
+    // DynamicRange 1, XP150 Version 1), 1 EXTRA removed (FujiFilm:Sharpness);
+    // 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA (VERDICT PASS); oracle rows
+    // conserve (480,769). Exactly the local prediction above.
     ("FujiFilm", "Main"),
     // Olympus::CameraSettings -- slice I-3 of
     // `docs/superpowers/specs/2026-09-06-ifd-tables-design.md`, the second
