@@ -15,6 +15,65 @@ use super::ifd_schema::IfdTable;
 /// it. Every entry carries the evidence that put it here, in the comment
 /// above it, in the shape `enabled.rs` uses.
 pub static ENABLED_IFD: &[(&str, &str)] = &[
+    // Canon::Main -- slice I-5. The table is `%Image::ExifTool::Canon::Main`
+    // (Canon.pm:1222-2210, pinned 13.59), reached from MakerNoteCanon
+    // (MakerNotes.pm:61-69: no Start, no Base, ByteOrder Unknown). Gate A:
+    // eligible since the regen 6ea9a207 (condition grammar 87fb2f2b:
+    // parenthesised groups, `$format =~ /re/`). Call site:
+    // `canon.rs::parse_canon_makernote_directory` ->
+    // `canon/main_engine.rs::walk`, every entry point but CIFF (CanonRaw never
+    // walks Canon::Main). Top level only: every Main edge stays with the hand
+    // sub-table code (the fence drops any non-Canon::Main row; no edge target
+    // is enabled, `canon_main_edges_reach_no_enabled_table`).
+    //
+    // What the line changes: the engine reports the 17 `Omitted::NONE` Main
+    // rows (CanonImageType, CanonFirmwareVersion, OwnerName, CanonFileLength,
+    // CanonModelID, ThumbnailImageValidArea, SerialNumberFormat, SuperMacro,
+    // DateStampMode, RawDataOffset, RawDataLength, LensModel, DustRemovalData,
+    // ColorTemperature, ColorSpace, CustomPictureStyleFileName, and SerialNumber
+    // for /EOS D30\b/) as `Canon:<Name>`, each replayed at its entry's position
+    // in the hand walk (ColorTemperature keeps ExifTool's IFD-order winner
+    // against Processing; ColorSpace has one Canon producer today because
+    // ColorInfo's is not decoded -- `canon/main_engine.rs` records why its
+    // `-j` winner is not last-wins). `CANON_MAIN_RESIDUAL_IDS` keeps
+    // FileNumber, SerialNumber (EOS-1D and default forms), FirmwareRevision,
+    // Categories, ImageUniqueID, BatteryType, InternalSerialNumber (hand arm,
+    // every body), PictureStyleUserDef/PC (withheld) and
+    // OriginalDecisionDataOffset/VRDOffset (not transcribed). `$$self{Model}`
+    // is the hand path's `self_model`. `--no-print-conv` shows
+    // `Emitted::value_conv` through the Canon value-form channel:
+    // `Canon:CanonModelID` is the integer id, `Canon:ColorSpace` is `1`.
+    // Pinned by `canon/main_engine.rs` tests (residual == generated
+    // withholding, the 0x000c alternative split, fence, replay order) and
+    // `tests/canon_main_ifd_table.rs` (t/images Canon.jpg and
+    // Canon1DmkIII.jpg per tag against `exiftool-pinned.sh -G1 -a -s`).
+    //
+    // Local pre-measurement (a prediction, not the gate): conformance.py over
+    // a bounded 200-file Canon subset of combined-samples (the 11 top-level
+    // Canon-bearing samples -- Canon.jpg, Canon1DmkIII.jpg, CanonRaw.cr2/cr3/
+    // crw, DNG.dng, ExifTool.jpg/tif, BPG, M2TS, XMP -- every file the slice
+    // spec names, the scout's 34 engine-dump files, then an even stride over
+    // combined-samples/Canon), pinned 13.59 (both probes), control = release
+    // build of d1c777b1, treatment = this line (--min-files 200 --min-tags
+    // 25000; totals from --json-out):
+    //     control    TOTAL 200 files  36210 matched  4 rename  24 value  1062 missing  97 extra
+    //     treatment  TOTAL 200 files  36226 matched  4 rename  21 value  1049 missing  97 extra
+    // per-file diff (abdiff.py): 13 MISSING -> matched (CanonFileLength 7:
+    // Canon.jpg, CanonEOS10D, EOS300D, EOS_D30, EOS_D60, EOS_DIGITAL_REBEL,
+    // EOS_KissDigital; ColorTemperature 5: Canon.jpg, EOS10D, EOS300D,
+    // EOS_DIGITAL_REBEL, EOS_KissDigital; RawDataLength 1: EOS-1DS), 3 VALUE
+    // -> matched (OwnerName `?` for non-UTF-8 bytes: DIGITAL_IXUS_IIs,
+    // EOS_KissDigital, MD160), 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA.
+    // `oxidex -j -G1` control vs treatment over the same 200 files (with and
+    // without -a): exactly those 16 rows in those 10 files differ, nothing
+    // else. `--no-print-conv` against the oracle's `-j -n -D -G0:1:4 -a`
+    // (Canon::Main-attributed rows): 321 VALUE -> matched (CanonModelID 161,
+    // DateStampMode 78, ColorSpace 47, SerialNumberFormat 27, SuperMacro 4,
+    // OwnerName 3, D30 SerialNumber 1), 13 MISSING -> matched, 0 matched ->
+    // wrong.
+    // Gate B of record: CANONM_GATEB_PENDING (filled from the i7 census
+    // before the gate; the landing refuses while this token is present).
+    ("Canon", "Main"),
     // Exif::Main, walked at DirName `IFD1` only -- the JPEG-APP1 thumbnail
     // IFD (slice IFD1, landing 2; landing 1 landed as 759fa0e9: the codegen
     // policy aaf00801, the i7 regen dcc012f4, and the design spec's v1.1
