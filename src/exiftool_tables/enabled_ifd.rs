@@ -85,8 +85,21 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // same-name, same-value slot. Remaining IFD1-shaped misses are other
     // producers: InteropIFD image tags (CanonXL_H1, SamsungSPH-A800/A940),
     // Leica IFD2, the IFD0 Model embedded-NUL defect (SonyMVC-CD*).
-    // Gate B of record (i7): full-corpus census numbers to be added by the
-    // integrator.
+    // Gate B of record (i7, conformance.py over all 4,238 combined-samples
+    // files, pinned 13.59, i7-missing-census.sh + i7-ab-diff.py): control
+    // census tip759fa at 759fa0e9, treatment census ifd1cs at fed7fc28:
+    //     control    TOTAL 4238 450038 26 512 30193 1564  93.6%
+    //     treatment  TOTAL 4238 467876 26 512 12355 1564  97.3%
+    // 17,838 MISSING -> matched in 3,801 files, 0 matched -> MISSING, 0 new
+    // VALUE, 0 new EXTRA, 0 VALUE or EXTRA gone; matched+VALUE+MISSING+EXTRA
+    // conserved (482,307). By name: ResolutionUnit 3,755, YResolution 3,754,
+    // XResolution 3,751, Orientation 1,922, YCbCrPositioning 1,453, Make 765,
+    // Model 765, ModifyDate 763, ImageDescription 243, Software 154,
+    // ImageWidth/ImageHeight 116 each ... 16,123 of them are engine rows
+    // from this table and 1,715 the `IFD1_RESIDUAL_IDS` hand rows (Make,
+    // Model, Software, Artist, Copyright ...) that now reach the output
+    // through the same owner; ~60 are credited by conformance.py's
+    // name-bucket matching to same-name, same-value XMP:/MakerNotes: slots.
     ("Exif", "Main"),
     // Olympus::CameraSettings -- slice I-3 of
     // `docs/superpowers/specs/2026-09-06-ifd-tables-design.md`, the second
