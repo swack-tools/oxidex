@@ -28,6 +28,7 @@
 
 use oxidex::core::MetadataMap;
 use oxidex::core::operations::read_metadata;
+use oxidex::exiftool_tables::{ENABLED_IFD, find_ifd_table};
 use std::path::Path;
 use std::process::Command;
 
@@ -62,6 +63,29 @@ fn assert_tags(metadata: &MetadataMap, file: &str, expected: &[(&str, &str)]) {
             "{file}: {key}"
         );
     }
+}
+
+/// The allowlist line is the reviewable unit; this asserts the line is in
+/// force, so a revert of it -- or a regeneration that re-blocks gate A --
+/// fails loudly here rather than silently dropping the 88 ids the engine
+/// produces. Landing 2 deleted the hand arms that used to run when the line
+/// was off, so this test is what makes that deletion safe.
+#[test]
+fn fujifilm_main_is_on_the_gate_b_allowlist() {
+    assert!(
+        ENABLED_IFD.contains(&("FujiFilm", "Main")),
+        "ENABLED_IFD must carry the (\"FujiFilm\", \"Main\") line"
+    );
+    let table = find_ifd_table("FujiFilm", "Main").expect("FujiFilm::Main is generated");
+    assert!(
+        table.gate_a.passes(),
+        "gate A must pass: {:?}",
+        table.gate_a.blocked_by
+    );
+    assert!(
+        table.enabled(),
+        "FujiFilm::Main must be enabled (gate A and the gate B line together)"
+    );
 }
 
 /// `FujiFilm.jpg` (JPEG APP1 path, IFD0 Model and value forms): the 14

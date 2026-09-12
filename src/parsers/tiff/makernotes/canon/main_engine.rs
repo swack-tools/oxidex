@@ -1,5 +1,8 @@
 //! `Canon::Main` through the generated `IFD_CANON_MAIN` table and the IFD
-//! engine (slice I-5, landing 1).
+//! engine (slice I-5). Landing 1 put the table on the engine; landing 2
+//! deleted the hand arms it replaced, so the engine is the only producer of
+//! the rows below (`tests/canon_main_ifd_table.rs::canon_main_is_on_the_
+//! gate_b_allowlist` keeps the line in force).
 //!
 //! # What this module owns
 //!
@@ -762,20 +765,34 @@ mod tests {
     /// offset of 0, so the base is 0 by construction (the CIFF builder's
     /// argument, `parse_canon_ciff_records`).
     fn le_note(entries: &[(u16, u16, u32, Vec<u8>)]) -> Vec<u8> {
+        note_in(ByteOrder::LittleEndian, entries)
+    }
+
+    /// [`le_note`] in either byte order; each entry's value bytes are
+    /// already in `order`.
+    fn note_in(order: ByteOrder, entries: &[(u16, u16, u32, Vec<u8>)]) -> Vec<u8> {
+        let u16_bytes = |v: u16| match order {
+            ByteOrder::LittleEndian => v.to_le_bytes(),
+            ByteOrder::BigEndian => v.to_be_bytes(),
+        };
+        let u32_bytes = |v: u32| match order {
+            ByteOrder::LittleEndian => v.to_le_bytes(),
+            ByteOrder::BigEndian => v.to_be_bytes(),
+        };
         let header = 2 + entries.len() * 12 + 4;
         let mut buffer = vec![0u8; header];
-        buffer[..2].copy_from_slice(&(entries.len() as u16).to_le_bytes());
+        buffer[..2].copy_from_slice(&u16_bytes(entries.len() as u16));
         let mut values = Vec::new();
         for (index, (id, ty, count, bytes)) in entries.iter().enumerate() {
             let at = 2 + index * 12;
-            buffer[at..at + 2].copy_from_slice(&id.to_le_bytes());
-            buffer[at + 2..at + 4].copy_from_slice(&ty.to_le_bytes());
-            buffer[at + 4..at + 8].copy_from_slice(&count.to_le_bytes());
+            buffer[at..at + 2].copy_from_slice(&u16_bytes(*id));
+            buffer[at + 2..at + 4].copy_from_slice(&u16_bytes(*ty));
+            buffer[at + 4..at + 8].copy_from_slice(&u32_bytes(*count));
             if bytes.len() <= 4 {
                 buffer[at + 8..at + 8 + bytes.len()].copy_from_slice(bytes);
             } else {
                 let offset = (header + values.len()) as u32;
-                buffer[at + 8..at + 12].copy_from_slice(&offset.to_le_bytes());
+                buffer[at + 8..at + 12].copy_from_slice(&u32_bytes(offset));
                 values.extend_from_slice(bytes);
             }
         }
@@ -799,11 +816,18 @@ mod tests {
     }
 
     fn parse(note: &[u8]) -> (HashMap<String, String>, HashMap<String, String>) {
+        parse_in(ByteOrder::LittleEndian, note)
+    }
+
+    fn parse_in(
+        order: ByteOrder,
+        note: &[u8],
+    ) -> (HashMap<String, String>, HashMap<String, String>) {
         let mut forms = HashMap::new();
         let tags = super::super::parse_canon_makernote_impl_located_with_values(
             note,
             note,
-            ByteOrder::LittleEndian,
+            order,
             None,
             Some(0),
             Some(&mut forms),
@@ -853,6 +877,88 @@ mod tests {
             forms.keys().filter(|k| k.contains("ColorSpace")).count(),
             1,
             "one form under the key: {forms:?}"
+        );
+    }
+
+    /// Landing 2 deleted the hand decoders the engine replaced --
+    /// `COLOR_SPACE`, `SUPER_MACRO`, `DATE_STAMP_MODE`,
+    /// `SERIAL_NUMBER_FORMAT`, `canon_inline_u16` and `canon_tag_to_name` --
+    /// with the unit tests that pinned them (`test_decode_color_space`,
+    /// `test_canon_date_stamp_mode_and_super_macro_print_conv`,
+    /// `test_canon_inline_u16_byte_order` and the three `canon_tag_to_name`
+    /// tests). Their ExifTool-sourced values (Canon.pm 0xb4, 0x1c, 0x1a,
+    /// 0x15 `PrintConv` hashes, pinned 13.59) now hold here, on the engine,
+    /// through the full parser; `canon_tag_to_name`'s ExifTool names hold as
+    /// the keys the engine rows land under. (Its non-ExifTool spellings --
+    /// `ImageType`, `FirmwareVersion`, `ProcessingInfo` -- were never output
+    /// names and are not carried over.) Real-file values stay pinned by the
+    /// oracle carriers in `tests/canon_main_ifd_table.rs`.
+    #[test]
+    fn the_values_the_hand_decoder_tests_pinned_hold_on_the_engine() {
+        assert!(engine_is_on(), "the (\"Canon\", \"Main\") line is in force");
+        let one = |order: ByteOrder, entry: (u16, u16, u32, Vec<u8>), key: &str| {
+            let (tags, _) = parse_in(order, &note_in(order, &[entry]));
+            tags.get(key).cloned()
+        };
+        let le = ByteOrder::LittleEndian;
+        let cases: [(u16, u16, &str, &str); 11] = [
+            (0x00b4, 1, "Canon:ColorSpace", "sRGB"),
+            (0x00b4, 2, "Canon:ColorSpace", "Adobe RGB"),
+            (0x00b4, 65535, "Canon:ColorSpace", "n/a"),
+            (0x00b4, 99, "Canon:ColorSpace", "Unknown (99)"),
+            (0x001c, 0, "Canon:DateStampMode", "Off"),
+            (0x001c, 1, "Canon:DateStampMode", "Date"),
+            (0x001c, 2, "Canon:DateStampMode", "Date & Time"),
+            (0x001c, 3, "Canon:DateStampMode", "Unknown (3)"),
+            (0x001a, 0, "Canon:SuperMacro", "Off"),
+            (0x001a, 1, "Canon:SuperMacro", "On (1)"),
+            (0x001a, 2, "Canon:SuperMacro", "On (2)"),
+        ];
+        for (id, raw, key, want) in cases {
+            assert_eq!(
+                one(le, short(id, raw), key).as_deref(),
+                Some(want),
+                "{id:#06x} = {raw}"
+            );
+        }
+
+        // `canon_inline_u16`'s case: a big-endian note left-justifies an
+        // `int16u` in the 4-byte slot, so the value is the slot's HIGH half.
+        let be = ByteOrder::BigEndian;
+        let be_short = |id: u16, v: u16| (id, 3u16, 1u32, v.to_be_bytes().to_vec());
+        assert_eq!(
+            one(be, be_short(0x001c, 2), "Canon:DateStampMode").as_deref(),
+            Some("Date & Time")
+        );
+        assert_eq!(
+            one(be, be_short(0x001a, 1), "Canon:SuperMacro").as_deref(),
+            Some("On (1)")
+        );
+
+        // `SERIAL_NUMBER_FORMAT` (int32u, `PrintHex`).
+        let long = |id: u16, v: u32| (id, 4u16, 1u32, v.to_le_bytes().to_vec());
+        for (raw, want) in [(0x9000_0000u32, "Format 1"), (0xa000_0000, "Format 2")] {
+            assert_eq!(
+                one(le, long(0x0015, raw), "Canon:SerialNumberFormat").as_deref(),
+                Some(want),
+                "0x0015 = {raw:#x}"
+            );
+        }
+
+        // The ExifTool names `canon_tag_to_name` carried for engine-owned
+        // ids, each observed as the key its row lands under.
+        assert_eq!(
+            one(le, long(0x0010, 0x8000_0170), "Canon:CanonModelID").as_deref(),
+            Some("EOS Digital Rebel / 300D / Kiss Digital")
+        );
+        let lens = b"EF16-35mm f/2.8L II USM\0".to_vec();
+        assert_eq!(
+            one(le, (0x0095, 2, lens.len() as u32, lens), "Canon:LensModel").as_deref(),
+            Some("EF16-35mm f/2.8L II USM")
+        );
+        assert_eq!(
+            one(le, (0x0097, 7, 16, vec![0xab; 16]), "Canon:DustRemovalData").as_deref(),
+            Some("(Binary data 16 bytes, use -b option to extract)")
         );
     }
 
