@@ -37,8 +37,10 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // ColorInfo's is not decoded -- `canon/main_engine.rs` records why its
     // `-j` winner is not last-wins). `CANON_MAIN_RESIDUAL_IDS` keeps
     // FileNumber, SerialNumber (EOS-1D and default forms), FirmwareRevision,
-    // Categories, ImageUniqueID, BatteryType, InternalSerialNumber (hand arm,
-    // every body), PictureStyleUserDef/PC (withheld) and
+    // Categories, ImageUniqueID, BatteryType, InternalSerialNumber (value
+    // alternative only: on /EOS 5D/ bodies ExifTool's value comes from the
+    // SerialInfo edge, which is not decoded, so none is printed -- decision
+    // D3, its own commit), PictureStyleUserDef/PC (withheld) and
     // OriginalDecisionDataOffset/VRDOffset (not transcribed). `$$self{Model}`
     // is the hand path's `self_model`. `--no-print-conv` shows
     // `Emitted::value_conv` through the Canon value-form channel:
@@ -71,6 +73,13 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // DateStampMode 78, ColorSpace 47, SerialNumberFormat 27, SuperMacro 4,
     // OwnerName 3, D30 SerialNumber 1), 13 MISSING -> matched, 0 matched ->
     // wrong.
+    // D3 alone (same instrument and subset, control = the landing-1 commit):
+    //     TOTAL 200 files  36226 matched  0 rename  20 value  1054 missing  96 extra
+    // exactly 6 files, all Canon:InternalSerialNumber: CanonEOS5D VALUE ->
+    // MISSING (the hand arm printed mojibake; ExifTool prints SerialInfo's
+    // E005986), CanonEOS5D_MarkII EXTRA "" removed, 5DS, 5DS_R, 5D_MarkIII,
+    // 5D_MarkIV RENAME -> MISSING. A wrong value under a real tag name is
+    // worse than an absent one; revert the D3 commit alone to undo it.
     // Gate B of record: CANONM_GATEB_PENDING (filled from the i7 census
     // before the gate; the landing refuses while this token is present).
     ("Canon", "Main"),

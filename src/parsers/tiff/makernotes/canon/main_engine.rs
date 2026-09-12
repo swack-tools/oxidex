@@ -377,6 +377,17 @@ pub(super) fn serial_number_is_d30(model: &str) -> bool {
     })
 }
 
+/// `Condition => '$$self{Model} =~ /EOS 5D/'` (Canon.pm:1841), 0x0096's
+/// first alternative, is the `%Canon::SerialInfo` edge; the second
+/// (Always) is the Main `InternalSerialNumber` value the residual arm
+/// renders. True when the value alternative wins -- `/EOS 5D/` also matches
+/// the 5D Mark II/III/IV and 5DS/5DS R, all of which ExifTool routes to
+/// SerialInfo. Pinned as the complement of `first_match_ifd` by
+/// `canon_main_residual_emits_exactly_the_withheld_alternatives`.
+pub(super) fn internal_serial_is_main_value(model: &str) -> bool {
+    !model.contains("EOS 5D")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,6 +659,38 @@ mod tests {
                 alternative_is_reported(winner),
                 winner_index == 0,
                 "0x000c for Model {model:?}: only the D30 alternative is engine-reported"
+            );
+        }
+
+        // 0x0096: alternative 0 is the /EOS 5D/ SerialInfo edge, alternative
+        // 1 the withheld value the residual arm renders. Neither is
+        // engine-reported, so the residual must render exactly when the
+        // value alternative wins -- and stay silent when the edge does.
+        let group = table
+            .variant_group(0x0096)
+            .expect("0x0096 is a _variants group");
+        assert!(
+            group.alternatives[0].1.subdir.is_some(),
+            "0x0096 alternative 0 is the SerialInfo edge"
+        );
+        assert!(
+            group.alternatives[1].1.subdir.is_none()
+                && !alternative_is_reported(&group.alternatives[1].1),
+            "0x0096 alternative 1 is the withheld InternalSerialNumber value"
+        );
+        for model in models {
+            let mut members = HashMap::new();
+            if !model.is_empty() {
+                members.insert("Model", MemberValue::Str(model.to_string()));
+            }
+            let mut ctx = Ctx::new(&mut members).with_count(9);
+            let winner = first_match_ifd(group.alternatives, &mut ctx)
+                .expect("a Cond::Always alternative ends 0x0096");
+            assert_eq!(
+                internal_serial_is_main_value(model),
+                winner.subdir.is_none(),
+                "0x0096 for Model {model:?}: first_match_ifd picks {}",
+                winner.name
             );
         }
     }

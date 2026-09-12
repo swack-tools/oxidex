@@ -232,6 +232,19 @@ fn corpus_main_tags_match_the_pinned_oracle() {
             &[("Canon:OwnerName", "Ren? Kuunders")],
         );
     }
+    // residual, decision D3: 0x0096 on /EOS 5D/ bodies is the SerialInfo
+    // edge, so no Main `InternalSerialNumber` (the oracle's `E005986` on the
+    // 5D is SerialInfo's own row, which has no producer yet; the 5D Mark II
+    // carries none at all).
+    for file in ["CanonEOS5D.jpg", "CanonEOS5D_MarkII.jpg"] {
+        if let Some(metadata) = carrier(CORPUS, file) {
+            assert_eq!(
+                shown(&metadata, "Canon:InternalSerialNumber"),
+                None,
+                "{file}: the Main 0x0096 value is not ExifTool's on a /EOS 5D/ body"
+            );
+        }
+    }
     // engine: 0x0082 RawDataLength, a zero value.
     if let Some(metadata) = carrier(CORPUS, "CanonEOS-1DS.jpg") {
         assert_tags(

@@ -6601,6 +6601,24 @@ fn parse_canon_makernote_directory(
             // with 0xff rather than NUL. Its ValueConv removes only those
             // trailing 0xff bytes before normal TIFF string termination.
             CANON_INTERNAL_SERIAL_NUMBER => {
+                // Residual (slice I-5, decision D3): 0x0096 is a `_variants`
+                // group (Canon.pm:1841). Its first alternative, `$$self{Model}
+                // =~ /EOS 5D/`, is a SubDirectory into `%Canon::SerialInfo`
+                // (Canon.pm:7146-7162: `InternalSerialNumber2` on the 5D Mark
+                // II/III/IV and 5DS/5DS R, `InternalSerialNumber` at index 9
+                // otherwise), not this value -- ExifTool reports no Main
+                // `InternalSerialNumber` on any /EOS 5D/ body. So with the
+                // engine on, this arm renders the value only when the second
+                // alternative wins, reading the `self_model` the engine
+                // resolves 0x0096 with (`main_engine::canon_main_residual_
+                // emits_exactly_the_withheld_alternatives` pins the
+                // complement). SerialInfo itself has no producer yet: on those
+                // bodies the tag is absent rather than a Main string ExifTool
+                // does not report there under that name.
+                if main_engine.is_some() && !main_engine::internal_serial_is_main_value(self_model)
+                {
+                    return;
+                }
                 if let Some(raw) = extract_canon_bytes_with_base(entry, ifd_data, base) {
                     let without_ff = raw
                         .iter()
