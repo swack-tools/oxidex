@@ -1453,7 +1453,8 @@ def expected_ifd_format(spelling, count_decl):
     (`ifd_format_unsupported`: the tag must not be emitted at all).
 
     The spec (section 2, `format`/`count`): `fmt[N]` -> `Some(fmt)` with
-    `count: Some(N)`; bare `string`/`undef` -> the UNSIZED
+    `count: Some(N)`; bare `string`/`undef` (and `binary`, ExifTool's alias of
+    undef) -> the UNSIZED
     `Some(Fmt::Str(0))`/`Some(Fmt::Undef(0))` ("this kind, the entry's own
     byte length": a live reinterpretation, Exif.pm:6737-6745, which the walk
     honours) with the count from `Count`; any other scalar in the schema ->
@@ -1476,7 +1477,13 @@ def expected_ifd_format(spelling, count_decl):
         return None
     if spelling == "string":
         return ("Some(Fmt::Str(0))", count_decl)
-    if spelling == "undef":
+    if spelling in ("undef", "binary"):
+        # `binary` IS the unsized undef, not an approximation of it: Exif.pm's
+        # %formatNumber has 'binary' => 7 "(same as undef)" (Exif.pm:103-104),
+        # %formatSize gives it width 1 (ExifTool.pm:6236), and ReadValue reads
+        # "undef/binary/string" with one substr, NUL-truncating only string
+        # (ExifTool.pm:6307-6311). A sized `binary[N]` stays refused below, as
+        # codegen refuses it (IFD1 landing 1, G1).
         return ("Some(Fmt::Undef(0))", count_decl)
     if spelling in _FMT_VARIANT:
         return (f"Some(Fmt::{_FMT_VARIANT[spelling]})", count_decl)

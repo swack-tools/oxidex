@@ -235,6 +235,21 @@ class ParseSample(unittest.TestCase):
         self.assertTrue(alt["subdir"]["sub_ifd"])
 
 
+class BinaryIsTheUnsizedUndef(unittest.TestCase):
+    """Exif.pm:103-104 `'binary' => 7, # (same as undef)`; ReadValue treats
+    undef/binary/string alike (ExifTool.pm:6307-6311). The verifier must expect
+    exactly what it expects for bare `undef`, and still refuse a sized
+    `binary[N]` and any spelling outside the schema."""
+
+    def test_bare_binary_expects_unsized_undef(self):
+        self.assertEqual(verify.expected_ifd_format("binary", None), ("Some(Fmt::Undef(0))", None))
+        self.assertEqual(verify.expected_ifd_format("binary", None), verify.expected_ifd_format("undef", None))
+
+    def test_sized_binary_and_unknown_spellings_stay_refused(self):
+        self.assertIsNone(verify.expected_ifd_format("binary[4]", None))
+        self.assertIsNone(verify.expected_ifd_format("blob", None))
+
+
 class ParseFailsLoudly(unittest.TestCase):
     """An unparsed `IfdTag {` is a coverage lie, so every shape the parser
     does not know is a SystemExit, never a silent skip."""
