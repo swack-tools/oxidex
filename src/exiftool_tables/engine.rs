@@ -292,6 +292,13 @@ pub struct Emitted {
     pub group2: &'static str,
     pub name: &'static str,
     pub value: TagValue,
+    /// The value ExifTool's `-n` reports -- the `ValueConv` result before
+    /// `PrintConv` (ExifTool.pm:3477: `GetValue` stops at `ValueConv` when
+    /// the `PrintConv` option is off) -- when a `PrintConv` rendered `value`;
+    /// `None` when `value` already is that unconverted form. A caller that
+    /// records rows with `insert_occurrence_with_raw` hands this to
+    /// `--no-print-conv`, which otherwise has only the printed string.
+    pub value_conv: Option<TagValue>,
     /// ExifTool's `PRIORITY => 0` (ExifTool.pm:9471, `$priority = $$tbl{PRIORITY}`):
     /// this value must not displace one already reported under the same name.
     pub low_priority: bool,
@@ -498,13 +505,16 @@ pub(super) fn walk(
             // tag suppression, not permission to emit the raw value.
             continue;
         };
-        let value = match super::runtime::render(field.print_conv, &converted) {
-            Some(rendered) => TagValue::String(rendered),
-            // The unconverted value in the form ExifTool reports it: a
-            // fixed-count field is ONE space-joined string (ExifTool.pm:6312
-            // `join ' '`), not a list -- `exiftool -j` prints
-            // `"ConnectionSpaceIlluminant": "0.9642 1 0.82491"`.
-            None => super::runtime::to_exiftool_value(&converted),
+        // The unconverted value in the form ExifTool reports it: a
+        // fixed-count field is ONE space-joined string (ExifTool.pm:6312
+        // `join ' '`), not a list -- `exiftool -j` prints
+        // `"ConnectionSpaceIlluminant": "0.9642 1 0.82491"`.
+        let (value, value_conv) = match super::runtime::render(field.print_conv, &converted) {
+            Some(rendered) => (
+                TagValue::String(rendered),
+                Some(super::runtime::to_exiftool_value(&converted)),
+            ),
+            None => (super::runtime::to_exiftool_value(&converted), None),
         };
         out.push(Emitted {
             module: table.module,
@@ -516,6 +526,7 @@ pub(super) fn walk(
             group2: table.group2,
             name: field.name,
             value,
+            value_conv,
             low_priority: table.priority == Some(0),
             // `Avoid` is not part of the binary-table schema (`Field` has no
             // flags); no ProcessBinaryData field in the pinned tree declares

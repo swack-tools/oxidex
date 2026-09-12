@@ -1422,7 +1422,7 @@ mod tests {
         // tag name in every one of those directories.
         //
         // parse_embedded_exif_at routes IFD0 through lookup_tag_name(id, "IFD0")
-        // and only parse_ifd1_thumbnail names the IFD1 pair, so this pins the
+        // and only the IFD1 collector (`tiff_helpers::collect_ifd1_thumbnail`) names the IFD1 pair, so this pins the
         // scope of the fix at the call site rather than trusting the branch to
         // stay put.
         let mut data = vec![0u8; 32];

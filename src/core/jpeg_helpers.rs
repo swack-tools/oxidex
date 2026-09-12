@@ -268,16 +268,22 @@ pub fn process_exif_segments(
                     .map(|count| count as usize)
                     .unwrap_or(tags.len());
 
-                    // Walk IFD0's next-IFD pointer to IFD1 (the thumbnail IFD), which
-                    // carries Compression/ThumbnailOffset/ThumbnailLength/ThumbnailImage.
-                    // `tiff_offset` is the absolute file position of the TIFF header,
-                    // which ExifTool adds to the stored ThumbnailOffset.
-                    crate::core::tiff_helpers::parse_ifd1_thumbnail(
+                    // Walk IFD0's next-IFD pointer to IFD1 (the thumbnail IFD):
+                    // the generated `Exif::Main` table reports its ordinary
+                    // rows, the hand residual its offset pair, derived images
+                    // and `RawConv` strings. `tiff_offset` is the absolute
+                    // file position of the TIFF header, which ExifTool adds to
+                    // the stored ThumbnailOffset. IFD1 is a `LOW_PRIORITY_DIR`
+                    // for a JPEG (ExifTool.pm:7317), so its rows never
+                    // displace IFD0's for a bare request.
+                    crate::core::tiff_helpers::parse_ifd1(
                         &tiff_reader,
+                        tiff_data,
                         ifd_offset,
                         ifd0_entry_count,
                         byte_order,
                         tiff_offset,
+                        true,
                         metadata,
                     );
 

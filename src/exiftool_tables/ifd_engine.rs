@@ -783,29 +783,37 @@ fn walk(
         if omitted.any() {
             continue;
         }
-        let value = if tag.flags.binary && tag.value_conv.is_none() {
+        let (value, value_conv) = if tag.flags.binary && tag.value_conv.is_none() {
             // ExifTool.pm:3535-3539: a `Binary` tag with no `ValueConv` gets
             // `\$val`, and the CLI prints the placeholder with `length($$val)`
             // (exiftool:3983-3988). A `ValueConv`, when present, runs
-            // normally and the result is an ordinary scalar.
+            // normally and the result is an ordinary scalar. The placeholder
+            // is the same under `-n`.
             let Some(len) = perl_length(&raw) else {
                 continue;
             };
-            TagValue::String(format!(
+            let placeholder = TagValue::String(format!(
                 "(Binary data {len} bytes, use -b option to extract)"
-            ))
+            ));
+            (placeholder, None)
         } else {
             let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
                 // A verified ValueConv may faithfully return Perl undef:
                 // tag suppression, not permission to emit the raw value.
                 continue;
             };
+            // ExifTool.pm:6330: the entry's value is ONE space-joined
+            // scalar unless the tag is a `List`.
+            let unconverted = || {
+                if tag.flags.list {
+                    runtime::to_tag_value(&converted)
+                } else {
+                    ifd_exiftool_value(&converted)
+                }
+            };
             match runtime::render(tag.print_conv, &converted) {
-                Some(rendered) => TagValue::String(rendered),
-                // ExifTool.pm:6330: the entry's value is ONE space-joined
-                // scalar unless the tag is a `List`.
-                None if tag.flags.list => runtime::to_tag_value(&converted),
-                None => ifd_exiftool_value(&converted),
+                Some(rendered) => (TagValue::String(rendered), Some(unconverted())),
+                None => (unconverted(), None),
             }
         };
         let Some(group1) = group1_of(table, tag, &dir) else {
@@ -821,6 +829,7 @@ fn walk(
             group2: tag.groups.g2.unwrap_or(table.group2),
             name: tag.name,
             value,
+            value_conv,
             low_priority: effective_priority(table, tag) == Some(0),
             avoid: tag.flags.avoid,
         });
@@ -1617,6 +1626,10 @@ mod tests {
             assert_eq!(got[0].group2, "Camera");
             assert!(!got[0].low_priority);
             assert!(!got[0].avoid);
+            // `-n` (ExifTool.pm:3477): the rendered row carries its
+            // pre-PrintConv value; the unconverted one needs none.
+            assert_eq!(got[0].value_conv, Some(TagValue::Integer(2)), "{order:?}");
+            assert_eq!(got[1].value_conv, None, "{order:?}");
         }
         // An enum MISS renders ExifTool's own `Unknown (9)` (ExifTool.pm:
         // 3624-3631) -- `runtime::render` does that for every hash miss
