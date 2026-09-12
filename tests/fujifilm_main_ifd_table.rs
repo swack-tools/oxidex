@@ -243,4 +243,14 @@ fn corpus_main_tags_match_the_pinned_oracle() {
             "FujiFilmX-H2S.jpg: FlickerReduction is unsupplied"
         );
     }
+    // residual 0x0000 under the entry-format rule (Exif.pm:6463-6478): the
+    // note's four trailing all-zero entries (type 0) are skipped, so they no
+    // longer overwrite the real Version with "".
+    if let Some(metadata) = carrier(CORPUS, "FujiFilmFinePixXP150.jpg") {
+        assert_tags(
+            &metadata,
+            "FujiFilmFinePixXP150.jpg",
+            &[("FujiFilm:Version", "0130")],
+        );
+    }
 }

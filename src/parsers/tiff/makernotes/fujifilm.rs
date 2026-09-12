@@ -873,7 +873,19 @@ impl FujifilmParser {
         let hand_entries = entries.len();
 
         // Extract tags from entries
-        for entry in entries {
+        for (index, entry) in entries.into_iter().enumerate() {
+            // Exif.pm:6463-6478, as the engine applies it
+            // (`ifd_engine::accepted_type`): an entry whose type code
+            // `ProcessExif` refuses is skipped, and the directory is abandoned
+            // when that entry is the first one. Engine on only, so the
+            // engine-off fallback stays as it was.
+            if main_table.is_some() && !main_engine::entry_type_accepted(entry.field_type) {
+                if index == 0 {
+                    break;
+                }
+                continue;
+            }
+
             // Binary sub-directories. `%FujiFilm::Main` gives these four tags a
             // `SubDirectory => { TagTable => ... }` with no Condition and no
             // Start/Base/ByteOrder override (FujiFilm.pm:341, :345, :349, :609),

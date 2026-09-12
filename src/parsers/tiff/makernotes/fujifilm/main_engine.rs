@@ -96,6 +96,17 @@ pub(super) fn is_residual(id: u16) -> bool {
     FUJI_MAIN_RESIDUAL_IDS.binary_search(&id).is_ok()
 }
 
+/// Exif.pm:6463 -- the type codes `ProcessExif` reads: 1-13 and 129 (the
+/// Apple-only `int64u` exception cannot apply to a FujiFilm note). The hand
+/// loop applies it with the engine on, exactly as the engine's own walk
+/// does (`ifd_engine::accepted_type`): skip the entry, and abandon the
+/// directory when it is the first one (Exif.pm:6474-6477). This is what
+/// keeps the all-zero padding entries of FinePixXP150's note (id 0, type 0)
+/// from overwriting its real 0x0000 `Version` with `""`.
+pub(super) fn entry_type_accepted(field_type: u16) -> bool {
+    (1..=13).contains(&field_type) || field_type == 129
+}
+
 /// `FujiFilm:<Name>` into the map the way `FoundTag` records it
 /// (`shared::tag_priority`), with the `-n` form attached to the same
 /// occurrence: a `Priority => 0` row (0x1431 `Rating`, FujiFilm.pm:821-826)
@@ -787,6 +798,50 @@ mod tests {
         let (tags, _) = parse(&le_note(&[short(0x1039, 1), long(0xf001, 4000)]), None);
         assert!(!tags.contains_key("FujiFilm:DriveMode"), "{tags:?}");
         assert!(!tags.contains_key("FujiFilm:RawImageFullWidth"), "{tags:?}");
+    }
+
+    /// Test 7(h): the XP150 shape -- a real 0x0000 `undef[4]` `"0130"` first,
+    /// then all-zero entries (id 0, type 0, count 0) the hand walk would
+    /// read as `Version` `""`. ExifTool skips a type-0 entry (Exif.pm:6463),
+    /// so `Version` stays `0130`.
+    #[test]
+    fn zero_type_padding_entries_are_skipped() {
+        let padding = (0x0000u16, 0u16, 0u32, Vec::new());
+        let note = le_note(&[
+            version(b"0130"),
+            short(0x1001, 3),
+            padding.clone(),
+            padding.clone(),
+            padding.clone(),
+            padding,
+        ]);
+        let (tags, _) = parse(&note, None);
+        assert_eq!(get(&tags, "FujiFilm:Version"), Some("0130"));
+        assert_eq!(get(&tags, "FujiFilm:Sharpness"), Some("0 (normal)"));
+    }
+
+    /// Test 7(h), second half: a first entry of a type `ProcessExif` refuses
+    /// abandons the directory (Exif.pm:6474-6477): no `FujiFilm:` key at all,
+    /// engine or residual.
+    #[test]
+    fn a_bad_first_entry_abandons_the_directory() {
+        assert!(
+            engine_is_on(),
+            "the (\"FujiFilm\", \"Main\") line is in force"
+        );
+        let note = le_note(&[
+            (0x0000, 0, 0, Vec::new()),
+            version(b"0130"),
+            short(0x1001, 3),
+            (0x0010, 2, 4, b"ABC\0".to_vec()),
+        ]);
+        let (tags, forms) = parse(&note, None);
+        assert!(tags.is_empty(), "{tags:?}");
+        assert!(forms.is_empty(), "{forms:?}");
+        assert!(!entry_type_accepted(0));
+        assert!(!entry_type_accepted(14));
+        assert!(!entry_type_accepted(16));
+        assert!(entry_type_accepted(1) && entry_type_accepted(13) && entry_type_accepted(129));
     }
 
     /// Test 8: 0x1100 `AutoBracketing` takes its X-T3 alternative from

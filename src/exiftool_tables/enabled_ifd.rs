@@ -223,6 +223,13 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // `--no-print-conv` against the oracle's `-j -n -G1 -a -FujiFilm:all`:
     // 2,322 wrong -> match, 35 missing -> match, 0 match -> non-match (the
     // residual, sub-table and RAF rows keep printing PrintConv strings).
+    // + the entry-format rule (Exif.pm:6463-6478 in the residual loop, its own
+    // commit; control = the commit above, same instrument and list):
+    //     treatment  TOTAL 150 16547 0 11 105 10
+    // exactly 1 VALUE -> matched: FinePixXP150 Version `0130` (its four
+    // trailing type-0 entries no longer overwrite it with ""); `oxidex -j`
+    // differs by that one value; `--no-print-conv` 1 wrong -> match, 0 match
+    // -> non-match. Revert that commit alone to undo it.
     // Gate B of record (i7, i7-missing-census.sh + i7-ab-diff.py, 4,238 files):
     // FUJI_GATEB_PENDING
     ("FujiFilm", "Main"),
