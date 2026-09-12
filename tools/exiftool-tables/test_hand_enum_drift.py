@@ -46,6 +46,30 @@ const B: &[(&str, &str)] = &[("03", "Three"), ("model", "Body")];
 '''), {("16", "Sixteen"), ("-1", "Off"), ("2", 'Quoted "value"'),
        ("3", "Three"), ("model", "Body")})
 
+    def test_table_lookup_arguments_are_not_facts(self):
+        # canon.rs: find_ifd_table("Canon", "Main") (c7d7b71d) and two
+        # find_table calls read as ("Canon", "Main")-style rust-only facts;
+        # the first took the tip's canon.rs from 235 to 236 [REGRESSED].
+        self.assertEqual(self.extract('''
+const PAIRS: &[(i32, &str)] = &[(1, "Real")];
+fn lookups() {
+    let a = find_table("Canon", "FileInfo");
+    let b = crate::exiftool_tables::find_ifd_table("Canon", "Main");
+    let c = exiftool_tables::find_unemitted_table ("Canon", "Unemitted");
+    let d = Some(find_table("Canon", "CameraSettings"));
+}
+'''), {("1", "Real")})
+
+    def test_other_call_and_macro_arguments_still_count(self):
+        # The exclusion is the table lookups by name, not "any call": a fact
+        # written through a constructor or macro must stay visible, because
+        # dropping one is silent while over-counting fails loudly.
+        self.assertEqual(self.extract('''
+const A: Pc = Pc::Entry(1, "Off");
+const B: Pc = pc!(2, "On");
+fn f() { not_find_table("Canon", "Main"); find_tables("Nikon", "Main"); }
+'''), {("1", "Off"), ("2", "On"), ("Canon", "Main"), ("Nikon", "Main")})
+
     def run_check(self, source, expected_count=0):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
@@ -73,6 +97,14 @@ const PAIRS: &[(i32, &str)] = &[(1, "Supported")];
 ''')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("rust_pairs=1", result.stdout)
+
+    def test_table_lookup_does_not_regress_the_drift_check(self):
+        result = self.run_check('''
+const PAIRS: &[(i32, &str)] = &[(1, "Supported")];
+fn engine() { find_ifd_table("Test", "Main"); }
+''')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("rust_pairs=1 dump_pairs=1 rust_only=0 [OK]", result.stdout)
 
     def test_actual_incorrect_tuple_still_fails_drift_check(self):
         result = self.run_check('''
