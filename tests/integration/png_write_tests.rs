@@ -122,8 +122,8 @@ fn test_write_text_chunk_to_new_png() {
 
     // Create metadata with tEXt tag
     let mut metadata = MetadataMap::new();
-    metadata.insert("PNG:tEXt:Author", TagValue::new_string("Test Author"));
-    metadata.insert("PNG:tEXt:Title", TagValue::new_string("Test Title"));
+    metadata.insert("PNG:Author", TagValue::new_string("Test Author"));
+    metadata.insert("PNG:Title", TagValue::new_string("Test Title"));
 
     // Write to temp file
     let temp_dir = TempDir::new().unwrap();
@@ -136,13 +136,10 @@ fn test_write_text_chunk_to_new_png() {
     let parsed_metadata = parse_png_metadata(&output_reader).unwrap();
 
     assert_eq!(
-        parsed_metadata.get_string("PNG:tEXt:Author"),
+        parsed_metadata.get_string("PNG:Author"),
         Some("Test Author")
     );
-    assert_eq!(
-        parsed_metadata.get_string("PNG:tEXt:Title"),
-        Some("Test Title")
-    );
+    assert_eq!(parsed_metadata.get_string("PNG:Title"), Some("Test Title"));
 }
 
 #[test]
@@ -154,13 +151,13 @@ fn test_modify_existing_text_chunk() {
     // Parse original metadata
     let original_metadata = parse_png_metadata(&reader).unwrap();
     assert_eq!(
-        original_metadata.get_string("PNG:tEXt:Author"),
+        original_metadata.get_string("PNG:Author"),
         Some("Original Author")
     );
 
     // Modify metadata
     let mut modified_metadata = MetadataMap::new();
-    modified_metadata.insert("PNG:tEXt:Author", TagValue::new_string("Modified Author"));
+    modified_metadata.insert("PNG:Author", TagValue::new_string("Modified Author"));
 
     // Write to temp file
     let temp_dir = TempDir::new().unwrap();
@@ -173,7 +170,7 @@ fn test_modify_existing_text_chunk() {
     let parsed_metadata = parse_png_metadata(&output_reader).unwrap();
 
     assert_eq!(
-        parsed_metadata.get_string("PNG:tEXt:Author"),
+        parsed_metadata.get_string("PNG:Author"),
         Some("Modified Author")
     );
 }
@@ -187,10 +184,10 @@ fn test_write_itxt_chunk() {
     // Create metadata with iTXt tag (UTF-8)
     let mut metadata = MetadataMap::new();
     metadata.insert(
-        "PNG:iTXt:Description",
+        "PNG:Description",
         TagValue::new_string("UTF-8 Text: 你好世界"),
     );
-    metadata.insert("PNG:iTXt:Comment", TagValue::new_string("Testing iTXt"));
+    metadata.insert("PNG:Comment", TagValue::new_string("Testing iTXt"));
 
     // Write to temp file
     let temp_dir = TempDir::new().unwrap();
@@ -203,11 +200,11 @@ fn test_write_itxt_chunk() {
     let parsed_metadata = parse_png_metadata(&output_reader).unwrap();
 
     assert_eq!(
-        parsed_metadata.get_string("PNG:iTXt:Description"),
+        parsed_metadata.get_string("PNG:Description"),
         Some("UTF-8 Text: 你好世界")
     );
     assert_eq!(
-        parsed_metadata.get_string("PNG:iTXt:Comment"),
+        parsed_metadata.get_string("PNG:Comment"),
         Some("Testing iTXt")
     );
 }
@@ -251,7 +248,7 @@ fn test_preserve_idat_chunks() {
 
     // Modify metadata (but not image data)
     let mut metadata = MetadataMap::new();
-    metadata.insert("PNG:tEXt:Author", TagValue::new_string("Test Author"));
+    metadata.insert("PNG:Author", TagValue::new_string("Test Author"));
 
     // Write to temp file
     let temp_dir = TempDir::new().unwrap();
@@ -318,8 +315,8 @@ fn test_round_trip_preservation() {
     let roundtrip_metadata = parse_png_metadata(&output_reader).unwrap();
 
     assert_eq!(
-        original_metadata.get_string("PNG:tEXt:Author"),
-        roundtrip_metadata.get_string("PNG:tEXt:Author")
+        original_metadata.get_string("PNG:Author"),
+        roundtrip_metadata.get_string("PNG:Author")
     );
 }
 
@@ -332,7 +329,7 @@ fn test_remove_metadata_chunk() {
     // Parse original to verify it has metadata
     let original_metadata = parse_png_metadata(&reader).unwrap();
     assert_eq!(
-        original_metadata.get_string("PNG:tEXt:Author"),
+        original_metadata.get_string("PNG:Author"),
         Some("Original Author")
     );
 
@@ -347,7 +344,7 @@ fn test_remove_metadata_chunk() {
     let output_reader = BufferedReader::new(&output_path).unwrap();
     let parsed_metadata = parse_png_metadata(&output_reader).unwrap();
 
-    assert!(parsed_metadata.get_string("PNG:tEXt:Author").is_none());
+    assert!(parsed_metadata.get_string("PNG:Author").is_none());
 }
 
 #[test]
@@ -358,8 +355,8 @@ fn test_mixed_metadata_types() {
 
     // Create metadata with mixed types
     let mut metadata = MetadataMap::new();
-    metadata.insert("PNG:tEXt:Author", TagValue::new_string("John Doe"));
-    metadata.insert("PNG:iTXt:Description", TagValue::new_string("Test 测试"));
+    metadata.insert("PNG:Author", TagValue::new_string("John Doe"));
+    metadata.insert("PNG:Description", TagValue::new_string("Test 测试"));
     metadata.insert("IFD0:Make", TagValue::new_string("TestMake"));
 
     // Write to temp file
@@ -372,12 +369,9 @@ fn test_mixed_metadata_types() {
     let output_reader = BufferedReader::new(&output_path).unwrap();
     let parsed_metadata = parse_png_metadata(&output_reader).unwrap();
 
+    assert_eq!(parsed_metadata.get_string("PNG:Author"), Some("John Doe"));
     assert_eq!(
-        parsed_metadata.get_string("PNG:tEXt:Author"),
-        Some("John Doe")
-    );
-    assert_eq!(
-        parsed_metadata.get_string("PNG:iTXt:Description"),
+        parsed_metadata.get_string("PNG:Description"),
         Some("Test 测试")
     );
     // EXIF tags are returned with IFD0: prefix
@@ -392,7 +386,7 @@ fn test_crc_recalculation() {
 
     // Add metadata
     let mut metadata = MetadataMap::new();
-    metadata.insert("PNG:tEXt:Test", TagValue::new_string("Value"));
+    metadata.insert("PNG:Comment", TagValue::new_string("Value"));
 
     // Write to temp file
     let temp_dir = TempDir::new().unwrap();

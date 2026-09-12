@@ -176,9 +176,10 @@ def split_oxidex_key(k):
     OxiDex prints 'IFD0:Make' (its group, then the name) -- but it also
     prints keys whose middle segment is part of the NAME, not a group:
     ooxml.rs emits 'OOXML:Custom:<property>' (26 keys on t/images/OOXML.docx
-    under the 25a2109e binary) and png_writer.rs 'PNG:<chunk>:<keyword>'
-    ('PNG:tEXt:comment' on PNG.png). ExifTool spells those 'XML:Division'
-    and 'PNG:Comment', so the colon-in-name is a defect the census must keep
+    under the 25a2109e binary), and the PNG reader used to emit
+    'PNG:<chunk>:<keyword>' ('PNG:tEXt:comment' on PNG.png, until
+    staging/png-text-names). ExifTool spells those 'XML:Division' and
+    'PNG:Comment', so the colon-in-name is a defect the census must keep
     exposing: with the pre-f3b5f5e6 first-segment rule, kept here verbatim,
     'Custom:Division' stays a distinct name and lands in EXTRA (or RENAME)
     beside the oracle's MISSING 'Division'. Applying the oracle's last-

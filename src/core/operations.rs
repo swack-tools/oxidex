@@ -39,7 +39,7 @@ use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::jpeg_writer::write_exif_to_jpeg;
 use crate::writers::pdf_writer::write_pdf_file;
-use crate::writers::png_writer::write_png_metadata;
+use crate::writers::png_writer::{write_png_metadata, write_png_metadata_with_baseline};
 use crate::writers::tiff_surgical::rewrite_tiff_file;
 use std::path::Path;
 
@@ -956,7 +956,14 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
             write_atomic(path, &serialized_bytes)?;
         }
         FileFormat::PNG => {
-            write_png_metadata(path, &reader, metadata)?;
+            // The caller's map was derived from `read_metadata`, so judge
+            // which PNG: keys changed against that same map.
+            match baseline.as_ref() {
+                Some(baseline) => {
+                    write_png_metadata_with_baseline(path, &reader, metadata, baseline)?
+                }
+                None => write_png_metadata(path, &reader, metadata)?,
+            }
         }
         FileFormat::PDF => {
             write_pdf_file(path, &reader, metadata)?;

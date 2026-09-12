@@ -759,6 +759,144 @@ pub fn parse_exif_chunk(data: &[u8]) -> Result<IfdEntries> {
     parse_ifd(&exif_reader, ifd_offset as u64, byte_order)
 }
 
+/// The payload of a textual-data chunk once its compression is dealt with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TextPayload {
+    /// Uncompressed, or inflated to `Z_STREAM_END` (`FoundPNG`,
+    /// `PNG.pm:934-941`). Not yet charset-decoded.
+    Bytes(Vec<u8>),
+    /// A compression method other than 0: ExifTool warns "Unknown
+    /// compression method" and keeps the still-compressed bytes as the value
+    /// (`PNG.pm:950-953`, stored as Binary by `:1141-1145`).
+    UnknownMethod(Vec<u8>),
+    /// Method 0 whose inflate did not reach `Z_STREAM_END` ("Error
+    /// inflating", `PNG.pm:942-943`). ExifTool stores whatever input
+    /// Compress::Zlib left unconsumed, a byte count that depends on zlib's
+    /// in-place consumption, so no value is reproducible here.
+    InflateError,
+}
+
+/// One tEXt / zTXt / iTXt chunk, split exactly the way ExifTool's handlers
+/// split it (`ProcessPNG_tEXt` `PNG.pm:1325-1332`, `ProcessPNG_Compressed`
+/// `:1288-1317`, `ProcessPNG_iTXt` `:1339-1351`).
+///
+/// The keyword, language and translated keyword are kept as the raw chunk
+/// bytes so a writer can rebuild the chunk byte-for-byte.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PngTextRecord {
+    /// `tEXt`, `zTXt` or `iTXt`.
+    pub chunk_type: [u8; 4],
+    /// Bytes before the first NUL (may be empty: Perl's `split` yields '').
+    pub keyword: Vec<u8>,
+    /// iTXt language tag (empty when absent); `None` for tEXt/zTXt.
+    pub lang: Option<Vec<u8>>,
+    /// iTXt translated keyword; `None` for tEXt/zTXt. ExifTool reads and
+    /// discards it (`PNG.pm:1345`).
+    pub translated: Option<Vec<u8>>,
+    /// The value.
+    pub payload: TextPayload,
+}
+
+impl PngTextRecord {
+    /// Whether the value is Latin (cp1252) text: tEXt and zTXt are decoded
+    /// with `'Latin'` (`PNG.pm:1315`, `:1331`), iTXt with `'UTF8'` (`:1350`).
+    pub fn is_latin(&self) -> bool {
+        self.chunk_type != *b"iTXt"
+    }
+}
+
+/// Inflates a zlib stream the way `FoundPNG` does (`PNG.pm:934-941`): the
+/// result counts only when the stream reaches its end (`Z_STREAM_END`);
+/// input after the end of the stream is ignored.
+pub fn inflate_zlib_stream(data: &[u8]) -> Option<Vec<u8>> {
+    use flate2::{Decompress, FlushDecompress, Status};
+    let mut inflater = Decompress::new(true);
+    let mut out: Vec<u8> = Vec::with_capacity(data.len().saturating_mul(4).max(64));
+    loop {
+        let consumed = inflater.total_in() as usize;
+        if out.len() == out.capacity() {
+            out.reserve(out.capacity().max(64));
+        }
+        let status = inflater
+            .decompress_vec(&data[consumed..], &mut out, FlushDecompress::Finish)
+            .ok()?;
+        match status {
+            Status::StreamEnd => return Some(out),
+            // More output space may be all it needs; stop when neither input
+            // nor output moved (truncated stream).
+            Status::Ok | Status::BufError => {
+                let progressed = inflater.total_in() as usize != consumed;
+                if !progressed && out.len() < out.capacity() {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+/// Splits a tEXt, zTXt or iTXt chunk. `None` wherever ExifTool's handler
+/// returns 0 before `FoundPNG` names anything: a tEXt or zTXt with no NUL (or
+/// a zTXt with nothing after it), an iTXt with fewer than 4 bytes after the
+/// keyword or without its language / translated-keyword separators (`$val`
+/// undefined, `PNG.pm:911`). ExifTool then stores the whole chunk as
+/// `PNG:TextualData` / `CompressedText` / `InternationalText` binary, which
+/// oxidex does not emit.
+pub fn parse_text_record(chunk_type: &[u8; 4], data: &[u8]) -> Option<PngTextRecord> {
+    let nul = data.iter().position(|&b| b == 0)?;
+    let keyword = data[..nul].to_vec();
+    let rest = &data[nul + 1..];
+    let (lang, translated, payload) = match chunk_type {
+        b"tEXt" => (None, None, TextPayload::Bytes(rest.to_vec())),
+        b"zTXt" => {
+            // `$compressed = 2 + unpack('C', $val)`; `substr($val, 1)` of an
+            // empty string is undef, so FoundPNG returns 0 (`:911`).
+            let (&method, compressed) = rest.split_first()?;
+            (None, None, decompress_payload(method, compressed))
+        }
+        b"iTXt" => {
+            // `return 0 unless defined $dat and length($dat) >= 4` (:1343)
+            if rest.len() < 4 {
+                return None;
+            }
+            let (flag, method) = (rest[0], rest[1]);
+            // `split /\0/, substr($dat, 2), 3` (:1345)
+            let tail = &rest[2..];
+            let lang_end = tail.iter().position(|&b| b == 0)?;
+            let after_lang = &tail[lang_end + 1..];
+            let trans_end = after_lang.iter().position(|&b| b == 0)?;
+            let value = &after_lang[trans_end + 1..];
+            let payload = if flag != 0 {
+                decompress_payload(method, value)
+            } else {
+                TextPayload::Bytes(value.to_vec())
+            };
+            (
+                Some(tail[..lang_end].to_vec()),
+                Some(after_lang[..trans_end].to_vec()),
+                payload,
+            )
+        }
+        _ => return None,
+    };
+    Some(PngTextRecord {
+        chunk_type: *chunk_type,
+        keyword,
+        lang,
+        translated,
+        payload,
+    })
+}
+
+fn decompress_payload(method: u8, compressed: &[u8]) -> TextPayload {
+    if method != 0 {
+        return TextPayload::UnknownMethod(compressed.to_vec());
+    }
+    match inflate_zlib_stream(compressed) {
+        Some(bytes) => TextPayload::Bytes(bytes),
+        None => TextPayload::InflateError,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
