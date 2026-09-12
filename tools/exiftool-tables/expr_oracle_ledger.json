@@ -6,10 +6,12 @@
     "verified": 607
   },
   "instrument": {
+    "build_timeout_seconds": 1800,
     "et_lib": "/tmp/oxidex-exiftool-cache/exiftool/lib",
     "perl": "/usr/bin/perl",
     "perl_version": "v5.38.2",
-    "rust": "cargo run --quiet --bin expr_oracle_harness",
+    "probe_timeout_seconds": 180,
+    "rust": "cargo build --locked --jobs 2 --bin expr_oracle_harness; execute reported artifact",
     "tz": "UTC"
   },
   "perl_version": "v5.38.2",

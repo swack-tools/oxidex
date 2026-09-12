@@ -214,7 +214,14 @@ class ParseSample(unittest.TestCase):
              t["subdir"]["dir_name"]),
             (("Val", 0), True, 1, "KodakIFD"),
         )
-        self.assertIsNone(gen.tags[("Exif", "Main", "34665")]["subdir"])
+        # ExifOffset: no TagTable -> the enclosing table, emitted unwalked
+        # (spec v1.1); a walkable edge carries `unwalked: None`.
+        t = gen.tags[("Exif", "Main", "34665")]["subdir"]
+        self.assertEqual(
+            (t["module"], t["table"], t["start"], t["sub_ifd"], t["dir_name"], t["unwalked"]),
+            ("Exif", "Main", ("Val", 0), True, "ExifIFD", "same-table recursion (TagTable absent)"),
+        )
+        self.assertIsNone(gen.tags[("Exif", "Main", "33424")]["subdir"]["unwalked"])
 
         t = gen.tags[("FLIR", "Main", "1")]
         self.assertEqual(t["fmt"], "Some(Fmt::Rational64s)")
@@ -228,9 +235,46 @@ class ParseSample(unittest.TestCase):
         self.assertTrue(alt["subdir"]["sub_ifd"])
 
 
+class BinaryIsTheUnsizedUndef(unittest.TestCase):
+    """Exif.pm:103-104 `'binary' => 7, # (same as undef)`; ReadValue treats
+    undef/binary/string alike (ExifTool.pm:6307-6311). The verifier must expect
+    exactly what it expects for bare `undef`, and still refuse a sized
+    `binary[N]` and any spelling outside the schema."""
+
+    def test_bare_binary_expects_unsized_undef(self):
+        self.assertEqual(verify.expected_ifd_format("binary", None), ("Some(Fmt::Undef(0))", None))
+        self.assertEqual(verify.expected_ifd_format("binary", None), verify.expected_ifd_format("undef", None))
+
+    def test_sized_binary_and_unknown_spellings_stay_refused(self):
+        self.assertIsNone(verify.expected_ifd_format("binary[4]", None))
+        self.assertIsNone(verify.expected_ifd_format("blob", None))
+
+
 class ParseFailsLoudly(unittest.TestCase):
     """An unparsed `IfdTag {` is a coverage lie, so every shape the parser
     does not know is a SystemExit, never a silent skip."""
+
+    def test_edge_without_the_unwalked_field_is_out_of_date(self):
+        # The pre-v1.1 edge shape: refused loudly rather than read with the
+        # field defaulted, so a stale generated file cannot PASS.
+        with self.assertRaisesRegex(SystemExit, "out of date"):
+            _mutated_sample('dir_name: Some("KodakIFD"),\n                validate: false,\n'
+                            '                unwalked: None,',
+                            'dir_name: Some("KodakIFD"),\n                validate: false,')
+
+    def test_rustfmt_wrapped_unwalked_reason_parses(self):
+        # The committed regen wraps a long reason over three lines (ProfileIFD,
+        # 0xc6f5, at the IFD1 landing-1 regen): whitespace after `Some(` and a
+        # trailing comma. The i7 regen's verify.py died on it with "unrecognised
+        # subdir value (tail)"; it must parse, and yield the reason verbatim.
+        reason = ("same-table recursion (TagTable absent); ProcessProc "
+                  "Image::ExifTool::Exif::ProcessTiffIFD; unmodeled SubDirectory key(s) Magic")
+        gen = _mutated_sample(
+            'unwalked: Some("same-table recursion (TagTable absent)"),',
+            'unwalked: Some(\n                    "' + reason + '",\n                ),',
+        )
+        edges = [t["subdir"] for t in gen.tags.values() if t.get("subdir") and t["subdir"]["unwalked"]]
+        self.assertEqual([e["unwalked"] for e in edges], [reason])
 
     def test_var_format_is_not_an_ifd_shape(self):
         with self.assertRaises(SystemExit):
@@ -325,7 +369,7 @@ class CleanRunPasses(unittest.TestCase):
         failed, report = _run()
         self.assertEqual(failed, 0, report)
         self.assertIn("IFD MISMATCH total 0", report)
-        self.assertIn("subdirectory edges 6", report)
+        self.assertIn("subdirectory edges 7", report)
         # CameraType's `$self->{CameraType} = $val` is SetMember-shaped but
         # the sample refuses it: a note, never a mismatch.
         self.assertIn("SetMember-shaped RawConvs refused instead: 1", report)
@@ -468,15 +512,22 @@ class EachWrongFactIsExactlyOneMismatch(unittest.TestCase):
                   "groups: TagGroups::NONE,", "tag groups  (")
 
     def test_subdirectory_flag_dropped(self):
+        # ExifOffset carries its (unwalked) edge, so dropping the flag is two
+        # wrong facts from one mutation: the flag, and an edge emitted
+        # without `omitted.subdirectory`.
         rep = self._one(
             "hook: false,\n                subdirectory: true,\n                print_conv: false,\n"
             "            },\n            raw_conv: None,\n            value_conv: None,\n"
-            "            print_conv: PrintConv::None,\n            subdir: None,",
+            "            print_conv: PrintConv::None,\n            subdir: Some(IfdSubdirEdge {\n"
+            "                module: \"Exif\",",
             "hook: false,\n                subdirectory: false,\n                print_conv: false,\n"
             "            },\n            raw_conv: None,\n            value_conv: None,\n"
-            "            print_conv: PrintConv::None,\n            subdir: None,",
+            "            print_conv: PrintConv::None,\n            subdir: Some(IfdSubdirEdge {\n"
+            "                module: \"Exif\",",
             "subdirectory flag",
+            expected=2,
         )
+        self.assertIn("edge emitted without omitted.subdirectory", rep)
         self.assertIn("ExifOffset", rep.replace("34665", "ExifOffset"))
 
     def test_wrong_subdir_target(self):
@@ -512,17 +563,45 @@ class EachWrongFactIsExactlyOneMismatch(unittest.TestCase):
         self._one("base: Some(&BaseExpr::Sub(&BaseExpr::Start, &BaseExpr::Const(8))),",
                   "base: None,", "subdir edge  (")
 
+    def test_same_table_edge_marked_walkable(self):
+        # ExifOffset's SubDirectory has no TagTable: the edge exists only as
+        # an unwalked marker (spec v1.1). Clearing the marker makes a walk
+        # ExifTool does not do -- a wrong fact, exactly one mismatch.
+        self._one('dir_name: Some("ExifIFD"),\n                validate: false,\n'
+                  '                unwalked: Some("same-table recursion (TagTable absent)"),',
+                  'dir_name: Some("ExifIFD"),\n                validate: false,\n'
+                  '                unwalked: None,', "subdir edge  (")
+
+    def test_same_table_edge_naming_another_table(self):
+        # Exif.pm:6939-6944: the enclosing table, not any other.
+        self._one('                module: "Exif",\n                table: "Main",',
+                  '                module: "Olympus",\n                table: "Main",', "subdir edge  (")
+
+    def test_walkable_edge_marked_unwalked(self):
+        # Kodak::IFD has a TagTable and no ProcessProc: refusing to walk it
+        # under a reason is a wrong fact too (the walk would silently lose
+        # every tag behind it while the census says the edge is honoured).
+        self._one('dir_name: Some("KodakIFD"),\n                validate: false,\n'
+                  '                unwalked: None,',
+                  'dir_name: Some("KodakIFD"),\n                validate: false,\n'
+                  '                unwalked: Some("ProcessProc Image::ExifTool::ProcessTIFF"),',
+                  "subdir edge  (")
+
     def test_edge_invented_where_exiftool_refuses(self):
-        # ExifOffset's SubDirectory has no TagTable: any edge is wrong.
-        self._one(
-            "print_conv: PrintConv::None,\n            subdir: None,\n        },\n        IfdTag {\n"
-            "            id: 41985,",
-            "print_conv: PrintConv::None,\n            subdir: Some(IfdSubdirEdge { module: \"Exif\", "
-            "table: \"Main\", start: IfdStart::Val(0), base: None, byte_order: IfdByteOrder::Inherit, "
-            "fix_format: None, sub_ifd: true, max_subdirs: None, dir_name: Some(\"ExifIFD\"), "
-            "validate: false }),\n        },\n        IfdTag {\n            id: 41985,",
+        # A TagTable that is present but unparseable: no edge, walked or not,
+        # is right. Kodak::IFD's oracle row is rewritten to such a TagTable.
+        self._one_oracle(
+            "IFD\tExif\tMain\t33424\tSUBDIR\tImage::ExifTool::Kodak::IFD\t$val",
+            "IFD\tExif\tMain\t33424\tSUBDIR\tImage::ExifTool::Kodak\t$val",
             "require a refusal",
         )
+
+    def _one_oracle(self, old, new, label, expected=1):
+        assert ORACLE.count(old) == 1, old
+        failed, report = _run(text=ORACLE.replace(old, new))
+        self.assertEqual(failed, expected, report)
+        self.assertIn(label, report)
+        return report
 
     def test_wrong_table_groups_set_group1_priority(self):
         self._one('group2: "Image",', 'group2: "Other",', "table groups  (")
@@ -543,7 +622,7 @@ class RefusalsAreNotMismatches(unittest.TestCase):
             "                base: None,\n                byte_order: IfdByteOrder::Big,\n"
             "                fix_format: None,\n                sub_ifd: false,\n"
             "                max_subdirs: None,\n                dir_name: None,\n"
-            "                validate: false,\n            }),",
+            "                validate: false,\n                unwalked: None,\n            }),",
             "subdir: None,",
         )
         failed, report = _run(gen)
@@ -618,9 +697,21 @@ class ExpectedEdge(unittest.TestCase):
         self.assertEqual(e(self._fact(start="$valuePtr + 12"))[0]["start"], ("ValuePtr", 12))
         self.assertEqual(e(self._fact(start="$val - 36"))[0]["start"], ("Val", -36))
         self.assertIsNone(e(self._fact(start="4"))[0])
+        # Spec v1.1 (slice IFD1): no TagTable -> the ENCLOSING table, unwalked;
+        # a ProcessProc other than ProcessBinaryData -> unwalked; nothing
+        # else is. Without the enclosing name a TagTable-less row has no
+        # honest edge.
         self.assertIsNone(e(self._fact(tagtable="-"))[0])
-        self.assertIsNone(e(self._fact(processproc="Image::ExifTool::MakerNotes::ProcessUnknown"))[0])
-        self.assertIsNotNone(e(self._fact(processproc="Image::ExifTool::ProcessBinaryData"))[0])
+        same = e(self._fact(tagtable="-", dirname="ExifIFD", subifd=True), ("Exif", "Main"))[0]
+        self.assertEqual((same["module"], same["table"], same["dir_name"], same["sub_ifd"], same["unwalked"]),
+                         ("Exif", "Main", "ExifIFD", True, True))
+        proc = e(self._fact(processproc="Image::ExifTool::MakerNotes::ProcessUnknown"))[0]
+        self.assertEqual((proc["module"], proc["table"], proc["unwalked"]), ("Olympus", "Equipment", True))
+        self.assertFalse(e(self._fact(processproc="Image::ExifTool::ProcessBinaryData"))[0]["unwalked"])
+        self.assertFalse(e(self._fact())[0]["unwalked"])
+        # Every other refusal stands, unwalked or not.
+        self.assertIsNone(e(self._fact(tagtable="-", start="4"), ("Exif", "Main"))[0])
+        self.assertIsNone(e(self._fact(tagtable="Image::ExifTool::Olympus"), ("Exif", "Main"))[0])
         self.assertIsNone(e(self._fact(base="$start + foo()"))[0])
         self.assertTrue(e(self._fact(base="$start - 8"))[0]["base_present"])
         self.assertEqual(e(self._fact(fixformat="ifd", subifd=True))[0]["fix_format"], "None")
@@ -641,8 +732,10 @@ class ReachabilityCensus(unittest.TestCase):
         self.assertTrue(by[("Exif", "Main")]["gate_a"])
         self.assertEqual(by[("Olympus", "Main")]["blocked_by"], [("ifd_expr_domain_unknown", 2)])
         self.assertEqual(by[("Olympus", "Main")]["fields"], 6)  # 4 tags + 2 alternatives
+        # ExifOffset's unwalked same-table edge is in the census too: the
+        # census sees every emitted edge, the walk decides.
         self.assertEqual(sorted(by[("Exif", "Main")]["edges"]),
-                         [("IPTC", "Main"), ("Kodak", "IFD"), ("Nikon", "NEFInfo")])
+                         [("Exif", "Main"), ("IPTC", "Main"), ("Kodak", "IFD"), ("Nikon", "NEFInfo")])
         self.assertEqual(by[("Olympus", "Main")]["edges"],
                          [("Minolta", "CameraSettings"), ("Olympus", "Equipment"), ("Olympus", "Equipment")])
         enabled, eligible, refused = reachability.classify(tables, {("Exif", "Main")}, {("FLIR", "Main")})
@@ -674,7 +767,8 @@ class ReachabilityCensus(unittest.TestCase):
         self.assertIn("hand-wired find_ifd_table call sites", out)
         self.assertIn("  FLIR::Main                   eligible", out)
         self.assertIn("  Olympus::Main                   ifd_expr_domain_unknown=2", out)
-        self.assertIn("SubDirectory edges: 6 from 2 tables (1 of which are hand-wired today)", out)
+        self.assertIn("SubDirectory edges: 7 from 2 tables (1 of which are hand-wired today)", out)
+        self.assertIn("-> Exif::Main", out)
         self.assertIn("  -> IPTC::Main                   x1   binary:eligible", out)
         self.assertIn("  -> Kodak::IFD                    x1   no-layout", out)
         self.assertIn("  -> Olympus::Equipment              x2   enabled", out)

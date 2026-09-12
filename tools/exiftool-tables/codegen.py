@@ -1313,9 +1313,12 @@ GATE_A_DISQUALIFYING = (
     # (subdir: None), so every tag on the far side is silently absent. Same
     # rule as the binary `subdir_refused_*` set above. `ifd_subdir_refused_
     # validate` is deliberately NOT here: that edge IS emitted (`validate:
-    # true`) and it is the walk that refuses it, countably, at runtime.
+    # true`) and it is the walk that refuses it, countably, at runtime. The
+    # same argument retires `ifd_subdir_refused_processproc` and covers a
+    # SubDirectory with no `TagTable` (slice IFD1, `compile_ifd_subdir`):
+    # both edges ARE emitted, with `unwalked: Some(reason)`, and counted
+    # under the two `_unwalked` counters in the block below.
     "ifd_subdir_refused_tagtable",
-    "ifd_subdir_refused_processproc",
     "ifd_subdir_refused_unmodeled_key",
     "ifd_subdir_refused_start",
     "ifd_subdir_refused_base",
@@ -1332,6 +1335,35 @@ GATE_A_DISQUALIFYING = (
 # reads (the entry says its own count; Writable is the writer's; FixFormat is
 # consulted only by WriteExif.pl:1760). `ifd_set_group1_flag` -- table-level,
 # see `gen_ifd_table`.
+#
+# Slice IFD1 (Exif::Main through the engine at a NAMED directory) adds four
+# more, on the `ifd_subdir_refused_validate` argument -- an entry that marks
+# its place and is refused countably at the walk is honest absence, not
+# silence:
+# `ifd_subdir_same_table_unwalked`, `ifd_subdir_processproc_unwalked` --
+# the edge IS emitted (`unwalked: Some(reason)`): an absent `TagTable` means
+# the enclosing table itself (Exif.pm:6939-6944 `$newTagTable =
+# $tagTablePtr; # use existing table`), and a `ProcessProc` other than
+# `ProcessBinaryData` is Perl the walk cannot run; `descend` returns on the
+# edge at runtime exactly as it does for `validate`, so every tag behind the
+# pointer is absent, never wrong.
+# `ifd_variant_unreported_skipped`, `ifd_variant_makernotes_dispatch` -- a
+# `_variants` group whose every alternative is offset-class
+# (`_has_offset_semantics`: the `ifd_isoffset_unsupported` argument again) or
+# a SubDirectory the walk could never follow (no `TagTable`, or a
+# `ProcessProc` other than `ProcessBinaryData` -- the two shapes
+# `compile_ifd_subdir` emits unwalked; a SubDirectory's own value is never
+# reported, Exif.pm:7103-7104, so the edge is all the alternative has), or
+# the group that IS `\@MakerNotes::Main` (Exif.pm:2496 `0x927c`; the hand
+# dispatcher owns maker notes), can never produce a value or a walk the
+# engine would have to get right whichever alternative wins. NOTHING is
+# emitted for the id -- the engine treats an id with no tag and no group as
+# unknown (no row) -- and the hand post-passes stay its only producer.
+# Grammar work could not clear these groups: even a compiled Condition would
+# select an alternative `gen_ifd_tag_literal` refuses
+# (`tag_variant_field_unsupported`) or an edge `descend` returns on. A group
+# with ONE alternative whose edge is walkable (Olympus::Main 0x2010,
+# Canon::Main 0x000d) is NOT this: it takes the compiling path as before.
 
 
 def gate_a_for(table_stats, offset_hazard):
@@ -1686,7 +1718,20 @@ def parse_ifd_tag_id(key):
 # `ifd_engine.rs` reads exactly that) -- so an `undef`-typed CameraID under
 # `Format => 'string'` (Olympus.pm) is NUL-truncated as ExifTool does rather
 # than reported as bytes. Counted (informational) under `ifd_format_unsized`.
-IFD_UNSIZED_FORMATS = {"string": "Some(Fmt::Str(0))", "undef": "Some(Fmt::Undef(0))"}
+#
+# `binary` is a third spelling of the same unsized read: `%formatSize` has
+# `binary => 1` beside `string`/`undef` (ExifTool.pm:6236), `ReadValue` reads
+# all three with one `substr` (ExifTool.pm:6308-6309) and NUL-truncates only
+# `string` (:6311). So a bare `Format => 'binary'` (ColorMap, Exif.pm:961-965;
+# PhotoshopSettings, Exif.pm:1997-2004) IS `Fmt::Undef(0)`, read and
+# domain-typed (`bytes`) exactly as `undef`. Counted `ifd_format_unsized` plus
+# `ifd_format_binary_as_undef` (informational). Values: `(fmt_src,
+# domain_spelling)`.
+IFD_UNSIZED_FORMATS = {
+    "string": ("Some(Fmt::Str(0))", "string"),
+    "undef": ("Some(Fmt::Undef(0))", "undef"),
+    "binary": ("Some(Fmt::Undef(0))", "undef"),
+}
 
 
 def ifd_format_for(tag, stats):
@@ -1694,9 +1739,9 @@ def ifd_format_for(tag, stats):
     or `None` when the spelling is refused (counted `ifd_format_unsupported`).
 
     Per the contract: `fmt[N]` -> `Some(Fmt)` plus `count: Some(N)`; a scalar
-    spelling -> `Some(Fmt)`; a bare `string`/`undef` -> the unsized
+    spelling -> `Some(Fmt)`; a bare `string`/`undef`/`binary` -> the unsized
     `Some(Fmt::Str(0))`/`Some(Fmt::Undef(0))` (see `IFD_UNSIZED_FORMATS`);
-    anything else -- `ifd`, `unicode`, `binary`,
+    anything else -- `ifd`, `unicode`,
     `utf8`, Matroska's `unsigned`, PICT's `Rect`, IPTC's `string[0,32]` /
     `digits[8]` -- is refused. Note that `%formatNumber` (Exif.pm:96) has no
     sized spelling at all, so a `fmt[N]` Format is only ever declared by the
@@ -1719,7 +1764,10 @@ def ifd_format_for(tag, stats):
                 return f"Some(Fmt::Undef({n}))", n, base
         elif f in IFD_UNSIZED_FORMATS:
             stats["ifd_format_unsized"] += 1
-            return IFD_UNSIZED_FORMATS[f], None, f
+            if f == "binary":
+                stats["ifd_format_binary_as_undef"] += 1
+            fmt_src, domain_spelling = IFD_UNSIZED_FORMATS[f]
+            return fmt_src, None, domain_spelling
         elif f in SCALAR_FORMATS:
             return f"Some(Fmt::{SCALAR_FORMATS[f][0]})", None, f
     stats["ifd_format_unsupported"] += 1
@@ -1984,11 +2032,19 @@ def compile_ifd_byte_order(value):
 class IfdGenContext:
     """Run-wide facts the per-tag emitter needs: which `(module, table)`
     pairs are IFD-style and which are ProcessBinaryData, so an edge's target
-    kind can be counted without a second pass over the generated Rust."""
+    kind can be counted without a second pass over the generated Rust; and
+    the rows of `@Image::ExifTool::MakerNotes::Main` (`makernotes_main`),
+    so `compile_ifd_variant_group` can recognise the maker-note dispatch
+    array where a table references it (Exif.pm:2496 `0x927c =>
+    \\@Image::ExifTool::MakerNotes::Main`): `dump_tables.pl` inlines the
+    referenced array as that key's `_variants` (:204) and dumps the array
+    itself under the module's `arrays` (:285-313), so the two are equal
+    lists of the same 94 rows -- an exact fact, not a name heuristic."""
 
-    def __init__(self, ifd_tables, binary_tables):
+    def __init__(self, ifd_tables, binary_tables, makernotes_main=None):
         self.ifd_tables = ifd_tables
         self.binary_tables = binary_tables
+        self.makernotes_main = makernotes_main
 
     @classmethod
     def from_doc(cls, doc):
@@ -2000,7 +2056,15 @@ class IfdGenContext:
                     binary.add((mod_name, tbl_name))
                 elif is_ifd_table(meta):
                     ifd.add((mod_name, tbl_name))
-        return cls(ifd, binary)
+        arrays = (doc["modules"].get("MakerNotes") or {}).get("arrays") or {}
+        main = arrays.get("Main") if isinstance(arrays, dict) else None
+        rows = main.get("rows") if isinstance(main, dict) else None
+        return cls(ifd, binary, rows if isinstance(rows, list) and rows else None)
+
+    def is_makernotes_dispatch(self, variants):
+        """`variants` is the `\\@MakerNotes::Main` array itself (see the
+        class doc). Absent from the dump -> never (a missing fact refuses)."""
+        return self.makernotes_main is not None and variants == self.makernotes_main
 
     def target_kind(self, module, table):
         if (module, table) in self.ifd_tables:
@@ -2010,12 +2074,33 @@ class IfdGenContext:
         return "other"
 
 
-def compile_ifd_subdir(tag, stats, ctx):
+def compile_ifd_subdir(tag, stats, ctx, enclosing=None):
     """A tag's `SubDirectory` (tag already flag-expanded) as `Some(IfdSubdirEdge
     {...})` source, or `"None"` with exactly one `ifd_subdir_refused_*`
     counter bumped. Never a guess: see `IFD_SUBDIR_KEYS`, `compile_ifd_start`,
     `compile_ifd_byte_order` and `src/exiftool_tables/ifd_schema.rs` for the
     Exif.pm citations behind each check.
+
+    Two shapes are emitted but marked `unwalked: Some(reason)` -- the edge
+    describes the pointer exactly and `descend` (ifd_engine.rs) returns on
+    it, the way it returns on `validate` -- rather than refused:
+    * no `TagTable`: ExifTool walks the pointer with the ENCLOSING table
+      (Exif.pm:6939-6944 `$newTagTable = $tagTablePtr; # use existing
+      table`), so `module`/`table` name `enclosing` (`(module, table)` of the
+      table being generated) and the edge is counted
+      `ifd_subdir_same_table_unwalked`. A real same-table walk is not this
+      slice's: from a directory the hand parser reached, the engine's guard
+      cannot see the hand-walked IFD0/ExifIFD it would re-enter. With
+      `enclosing` unknown (`None`) there is no honest name, so the edge is
+      refused `ifd_subdir_refused_tagtable` as before.
+    * `ProcessProc` other than `ProcessBinaryData` (ProcessSubTIFF,
+      ProcessTiffIFD, ...): Perl the walk cannot run; emitted with the sub's
+      name in the reason, counted `ifd_subdir_processproc_unwalked`. Keys
+      the schema does not model are then appended to the reason instead of
+      refusing (nothing reads them: the edge is never walked); every other
+      field must still compile, or the edge is refused as usual.
+    A `TagTable` that IS present but unparseable stays
+    `ifd_subdir_refused_tagtable` (disqualifying).
 
     `FixFormat` is read from the TAG (it is a sibling of `Flags => 'SubIFD'`,
     not a SubDirectory key) and carried as the contract says -- `'ifd'` means
@@ -2028,25 +2113,38 @@ def compile_ifd_subdir(tag, stats, ctx):
     if not isinstance(sd, dict):
         stats["ifd_subdir_refused_tagtable"] += 1
         return "None"
-    try:
-        module, table = subdirs.parse_tag_table(sd.get("TagTable"))
-    except subdirs.SubdirCompileError:
-        stats["ifd_subdir_refused_tagtable"] += 1
-        return "None"
+    unwalked = []
+    if sd.get("TagTable") is None:
+        # Exif.pm:6939-6944: no TagTable -> the enclosing table, unwalked.
+        if enclosing is None:
+            stats["ifd_subdir_refused_tagtable"] += 1
+            return "None"
+        module, table = enclosing
+        unwalked.append("same-table recursion (TagTable absent)")
+    else:
+        try:
+            module, table = subdirs.parse_tag_table(sd.get("TagTable"))
+        except subdirs.SubdirCompileError:
+            stats["ifd_subdir_refused_tagtable"] += 1
+            return "None"
 
     pp = sd.get("ProcessProc")
     if pp is not None:
         pp_name = pp.get("__name") if isinstance(pp, dict) else (pp if isinstance(pp, str) else None)
         if not (pp_name or "").endswith("ProcessBinaryData"):
-            stats["ifd_subdir_refused_processproc"] += 1
-            return "None"
+            unwalked.append(f"ProcessProc {pp_name or '<unnamed CODE>'}")
 
     unmodeled = sorted(k for k in sd if k not in IFD_SUBDIR_KEYS and k not in IFD_SUBDIR_IGNORED_KEYS)
     if unmodeled:
-        stats["ifd_subdir_refused_unmodeled_key"] += 1
-        for key in unmodeled:
-            stats["ifd_subdir_unmodeled_keys"][key] += 1
-        return "None"
+        if unwalked:
+            # Never read: the edge is not walked. Named in the reason so the
+            # census can still see them.
+            unwalked.append("unmodeled SubDirectory key(s) " + ", ".join(unmodeled))
+        else:
+            stats["ifd_subdir_refused_unmodeled_key"] += 1
+            for key in unmodeled:
+                stats["ifd_subdir_unmodeled_keys"][key] += 1
+            return "None"
 
     try:
         start_src = compile_ifd_start(sd.get("Start"))
@@ -2122,18 +2220,31 @@ def compile_ifd_subdir(tag, stats, ctx):
         # knows which edges those are; the edge itself is unchanged.
         stats["ifd_subdir_edge_makernotes"] += 1
 
+    # Counted here, not where each reason was found: a refusal above must
+    # leave exactly one `ifd_subdir_refused_*` counter and nothing else.
+    unwalked_src = "None"
+    if unwalked:
+        if unwalked[0].startswith("same-table"):
+            stats["ifd_subdir_same_table_unwalked"] += 1
+        if any(r.startswith("ProcessProc ") for r in unwalked):
+            stats["ifd_subdir_processproc_unwalked"] += 1
+        reason = "; ".join(unwalked)
+        stats["ifd_subdir_unwalked_reasons"][reason] += 1
+        unwalked_src = f'Some("{rust_str(reason)}")'
+
     return (
         "Some(IfdSubdirEdge { "
         f'module: "{rust_str(module)}", table: "{rust_str(table)}", '
         f"start: {start_src}, base: {base_src}, byte_order: {byte_order_src}, "
         f"fix_format: {fix_src}, sub_ifd: {'true' if sub_ifd else 'false'}, "
         f"max_subdirs: {max_src}, dir_name: {dir_src}, "
-        f"validate: {'true' if validate else 'false'} }})"
+        f"validate: {'true' if validate else 'false'}, "
+        f"unwalked: {unwalked_src} }})"
     )
 
 
 def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
-                        condition_resolved=False):
+                        condition_resolved=False, enclosing=None):
     """One `IfdTag { ... }` literal for `tag` at `tag_id`, as `(src, None)`,
     or `(None, reason)` when the tag is refused -- `reason` is the name of
     the one counter that says why, for `compile_ifd_variant_group`'s report.
@@ -2258,7 +2369,7 @@ def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
 
     subdir_src = "None"
     if tag.get("SubDirectory") is not None:
-        subdir_src = compile_ifd_subdir(tag, stats, ctx)
+        subdir_src = compile_ifd_subdir(tag, stats, ctx, enclosing)
 
     omitted_src = ifd_omitted_for(
         tag, stats, condition_resolved, value_conv_modeled, pc_refused, member is not None
@@ -2291,7 +2402,53 @@ IFD_NESTED_STAT_KEYS = (
     "ifd_print_conv_withheld_by",
     "ifd_variant_field_reasons",
     "ifd_gate_a_blocked_by",
+    "ifd_subdir_unwalked_reasons",
+    "ifd_variant_unreported_ids",
 )
+
+# `compile_ifd_variant_group`'s third answer beside a literal and `None`: the
+# group was classified unreported (see `GATE_A_DISQUALIFYING`'s NOT block)
+# and nothing is emitted for the id -- without `tag_variant_skipped`.
+IFD_VARIANT_UNREPORTED = object()
+
+
+def _subdir_is_unwalkable(sd):
+    """The two `SubDirectory` shapes `compile_ifd_subdir` emits with
+    `unwalked: Some(..)` -- no `TagTable` (Exif.pm:6939-6944: the enclosing
+    table itself) or a `ProcessProc` other than `ProcessBinaryData` -- so
+    `descend` would return on the edge whatever else it carries. A
+    SubDirectory that is not a hash is refused, not unwalkable: False."""
+    if not isinstance(sd, dict):
+        return False
+    if sd.get("TagTable") is None:
+        return True
+    pp = sd.get("ProcessProc")
+    if pp is None:
+        return False
+    pp_name = pp.get("__name") if isinstance(pp, dict) else (pp if isinstance(pp, str) else None)
+    return not (pp_name or "").endswith("ProcessBinaryData")
+
+
+def _alternative_is_unreported(alt):
+    """True when `alt` could never give the walk anything to get right: an
+    offset-class tag (`IFD_OFFSET_KEYS`, after `expand_flags`, since
+    `IsOffset` may arrive via `Flags`), or a SubDirectory the walk could
+    never follow (`_subdir_is_unwalkable`; a SubDirectory's own value is
+    never reported, Exif.pm:7103-7104, so the edge is all it has). A
+    SubDirectory with a walkable edge is REPORTED for this purpose (its
+    target's tags are the value), as is any plain tag. A nested `_variants`,
+    or a `Flags` entry the generator cannot name, is not classifiable ->
+    False, so the group takes the compiling path and is counted there."""
+    if not isinstance(alt, dict) or "_variants" in alt:
+        return False
+    trial = Counter()
+    expanded = expand_flags(alt, trial)
+    if trial["ifd_flags_unreadable"]:
+        return False
+    if _has_offset_semantics(expanded):
+        return True
+    sd = expanded.get("SubDirectory")
+    return sd is not None and _subdir_is_unwalkable(sd)
 
 
 def new_ifd_stats():
@@ -2301,7 +2458,8 @@ def new_ifd_stats():
     return stats
 
 
-def compile_ifd_variant_group(tag, tag_id, stats, verified_exprs, ctx, table_meta):
+def compile_ifd_variant_group(tag, tag_id, stats, verified_exprs, ctx, table_meta,
+                              enclosing=None):
     """A `_variants` array at `tag_id` as `IfdVariantGroup {...}` source, or
     `None` -- atomically, for `compile_variant_group`'s reason: dropping one
     alternative changes first-match order (`GetTagInfo`), and the wrong
@@ -2310,8 +2468,32 @@ def compile_ifd_variant_group(tag, tag_id, stats, verified_exprs, ctx, table_met
     bumps exactly one of `tag_variant_cond_unsupported` /
     `tag_variant_field_unsupported` (the caller adds `tag_variant_skipped`),
     and records the refusing Condition text or per-tag reason so the REPORT
-    can name what the grammar would have to learn."""
+    can name what the grammar would have to learn.
+
+    Before any Condition is compiled the group is classified (slice IFD1):
+    the `\\@MakerNotes::Main` dispatch array (`ctx.is_makernotes_dispatch`,
+    Exif.pm:2496) is `ifd_variant_makernotes_dispatch`, and a group whose
+    EVERY alternative `_alternative_is_unreported` is
+    `ifd_variant_unreported_skipped` -- both return `IFD_VARIANT_UNREPORTED`:
+    nothing is emitted for the id and neither counter disqualifies (see the
+    NOT block above `gate_a_for`). One reportable alternative -- a plain
+    tag, or a SubDirectory with a walkable edge -- is enough to take the
+    compiling path, where the group is refused atomically as before; the
+    classification never drops an alternative."""
     variants = tag["_variants"]
+    where = f"{enclosing[0]}::{enclosing[1]} " if enclosing else ""
+    if ctx.is_makernotes_dispatch(variants):
+        stats["ifd_variant_makernotes_dispatch"] += 1
+        stats["ifd_variant_unreported_ids"][
+            f"{where}{tag_id:#06x} MakerNotes::Main dispatch ({len(variants)} alternatives)"
+        ] += 1
+        return IFD_VARIANT_UNREPORTED
+    if variants and all(_alternative_is_unreported(v) for v in variants):
+        stats["ifd_variant_unreported_skipped"] += 1
+        stats["ifd_variant_unreported_ids"][
+            f"{where}{tag_id:#06x} ({len(variants)} offset-class/unwalkable-SubDirectory alternatives)"
+        ] += 1
+        return IFD_VARIANT_UNREPORTED
     trial = new_ifd_stats()
     alt_srcs = []
     for v in variants:
@@ -2327,7 +2509,8 @@ def compile_ifd_variant_group(tag, tag_id, stats, verified_exprs, ctx, table_met
             stats["ifd_variant_cond_texts"][text] += 1
             return None
         tag_src, reason = gen_ifd_tag_literal(
-            v, tag_id, trial, verified_exprs, ctx, table_meta, condition_resolved=True
+            v, tag_id, trial, verified_exprs, ctx, table_meta, condition_resolved=True,
+            enclosing=enclosing,
         )
         if tag_src is None:
             stats["tag_variant_field_unsupported"] += 1
@@ -2375,13 +2558,19 @@ def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx):
     rows, variant_rows = [], []
     for tag_id, tag in sorted(entries, key=lambda e: e[0]):
         if "_variants" in tag:
-            group_src = compile_ifd_variant_group(tag, tag_id, stats, verified_exprs, ctx, meta)
+            group_src = compile_ifd_variant_group(
+                tag, tag_id, stats, verified_exprs, ctx, meta, enclosing=(mod_name, tbl_name)
+            )
+            if group_src is IFD_VARIANT_UNREPORTED:
+                continue
             if group_src is None:
                 stats["tag_variant_skipped"] += 1
                 continue
             variant_rows.append(f"    {group_src},")
             continue
-        tag_src, _reason = gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, meta)
+        tag_src, _reason = gen_ifd_tag_literal(
+            tag, tag_id, stats, verified_exprs, ctx, meta, enclosing=(mod_name, tbl_name)
+        )
         if tag_src is None:
             continue
         rows.append(f"    {tag_src},")
@@ -2575,6 +2764,8 @@ IFD_REPORT = (
         ("  Flags SubIFD / FixFormat ifd (sub_ifd: true)", "ifd_subdir_edge_sub_ifd"),
         ("  on a MakerNotes-marked tag (base fixing applies beyond it)", "ifd_subdir_edge_makernotes"),
         ("  carrying Validate (emitted; the walk refuses it)", "ifd_subdir_refused_validate"),
+        ("  no TagTable = the enclosing table (emitted unwalked; not disqualifying)", "ifd_subdir_same_table_unwalked"),
+        ("  ProcessProc other than ProcessBinaryData (emitted unwalked; not disqualifying)", "ifd_subdir_processproc_unwalked"),
     )),
     ("IFD tables: emitted with semantics recorded but not applied (the walk withholds)", (
         ("ValueConv", "omitted_value_conv"),
@@ -2588,7 +2779,8 @@ IFD_REPORT = (
         ("table keys not an integer in 0..=0xFFFF (tag not emitted)", "ifd_tag_id_unrepresentable"),
         ("IsOffset/OffsetPair/DataTag/ChangeBase tags (not emitted; hand post-passes)", "ifd_isoffset_unsupported"),
         ("Format outside the scalar grammar (tag not emitted)", "ifd_format_unsupported"),
-        ("Format bare string/undef (emitted as the unsized Fmt::Str(0)/Undef(0); informational)", "ifd_format_unsized"),
+        ("Format bare string/undef/binary (emitted as the unsized Fmt::Str(0)/Undef(0); informational)", "ifd_format_unsized"),
+        ("  of which `binary` (read as `undef`, ExifTool.pm:6308-6311)", "ifd_format_binary_as_undef"),
         ("conversions refused: no scalar domain from Format/Writable/Count", "ifd_expr_domain_unknown"),
         ("BITMASK with BitsPerWord/BitsTotal (PrintConv refused)", "ifd_bitmask_words_unsupported"),
         ("PrintConv refused and WITHHELD per tag (Omitted.print_conv; not table-disqualifying)", "ifd_print_conv_withheld"),
@@ -2611,12 +2803,13 @@ IFD_REPORT = (
         ("variant groups refused (atomic)", "tag_variant_skipped"),
         ("  of which a Condition outside the closed grammar", "tag_variant_cond_unsupported"),
         ("  of which an alternative refused for a per-tag reason", "tag_variant_field_unsupported"),
+        ("variant groups unreported: every alternative offset-class or an unwalkable SubDirectory (nothing emitted; not disqualifying)", "ifd_variant_unreported_skipped"),
+        ("variant group is the MakerNotes::Main dispatch array (nothing emitted; not disqualifying)", "ifd_variant_makernotes_dispatch"),
         ("tag Groups naming only families 3+", "tag_group_unmodeled_family"),
         ("unnamed tags", "tag_no_name"),
     )),
     ("IFD tables: SubDirectory edges refused (tag emitted with omitted.subdirectory, subdir: None)", (
-        ("TagTable missing or an unrecognised shape", "ifd_subdir_refused_tagtable"),
-        ("ProcessProc other than ProcessBinaryData", "ifd_subdir_refused_processproc"),
+        ("TagTable an unrecognised shape (absent = the enclosing table, emitted unwalked; see above)", "ifd_subdir_refused_tagtable"),
         ("a SubDirectory key the schema does not model (OffsetPt, FixBase, ...)", "ifd_subdir_refused_unmodeled_key"),
         ("Start outside `$valuePtr [+-] n` / `$val [+-] n`", "ifd_subdir_refused_start"),
         ("Base outside the closed grammar", "ifd_subdir_refused_base"),
@@ -2655,6 +2848,8 @@ def print_ifd_report(ifd_stats):
         ("ifd_format_unsupported_spellings", "IFD Format spellings refused", 12),
         ("ifd_subdir_refused_start_spellings", "IFD SubDirectory Start spellings refused", 10),
         ("ifd_subdir_unmodeled_keys", "IFD SubDirectory keys the schema does not model", 10),
+        ("ifd_subdir_unwalked_reasons", "IFD SubDirectory edges emitted unwalked, by reason", 10),
+        ("ifd_variant_unreported_ids", "IFD variant groups unreported (nothing emitted for the id)", 10),
         ("unsupported_exprs", "IFD: top unsupported expressions", 10),
         ("value_conv_refused_expressions", "IFD: top refused ValueConv expressions", 10),
         ("dropped_code_refs", "IFD: PrintConv CODE refs refused (tag withheld)", 10),

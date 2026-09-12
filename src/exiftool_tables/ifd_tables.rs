@@ -228,6 +228,7 @@ pub static IFD_APPLE_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -1023,9 +1024,7 @@ pub static IFD_BPG_EXTENSIONS: IfdTable = IfdTable {
     group2: "Image",
     set_group1: None,
     priority: None,
-    gate_a: GateA {
-        blocked_by: &[("ifd_subdir_refused_processproc", 1)],
-    },
+    gate_a: GateA { blocked_by: &[] },
     tags: &[
         IfdTag {
             id: 0x0001,
@@ -1046,7 +1045,19 @@ pub static IFD_BPG_EXTENSIONS: IfdTable = IfdTable {
             raw_conv: None,
             value_conv: None,
             print_conv: PrintConv::None,
-            subdir: None,
+            subdir: Some(IfdSubdirEdge {
+                module: "Exif",
+                table: "Main",
+                start: IfdStart::ValuePtr(0),
+                base: None,
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: false,
+                max_subdirs: None,
+                dir_name: None,
+                validate: false,
+                unwalked: Some("ProcessProc Image::ExifTool::ProcessTIFF"),
+            }),
         },
         IfdTag {
             id: 0x0002,
@@ -1078,6 +1089,7 @@ pub static IFD_BPG_EXTENSIONS: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -1110,6 +1122,7 @@ pub static IFD_BPG_EXTENSIONS: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -1292,6 +1305,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -1324,6 +1338,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -1377,6 +1392,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -1409,6 +1425,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -1512,6 +1529,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2067,6 +2085,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2099,6 +2118,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2191,6 +2211,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2276,6 +2297,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2308,6 +2330,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2340,6 +2363,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2372,6 +2396,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2429,6 +2454,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2461,6 +2487,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2493,6 +2520,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2546,6 +2574,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2606,6 +2635,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2638,6 +2668,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2670,6 +2701,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2702,6 +2734,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2790,6 +2823,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2822,6 +2856,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2854,6 +2889,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -2886,6 +2922,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3002,6 +3039,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3034,6 +3072,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3080,6 +3119,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3112,6 +3152,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3200,6 +3241,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3232,6 +3274,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3285,6 +3328,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3394,6 +3438,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3426,6 +3471,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3458,6 +3504,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3490,6 +3537,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3522,6 +3570,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3554,6 +3603,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3586,6 +3636,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3618,6 +3669,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3650,6 +3702,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3682,6 +3735,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3714,6 +3768,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3746,6 +3801,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -3778,6 +3834,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: true,
+                unwalked: None,
             }),
         },
     ],
@@ -3902,6 +3959,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -3942,6 +4000,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -3982,6 +4041,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4022,6 +4082,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4062,6 +4123,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4102,6 +4164,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4142,6 +4205,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4182,6 +4246,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4222,6 +4287,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4257,6 +4323,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4302,6 +4369,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4375,6 +4443,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4419,6 +4488,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: true,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4457,6 +4527,7 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -4911,6 +4982,7 @@ pub static IFD_CASIO_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -5196,6 +5268,7 @@ pub static IFD_CASIO_TYPE2: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -7725,7 +7798,7 @@ pub static IFD_EXIF_COMPOSITE: IfdTable = IfdTable {
     variants: &[],
 };
 
-/// `Image::ExifTool::Exif::Main` -- 574 tags,
+/// `Image::ExifTool::Exif::Main` -- 576 tags,
 /// 1 `_variants` groups (IFD-style: PROCESS_PROC absent).
 /// `SET_GROUP1` declared (Exif.pm:7183: group 1 is the directory name the
 /// walk was given, not a static string) -- see codegen.py `gen_ifd_table`.
@@ -7738,15 +7811,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
     group2: "Image",
     set_group1: Some("1"),
     priority: None,
-    gate_a: GateA {
-        blocked_by: &[
-            ("ifd_format_unsupported", 2),
-            ("ifd_subdir_refused_processproc", 1),
-            ("ifd_subdir_refused_tagtable", 4),
-            ("tag_variant_cond_unsupported", 6),
-            ("tag_variant_skipped", 6),
-        ],
-    },
+    gate_a: GateA { blocked_by: &[] },
     tags: &[
         IfdTag {
             id: 0x0001,
@@ -8767,6 +8832,27 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
             subdir: None,
         },
         IfdTag {
+            id: 0x0140,
+            name: "ColorMap",
+            format: Some(Fmt::Undef(0)),
+            count: None,
+            writable: None,
+            groups: TagGroups::NONE,
+            flags: IfdFlags {
+                unknown: false,
+                binary: true,
+                list: false,
+                protected: false,
+                avoid: false,
+                priority: None,
+            },
+            omitted: Omitted::NONE,
+            raw_conv: None,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+        },
+        IfdTag {
             id: 0x0141,
             name: "HalftoneHints",
             format: None,
@@ -9132,7 +9218,19 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
             raw_conv: None,
             value_conv: None,
             print_conv: PrintConv::None,
-            subdir: None,
+            subdir: Some(IfdSubdirEdge {
+                module: "Exif",
+                table: "Main",
+                start: IfdStart::Val(0),
+                base: None,
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: true,
+                max_subdirs: Some(1),
+                dir_name: Some("GlobParamIFD"),
+                validate: false,
+                unwalked: Some("same-table recursion (TagTable absent)"),
+            }),
         },
         IfdTag {
             id: 0x0191,
@@ -9488,6 +9586,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("XMP"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -9651,6 +9750,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -11319,6 +11419,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: Some(1),
                 dir_name: Some("KodakIFD"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -11621,6 +11722,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("IPTC"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -11991,6 +12093,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("AFCP_IPTC"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -12083,6 +12186,40 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("LeafIFD"),
                 validate: false,
+                unwalked: None,
+            }),
+        },
+        IfdTag {
+            id: 0x8649,
+            name: "PhotoshopSettings",
+            format: Some(Fmt::Undef(0)),
+            count: None,
+            writable: None,
+            groups: TagGroups::NONE,
+            flags: IfdFlags::NONE,
+            omitted: Omitted {
+                value_conv: false,
+                raw_conv: false,
+                condition: false,
+                hook: false,
+                subdirectory: true,
+                print_conv: false,
+            },
+            raw_conv: None,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: Some(IfdSubdirEdge {
+                module: "Photoshop",
+                table: "Main",
+                start: IfdStart::ValuePtr(0),
+                base: None,
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: false,
+                max_subdirs: None,
+                dir_name: Some("Photoshop"),
+                validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -12108,7 +12245,19 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
             raw_conv: None,
             value_conv: None,
             print_conv: PrintConv::None,
-            subdir: None,
+            subdir: Some(IfdSubdirEdge {
+                module: "Exif",
+                table: "Main",
+                start: IfdStart::Val(0),
+                base: None,
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: true,
+                max_subdirs: None,
+                dir_name: Some("ExifIFD"),
+                validate: false,
+                unwalked: Some("same-table recursion (TagTable absent)"),
+            }),
         },
         IfdTag {
             id: 0x8773,
@@ -12140,6 +12289,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -12394,6 +12544,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: Some(1),
                 dir_name: Some("GPS"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -12669,6 +12820,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -13564,6 +13716,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -13687,6 +13840,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -13894,7 +14048,19 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
             raw_conv: None,
             value_conv: None,
             print_conv: PrintConv::None,
-            subdir: None,
+            subdir: Some(IfdSubdirEdge {
+                module: "Exif",
+                table: "Main",
+                start: IfdStart::Val(0),
+                base: None,
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: true,
+                max_subdirs: Some(1),
+                dir_name: Some("InteropIFD"),
+                validate: false,
+                unwalked: Some("same-table recursion (TagTable absent)"),
+            }),
         },
         IfdTag {
             id: 0xa101,
@@ -15316,6 +15482,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -15348,6 +15515,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("XML"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -15369,7 +15537,19 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
             raw_conv: None,
             value_conv: None,
             print_conv: PrintConv::None,
-            subdir: None,
+            subdir: Some(IfdSubdirEdge {
+                module: "Exif",
+                table: "Main",
+                start: IfdStart::ValuePtr(0),
+                base: Some(&BaseExpr::Start),
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: false,
+                max_subdirs: None,
+                dir_name: None,
+                validate: false,
+                unwalked: Some("ProcessProc Image::ExifTool::ProcessSubTIFF"),
+            }),
         },
         IfdTag {
             id: 0xc573,
@@ -16446,6 +16626,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -16527,6 +16708,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("AsShotICCProfile"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -16587,6 +16769,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("CurrentICCProfile"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -16770,7 +16953,21 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
             raw_conv: None,
             value_conv: None,
             print_conv: PrintConv::None,
-            subdir: None,
+            subdir: Some(IfdSubdirEdge {
+                module: "Exif",
+                table: "Main",
+                start: IfdStart::Val(0),
+                base: Some(&BaseExpr::Start),
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: true,
+                max_subdirs: Some(10),
+                dir_name: Some("ProfileIFD"),
+                validate: false,
+                unwalked: Some(
+                    "same-table recursion (TagTable absent); ProcessProc Image::ExifTool::Exif::ProcessTiffIFD; unmodeled SubDirectory key(s) Magic",
+                ),
+            }),
         },
         IfdTag {
             id: 0xc6f6,
@@ -17790,6 +17987,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -18328,6 +18526,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("JUMBF"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -18381,6 +18580,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -18434,6 +18634,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -18529,6 +18730,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -18691,6 +18893,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("KDC_IFD"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -19046,6 +19249,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: Some("SR2Private"),
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -19091,6 +19295,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -19144,6 +19349,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -19189,6 +19395,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -19234,6 +19441,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -19279,6 +19487,7 @@ pub static IFD_EXIF_MAIN: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -19998,6 +20207,7 @@ pub static IFD_FLAC_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -20072,6 +20282,7 @@ pub static IFD_FLAC_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -20125,6 +20336,7 @@ pub static IFD_FLAC_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -20290,6 +20502,7 @@ pub static IFD_FLIR_AFF: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -20322,6 +20535,7 @@ pub static IFD_FLIR_AFF: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -20529,6 +20743,7 @@ pub static IFD_FLASH_FLV: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -20561,6 +20776,7 @@ pub static IFD_FLASH_FLV: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -20593,6 +20809,7 @@ pub static IFD_FLASH_FLV: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -20661,6 +20878,7 @@ pub static IFD_FLASH_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -21151,6 +21369,7 @@ pub static IFD_FUJIFILM_IFD: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("FujiSubIFD"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -21765,6 +21984,7 @@ pub static IFD_FUJIFILM_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -21797,6 +22017,7 @@ pub static IFD_FUJIFILM_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -21829,6 +22050,7 @@ pub static IFD_FUJIFILM_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -22263,6 +22485,7 @@ pub static IFD_FUJIFILM_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -23143,6 +23366,7 @@ pub static IFD_FUJIFILM_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -23411,6 +23635,7 @@ pub static IFD_GIMP_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -23457,6 +23682,7 @@ pub static IFD_GIMP_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -33789,6 +34015,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -33828,6 +34055,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -33867,6 +34095,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -33906,6 +34135,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -33945,6 +34175,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -33984,6 +34215,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34023,6 +34255,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34062,6 +34295,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34101,6 +34335,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34140,6 +34375,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34179,6 +34415,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34218,6 +34455,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34257,6 +34495,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34296,6 +34535,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34335,6 +34575,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34374,6 +34615,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34413,6 +34655,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34445,6 +34688,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34477,6 +34721,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34509,6 +34754,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34548,6 +34794,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34587,6 +34834,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34626,6 +34874,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34665,6 +34914,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34704,6 +34954,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34743,6 +34994,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34782,6 +35034,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34821,6 +35074,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34860,6 +35114,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34892,6 +35147,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34931,6 +35187,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -34970,6 +35227,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35009,6 +35267,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35048,6 +35307,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35087,6 +35347,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35126,6 +35387,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35165,6 +35427,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35204,6 +35467,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35243,6 +35507,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35282,6 +35547,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35321,6 +35587,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35360,6 +35627,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35399,6 +35667,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35438,6 +35707,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35477,6 +35747,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35516,6 +35787,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35555,6 +35827,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35594,6 +35867,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35633,6 +35907,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35672,6 +35947,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35711,6 +35987,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35750,6 +36027,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35810,6 +36088,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35849,6 +36128,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35888,6 +36168,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35927,6 +36208,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35959,6 +36241,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -35998,6 +36281,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36037,6 +36321,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36076,6 +36361,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36115,6 +36401,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36154,6 +36441,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36186,6 +36474,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36225,6 +36514,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36264,6 +36554,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36303,6 +36594,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36342,6 +36634,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36381,6 +36674,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36420,6 +36714,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36452,6 +36747,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36491,6 +36787,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36530,6 +36827,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36569,6 +36867,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36608,6 +36907,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36640,6 +36940,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36679,6 +36980,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36718,6 +37020,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36757,6 +37060,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36796,6 +37100,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36835,6 +37140,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36874,6 +37180,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36913,6 +37220,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36952,6 +37260,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -36991,6 +37300,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37030,6 +37340,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37069,6 +37380,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37108,6 +37420,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37147,6 +37460,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37186,6 +37500,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37225,6 +37540,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37264,6 +37580,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37303,6 +37620,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37342,6 +37660,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37381,6 +37700,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37420,6 +37740,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37459,6 +37780,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37498,6 +37820,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37537,6 +37860,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37576,6 +37900,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37615,6 +37940,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37654,6 +37980,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37693,6 +38020,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37732,6 +38060,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37771,6 +38100,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37810,6 +38140,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37849,6 +38180,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37888,6 +38220,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37927,6 +38260,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -37966,6 +38300,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38005,6 +38340,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38044,6 +38380,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38083,6 +38420,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38122,6 +38460,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38161,6 +38500,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38200,6 +38540,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38239,6 +38580,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38278,6 +38620,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38317,6 +38660,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38356,6 +38700,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38395,6 +38740,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38427,6 +38773,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38466,6 +38813,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38505,6 +38853,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38544,6 +38893,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38583,6 +38933,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38622,6 +38973,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38661,6 +39013,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38700,6 +39053,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38739,6 +39093,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38778,6 +39133,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38817,6 +39173,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38856,6 +39213,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38895,6 +39253,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38927,6 +39286,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -38966,6 +39326,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39005,6 +39366,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39044,6 +39406,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39076,6 +39439,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39115,6 +39479,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39154,6 +39519,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39193,6 +39559,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39232,6 +39599,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39271,6 +39639,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39310,6 +39679,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39349,6 +39719,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39388,6 +39759,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39427,6 +39799,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39466,6 +39839,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39505,6 +39879,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39544,6 +39919,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39583,6 +39959,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39622,6 +39999,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39661,6 +40039,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39700,6 +40079,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39739,6 +40119,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39778,6 +40159,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39817,6 +40199,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39856,6 +40239,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39895,6 +40279,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39934,6 +40319,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -39973,6 +40359,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -40012,6 +40399,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -40051,6 +40439,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -40090,6 +40479,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -40129,6 +40519,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -40168,6 +40559,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -40207,6 +40599,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -40246,6 +40639,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -40285,6 +40679,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -40324,6 +40719,7 @@ pub static IFD_GARMIN_FIT: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -75288,6 +75684,7 @@ pub static IFD_HP_MAIN: IfdTable = IfdTable {
             max_subdirs: None,
             dir_name: None,
             validate: false,
+            unwalked: None,
         }),
     }],
     variants: &[],
@@ -76691,6 +77088,7 @@ pub static IFD_ISO_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -76723,6 +77121,7 @@ pub static IFD_ISO_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -76789,6 +77188,7 @@ pub static IFD_JPEG_EPPIM: IfdTable = IfdTable {
             max_subdirs: None,
             dir_name: None,
             validate: false,
+            unwalked: None,
         }),
     }],
     variants: &[],
@@ -77531,6 +77931,7 @@ pub static IFD_KODAK_IFD: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -87917,6 +88318,7 @@ pub static IFD_KODAK_IFD: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -89184,6 +89586,7 @@ pub static IFD_KODAK_IFD: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -89828,6 +90231,7 @@ pub static IFD_KODAK_META: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -89864,6 +90268,7 @@ pub static IFD_KODAK_META: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -90661,7 +91066,6 @@ pub static IFD_KODAK_TYPE8: IfdTable = IfdTable {
     priority: None,
     gate_a: GateA {
         blocked_by: &[
-            ("ifd_subdir_refused_processproc", 1),
             ("tag_variant_cond_unsupported", 6),
             ("tag_variant_skipped", 6),
         ],
@@ -90701,6 +91105,7 @@ pub static IFD_KODAK_TYPE8: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -90737,6 +91142,7 @@ pub static IFD_KODAK_TYPE8: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -90771,7 +91177,19 @@ pub static IFD_KODAK_TYPE8: IfdTable = IfdTable {
                     raw_conv: None,
                     value_conv: None,
                     print_conv: PrintConv::None,
-                    subdir: None,
+                    subdir: Some(IfdSubdirEdge {
+                        module: "Kodak",
+                        table: "SubIFD0",
+                        start: IfdStart::ValuePtr(0),
+                        base: Some(&BaseExpr::Start),
+                        byte_order: IfdByteOrder::Inherit,
+                        fix_format: None,
+                        sub_ifd: false,
+                        max_subdirs: None,
+                        dir_name: None,
+                        validate: false,
+                        unwalked: Some("ProcessProc Image::ExifTool::Kodak::ProcessKodakIFD"),
+                    }),
                 },
             ),
             (
@@ -90810,6 +91228,7 @@ pub static IFD_KODAK_TYPE8: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -91158,6 +91577,7 @@ pub static IFD_MPEG_XING: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -91193,9 +91613,7 @@ pub static IFD_MPF_MAIN: IfdTable = IfdTable {
     group2: "Image",
     set_group1: None,
     priority: None,
-    gate_a: GateA {
-        blocked_by: &[("ifd_subdir_refused_processproc", 1)],
-    },
+    gate_a: GateA { blocked_by: &[] },
     tags: &[
         IfdTag {
             id: 0xb000,
@@ -91244,7 +91662,19 @@ pub static IFD_MPF_MAIN: IfdTable = IfdTable {
             raw_conv: None,
             value_conv: None,
             print_conv: PrintConv::None,
-            subdir: None,
+            subdir: Some(IfdSubdirEdge {
+                module: "MPF",
+                table: "MPImage",
+                start: IfdStart::ValuePtr(0),
+                base: None,
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: false,
+                max_subdirs: None,
+                dir_name: None,
+                validate: false,
+                unwalked: Some("ProcessProc Image::ExifTool::MPF::ProcessMPImageList"),
+            }),
         },
         IfdTag {
             id: 0xb003,
@@ -91607,9 +92037,7 @@ pub static IFD_MACOS_MAIN: IfdTable = IfdTable {
     group2: "Other",
     set_group1: None,
     priority: None,
-    gate_a: GateA {
-        blocked_by: &[("ifd_subdir_refused_processproc", 1)],
-    },
+    gate_a: GateA { blocked_by: &[] },
     tags: &[
         IfdTag {
             id: 0x0002,
@@ -91641,6 +92069,7 @@ pub static IFD_MACOS_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -91662,7 +92091,19 @@ pub static IFD_MACOS_MAIN: IfdTable = IfdTable {
             raw_conv: None,
             value_conv: None,
             print_conv: PrintConv::None,
-            subdir: None,
+            subdir: Some(IfdSubdirEdge {
+                module: "MacOS",
+                table: "XAttr",
+                start: IfdStart::ValuePtr(0),
+                base: None,
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: false,
+                max_subdirs: None,
+                dir_name: None,
+                validate: false,
+                unwalked: Some("ProcessProc Image::ExifTool::MacOS::ProcessATTR"),
+            }),
         },
     ],
     variants: &[],
@@ -91734,6 +92175,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -91766,6 +92208,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -91798,6 +92241,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -91830,6 +92274,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -91967,6 +92412,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -91999,6 +92445,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92070,6 +92517,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92102,6 +92550,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92134,6 +92583,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92166,6 +92616,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92198,6 +92649,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92230,6 +92682,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92262,6 +92715,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92483,6 +92937,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92683,6 +93138,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92715,6 +93171,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92747,6 +93204,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92807,6 +93265,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92839,6 +93298,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92871,6 +93331,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -92924,6 +93385,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93075,6 +93537,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93156,6 +93619,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93188,6 +93652,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93220,6 +93685,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93273,6 +93739,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93354,6 +93821,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93442,6 +93910,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93572,6 +94041,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93647,6 +94117,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93679,6 +94150,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -93753,6 +94225,7 @@ pub static IFD_MATROSKA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -93931,6 +94404,7 @@ pub static IFD_MATROSKA_PROJECTION: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -93970,6 +94444,7 @@ pub static IFD_MATROSKA_PROJECTION: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -94130,6 +94605,7 @@ pub static IFD_MINOLTA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -94162,6 +94638,7 @@ pub static IFD_MINOLTA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -94194,6 +94671,7 @@ pub static IFD_MINOLTA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -94226,6 +94704,7 @@ pub static IFD_MINOLTA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -94258,6 +94737,7 @@ pub static IFD_MINOLTA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -94565,6 +95045,7 @@ pub static IFD_MINOLTA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -94629,6 +95110,7 @@ pub static IFD_MINOLTA_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -94869,6 +95351,7 @@ pub static IFD_MINOLTA_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -94908,6 +95391,7 @@ pub static IFD_MINOLTA_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -97657,6 +98141,7 @@ pub static IFD_NIKON_NEFINFO: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -97689,6 +98174,7 @@ pub static IFD_NIKON_NEFINFO: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -98023,6 +98509,7 @@ pub static IFD_NIKON_SCAN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -98055,6 +98542,7 @@ pub static IFD_NIKON_SCAN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -98364,6 +98852,7 @@ pub static IFD_NINTENDO_MAIN: IfdTable = IfdTable {
             max_subdirs: None,
             dir_name: None,
             validate: false,
+            unwalked: None,
         }),
     }],
     variants: &[],
@@ -98734,6 +99223,7 @@ pub static IFD_OLYMPUS_CAMERASETTINGS: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -98766,6 +99256,7 @@ pub static IFD_OLYMPUS_CAMERASETTINGS: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -100999,6 +101490,7 @@ pub static IFD_OLYMPUS_FOCUSINFO: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -102447,6 +102939,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -102479,6 +102972,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -103038,6 +103532,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -103321,6 +103816,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -104409,6 +104905,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104448,6 +104945,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104497,6 +104995,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104536,6 +105035,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104585,6 +105085,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104624,6 +105125,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104673,6 +105175,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104712,6 +105215,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104761,6 +105265,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104800,6 +105305,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104855,6 +105361,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104897,6 +105404,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -104970,6 +105478,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105009,6 +105518,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105058,6 +105568,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105097,6 +105608,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105146,6 +105658,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105185,6 +105698,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105234,6 +105748,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105273,6 +105788,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105322,6 +105838,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105361,6 +105878,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105410,6 +105928,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105449,6 +105968,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105498,6 +106018,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105537,6 +106058,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105586,6 +106108,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105625,6 +106148,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105674,6 +106198,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105713,6 +106238,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105762,6 +106288,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105801,6 +106328,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105850,6 +106378,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105889,6 +106418,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105938,6 +106468,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -105977,6 +106508,7 @@ pub static IFD_OLYMPUS_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -106690,6 +107222,7 @@ pub static IFD_OLYMPUS_RAWDEVELOPMENT2: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -108391,6 +108924,7 @@ pub static IFD_PSP_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -108423,6 +108957,7 @@ pub static IFD_PSP_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -108489,6 +109024,7 @@ pub static IFD_PSP_MAIN: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -108859,6 +109395,7 @@ pub static IFD_PANASONIC_LEICA3: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -108922,6 +109459,7 @@ pub static IFD_PANASONIC_LEICA4: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -108954,6 +109492,7 @@ pub static IFD_PANASONIC_LEICA4: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -108986,6 +109525,7 @@ pub static IFD_PANASONIC_LEICA4: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -109018,6 +109558,7 @@ pub static IFD_PANASONIC_LEICA4: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -109035,9 +109576,7 @@ pub static IFD_PANASONIC_LEICA5: IfdTable = IfdTable {
     group2: "Camera",
     set_group1: None,
     priority: Some(0),
-    gate_a: GateA {
-        blocked_by: &[("ifd_subdir_refused_processproc", 1)],
-    },
+    gate_a: GateA { blocked_by: &[] },
     tags: &[
         IfdTag {
             id: 0x0303,
@@ -109132,6 +109671,7 @@ pub static IFD_PANASONIC_LEICA5: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -109184,6 +109724,7 @@ pub static IFD_PANASONIC_LEICA5: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -109254,7 +109795,19 @@ pub static IFD_PANASONIC_LEICA5: IfdTable = IfdTable {
             raw_conv: None,
             value_conv: None,
             print_conv: PrintConv::None,
-            subdir: None,
+            subdir: Some(IfdSubdirEdge {
+                module: "PanasonicRaw",
+                table: "CameraIFD",
+                start: IfdStart::ValuePtr(0),
+                base: Some(&BaseExpr::Start),
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: false,
+                max_subdirs: None,
+                dir_name: None,
+                validate: false,
+                unwalked: Some("ProcessProc Image::ExifTool::ProcessTIFF"),
+            }),
         },
     ],
     variants: &[],
@@ -110584,6 +111137,7 @@ pub static IFD_PANASONIC_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -110755,6 +111309,7 @@ pub static IFD_PANASONIC_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -111874,6 +112429,7 @@ pub static IFD_PANASONIC_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -111906,6 +112462,7 @@ pub static IFD_PANASONIC_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -112585,6 +113142,7 @@ pub static IFD_PANASONIC_SUBDIR: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -112617,6 +113175,7 @@ pub static IFD_PANASONIC_SUBDIR: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -113674,9 +114233,7 @@ pub static IFD_PANASONICRAW_MAIN: IfdTable = IfdTable {
     group2: "Image",
     set_group1: None,
     priority: None,
-    gate_a: GateA {
-        blocked_by: &[("ifd_subdir_refused_processproc", 1)],
-    },
+    gate_a: GateA { blocked_by: &[] },
     tags: &[
         IfdTag {
             id: 0x0001,
@@ -113971,6 +114528,7 @@ pub static IFD_PANASONICRAW_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -114164,6 +114722,7 @@ pub static IFD_PANASONICRAW_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -114374,6 +114933,7 @@ pub static IFD_PANASONICRAW_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -114409,7 +114969,19 @@ pub static IFD_PANASONICRAW_MAIN: IfdTable = IfdTable {
             raw_conv: None,
             value_conv: None,
             print_conv: PrintConv::None,
-            subdir: None,
+            subdir: Some(IfdSubdirEdge {
+                module: "PanasonicRaw",
+                table: "CameraIFD",
+                start: IfdStart::ValuePtr(0),
+                base: Some(&BaseExpr::Start),
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: false,
+                max_subdirs: None,
+                dir_name: None,
+                validate: false,
+                unwalked: Some("ProcessProc Image::ExifTool::ProcessTIFF"),
+            }),
         },
         IfdTag {
             id: 0x0121,
@@ -114487,6 +115059,7 @@ pub static IFD_PANASONICRAW_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("XMP"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -114551,6 +115124,7 @@ pub static IFD_PANASONICRAW_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("IPTC"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -114587,6 +115161,7 @@ pub static IFD_PANASONICRAW_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("ExifIFD"),
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -114623,6 +115198,7 @@ pub static IFD_PANASONICRAW_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: Some("GPS"),
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -115971,6 +116547,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -116326,6 +116903,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -116425,6 +117003,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -116478,6 +117057,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -116803,6 +117383,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117287,6 +117868,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117319,6 +117901,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117400,6 +117983,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117453,6 +118037,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117485,6 +118070,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117517,6 +118103,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117549,6 +118136,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117581,6 +118169,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117613,6 +118202,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117659,6 +118249,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117769,6 +118360,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117801,6 +118393,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117847,6 +118440,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117879,6 +118473,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -117995,6 +118590,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -118027,6 +118623,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -118059,6 +118656,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -118556,6 +119154,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -118591,6 +119190,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -118683,6 +119283,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -118718,6 +119319,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -118761,6 +119363,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -118796,6 +119399,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -118841,6 +119445,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -118876,6 +119481,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -118921,6 +119527,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -118956,6 +119563,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -119001,6 +119609,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -119036,6 +119645,7 @@ pub static IFD_PENTAX_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -119301,6 +119911,7 @@ pub static IFD_PENTAX_TYPE2: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -120767,6 +121378,7 @@ pub static IFD_RICOH_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -121414,6 +122026,7 @@ pub static IFD_RICOH_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -121456,6 +122069,7 @@ pub static IFD_RICOH_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -121715,6 +122329,7 @@ pub static IFD_RICOH_SUBDIR: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -121747,6 +122362,7 @@ pub static IFD_RICOH_SUBDIR: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -121793,6 +122409,7 @@ pub static IFD_RICOH_SUBDIR: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -122101,6 +122718,7 @@ pub static IFD_SAMSUNG_TYPE2: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -122133,6 +122751,7 @@ pub static IFD_SAMSUNG_TYPE2: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -123223,6 +123842,7 @@ pub static IFD_SAMSUNG_TYPE2: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -123266,6 +123886,7 @@ pub static IFD_SAMSUNG_TYPE2: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -123757,6 +124378,7 @@ pub static IFD_SANYO_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -123836,6 +124458,7 @@ pub static IFD_SANYO_MAIN: IfdTable = IfdTable {
                         max_subdirs: None,
                         dir_name: None,
                         validate: false,
+                        unwalked: None,
                     }),
                 },
             ),
@@ -124874,6 +125497,7 @@ pub static IFD_SIGMA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -124906,6 +125530,7 @@ pub static IFD_SIGMA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -125982,6 +126607,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -126077,6 +126703,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -126593,6 +127220,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -126870,6 +127498,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -126937,6 +127566,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -126969,6 +127599,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -127001,6 +127632,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -127033,6 +127665,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -127261,6 +127894,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -127633,6 +128267,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -128178,6 +128813,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128222,6 +128858,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128260,6 +128897,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128295,6 +128933,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128344,6 +128983,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128379,6 +129019,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128428,6 +129069,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128466,6 +129108,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128510,6 +129153,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128545,6 +129189,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128590,6 +129235,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128630,6 +129276,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128665,6 +129312,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -128937,6 +129585,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -129011,6 +129660,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -129049,6 +129699,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -129125,6 +129776,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -129201,6 +129853,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -129277,6 +129930,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -129317,6 +129971,7 @@ pub static IFD_SONY_MAIN: IfdTable = IfdTable {
                             max_subdirs: None,
                             dir_name: None,
                             validate: false,
+                            unwalked: None,
                         }),
                     },
                 ),
@@ -129850,6 +130505,7 @@ pub static IFD_SONY_SR2SUBIFD: IfdTable = IfdTable {
                 max_subdirs: Some(20),
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -134603,6 +135259,7 @@ pub static IFD_STIM_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -134635,6 +135292,7 @@ pub static IFD_STIM_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -134937,6 +135595,7 @@ pub static IFD_THEORA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -134969,6 +135628,7 @@ pub static IFD_THEORA_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],
@@ -135143,6 +135803,7 @@ pub static IFD_UNKNOWN_MAIN: IfdTable = IfdTable {
             max_subdirs: None,
             dir_name: None,
             validate: false,
+            unwalked: None,
         }),
     }],
     variants: &[],
@@ -135263,6 +135924,7 @@ pub static IFD_VORBIS_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
         IfdTag {
@@ -135295,6 +135957,7 @@ pub static IFD_VORBIS_MAIN: IfdTable = IfdTable {
                 max_subdirs: None,
                 dir_name: None,
                 validate: false,
+                unwalked: None,
             }),
         },
     ],

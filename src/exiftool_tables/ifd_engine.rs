@@ -1167,6 +1167,13 @@ fn descend(
     if edge.validate {
         return;
     }
+    // Slice IFD1: the generator emitted the edge but marked it unwalked --
+    // the enclosing table itself (no TagTable, Exif.pm:6939-6944) or a
+    // ProcessProc the walk cannot run. Same outcome as `validate`: the
+    // pointer marks its place and nothing behind it is read.
+    if edge.unwalked.is_some() {
+        return;
+    }
     // Exif.pm:6921-6926 -- "don't process empty subdirectories".
     if located.bytes.is_empty() {
         return;
@@ -1438,6 +1445,7 @@ mod tests {
             max_subdirs: None,
             dir_name: None,
             validate: false,
+            unwalked: None,
         }
     }
 
@@ -2692,6 +2700,58 @@ mod tests {
         );
         let _reg = Registered::new(&[&INNER_ON]);
         assert!(run(&V, &data, order, Some(0)).is_empty());
+    }
+
+    #[test]
+    fn an_unwalked_edge_is_never_walked() {
+        // Slice IFD1: the target is registered and walkable -- only the
+        // `unwalked` marker stops the descent, the way `validate` does.
+        static U_TAGS: &[IfdTag] = &[
+            IfdTag {
+                subdir: Some(IfdSubdirEdge {
+                    unwalked: Some("same-table recursion (TagTable absent)"),
+                    ..edge("InnerOn")
+                }),
+                ..plain(0x0011, "ToOn")
+            },
+            IfdTag {
+                subdir: Some(IfdSubdirEdge {
+                    unwalked: Some("ProcessProc Image::ExifTool::ProcessSubTIFF"),
+                    ..edge("InnerOn")
+                }),
+                ..plain(0x0012, "ToOn2")
+            },
+            plain(0x0013, "After"),
+        ];
+        static U: IfdTable = table("Unwalked", U_TAGS);
+        let order = ByteOrder::Big;
+        let floor = trailer_at(3) as u32;
+        let inner = inner_ifd(order, 5);
+        let data = ifd(
+            order,
+            &[
+                entry(order, 0x0011, 7, inner.len() as u32, bytes32(order, floor)),
+                entry(order, 0x0012, 7, inner.len() as u32, bytes32(order, floor)),
+                int16u_entry(order, 0x0013, 9),
+            ],
+            &inner,
+        );
+        let _reg = Registered::new(&[&INNER_ON]);
+        let got = run(&U, &data, order, Some(0));
+        assert_eq!(
+            values(&got),
+            vec![("After", TagValue::Integer(9))],
+            "both unwalked edges mark their place and read nothing; the walk continues"
+        );
+        // The same edge with the marker cleared IS walked: the marker, not
+        // the shape, is what refuses.
+        static W_TAGS: &[IfdTag] = &[IfdTag {
+            subdir: Some(edge("InnerOn")),
+            ..plain(0x0011, "ToOn")
+        }];
+        static W: IfdTable = table("Walked", W_TAGS);
+        let got = run(&W, &data, order, Some(0));
+        assert_eq!(values(&got), vec![("Inner", TagValue::Integer(5))]);
     }
 
     // -- SubDirectory: SubIFD pointers, byte order, base ---------------------------
