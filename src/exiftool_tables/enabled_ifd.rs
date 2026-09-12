@@ -16,8 +16,9 @@ use super::ifd_schema::IfdTable;
 /// above it, in the shape `enabled.rs` uses.
 pub static ENABLED_IFD: &[(&str, &str)] = &[
     // Exif::Main, walked at DirName `IFD1` only -- the JPEG-APP1 thumbnail
-    // IFD (slice IFD1, landing 2; landing 1 is the codegen policy of 7c849c7e
-    // and the design spec's v1.1 amendment). The table is
+    // IFD (slice IFD1, landing 2; landing 1 landed as 759fa0e9: the codegen
+    // policy aaf00801, the i7 regen dcc012f4, and the design spec's v1.1
+    // amendment). The table is
     // `%Image::ExifTool::Exif::Main` (Exif.pm:411-4723, pinned 13.59),
     // SET_GROUP1 (Exif.pm:416, 7183): every row takes the directory name the
     // call site passes (`IfdDir.group1 = Some("IFD1")`, `ifd_engine::group1_of`).
