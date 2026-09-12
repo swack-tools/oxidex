@@ -247,6 +247,20 @@ class ParseFailsLoudly(unittest.TestCase):
                             '                unwalked: None,',
                             'dir_name: Some("KodakIFD"),\n                validate: false,')
 
+    def test_rustfmt_wrapped_unwalked_reason_parses(self):
+        # The committed regen wraps a long reason over three lines (ProfileIFD,
+        # 0xc6f5, at the IFD1 landing-1 regen): whitespace after `Some(` and a
+        # trailing comma. The i7 regen's verify.py died on it with "unrecognised
+        # subdir value (tail)"; it must parse, and yield the reason verbatim.
+        reason = ("same-table recursion (TagTable absent); ProcessProc "
+                  "Image::ExifTool::Exif::ProcessTiffIFD; unmodeled SubDirectory key(s) Magic")
+        gen = _mutated_sample(
+            'unwalked: Some("same-table recursion (TagTable absent)"),',
+            'unwalked: Some(\n                    "' + reason + '",\n                ),',
+        )
+        edges = [t["subdir"] for t in gen.tags.values() if t.get("subdir") and t["subdir"]["unwalked"]]
+        self.assertEqual([e["unwalked"] for e in edges], [reason])
+
     def test_var_format_is_not_an_ifd_shape(self):
         with self.assertRaises(SystemExit):
             _mutated_sample(

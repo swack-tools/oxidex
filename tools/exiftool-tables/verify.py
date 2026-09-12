@@ -1075,7 +1075,10 @@ _IFD_SUBDIR_TAIL_RE = re.compile(
     r'max_subdirs:\s*(?P<max_subdirs>None|Some\(\d+\))\s*,\s*'
     r'dir_name:\s*(?P<dir_name>None|Some\("(?:[^"\\]|\\.)*"\))\s*,\s*'
     r'validate:\s*(?P<validate>true|false)\s*,\s*'
-    r'unwalked:\s*(?P<unwalked>None|Some\("(?:[^"\\]|\\.)*"\))\s*,?\s*\}\s*,?\s*\)\s*$',
+    # rustfmt wraps a long reason as `Some(\n "...",\n)`: whitespace after `Some(` and a
+    # trailing comma before `)` are part of the committed shape (ProfileIFD 0xc6f5, whose
+    # reason names three refusals, is the first edge long enough to wrap).
+    r'unwalked:\s*(?P<unwalked>None|Some\(\s*"(?:[^"\\]|\\.)*"\s*,?\s*\))\s*,?\s*\}\s*,?\s*\)\s*$',
     re.S,
 )
 _OUT_OF_DATE = "-- the verifier's pattern is out of date; fix it before trusting a PASS"
@@ -1089,7 +1092,12 @@ def _some_int(text):
 def _some_str_opt(text):
     """`Some("X")` -> "X"; `None` -> None (unlike `_some_str`, which maps
     None to "" for the groups convention)."""
-    return None if text == "None" else unescape(text[len('Some("'):-len('")')])
+    if text == "None":
+        return None
+    m = re.fullmatch(r'Some\(\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)', text.strip(), re.S)
+    if m is None:
+        raise SystemExit(f"unrecognised Some(string) value {text!r} {_OUT_OF_DATE}")
+    return unescape(m.group(1))
 
 
 def _parse_tag_groups_value(text, k):
