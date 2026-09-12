@@ -80,8 +80,20 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // E005986), CanonEOS5D_MarkII EXTRA "" removed, 5DS, 5DS_R, 5D_MarkIII,
     // 5D_MarkIV RENAME -> MISSING. A wrong value under a real tag name is
     // worse than an absent one; revert the D3 commit alone to undo it.
-    // Gate B of record: CANONM_GATEB_PENDING (filled from the i7 census
-    // before the gate; the landing refuses while this token is present).
+    // Gate B of record (i7-missing-census.sh: conformance.py over 4,238 files,
+    // pinned 13.59, clean trees, on the i7; per-file diff i7-ab-diff.py):
+    //     control   census olyaf  (d1c777b1 tree)  TOTAL 4238 467919 26 512 12312 1564
+    //     treatment census canonm (6287fdf6)       TOTAL 4238 467935 22 508 12304 1563
+    // 16 files: 13 MISSING -> matched (CanonFileLength 7, ColorTemperature 5,
+    // RawDataLength 1) and 3 VALUE -> matched (OwnerName), plus D3's six
+    // InternalSerialNumber rows (CanonEOS5D VALUE -> MISSING, per_file
+    // value_diff; four InternalSerialNumber->InternalSerialNumber2 RENAME ->
+    // MISSING, the JPEG `renames` entry 4 -> 0; one EXTRA "" removed). 0
+    // matched -> MISSING, 0 new VALUE, 0 new EXTRA; oracle rows conserve
+    // (480,769). i7-ab-diff.py reports the five D3 rows as "matched -> MISSING
+    // (or newly visible oracle row)" and so prints FAIL: it cannot see a
+    // file's VALUE or RENAME state before the change; the rows above were read
+    // from both census JSONs.
     ("Canon", "Main"),
     // Exif::Main, walked at DirName `IFD1` only -- the JPEG-APP1 thumbnail
     // IFD (slice IFD1, landing 2; landing 1 landed as 759fa0e9: the codegen
