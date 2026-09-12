@@ -2,6 +2,11 @@
 """Focused regression tests for conformance.py's matching rules."""
 
 import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -440,6 +445,120 @@ class LeftoverOccurrenceTests(unittest.TestCase):
     def test_unique_names_are_untouched(self):
         result = conformance.compare({"EXIF:IFD0:Make": "Canon"}, {})
         self.assertEqual(result["missing"], {"Make": ("EXIF", "Canon")})
+
+
+# Runs conformance.main() end to end in a fresh interpreter, with the four
+# instrument seams (oracle, git state, binary, header) and the two tool calls
+# faked from a fixtures file, so the --json-out it writes is the real one.
+# Also records the iteration order of the raw tag-name set compare() builds
+# for the first fixture, so the caller can prove the hash seed reordered it.
+_JSON_OUT_DRIVER = r"""
+import importlib.util, json, sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+module_path, corpus, json_out, fixtures_path, set_order_out = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("conformance", module_path)
+conformance = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(conformance)
+fixtures = json.loads(Path(fixtures_path).read_text(encoding="utf-8"))
+
+first = fixtures[min(fixtures)]
+names = (conformance.tags_by_name(first["exiftool"], conformance.split_oracle_key).keys()
+         | conformance.tags_by_name(first["oxidex"], conformance.split_oxidex_key).keys())
+Path(set_order_out).write_text(json.dumps(list(names)), encoding="utf-8")
+
+inst = conformance.instrument
+with mock.patch.object(conformance.exiftool_oracle, "shared", lambda: None), \
+        mock.patch.object(inst, "git_state", lambda: None), \
+        mock.patch.object(inst, "refuse_if_dirty", lambda _git, _tool: False), \
+        mock.patch.object(inst, "resolve_binary",
+                          lambda _req, kind: SimpleNamespace(path="oxidex")), \
+        mock.patch.object(inst, "print_header", lambda **_kw: None), \
+        mock.patch.object(conformance, "run_exiftool",
+                          lambda _oracle, p: fixtures[Path(p).name]["exiftool"]), \
+        mock.patch.object(conformance, "run_oxidex",
+                          lambda _binary, p: fixtures[Path(p).name]["oxidex"]), \
+        mock.patch.object(sys, "argv",
+                          ["conformance.py", corpus, "--json-out", json_out]):
+    conformance.main()
+"""
+
+
+class JsonOutDeterminismTests(unittest.TestCase):
+    """--json-out must not depend on Python's string hashing.
+
+    compare() walked `et_by_name.keys() | ox_by_name.keys()`, a set whose
+    iteration order follows str hashing and therefore PYTHONHASHSEED, and
+    value_diff came out in that order. Two censuses of identical oracle and
+    oxidex output then differed in per_file: census fujim vs e1 (2026-09-12,
+    4,238 files) had 51 files dict-unequal of which only 16 were real, so
+    every per-file consumer had to normalise before diffing.
+    """
+
+    SEEDS = ("1", "2")
+
+    @staticmethod
+    def _fixtures():
+        # 24 value differences, 8 MISSING, 8 EXTRA and one RENAME in one file,
+        # a smaller second file of another format: enough distinct names that
+        # two hash seeds cannot plausibly iterate them in the same order.
+        a_et = {"File:FileType": "JPEG"}
+        a_ox = {"File:FileType": "JPEG"}
+        for i in range(24):
+            a_et[f"EXIF:IFD0:Tag{i:02d}"] = f"expected {i}"
+            a_ox[f"IFD0:Tag{i:02d}"] = f"actual {i}"
+        for i in range(8):
+            a_et[f"MakerNotes:Canon:Missing{i:02d}"] = f"m{i}"
+            a_ox[f"XMP:Extra{i:02d}"] = f"x{i}"
+        a_et["PNG:Comment"] = "a distinctive test comment"
+        a_ox["PNG:tEXt:comment"] = "a distinctive test comment"
+        b_et = {"File:FileType": "PNG", "PNG:ImageWidth": 16, "PNG:ImageHeight": 9,
+                "PNG:BitDepth": 8, "PNG:ColorType": "RGB"}
+        b_ox = {"File:FileType": "PNG", "PNG:ImageWidth": 17, "PNG:ImageHeight": 10,
+                "PNG:BitDepth": 16, "PNG:ColorType": "Palette"}
+        return {"a.jpg": {"exiftool": a_et, "oxidex": a_ox},
+                "b.png": {"exiftool": b_et, "oxidex": b_ox}}
+
+    def _json_out_under_seed(self, tmp, seed):
+        out = tmp / f"census-seed{seed}.json"
+        set_order = tmp / f"set-order-seed{seed}.json"
+        proc = subprocess.run(
+            [sys.executable, "-c", _JSON_OUT_DRIVER, str(MODULE_PATH),
+             str(tmp / "corpus"), str(out), str(tmp / "fixtures.json"), str(set_order)],
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0,
+                         f"PYTHONHASHSEED={seed}: driver failed\n{proc.stdout}\n{proc.stderr}")
+        return out.read_bytes(), json.loads(set_order.read_text(encoding="utf-8"))
+
+    def test_json_out_is_byte_identical_under_two_hash_seeds(self):
+        fixtures = self._fixtures()
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            (tmp / "corpus").mkdir()
+            for name in fixtures:
+                (tmp / "corpus" / name).write_bytes(b"")
+            (tmp / "fixtures.json").write_text(json.dumps(fixtures), encoding="utf-8")
+
+            (json_a, order_a), (json_b, order_b) = (
+                self._json_out_under_seed(tmp, seed) for seed in self.SEEDS)
+
+        # Not vacuous: the seeds really did reorder the set compare() builds,
+        # and the run really did produce the rows whose order is at stake.
+        self.assertEqual(sorted(order_a), sorted(order_b))
+        self.assertNotEqual(order_a, order_b,
+                            f"PYTHONHASHSEED {self.SEEDS} iterate the name set identically; "
+                            "this test would pass on order-dependent code too")
+        per_file = json.loads(json_a)["per_file"]
+        a_row = next(v for k, v in per_file.items() if k.endswith("a.jpg"))
+        self.assertEqual(len(a_row["value_diff"]), 24)
+        self.assertEqual(len(a_row["missing"]), 8)
+        self.assertEqual(len(a_row["extra"]), 8)
+
+        self.assertEqual(json_a.decode(), json_b.decode())
 
 
 class SeverityTests(unittest.TestCase):

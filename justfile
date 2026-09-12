@@ -1389,8 +1389,12 @@ check-staleness version="":
     TMPFIX="$(mktemp -d)"
     trap 'rm -rf "$TMPFIX"' EXIT
     python3 tools/exiftool-tables/gen_staleness_facts.py "$DUMP" "$TMPFIX"
+    # Same exclusions as ci.yml's staleness step. The IFD sample is a
+    # handwritten verifier-parser fixture, not an output of
+    # gen_staleness_facts.py. Keep it out of this data diff.
     if ! diff -ru tools/exiftool-tables/fixtures "$TMPFIX" \
-            --exclude hand_enum_drift_baseline.json; then
+            --exclude hand_enum_drift_baseline.json \
+            --exclude ifd_tables_sample.rs; then
         echo "❌ committed staleness fixtures are stale relative to ExifTool $VERSION." >&2
         echo "   Re-run: python3 tools/exiftool-tables/gen_staleness_facts.py \"$DUMP\" tools/exiftool-tables/fixtures" >&2
         echo "   then update the hand-embedded Rust these fixtures check, and 'cargo test staleness'." >&2
