@@ -28,19 +28,27 @@
 
 use oxidex::core::MetadataMap;
 use oxidex::core::operations::read_metadata;
-use oxidex::exiftool_tables::find_ifd_table;
+use oxidex::exiftool_tables::{ENABLED_IFD, find_ifd_table};
 use std::path::Path;
 use std::process::Command;
 
 const T_IMAGES: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images";
 const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon";
 
-/// The line is in force: without it `main_engine` is `None` and the hand
-/// arms (landing 1's fallback) produce these rows instead, so the carrier
-/// pins below would still pass on the rows both paths agree on. This makes
-/// a revert of the line a red test.
+/// The allowlist line is the reviewable unit; this asserts the line is in
+/// force, so a revert of it -- or a regeneration that re-blocks gate A --
+/// fails loudly here rather than silently dropping the seventeen rows the
+/// engine produces. Landing 2 deleted the hand arms that used to run when
+/// the line was off (a copy of `tests/olympus_main_ifd_table.rs`'s
+/// `olympus_main_is_on_the_gate_b_allowlist`), so this test is what makes
+/// that deletion safe: with the line off `main_engine` is `None` and the
+/// block keeps only its residual and sub-table rows.
 #[test]
-fn canon_main_line_is_in_force() {
+fn canon_main_is_on_the_gate_b_allowlist() {
+    assert!(
+        ENABLED_IFD.contains(&("Canon", "Main")),
+        "ENABLED_IFD must carry the (\"Canon\", \"Main\") line"
+    );
     let table = find_ifd_table("Canon", "Main").expect("Canon::Main is generated");
     assert!(
         table.gate_a.passes(),

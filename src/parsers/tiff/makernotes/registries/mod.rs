@@ -19,7 +19,12 @@
 // `SemanticStyle`, `SignalToNoiseRatioType` and `GreenGhostMitigationStatus`,
 // none of which has a `PrintConv` in Apple.pm. `makernotes::apple` now carries
 // the table transcribed from `%Apple::Main` itself.)
-pub mod canon;
+// (no `canon` registry: `canon_registry` was re-exported here and never
+// called, and its names diverged from ExifTool's -- `ImageType`,
+// `FirmwareVersion` and `ModelID` for `Canon::Main`'s `CanonImageType`,
+// `CanonFirmwareVersion` and `CanonModelID`. It was deleted with the hand
+// `Canon::Main` arms; `makernotes::canon` reads that table through the
+// generated `IFD_CANON_MAIN`.)
 pub mod captureone; // Capture One migration complete (Batch 4, Task 4.2)
 pub mod nikoncapture;
 
@@ -90,8 +95,6 @@ pub mod gimp;
 pub mod indesign;
 pub mod reconyx;
 pub mod scalado;
-
-pub use canon::canon_registry;
 
 // Batch 1 exports
 pub use olympus::olympus_registry;

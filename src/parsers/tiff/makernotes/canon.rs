@@ -532,20 +532,6 @@ fn extract_canon_bytes_with_base<'a>(
     data.get(relative_offset..relative_offset.checked_add(byte_count)?)
 }
 
-/// Returns an `int16u`-count-1 entry's inline value.
-///
-/// TIFF stores a value of four bytes or fewer left-justified in the entry's
-/// 4-byte offset slot, and [`IfdEntry::value_offset`] is that slot read as a
-/// `u32` in the file's byte order. For a 2-byte value that means the low half
-/// in little-endian files and the *high* half in big-endian ones; taking the
-/// low half unconditionally reports 0 for every big-endian MakerNote.
-fn canon_inline_u16(entry: &IfdEntry, byte_order: ByteOrder) -> u16 {
-    match byte_order {
-        ByteOrder::LittleEndian => (entry.value_offset & 0xffff) as u16,
-        ByteOrder::BigEndian => (entry.value_offset >> 16) as u16,
-    }
-}
-
 /// Returns a Canon BinaryData record as the 16-bit-word view used by
 /// [`binary_tables`].
 ///
@@ -799,18 +785,12 @@ fn realign_length_prefixed_record(array: Vec<i16>) -> Vec<i16> {
 const CANON_CAMERA_SETTINGS: u16 = 0x0001;
 const CANON_FOCAL_LENGTH: u16 = 0x0002;
 const CANON_SHOT_INFO: u16 = 0x0004;
-const CANON_PANORAMA: u16 = 0x0005;
 const CANON_IMAGE_TYPE: u16 = 0x0006;
-const CANON_FIRMWARE_VERSION: u16 = 0x0007;
 const CANON_FILE_NUMBER: u16 = 0x0008;
-const CANON_OWNER_NAME: u16 = 0x0009;
 const CANON_SERIAL_NUMBER: u16 = 0x000C;
 const CANON_CAMERA_INFO: u16 = 0x000D;
 const CANON_CUSTOM_FUNCTIONS: u16 = 0x000F;
-const CANON_MODEL_ID: u16 = 0x0010;
-const CANON_FLASH_INFO: u16 = 0x0003;
 const CANON_AF_INFO: u16 = 0x0012;
-const CANON_SERIAL_NUMBER_FORMAT: u16 = 0x0015;
 const CANON_AF_INFO2: u16 = 0x0026;
 /// Canon.pm:1726 -- 16-byte undef value rendered with `unpack("H*", $val)`.
 const CANON_IMAGE_UNIQUE_ID: u16 = 0x0028;
@@ -825,28 +805,17 @@ const CANON_AF_INFO3: u16 = 0x003C;
 /// NUL-terminated ASCII string starting at byte 4.
 const CANON_BATTERY_TYPE: u16 = 0x0038;
 const CANON_FILE_INFO: u16 = 0x0093;
-const CANON_LENS_MODEL: u16 = 0x0095;
 const CANON_INTERNAL_SERIAL_NUMBER: u16 = 0x0096;
 const CANON_PROCESSING_INFO: u16 = 0x00A0;
 const CANON_MEASURED_COLOR: u16 = 0x00AA;
-const CANON_COLOR_SPACE: u16 = 0x00B4;
 const CANON_VRD_OFFSET: u16 = 0x00D0;
 /// ExifTool Canon.pm:1965 — `0xe0 => { Name => 'SensorInfo', ... }`
 const CANON_SENSOR_INFO: u16 = 0x00E0;
-/// ExifTool Canon.pm:1607 — `0x13 => { Name => 'ThumbnailImageValidArea', ... }`
-const CANON_THUMBNAIL_IMAGE_VALID_AREA: u16 = 0x0013;
-/// ExifTool Canon.pm:1626 — `0x1a => { Name => 'SuperMacro', Writable => 'int16u', ... }`
-const CANON_SUPER_MACRO: u16 = 0x001A;
-/// ExifTool Canon.pm:1635 — `0x1c => { Name => 'DateStampMode', Writable => 'int16u', ... }`
-const CANON_DATE_STAMP_MODE: u16 = 0x001C;
 /// ExifTool Canon.pm:1652 — `0x1e => { Name => 'FirmwareRevision', Writable => 'int32u', ... }`
 const CANON_FIRMWARE_REVISION: u16 = 0x001E;
 /// ExifTool Canon.pm:1674 — `0x23 => { Name => 'Categories', Format => 'int32u',
 /// Count => '2', Condition => '$$valPt =~ /^\x08\0\0\0/', ... }`
 const CANON_CATEGORIES: u16 = 0x0023;
-/// ExifTool Canon.pm:1848 — `0x97 => { Name => 'DustRemovalData', Writable => 'undef',
-/// Flags => [ 'Binary', 'Protected' ] }`
-const CANON_DUST_REMOVAL_DATA: u16 = 0x0097;
 /// ExifTool Canon.pm:1785 — `0x83 => { Name => 'OriginalDecisionDataOffset', ... }`
 const CANON_ORIGINAL_DECISION_DATA_OFFSET: u16 = 0x0083;
 /// ExifTool Canon.pm:1972 — `0x4001 => [ ... ColorData1..ColorData12 ... ]`
@@ -1362,18 +1331,6 @@ const_decoder!(
         (6, "M-Dep"),
         (7, "Bulb"),
         (8, "Flexible-priority AE"),
-    ]
-);
-
-// Canon color space decoder
-// Used for ColorSpace tag (0x00B4)
-const_decoder!(
-    pub COLOR_SPACE,
-    i32,
-    [
-        (1, "sRGB"),
-        (2, "Adobe RGB"),
-        (65535, "n/a"),
     ]
 );
 
@@ -1947,33 +1904,6 @@ const_decoder!(
         (2, "On (shot 2)"),
         (3, "On (shot 3)"),
     ]
-);
-
-// Canon serial number display format decoder
-// ExifTool Canon.pm:1615 — `0x15 => { Name => 'SerialNumberFormat', PrintHex => 1, ... }`
-const_decoder!(
-    pub SERIAL_NUMBER_FORMAT,
-    i64,
-    [(0x9000_0000, "Format 1"), (0xa000_0000, "Format 2"),]
-);
-
-// Canon SuperMacro decoder
-// ExifTool Canon.pm:1626 — `0x1a => { Name => 'SuperMacro', Writable => 'int16u',
-// PrintConv => { 0 => 'Off', 1 => 'On (1)', 2 => 'On (2)' } }`
-const_decoder!(
-    pub SUPER_MACRO,
-    i64,
-    [(0, "Off"), (1, "On (1)"), (2, "On (2)"),]
-);
-
-// Canon DateStampMode decoder
-// ExifTool Canon.pm:1635 — `0x1c => { Name => 'DateStampMode', Writable => 'int16u',
-// Notes => 'used only in postcard mode',
-// PrintConv => { 0 => 'Off', 1 => 'Date', 2 => 'Date & Time' } }`
-const_decoder!(
-    pub DATE_STAMP_MODE,
-    i64,
-    [(0, "Off"), (1, "Date"), (2, "Date & Time"),]
 );
 
 // ----------------------------------------------------------------------------
@@ -3132,54 +3062,6 @@ const_decoder!(
         (20, "PC Set4"),
         (21, "PC Set5"),
         (23, "Auto (ambience priority)"),
-    ]
-);
-
-// Canon Contrast decoder
-// Used for Contrast in CameraSettings (index 13)
-// Reference: ExifTool Canon.pm Contrast table
-// Canon uses signed values: 0=Normal, negative=Low, positive=High
-const_decoder!(
-    pub CONTRAST,
-    i16,
-    [
-        (-2, "Very Low"),
-        (-1, "Low"),
-        (0, "Normal"),
-        (1, "High"),
-        (2, "Very High"),
-    ]
-);
-
-// Canon Saturation decoder
-// Used for Saturation in CameraSettings (index 14)
-// Reference: ExifTool Canon.pm Saturation table
-// Canon uses signed values: 0=Normal, negative=Low, positive=High
-const_decoder!(
-    pub SATURATION,
-    i16,
-    [
-        (-2, "Very Low"),
-        (-1, "Low"),
-        (0, "Normal"),
-        (1, "High"),
-        (2, "Very High"),
-    ]
-);
-
-// Canon Sharpness decoder
-// Used for Sharpness in CameraSettings (index 15)
-// Reference: ExifTool Canon.pm Sharpness table
-// Canon uses signed values: 0=Normal, negative=Soft, positive=Sharp
-const_decoder!(
-    pub SHARPNESS,
-    i16,
-    [
-        (-2, "Very Soft"),
-        (-1, "Soft"),
-        (0, "Normal"),
-        (1, "Sharp"),
-        (2, "Very Sharp"),
     ]
 );
 
@@ -5015,67 +4897,6 @@ pub fn decode_camera_type(raw_value: i16) -> String {
     }
 }
 
-/// Represents a Canon MakerNote tag value
-#[derive(Debug, Clone, PartialEq)]
-pub enum CanonTagValue {
-    /// Single integer value
-    Integer(i32),
-    /// String value (model name, firmware, etc.)
-    String(String),
-    /// Array of integers (camera settings, shot info)
-    IntArray(Vec<i16>),
-}
-
-/// Maps Canon MakerNote tag IDs to human-readable tag names.
-///
-/// # Parameters
-/// - `tag_id`: The Canon-specific tag ID
-///
-/// # Returns
-/// Tag name in the format "Canon:TagName"
-///
-/// # Example
-/// ```
-/// use oxidex::parsers::tiff::makernotes::canon::canon_tag_to_name;
-/// assert_eq!(canon_tag_to_name(0x0001), "Canon:CameraSettings");
-/// ```
-pub fn canon_tag_to_name(tag_id: u16) -> String {
-    let tag_name = match tag_id {
-        CANON_CAMERA_SETTINGS => "CameraSettings",
-        CANON_FOCAL_LENGTH => "FocalLength",
-        CANON_FLASH_INFO => "FlashInfo",
-        CANON_SHOT_INFO => "ShotInfo",
-        CANON_PANORAMA => "Panorama",
-        CANON_IMAGE_TYPE => "ImageType",
-        CANON_FIRMWARE_VERSION => "FirmwareVersion",
-        CANON_FILE_NUMBER => "FileNumber",
-        CANON_OWNER_NAME => "OwnerName",
-        CANON_SERIAL_NUMBER => "SerialNumber",
-        CANON_CAMERA_INFO => "CameraInfo",
-        CANON_CUSTOM_FUNCTIONS => "CustomFunctions",
-        CANON_MODEL_ID => "CanonModelID",
-        CANON_AF_INFO => "AFInfo",
-        CANON_SERIAL_NUMBER_FORMAT => "SerialNumberFormat",
-        CANON_SUPER_MACRO => "SuperMacro",
-        CANON_DATE_STAMP_MODE => "DateStampMode",
-        CANON_FIRMWARE_REVISION => "FirmwareRevision",
-        CANON_CATEGORIES => "Categories",
-        CANON_DUST_REMOVAL_DATA => "DustRemovalData",
-        CANON_AF_INFO2 => "AFInfo2",
-        CANON_AF_INFO3 => "AFInfo3",
-        CANON_FILE_INFO => "FileInfo",
-        CANON_LENS_MODEL => "LensModel",
-        CANON_INTERNAL_SERIAL_NUMBER => "InternalSerialNumber",
-        CANON_PROCESSING_INFO => "ProcessingInfo",
-        CANON_MEASURED_COLOR => "MeasuredColor",
-        CANON_COLOR_SPACE => "ColorSpace",
-        CANON_VRD_OFFSET => "VRDOffset",
-        _ => return format!("Canon:Unknown-{:#06X}", tag_id),
-    };
-
-    format!("Canon:{}", tag_name)
-}
-
 /// Represents a Canon MakerNote parser
 pub struct CanonParser;
 
@@ -5461,9 +5282,24 @@ fn parse_canon_makernote_directory(
     // `$$self{Model}` as the hand walk below, and its rows are BUFFERED: each
     // goes into `tags` when the hand walk reaches its entry (see
     // `main_engine`'s module doc for why neither "first" nor "last" is
-    // ExifTool's order). `None` -- the line off, or CIFF -- runs the hand arms
-    // below exactly as before the slice: landing 1 keeps them as the
-    // engine-off fallback, and landing 2 deletes them.
+    // ExifTool's order).
+    //
+    // `None` for CIFF, whose synthetic directory carries only sub-table ids
+    // (`canon_makernote_id_for_ciff_record`), so no engine-owned entry is
+    // ever in it. For a MakerNote, `None` means the `("Canon", "Main")` line
+    // is off, and then NOTHING produces the seventeen engine rows: landing 2
+    // retired the hand arms this branch used to fall back to, so the
+    // generated table is the only producer for every row it reports, and
+    // the walk below yields the residual and sub-table rows alone. That
+    // state is unreachable in any build whose tests pass --
+    // `tests/canon_main_ifd_table.rs::canon_main_is_on_the_gate_b_allowlist`
+    // asserts the line is present AND `table.enabled()` (gate A and gate B
+    // together) -- so an un-enabled table fails that test loudly instead of
+    // silently reporting a partial block. A block visibly missing its
+    // CanonModelID, CanonImageType and ColorSpace is deliberate: a partial
+    // Canon block that is unmistakably partial is preferred to one that
+    // silently looks complete (the Olympus precedent, `olympus.rs`'s
+    // `main_table` call site).
     let mut main_engine = walk_main
         .then(|| find_ifd_table("Canon", "Main").filter(|table| table.enabled()))
         .flatten()
@@ -5499,8 +5335,8 @@ fn parse_canon_makernote_directory(
         // ExifTool's IFD-order last-wins (Exif.pm:6919-7153 processes a
         // SubDirectory inline, in entry order). ColorSpace does not follow
         // last-wins under `-j`; see `canon/main_engine.rs`'s module docs.
-        // The arms below for these ids are then unreachable; they run only
-        // when `main_engine` is `None`.
+        // No arm below matches an engine-owned id, so with the engine off
+        // such an entry falls through to `_` and produces nothing.
         if let Some(engine) = main_engine.as_mut()
             && engine.owns(entry.tag_id)
         {
@@ -5508,29 +5344,6 @@ fn parse_canon_makernote_directory(
             return;
         }
         match entry.tag_id {
-            // Simple string tags (Phase 1)
-            // Canon MakerNotes use TIFF-relative offsets, so we use extract_canon_string
-            // which properly calculates and applies the base offset
-            //
-            // The emitted names are ExifTool's own: tag 0x0006 is `CanonImageType` and
-            // 0x0007 is `CanonFirmwareVersion` (Canon.pm:1252/1256). The bare
-            // `FirmwareVersion` and `ImageType` aliases this used to add alongside them
-            // are not ExifTool names for these tags -- `FirmwareVersion` is a CameraInfo
-            // tag holding just "1.1.0", so aliasing 0x0007's "Firmware Version 1.1.0"
-            // onto it reported a wrong value on every body that has both.
-            CANON_IMAGE_TYPE | CANON_FIRMWARE_VERSION | CANON_OWNER_NAME => {
-                if let Some(value) =
-                    extract_canon_string_with_base(entry, ifd_data, byte_order, base)
-                {
-                    let tag_name = match entry.tag_id {
-                        CANON_IMAGE_TYPE => "Canon:CanonImageType",
-                        CANON_FIRMWARE_VERSION => "Canon:CanonFirmwareVersion",
-                        _ => "Canon:OwnerName",
-                    };
-                    tags.insert(tag_name.to_string(), value);
-                }
-            }
-
             // SerialNumber (tag 0x000C) is an int32u, not a string.
             //
             // ExifTool Canon.pm:1299 (the fall-through variant used by every body except
@@ -5544,27 +5357,28 @@ fn parse_canon_makernote_directory(
             CANON_SERIAL_NUMBER => {
                 // Residual (slice I-5): 0x000c's first alternative,
                 // `/EOS D30\b/`, is the generated table's -- the engine
-                // reports it -- and alternatives 2 and 3 are withheld. So with
-                // the engine on, this arm defers to the engine's row exactly
-                // when that alternative wins, reading the same `self_model`
-                // the engine was seeded with, and renders the other two
-                // itself (`main_engine::canon_main_residual_emits_exactly_
-                // the_withheld_alternatives` pins the complement).
-                if let Some(engine) = main_engine.as_mut()
-                    && main_engine::serial_number_is_d30(self_model)
-                {
-                    engine.replay(entry.tag_id, &mut tags, &mut value_forms);
+                // reports it -- and alternatives 2 and 3 are withheld. So
+                // this arm defers to the engine's row exactly when that
+                // alternative wins, reading the same `self_model` the engine
+                // was seeded with, and renders the other two itself
+                // (`main_engine::canon_main_residual_emits_exactly_the_
+                // withheld_alternatives` pins the complement). Landing 2
+                // retired the hand D30 rendering, so with the engine off a
+                // D30 body gets no SerialNumber (see the `main_engine` call
+                // site for why that state is unreachable).
+                if main_engine::serial_number_is_d30(self_model) {
+                    if let Some(engine) = main_engine.as_mut() {
+                        engine.replay(entry.tag_id, &mut tags, &mut value_forms);
+                    }
                     return;
                 }
                 let serial = entry.value_offset;
-                // Both Conditions read `$$self{Model}` (Canon.pm:1286/1295), so they
-                // take `self_model` rather than CanonImageType. Neither is anchored --
-                // `/EOS D30\b/` and `/EOS-1D/` are plain substrings that both string
-                // forms embed -- so this is a no-op on every `combined-samples` file;
-                // it is switched for correctness, not for a measured gain.
-                let rendered = if has_word(self_model, "EOS D30") {
-                    format!("{:04x}{:05}", serial >> 16, serial & 0xffff)
-                } else if self_model.contains("EOS-1D") {
+                // `/EOS-1D/` reads `$$self{Model}` (Canon.pm:1295), so it takes
+                // `self_model` rather than CanonImageType. It is not anchored --
+                // a plain substring both string forms embed -- so this is a no-op
+                // on every `combined-samples` file; it is switched for
+                // correctness, not for a measured gain.
+                let rendered = if self_model.contains("EOS-1D") {
                     format!("{:06}", serial)
                 } else {
                     format!("{:010}", serial)
@@ -5572,33 +5386,7 @@ fn parse_canon_makernote_directory(
                 tags.insert("Canon:SerialNumber".to_string(), rendered);
             }
 
-            // SerialNumberFormat (tag 0x0015) - int32u display-format selector
-            CANON_SERIAL_NUMBER_FORMAT => {
-                tags.insert(
-                    "Canon:SerialNumberFormat".to_string(),
-                    SERIAL_NUMBER_FORMAT.decode(entry.value_offset as i64),
-                );
-            }
-
-            // SuperMacro (tag 0x001A) and DateStampMode (tag 0x001C) are both
-            // `int16u` count 1, so the value lives inline in the entry's
-            // 4-byte offset slot -- read through `canon_inline_u16` because a
-            // big-endian MakerNote puts those two bytes in the *high* half of
-            // that u32.
-            CANON_SUPER_MACRO => {
-                tags.insert(
-                    "Canon:SuperMacro".to_string(),
-                    SUPER_MACRO.decode(canon_inline_u16(entry, byte_order) as i64),
-                );
-            }
-            CANON_DATE_STAMP_MODE => {
-                tags.insert(
-                    "Canon:DateStampMode".to_string(),
-                    DATE_STAMP_MODE.decode(canon_inline_u16(entry, byte_order) as i64),
-                );
-            }
-
-            // FirmwareRevision (tag 0x001E) - int32u count 1, also inline.
+            // FirmwareRevision (tag 0x001E) - int32u count 1, inline.
             CANON_FIRMWARE_REVISION => {
                 tags.insert(
                     "Canon:FirmwareRevision".to_string(),
@@ -5618,41 +5406,6 @@ fn parse_canon_makernote_directory(
                 }
             }
 
-            // DustRemovalData (tag 0x0097) - `Writable => 'undef'` with
-            // `Flags => [ 'Binary', 'Protected' ]` (Canon.pm:1848). ExifTool
-            // never decodes it without `-b`; it prints the standard binary
-            // placeholder sized by the value it actually read. The record's
-            // internal layout is documented only as a commented-out field list
-            // in the Perl (no `SubDirectory`, no `TagTable`), so there is
-            // nothing here to decode and nothing is guessed -- the byte count
-            // is taken from the resolved slice rather than from the entry
-            // header so a MakerNote whose value offset does not resolve emits
-            // no tag at all instead of a confident wrong length.
-            CANON_DUST_REMOVAL_DATA => {
-                if let Some(bytes) = extract_canon_bytes_with_base(entry, ifd_data, base) {
-                    tags.insert(
-                        "Canon:DustRemovalData".to_string(),
-                        format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            bytes.len()
-                        ),
-                    );
-                }
-            }
-
-            // ThumbnailImageValidArea (tag 0x0013) - int16u[4] crop box
-            CANON_THUMBNAIL_IMAGE_VALID_AREA => {
-                if let Some(array) =
-                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
-                    && array.len() >= 4
-                {
-                    tags.insert(
-                        "Canon:ThumbnailImageValidArea".to_string(),
-                        join_i16_slice(&array[..4]),
-                    );
-                }
-            }
-
             // OriginalDecisionDataOffset (tag 0x0083) and VRDOffset (tag 0x00D0) are
             // plain int32u offsets that ExifTool reports verbatim.
             CANON_ORIGINAL_DECISION_DATA_OFFSET => {
@@ -5666,15 +5419,6 @@ fn parse_canon_makernote_directory(
                     "Canon:VRDOffset".to_string(),
                     entry.value_offset.to_string(),
                 );
-            }
-
-            // Canon Model ID - decode to camera model name
-            // The model ID is stored as a 32-bit integer that maps to specific camera models
-            CANON_MODEL_ID => {
-                // The value_offset contains the model ID directly for LONG type (4 bytes)
-                let model_id = entry.value_offset;
-                let model_name = decode_canon_model_id(model_id);
-                tags.insert("Canon:CanonModelID".to_string(), model_name);
             }
 
             // FileNumber (tag 0x0008) - int32u, ExifTool Canon.pm:1260 renders it as
@@ -6562,26 +6306,6 @@ fn parse_canon_makernote_directory(
                 }
             }
 
-            // LensModel tag (Phase 3) - ASCII string containing lens name
-            //
-            // This is the same TIFF-relative offset every other Canon string
-            // entry uses, so it goes through `extract_canon_string_with_base`
-            // like CanonImageType and OwnerName do. It used to index `data` with
-            // the raw `value_offset`, which is only correct when the base
-            // happens to be 0; on a CR3, whose MakerNote sits 8 bytes into the
-            // CMT3 TIFF, that read the string 8 bytes late and ran `value_count`
-            // bytes past its end -- "EF-M15-45mm f/3.5-6.3 IS STM" came out as
-            // "5mm f/3.5-6.3 IS STM" plus 46 NULs and the first 8 characters of
-            // the InternalSerialNumber that follows it.
-            CANON_LENS_MODEL => {
-                if let Some(lens_model) =
-                    extract_canon_string_with_base(entry, ifd_data, byte_order, base)
-                    && !lens_model.is_empty()
-                {
-                    tags.insert("Canon:LensModel".to_string(), lens_model);
-                }
-            }
-
             // Canon.pm 0x28 suppresses precisely sixteen zero bytes, then
             // applies `unpack("H*", $val)` to the otherwise opaque UUID.
             CANON_IMAGE_UNIQUE_ID => {
@@ -6607,16 +6331,17 @@ fn parse_canon_makernote_directory(
                 // (Canon.pm:7146-7162: `InternalSerialNumber2` on the 5D Mark
                 // II/III/IV and 5DS/5DS R, `InternalSerialNumber` at index 9
                 // otherwise), not this value -- ExifTool reports no Main
-                // `InternalSerialNumber` on any /EOS 5D/ body. So with the
-                // engine on, this arm renders the value only when the second
-                // alternative wins, reading the `self_model` the engine
-                // resolves 0x0096 with (`main_engine::canon_main_residual_
-                // emits_exactly_the_withheld_alternatives` pins the
-                // complement). SerialInfo itself has no producer yet: on those
-                // bodies the tag is absent rather than a Main string ExifTool
-                // does not report there under that name.
-                if main_engine.is_some() && !main_engine::internal_serial_is_main_value(self_model)
-                {
+                // `InternalSerialNumber` on any /EOS 5D/ body. So this arm
+                // renders the value only when the second alternative wins,
+                // reading the `self_model` the engine resolves 0x0096 with
+                // (`main_engine::canon_main_residual_emits_exactly_the_
+                // withheld_alternatives` pins the complement). SerialInfo
+                // itself has no producer yet: on those bodies the tag is
+                // absent rather than a Main string ExifTool does not report
+                // there under that name. Unconditional since landing 2: the
+                // engine-off branch no longer restores the pre-slice
+                // rendering on those bodies.
+                if !main_engine::internal_serial_is_main_value(self_model) {
                     return;
                 }
                 if let Some(raw) = extract_canon_bytes_with_base(entry, ifd_data, base) {
@@ -6960,22 +6685,6 @@ fn parse_canon_makernote_directory(
                 }
             }
 
-            // Canon.pm 0xb4 is one unsigned SHORT with the ColorSpace
-            // PrintConv (1=sRGB, 2=Adobe RGB, 65535=n/a).
-            CANON_COLOR_SPACE => {
-                if entry.field_type == 3
-                    && entry.value_count == 1
-                    && let Some(values) =
-                        extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
-                    && let Some(&value) = values.first()
-                {
-                    tags.insert(
-                        "Canon:ColorSpace".to_string(),
-                        COLOR_SPACE.decode(i32::from(value as u16)),
-                    );
-                }
-            }
-
             // The plain %Canon binary sub-tables -- CropInfo, AspectInfo, ModifiedInfo,
             // AFConfig, VignettingCorr, ContrastInfo, FaceDetect1/3, Ambience and the
             // rest. See `binary_tables` for the transcription, the ExifTool `Condition`
@@ -7089,16 +6798,6 @@ fn parse_canon_makernote_directory(
                             .collect::<Vec<_>>()
                             .join("; "),
                     );
-                }
-            }
-
-            // Canon.pm 0x4010 is a regular TIFF string. Empty is a real
-            // reported value, so unlike lens strings it must not be dropped.
-            0x4010 => {
-                if let Some(value) =
-                    extract_canon_string_with_base(entry, ifd_data, byte_order, base)
-                {
-                    tags.insert("Canon:CustomPictureStyleFileName".to_string(), value);
                 }
             }
 
@@ -7844,25 +7543,11 @@ mod tests {
         assert_eq!(CANON_CAMERA_SETTINGS, 0x0001);
         assert_eq!(CANON_FOCAL_LENGTH, 0x0002);
         assert_eq!(CANON_SHOT_INFO, 0x0004);
-        assert_eq!(CANON_MODEL_ID, 0x0010);
     }
 
     #[test]
     fn test_canon_signature() {
         assert_eq!(CANON_SIGNATURE, b"Canon");
-    }
-
-    #[test]
-    fn test_canon_tag_to_name() {
-        assert_eq!(canon_tag_to_name(0x0001), "Canon:CameraSettings");
-        assert_eq!(canon_tag_to_name(0x0002), "Canon:FocalLength");
-        assert_eq!(canon_tag_to_name(0x0004), "Canon:ShotInfo");
-        assert_eq!(canon_tag_to_name(0x0006), "Canon:ImageType");
-        assert_eq!(canon_tag_to_name(0x0007), "Canon:FirmwareVersion");
-        assert_eq!(canon_tag_to_name(0x0010), "Canon:CanonModelID");
-
-        // Unknown tag
-        assert_eq!(canon_tag_to_name(0xFFFF), "Canon:Unknown-0xFFFF");
     }
 
     #[test]
@@ -9114,7 +8799,7 @@ mod tests {
     #[test]
     fn color_space_uses_canon_pm_print_conversion() {
         // Canon.pm 0xb4 maps 1 to sRGB (the CR2 wave-8 residual value).
-        let data = canon_makernote_with_inline_short(CANON_COLOR_SPACE, 1);
+        let data = canon_makernote_with_inline_short(0x00b4, 1);
         let tags = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
         assert_eq!(tags.get("Canon:ColorSpace"), Some(&"sRGB".to_string()));
     }
@@ -9736,14 +9421,6 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_decode_color_space() {
-        assert_eq!(COLOR_SPACE.decode(1), "sRGB");
-        assert_eq!(COLOR_SPACE.decode(2), "Adobe RGB");
-        assert_eq!(COLOR_SPACE.decode(65535), "n/a");
-        assert_eq!(COLOR_SPACE.decode(99), "Unknown (99)");
-    }
-
-    #[test]
     fn test_decode_picture_style() {
         assert_eq!(PICTURE_STYLE.decode(0x0081), "Standard");
         assert_eq!(PICTURE_STYLE.decode(0x0082), "Portrait");
@@ -9785,44 +9462,6 @@ mod tests {
     #[test]
     fn record_mode_zero_is_unknown() {
         assert_eq!(RECORD_MODE.decode(0), "Unknown (0)");
-    }
-
-    #[test]
-    fn test_canon_tag_to_name_extended() {
-        // Test new tags added in Phase 4
-        assert_eq!(canon_tag_to_name(0x0003), "Canon:FlashInfo");
-        assert_eq!(canon_tag_to_name(0x0012), "Canon:AFInfo");
-        assert_eq!(canon_tag_to_name(0x0015), "Canon:SerialNumberFormat");
-        assert_eq!(canon_tag_to_name(0x0026), "Canon:AFInfo2");
-        assert_eq!(canon_tag_to_name(0x0093), "Canon:FileInfo");
-        assert_eq!(canon_tag_to_name(0x0095), "Canon:LensModel");
-        assert_eq!(canon_tag_to_name(0x0096), "Canon:InternalSerialNumber");
-        assert_eq!(canon_tag_to_name(0x00A0), "Canon:ProcessingInfo");
-        assert_eq!(canon_tag_to_name(0x00AA), "Canon:MeasuredColor");
-        assert_eq!(canon_tag_to_name(0x00B4), "Canon:ColorSpace");
-        assert_eq!(canon_tag_to_name(0x00D0), "Canon:VRDOffset");
-    }
-
-    #[test]
-    fn test_canon_main_ifd_tag_names() {
-        assert_eq!(canon_tag_to_name(0x001A), "Canon:SuperMacro");
-        assert_eq!(canon_tag_to_name(0x001C), "Canon:DateStampMode");
-        assert_eq!(canon_tag_to_name(0x001E), "Canon:FirmwareRevision");
-        assert_eq!(canon_tag_to_name(0x0023), "Canon:Categories");
-        assert_eq!(canon_tag_to_name(0x0097), "Canon:DustRemovalData");
-    }
-
-    /// Pins `Canon::Main` 0x1c and 0x1a against the pinned ExifTool 13.59
-    /// `PrintConv` hashes (Canon.pm:1635 and :1626).
-    #[test]
-    fn test_canon_date_stamp_mode_and_super_macro_print_conv() {
-        assert_eq!(DATE_STAMP_MODE.decode(0), "Off");
-        assert_eq!(DATE_STAMP_MODE.decode(1), "Date");
-        assert_eq!(DATE_STAMP_MODE.decode(2), "Date & Time");
-        assert_eq!(DATE_STAMP_MODE.decode(3), "Unknown (3)");
-        assert_eq!(SUPER_MACRO.decode(0), "Off");
-        assert_eq!(SUPER_MACRO.decode(1), "On (1)");
-        assert_eq!(SUPER_MACRO.decode(2), "On (2)");
     }
 
     /// Pins `Canon::Main` 0x1e (Canon.pm:1652) against values read straight out
@@ -9913,24 +9552,6 @@ mod tests {
         assert!(
             decode_canon_categories(&[0x08, 0x00, 0x00, 0x00], ByteOrder::LittleEndian).is_none()
         );
-    }
-
-    #[test]
-    fn test_canon_inline_u16_byte_order() {
-        let entry = IfdEntry {
-            tag_id: CANON_DATE_STAMP_MODE,
-            field_type: 3,
-            value_count: 1,
-            value_offset: 0x0002_0000,
-        };
-        // Big-endian files left-justify the 2-byte value in the 4-byte slot.
-        assert_eq!(canon_inline_u16(&entry, ByteOrder::BigEndian), 2);
-        assert_eq!(canon_inline_u16(&entry, ByteOrder::LittleEndian), 0);
-        let le = IfdEntry {
-            value_offset: 0x0000_0002,
-            ..entry
-        };
-        assert_eq!(canon_inline_u16(&le, ByteOrder::LittleEndian), 2);
     }
 
     #[test]
