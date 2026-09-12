@@ -18,7 +18,8 @@ per file" problem TRANSCRIPTION.md documents. This script does NOT attempt that.
 
 What it checks instead, deliberately coarse: it extracts every literal
 `(key, "value")` pair present in code in the target Rust file(s), excluding
-comment and string-literal examples -- this
+comment and string-literal examples and the (module, table) arguments of the
+`find_table`-family table lookups (see TABLE_LOOKUP_FNS) -- this
 catches every `static M<n>`/`const PC_<n>`/`const_decoder!`/`bitfield_decoder!`
 array regardless of which named constant holds it -- and treats it as a
 set of claimed ExifTool facts. Separately, it unions every PrintConv
@@ -75,6 +76,29 @@ PAIR_RE = re.compile(
 )
 
 
+# src/exiftool_tables/mod.rs's table lookups take (module, table) names, so
+# PAIR_RE reads `find_ifd_table("Canon", "Main")` as a ("Canon", "Main") fact.
+# Their arguments name a table, never a (key, value) entry: canon.rs carried
+# three such rust-only "pairs" (two find_table calls inside the 235 baseline,
+# then c7d7b71d's find_ifd_table, which made it 236 [REGRESSED]). Excluded by
+# callee name, not as "any call": a fact written through a constructor or a
+# macro must stay counted, since dropping one is silent and over-counting is
+# a loud failure someone reviews.
+TABLE_LOOKUP_FNS = frozenset({"find_table", "find_ifd_table", "find_unemitted_table"})
+
+
+def _callee(code: str, paren: int) -> str:
+    """The identifier immediately before the `(` at `paren` in masked code,
+    or '' when the parenthesis opens a tuple rather than an argument list."""
+    end = paren
+    while end > 0 and code[end - 1].isspace():
+        end -= 1
+    start = end
+    while start > 0 and (code[start - 1].isalnum() or code[start - 1] == "_"):
+        start -= 1
+    return code[start:end]
+
+
 def normalize_key(raw_key: str | None, raw_qkey: str | None) -> str:
     if raw_qkey is not None:
         # A quoted numeric key ("0", "-32768", ...) normalizes the same way
@@ -106,6 +130,8 @@ def extract_rust_pairs(path: Path) -> set[tuple[str, str]]:
         # Inspect the tuple opening in masked code, but extract key/value from
         # the original text so real string keys and escaped values survive.
         if code[m.start()] != "(":
+            continue
+        if _callee(code, m.start()) in TABLE_LOOKUP_FNS:
             continue
         key = normalize_key(m.group("key"), m.group("qkey"))
         value = unescape(m.group("value"))
