@@ -48,8 +48,14 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // ThumbnailTIFF/PreviewTIFF (offset class, not transcribed). RowsPerStrip
     // left the hand path. Compression no longer yields to an IFD0/InteropIFD
     // twin: both occurrences are kept, IFD0/Interop wins the bare request.
-    // `-n` on engine rows prints the rendered value (no raw form in
-    // `Emitted`; the Olympus lines carry the same limitation). Pinned by
+    // `--no-print-conv` (ExifTool `-n`) shows the engine's pre-PrintConv
+    // value (`Emitted::value_conv` -> `insert_occurrence_with_raw`):
+    // `IFD1:ResolutionUnit` is `2`, not `inches`. (The Olympus lines do not
+    // consume `value_conv` yet and still print the rendered value under
+    // `--no-print-conv`.) Every IFD1 occurrence keeps an empty `group1`, so
+    // family 0 resolves `IFD1` -> `EXIF` (`tag_resolution::resolve_family0`):
+    // `-EXIF:Compression` reaches IFD1 and `-a -G0:1` labels it
+    // `[EXIF:IFD1]`, as ExifTool does. Pinned by
     // `tiff_helpers::ifd1_tests` (residual == remainder, priority, value
     // shapes, fence, visited-directory guard files, t/images Nikon.jpg /
     // Olympus.jpg and combined-samples Apple_iPhone13 / AppleQT-200 /

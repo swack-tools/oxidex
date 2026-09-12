@@ -2439,7 +2439,7 @@ enum Ifd1Hand {
     /// an IFD0/InteropIFD twin; RowsPerStrip is hand-read.
     Thumbnail,
     /// Only [`IFD1_RESIDUAL_IDS`], beside the engine's rows ([`parse_ifd1`]).
-    /// Every row is recorded at `priority` under family-1 group `IFD1`, and
+    /// Every row is recorded at `priority` (group1 [`IFD1_GROUP1`]), and
     /// Compression coexists with its twins instead of yielding.
     Residual { priority: u8 },
 }
@@ -2451,7 +2451,7 @@ impl Ifd1Hand {
                 metadata.insert(key, value);
             }
             Self::Residual { priority } => {
-                metadata.insert_occurrence(key, value, priority, "IFD1", Instance::default());
+                metadata.insert_occurrence(key, value, priority, IFD1_GROUP1, Instance::default());
             }
         }
     }
@@ -2669,15 +2669,33 @@ fn ifd1_engine_rows(
         } else {
             SHIM_DEFAULT_PRIORITY
         };
-        metadata.insert_occurrence(
+        // `--no-print-conv` shows ExifTool's `-n` form: the engine's
+        // pre-PrintConv value when a PrintConv rendered the row, else the
+        // row itself (`TagOccurrence::value_conv` must not re-derive one from
+        // a printed string).
+        let display = ifd1_value(row.value);
+        let no_print_conv = row.value_conv.map_or_else(|| display.clone(), ifd1_value);
+        metadata.insert_occurrence_with_raw(
             format!("IFD1:{}", row.name),
-            ifd1_value(row.value),
+            display,
+            no_print_conv,
             priority,
-            "IFD1",
+            IFD1_GROUP1,
             Instance::default(),
         );
     }
 }
+
+/// The `group1` every IFD1 occurrence is recorded under: empty, like every
+/// other `IFD0:`/`ExifIFD:`-keyed occurrence (`embedded.rs`'s IFD0 priority
+/// rows are the precedent). The key prefix `IFD1` is then both the family-1
+/// label and, through `tag_resolution::resolve_family0`, family 0 `EXIF` --
+/// so `-EXIF:Compression`, `-G0` and `-a -G0:1` see IFD1 rows as ExifTool
+/// does (`[EXIF:IFD1]`). A non-empty `group1` would make the key prefix the
+/// family-0 label itself (`family0_label`), i.e. `[IFD1:IFD1]`, and hide
+/// every row from an `-EXIF:` request. Priority 0 alone carries the
+/// `LOW_PRIORITY_DIR` arbitration.
+const IFD1_GROUP1: &str = "";
 
 /// The fence of [`ifd1_engine_rows`]: a row of `Exif::Main` itself, walked
 /// under DirName `IFD1`.
@@ -4637,6 +4655,128 @@ mod ifd1_tests {
         );
     }
 
+    /// `--no-print-conv` (ExifTool `-n`) shows the engine's pre-PrintConv
+    /// value, not the printed label: pinned 13.59 `-n -G1 -j` on
+    /// AppleQT-200.jpg prints `"IFD1:ResolutionUnit": 2`,
+    /// `"IFD1:YCbCrSubSampling": "2 1"`, `"IFD1:YCbCrPositioning": 2`,
+    /// `"IFD1:PhotometricInterpretation": 6`, `"IFD1:XResolution": 72`.
+    #[test]
+    fn engine_rows_carry_the_no_print_conv_form() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:ResolutionUnit", TagValue::new_integer(2));
+        run_two(
+            &[],
+            &[
+                (TAG_PHOTOMETRIC_INTERPRETATION, SHORT, 1, short(6)),
+                (TAG_X_RESOLUTION, RATIONAL, 1, rational(72, 1)),
+                (TAG_Y_RESOLUTION, RATIONAL, 1, rational(145, 2)),
+                (TAG_RESOLUTION_UNIT, SHORT, 1, short(2)),
+                (0x0212, SHORT, 2, [short(2), short(1)].concat()), // YCbCrSubSampling
+                (0x0213, SHORT, 1, short(2)),                      // YCbCrPositioning
+            ],
+            &mut metadata,
+        );
+        let shown = |key: &str, no_print_conv: bool| {
+            crate::cli::tag_resolution::resolved_display_value(
+                metadata.occurrences_for(key)[0],
+                no_print_conv,
+            )
+        };
+        for (key, printed, raw) in [
+            (
+                "IFD1:PhotometricInterpretation",
+                TagValue::new_string("YCbCr"),
+                TagValue::Integer(6),
+            ),
+            (
+                "IFD1:ResolutionUnit",
+                TagValue::new_string("inches"),
+                TagValue::Integer(2),
+            ),
+            (
+                "IFD1:YCbCrSubSampling",
+                TagValue::new_string("YCbCr4:2:2 (2 1)"),
+                TagValue::new_string("2 1"),
+            ),
+            (
+                "IFD1:YCbCrPositioning",
+                TagValue::new_string("Co-sited"),
+                TagValue::Integer(2),
+            ),
+            // No PrintConv: the same value either way, integral as `72`.
+            (
+                "IFD1:XResolution",
+                TagValue::Integer(72),
+                TagValue::Integer(72),
+            ),
+            (
+                "IFD1:YResolution",
+                TagValue::Float(72.5),
+                TagValue::Float(72.5),
+            ),
+        ] {
+            assert_eq!(shown(key, false), printed, "{key} printed");
+            assert_eq!(shown(key, true), raw, "{key} --no-print-conv");
+        }
+        // The whole-map projection the unfiltered `--no-print-conv` listing
+        // uses agrees, and the IFD0 twin is untouched.
+        let projected = metadata.without_print_conv();
+        assert_eq!(
+            projected.get("IFD1:ResolutionUnit"),
+            Some(&TagValue::Integer(2))
+        );
+        assert_eq!(
+            projected.get("IFD0:ResolutionUnit"),
+            Some(&TagValue::Integer(2))
+        );
+    }
+
+    /// Every IFD1 row answers a family-0 `-EXIF:` request, as ExifTool's
+    /// `-EXIF:Compression` does on LeicaQ2.jpg (`[IFD1] Compression`), and
+    /// labels as `EXIF`/`IFD1` under `-G0`/`-G1`. Engine rows
+    /// (PhotometricInterpretation, XResolution) and residual rows
+    /// (Compression, ThumbnailOffset) alike.
+    #[test]
+    fn exif_group_requests_reach_ifd1_rows() {
+        let mut metadata = MetadataMap::new();
+        run_two(
+            &[],
+            &[
+                (TAG_PHOTOMETRIC_INTERPRETATION, SHORT, 1, short(6)),
+                (TAG_COMPRESSION, SHORT, 1, short(6)),
+                (TAG_X_RESOLUTION, RATIONAL, 1, rational(72, 1)),
+                (TAG_THUMBNAIL_OFFSET, LONG, 1, 8u32.to_le_bytes().to_vec()),
+                (TAG_THUMBNAIL_LENGTH, LONG, 1, 4u32.to_le_bytes().to_vec()),
+            ],
+            &mut metadata,
+        );
+        for name in [
+            "Compression",
+            "ThumbnailOffset",
+            "PhotometricInterpretation",
+            "XResolution",
+        ] {
+            for qualifier in ["EXIF", "IFD1"] {
+                let resolved = crate::cli::tag_resolution::resolve_requested_tags(
+                    &metadata,
+                    &[format!("{qualifier}:{name}")],
+                    false,
+                );
+                assert_eq!(resolved.len(), 1, "{qualifier}:{name}");
+                assert_eq!(resolved[0].lookup_key, format!("IFD1:{name}"));
+                let occurrence = resolved[0].occurrence;
+                assert_eq!(
+                    crate::cli::tag_resolution::family0_label(occurrence),
+                    "EXIF"
+                );
+                assert_eq!(
+                    crate::cli::tag_resolution::family1_label(occurrence),
+                    "IFD1"
+                );
+            }
+        }
+    }
+
     /// A bare request keeps answering IFD0: every IFD1 row is priority 0
     /// (ExifTool.pm:7317, 9557-9560), and `all_occurrences` still has both,
     /// IFD0 first.
@@ -4683,7 +4823,18 @@ mod ifd1_tests {
             if key.starts_with("IFD1:") {
                 let occurrence = metadata.occurrences_for(&key)[0];
                 assert_eq!(occurrence.priority, 0, "{key}");
-                assert_eq!(&*occurrence.group1, "IFD1", "{key}");
+                // `-G1` prints IFD1 and `-G0` prints EXIF, as ExifTool's
+                // `[EXIF:IFD1]` does under `-a -G0:1`.
+                assert_eq!(
+                    crate::cli::tag_resolution::family1_label(occurrence),
+                    "IFD1",
+                    "{key}"
+                );
+                assert_eq!(
+                    crate::cli::tag_resolution::family0_label(occurrence),
+                    "EXIF",
+                    "{key}"
+                );
             }
         }
     }
@@ -4773,6 +4924,7 @@ mod ifd1_tests {
             group2: "Image",
             name: "ExposureTime",
             value: TagValue::Integer(5),
+            value_conv: None,
             low_priority: false,
             avoid: false,
         };
