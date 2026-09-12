@@ -127,27 +127,53 @@ impl DirEngineRows {
     /// ids), but the n-th-visit pairing is still exact: emission order is
     /// entry order, and two ids sharing a name share one key, so taking a
     /// same-named row one entry "early" changes neither the key nor the
-    /// relative order of the two rows. A row the engine refused never
-    /// exists, so the entry then produces nothing: the engine's absence,
-    /// which is ExifTool's.
+    /// relative order of the two rows.
+    ///
+    /// Returns whether a row existed (recorded or dropped by `keep`). `false`
+    /// means the engine refused the entry, and that absence is NOT always
+    /// ExifTool's: `ifd_engine::locate`'s `table_ifd.rs` floor refuses an
+    /// out-of-line value stored anywhere before the end of the directory,
+    /// where ExifTool refuses only one that overlaps it (Exif.pm:6549; the
+    /// K-O construct, E-2 commit 1), and a directory `read_ifd` refuses has
+    /// no rows at all. So the caller decides: the InteropIFD caller falls
+    /// back to its hand arm, the pre-engine producer, for that entry.
     pub(crate) fn replay(
         &mut self,
         id: u16,
         metadata: &mut MetadataMap,
         key: impl Fn(&str) -> String,
         keep: impl Fn(&str, &MetadataMap) -> bool,
-    ) {
+    ) -> bool {
         let table = self.table;
-        if let Some(row) = self
+        let Some(row) = self
             .rows
             .iter_mut()
             .find(|row| !row.consumed && declares(table, id, row.name))
-        {
-            row.consumed = true;
-            if keep(row.name, metadata) {
-                record(row, metadata, key(row.name));
-            }
+        else {
+            return false;
+        };
+        row.consumed = true;
+        if keep(row.name, metadata) {
+            record(row, metadata, key(row.name));
         }
+        true
+    }
+
+    /// Records every row at `priority` instead of its table priority.
+    ///
+    /// The table priority is ExifTool's, but only against producers that
+    /// model theirs: `Exif::Main`'s X/YResolution and ResolutionUnit carry
+    /// `Priority => 0`, which in ExifTool still outranks the JFIF copies
+    /// (`Priority => -1`, ExifTool.pm:2218-2233), while oxidex records JFIF
+    /// at 1 (`jpeg_helpers.rs`). Until JFIF's -1 is modelled, a walk whose
+    /// hand arms recorded at [`SHIM_DEFAULT_PRIORITY`] keeps that priority,
+    /// so `-TAG` selection stays where the hand arm left it (the InteropIFD
+    /// caller). E-2 chooses per directory.
+    pub(crate) fn at_priority(mut self, priority: u8) -> Self {
+        for row in &mut self.rows {
+            row.priority = priority;
+        }
+        self
     }
 
     /// Rows whose entry the hand walk never reached (`parse_ifd` drops a
@@ -648,14 +674,14 @@ mod tests {
         let mut metadata = MetadataMap::new();
         let key = |name: &str| format!("InteropIFD:{name}");
         let keep = |_: &str, _: &MetadataMap| true;
-        rows.replay(0x0001, &mut metadata, key, keep);
+        assert!(rows.replay(0x0001, &mut metadata, key, keep));
         assert_eq!(
             metadata.get_string("InteropIFD:InteropIndex"),
             Some("R98 - DCF basic file (sRGB)")
         );
         assert!(metadata.get("InteropIFD:RelatedImageWidth").is_none());
-        // A second visit of the same id finds no unconsumed row.
-        rows.replay(0x0001, &mut metadata, key, keep);
+        // A second visit of the same id finds no unconsumed row, and says so.
+        assert!(!rows.replay(0x0001, &mut metadata, key, keep));
         rows.drain(&mut metadata, key, keep);
         assert_eq!(
             metadata.get("InteropIFD:RelatedImageWidth"),
@@ -679,9 +705,80 @@ mod tests {
         let mut rows = interop_walk(&tiff);
         let mut metadata = MetadataMap::new();
         let key = |name: &str| format!("InteropIFD:{name}");
-        rows.replay(0x0128, &mut metadata, key, |_, _| false);
+        assert!(
+            rows.replay(0x0128, &mut metadata, key, |_, _| false),
+            "a row dropped by `keep` still existed: no hand fallback"
+        );
         rows.drain(&mut metadata, key, |_, _| true);
         assert!(metadata.get("InteropIFD:ResolutionUnit").is_none());
+    }
+
+    /// The floor refusal `replay` reports as `false`: an out-of-line value
+    /// stored before the directory, which ExifTool reads (Exif.pm:6549 only
+    /// refuses an overlap) and `ifd_engine::locate`'s floor refuses.
+    #[test]
+    fn a_value_stored_before_the_directory_has_no_row_and_replay_says_so() {
+        // Header, then the 8-byte rational at 8, then the IFD at 16.
+        let mut tiff = b"II\x2a\0\x10\0\0\0".to_vec();
+        tiff.extend([72u32.to_le_bytes(), 1u32.to_le_bytes()].concat());
+        tiff.extend(1u16.to_le_bytes());
+        tiff.extend(0x011au16.to_le_bytes());
+        tiff.extend(5u16.to_le_bytes());
+        tiff.extend(1u32.to_le_bytes());
+        tiff.extend(8u32.to_le_bytes());
+        tiff.extend(0u32.to_le_bytes());
+        let mut rows = walk(
+            &IFD_EXIF_MAIN,
+            &tiff,
+            16,
+            ByteOrder::LittleEndian,
+            "InteropIFD",
+            &MetadataMap::new(),
+        );
+        assert_eq!(rows.entries(), Some(1));
+        assert!(rows.rows.is_empty(), "{:?}", rows.rows);
+        let mut metadata = MetadataMap::new();
+        assert!(!rows.replay(
+            0x011a,
+            &mut metadata,
+            |name: &str| format!("InteropIFD:{name}"),
+            |_, _| true
+        ));
+        assert!(metadata.is_empty());
+    }
+
+    #[test]
+    fn at_priority_overrides_the_table_priority_of_every_row() {
+        // 0x011a XResolution is `Priority => 0` in Exif::Main.
+        let tiff = le_tiff(&[
+            (
+                0x011a,
+                5,
+                1,
+                [72u32.to_le_bytes(), 1u32.to_le_bytes()].concat(),
+            ),
+            short(0x1001, 640),
+        ]);
+        let rows = interop_walk(&tiff);
+        assert_eq!(rows.rows[0].priority, 0, "table Priority => 0");
+        assert_eq!(rows.rows[1].priority, SHIM_DEFAULT_PRIORITY);
+        let mut rows = rows.at_priority(SHIM_DEFAULT_PRIORITY);
+        assert!(
+            rows.rows
+                .iter()
+                .all(|r| r.priority == SHIM_DEFAULT_PRIORITY)
+        );
+        let mut metadata = MetadataMap::new();
+        rows.replay(
+            0x011a,
+            &mut metadata,
+            |n: &str| format!("InteropIFD:{n}"),
+            |_, _| true,
+        );
+        assert_eq!(
+            metadata.occurrences_for("InteropIFD:XResolution")[0].priority,
+            SHIM_DEFAULT_PRIORITY
+        );
     }
 
     #[test]

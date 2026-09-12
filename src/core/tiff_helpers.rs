@@ -1041,8 +1041,12 @@ fn interop_keep(name: &str, metadata: &MetadataMap) -> bool {
 /// ([`exif_dir_engine::walk`]), replayed at its entry's position in the hand
 /// walk below; [`INTEROP_RESIDUAL_IDS`] stay with their hand arms, and every
 /// other id produces nothing, as the hand arm dropped every id it did not
-/// name. With the table off, the hand arms run alone exactly as before the
-/// slice (the E-1/E-2 fallback; E-D deletes it).
+/// name. An engine-reported entry the engine refused (no row: the floor
+/// refuses a value stored before the directory, which ExifTool reads, or a
+/// directory `read_ifd` refuses) keeps its hand arm for that entry. Engine
+/// rows are recorded at the hand arms' priority ([`SHIM_DEFAULT_PRIORITY`];
+/// `DirEngineRows::at_priority`). With the table off, the hand arms run
+/// alone exactly as before the slice (the E-1/E-2 fallback; E-D deletes it).
 ///
 /// # Image-carrying Interop directories
 ///
@@ -1121,7 +1125,11 @@ fn parse_interop_directory(
                 },
                 "InteropIFD at {offset}: the TIFF slice and reader address different bytes"
             );
+            // At the hand arms' priority, not the table's `Priority => 0`
+            // for X/YResolution and ResolutionUnit: see `at_priority` (JFIF's
+            // `Priority => -1` is not modelled, so 0 would lose to JFIF).
             exif_dir_engine::walk(table, tiff, offset, byte_order, "InteropIFD", metadata)
+                .at_priority(SHIM_DEFAULT_PRIORITY)
         });
 
     let mut other_image_start: Option<u64> = None;
@@ -1135,11 +1143,16 @@ fn parse_interop_directory(
         {
             // An engine-reported id replays its row here; any other id
             // produces nothing, as the hand arm dropped every id it did not
-            // name (the `_` arm below).
-            if engine.owner(*tag_id, false) == exif_dir_engine::Owner::Engine {
-                engine.replay(*tag_id, metadata, interop_key, interop_keep);
+            // name (the `_` arm below). An engine-reported id with no row --
+            // the engine refused the value (its floor refuses a value stored
+            // before the directory, which ExifTool reads: Exif.pm:6549 is
+            // an overlap rule, K-O in E-2) or the whole directory -- falls
+            // through to its hand arm, the pre-engine producer.
+            if engine.owner(*tag_id, false) != exif_dir_engine::Owner::Engine
+                || engine.replay(*tag_id, metadata, interop_key, interop_keep)
+            {
+                continue;
             }
-            continue;
         }
 
         match *tag_id {
@@ -5708,6 +5721,138 @@ mod interop_tests {
             .filter(|k| k.starts_with("InteropIFD:") || k.starts_with("EXIF:"))
             .collect();
         assert_eq!(interop_keys.len(), 3, "{interop_keys:?}");
+    }
+
+    /// Review finding (E-1, rev-exactness `crafted/before.*`,
+    /// `crafted2/idx8_before.*`): out-of-line values stored BEFORE the
+    /// Interop directory. ExifTool reads them (Exif.pm:6549 refuses only an
+    /// overlap; pinned 13.59 prints `[InteropIFD] XResolution 72`,
+    /// `YResolution 96`, and `-n` InteropIndex `ASCIIR98` with no warning);
+    /// the engine's floor refuses them, so those entries keep their hand
+    /// arms -- byte-identical to the engine-off fallback -- instead of
+    /// vanishing. The inline ResolutionUnit is still the engine's.
+    #[test]
+    fn a_value_stored_before_the_directory_keeps_its_hand_arm() {
+        assert!(engine_is_on());
+        // header(8) | XRes 72/1 @8 | YRes 96/1 @16 | "ASCIIR98" @24 | IFD @32
+        let mut data = b"II\x2a\0\x20\0\0\0".to_vec();
+        for (num, den) in [(72u32, 1u32), (96, 1)] {
+            data.extend(num.to_le_bytes());
+            data.extend(den.to_le_bytes());
+        }
+        data.extend(b"ASCIIR98");
+        let entries: [(u16, u16, u32, u32); 4] = [
+            (INTEROP_INDEX, ASCII, 8, 24),
+            (TAG_X_RESOLUTION, RATIONAL, 1, 8),
+            (TAG_Y_RESOLUTION, RATIONAL, 1, 16),
+            (TAG_RESOLUTION_UNIT, SHORT, 1, 2),
+        ];
+        data.extend((entries.len() as u16).to_le_bytes());
+        for (tag, field_type, count, value) in entries {
+            data.extend(tag.to_le_bytes());
+            data.extend(field_type.to_le_bytes());
+            data.extend(count.to_le_bytes());
+            data.extend(value.to_le_bytes());
+        }
+        data.extend(0u32.to_le_bytes());
+        let parse = |table: Option<&'static IfdTable>| {
+            let tiff_len = data.len() as u64;
+            let reader = TestReader::new(data.clone());
+            let mut metadata = MetadataMap::new();
+            parse_interop_directory(
+                &reader,
+                32,
+                ByteOrder::LittleEndian,
+                0,
+                tiff_len,
+                table,
+                &mut metadata,
+            );
+            metadata
+        };
+        let engine = parse(find_ifd_table("Exif", "Main"));
+        let hand = parse(None);
+        let index_key = format!("{INTEROP_DCF_GROUP}:InteropIndex");
+        for key in [
+            index_key.as_str(),
+            "InteropIFD:XResolution",
+            "InteropIFD:YResolution",
+        ] {
+            assert!(engine.get(key).is_some(), "{key} lost with the engine on");
+            assert_eq!(engine.get(key), hand.get(key), "{key}: not the hand arm");
+        }
+        assert_eq!(
+            engine.get("InteropIFD:XResolution"),
+            Some(&TagValue::new_rational(72, 1))
+        );
+        assert_eq!(
+            engine.get("InteropIFD:YResolution"),
+            Some(&TagValue::new_rational(96, 1))
+        );
+        assert_eq!(engine.get_string(&index_key), Some("ASCIIR98"));
+        assert_eq!(
+            engine.without_print_conv().get_string(&index_key),
+            Some("ASCIIR98"),
+            "the oracle's -n form"
+        );
+        // Inline, so the engine's: its `-n` form is the stored code.
+        assert_eq!(
+            engine.get_string("InteropIFD:ResolutionUnit"),
+            Some("inches")
+        );
+        assert_eq!(
+            engine.without_print_conv().get("InteropIFD:ResolutionUnit"),
+            Some(&TagValue::Integer(2))
+        );
+    }
+
+    /// Review finding (E-1, reviewer-regression
+    /// `SamsungSPH-A800_noifd0res.jpg`): engine Interop rows keep the hand
+    /// arms' priority. `Exif::Main` gives X/YResolution and ResolutionUnit
+    /// `Priority => 0`, which in ExifTool still beats JFIF's `Priority =>
+    /// -1` (ExifTool.pm:2218-2233); oxidex records JFIF at 1, so a 0 here
+    /// would hand `-XResolution` to `JFIF:XResolution` where the pinned
+    /// 13.59 oracle prints the Interop 72.
+    #[test]
+    fn engine_interop_rows_keep_the_hand_priority_against_jfif() {
+        assert!(engine_is_on());
+        let x_offset = tail_offset_for(2) as u32;
+        let (data, _) = build_interop(
+            &[
+                (TAG_X_RESOLUTION, RATIONAL, 1, x_offset),
+                (TAG_RESOLUTION_UNIT, SHORT, 1, 2),
+            ],
+            &[72u32.to_le_bytes(), 1u32.to_le_bytes()].concat(),
+        );
+        let tiff_len = data.len() as u64;
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        // JPEG order: APP0 JFIF before APP1 Exif.
+        metadata.insert("JFIF:XResolution", TagValue::Integer(0));
+        metadata.insert("JFIF:ResolutionUnit", TagValue::new_string("inches"));
+        parse_interop_subifd(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            0,
+            tiff_len,
+            &mut metadata,
+        );
+        for name in ["XResolution", "ResolutionUnit"] {
+            let key = format!("InteropIFD:{name}");
+            assert_eq!(
+                metadata.occurrences_for(&key)[0].priority,
+                SHIM_DEFAULT_PRIORITY,
+                "{key}"
+            );
+            let winner = crate::cli::tag_resolution::resolve_requested_tags(
+                &metadata,
+                &[name.to_string()],
+                false,
+            );
+            assert_eq!(winner.len(), 1);
+            assert_eq!(winner[0].lookup_key, key, "-{name} picks JFIF");
+        }
     }
 
     /// Spec 7.1 test 5: the PROCESSED guard in `parse_exif_subifd`. An
