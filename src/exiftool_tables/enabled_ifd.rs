@@ -203,8 +203,15 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // What E-1 changes: every Interop id the table reports (InteropIndex,
     // RelatedImageFileFormat/Width/Height, X/YResolution, ResolutionUnit, any
     // other) comes from the engine, replayed at its entry's position in the
-    // hand walk, at ExifTool's priority, with `--no-print-conv` =
-    // `Emitted::value_conv`; `INTEROP_RESIDUAL_IDS` keeps InteropVersion and
+    // hand walk, with `--no-print-conv` = `Emitted::value_conv`. The rows are
+    // recorded at the hand arms' SHIM_DEFAULT_PRIORITY
+    // (`DirEngineRows::at_priority`), not the table's `Priority => 0` for
+    // X/YResolution/ResolutionUnit, because oxidex records JFIF at 1 where
+    // ExifTool's JFIF priority is -1 (ExifTool.pm:2218-2233): at 0 a JFIF
+    // copy would win a bare-name `-XResolution`. An engine-reported id whose
+    // value the engine refuses (the table_ifd floor: a value stored before
+    // the directory, which Exif.pm:6549's overlap rule reads) falls back to
+    // its hand arm until K-O. `INTEROP_RESIDUAL_IDS` keeps InteropVersion and
     // Compression (`omitted.raw_conv`) and the OtherImage pair (not
     // transcribed) on their hand arms, and every other id reports nothing, as
     // before. Every row is keyed `InteropIFD:<name>`, ExifTool's `-G1`: the
@@ -249,7 +256,14 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // `--extended-output -j` differ only by `EXIF:` -> `InteropIFD:` key
     // renames with equal values, in 97 files (InteropIndex 94,
     // InteropVersion 96, RelatedImageWidth/Height 9 each).
-    // Gate B of record: EXIFE1_GATEB_PENDING
+    // Gate B of record (i7-missing-census.sh: conformance.py over 4,238 files,
+    // pinned 13.59, clean trees, on the i7; per-file diff i7-ab-diff.py):
+    //     control   census fujim (eadb5884 tree)  TOTAL 4238 467986 22 493 12268 1562
+    //     treatment census e1    (b2730002)       TOTAL 4238 468002 22 477 12268 1562
+    // exactly 16 VALUE -> matched, all InteropIndex, in the 16 files named
+    // above (per-file rows compared as sets; per_file.value_diff order is not
+    // stable between runs); 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA
+    // (VERDICT PASS); oracle rows conserve (480,769).
     ("Exif", "Main"),
     // FujiFilm::Main -- slice I-6. The table is `%Image::ExifTool::FujiFilm::Main`
     // (FujiFilm.pm:84-1022, pinned 13.59), reached from MakerNoteFujiFilm
