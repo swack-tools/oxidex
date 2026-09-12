@@ -480,7 +480,14 @@ def compare(et, ox):
     matched, value_diff = [], []
     missing, extra = {}, {}
 
-    for n in et_by_name.keys() | ox_by_name.keys():
+    # Sorted, never the bare set: a set of str iterates in hash order, which
+    # PYTHONHASHSEED changes per interpreter, and everything below inherits
+    # this order -- value_diff and matched directly, missing/extra through
+    # their insertion order (which infer_renames and place_occurrence read).
+    # Unsorted, two censuses of identical output differed in --json-out's
+    # per_file value_diff lists (fujim vs e1, 2026-09-12: 51 of 4,238 files
+    # dict-unequal, 16 real). Within one name, oracle key order still rules.
+    for n in sorted(et_by_name.keys() | ox_by_name.keys()):
         expected = et_by_name.get(n, [])
         actual = list(ox_by_name.get(n, []))
 
