@@ -95,8 +95,10 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // file's VALUE or RENAME state before the change; the rows above were read
     // from both census JSONs.
     ("Canon", "Main"),
-    // Exif::Main, walked at DirName `IFD1` only -- the JPEG-APP1 thumbnail
-    // IFD (slice IFD1, landing 2; landing 1 landed as 759fa0e9: the codegen
+    // Exif::Main, walked at DirName `IFD1` (slice IFD1, below) and
+    // `InteropIFD` (slice E-1, after the IFD1 evidence); `ExifIFD` is slice
+    // E-2 (not yet). Slice IFD1 -- the JPEG-APP1 thumbnail
+    // IFD (landing 2; landing 1 landed as 759fa0e9: the codegen
     // policy aaf00801, the i7 regen dcc012f4, and the design spec's v1.1
     // amendment). The table is
     // `%Image::ExifTool::Exif::Main` (Exif.pm:411-4723, pinned 13.59),
@@ -108,8 +110,9 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // `_variants` groups counted `ifd_variant_unreported_skipped` /
     // `ifd_variant_makernotes_dispatch`). Call site: `tiff_helpers::parse_ifd1`
     // -> `ifd1_engine_rows`, from `jpeg_helpers.rs::process_exif_segments`
-    // only. No other directory of this table is walked by the engine:
-    // IFD0/ExifIFD/GPS/InteropIFD stay hand, the PSD/PDF `ExifInfo` IFD1 stays
+    // only. No other directory of this table is walked by the engine but the
+    // InteropIFD (slice E-1, below): IFD0/ExifIFD/GPS stay hand, the PSD/PDF
+    // `ExifInfo` IFD1 stays
     // on `parse_ifd1_directory`, the standalone-TIFF chain on
     // `parse_ifd_chain`, and no enabled table carries an edge into Exif::Main.
     //
@@ -180,6 +183,64 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // Model, Software, Artist, Copyright ...) that now reach the output
     // through the same owner; ~60 are credited by conformance.py's
     // name-bucket matching to same-name, same-value XMP:/MakerNotes: slots.
+    //
+    // Slice E-1: the InteropIFD reached from ExifIFD 0xa005 (spec
+    // `oxidex-ops/slices/exif-ifd/spec.md`). Call site:
+    // `tiff_helpers::parse_interop_subifd` -> `exif_dir_engine::walk`
+    // (DirName and group 1 `InteropIFD`, base 0 over the TIFF block), from
+    // `parse_exif_subifd`'s third pass -- every entry point that reaches an
+    // ExifIFD: JPEG APP1, the standalone-TIFF chain, and the embedded TIFF
+    // blocks of PNG/WebP/JXL/HEIF/PSD/PDF/FLIF/MIFF/BPG. NOT the TIFF-raw,
+    // RW2-preview, RAF, X3F, CR3-CMT and PDF byte-scan walkers, which keep
+    // their own Interop code, and not an InteropIFD reached from IFD0's
+    // 0xa005. Top level only: the fence (`exif_dir_engine::is_exif_main_row`)
+    // drops every edge row, and the five Exif::Main self-edges are emitted
+    // unwalked (`exif_main_edges_reach_no_enabled_table_but_itself`). The
+    // walk sits behind the PROCESSED guard in `parse_exif_subifd`
+    // (ExifTool.pm:9058-9072): an InteropOffset aimed at the ExifIFD itself
+    // or at IFD0 is not walked by engine or hand.
+    //
+    // What E-1 changes: every Interop id the table reports (InteropIndex,
+    // RelatedImageFileFormat/Width/Height, X/YResolution, ResolutionUnit, any
+    // other) comes from the engine, replayed at its entry's position in the
+    // hand walk, at ExifTool's priority, with `--no-print-conv` =
+    // `Emitted::value_conv`; `INTEROP_RESIDUAL_IDS` keeps InteropVersion and
+    // Compression (`omitted.raw_conv`) and the OtherImage pair (not
+    // transcribed) on their hand arms, and every other id reports nothing, as
+    // before. The DCF rows keep the `EXIF:` key the hand arm used
+    // (`tiff_helpers::INTEROP_DCF_GROUP`); every other row is
+    // `InteropIFD:<name>`. The yield-to-IFD0 rule for X/YResolution/
+    // ResolutionUnit is kept (E-3 retires it). With the line off, the hand
+    // arms run alone as before (E-D deletes that fallback). Pinned by
+    // `exif_dir_engine` tests (the withholding snapshot, owner, fence,
+    // tripwire, replay/drain, output rules a no-op), `tiff_helpers::
+    // interop_tests` (residual == hand remainder, PROCESSED guard, keys, the
+    // fallback) and `tests/exif_ifd_table.rs` (t/images Canon.jpg, Nikon.jpg,
+    // ExifTool.jpg, a crafted PNG eXIf, combined-samples SamsungGT-S5250 /
+    // CanonHG20 / SamsungSPH-A800 / CanonXL_H1, per tag against
+    // `exiftool-pinned.sh -G1 -a -s -j [-n] -InteropIFD:all`).
+    //
+    // Local pre-measurement (a prediction, not the gate): conformance.py
+    // --recursive over the spec's bounded list `slices/exif-ifd/work/
+    // ab150.txt` (150 files: 45 census-named JPEGs, 23 semantic cases, 14
+    // container files, 68 fill files incl. 8 raws), pinned 13.59 (both
+    // probes), control the release build of e8a7c12a, treatment this change
+    // (`OXIDEX_ALLOW_DIRTY_TREE=1`; --min-files 150 --min-tags 18067; totals
+    // from --json-out):
+    //     control    TOTAL 150 15870 0 90 940 159
+    //     treatment  TOTAL 150 15886 0 74 940 159
+    // per-file diff: exactly 16 VALUE -> matched, all InteropIndex, ExifTool's
+    // `Unknown (...)` for an undeclared index (CanonHG20,
+    // NikonSUPER_COOLSCAN4000ED, SamsungGT-M8800, GT-S5250, GT-S5330,
+    // GT-S5620, GT-S9402, NX3000, NX3300, SGH-D980, SGH-F488E, SGH-F490,
+    // SGH-F700, SGH-G600, SGH-G608, VP-D73); 0 matched -> MISSING, 0 new
+    // VALUE, 0 new EXTRA, no other file moved. `oxidex -j` and
+    // `--extended-output -j`, control vs treatment: only those 16
+    // `EXIF:InteropIndex` values differ (no Composite row, no raw file).
+    // `--no-print-conv` against the oracle's `-j -n -G1 -a -InteropIFD:all`:
+    // 80 InteropIndex rows move toward the oracle (the code, not the label),
+    // 0 away.
+    // Gate B of record: EXIFE1_GATEB_PENDING
     ("Exif", "Main"),
     // FujiFilm::Main -- slice I-6. The table is `%Image::ExifTool::FujiFilm::Main`
     // (FujiFilm.pm:84-1022, pinned 13.59), reached from MakerNoteFujiFilm

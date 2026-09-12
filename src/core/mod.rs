@@ -8,6 +8,7 @@
 
 pub mod binary_decoders;
 pub mod date_shift;
+pub mod exif_dir_engine;
 pub mod exif_enums;
 pub mod exiftool_compat;
 pub mod file_format;
