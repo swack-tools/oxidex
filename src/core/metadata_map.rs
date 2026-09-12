@@ -600,19 +600,47 @@ impl FromIterator<(String, TagValue)> for MetadataMap {
 /// ```
 impl IntoIterator for MetadataMap {
     type Item = (String, TagValue);
-    type IntoIter = std::collections::hash_map::IntoIter<String, TagValue>;
+    type IntoIter = std::vec::IntoIter<(String, TagValue)>;
 
     fn into_iter(self) -> Self::IntoIter {
-        // Only the winner projection is consumed; losing occurrences (none
-        // exist yet outside this module's own tests, since nothing else
-        // constructs duplicates) are dropped along with the rest of the sink.
-        self.sink.into_winner_map().into_iter()
+        // Only the winner projection is consumed, in file order (see
+        // `TagSink::into_winners`); losing occurrences are dropped along with
+        // the rest of the sink.
+        self.sink.into_winners().into_iter()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two ways parsers copy a sub-map into the file's map -- `iter()`
+    /// with clones, and consuming `for (k, v) in sub` -- both hand the tags
+    /// over in the order the sub-map recorded them, so the copies' file order
+    /// (what `-a` renders) is the same on every run.
+    #[test]
+    fn copying_a_sub_map_keeps_its_file_order_on_every_run() {
+        let names = ["Make", "Model", "Orientation", "XResolution", "YResolution"];
+        let names = names.map(|n| format!("IFD0:{n}"));
+        for run in 0..32 {
+            let mut sub = MetadataMap::new();
+            for name in &names {
+                sub.insert(name.clone(), TagValue::new_string(name.clone()));
+            }
+            let mut by_ref = MetadataMap::new();
+            for (key, value) in sub.iter() {
+                by_ref.insert(key.clone(), value.clone());
+            }
+            let mut by_value = MetadataMap::new();
+            for (key, value) in sub {
+                by_value.insert(key, value);
+            }
+            for copy in [by_ref, by_value] {
+                let order: Vec<String> = copy.all_occurrences().map(|(key, _)| key).collect();
+                assert_eq!(order, names, "copy in run {run}");
+            }
+        }
+    }
 
     #[test]
     fn test_new_metadata_map() {

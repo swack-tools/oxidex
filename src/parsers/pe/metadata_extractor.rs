@@ -1,8 +1,6 @@
 //! Metadata extraction from PE headers
 
-use std::collections::HashMap;
-
-use crate::core::{MetadataMap, TagValue};
+use crate::core::{MetadataMap, OrderedTags, TagValue};
 use crate::parsers::pe::clr_parser::DotNetInfo;
 use crate::parsers::pe::signature_parser::SignatureInfo;
 use crate::parsers::pe::structures::{
@@ -424,7 +422,7 @@ pub fn extract_optional_metadata(
 /// Extract metadata from VERSION_INFO resource
 pub fn extract_version_info_metadata(
     fixed_info: &VsFixedFileInfo,
-    strings: &HashMap<String, String>,
+    strings: &OrderedTags<String>,
     metadata: &mut MetadataMap,
 ) {
     // Fixed file info

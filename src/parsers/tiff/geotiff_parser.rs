@@ -17,7 +17,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use crate::core::OrderedTags;
 
 use super::geotiff_printconv::{geokey_name, geokey_print_conv, print_conv_lookup};
 
@@ -39,14 +39,15 @@ pub const MODEL_TRANSFORMATION_TAG: u16 = 0x85D8;
 /// - `is_little_endian`: Byte order
 ///
 /// # Returns
-/// HashMap of tag name to value string
+/// Tag name to value string, in key-directory order -- the order
+/// `ProcessGeoTiff` reports them in, and the order `-a` renders.
 pub fn parse_geotiff_keys(
     directory: &[u8],
     double_params: Option<&[u8]>,
     ascii_params: Option<&str>,
     is_little_endian: bool,
-) -> HashMap<String, String> {
-    let mut result = HashMap::new();
+) -> OrderedTags<String> {
+    let mut result = OrderedTags::new();
 
     // ProcessGeoTiff (GeoTiff.pm:2146-2147) requires the header AND every
     // declared entry before emitting anything -- a shorter blob is "Bad
@@ -754,5 +755,14 @@ mod tests {
             assert_eq!(result.get(tag).map(String::as_str), Some(value), "{tag}");
         }
         assert_eq!(result.len(), expect.len(), "key 999 must be skipped");
+
+        // Directory order, the order `ProcessGeoTiff` reports the keys in, on
+        // every run: this was a `HashMap`, whose order std seeds afresh per
+        // map, so `-a` listed the GeoTiff group differently each time.
+        for run in 0..32 {
+            let result = parse_geotiff_keys(&directory, Some(&doubles), Some("Test|\0"), true);
+            let keys: Vec<&str> = result.iter().map(|(key, _)| key.as_str()).collect();
+            assert_eq!(keys, expect.map(|(tag, _)| tag), "run {run}");
+        }
     }
 }

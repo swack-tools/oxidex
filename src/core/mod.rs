@@ -23,8 +23,11 @@ pub mod metadata;
 pub mod metadata_map;
 pub mod operations;
 pub mod operations_helpers;
+pub mod ordered_tags;
 pub mod read_options;
 pub mod read_report;
+#[cfg(test)]
+mod record_order_tests;
 pub mod tag_conversion;
 pub mod tag_normalization;
 pub mod tag_occurrence;
@@ -49,6 +52,7 @@ pub use operations::{
     read_metadata_report_with_detector, read_metadata_report_with_detector_and_options,
     read_metadata_with_detector_and_options, remove_tag, write_metadata,
 };
+pub use ordered_tags::OrderedTags;
 pub use read_options::ReadOptions;
 pub use read_report::{Diagnostic, DiagnosticKind, DiagnosticSink, ParseStatus, ReadReport};
 pub use tag_normalization::{normalize_metadata_map, normalize_tag_family};

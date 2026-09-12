@@ -1,12 +1,12 @@
 //! PE VERSION_INFO Resource Parser
 
+use crate::core::OrderedTags;
 use crate::io::EndianReader;
 use crate::parsers::pe::structures::VsFixedFileInfo;
 use nom::{
     IResult,
     number::complete::{le_u16, le_u32},
 };
-use std::collections::HashMap;
 
 /// Parse VS_FIXEDFILEINFO structure (52 bytes)
 pub fn parse_vs_fixed_file_info(input: &[u8]) -> IResult<&[u8], VsFixedFileInfo> {
@@ -45,7 +45,7 @@ pub fn parse_vs_fixed_file_info(input: &[u8]) -> IResult<&[u8], VsFixedFileInfo>
 }
 
 /// Parse VERSION_INFO structure and extract string table
-pub fn parse_version_info(data: &[u8]) -> Option<(VsFixedFileInfo, HashMap<String, String>)> {
+pub fn parse_version_info(data: &[u8]) -> Option<(VsFixedFileInfo, OrderedTags<String>)> {
     // VERSION_INFO structure starts with:
     // WORD  wLength
     // WORD  wValueLength
@@ -95,7 +95,7 @@ pub fn parse_version_info(data: &[u8]) -> Option<(VsFixedFileInfo, HashMap<Strin
 }
 
 /// Find and parse StringFileInfo among VERSION_INFO children
-fn find_string_file_info(data: &[u8], max_length: usize) -> Option<HashMap<String, String>> {
+fn find_string_file_info(data: &[u8], max_length: usize) -> Option<OrderedTags<String>> {
     let mut offset = 0;
     while offset + 6 < max_length && offset + 6 < data.len() {
         // Read child structure header
@@ -121,7 +121,7 @@ fn find_string_file_info(data: &[u8], max_length: usize) -> Option<HashMap<Strin
 }
 
 /// Parse StringFileInfo structure
-fn parse_string_file_info(data: &[u8], _max_length: usize) -> Option<HashMap<String, String>> {
+fn parse_string_file_info(data: &[u8], _max_length: usize) -> Option<OrderedTags<String>> {
     if data.len() < 6 {
         return None;
     }
@@ -151,7 +151,7 @@ fn parse_string_file_info(data: &[u8], _max_length: usize) -> Option<HashMap<Str
 }
 
 /// Parse StringTable structure (contains the actual key-value pairs)
-fn parse_string_table(data: &[u8]) -> Option<HashMap<String, String>> {
+fn parse_string_table(data: &[u8]) -> Option<OrderedTags<String>> {
     if data.len() < 6 {
         return None;
     }
@@ -168,7 +168,7 @@ fn parse_string_table(data: &[u8]) -> Option<HashMap<String, String>> {
     offset = (offset + 3) & !3;
 
     let end_offset = length as usize;
-    let mut strings = HashMap::new();
+    let mut strings = OrderedTags::new();
 
     // Parse all String structures
     while offset + 6 < end_offset && offset < data.len() {

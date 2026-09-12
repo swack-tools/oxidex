@@ -9,8 +9,8 @@ use super::registries::{
     CICP_VIDEO_FULL_RANGE_FLAG, GEOMETRY_TYPES, ILLUMINANT_TYPES, OBSERVER_TYPES, TAG_REGISTRY,
     TECHNOLOGIES, TagType, cicp_print, lookup_in_table,
 };
-use crate::core::TagValue;
 use crate::core::formatters::perl_number;
+use crate::core::{OrderedTags, TagValue};
 use crate::error::{ExifToolError, Result};
 use std::collections::HashMap;
 
@@ -18,7 +18,7 @@ use std::collections::HashMap;
 ///
 /// This function reads the tag table and dispatches each tag to its
 /// appropriate decoder based on the tag type in the registry.
-pub fn parse_tags_registry(data: &[u8], metadata: &mut HashMap<String, TagValue>) -> Result<()> {
+pub fn parse_tags_registry(data: &[u8], metadata: &mut OrderedTags<TagValue>) -> Result<()> {
     if data.len() < 132 {
         return Ok(());
     }
@@ -87,7 +87,7 @@ pub fn icc_output_group1(name: &str) -> &'static str {
 ///
 /// This function looks up the tag signature in the registry and calls
 /// the appropriate decoder based on the tag type.
-fn decode_tag(signature: &str, data: &[u8], size: usize, metadata: &mut HashMap<String, TagValue>) {
+fn decode_tag(signature: &str, data: &[u8], size: usize, metadata: &mut OrderedTags<TagValue>) {
     // Find tag in registry
     let Some(def) = TAG_REGISTRY.iter().find(|t| t.signature == signature) else {
         return;
@@ -177,7 +177,7 @@ fn decode_multi_localized(
     base_name: &str,
     data: &[u8],
     size: usize,
-    metadata: &mut HashMap<String, TagValue>,
+    metadata: &mut OrderedTags<TagValue>,
 ) {
     // ExifTool: `next if $size < 28` - too small to hold a single record.
     if size < 28 {
@@ -275,7 +275,7 @@ fn decode_utf16_be(bytes: &[u8]) -> String {
 /// Decodes viewing conditions into multiple metadata entries
 fn decode_viewing_conditions(
     vc: HashMap<String, String>,
-    metadata: &mut HashMap<String, TagValue>,
+    metadata: &mut OrderedTags<TagValue>,
 ) -> Option<TagValue> {
     if let Some(illuminant) = vc.get("illuminant") {
         metadata.insert(
@@ -301,7 +301,7 @@ fn decode_viewing_conditions(
 /// Decodes measurement data into multiple metadata entries
 fn decode_measurement(
     m: HashMap<String, String>,
-    metadata: &mut HashMap<String, TagValue>,
+    metadata: &mut OrderedTags<TagValue>,
 ) -> Option<TagValue> {
     if let Some(observer) = m.get("observer") {
         metadata.insert(
@@ -347,7 +347,7 @@ fn decode_measurement(
 /// `ProcessBinaryData` simply never reads. Like `view`/`meas`, this produces
 /// several metadata entries rather than one, so `decode_tag` discards this
 /// function's `None` return and reads the entries it inserted directly.
-fn decode_cicp(data: &[u8], metadata: &mut HashMap<String, TagValue>) {
+fn decode_cicp(data: &[u8], metadata: &mut OrderedTags<TagValue>) {
     if data.len() < 12 {
         return;
     }
@@ -617,13 +617,13 @@ mod tests {
         payload
     }
 
-    fn parse(profile: &[u8]) -> HashMap<String, TagValue> {
-        let mut metadata = HashMap::new();
+    fn parse(profile: &[u8]) -> OrderedTags<TagValue> {
+        let mut metadata = OrderedTags::new();
         parse_tags_registry(profile, &mut metadata).expect("tag table should parse");
         metadata
     }
 
-    fn value<'a>(metadata: &'a HashMap<String, TagValue>, name: &str) -> Option<&'a str> {
+    fn value<'a>(metadata: &'a OrderedTags<TagValue>, name: &str) -> Option<&'a str> {
         metadata.get(name).and_then(TagValue::as_string)
     }
 

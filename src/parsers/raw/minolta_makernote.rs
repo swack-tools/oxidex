@@ -20,14 +20,15 @@
 //! subdirectories, and the large `minoltaLensTypes` / `minoltaTeleconverters`
 //! tables -- are deliberately left undecoded rather than guessed at.
 
-use crate::core::TagValue;
 use crate::core::formatters::exif_print_conv::print_exposure_time;
+use crate::core::{OrderedTags, TagValue};
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-/// A parsed value plus the tags it produced.
-type Tags = HashMap<String, TagValue>;
+/// A parsed value plus the tags it produced, in the order they were decoded
+/// -- the order the caller records them in, which `-a` renders.
+type Tags = OrderedTags<TagValue>;
 
 /// What [`parse_ttw_makernotes`] hands back: the decoded tags, plus the subset
 /// of their keys whose visible value came from `%Minolta::CameraSettings`.

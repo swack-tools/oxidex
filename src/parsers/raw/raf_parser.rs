@@ -14,9 +14,9 @@
 //! - Extraction of Fujifilm MakerNote from embedded TIFF
 //! - Parsing of 20+ Fujifilm-specific camera tags including sensor info, white balance, and film simulation modes
 
+use crate::core::OrderedTags;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
-use std::collections::HashMap;
 
 /// Parse Fujifilm RAF MakerNote and extract camera-specific metadata
 ///
@@ -30,7 +30,7 @@ use std::collections::HashMap;
 ///
 /// # Returns
 ///
-/// * `Ok(HashMap)` - Parsed MakerNote tags with human-readable values
+/// * `Ok(OrderedTags)` - Parsed MakerNote tags with human-readable values, in the order they were read
 /// * `Err(ExifToolError)` - Parse error
 ///
 /// # Supported Tags (20 minimum)
@@ -67,7 +67,7 @@ use std::collections::HashMap;
 pub fn parse_raf_makernote(
     makernote_data: &[u8],
     byte_order: ByteOrder,
-) -> Result<HashMap<String, String>> {
+) -> Result<OrderedTags<String>> {
     // Fujifilm MakerNote starts with "FUJIFILM" signature followed by data
     if makernote_data.len() < 12 {
         return Err(ExifToolError::parse_error(
@@ -85,7 +85,7 @@ pub fn parse_raf_makernote(
     // Bytes 8-11 are reserved (usually 0x00000000)
     // The actual MakerNote tag data follows at various offsets
 
-    let mut tags = HashMap::new();
+    let mut tags = OrderedTags::new();
 
     // Read MakerNote tag values at fixed offsets based on Fujifilm specification
     // These offsets are documented in ExifTool's Fujifilm.pm module
@@ -311,8 +311,8 @@ pub fn parse_raf_makernote(
 /// Returns an empty map (rather than an error) if the file is too short or
 /// the directory pointers are out of bounds, so that callers can merge this
 /// in as a best-effort supplement to the embedded-JPEG metadata.
-pub fn parse_raf_container_metadata(data: &[u8]) -> HashMap<String, String> {
-    let mut tags = HashMap::new();
+pub fn parse_raf_container_metadata(data: &[u8]) -> OrderedTags<String> {
+    let mut tags = OrderedTags::new();
 
     if data.len() < 16 || &data[0..16] != b"FUJIFILMCCD-RAW " {
         return tags;

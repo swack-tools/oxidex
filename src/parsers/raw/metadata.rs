@@ -7530,9 +7530,11 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 
     let model_for_canon = (!model.is_empty()).then_some(model.as_str());
     let mut canon_value_forms = std::collections::HashMap::new();
-    for (name, value) in
-        parse_canon_ciff_records(&canon_records, model_for_canon, &mut canon_value_forms)
-    {
+    // The records decode through the Canon MakerNote parser, whose HashMap
+    // output is recorded in `in_record_order` like every other MakerNote.
+    for (name, value) in crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(
+        parse_canon_ciff_records(&canon_records, model_for_canon, &mut canon_value_forms),
+    ) {
         if name.starts_with("Canon:")
             && let Some(raw) = canon_value_forms.remove(&name)
         {

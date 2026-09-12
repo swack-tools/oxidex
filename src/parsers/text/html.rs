@@ -27,9 +27,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-
-use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
+use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, OrderedTags, TagValue};
 use crate::error::Result;
 
 /// How many bytes ExifTool validates the header against, and the window it
@@ -1094,13 +1092,15 @@ struct Collected {
     // earlier occurrence outright rather than merely not-yet-deciding a
     // winner -- `duplicate_loss_scan.py` scored HTML.html's
     // `HTML-office:RevisionNumber` PARTIAL because of it: two real oracle
-    // occurrences, one oxidex occurrence.
-    values: HashMap<String, (bool, Vec<String>)>,
+    // occurrences, one oxidex occurrence. Keys stay in the order the walk
+    // first met them: a `HashMap` here recorded them in its own per-run
+    // order, which `-a` renders.
+    values: OrderedTags<(bool, Vec<String>)>,
 }
 
 impl Collected {
     fn add(&mut self, key: String, value: String, list: bool) {
-        let entry = self.values.entry(key).or_insert_with(|| (list, Vec::new()));
+        let entry = self.values.get_or_insert_with(key, || (list, Vec::new()));
         entry.0 = list;
         entry.1.push(value);
     }
