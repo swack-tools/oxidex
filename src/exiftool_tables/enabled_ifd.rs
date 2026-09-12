@@ -15,6 +15,72 @@ use super::ifd_schema::IfdTable;
 /// it. Every entry carries the evidence that put it here, in the comment
 /// above it, in the shape `enabled.rs` uses.
 pub static ENABLED_IFD: &[(&str, &str)] = &[
+    // Exif::Main, walked at DirName `IFD1` only -- the JPEG-APP1 thumbnail
+    // IFD (slice IFD1, landing 2; landing 1 is the codegen policy of 7c849c7e
+    // and the design spec's v1.1 amendment). The table is
+    // `%Image::ExifTool::Exif::Main` (Exif.pm:411-4723, pinned 13.59),
+    // SET_GROUP1 (Exif.pm:416, 7183): every row takes the directory name the
+    // call site passes (`IfdDir.group1 = Some("IFD1")`, `ifd_engine::group1_of`).
+    // Gate A: eligible since the landing-1 regen (`ifd_format_unsupported` 2 ->
+    // 0 via `binary` = `Fmt::Undef(0)`, ExifTool.pm:6236; the four
+    // same-table edges and 0xc51b emitted unwalked; the six unreported
+    // `_variants` groups counted `ifd_variant_unreported_skipped` /
+    // `ifd_variant_makernotes_dispatch`). Call site: `tiff_helpers::parse_ifd1`
+    // -> `ifd1_engine_rows`, from `jpeg_helpers.rs::process_exif_segments`
+    // only. No other directory of this table is walked by the engine:
+    // IFD0/ExifIFD/GPS/InteropIFD stay hand, the PSD/PDF `ExifInfo` IFD1 stays
+    // on `parse_ifd1_directory`, the standalone-TIFF chain on
+    // `parse_ifd_chain`, and no enabled table carries an edge into Exif::Main.
+    //
+    // What the line changes: the engine reports every `Omitted::NONE` IFD1
+    // tag (XResolution, YResolution, ResolutionUnit, Orientation,
+    // YCbCrPositioning, ModifyDate, ImageDescription, ImageWidth, ImageHeight,
+    // BitsPerSample, PhotometricInterpretation, SamplesPerPixel,
+    // PlanarConfiguration, RowsPerStrip, YCbCrCoefficients, YCbCrSubSampling,
+    // ReferenceBlackWhite, ...) as `IFD1:<name>` at priority 0 (ExifTool.pm:
+    // 7317 LOW_PRIORITY_DIR for JPEG, :9557-9560), so a bare `-XResolution`
+    // still answers IFD0's. An integral rational is stored as `Integer` so
+    // `-j` prints `72` as ExifTool does, not `72.0`. `IFD1_RESIDUAL_IDS`
+    // keeps SubfileType, Compression, Make, Model, Software, Artist,
+    // Copyright (`omitted.raw_conv`; the shared Exif::Main converter, ASCII
+    // entries NUL-truncated as ExifTool's `string` read) and StripOffsets/
+    // StripByteCounts, ThumbnailOffset/ThumbnailLength + ThumbnailImage,
+    // ThumbnailTIFF/PreviewTIFF (offset class, not transcribed). RowsPerStrip
+    // left the hand path. Compression no longer yields to an IFD0/InteropIFD
+    // twin: both occurrences are kept, IFD0/Interop wins the bare request.
+    // `-n` on engine rows prints the rendered value (no raw form in
+    // `Emitted`; the Olympus lines carry the same limitation). Pinned by
+    // `tiff_helpers::ifd1_tests` (residual == remainder, priority, value
+    // shapes, fence, visited-directory guard files, t/images Nikon.jpg /
+    // Olympus.jpg and combined-samples Apple_iPhone13 / AppleQT-200 /
+    // CanonEOS10D / OlympusAIR-A01 per tag against `exiftool-pinned.sh -G1
+    // -a -s -j -IFD1:all`).
+    //
+    // Local pre-measurement (a prediction, not the gate): conformance.py
+    // --recursive over a 200-file stratified subset of combined-samples
+    // (187 JPEGs whose tip census row has IFD1-shaped EXIF MISSING, across all
+    // 14 directories, incl. the four visited-directory guard files and
+    // LeicaR9-DigitalBackDMR; 6 JPEG controls; 1 PSD; 1 TIFF), pinned 13.59
+    // (`-ver` -> 13.59, `-s3 -FileType t/images/OOXML.docx` -> DOCX), control
+    // the release build of 79101d7d, treatment this branch
+    // (`OXIDEX_ALLOW_DIRTY_TREE=1`, uncommitted edits):
+    //     control    TOTAL 200 21888 6 32 2004 62 91.5%
+    //     treatment  TOTAL 200 22845 6 32 1047 62 95.5%
+    // per-file diff: 957 MISSING -> matched in 187 files (`EXIF:`-keyed
+    // MISSING 1043 -> 117), 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA, 0 VALUE
+    // or EXTRA gone; matched+missing conserved (23892). `oxidex -j` over the
+    // 200 files differs only by 957 added `IFD1:` lines (FileAccessDate
+    // excluded). Of the 957, 926 carry an `EXIF:` key, 21 a bare key
+    // (PhotometricInterpretation/SamplesPerPixel/PlanarConfiguration, group
+    // EXIF -- the harness's unqualified keys), and 10 are labelled MakerNotes:/XMP: by its
+    // name-bucket matching (NikonCoolpix2500/D1H PreviewIFD,
+    // CanonPowerShotSX610HS XMP-tiff) -- each an IFD1 row filling a
+    // same-name, same-value slot. Remaining IFD1-shaped misses are other
+    // producers: InteropIFD image tags (CanonXL_H1, SamsungSPH-A800/A940),
+    // Leica IFD2, the IFD0 Model embedded-NUL defect (SonyMVC-CD*).
+    // Gate B of record (i7): full-corpus census numbers to be added by the
+    // integrator.
+    ("Exif", "Main"),
     // Olympus::CameraSettings -- slice I-3 of
     // `docs/superpowers/specs/2026-09-06-ifd-tables-design.md`, the second
     // of the six sub-table lines (all six share the evidence layout below;

@@ -10,6 +10,10 @@ use crate::core::tag_conversion::{
     apply_tile_offsets_value_conv, exif_raw_conv_drops_entry, gps_coordinate_degrees,
     raw_bytes_to_tag_value,
 };
+use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+use crate::exiftool_tables::{
+    Ctx, Emitted, IfdDir, IfdTable, MemberValue, find_ifd_table, process_exif,
+};
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{
@@ -965,7 +969,7 @@ pub fn parse_exif_subifd(
 /// * `offset` - Offset to the Interoperability sub-IFD
 /// * `byte_order` - Byte order for interpreting multi-byte values
 /// * `tiff_base` - Absolute file offset of the TIFF header, added to
-///   `OtherImageStart` exactly as `parse_ifd1_thumbnail` absolutises
+///   `OtherImageStart` exactly as `collect_ifd1_thumbnail` absolutises
 ///   `ThumbnailOffset`
 /// * `metadata` - MetadataMap to populate with Interop tags
 fn parse_interop_subifd(
@@ -991,8 +995,8 @@ fn parse_interop_subifd(
             // ExifTool's default (duplicate-suppressed) output only reports
             // these when IFD0 does not already own the same tag name - the
             // IFD0 copy has priority, the Interop copy priority 0 - so yield
-            // to an existing IFD0 twin the same way `parse_ifd1_thumbnail`
-            // yields IFD1:Compression to IFD0:Compression.
+            // to an existing IFD0 twin the same way the hand-only IFD1 collector
+            // (`Ifd1Hand::Thumbnail`) yields IFD1:Compression to IFD0:Compression.
             TAG_COMPRESSION | TAG_X_RESOLUTION | TAG_Y_RESOLUTION | TAG_RESOLUTION_UNIT => {
                 let tag_name = lookup_tag_name(*tag_id, "InteropIFD");
                 let base_name = tag_name
@@ -1069,7 +1073,7 @@ fn parse_interop_subifd(
     );
 
     // OtherImage is the bytes the pair points at - the same byte-range handling
-    // `parse_ifd1_thumbnail` applies to ThumbnailImage, including the
+    // `collect_ifd1_thumbnail` applies to ThumbnailImage, including the
     // placeholder fallback ExifTool prints for an unreadable range (see
     // `read_or_placeholder`). No corpus file currently exercises the fallback
     // here; it is shared so the two paths cannot diverge.
@@ -2378,12 +2382,130 @@ fn rebuild_thumbnail_tiff(
     ))
 }
 
-/// Parses the thumbnail IFD (IFD1) that follows IFD0 and emits the thumbnail tags.
+/// The IFD1 entries the hand path still owns once the generated
+/// `Exif::Main` table reports the thumbnail IFD ([`parse_ifd1`]): exactly the
+/// ids `IFD_EXIF_MAIN` withholds or never transcribed.
 ///
-/// A JPEG's APP1 EXIF payload is a TIFF structure whose IFD0 carries a
-/// next-IFD pointer to IFD1, which holds the embedded thumbnail. Callers that
-/// only walk IFD0 never surface `Compression`, `ThumbnailOffset`,
-/// `ThumbnailLength` or `ThumbnailImage`.
+/// * `omitted.raw_conv` -- 0x00FE SubfileType, 0x0103 Compression, 0x010F
+///   Make, 0x0110 Model, 0x0131 Software, 0x013B Artist, 0x8298 Copyright.
+///   Each carries a `RawConv` the generator does not model (Exif.pm 13.59:
+///   0xfe's `SetPriorityDir`/`PageCount` block, 0x103's `IdentifyRawFile`,
+///   0x10f/0x110/0x131's `$val =~ s/\s+$//; $$self{X} = $val`, 0x13b's
+///   `s/\s+$//`, 0x8298's NUL-separated notice sub), so the engine withholds
+///   them and the shared Exif::Main converter the IFD0 walk uses
+///   (`exif_entry_to_tag_value`) reports them here.
+/// * absent from the static -- 0x0111 StripOffsets, 0x0117 StripByteCounts,
+///   0x0201 ThumbnailOffset, 0x0202 ThumbnailLength: `_variants` groups whose
+///   every alternative is `IsOffset`/`OffsetPair`/`DataTag`, which the
+///   generator counts `ifd_variant_unreported_skipped` and emits nothing for.
+///   The derived ThumbnailImage / ThumbnailTIFF / PreviewTIFF come from them.
+///
+/// 0x0116 RowsPerStrip is NOT here: the table reports it (`Omitted::NONE`),
+/// and a second hand producer under the same key would be a double insert.
+/// `ifd1_residual_is_exactly_the_remainder` pins the list against the
+/// generated withholding in both directions. Sorted.
+const IFD1_RESIDUAL_IDS: &[u16] = &[
+    TAG_SUBFILE_TYPE,
+    TAG_COMPRESSION,
+    TAG_MAKE,
+    TAG_MODEL,
+    TAG_STRIP_OFFSETS,
+    TAG_STRIP_BYTE_COUNTS,
+    TAG_SOFTWARE,
+    TAG_ARTIST,
+    TAG_THUMBNAIL_OFFSET,
+    TAG_THUMBNAIL_LENGTH,
+    TAG_COPYRIGHT,
+];
+
+/// Make (0x010F), Model (0x0110), Software (0x0131), Artist (0x013B) and
+/// Copyright (0x8298): the `RawConv`-withheld strings of [`IFD1_RESIDUAL_IDS`].
+const TAG_MAKE: u16 = 0x010F;
+const TAG_MODEL: u16 = 0x0110;
+const TAG_SOFTWARE: u16 = 0x0131;
+const TAG_ARTIST: u16 = 0x013B;
+const TAG_COPYRIGHT: u16 = 0x8298;
+
+/// TIFF type 2, ASCII: ExifTool's `string` format (`$formatName[2]`).
+const EXIF_ASCII: u16 = 2;
+
+/// Which IFD1 rows the hand collector produces, and how it records them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ifd1Hand {
+    /// Every row the hand path has always owned: used when the generated
+    /// `Exif::Main` table is not in force (Gate A or the allowlist refuses
+    /// it), and by [`parse_ifd1_directory`], whose ordinary rows come from
+    /// the shared converter instead. Plain `insert()`; Compression yields to
+    /// an IFD0/InteropIFD twin; RowsPerStrip is hand-read.
+    Thumbnail,
+    /// Only [`IFD1_RESIDUAL_IDS`], beside the engine's rows ([`parse_ifd1`]).
+    /// Every row is recorded at `priority` under family-1 group `IFD1`, and
+    /// Compression coexists with its twins instead of yielding.
+    Residual { priority: u8 },
+}
+
+impl Ifd1Hand {
+    fn insert<K: Into<String>>(self, metadata: &mut MetadataMap, key: K, value: TagValue) {
+        match self {
+            Self::Thumbnail => {
+                metadata.insert(key, value);
+            }
+            Self::Residual { priority } => {
+                metadata.insert_occurrence(key, value, priority, "IFD1", Instance::default());
+            }
+        }
+    }
+}
+
+/// The IFD1 offset a walk may follow, or `None`: IFD0's next-IFD link
+/// ([`next_ifd_offset`]) unless it aims at a directory the EXIF walk already
+/// visited. ExifTool's `$$self{PROCESSED}` guard (ExifTool.pm:9061-9072)
+/// skips such a directory outright ("IFD1 pointer references previous
+/// InteropIFD directory"), and so does every IFD1 producer here -- this is
+/// the one place that decision is made. The IFD engine's own guard starts
+/// empty per walk and cannot see the hand-walked IFD0/ExifIFD/GPS/InteropIFD,
+/// so the check must stay in front of it.
+fn legal_ifd1_offset(
+    reader: &dyn FileReader,
+    ifd0_offset: u64,
+    ifd0_entry_count: usize,
+    byte_order: ByteOrder,
+) -> Option<u64> {
+    // No IFD1: nothing. A wrong thumbnail tag is worse than a missing one.
+    let ifd1_offset = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)?;
+    if visited_directory_offsets(reader, ifd0_offset, byte_order).contains(&ifd1_offset) {
+        return None;
+    }
+    Some(ifd1_offset)
+}
+
+/// Parses the thumbnail IFD (IFD1) that follows IFD0 in a JPEG's APP1 EXIF
+/// payload.
+///
+/// ExifTool walks IFD1 as the SAME `%Image::ExifTool::Exif::Main` table,
+/// under DirName `IFD1` (Exif.pm:7204-7232 follows IFD0's next-IFD link);
+/// the table's `SET_GROUP1` (Exif.pm:416, 7183) makes every row's family-1
+/// group the directory name. This function owns "is there an IFD1 to walk"
+/// ([`legal_ifd1_offset`]); under it two producers split the directory:
+///
+/// * the generated table through the IFD engine ([`ifd1_engine_rows`]) --
+///   every tag `IFD_EXIF_MAIN` reports, when `("Exif", "Main")` is on the
+///   `enabled_ifd.rs` allowlist and passes Gate A;
+/// * the hand residual ([`IFD1_RESIDUAL_IDS`]) -- the offset-class ids the
+///   generator never transcribes and the `RawConv`-withheld strings.
+///
+/// With the table off, the hand collector alone runs exactly as it did
+/// before the engine slice ([`Ifd1Hand::Thumbnail`]).
+///
+/// # Priority
+///
+/// ExifTool.pm:7317 marks IFD1 a `LOW_PRIORITY_DIR` for a JPEG (and :8685
+/// for an ARW), so every IFD1 tag without a `Priority` of its own is
+/// priority 0 (ExifTool.pm:9553-9560) and never displaces an IFD0 twin: a
+/// bare `-XResolution` keeps answering IFD0's value. `low_priority_dir`
+/// carries that; every IFD1 row is recorded through
+/// [`MetadataMap::insert_occurrence`] with it, never through `insert()`
+/// (priority 1, and the newer arrival wins a tie).
 ///
 /// # Offset semantics
 ///
@@ -2397,69 +2519,221 @@ fn rebuild_thumbnail_tiff(
 /// # Arguments
 ///
 /// * `reader` - Reader addressing the TIFF structure (TIFF-relative offsets)
+/// * `tiff_data` - The same TIFF structure as a slice (the APP1 payload after
+///   `Exif\0\0`, ExifTool's `$$dirInfo{DataPt}`), which the engine walks
 /// * `ifd0_offset` - Offset of IFD0 within the TIFF structure
 /// * `ifd0_entry_count` - Retained for callers; the physical count is read from IFD0
 /// * `byte_order` - Byte order for interpreting multi-byte values
 /// * `tiff_base` - Absolute file offset of the TIFF header, added to `ThumbnailOffset`
+/// * `low_priority_dir` - Whether IFD1 is a `LOW_PRIORITY_DIR` (JPEG: yes)
 /// * `metadata` - MetadataMap to populate
-pub fn parse_ifd1_thumbnail(
+#[allow(clippy::too_many_arguments)]
+pub fn parse_ifd1(
     reader: &dyn FileReader,
+    tiff_data: &[u8],
     ifd0_offset: u64,
     ifd0_entry_count: usize,
     byte_order: ByteOrder,
     tiff_base: u64,
+    low_priority_dir: bool,
     metadata: &mut MetadataMap,
 ) {
+    let Some(ifd1_offset) = legal_ifd1_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
+    else {
+        return;
+    };
+
+    // The lookup is spelled with literal arguments because
+    // `tools/exiftool-tables/reachability.py` counts literal call sites, and
+    // `enabled()` re-checks Gate A and the allowlist at runtime. Without the
+    // `("Exif", "Main")` line in `enabled_ifd.rs` this is `None` and IFD1 is
+    // read by the hand collector alone, as before the slice.
+    let Some(table) = find_ifd_table("Exif", "Main").filter(|table| table.enabled()) else {
+        let mut collected = MetadataMap::new();
+        collect_ifd1_thumbnail(
+            reader,
+            ifd1_offset,
+            byte_order,
+            tiff_base,
+            Ifd1Hand::Thumbnail,
+            metadata,
+            &mut collected,
+        );
+        metadata.merge(collected);
+        return;
+    };
+
+    // The engine reads `tiff_data`, the residual reads `reader`: for one
+    // APP1 payload they are the same bytes at the same offsets.
+    debug_assert!(
+        match (
+            usize::try_from(ifd1_offset)
+                .ok()
+                .and_then(|start| tiff_data.get(start..start.checked_add(2)?)),
+            reader.read(ifd1_offset, 2).ok(),
+        ) {
+            (Some(slice), Some(read)) => slice == read,
+            _ => true,
+        },
+        "IFD1 at {ifd1_offset}: tiff_data and reader address different bytes"
+    );
+
+    ifd1_engine_rows(
+        table,
+        tiff_data,
+        ifd1_offset,
+        byte_order,
+        low_priority_dir,
+        metadata,
+    );
+
+    let priority = if low_priority_dir {
+        0
+    } else {
+        SHIM_DEFAULT_PRIORITY
+    };
     let mut collected = MetadataMap::new();
     collect_ifd1_thumbnail(
         reader,
-        ifd0_offset,
-        ifd0_entry_count,
+        ifd1_offset,
         byte_order,
         tiff_base,
+        Ifd1Hand::Residual { priority },
         metadata,
         &mut collected,
     );
     metadata.merge(collected);
 }
 
+/// Walks IFD1 through the generated `Exif::Main` table and records every row
+/// it reports as `IFD1:<name>` (mirrors `olympus.rs::walk_main_through_engine`).
+///
+/// Data members: the engine seeds `Compression`/`SubfileType` itself
+/// (Exif.pm:6446-6447); `Make`/`Model` come from the IFD0 rows already in
+/// `metadata` (their `RawConv` is what sets `$$self{Make}`/`{Model}` in
+/// ExifTool), so the table's one compiled variant group resolves as ExifTool
+/// would. `TIFF_TYPE` is unknowable for an APP1 payload and stays unset.
+///
+/// Priority (ExifTool.pm:9548-9563): a tag's own `Priority` is used when
+/// defined, else a `LOW_PRIORITY_DIR` makes it 0, else 1. No `Exif::Main`
+/// tag declares a `Priority` other than 0 (`Emitted::low_priority` carries
+/// those and the `Avoid` default), so "0 if either" is exact for this table.
+fn ifd1_engine_rows(
+    table: &'static IfdTable,
+    tiff_data: &[u8],
+    ifd1_offset: u64,
+    byte_order: ByteOrder,
+    low_priority_dir: bool,
+    metadata: &mut MetadataMap,
+) {
+    let Ok(ifd_start) = usize::try_from(ifd1_offset) else {
+        return;
+    };
+    let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
+    for (member, key) in [("Make", "IFD0:Make"), ("Model", "IFD0:Model")] {
+        if let Some(text) = metadata.get(key).and_then(TagValue::as_string) {
+            members.insert(member, MemberValue::Str(text.to_string()));
+        }
+    }
+    let mut ctx = Ctx::new(&mut members);
+    let mut emitted = Vec::new();
+    process_exif(
+        table,
+        IfdDir {
+            data: tiff_data,
+            ifd_start,
+            // Stored offsets are TIFF-relative and `tiff_data[0]` is the
+            // TIFF header, so no correction.
+            base: Some(0),
+            byte_order: byte_order.to_io_byte_order(),
+            // SET_GROUP1: `ifd_engine::group1_of` reports this verbatim.
+            group1: Some("IFD1"),
+        },
+        &mut ctx,
+        &mut emitted,
+    );
+    for row in emitted {
+        // FENCE: this call site reports IFD1's own `Exif::Main` rows only.
+        // Anything else arrived through a `SubDirectory` edge whose target
+        // the hand walks own (ExifIFD, InteropIFD, GPS, ...): ExifTool's
+        // PROCESSED guard would skip an already-walked directory, and the
+        // engine's `Guard` cannot see the hand walks. None can arrive today
+        // (the same-table edges are emitted unwalked and GPS::Main is not
+        // enabled); the day an edge target gets an allowlist line, this is
+        // what keeps an IFD1 pointer from duplicating a hand walk.
+        if !is_ifd1_exif_main_row(&row) {
+            continue;
+        }
+        let priority = if low_priority_dir || row.low_priority {
+            0
+        } else {
+            SHIM_DEFAULT_PRIORITY
+        };
+        metadata.insert_occurrence(
+            format!("IFD1:{}", row.name),
+            ifd1_value(row.value),
+            priority,
+            "IFD1",
+            Instance::default(),
+        );
+    }
+}
+
+/// The fence of [`ifd1_engine_rows`]: a row of `Exif::Main` itself, walked
+/// under DirName `IFD1`.
+fn is_ifd1_exif_main_row(row: &Emitted) -> bool {
+    row.module == "Exif" && row.table == "Main" && row.group1 == "IFD1"
+}
+
+/// The value an engine row is stored as. The engine carries an unconverted
+/// rational as the `Float` Perl numifies `RoundFloat($n/$d, 10)` to
+/// (`ifd_engine::round_rationals`); Perl stringifies an integral one with no
+/// fraction (`72`), which is what ExifTool's `-j` prints, while the JSON
+/// writer prints a `Float` as `72.0`. So an integral float inside f64's
+/// exact-integer range becomes `Integer` (the text writer's `perl_num`
+/// already prints it that way); everything else passes through, so 145/2
+/// stays `72.5`.
+fn ifd1_value(value: TagValue) -> TagValue {
+    const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    match value {
+        TagValue::Float(f) if f.fract() == 0.0 && f.abs() < EXACT => TagValue::Integer(f as i64),
+        other => other,
+    }
+}
+
 // Separate incoming precedence context from newly emitted occurrences so a
 // complete directory can order the same thumbnail results among ordinary tags.
+// `ifd1_offset` has already passed `legal_ifd1_offset`.
 fn collect_ifd1_thumbnail(
     reader: &dyn FileReader,
-    ifd0_offset: u64,
-    ifd0_entry_count: usize,
+    ifd1_offset: u64,
     byte_order: ByteOrder,
     tiff_base: u64,
+    mode: Ifd1Hand,
     context: &MetadataMap,
     metadata: &mut MetadataMap,
 ) {
-    let Some(ifd1_offset) = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
-    else {
-        // No IFD1: emit nothing. A wrong thumbnail tag is worse than a missing one.
-        return;
-    };
-
-    // An IFD1 pointer aimed at a directory the EXIF walk already visited is a
-    // malformed file, not a thumbnail. ExifTool skips the directory outright.
-    if visited_directory_offsets(reader, ifd0_offset, byte_order).contains(&ifd1_offset) {
-        return;
-    }
-
     let Ok(entries) = parse_ifd(reader, ifd1_offset, byte_order) else {
         return;
     };
+    let residual = matches!(mode, Ifd1Hand::Residual { .. });
 
     let mut compression: Option<i64> = None;
     let mut thumb_offset: Option<u64> = None;
     let mut thumb_length: Option<u64> = None;
 
     for (tag_id, field_type, value_count, raw_bytes) in &entries {
+        // Beside the engine, the hand path reads only the ids the generated
+        // table leaves to it; everything else is the engine's.
+        if residual && IFD1_RESIDUAL_IDS.binary_search(tag_id).is_err() {
+            continue;
+        }
         match *tag_id {
             TAG_SUBFILE_TYPE => {
                 // Family 1 is IFD1 here, like every sibling in this
                 // directory: `exiftool -G1` prints `[IFD1] SubfileType`.
-                metadata.insert(
+                mode.insert(
+                    metadata,
                     lookup_tag_name(*tag_id, "IFD1"),
                     raw_bytes_to_tag_value(
                         raw_bytes,
@@ -2488,6 +2762,43 @@ fn collect_ifd1_thumbnail(
                 thumb_length =
                     read_unsigned_field(raw_bytes, *field_type, *value_count, *tag_id, byte_order);
             }
+            // The `RawConv`-withheld strings, through the converter the IFD0
+            // walk uses (it applies the trailing-blank trims and 0x8298's
+            // notice split). Beside the engine only: without it these ids
+            // were never hand rows, and `parse_ifd1_directory` reads them
+            // through its own ordinary-entry loop.
+            TAG_MAKE | TAG_MODEL | TAG_SOFTWARE | TAG_ARTIST | TAG_COPYRIGHT if residual => {
+                // An ASCII entry is ExifTool's `string` read, which drops the
+                // first NUL and everything after it before the `RawConv`
+                // trim runs (ExifTool.pm:6308-6311 `s/\0.*//s`):
+                // SonyMVC-CD1000.jpg's Model "MAVICA\03ghx7y\0" is "MAVICA".
+                // The shared converter keeps bytes past an embedded NUL, so
+                // hand it the truncated read. 0x8298 is `Format => 'undef'`
+                // (never truncated here; its RawConv splits on the NULs) and
+                // an UNDEFINED-typed entry is not a `string` read either.
+                let bytes: &[u8] = raw_bytes;
+                let bytes = if *field_type == EXIF_ASCII && *tag_id != TAG_COPYRIGHT {
+                    &bytes[..bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len())]
+                } else {
+                    bytes
+                };
+                let count = if *field_type == EXIF_ASCII {
+                    u32::try_from(bytes.len()).unwrap_or(*value_count)
+                } else {
+                    *value_count
+                };
+                if let Some(value) = crate::core::tag_conversion::exif_entry_to_tag_value(
+                    bytes,
+                    *field_type,
+                    count,
+                    *tag_id,
+                    byte_order,
+                ) {
+                    mode.insert(metadata, lookup_tag_name(*tag_id, "IFD1"), value);
+                }
+            }
+            // RowsPerStrip reaches this arm only without the engine: it is
+            // not a residual id.
             TAG_STRIP_OFFSETS | TAG_ROWS_PER_STRIP | TAG_STRIP_BYTE_COUNTS => {
                 let tag_name = lookup_tag_name(*tag_id, "IFD1");
                 let base_name = tag_name
@@ -2496,7 +2807,10 @@ fn collect_ifd1_thumbnail(
 
                 // At family 0 the IFD0 copy has precedence over IFD1, as it
                 // does for Compression below. AppleQT-200.jpg has these only
-                // in IFD1, where ExifTool reports all three.
+                // in IFD1, where ExifTool reports all three. (ExifTool `-a`
+                // prints IFD1's copy regardless; the census carries one
+                // MISSING StripOffsets/StripByteCounts each, neither a JPEG,
+                // so the rule is kept.)
                 if context.get(&format!("IFD0:{base_name}")).is_none() {
                     let tag_value = if *tag_id == TAG_STRIP_OFFSETS && *value_count == 1 {
                         // TIFF stores IFD1 strip locations relative to the
@@ -2530,7 +2844,7 @@ fn collect_ifd1_thumbnail(
                             byte_order,
                         )
                     };
-                    metadata.insert(tag_name, tag_value);
+                    mode.insert(metadata, tag_name, tag_value);
                 }
             }
             _ => {}
@@ -2541,29 +2855,46 @@ fn collect_ifd1_thumbnail(
         // RebuildTIFF names the rebuilt image after the SubfileType tag's
         // groups (family 1 = IFD1), calling it PreviewTIFF above 256 pixels
         // wide (Exif.pm:6199-6203).
-        metadata.insert(format!("IFD1:{name}"), TagValue::new_binary(tiff));
+        mode.insert(metadata, format!("IFD1:{name}"), TagValue::new_binary(tiff));
     }
 
     // Compression carries the standard PrintConv ("JPEG (old-style)" for a
     // thumbnail); the exiftool_compat layer applies it to the integer.
-    //
-    // Precedence: when a file carries Compression in BOTH IFD0 and IFD1, the
-    // two collapse onto a single `EXIF:Compression` in the family-normalised
-    // view, and ExifTool's default (duplicate-suppressed) output reports the
-    // IFD0 one - e.g. OlympusAIR-A01.jpg is `Uncompressed` (IFD0), not
-    // `JPEG (old-style)` (IFD1). Yield to IFD0 so the thumbnail IFD never
-    // rewrites the main image's value. An image-carrying Interoperability IFD
-    // (see `parse_interop_subifd`) also wins: it is walked before IFD1, and
-    // with both copies at ExifTool priority 0 the first-extracted one is the
-    // one ExifTool displays.
-    if let Some(value) = compression
-        && context.get("IFD0:Compression").is_none()
-        && context.get("InteropIFD:Compression").is_none()
-    {
-        metadata.insert(
-            lookup_tag_name(TAG_COMPRESSION, "IFD1"),
-            TagValue::new_integer(value),
-        );
+    if let Some(value) = compression {
+        match mode {
+            // Precedence without per-occurrence priorities: when a file
+            // carries Compression in BOTH IFD0 and IFD1, the two collapse
+            // onto a single `EXIF:Compression` in the family-normalised view,
+            // and ExifTool's default (duplicate-suppressed) output reports
+            // the IFD0 one - e.g. OlympusAIR-A01.jpg is `Uncompressed`
+            // (IFD0), not `JPEG (old-style)` (IFD1). Yield to IFD0 so the
+            // thumbnail IFD never rewrites the main image's value. An
+            // image-carrying Interoperability IFD (see `parse_interop_subifd`)
+            // also wins: it is walked before IFD1, and with both copies at
+            // ExifTool priority 0 the first-extracted one is displayed.
+            Ifd1Hand::Thumbnail => {
+                if context.get("IFD0:Compression").is_none()
+                    && context.get("InteropIFD:Compression").is_none()
+                {
+                    mode.insert(
+                        metadata,
+                        lookup_tag_name(TAG_COMPRESSION, "IFD1"),
+                        TagValue::new_integer(value),
+                    );
+                }
+            }
+            // With real priorities both copies are kept, as `-a` prints
+            // them: 0x0103 declares `Priority => 0` itself (Exif.pm 13.59),
+            // so IFD1's never displaces the IFD0 (priority 1) or the
+            // earlier InteropIFD occurrence a bare `-Compression` resolves to.
+            Ifd1Hand::Residual { .. } => {
+                Ifd1Hand::Residual { priority: 0 }.insert(
+                    metadata,
+                    lookup_tag_name(TAG_COMPRESSION, "IFD1"),
+                    TagValue::new_integer(value),
+                );
+            }
+        }
     }
 
     // ExifTool emits the offset/length pair only when both are present.
@@ -2579,11 +2910,16 @@ fn collect_ifd1_thumbnail(
     // registered under their spec names (JPEGInterchangeFormat/Length) and the
     // reverse index resolves to those, but ExifTool names them contextually -
     // inside IFD1 they print as ThumbnailOffset/ThumbnailLength.
-    metadata.insert(
+    mode.insert(
+        metadata,
         "IFD1:ThumbnailOffset",
         TagValue::new_integer(absolute_offset as i64),
     );
-    metadata.insert("IFD1:ThumbnailLength", TagValue::new_integer(length as i64));
+    mode.insert(
+        metadata,
+        "IFD1:ThumbnailLength",
+        TagValue::new_integer(length as i64),
+    );
 
     // ThumbnailImage is the bytes the offset/length pair points at. The bytes
     // are NOT required to be a JPEG - ExifTool's ValidateImage only rejects a
@@ -2596,7 +2932,8 @@ fn collect_ifd1_thumbnail(
     if length == 0 || length > MAX_THUMBNAIL_BYTES {
         return;
     }
-    metadata.insert(
+    mode.insert(
+        metadata,
         "IFD1:ThumbnailImage",
         read_or_placeholder(reader, offset, length),
     );
@@ -2617,13 +2954,10 @@ pub fn parse_ifd1_directory(
     tiff_base: u64,
     metadata: &mut MetadataMap,
 ) {
-    let Some(ifd1_offset) = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
+    let Some(ifd1_offset) = legal_ifd1_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
     else {
         return;
     };
-    if visited_directory_offsets(reader, ifd0_offset, byte_order).contains(&ifd1_offset) {
-        return;
-    }
     let Ok(entries) = parse_ifd(reader, ifd1_offset, byte_order) else {
         return;
     };
@@ -2631,10 +2965,10 @@ pub fn parse_ifd1_directory(
     let mut collected = MetadataMap::new();
     collect_ifd1_thumbnail(
         reader,
-        ifd0_offset,
-        ifd0_entry_count,
+        ifd1_offset,
         byte_order,
         tiff_base,
+        Ifd1Hand::Thumbnail,
         metadata,
         &mut collected,
     );
@@ -2726,7 +3060,7 @@ pub fn parse_ifd1_directory(
 /// `DataTag => 'PreviewImage'` instead.
 ///
 /// `reader` must address the TIFF structure itself (offset 0 == TIFF
-/// header) - the same convention `parse_ifd1_thumbnail` uses - since the
+/// header) - the same convention `parse_ifd1` uses - since the
 /// offsets stored in IFD2 are TIFF-relative and `read_or_placeholder` reads
 /// directly against `reader`.
 pub fn parse_ifd2_preview_image(
@@ -3627,14 +3961,16 @@ mod ifd1_tests {
 
     fn run(entries: &[(u16, u16, u32)], thumb: &[u8], tiff_base: u64) -> MetadataMap {
         let (data, _) = build_tiff(entries, thumb);
-        let reader = TestReader::new(data);
+        let reader = TestReader::new(data.clone());
         let mut metadata = MetadataMap::new();
-        parse_ifd1_thumbnail(
+        parse_ifd1(
             &reader,
+            &data,
             8,
             0,
             ByteOrder::LittleEndian,
             tiff_base,
+            true,
             &mut metadata,
         );
         metadata
@@ -3904,9 +4240,18 @@ mod ifd1_tests {
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xDB]);
 
-        let reader = TestReader::new(data);
+        let reader = TestReader::new(data.clone());
         let mut metadata = MetadataMap::new();
-        parse_ifd1_thumbnail(&reader, 8, 1, ByteOrder::LittleEndian, 0, &mut metadata);
+        parse_ifd1(
+            &reader,
+            &data,
+            8,
+            1,
+            ByteOrder::LittleEndian,
+            0,
+            true,
+            &mut metadata,
+        );
         assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
         assert!(metadata.get("IFD1:ThumbnailLength").is_none());
         assert!(metadata.get("IFD1:ThumbnailImage").is_none());
@@ -3963,34 +4308,70 @@ mod ifd1_tests {
     }
 
     #[test]
-    fn ifd1_compression_yields_to_ifd0() {
-        // OlympusAIR-A01.jpg carries Compression in both IFDs; ExifTool's
-        // duplicate-suppressed output reports IFD0's "Uncompressed".
+    fn ifd1_compression_coexists_with_ifd0_and_ifd0_wins_the_request() {
+        // OlympusAIR-A01.jpg carries Compression in both IFDs. `-a` prints
+        // both; a bare `-Compression` answers IFD0's "Uncompressed": 0x0103 is
+        // `Priority => 0` and IFD1 a LOW_PRIORITY_DIR, so IFD1's copy never
+        // displaces IFD0's priority-1 occurrence.
         let (data, _) = build_tiff(&[(TAG_COMPRESSION, SHORT, 6)], &[]);
-        let reader = TestReader::new(data);
+        let reader = TestReader::new(data.clone());
         let mut metadata = MetadataMap::new();
         metadata.insert("IFD0:Compression", TagValue::new_integer(1));
-        parse_ifd1_thumbnail(&reader, 8, 0, ByteOrder::LittleEndian, 0, &mut metadata);
-        assert_eq!(
-            metadata
-                .get("IFD0:Compression")
-                .and_then(|v| v.as_integer()),
-            Some(1)
+        parse_ifd1(
+            &reader,
+            &data,
+            8,
+            0,
+            ByteOrder::LittleEndian,
+            0,
+            true,
+            &mut metadata,
         );
-        assert!(metadata.get("IFD1:Compression").is_none());
+        assert_eq!(metadata.get_integer("IFD0:Compression"), Some(1));
+        assert_eq!(metadata.get_integer("IFD1:Compression"), Some(6));
+        let resolved = crate::cli::tag_resolution::resolve_requested_tags(
+            &metadata,
+            &["Compression".to_string()],
+            false,
+        );
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].occurrence.raw, TagValue::new_integer(1));
+        assert_eq!(metadata.occurrences_for("IFD1:Compression")[0].priority, 0);
     }
 
     #[test]
-    fn ifd1_compression_yields_to_interop() {
+    fn ifd1_compression_coexists_with_interop_and_interop_wins_the_request() {
         // An image-carrying Interop IFD is walked before IFD1; with both
         // copies at ExifTool priority 0 the first-extracted (Interop) one is
-        // the one ExifTool displays.
+        // the one a bare request resolves to, while `-a` keeps both.
         let (data, _) = build_tiff(&[(TAG_COMPRESSION, SHORT, 6)], &[]);
-        let reader = TestReader::new(data);
+        let reader = TestReader::new(data.clone());
         let mut metadata = MetadataMap::new();
-        metadata.insert("InteropIFD:Compression", TagValue::new_integer(6));
-        parse_ifd1_thumbnail(&reader, 8, 0, ByteOrder::LittleEndian, 0, &mut metadata);
-        assert!(metadata.get("IFD1:Compression").is_none());
+        metadata.insert_occurrence(
+            "InteropIFD:Compression",
+            TagValue::new_integer(1),
+            0,
+            "InteropIFD",
+            Instance::default(),
+        );
+        parse_ifd1(
+            &reader,
+            &data,
+            8,
+            0,
+            ByteOrder::LittleEndian,
+            0,
+            true,
+            &mut metadata,
+        );
+        assert_eq!(metadata.get_integer("IFD1:Compression"), Some(6));
+        let resolved = crate::cli::tag_resolution::resolve_requested_tags(
+            &metadata,
+            &["Compression".to_string()],
+            false,
+        );
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].occurrence.raw, TagValue::new_integer(1));
     }
 
     #[test]
@@ -4001,11 +4382,592 @@ mod ifd1_tests {
         data.extend_from_slice(&8u32.to_le_bytes());
         data.extend_from_slice(&0u16.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes()); // no IFD1
-        let reader = TestReader::new(data);
+        let reader = TestReader::new(data.clone());
         let mut metadata = MetadataMap::new();
-        parse_ifd1_thumbnail(&reader, 8, 0, ByteOrder::LittleEndian, 12, &mut metadata);
+        parse_ifd1(
+            &reader,
+            &data,
+            8,
+            0,
+            ByteOrder::LittleEndian,
+            12,
+            true,
+            &mut metadata,
+        );
         assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
         assert!(metadata.get("IFD1:Compression").is_none());
+    }
+
+    // ---------------------------------------------------------------------
+    // IFD1 through the generated `Exif::Main` table (engine + residual)
+    // ---------------------------------------------------------------------
+
+    const ASCII: u16 = 2;
+    const RATIONAL: u16 = 5;
+
+    /// Builds a little-endian TIFF whose IFD0 holds `ifd0` and whose IFD1
+    /// holds `ifd1`, each entry `(tag, type, count, value bytes)`. Values of
+    /// more than four bytes are placed after both directories and addressed
+    /// by TIFF-relative offset, exactly as a camera writes them.
+    fn build_two_ifd_tiff(
+        ifd0: &[(u16, u16, u32, Vec<u8>)],
+        ifd1: &[(u16, u16, u32, Vec<u8>)],
+    ) -> Vec<u8> {
+        let dir_len = |n: usize| 2 + 12 * n + 4;
+        let ifd0_at = 8usize;
+        let ifd1_at = ifd0_at + dir_len(ifd0.len());
+        let mut blob_at = ifd1_at + dir_len(ifd1.len());
+        let mut data = b"II".to_vec();
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&(ifd0_at as u32).to_le_bytes());
+        let mut blobs = Vec::new();
+        for (entries, next) in [(ifd0, ifd1_at as u32), (ifd1, 0u32)] {
+            data.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+            for (tag, field_type, count, bytes) in entries {
+                data.extend_from_slice(&tag.to_le_bytes());
+                data.extend_from_slice(&field_type.to_le_bytes());
+                data.extend_from_slice(&count.to_le_bytes());
+                if bytes.len() <= 4 {
+                    let mut field = bytes.clone();
+                    field.resize(4, 0);
+                    data.extend_from_slice(&field);
+                } else {
+                    data.extend_from_slice(&(blob_at as u32).to_le_bytes());
+                    blob_at += bytes.len();
+                    blobs.extend_from_slice(bytes);
+                }
+            }
+            data.extend_from_slice(&next.to_le_bytes());
+        }
+        data.extend_from_slice(&blobs);
+        data
+    }
+
+    fn rational(n: u32, d: u32) -> Vec<u8> {
+        let mut bytes = n.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&d.to_le_bytes());
+        bytes
+    }
+
+    fn short(v: u16) -> Vec<u8> {
+        v.to_le_bytes().to_vec()
+    }
+
+    fn run_two(
+        ifd0: &[(u16, u16, u32, Vec<u8>)],
+        ifd1: &[(u16, u16, u32, Vec<u8>)],
+        metadata: &mut MetadataMap,
+    ) {
+        let data = build_two_ifd_tiff(ifd0, ifd1);
+        let reader = TestReader::new(data.clone());
+        parse_ifd1(
+            &reader,
+            &data,
+            8,
+            ifd0.len(),
+            ByteOrder::LittleEndian,
+            0,
+            true,
+            metadata,
+        );
+    }
+
+    fn ifd1_keys(metadata: &MetadataMap) -> Vec<String> {
+        let mut keys: Vec<String> = metadata
+            .all_occurrences()
+            .map(|(key, _)| key)
+            .filter(|key| key.starts_with("IFD1:"))
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    /// The hand residual is exactly what the generated table leaves over,
+    /// in both directions (precedent: `olympus/tables.rs`'s
+    /// `assert_residual_is_exactly_the_remainder`). A regeneration that
+    /// starts reporting a residual id -- or stops reporting one the hand path
+    /// no longer reads -- fails here instead of double-inserting or dropping
+    /// a row in silence.
+    #[test]
+    fn ifd1_residual_is_exactly_the_remainder() {
+        use crate::exiftool_tables::ifd_tables::IFD_EXIF_MAIN;
+
+        assert!(
+            IFD1_RESIDUAL_IDS.windows(2).all(|w| w[0] < w[1]),
+            "IFD1_RESIDUAL_IDS is binary-searched and must stay sorted"
+        );
+        assert!(
+            IFD_EXIF_MAIN.enabled(),
+            "the residual split assumes the engine walks IFD1; with Exif::Main off \
+             the hand collector runs whole (Ifd1Hand::Thumbnail)"
+        );
+        // Every residual id is withheld (a non-empty `omitted`) or absent
+        // from the static altogether (the offset class: no tag, no group).
+        for &id in IFD1_RESIDUAL_IDS {
+            match IFD_EXIF_MAIN.tag(id) {
+                Some(tag) => assert!(
+                    tag.omitted.any(),
+                    "0x{id:04x} {} is reported by the generated table but also read by \
+                     the IFD1 residual -- a double insert",
+                    tag.name
+                ),
+                None => assert!(
+                    IFD_EXIF_MAIN.variant_group(id).is_none(),
+                    "0x{id:04x} is a compiled variant group the engine may report"
+                ),
+            }
+        }
+        // The withheld residual ids are exactly the RawConv strings the spec
+        // names; the absent ones exactly the offset class.
+        let withheld: Vec<u16> = IFD1_RESIDUAL_IDS
+            .iter()
+            .copied()
+            .filter(|id| IFD_EXIF_MAIN.tag(*id).is_some())
+            .collect();
+        assert_eq!(
+            withheld,
+            vec![
+                TAG_SUBFILE_TYPE,
+                TAG_COMPRESSION,
+                TAG_MAKE,
+                TAG_MODEL,
+                TAG_SOFTWARE,
+                TAG_ARTIST,
+                TAG_COPYRIGHT
+            ]
+        );
+        for &id in &withheld {
+            assert!(IFD_EXIF_MAIN.tag(id).unwrap().omitted.raw_conv);
+        }
+        // ThumbnailImage / ThumbnailTIFF / PreviewTIFF are derived from these
+        // four, which the static must not carry in any form.
+        for id in [
+            TAG_STRIP_OFFSETS,
+            TAG_STRIP_BYTE_COUNTS,
+            TAG_THUMBNAIL_OFFSET,
+            TAG_THUMBNAIL_LENGTH,
+        ] {
+            assert!(IFD_EXIF_MAIN.tag(id).is_none(), "0x{id:04x}");
+            assert!(IFD_EXIF_MAIN.variant_group(id).is_none(), "0x{id:04x}");
+        }
+        // Conversely: nothing the engine reports is a residual id (this is
+        // what catches RowsPerStrip, which left the hand path).
+        for tag in IFD_EXIF_MAIN.tags {
+            if tag.omitted.any() || tag.subdir.is_some() || tag.flags.unknown {
+                continue;
+            }
+            assert!(
+                IFD1_RESIDUAL_IDS.binary_search(&tag.id).is_err(),
+                "0x{:04x} {} is engine-reported and must not be a residual id",
+                tag.id,
+                tag.name
+            );
+        }
+        assert!(
+            IFD1_RESIDUAL_IDS
+                .binary_search(&TAG_ROWS_PER_STRIP)
+                .is_err()
+        );
+        assert!(
+            IFD_EXIF_MAIN
+                .tag(TAG_ROWS_PER_STRIP)
+                .is_some_and(|t| !t.omitted.any())
+        );
+    }
+
+    /// RowsPerStrip, now the engine's, is recorded exactly once; the strip
+    /// pair stays hand-read with its absolute-offset rule.
+    #[test]
+    fn rows_per_strip_has_one_producer() {
+        let mut metadata = MetadataMap::new();
+        run_two(
+            &[],
+            &[
+                (TAG_STRIP_OFFSETS, LONG, 1, 784u32.to_le_bytes().to_vec()),
+                (TAG_ROWS_PER_STRIP, SHORT, 1, short(60)),
+                (
+                    TAG_STRIP_BYTE_COUNTS,
+                    LONG,
+                    1,
+                    9600u32.to_le_bytes().to_vec(),
+                ),
+            ],
+            &mut metadata,
+        );
+        assert_eq!(metadata.occurrences_for("IFD1:RowsPerStrip").len(), 1);
+        assert_eq!(metadata.get_integer("IFD1:RowsPerStrip"), Some(60));
+        assert_eq!(metadata.get_integer("IFD1:StripOffsets"), Some(784));
+        assert_eq!(metadata.get_integer("IFD1:StripByteCounts"), Some(9600));
+    }
+
+    /// Value shapes: an integral rational is an `Integer` (so `-j` prints
+    /// `72`, as ExifTool does, not the JSON writer's `72.0`); a fractional
+    /// one stays a `Float` (`72.5`); enums arrive rendered.
+    #[test]
+    fn engine_rows_take_exiftool_value_shapes() {
+        let mut metadata = MetadataMap::new();
+        run_two(
+            &[],
+            &[
+                (TAG_X_RESOLUTION, RATIONAL, 1, rational(72, 1)),
+                (TAG_Y_RESOLUTION, RATIONAL, 1, rational(145, 2)),
+                (TAG_RESOLUTION_UNIT, SHORT, 1, short(2)),
+                (0x0213, SHORT, 1, short(1)), // YCbCrPositioning
+            ],
+            &mut metadata,
+        );
+        assert_eq!(
+            metadata.get("IFD1:XResolution"),
+            Some(&TagValue::Integer(72))
+        );
+        assert_eq!(
+            metadata.get("IFD1:YResolution"),
+            Some(&TagValue::Float(72.5))
+        );
+        assert_eq!(metadata.get_string("IFD1:ResolutionUnit"), Some("inches"));
+        assert_eq!(
+            metadata.get_string("IFD1:YCbCrPositioning"),
+            Some("Centered")
+        );
+        assert_eq!(ifd1_value(TagValue::Float(300.0)), TagValue::Integer(300));
+        assert_eq!(ifd1_value(TagValue::Float(0.5)), TagValue::Float(0.5));
+        assert_eq!(
+            ifd1_value(TagValue::new_string("8 8 8")),
+            TagValue::new_string("8 8 8")
+        );
+    }
+
+    /// A bare request keeps answering IFD0: every IFD1 row is priority 0
+    /// (ExifTool.pm:7317, 9557-9560), and `all_occurrences` still has both,
+    /// IFD0 first.
+    #[test]
+    fn ifd0_keeps_the_bare_request_ifd1_is_priority_zero() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:XResolution", TagValue::new_rational(350, 1));
+        metadata.insert("IFD0:Orientation", TagValue::new_integer(1));
+        run_two(
+            &[],
+            &[
+                (TAG_X_RESOLUTION, RATIONAL, 1, rational(72, 1)),
+                (TAG_ORIENTATION, SHORT, 1, short(6)),
+                (0x0132, ASCII, 20, b"2015:02:16 11:50:05\0".to_vec()), // ModifyDate
+            ],
+            &mut metadata,
+        );
+        for (name, ifd0) in [
+            ("XResolution", TagValue::new_rational(350, 1)),
+            ("Orientation", TagValue::new_integer(1)),
+        ] {
+            let resolved = crate::cli::tag_resolution::resolve_requested_tags(
+                &metadata,
+                &[name.to_string()],
+                false,
+            );
+            assert_eq!(resolved.len(), 1, "{name}");
+            assert_eq!(resolved[0].occurrence.raw, ifd0, "{name}");
+            let all = crate::cli::tag_resolution::resolve_requested_tags(
+                &metadata,
+                &[name.to_string()],
+                true,
+            );
+            assert_eq!(all.len(), 2, "{name}");
+            assert_eq!(all[0].lookup_key, format!("IFD0:{name}"));
+            assert_eq!(all[1].lookup_key, format!("IFD1:{name}"));
+        }
+        // Only IFD1 carries ModifyDate here: the lone occurrence answers.
+        assert_eq!(
+            metadata.get_string("IFD1:ModifyDate"),
+            Some("2015:02:16 11:50:05")
+        );
+        for (key, _) in metadata.all_occurrences() {
+            if key.starts_with("IFD1:") {
+                let occurrence = metadata.occurrences_for(&key)[0];
+                assert_eq!(occurrence.priority, 0, "{key}");
+                assert_eq!(&*occurrence.group1, "IFD1", "{key}");
+            }
+        }
+    }
+
+    /// The `RawConv`-withheld strings come from the residual through the
+    /// shared converter: `$val =~ s/\s+$//` (Exif.pm 0x10f/0x110/0x131/0x13b)
+    /// on the NUL-truncated `string` read.
+    #[test]
+    fn residual_strings_are_trimmed_like_ifd0() {
+        let mut metadata = MetadataMap::new();
+        run_two(
+            &[],
+            &[
+                (TAG_MAKE, ASCII, 9, b"Canon   \0".to_vec()),
+                (TAG_MODEL, ASCII, 6, b"EOS \t\0".to_vec()),
+                (TAG_SOFTWARE, ASCII, 6, b"v1.0 \0".to_vec()),
+                (TAG_ARTIST, ASCII, 4, b"Me \0".to_vec()),
+                // Photographer only: "notice + NUL" (Exif.pm 0x8298 RawConv).
+                (TAG_COPYRIGHT, ASCII, 8, b"(c) Me \0".to_vec()),
+            ],
+            &mut metadata,
+        );
+        assert_eq!(metadata.get_string("IFD1:Make"), Some("Canon"));
+        assert_eq!(metadata.get_string("IFD1:Model"), Some("EOS"));
+        assert_eq!(metadata.get_string("IFD1:Software"), Some("v1.0"));
+        assert_eq!(metadata.get_string("IFD1:Artist"), Some("Me"));
+        assert_eq!(metadata.get_string("IFD1:Copyright"), Some("(c) Me"));
+        assert_eq!(metadata.occurrences_for("IFD1:Make").len(), 1);
+
+        let mut metadata = MetadataMap::new();
+        run_two(
+            &[],
+            // SonyMVC-CD1000.jpg: an embedded NUL ends the `string` read.
+            &[(TAG_MODEL, ASCII, 14, b"MAVICA\x003ghx7y\0".to_vec())],
+            &mut metadata,
+        );
+        assert_eq!(metadata.get_string("IFD1:Model"), Some("MAVICA"));
+    }
+
+    /// FENCE: an IFD1 that carries an ExifIFD pointer yields no `ExifIFD:`
+    /// row from this call site -- the same-table edge is emitted unwalked,
+    /// and the call-site filter would drop anything that did arrive.
+    #[test]
+    fn ifd1_never_reports_rows_of_another_directory() {
+        let mut metadata = MetadataMap::new();
+        // IFD1 at 8 + 6 = 14 with 2 entries -> directory ends at 44; a tiny
+        // "ExifIFD" sits at 44 carrying ExposureTime.
+        let mut ifd1 = vec![(TAG_X_RESOLUTION, RATIONAL, 1, rational(72, 1))];
+        ifd1.push((0x8769, LONG, 1, 0u32.to_le_bytes().to_vec()));
+        let mut data = build_two_ifd_tiff(&[], &ifd1);
+        let exif_at = data.len() as u32;
+        // Point 0x8769 (second IFD1 entry, value field at 14 + 2 + 12 + 8).
+        data[14 + 2 + 12 + 8..14 + 2 + 12 + 12].copy_from_slice(&exif_at.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0x829au16.to_le_bytes()); // ExposureTime
+        data.extend_from_slice(&LONG.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&5u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        let reader = TestReader::new(data.clone());
+        parse_ifd1(
+            &reader,
+            &data,
+            8,
+            0,
+            ByteOrder::LittleEndian,
+            0,
+            true,
+            &mut metadata,
+        );
+        assert_eq!(
+            metadata.get("IFD1:XResolution"),
+            Some(&TagValue::Integer(72))
+        );
+        let foreign: Vec<String> = metadata
+            .all_occurrences()
+            .map(|(key, _)| key)
+            .filter(|key| !key.starts_with("IFD1:"))
+            .collect();
+        assert!(foreign.is_empty(), "rows outside IFD1: {foreign:?}");
+        // The filter itself, over rows the engine could emit through an edge.
+        let row = |module, table, group1| Emitted {
+            module,
+            table,
+            group0: "EXIF",
+            group1,
+            group2: "Image",
+            name: "ExposureTime",
+            value: TagValue::Integer(5),
+            low_priority: false,
+            avoid: false,
+        };
+        assert!(is_ifd1_exif_main_row(&row("Exif", "Main", "IFD1")));
+        assert!(!is_ifd1_exif_main_row(&row("Exif", "Main", "ExifIFD")));
+        assert!(!is_ifd1_exif_main_row(&row("GPS", "Main", "IFD1")));
+    }
+
+    /// Four corpus files aim IFD1 at a directory already walked (ExifTool:
+    /// "IFD1 pointer references previous InteropIFD/GPS directory"); neither
+    /// producer may report a single IFD1 row for them.
+    #[test]
+    fn visited_directory_guard_files_report_no_ifd1_rows() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        for name in [
+            "Samsung/SamsungSPH-A800.jpg",
+            "Samsung/SamsungSPH-A940.jpg",
+            "Canon/CanonXL_H1.jpg",
+            "Samsung/SamsungGT-S5620.jpg",
+        ] {
+            let path = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT).join(name);
+            if !path.exists() {
+                continue;
+            }
+            let metadata = crate::core::operations::read_metadata(&path).expect("parses");
+            assert_eq!(ifd1_keys(&metadata), Vec::<String>::new(), "{name}");
+        }
+    }
+
+    /// Per-tag pins against `exiftool-pinned.sh -G1 -a -s -j -IFD1:all`
+    /// (13.59, both probes asserted): the IFD1 key set is exactly the
+    /// oracle's and each value matches.
+    #[test]
+    fn ifd1_carriers_match_pinned_exiftool() {
+        let int = TagValue::Integer;
+        let s = |text: &str| TagValue::new_string(text);
+        let thumb = |n: i64| {
+            TagValue::new_string(format!("(Binary data {n} bytes, use -b option to extract)"))
+        };
+        let jpeg_old = || int(6);
+        let cases: Vec<(&str, Vec<(&str, TagValue)>)> = vec![
+            (
+                "Nikon.jpg",
+                vec![
+                    ("Compression", jpeg_old()),
+                    ("XResolution", int(300)),
+                    ("YResolution", int(300)),
+                    ("ResolutionUnit", s("inches")),
+                    ("ThumbnailOffset", int(1426)),
+                    ("ThumbnailLength", int(28)),
+                    ("ThumbnailImage", thumb(28)),
+                ],
+            ),
+            (
+                "Olympus.jpg",
+                vec![
+                    ("Compression", jpeg_old()),
+                    ("XResolution", int(72)),
+                    ("YResolution", int(72)),
+                    ("ResolutionUnit", s("inches")),
+                    ("ThumbnailOffset", int(1296)),
+                    ("ThumbnailLength", int(28)),
+                    ("ThumbnailImage", thumb(28)),
+                ],
+            ),
+            (
+                "Apple/Apple_iPhone13.jpg",
+                vec![
+                    ("Compression", jpeg_old()),
+                    ("XResolution", int(72)),
+                    ("YResolution", int(72)),
+                    ("ResolutionUnit", s("inches")),
+                    ("ThumbnailOffset", int(2464)),
+                    ("ThumbnailLength", int(10338)),
+                    ("ThumbnailImage", thumb(10338)),
+                ],
+            ),
+            (
+                "Canon/CanonEOS10D.jpg",
+                vec![
+                    ("Compression", jpeg_old()),
+                    ("XResolution", int(180)),
+                    ("YResolution", int(180)),
+                    ("ResolutionUnit", s("inches")),
+                    ("ThumbnailOffset", int(2216)),
+                    ("ThumbnailLength", int(11776)),
+                    ("ThumbnailImage", thumb(11776)),
+                ],
+            ),
+            (
+                "Olympus/OlympusAIR-A01.jpg",
+                vec![
+                    ("Compression", jpeg_old()),
+                    ("Orientation", s("Horizontal (normal)")),
+                    ("XResolution", int(72)),
+                    ("YResolution", int(72)),
+                    ("ResolutionUnit", s("inches")),
+                    ("ModifyDate", s("2015:02:16 11:50:05")),
+                    ("ThumbnailOffset", int(15682)),
+                    ("ThumbnailLength", int(4585)),
+                    ("ThumbnailImage", thumb(4585)),
+                ],
+            ),
+            (
+                "Apple/AppleQT-200.jpg",
+                vec![
+                    ("ImageWidth", int(80)),
+                    ("ImageHeight", int(60)),
+                    ("BitsPerSample", s("8 8 8")),
+                    ("Compression", int(1)),
+                    ("PhotometricInterpretation", s("YCbCr")),
+                    ("StripOffsets", int(796)),
+                    ("SamplesPerPixel", int(3)),
+                    ("RowsPerStrip", int(60)),
+                    ("StripByteCounts", int(9600)),
+                    ("XResolution", int(72)),
+                    ("YResolution", int(72)),
+                    ("PlanarConfiguration", s("Chunky")),
+                    ("ResolutionUnit", s("inches")),
+                    ("YCbCrCoefficients", s("0.299 0.587 0.114")),
+                    ("YCbCrSubSampling", s("YCbCr4:2:2 (2 1)")),
+                    ("YCbCrPositioning", s("Co-sited")),
+                    ("ReferenceBlackWhite", s("0 255 128 255 128 255")),
+                ],
+            ),
+        ];
+        let mut ran = 0;
+        for (name, expected) in cases {
+            let Some(path) = crate::test_support::pinned_fixture_path(name).or_else(|| {
+                Some(std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT).join(name))
+                    .filter(|p| p.exists())
+            }) else {
+                continue;
+            };
+            let metadata = crate::core::operations::read_metadata(&path).expect("parses");
+            let mut want: Vec<String> = expected.iter().map(|(n, _)| format!("IFD1:{n}")).collect();
+            want.sort();
+            assert_eq!(ifd1_keys(&metadata), want, "{name}: IFD1 key set");
+            for (tag, value) in expected {
+                let key = format!("IFD1:{tag}");
+                let occurrences = metadata.occurrences_for(&key);
+                assert_eq!(occurrences.len(), 1, "{name} {key}");
+                match (&occurrences[0].raw, &value) {
+                    // The image bytes themselves; `-j` prints this placeholder.
+                    (TagValue::Binary(bytes), TagValue::String(text)) => assert_eq!(
+                        &format!(
+                            "(Binary data {} bytes, use -b option to extract)",
+                            bytes.len()
+                        ),
+                        text,
+                        "{name} {key}"
+                    ),
+                    (raw, want) => assert_eq!(raw, want, "{name} {key}"),
+                }
+                assert_eq!(occurrences[0].priority, 0, "{name} {key}");
+            }
+            ran += 1;
+        }
+        if crate::test_support::pinned_corpus_available() {
+            assert!(ran >= 4, "carriers present but only {ran} ran");
+        }
+    }
+
+    /// A bare request on a real carrier: IFD0's 72/72 and IFD1's 72/72 are
+    /// equal on Apple_iPhone13.jpg, so pin OlympusAIR-A01.jpg, whose IFD0
+    /// says 350 and IFD1 72 (ExifTool `-XResolution` -> 350).
+    #[test]
+    fn olympus_air_bare_requests_answer_ifd0() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        let path = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT)
+            .join("Olympus/OlympusAIR-A01.jpg");
+        let metadata = crate::core::operations::read_metadata(&path).expect("parses");
+        for (name, group) in [
+            ("XResolution", "IFD0"),
+            ("Compression", "IFD0"),
+            ("Orientation", "IFD0"),
+            ("ModifyDate", "IFD0"),
+        ] {
+            let resolved = crate::cli::tag_resolution::resolve_requested_tags(
+                &metadata,
+                &[name.to_string()],
+                false,
+            );
+            assert_eq!(resolved.len(), 1, "{name}");
+            assert_eq!(resolved[0].lookup_key, format!("{group}:{name}"), "{name}");
+        }
+        assert_ne!(
+            metadata.get("IFD0:XResolution"),
+            metadata.get("IFD1:XResolution"),
+            "the carrier must tell the two directories apart"
+        );
     }
 }
 
