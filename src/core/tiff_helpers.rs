@@ -980,19 +980,25 @@ const INTEROP_RESIDUAL_IDS: &[u16] = &[
 ];
 
 /// The family-1 prefix of the Interop DCF rows (InteropIndex, InteropVersion,
-/// RelatedImageWidth/Height): `EXIF`, the key the hand DCF arm has always
-/// used and the surgical writer's second candidate anticipates
-/// (`exif_surgical.rs::carried_class_reader_keys`). ExifTool's `-G1` says
-/// `InteropIFD`; decision D-1 of the E-1 spec is the rename, its own commit.
-const INTEROP_DCF_GROUP: &str = "EXIF";
+/// RelatedImageWidth/Height): `InteropIFD`, ExifTool's `-G1` for them and
+/// the surgical writer's first candidate key
+/// (`exif_surgical.rs::carried_class_reader_keys`,
+/// `lookup_tag_name(id, "InteropIFD")`). Decision D-1 of slice E-1, its own
+/// commit: before it these rows were keyed `EXIF:`, which `-G1` printed as
+/// `EXIF`; family 0 is `EXIF` either way (`tag_resolution::resolve_family0`),
+/// so reading `-EXIF:InteropIndex` and conformance.py's tiers see no change.
+/// Writing does: the reader no longer surfaces `EXIF:<name>`, so
+/// `plan_exif_write` maps an `EXIF:<name>` edit onto the raw-carried entry's
+/// `InteropIFD:<name>` row (`exif_surgical.rs`, `interop_aliases`) and
+/// refuses it, as before D-1, instead of adding a stray tag to IFD0.
+const INTEROP_DCF_GROUP: &str = "InteropIFD";
 
 /// The key an engine-produced InteropIFD row is recorded under: the DCF
-/// names keep [`INTEROP_DCF_GROUP`] (today's keys, so commit 1 of E-1 moves
-/// values only); every other row -- the image rows, and any reported id a
-/// writer puts in an InteropIFD, e.g. 0x1000 RelatedImageFileFormat, which
-/// the hand arm never named -- is `InteropIFD:<name>`, ExifTool's family 1
-/// and `lookup_tag_name(id, "InteropIFD")`'s spelling (the writer's first
-/// candidate key).
+/// names take [`INTEROP_DCF_GROUP`]; every other row -- the image rows, and
+/// any reported id a writer puts in an InteropIFD, e.g. 0x1000
+/// RelatedImageFileFormat, which the hand arm never named -- is
+/// `InteropIFD:<name>`, ExifTool's family 1 and `lookup_tag_name(id,
+/// "InteropIFD")`'s spelling (the writer's first candidate key).
 fn interop_key(name: &str) -> String {
     if matches!(
         name,
@@ -5568,15 +5574,16 @@ mod interop_tests {
     }
 
     #[test]
-    fn dcf_conformance_tags_keep_their_exif_keys() {
-        // InteropIndex lands on "EXIF:InteropIndex" (the key the surgical
-        // writer anticipates) with ExifTool's expanded description, from the
-        // engine and from the hand fallback alike.
+    fn dcf_conformance_tags_are_keyed_interop_ifd() {
+        // InteropIndex lands on "InteropIFD:InteropIndex" (ExifTool's `-G1`,
+        // decision D-1, and the surgical writer's first candidate key) with
+        // ExifTool's expanded description, from the engine and from the hand
+        // fallback alike.
         let entries = [(INTEROP_INDEX, ASCII, 4, u32::from_le_bytes(*b"R98\0"))];
         for metadata in [run(&entries, &[], 0), run_hand(&entries, &[], 0)] {
             assert_eq!(
                 metadata
-                    .get("EXIF:InteropIndex")
+                    .get("InteropIFD:InteropIndex")
                     .and_then(|v| v.as_string()),
                 Some("R98 - DCF basic file (sRGB)")
             );
@@ -5668,18 +5675,18 @@ mod interop_tests {
         let entries = [(INTEROP_INDEX, ASCII, 4, u32::from_le_bytes(*b"R99\0"))];
         let metadata = run(&entries, &[], 0);
         assert_eq!(
-            metadata.get_string("EXIF:InteropIndex"),
+            metadata.get_string("InteropIFD:InteropIndex"),
             Some("Unknown (R99)")
         );
         assert_eq!(
             metadata
                 .without_print_conv()
-                .get_string("EXIF:InteropIndex"),
+                .get_string("InteropIFD:InteropIndex"),
             Some("R99")
         );
         // The fallback keeps today's value.
         assert_eq!(
-            run_hand(&entries, &[], 0).get_string("EXIF:InteropIndex"),
+            run_hand(&entries, &[], 0).get_string("InteropIFD:InteropIndex"),
             Some("R99")
         );
     }
@@ -5703,7 +5710,7 @@ mod interop_tests {
             0,
         );
         assert_eq!(
-            metadata.get_string("EXIF:InteropIndex"),
+            metadata.get_string("InteropIFD:InteropIndex"),
             Some("THM - DCF thumbnail file")
         );
         assert!(
@@ -5914,7 +5921,11 @@ mod interop_tests {
             keys
         };
         assert!(engine_is_on());
-        assert_eq!(interop_rows(tiff(None)), ["EXIF:InteropIndex"], "control");
+        assert_eq!(
+            interop_rows(tiff(None)),
+            ["InteropIFD:InteropIndex"],
+            "control"
+        );
         assert_eq!(
             interop_rows(tiff(Some(38))),
             Vec::<String>::new(),

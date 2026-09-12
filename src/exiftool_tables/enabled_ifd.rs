@@ -207,10 +207,13 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // `Emitted::value_conv`; `INTEROP_RESIDUAL_IDS` keeps InteropVersion and
     // Compression (`omitted.raw_conv`) and the OtherImage pair (not
     // transcribed) on their hand arms, and every other id reports nothing, as
-    // before. The DCF rows keep the `EXIF:` key the hand arm used
-    // (`tiff_helpers::INTEROP_DCF_GROUP`); every other row is
-    // `InteropIFD:<name>`. The yield-to-IFD0 rule for X/YResolution/
-    // ResolutionUnit is kept (E-3 retires it). With the line off, the hand
+    // before. Every row is keyed `InteropIFD:<name>`, ExifTool's `-G1`: the
+    // DCF four and InteropVersion moved there from the hand arm's `EXIF:`
+    // in decision D-1, its own commit (`tiff_helpers::INTEROP_DCF_GROUP`,
+    // plus the surgical writer's refusal of an edit to an `InteropIFD:`-keyed
+    // carried entry, which its `EXIF:`-only Added loop never visited; revert
+    // it alone to restore `EXIF:`). The yield-to-IFD0 rule for
+    // X/YResolution/ResolutionUnit is kept (E-3 retires it). With the line off, the hand
     // arms run alone as before (E-D deletes that fallback). Pinned by
     // `exif_dir_engine` tests (the withholding snapshot, owner, fence,
     // tripwire, replay/drain, output rules a no-op), `tiff_helpers::
@@ -240,6 +243,12 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // `--no-print-conv` against the oracle's `-j -n -G1 -a -InteropIFD:all`:
     // 80 InteropIndex rows move toward the oracle (the code, not the label),
     // 0 away.
+    // D-1 alone (same instrument and list, control = the commit-1 build):
+    //     treatment  TOTAL 150 15886 0 74 940 159
+    // 0 files moved. `oxidex -j`, `--no-print-conv -j` and
+    // `--extended-output -j` differ only by `EXIF:` -> `InteropIFD:` key
+    // renames with equal values, in 97 files (InteropIndex 94,
+    // InteropVersion 96, RelatedImageWidth/Height 9 each).
     // Gate B of record: EXIFE1_GATEB_PENDING
     ("Exif", "Main"),
     // FujiFilm::Main -- slice I-6. The table is `%Image::ExifTool::FujiFilm::Main`

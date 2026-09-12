@@ -26,8 +26,8 @@
 //!
 //! Each pinned tag names its producer: `engine` (the generated row, replayed
 //! at its entry) or `residual` (the hand arm `INTEROP_RESIDUAL_IDS` keeps).
-//! The DCF rows are keyed `EXIF:` (today's key; ExifTool's `-G1` is
-//! `InteropIFD`, decision D-1).
+//! Every row is keyed `InteropIFD:`, ExifTool's `-G1` (the DCF rows since
+//! decision D-1).
 
 use oxidex::core::MetadataMap;
 use oxidex::core::exiftool_compat::format_tag_value;
@@ -129,24 +129,24 @@ fn canon_jpg_interop_tags_match_the_pinned_oracle() {
         "Canon.jpg",
         &[
             // engine
-            ("EXIF:InteropIndex", "THM - DCF thumbnail file"),
-            ("EXIF:RelatedImageWidth", "3072"),
-            ("EXIF:RelatedImageHeight", "2048"),
+            ("InteropIFD:InteropIndex", "THM - DCF thumbnail file"),
+            ("InteropIFD:RelatedImageWidth", "3072"),
+            ("InteropIFD:RelatedImageHeight", "2048"),
             // residual (0x0002, `omitted.raw_conv`)
-            ("EXIF:InteropVersion", "0100"),
+            ("InteropIFD:InteropVersion", "0100"),
         ],
     );
     assert_eq!(
-        shown_n(&metadata, "EXIF:InteropIndex").as_deref(),
+        shown_n(&metadata, "InteropIFD:InteropIndex").as_deref(),
         Some("THM")
     );
     assert_eq!(
         interop_keys(&metadata),
         [
-            "EXIF:InteropIndex",
-            "EXIF:InteropVersion",
-            "EXIF:RelatedImageHeight",
-            "EXIF:RelatedImageWidth"
+            "InteropIFD:InteropIndex",
+            "InteropIFD:InteropVersion",
+            "InteropIFD:RelatedImageHeight",
+            "InteropIFD:RelatedImageWidth"
         ]
     );
 }
@@ -161,18 +161,18 @@ fn nikon_jpg_interop_tags_match_the_pinned_oracle() {
         "Nikon.jpg",
         &[
             // engine
-            ("EXIF:InteropIndex", "R98 - DCF basic file (sRGB)"),
+            ("InteropIFD:InteropIndex", "R98 - DCF basic file (sRGB)"),
             // residual
-            ("EXIF:InteropVersion", "0100"),
+            ("InteropIFD:InteropVersion", "0100"),
         ],
     );
     assert_eq!(
-        shown_n(&metadata, "EXIF:InteropIndex").as_deref(),
+        shown_n(&metadata, "InteropIFD:InteropIndex").as_deref(),
         Some("R98")
     );
     assert_eq!(
         interop_keys(&metadata),
-        ["EXIF:InteropIndex", "EXIF:InteropVersion"]
+        ["InteropIFD:InteropIndex", "InteropIFD:InteropVersion"]
     );
 }
 
@@ -205,12 +205,12 @@ fn census_interop_index_carriers_match_the_pinned_oracle() {
         let metadata = carrier(&format!("{CORPUS}/{dir}"), file)
             .unwrap_or_else(|| panic!("{dir}/{file} is part of the pinned corpus"));
         assert_eq!(
-            shown(&metadata, "EXIF:InteropIndex").as_deref(),
+            shown(&metadata, "InteropIFD:InteropIndex").as_deref(),
             Some(want),
             "{file}"
         );
         assert_eq!(
-            shown_n(&metadata, "EXIF:InteropIndex").as_deref(),
+            shown_n(&metadata, "InteropIFD:InteropIndex").as_deref(),
             Some(want_n),
             "{file} -n"
         );
@@ -274,14 +274,14 @@ fn png_exif_chunk_reaches_the_interop_engine() {
         &metadata,
         "crafted Canon.png",
         &[
-            ("EXIF:InteropIndex", "THM - DCF thumbnail file"),
-            ("EXIF:RelatedImageWidth", "3072"),
-            ("EXIF:RelatedImageHeight", "2048"),
-            ("EXIF:InteropVersion", "0100"),
+            ("InteropIFD:InteropIndex", "THM - DCF thumbnail file"),
+            ("InteropIFD:RelatedImageWidth", "3072"),
+            ("InteropIFD:RelatedImageHeight", "2048"),
+            ("InteropIFD:InteropVersion", "0100"),
         ],
     );
     assert_eq!(
-        shown_n(&metadata, "EXIF:InteropIndex").as_deref(),
+        shown_n(&metadata, "InteropIFD:InteropIndex").as_deref(),
         Some("THM")
     );
 }
