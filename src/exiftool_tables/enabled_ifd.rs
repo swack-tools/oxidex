@@ -181,6 +181,51 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // through the same owner; ~60 are credited by conformance.py's
     // name-bucket matching to same-name, same-value XMP:/MakerNotes: slots.
     ("Exif", "Main"),
+    // FujiFilm::Main -- slice I-6. The table is `%Image::ExifTool::FujiFilm::Main`
+    // (FujiFilm.pm:84-1022, pinned 13.59), reached from MakerNoteFujiFilm
+    // (MakerNotes.pm:121-133: header FUJIFILM, OffsetPt '$valuePtr+8', Base
+    // '$start', ByteOrder 'LittleEndian'). Gate A: eligible, blocked_by empty.
+    // Call site: fujifilm.rs::parse_note -> fujifilm/main_engine.rs::insert_rows,
+    // at every dispatch entry point (JPEG/TIFF with IFD0 Model and value forms;
+    // RAF detached, no Model). Top level only: the four binary edges stay with
+    // the hand settings_tables decoders and 0x4282 FaceRecInfo has no layout
+    // (the fence drops any non-FujiFilm::Main row; no edge target is enabled,
+    // `fuji_main_edges_reach_no_enabled_table`).
+    //
+    // What the line changes: the engine reports 88 FujiFilm::Main ids as
+    // `FujiFilm:<Name>`, inserted after the residual/edge pass (ExifTool's
+    // IFD-order winner for the one shared name, NoiseReduction 0x100b/0x100e).
+    // FUJI_MAIN_RESIDUAL_IDS keeps Version (engine value is undef/Binary, which
+    // the string map drops), InternalSerialNumber, NoiseReduction 0x100b (now
+    // with its RawConv drop), ShadowTone, HighlightTone, ImageStabilization and
+    // FaceElementTypes (withheld). Unsupplied: GEImageSize (Make condition),
+    // FlickerReduction (q{} sprintf), FaceRecInfo. `$$self{Model}` seeds the
+    // 0x1100 AutoBracketing X-T3 variant. `--no-print-conv` carries
+    // Emitted::value_conv (e.g. FujiFilm:WhiteBalance is 0, FujiFlashMode 3).
+    // Pinned by fujifilm/main_engine.rs tests (residual == generated
+    // withholding, name-collision inventory, fence, tripwire, NoiseReduction
+    // order, Version tripwire) and tests/fujifilm_main_ifd_table.rs (t/images
+    // FujiFilm.jpg and FujiFilm.raf per tag against exiftool-pinned.sh).
+    //
+    // Local pre-measurement (a prediction, not the gate): conformance.py over the
+    // 150-file list /Users/allen/oxidex-ops/slices/fuji-main/ab-files.txt, pinned
+    // 13.59 (both probes), control = release build of e8a7c12a, treatment =
+    // this branch (OXIDEX_ALLOW_DIRTY_TREE=1; totals from --json-out):
+    //     control    TOTAL 150 16496 0 26 141 11
+    //     treatment  TOTAL 150 16546 0 12 105 10
+    // per-file diff (abdiff.py): 36 MISSING -> matched (Clarity 17, RollAngle 9,
+    // Contrast 5, CompositeImageMode/Count1/Count2 3, CropFlag 1, Sharpness 1),
+    // 14 VALUE -> matched (ImageCount 10, ColorTemperature 2, ColorMode 1,
+    // DynamicRange 1), 1 EXTRA removed (S3Pro_UVIR FujiFilm:Sharpness) in 35
+    // files; 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA. `oxidex -j -G1 -a`
+    // control vs treatment over the same 150 files (FileAccessDate dropped):
+    // exactly 35 added FujiFilm: keys and 15 changed values in those 35 files.
+    // `--no-print-conv` against the oracle's `-j -n -G1 -a -FujiFilm:all`:
+    // 2,322 wrong -> match, 35 missing -> match, 0 match -> non-match (the
+    // residual, sub-table and RAF rows keep printing PrintConv strings).
+    // Gate B of record (i7, i7-missing-census.sh + i7-ab-diff.py, 4,238 files):
+    // FUJI_GATEB_PENDING
+    ("FujiFilm", "Main"),
     // Olympus::CameraSettings -- slice I-3 of
     // `docs/superpowers/specs/2026-09-06-ifd-tables-design.md`, the second
     // of the six sub-table lines (all six share the evidence layout below;

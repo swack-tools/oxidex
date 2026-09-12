@@ -10,6 +10,8 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+/// `FujiFilm::Main` through the generated table and the IFD engine (slice I-6).
+mod main_engine;
 /// The `OTHER` fallbacks of `%FujiFilm`'s settings tables, hand-written.
 mod print_conv;
 /// `%FujiFilm` binary sub-tables, generated from ExifTool's own hashes.
@@ -26,6 +28,7 @@ use nom::{
 };
 use std::collections::HashMap;
 
+use super::makernote_context::MakerNoteContext;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{
     extract_i16_array, extract_i32_array, extract_rational_array, extract_u16_array,
@@ -35,6 +38,7 @@ use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
 use crate::const_decoder;
 use crate::core::formatters::numeric_precision::perl_number;
 use crate::core::value_formatter::format_rational_as_decimal;
+use crate::exiftool_tables::find_ifd_table;
 use settings_tables::{
     FUJIFILM_AFCSETTINGS, FUJIFILM_DRIVESETTINGS, FUJIFILM_FOCUSSETTINGS, FUJIFILM_PRIORITYSETTINGS,
 };
@@ -769,8 +773,50 @@ impl MakerNoteParser for FujifilmParser {
     fn parse(
         &self,
         data: &[u8],
-        _byte_order: ByteOrder,
+        byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_with_model(data, byte_order, None, tags)
+    }
+
+    fn parse_with_model(
+        &self,
+        data: &[u8],
+        _byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_note(data, model, tags, None)
+    }
+
+    fn parse_with_context_and_values(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        _byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        // The payload, not the window: the residual arms and the sub-table
+        // decoders read `data` (`entry_bytes`, `extract_*`), and the engine
+        // must read the same bytes. `parse_with_context` and
+        // `parse_with_model_and_values` keep their trait defaults, which
+        // forward the payload to `parse_with_model`.
+        self.parse_note(ctx.payload(), model, tags, Some(value_forms))
+    }
+}
+
+impl FujifilmParser {
+    /// Every entry point funnels here: the hand walk of the Main IFD, then
+    /// (with the `("FujiFilm", "Main")` line in force) the engine rows.
+    /// `model` is `$$self{Model}` for the engine; `forms` receives the
+    /// engine rows' `-n` forms (`None` on the detached, value-less paths).
+    fn parse_note(
+        &self,
+        data: &[u8],
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        forms: Option<&mut HashMap<String, String>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
@@ -817,6 +863,15 @@ impl MakerNoteParser for FujifilmParser {
             Err(_) => return Ok(()), // Return empty on parse failure
         };
 
+        // Slice I-6: `FujiFilm::Main` through the generated table and the IFD
+        // engine, behind Gate B. The lookup is spelled with literal arguments
+        // because `tools/exiftool-tables/reachability.py` counts literal
+        // `find_ifd_table` call sites, and `enabled()` re-checks Gate A and
+        // the line at runtime. `None` = every hand arm below runs exactly as
+        // before the slice (landing 1's engine-off fallback).
+        let main_table = find_ifd_table("FujiFilm", "Main").filter(|table| table.enabled());
+        let hand_entries = entries.len();
+
         // Extract tags from entries
         for entry in entries {
             // Binary sub-directories. `%FujiFilm::Main` gives these four tags a
@@ -828,6 +883,14 @@ impl MakerNoteParser for FujifilmParser {
                 if let Some(record) = entry_bytes(&entry, data) {
                     decode_binary_subdir(table, &record, fuji_byte_order, "FujiFilm", tags);
                 }
+                continue;
+            }
+
+            // Engine on: only the residual arms run here. Every engine-owned
+            // id, and the hand ids `FujiFilm::Main` does not declare (0x1039,
+            // 0xf001, 0xf002), is skipped; the engine rows go in after this
+            // loop (`main_engine`'s module doc argues the order).
+            if main_table.is_some() && !main_engine::is_residual(entry.tag_id) {
                 continue;
             }
 
@@ -1210,6 +1273,11 @@ impl MakerNoteParser for FujifilmParser {
                 // Noise reduction tags
                 FUJI_NOISE_REDUCTION => {
                     let value = entry.value_offset as i32;
+                    // `RawConv => '$val == 0x100 ? undef : $val'`
+                    // (FujiFilm.pm:237): ExifTool reports no tag for 0x100.
+                    if value == 0x100 {
+                        continue;
+                    }
                     tags.insert(
                         "FujiFilm:NoiseReduction".to_string(),
                         DECODE_NOISE_REDUCTION.decode(value).to_string(),
@@ -1578,6 +1646,11 @@ impl MakerNoteParser for FujifilmParser {
                 // Other tags - skip unknown tags
                 _ => continue,
             }
+        }
+
+        // Engine rows LAST, in emission order (= IFD entry order).
+        if let Some(table) = main_table {
+            main_engine::insert_rows(table, data, ifd_offset, hand_entries, model, tags, forms);
         }
 
         Ok(())

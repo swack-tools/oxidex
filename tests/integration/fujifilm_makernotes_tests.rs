@@ -179,9 +179,15 @@ fn test_fujifilm_parse_focus_and_flash() {
     let mut tags = HashMap::new();
     parse_fujifilm_makernotes(&data, ByteOrder::LittleEndian, &mut tags);
 
+    // FujiFilm.pm:321-329 declares FocusMode 0 Auto, 1 Manual, 65535 Movie
+    // and nothing else; the hand map's "AF-C (Continuous)" for 3 was
+    // invented. Pinned ExifTool 13.59 on t/images/FujiFilm.jpg with 0x1021
+    // patched to 3 prints `FocusMode : Unknown (3)` (and FujiFlashMode `On`,
+    // WhiteBalance `Daylight` for the two entries below), which is what the
+    // generated FujiFilm::Main table now reports (slice I-6).
     assert_eq!(
         tags.get("FujiFilm:FocusMode"),
-        Some(&"AF-C (Continuous)".to_string())
+        Some(&"Unknown (3)".to_string())
     );
     // ExifTool names this tag "FujiFlashMode", not "FlashMode".
     assert_eq!(tags.get("FujiFilm:FujiFlashMode"), Some(&"On".to_string()));
