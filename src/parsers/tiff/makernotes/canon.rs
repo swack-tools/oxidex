@@ -14,9 +14,11 @@ pub mod color_data;
 mod custom_functions2;
 mod custom_functions2_tables;
 pub mod filter_info;
+mod main_engine;
 
 use crate::core::formatters::perl_number as format_perl_number;
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::find_ifd_table;
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::shared::ifd_parser_base::{
@@ -5345,7 +5347,38 @@ fn parse_canon_makernote_impl_located_with_values(
     byte_order: ByteOrder,
     exif_model: Option<&str>,
     dir_tiff_offset: Option<u32>,
+    value_forms: Option<&mut HashMap<String, String>>,
+) -> Result<HashMap<String, String>> {
+    parse_canon_makernote_directory(
+        data,
+        declared,
+        byte_order,
+        exif_model,
+        dir_tiff_offset,
+        value_forms,
+        true,
+    )
+}
+
+/// The body of every Canon MakerNote entry point: one walk of a `Canon::Main`
+/// directory (or of the synthetic one `parse_canon_ciff_records` builds).
+///
+/// `walk_main` is whether the directory IS a `Canon::Main` IFD, and so may be
+/// read through the generated `IFD_CANON_MAIN` (slice I-5): `true` for every
+/// MakerNote entry point, `false` for CIFF. ExifTool never walks
+/// `Canon::Main` for a CRW -- CanonRaw.pm points its records straight at the
+/// `%Canon::*` sub-tables -- and the synthetic IFD only borrows Main's tag ids
+/// to reach the same decoders; were one of those ids an edge whose target
+/// got enabled (0x0002 FocalLength has no `Validate`), the engine would
+/// start descending from a directory ExifTool never has.
+fn parse_canon_makernote_directory(
+    data: &[u8],
+    declared: &[u8],
+    byte_order: ByteOrder,
+    exif_model: Option<&str>,
+    dir_tiff_offset: Option<u32>,
     mut value_forms: Option<&mut HashMap<String, String>>,
+    walk_main: bool,
 ) -> Result<HashMap<String, String>> {
     if data.is_empty() {
         return Ok(HashMap::new());
@@ -5420,6 +5453,26 @@ fn parse_canon_makernote_impl_located_with_values(
     // measured case -- /\b(...|10D|...)$/ can never match a string ending "JPEG".
     let self_model = exif_model.filter(|m| !m.is_empty()).unwrap_or(&model);
 
+    // Slice I-5: `Canon::Main` through the generated table and the IFD engine,
+    // behind Gate B. The lookup is spelled with literal arguments because
+    // `tools/exiftool-tables/reachability.py` counts literal `find_ifd_table`
+    // call sites, and `enabled()` re-checks Gate A and the allowlist at
+    // runtime. The walk reads the same slice, base, byte order and
+    // `$$self{Model}` as the hand walk below, and its rows are BUFFERED: each
+    // goes into `tags` when the hand walk reaches its entry (see
+    // `main_engine`'s module doc for why neither "first" nor "last" is
+    // ExifTool's order). `None` -- the line off, or CIFF -- runs the hand arms
+    // below exactly as before the slice: landing 1 keeps them as the
+    // engine-off fallback, and landing 2 deletes them.
+    let mut main_engine = walk_main
+        .then(|| find_ifd_table("Canon", "Main").filter(|table| table.enabled()))
+        .flatten()
+        .map(|table| main_engine::walk(table, data, byte_order, &config, base, self_model));
+    // How many entries the hand walk visited, for the one structural invariant
+    // the two walks share: when the engine accepted the directory, the hand
+    // walk saw every one of its entries (or, above its 200-entry bound, none).
+    let mut hand_entries = 0usize;
+
     // `%Canon::CameraInfo*` is PRIORITY => 0, so its values are collected apart
     // and only fill names no other Canon table produced. See `merge_priority0`.
     let mut camera_info_tags: HashMap<String, String> = HashMap::new();
@@ -5438,6 +5491,22 @@ fn parse_canon_makernote_impl_located_with_values(
     // Note: we don't propagate errors here to maintain existing behavior of
     // returning whatever tags we found even if parsing isn't perfect
     let _ = parse_ifd_entries(data, byte_order, &config, |entry, ifd_data| {
+        hand_entries += 1;
+        // A row the generated table reports and no residual arm owns: the
+        // engine's row for this entry goes in HERE, at the entry's own
+        // position, so a later same-named sub-table row (Processing's
+        // ColorTemperature) still overwrites it and an earlier one does not --
+        // ExifTool's IFD-order last-wins (Exif.pm:6919-7153 processes a
+        // SubDirectory inline, in entry order). ColorSpace does not follow
+        // last-wins under `-j`; see `canon/main_engine.rs`'s module docs.
+        // The arms below for these ids are then unreachable; they run only
+        // when `main_engine` is `None`.
+        if let Some(engine) = main_engine.as_mut()
+            && engine.owns(entry.tag_id)
+        {
+            engine.replay(entry.tag_id, &mut tags, &mut value_forms);
+            return;
+        }
         match entry.tag_id {
             // Simple string tags (Phase 1)
             // Canon MakerNotes use TIFF-relative offsets, so we use extract_canon_string
@@ -5473,6 +5542,20 @@ fn parse_canon_makernote_impl_located_with_values(
             //     PrintConv => 'sprintf("%.10u",$val)',
             // ```
             CANON_SERIAL_NUMBER => {
+                // Residual (slice I-5): 0x000c's first alternative,
+                // `/EOS D30\b/`, is the generated table's -- the engine
+                // reports it -- and alternatives 2 and 3 are withheld. So with
+                // the engine on, this arm defers to the engine's row exactly
+                // when that alternative wins, reading the same `self_model`
+                // the engine was seeded with, and renders the other two
+                // itself (`main_engine::canon_main_residual_emits_exactly_
+                // the_withheld_alternatives` pins the complement).
+                if let Some(engine) = main_engine.as_mut()
+                    && main_engine::serial_number_is_d30(self_model)
+                {
+                    engine.replay(entry.tag_id, &mut tags, &mut value_forms);
+                    return;
+                }
                 let serial = entry.value_offset;
                 // Both Conditions read `$$self{Model}` (Canon.pm:1286/1295), so they
                 // take `self_model` rather than CanonImageType. Neither is anchored --
@@ -6518,6 +6601,24 @@ fn parse_canon_makernote_impl_located_with_values(
             // with 0xff rather than NUL. Its ValueConv removes only those
             // trailing 0xff bytes before normal TIFF string termination.
             CANON_INTERNAL_SERIAL_NUMBER => {
+                // Residual (slice I-5, decision D3): 0x0096 is a `_variants`
+                // group (Canon.pm:1841). Its first alternative, `$$self{Model}
+                // =~ /EOS 5D/`, is a SubDirectory into `%Canon::SerialInfo`
+                // (Canon.pm:7146-7162: `InternalSerialNumber2` on the 5D Mark
+                // II/III/IV and 5DS/5DS R, `InternalSerialNumber` at index 9
+                // otherwise), not this value -- ExifTool reports no Main
+                // `InternalSerialNumber` on any /EOS 5D/ body. So with the
+                // engine on, this arm renders the value only when the second
+                // alternative wins, reading the `self_model` the engine
+                // resolves 0x0096 with (`main_engine::canon_main_residual_
+                // emits_exactly_the_withheld_alternatives` pins the
+                // complement). SerialInfo itself has no producer yet: on those
+                // bodies the tag is absent rather than a Main string ExifTool
+                // does not report there under that name.
+                if main_engine.is_some() && !main_engine::internal_serial_is_main_value(self_model)
+                {
+                    return;
+                }
                 if let Some(raw) = extract_canon_bytes_with_base(entry, ifd_data, base) {
                     let without_ff = raw
                         .iter()
@@ -7508,6 +7609,21 @@ fn parse_canon_makernote_impl_located_with_values(
         }
     });
 
+    // Rows whose entry the hand walk never reached: `parse_ifd_entries` stops
+    // at the first truncated entry and refuses more than 200, the engine's
+    // `read_ifd` accepts up to 512. Later in IFD order than anything the hand
+    // walk visited, so last (before the `PRIORITY => 0` merges) is their place.
+    if let Some(engine) = main_engine {
+        debug_assert!(
+            engine
+                .entries()
+                .is_none_or(|n| n == hand_entries || n > config.max_entries),
+            "the engine accepted {:?} entries, the hand walk visited {hand_entries}",
+            engine.entries()
+        );
+        engine.drain(&mut tags, &mut value_forms);
+    }
+
     camera_info::merge_priority0(&mut tags, camera_info_tags);
 
     // See the comment on `lens_info_serial`'s declaration: this only fills a gap
@@ -7681,13 +7797,16 @@ pub(crate) fn parse_canon_ciff_records(
     buffer.extend_from_slice(&values);
     buffer.extend(std::iter::repeat_n(0u8, FOOTER_GUARD));
 
-    parse_canon_makernote_impl_located_with_values(
+    // `walk_main: false`: CanonRaw never walks `Canon::Main` (see
+    // `parse_canon_makernote_directory`).
+    parse_canon_makernote_directory(
         &buffer,
         &buffer,
         ByteOrder::LittleEndian,
         model,
         Some(0),
         Some(value_forms),
+        false,
     )
     .unwrap_or_default()
 }

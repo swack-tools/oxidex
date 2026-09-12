@@ -35,6 +35,9 @@ pub mod binary_subdir;
 pub mod byte_utils;
 /// Declarative macros for creating decoders with minimal boilerplate
 pub mod decoder_macros;
+/// The string a generated-table (IFD engine) value is stored as in a
+/// MakerNote parser's `HashMap<String, String>`
+pub mod engine_value;
 /// Generic decoders for common MakerNote value patterns
 pub mod generic_decoders;
 /// Shared IFD parsing implementation to eliminate parse() duplication

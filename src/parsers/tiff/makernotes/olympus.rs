@@ -43,6 +43,7 @@ use std::collections::HashMap;
 use super::registries::olympus::olympus_registry;
 use super::shared::MakerNoteParser;
 use super::shared::array_extractors::{extract_i16_array, extract_i32_array, extract_u16_array};
+use super::shared::engine_value::engine_value_text;
 use super::shared::generic_decoders::ON_OFF;
 pub use super::shared::table_ifd as ifd;
 
@@ -949,48 +950,6 @@ fn walk_main_through_engine(
         } else {
             tags.insert(key, text);
         }
-    }
-}
-
-/// The string the hand walk (`ifd::apply_conv`) would have produced for an
-/// engine value of the same shape, so that switching the producer changes no
-/// byte of the map:
-///
-/// * `String` -- itself. This is also every multi-count numeric entry (the
-///   engine space-joins them, ExifTool.pm:6330) and every rendered
-///   `PrintConv`.
-/// * `Integer` -- decimal, as `OlyVal::Int`'s `print_raw`.
-/// * `Float` -- Perl's `%.15g` (`exprs::perl_num`), as `OlyVal::Float`'s
-///   `fmt_g15`. This is every unconverted rational with a nonzero
-///   denominator: the engine reads a 64-bit rational as the number Perl
-///   parses from `RoundFloat($n/$d, 10)` = `sprintf("%.10g")`
-///   (`GetRational64s`, ExifTool.pm:6107-6120, 5960-5964;
-///   `ifd_engine::round_rationals`), and `%.15g` of that number prints the
-///   same ten digits, which is what `ifd::print_rational` printed for the
-///   hand rows (0x1003, 0x1006, 0x1023, 0x1025, 0x103d, 0x103e). No
-///   `Olympus::Main` row is float-typed in the file.
-/// * `Rational` -- only a zero denominator reaches this arm now;
-///   `ifd::print_rational` prints it as ExifTool does (`inf` for a nonzero
-///   numerator, `undef` for zero, ExifTool.pm:6111/6118).
-/// * anything else -- dropped. `Binary` is an `undef` run with no
-///   conversion (only 0x0000 `MakerNoteVersion` in this table, which no
-///   Olympus note in the corpus carries): the string map cannot say whether
-///   its bytes are text, and guessing is worse than the absent tag. `Array`
-///   only arises for `List => 1` tags, of which `Olympus::Main` has none;
-///   `DateTime`/`Structure` cannot come out of an IFD walk.
-fn engine_value_text(value: &TagValue) -> Option<String> {
-    match value {
-        TagValue::String(s) => Some(s.clone()),
-        TagValue::Integer(n) => Some(n.to_string()),
-        TagValue::Float(f) => Some(crate::exiftool_tables::exprs::perl_num(*f)),
-        TagValue::Rational {
-            numerator,
-            denominator,
-        } => Some(ifd::print_rational(
-            i64::from(*numerator),
-            i64::from(*denominator),
-        )),
-        _ => None,
     }
 }
 
