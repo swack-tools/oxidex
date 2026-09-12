@@ -154,6 +154,31 @@ pub static ENABLED: &[(&str, &str)] = &[
     // MPF::MPImage -- `src/parsers/jpeg/mpf_parser.rs:591`. The most heavily
     // exercised of the five: 689 corpus files report `MPImage1:*`.
     ("MPF", "MPImage"),
+    // Olympus::AFInfo, Olympus::AFTargetInfo, Olympus::SubjectDetectInfo --
+    // ProcessBinaryData targets of SubDirectory edges leaving tables that
+    // are already enabled and wired: AFTargetInfo (0x030a) and
+    // SubjectDetectInfo (0x030b) from Olympus::CameraSettings, AFInfo from
+    // Olympus::FocusInfo (Olympus.pm, pinned 13.59). `ifd_engine::descend`
+    // follows such an edge the moment the target reports `enabled()` ("an
+    // edge never enables its target"), so this needs no call site, no parser
+    // change and no generator change. All three are Gate-A clean with every
+    // field `Omitted::NONE`, and no hand producer emits any of their tag
+    // names (rg over src/ outside src/exiftool_tables/), so nothing can be
+    // double-produced. AFFrameSize is also declared by Pentax::AFInfoK3III;
+    // every corpus carrier is an Olympus body with an Olympus maker note.
+    //
+    // Gate B: conformance.py over all 4,238 combined-samples files, pinned
+    // 13.59, on the i7 (i7-missing-census.sh + i7-ab-diff.py): control census
+    // ifd4 (c6db0235's tree), treatment olyaf (57f546cf, these three lines):
+    //     control    TOTAL 4238 467876 26 512 12355 1564  97.3%
+    //     treatment  TOTAL 4238 467919 26 512 12312 1564  97.3%
+    // 43 MISSING -> matched in 9 files (CAFSensitivity 8; AFSelectedArea,
+    // AFFocusArea, SubjectDetectArea/Status/Detail/FrameSize 5 each; ...),
+    // 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA; the four counters
+    // conserve (482,307).
+    ("Olympus", "AFInfo"),
+    ("Olympus", "AFTargetInfo"),
+    ("Olympus", "SubjectDetectInfo"),
     // Pentax::MOV -- `src/parsers/quicktime/metadata_extractor.rs:3601`.
     // Carries a `string[24]` Make and a `string[24]` Model at the head of the
     // record, same shortening story as ID3::v1.
