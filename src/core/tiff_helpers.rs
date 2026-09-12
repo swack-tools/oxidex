@@ -4,6 +4,7 @@
 //! processing tags, and handling sub-IFDs (EXIF, GPS), MakerNotes, and GeoTiff.
 
 use super::{FileReader, MetadataMap, TagValue};
+use crate::core::exif_dir_engine::{self, engine_row_value};
 use crate::core::formatters::composite_image_exposure_times::format_composite_image_exposure_times;
 use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::{
@@ -929,10 +930,94 @@ pub fn parse_exif_subifd(
 
         // Third pass: Parse Interoperability IFD if pointer was found
         // The Interop IFD contains DCF conformance tags like InteropIndex and InteropVersion
-        if let Some(iop_offset) = interop_ifd_offset {
-            parse_interop_subifd(reader, iop_offset, byte_order, tiff_base, metadata);
+        //
+        // ExifTool's `$$self{PROCESSED}` guard (ExifTool.pm:9058-9072) skips a
+        // directory already walked ("InteropIFD pointer references previous
+        // ... directory"). Here that is this ExifIFD itself or IFD0 (the TIFF
+        // header's first-IFD offset): the engine walk of such a mis-aimed
+        // pointer would re-emit the whole directory as `InteropIFD:*`. The
+        // guard sits in front of both producers, engine and hand.
+        if let Some(iop_offset) = interop_ifd_offset
+            && iop_offset != offset
+            && Some(iop_offset) != tiff_ifd0_offset(reader, byte_order)
+        {
+            parse_interop_subifd(
+                reader, iop_offset, byte_order, tiff_base, tiff_len, metadata,
+            );
         }
     }
+}
+
+/// IFD0's offset as the TIFF header at `reader` offset 0 declares it (bytes
+/// 4..8), or `None` when the header is unreadable. Every caller of
+/// [`parse_exif_subifd`] addresses the TIFF block from its byte 0 (the APP1
+/// payload, the standalone TIFF, the embedded block).
+fn tiff_ifd0_offset(reader: &dyn FileReader, byte_order: ByteOrder) -> Option<u64> {
+    reader
+        .read(4, 4)
+        .ok()
+        .filter(|bytes| bytes.len() == 4)
+        .map(|bytes| u64::from(read_u32(bytes, byte_order)))
+}
+
+/// Interop ids the hand arm of [`parse_interop_subifd`] keeps producing
+/// beside the engine: withheld or not transcribed by the generated
+/// `Exif::Main`. Sorted (binary-searched). Pinned by
+/// `interop_residual_is_exactly_the_hand_remainder`.
+///
+/// * 0x0002 InteropVersion -- `omitted.raw_conv` (`$val =~ s/\0+$//; $val`,
+///   Exif.pm:436);
+/// * 0x0103 Compression -- `omitted.raw_conv` (sets `$$self{Compression}`);
+///   `collect_ifd1_thumbnail` still reads `InteropIFD:Compression`;
+/// * 0x0201 / 0x0202 -- absent (`IsOffset`/`OffsetPair` `_variants`, see
+///   [`IFD1_RESIDUAL_IDS`]): OtherImageStart/Length and the derived
+///   OtherImage.
+const INTEROP_RESIDUAL_IDS: &[u16] = &[
+    INTEROP_VERSION,
+    TAG_COMPRESSION,
+    TAG_OTHER_IMAGE_START,
+    TAG_OTHER_IMAGE_LENGTH,
+];
+
+/// The family-1 prefix of the Interop DCF rows (InteropIndex, InteropVersion,
+/// RelatedImageWidth/Height): `InteropIFD`, ExifTool's `-G1` for them and
+/// the surgical writer's first candidate key
+/// (`exif_surgical.rs::carried_class_reader_keys`,
+/// `lookup_tag_name(id, "InteropIFD")`). Decision D-1 of slice E-1, its own
+/// commit: before it these rows were keyed `EXIF:`, which `-G1` printed as
+/// `EXIF`; family 0 is `EXIF` either way (`tag_resolution::resolve_family0`),
+/// so reading `-EXIF:InteropIndex` and conformance.py's tiers see no change.
+/// Writing does: the reader no longer surfaces `EXIF:<name>`, so
+/// `plan_exif_write` maps an `EXIF:<name>` edit onto the raw-carried entry's
+/// `InteropIFD:<name>` row (`exif_surgical.rs`, `interop_aliases`) and
+/// refuses it, as before D-1, instead of adding a stray tag to IFD0.
+const INTEROP_DCF_GROUP: &str = "InteropIFD";
+
+/// The key an engine-produced InteropIFD row is recorded under: the DCF
+/// names take [`INTEROP_DCF_GROUP`]; every other row -- the image rows, and
+/// any reported id a writer puts in an InteropIFD, e.g. 0x1000
+/// RelatedImageFileFormat, which the hand arm never named -- is
+/// `InteropIFD:<name>`, ExifTool's family 1 and `lookup_tag_name(id,
+/// "InteropIFD")`'s spelling (the writer's first candidate key).
+fn interop_key(name: &str) -> String {
+    if matches!(
+        name,
+        "InteropIndex" | "InteropVersion" | "RelatedImageWidth" | "RelatedImageHeight"
+    ) {
+        format!("{INTEROP_DCF_GROUP}:{name}")
+    } else {
+        format!("InteropIFD:{name}")
+    }
+}
+
+/// The hand arm's yield, for engine rows: an Interop XResolution,
+/// YResolution or ResolutionUnit is dropped when IFD0 already holds the name
+/// (ExifTool's default duplicate-suppressed view; see the image arm below).
+/// Every other row is kept. Name-keyed, which is id-exact: no other
+/// `Exif::Main` id declares these three names. E-3 retires the rule.
+fn interop_keep(name: &str, metadata: &MetadataMap) -> bool {
+    !(matches!(name, "XResolution" | "YResolution" | "ResolutionUnit")
+        && metadata.get(&format!("IFD0:{name}")).is_some())
 }
 
 /// Parses an Interoperability sub-IFD and extracts Interop tags.
@@ -948,9 +1033,26 @@ pub fn parse_exif_subifd(
 /// - **RelatedImageWidth (0x1001)**: Width of the related full-resolution image
 /// - **RelatedImageHeight (0x1002)**: Height of the related full-resolution image
 ///
-/// Those DCF tags are output with the "EXIF:" prefix to match ExifTool's output
-/// format (and the surgical writer's key-anticipation in
-/// `carried_class_reader_keys`, `src/writers/exif_surgical.rs`).
+/// Those DCF tags are output with the [`INTEROP_DCF_GROUP`] prefix (and the
+/// surgical writer's key-anticipation in `carried_class_reader_keys`,
+/// `src/writers/exif_surgical.rs`).
+///
+/// # Producers (slice E-1)
+///
+/// ExifTool walks this directory as `%Image::ExifTool::Exif::Main` under
+/// DirName `InteropIFD`. When the generated table is in force (the
+/// `("Exif", "Main")` line of `enabled_ifd.rs` plus Gate A), every id it
+/// reports -- InteropIndex, RelatedImageFileFormat/Width/Height,
+/// X/YResolution, ResolutionUnit, any other -- comes from one engine walk
+/// ([`exif_dir_engine::walk`]), replayed at its entry's position in the hand
+/// walk below; [`INTEROP_RESIDUAL_IDS`] stay with their hand arms, and every
+/// other id produces nothing, as the hand arm dropped every id it did not
+/// name. An engine-reported entry the engine refused (no row: the floor
+/// refuses a value stored before the directory, which ExifTool reads, or a
+/// directory `read_ifd` refuses) keeps its hand arm for that entry. Engine
+/// rows are recorded at the hand arms' priority ([`SHIM_DEFAULT_PRIORITY`];
+/// `DirEngineRows::at_priority`). With the table off, the hand arms run
+/// alone exactly as before the slice (the E-1/E-2 fallback; E-D deletes it).
 ///
 /// # Image-carrying Interop directories
 ///
@@ -971,12 +1073,36 @@ pub fn parse_exif_subifd(
 /// * `tiff_base` - Absolute file offset of the TIFF header, added to
 ///   `OtherImageStart` exactly as `collect_ifd1_thumbnail` absolutises
 ///   `ThumbnailOffset`
+/// * `tiff_len` - Length of the enclosing TIFF block from `reader` offset 0
+///   (ExifTool's `$dataLen`, as for [`parse_exif_subifd`]): the bytes the
+///   engine walks
 /// * `metadata` - MetadataMap to populate with Interop tags
 fn parse_interop_subifd(
     reader: &dyn FileReader,
     offset: u64,
     byte_order: ByteOrder,
     tiff_base: u64,
+    tiff_len: u64,
+    metadata: &mut MetadataMap,
+) {
+    // Slice E-1. The lookup is spelled with literal arguments because
+    // `tools/exiftool-tables/reachability.py` counts literal call sites;
+    // `enabled()` re-checks Gate A and the allowlist at runtime.
+    let table = find_ifd_table("Exif", "Main").filter(|table| table.enabled());
+    parse_interop_directory(
+        reader, offset, byte_order, tiff_base, tiff_len, table, metadata,
+    );
+}
+
+/// [`parse_interop_subifd`] with the table decision made: `table` is the
+/// enabled `Exif::Main`, or `None` for the hand arms alone.
+fn parse_interop_directory(
+    reader: &dyn FileReader,
+    offset: u64,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    tiff_len: u64,
+    table: Option<&'static IfdTable>,
     metadata: &mut MetadataMap,
 ) {
     // Attempt to parse the Interoperability IFD structure
@@ -984,11 +1110,56 @@ fn parse_interop_subifd(
         return;
     };
 
+    // The engine reads the TIFF block as one slice (ExifTool's `DataPt`,
+    // offsets from its byte 0); the hand arms read `reader`. `None` = the
+    // hand arms alone, unchanged.
+    let mut engine = table
+        .and_then(|table| {
+            let len = usize::try_from(tiff_len.min(reader.size())).ok()?;
+            Some((table, reader.read(0, len).ok()?))
+        })
+        .map(|(table, tiff)| {
+            debug_assert!(
+                match (
+                    usize::try_from(offset)
+                        .ok()
+                        .and_then(|start| tiff.get(start..start.checked_add(2)?)),
+                    reader.read(offset, 2).ok(),
+                ) {
+                    (Some(slice), Some(read)) => slice == read,
+                    _ => true,
+                },
+                "InteropIFD at {offset}: the TIFF slice and reader address different bytes"
+            );
+            // At the hand arms' priority, not the table's `Priority => 0`
+            // for X/YResolution and ResolutionUnit: see `at_priority` (JFIF's
+            // `Priority => -1` is not modelled, so 0 would lose to JFIF).
+            exif_dir_engine::walk(table, tiff, offset, byte_order, "InteropIFD", metadata)
+                .at_priority(SHIM_DEFAULT_PRIORITY)
+        });
+
     let mut other_image_start: Option<u64> = None;
     let mut other_image_length: Option<u64> = None;
 
     for (tag_id, field_type, value_count, raw_bytes) in &interop_tags {
         let bytes = raw_bytes.as_ref();
+
+        if let Some(engine) = engine.as_mut()
+            && INTEROP_RESIDUAL_IDS.binary_search(tag_id).is_err()
+        {
+            // An engine-reported id replays its row here; any other id
+            // produces nothing, as the hand arm dropped every id it did not
+            // name (the `_` arm below). An engine-reported id with no row --
+            // the engine refused the value (its floor refuses a value stored
+            // before the directory, which ExifTool reads: Exif.pm:6549 is
+            // an overlap rule, K-O in E-2) or the whole directory -- falls
+            // through to its hand arm, the pre-engine producer.
+            if engine.owner(*tag_id, false) != exif_dir_engine::Owner::Engine
+                || engine.replay(*tag_id, metadata, interop_key, interop_keep)
+            {
+                continue;
+            }
+        }
 
         match *tag_id {
             // Image-carrying tags: emitted under the "InteropIFD:" group.
@@ -1028,8 +1199,8 @@ fn parse_interop_subifd(
                     continue;
                 }
 
-                // Build the full tag name with "EXIF:" prefix to match ExifTool output
-                let tag_name = format!("EXIF:{}", tag_base_name);
+                // Build the full tag name with the DCF prefix to match ExifTool output
+                let tag_name = format!("{INTEROP_DCF_GROUP}:{tag_base_name}");
 
                 // Convert the raw bytes to a TagValue
                 let mut tag_value =
@@ -1047,6 +1218,11 @@ fn parse_interop_subifd(
                 metadata.insert(tag_name, tag_value);
             }
         }
+    }
+
+    // Engine rows whose entry the hand walk never reached.
+    if let Some(engine) = engine {
+        engine.drain(metadata, interop_key, interop_keep);
     }
 
     // ExifTool emits the offset/length pair only when both are present.
@@ -1153,7 +1329,7 @@ fn contextual_tag_name(resolved: &str, base_name: &str) -> String {
 /// Exif.pm:585,595). Trailing NULs are also dropped defensively; an absent
 /// tag reads as the empty string, which fails every `eq`/prefix test below
 /// exactly as Perl's `undef` fails them.
-fn trimmed_data_member(metadata: &MetadataMap, key: &str) -> String {
+pub(crate) fn trimmed_data_member(metadata: &MetadataMap, key: &str) -> String {
     metadata.get_string(key).map_or_else(String::new, |value| {
         value
             .trim_end_matches(['\0', ' ', '\t', '\n', '\r', '\x0b', '\x0c'])
@@ -2673,8 +2849,10 @@ fn ifd1_engine_rows(
         // pre-PrintConv value when a PrintConv rendered the row, else the
         // row itself (`TagOccurrence::value_conv` must not re-derive one from
         // a printed string).
-        let display = ifd1_value(row.value);
-        let no_print_conv = row.value_conv.map_or_else(|| display.clone(), ifd1_value);
+        let display = engine_row_value(row.value);
+        let no_print_conv = row
+            .value_conv
+            .map_or_else(|| display.clone(), engine_row_value);
         metadata.insert_occurrence_with_raw(
             format!("IFD1:{}", row.name),
             display,
@@ -2701,22 +2879,6 @@ const IFD1_GROUP1: &str = "";
 /// under DirName `IFD1`.
 fn is_ifd1_exif_main_row(row: &Emitted) -> bool {
     row.module == "Exif" && row.table == "Main" && row.group1 == "IFD1"
-}
-
-/// The value an engine row is stored as. The engine carries an unconverted
-/// rational as the `Float` Perl numifies `RoundFloat($n/$d, 10)` to
-/// (`ifd_engine::round_rationals`); Perl stringifies an integral one with no
-/// fraction (`72`), which is what ExifTool's `-j` prints, while the JSON
-/// writer prints a `Float` as `72.0`. So an integral float inside f64's
-/// exact-integer range becomes `Integer` (the text writer's `perl_num`
-/// already prints it that way); everything else passes through, so 145/2
-/// stays `72.5`.
-fn ifd1_value(value: TagValue) -> TagValue {
-    const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
-    match value {
-        TagValue::Float(f) if f.fract() == 0.0 && f.abs() < EXACT => TagValue::Integer(f as i64),
-        other => other,
-    }
 }
 
 // Separate incoming precedence context from newly emitted occurrences so a
@@ -4647,10 +4809,13 @@ mod ifd1_tests {
             metadata.get_string("IFD1:YCbCrPositioning"),
             Some("Centered")
         );
-        assert_eq!(ifd1_value(TagValue::Float(300.0)), TagValue::Integer(300));
-        assert_eq!(ifd1_value(TagValue::Float(0.5)), TagValue::Float(0.5));
         assert_eq!(
-            ifd1_value(TagValue::new_string("8 8 8")),
+            engine_row_value(TagValue::Float(300.0)),
+            TagValue::Integer(300)
+        );
+        assert_eq!(engine_row_value(TagValue::Float(0.5)), TagValue::Float(0.5));
+        assert_eq!(
+            engine_row_value(TagValue::new_string("8 8 8")),
             TagValue::new_string("8 8 8")
         );
     }
@@ -5155,8 +5320,11 @@ mod interop_tests {
         (data, tail_offset)
     }
 
+    /// The production path: the enabled `Exif::Main` engine plus the
+    /// residual hand arms (slice E-1).
     fn run(entries: &[(u16, u16, u32, u32)], tail: &[u8], tiff_base: u64) -> MetadataMap {
         let (data, _) = build_interop(entries, tail);
+        let tiff_len = data.len() as u64;
         let reader = TestReader::new(data);
         let mut metadata = MetadataMap::new();
         parse_interop_subifd(
@@ -5164,9 +5332,32 @@ mod interop_tests {
             8,
             ByteOrder::LittleEndian,
             tiff_base,
+            tiff_len,
             &mut metadata,
         );
         metadata
+    }
+
+    /// The engine-off fallback: the hand arms alone, as before slice E-1.
+    fn run_hand(entries: &[(u16, u16, u32, u32)], tail: &[u8], tiff_base: u64) -> MetadataMap {
+        let (data, _) = build_interop(entries, tail);
+        let tiff_len = data.len() as u64;
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_interop_directory(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            tiff_base,
+            tiff_len,
+            None,
+            &mut metadata,
+        );
+        metadata
+    }
+
+    fn engine_is_on() -> bool {
+        find_ifd_table("Exif", "Main").is_some_and(|table| table.enabled())
     }
 
     /// The tail offset for `n` entries: header(8) + count(2) + 12n + next(4).
@@ -5248,20 +5439,39 @@ mod interop_tests {
             ],
             &rational_tail,
         );
+        let tiff_len = data.len() as u64;
         let reader = TestReader::new(data);
-        let mut metadata = MetadataMap::new();
-        metadata.insert("IFD0:XResolution", TagValue::new_rational(72, 1));
-        metadata.insert("IFD0:ResolutionUnit", TagValue::new_integer(2));
-        parse_interop_subifd(&reader, 8, ByteOrder::LittleEndian, 0, &mut metadata);
+        for table in [find_ifd_table("Exif", "Main").filter(|t| t.enabled()), None] {
+            let mut metadata = MetadataMap::new();
+            metadata.insert("IFD0:XResolution", TagValue::new_rational(72, 1));
+            metadata.insert("IFD0:ResolutionUnit", TagValue::new_integer(2));
+            parse_interop_directory(
+                &reader,
+                8,
+                ByteOrder::LittleEndian,
+                0,
+                tiff_len,
+                table,
+                &mut metadata,
+            );
 
-        assert!(metadata.get("InteropIFD:XResolution").is_none());
-        assert!(metadata.get("InteropIFD:ResolutionUnit").is_none());
-        assert_eq!(
-            metadata
-                .get("InteropIFD:Compression")
-                .and_then(|v| v.as_integer()),
-            Some(6)
-        );
+            let producer = if table.is_some() { "engine" } else { "hand" };
+            assert!(
+                metadata.get("InteropIFD:XResolution").is_none(),
+                "{producer}"
+            );
+            assert!(
+                metadata.get("InteropIFD:ResolutionUnit").is_none(),
+                "{producer}"
+            );
+            assert_eq!(
+                metadata
+                    .get("InteropIFD:Compression")
+                    .and_then(|v| v.as_integer()),
+                Some(6),
+                "{producer}"
+            );
+        }
     }
 
     #[test]
@@ -5270,16 +5480,36 @@ mod interop_tests {
         rational_tail.extend_from_slice(&72u32.to_le_bytes());
         rational_tail.extend_from_slice(&1u32.to_le_bytes());
         let x_res_offset = tail_offset_for(2) as u32;
+        let entries = [
+            (TAG_X_RESOLUTION, RATIONAL, 1, x_res_offset),
+            (TAG_RESOLUTION_UNIT, SHORT, 1, 2),
+        ];
 
-        let metadata = run(
-            &[
-                (TAG_X_RESOLUTION, RATIONAL, 1, x_res_offset),
-                (TAG_RESOLUTION_UNIT, SHORT, 1, 2),
-            ],
-            &rational_tail,
-            0,
+        // Engine (the production path): `RoundFloat(72/1)` stored as the
+        // integer ExifTool's `-j` prints (`engine_row_value`, the IFD1
+        // shape), and ResolutionUnit through its PrintConv with `2` as the
+        // `--no-print-conv` form -- pinned 13.59 prints `72` / `inches` for
+        // SamsungSPH-A800.jpg's InteropIFD (`-G1 -a -s -j -InteropIFD:all`).
+        assert!(engine_is_on(), "the (\"Exif\", \"Main\") line is in force");
+        let metadata = run(&entries, &rational_tail, 0);
+        assert_eq!(
+            metadata.get("InteropIFD:XResolution"),
+            Some(&TagValue::Integer(72))
+        );
+        assert_eq!(
+            metadata.get_string("InteropIFD:ResolutionUnit"),
+            Some("inches")
+        );
+        assert_eq!(
+            metadata
+                .without_print_conv()
+                .get("InteropIFD:ResolutionUnit")
+                .and_then(TagValue::as_integer),
+            Some(2)
         );
 
+        // Hand fallback: unchanged.
+        let metadata = run_hand(&entries, &rational_tail, 0);
         assert!(matches!(
             metadata.get("InteropIFD:XResolution"),
             Some(TagValue::Rational {
@@ -5344,20 +5574,367 @@ mod interop_tests {
     }
 
     #[test]
-    fn dcf_conformance_tags_keep_their_exif_keys() {
-        // The pre-existing DCF path is untouched: InteropIndex still lands on
-        // "EXIF:InteropIndex" (the key the surgical writer anticipates) with
-        // ExifTool's expanded description.
-        let metadata = run(
-            &[(INTEROP_INDEX, ASCII, 4, u32::from_le_bytes(*b"R98\0"))],
-            &[],
-            0,
+    fn dcf_conformance_tags_are_keyed_interop_ifd() {
+        // InteropIndex lands on "InteropIFD:InteropIndex" (ExifTool's `-G1`,
+        // decision D-1, and the surgical writer's first candidate key) with
+        // ExifTool's expanded description, from the engine and from the hand
+        // fallback alike.
+        let entries = [(INTEROP_INDEX, ASCII, 4, u32::from_le_bytes(*b"R98\0"))];
+        for metadata in [run(&entries, &[], 0), run_hand(&entries, &[], 0)] {
+            assert_eq!(
+                metadata
+                    .get("InteropIFD:InteropIndex")
+                    .and_then(|v| v.as_string()),
+                Some("R98 - DCF basic file (sRGB)")
+            );
+        }
+    }
+
+    /// Spec 3.3 pin 3. The residual is an explicit list, not a complement:
+    /// the hand arm dropped every Interop id it did not name.
+    #[test]
+    fn interop_residual_is_exactly_the_hand_remainder() {
+        use crate::exiftool_tables::ifd_tables::IFD_EXIF_MAIN;
+        assert!(
+            INTEROP_RESIDUAL_IDS.windows(2).all(|w| w[0] < w[1]),
+            "INTEROP_RESIDUAL_IDS is binary-searched and must stay sorted"
+        );
+        assert_eq!(
+            INTEROP_RESIDUAL_IDS,
+            [0x0002, 0x0103, 0x0201, 0x0202],
+            "spec 3.2"
+        );
+        // Each residual id is withheld (a non-empty `omitted`) or absent.
+        for &id in INTEROP_RESIDUAL_IDS {
+            assert!(
+                !crate::exiftool_tables::engine_reports(&IFD_EXIF_MAIN, id),
+                "{id:#06x} is engine-reported and also read by the Interop residual: a double insert"
+            );
+            match IFD_EXIF_MAIN.tag(id) {
+                Some(tag) => assert!(
+                    tag.omitted.raw_conv && tag.subdir.is_none(),
+                    "{id:#06x} {}: withheld for its RawConv",
+                    tag.name
+                ),
+                None => assert!(
+                    IFD_EXIF_MAIN.variant_group(id).is_none(),
+                    "{id:#06x} is a compiled variant group"
+                ),
+            }
+        }
+        // Every id the hand arm owned before E-1 is now engine-reported, so
+        // its hand arm is unreachable while the engine runs.
+        for id in [
+            INTEROP_INDEX,
+            RELATED_IMAGE_WIDTH,
+            RELATED_IMAGE_HEIGHT,
+            TAG_X_RESOLUTION,
+            TAG_Y_RESOLUTION,
+            TAG_RESOLUTION_UNIT,
+        ] {
+            assert!(
+                crate::exiftool_tables::engine_reports(&IFD_EXIF_MAIN, id),
+                "{id:#06x} left the hand arm and must be engine-reported"
+            );
+        }
+        // The hand DCF arm's names are the engine's names for the same ids,
+        // and the keys stay what the hand arm used (commit 1 of E-1).
+        for id in [INTEROP_INDEX, RELATED_IMAGE_WIDTH, RELATED_IMAGE_HEIGHT] {
+            let name = interop_tag_to_name(id);
+            assert_eq!(IFD_EXIF_MAIN.tag(id).map(|t| t.name), Some(name));
+            assert_eq!(interop_key(name), format!("{INTEROP_DCF_GROUP}:{name}"));
+        }
+        assert_eq!(
+            interop_key("InteropVersion"),
+            format!("{INTEROP_DCF_GROUP}:InteropVersion")
+        );
+        // Every other engine row is keyed as `lookup_tag_name` spells it for
+        // the InteropIFD (the writer's first candidate key).
+        for id in [
+            TAG_X_RESOLUTION,
+            TAG_Y_RESOLUTION,
+            TAG_RESOLUTION_UNIT,
+            0x1000,
+        ] {
+            let name = IFD_EXIF_MAIN.tag(id).expect("transcribed").name;
+            assert_eq!(
+                interop_key(name),
+                lookup_tag_name(id, "InteropIFD"),
+                "{id:#06x}"
+            );
+        }
+    }
+
+    /// Engine values are ExifTool's where the hand arm's were not: an
+    /// undeclared InteropIndex prints `Unknown (...)` (pinned 13.59 on
+    /// SamsungVP-D73.jpg `R99`, SamsungGT-S5250.jpg `R 9 8 `), with the raw
+    /// string as the `--no-print-conv` form.
+    #[test]
+    fn engine_interop_index_prints_unknown_for_an_undeclared_value() {
+        assert!(engine_is_on());
+        let entries = [(INTEROP_INDEX, ASCII, 4, u32::from_le_bytes(*b"R99\0"))];
+        let metadata = run(&entries, &[], 0);
+        assert_eq!(
+            metadata.get_string("InteropIFD:InteropIndex"),
+            Some("Unknown (R99)")
         );
         assert_eq!(
             metadata
-                .get("EXIF:InteropIndex")
-                .and_then(|v| v.as_string()),
-            Some("R98 - DCF basic file (sRGB)")
+                .without_print_conv()
+                .get_string("InteropIFD:InteropIndex"),
+            Some("R99")
+        );
+        // The fallback keeps today's value.
+        assert_eq!(
+            run_hand(&entries, &[], 0).get_string("InteropIFD:InteropIndex"),
+            Some("R99")
+        );
+    }
+
+    /// The residual ids keep their hand arms beside the engine, and an id
+    /// the hand arm never named that the table reports -- 0x1000
+    /// RelatedImageFileFormat, or an ExifIFD tag a writer misplaced here --
+    /// is reported as ExifTool reports it, under `InteropIFD:`.
+    #[test]
+    fn engine_on_keeps_the_residual_and_reports_every_table_id() {
+        assert!(engine_is_on());
+        let format_offset = tail_offset_for(4) as u32;
+        let metadata = run(
+            &[
+                (INTEROP_INDEX, ASCII, 4, u32::from_le_bytes(*b"THM\0")),
+                (INTEROP_VERSION, 7, 4, u32::from_le_bytes(*b"0100")),
+                (0x1000, ASCII, 8, format_offset),
+                (0xeeee, SHORT, 1, 5), // not in Exif::Main
+            ],
+            b"JPEG FF\0",
+            0,
+        );
+        assert_eq!(
+            metadata.get_string("InteropIFD:InteropIndex"),
+            Some("THM - DCF thumbnail file")
+        );
+        assert!(
+            metadata
+                .get(&format!("{INTEROP_DCF_GROUP}:InteropVersion"))
+                .is_some()
+        );
+        assert_eq!(
+            metadata.get_string("InteropIFD:RelatedImageFileFormat"),
+            Some("JPEG FF")
+        );
+        let interop_keys: Vec<&str> = metadata
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .filter(|k| k.starts_with("InteropIFD:") || k.starts_with("EXIF:"))
+            .collect();
+        assert_eq!(interop_keys.len(), 3, "{interop_keys:?}");
+    }
+
+    /// Review finding (E-1, rev-exactness `crafted/before.*`,
+    /// `crafted2/idx8_before.*`): out-of-line values stored BEFORE the
+    /// Interop directory. ExifTool reads them (Exif.pm:6549 refuses only an
+    /// overlap; pinned 13.59 prints `[InteropIFD] XResolution 72`,
+    /// `YResolution 96`, and `-n` InteropIndex `ASCIIR98` with no warning);
+    /// the engine's floor refuses them, so those entries keep their hand
+    /// arms -- byte-identical to the engine-off fallback -- instead of
+    /// vanishing. The inline ResolutionUnit is still the engine's.
+    #[test]
+    fn a_value_stored_before_the_directory_keeps_its_hand_arm() {
+        assert!(engine_is_on());
+        // header(8) | XRes 72/1 @8 | YRes 96/1 @16 | "ASCIIR98" @24 | IFD @32
+        let mut data = b"II\x2a\0\x20\0\0\0".to_vec();
+        for (num, den) in [(72u32, 1u32), (96, 1)] {
+            data.extend(num.to_le_bytes());
+            data.extend(den.to_le_bytes());
+        }
+        data.extend(b"ASCIIR98");
+        let entries: [(u16, u16, u32, u32); 4] = [
+            (INTEROP_INDEX, ASCII, 8, 24),
+            (TAG_X_RESOLUTION, RATIONAL, 1, 8),
+            (TAG_Y_RESOLUTION, RATIONAL, 1, 16),
+            (TAG_RESOLUTION_UNIT, SHORT, 1, 2),
+        ];
+        data.extend((entries.len() as u16).to_le_bytes());
+        for (tag, field_type, count, value) in entries {
+            data.extend(tag.to_le_bytes());
+            data.extend(field_type.to_le_bytes());
+            data.extend(count.to_le_bytes());
+            data.extend(value.to_le_bytes());
+        }
+        data.extend(0u32.to_le_bytes());
+        let parse = |table: Option<&'static IfdTable>| {
+            let tiff_len = data.len() as u64;
+            let reader = TestReader::new(data.clone());
+            let mut metadata = MetadataMap::new();
+            parse_interop_directory(
+                &reader,
+                32,
+                ByteOrder::LittleEndian,
+                0,
+                tiff_len,
+                table,
+                &mut metadata,
+            );
+            metadata
+        };
+        let engine = parse(find_ifd_table("Exif", "Main"));
+        let hand = parse(None);
+        let index_key = format!("{INTEROP_DCF_GROUP}:InteropIndex");
+        for key in [
+            index_key.as_str(),
+            "InteropIFD:XResolution",
+            "InteropIFD:YResolution",
+        ] {
+            assert!(engine.get(key).is_some(), "{key} lost with the engine on");
+            assert_eq!(engine.get(key), hand.get(key), "{key}: not the hand arm");
+        }
+        assert_eq!(
+            engine.get("InteropIFD:XResolution"),
+            Some(&TagValue::new_rational(72, 1))
+        );
+        assert_eq!(
+            engine.get("InteropIFD:YResolution"),
+            Some(&TagValue::new_rational(96, 1))
+        );
+        assert_eq!(engine.get_string(&index_key), Some("ASCIIR98"));
+        assert_eq!(
+            engine.without_print_conv().get_string(&index_key),
+            Some("ASCIIR98"),
+            "the oracle's -n form"
+        );
+        // Inline, so the engine's: its `-n` form is the stored code.
+        assert_eq!(
+            engine.get_string("InteropIFD:ResolutionUnit"),
+            Some("inches")
+        );
+        assert_eq!(
+            engine.without_print_conv().get("InteropIFD:ResolutionUnit"),
+            Some(&TagValue::Integer(2))
+        );
+    }
+
+    /// Review finding (E-1, reviewer-regression
+    /// `SamsungSPH-A800_noifd0res.jpg`): engine Interop rows keep the hand
+    /// arms' priority. `Exif::Main` gives X/YResolution and ResolutionUnit
+    /// `Priority => 0`, which in ExifTool still beats JFIF's `Priority =>
+    /// -1` (ExifTool.pm:2218-2233); oxidex records JFIF at 1, so a 0 here
+    /// would hand `-XResolution` to `JFIF:XResolution` where the pinned
+    /// 13.59 oracle prints the Interop 72.
+    #[test]
+    fn engine_interop_rows_keep_the_hand_priority_against_jfif() {
+        assert!(engine_is_on());
+        let x_offset = tail_offset_for(2) as u32;
+        let (data, _) = build_interop(
+            &[
+                (TAG_X_RESOLUTION, RATIONAL, 1, x_offset),
+                (TAG_RESOLUTION_UNIT, SHORT, 1, 2),
+            ],
+            &[72u32.to_le_bytes(), 1u32.to_le_bytes()].concat(),
+        );
+        let tiff_len = data.len() as u64;
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        // JPEG order: APP0 JFIF before APP1 Exif.
+        metadata.insert("JFIF:XResolution", TagValue::Integer(0));
+        metadata.insert("JFIF:ResolutionUnit", TagValue::new_string("inches"));
+        parse_interop_subifd(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            0,
+            tiff_len,
+            &mut metadata,
+        );
+        for name in ["XResolution", "ResolutionUnit"] {
+            let key = format!("InteropIFD:{name}");
+            assert_eq!(
+                metadata.occurrences_for(&key)[0].priority,
+                SHIM_DEFAULT_PRIORITY,
+                "{key}"
+            );
+            let winner = crate::cli::tag_resolution::resolve_requested_tags(
+                &metadata,
+                &[name.to_string()],
+                false,
+            );
+            assert_eq!(winner.len(), 1);
+            assert_eq!(winner[0].lookup_key, key, "-{name} picks JFIF");
+        }
+    }
+
+    /// Spec 7.1 test 5: the PROCESSED guard in `parse_exif_subifd`. An
+    /// InteropOffset aimed at the ExifIFD itself, or at IFD0, walks nothing;
+    /// a proper InteropIFD still reports InteropIndex.
+    #[test]
+    fn a_mis_aimed_interop_offset_is_not_walked() {
+        // TIFF header, IFD0 at 8 {XResolution, ExifOffset}, ExifIFD
+        // {ExposureTime, InteropOffset}, then an InteropIFD {InteropIndex}.
+        fn tiff(interop_target: Option<u32>) -> Vec<u8> {
+            let ifd0 = 8u32;
+            let exif = ifd0 + 2 + 2 * 12 + 4; // 38
+            let interop = exif + 2 + 2 * 12 + 4; // 68
+            let values = interop + 2 + 12 + 4; // 86
+            let target = interop_target.unwrap_or(interop);
+            let mut d = b"II\x2a\0".to_vec();
+            d.extend_from_slice(&ifd0.to_le_bytes());
+            let entry = |d: &mut Vec<u8>, tag: u16, ty: u16, count: u32, value: u32| {
+                d.extend_from_slice(&tag.to_le_bytes());
+                d.extend_from_slice(&ty.to_le_bytes());
+                d.extend_from_slice(&count.to_le_bytes());
+                d.extend_from_slice(&value.to_le_bytes());
+            };
+            d.extend_from_slice(&2u16.to_le_bytes());
+            entry(&mut d, TAG_X_RESOLUTION, RATIONAL, 1, values);
+            entry(&mut d, 0x8769, LONG, 1, exif);
+            d.extend_from_slice(&0u32.to_le_bytes());
+            d.extend_from_slice(&2u16.to_le_bytes());
+            entry(&mut d, 0x829a, RATIONAL, 1, values + 8);
+            entry(&mut d, INTEROPERABILITY_IFD_POINTER, LONG, 1, target);
+            d.extend_from_slice(&0u32.to_le_bytes());
+            d.extend_from_slice(&1u16.to_le_bytes());
+            entry(
+                &mut d,
+                INTEROP_INDEX,
+                ASCII,
+                4,
+                u32::from_le_bytes(*b"R98\0"),
+            );
+            d.extend_from_slice(&0u32.to_le_bytes());
+            assert_eq!(d.len() as u32, values);
+            for (n, den) in [(72u32, 1u32), (1, 80)] {
+                d.extend_from_slice(&n.to_le_bytes());
+                d.extend_from_slice(&den.to_le_bytes());
+            }
+            d
+        }
+        let interop_rows = |data: Vec<u8>| {
+            let len = data.len() as u64;
+            let reader = TestReader::new(data);
+            let mut metadata = MetadataMap::new();
+            parse_exif_subifd(&reader, 38, ByteOrder::LittleEndian, 0, len, &mut metadata);
+            assert!(metadata.get("ExifIFD:ExposureTime").is_some());
+            let keys: Vec<String> = metadata
+                .iter()
+                .map(|(k, _)| k.clone())
+                .filter(|k| k.starts_with("InteropIFD:") || k.starts_with("EXIF:Interop"))
+                .collect();
+            keys
+        };
+        assert!(engine_is_on());
+        assert_eq!(
+            interop_rows(tiff(None)),
+            ["InteropIFD:InteropIndex"],
+            "control"
+        );
+        assert_eq!(
+            interop_rows(tiff(Some(38))),
+            Vec::<String>::new(),
+            "aimed at the ExifIFD"
+        );
+        assert_eq!(
+            interop_rows(tiff(Some(8))),
+            Vec::<String>::new(),
+            "aimed at IFD0"
         );
     }
 }

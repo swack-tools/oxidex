@@ -102,6 +102,51 @@ pub fn find_ifd_table(module: &str, table: &str) -> Option<&'static IfdTable> {
         .map(|i| ALL_IFD_TABLES[i])
 }
 
+/// Whether the IFD engine reports entry `id` of `table` at all: a plain tag
+/// the walk reports ([`tag_is_reported`]), or a `_variants` group with an
+/// alternative it reports ([`alternative_is_reported`]). This is the static
+/// half of "engine or hand" every IFD call site that splits a directory
+/// between the two asks (Canon::Main's `main_engine::owns`, the
+/// ExifIFD/InteropIFD walk in `core::exif_dir_engine`), derived from the
+/// generated table and never from a hand list.
+#[must_use]
+pub fn engine_reports(table: &IfdTable, id: u16) -> bool {
+    table.tag(id).is_some_and(tag_is_reported)
+        || table.variant_group(id).is_some_and(|group| {
+            group
+                .alternatives
+                .iter()
+                .any(|(_, tag)| alternative_is_reported(tag))
+        })
+}
+
+/// The walk's own filters for a plain tag (`ifd_engine::walk`): not
+/// `Unknown`, nothing omitted, not a `SubDirectory` edge.
+#[must_use]
+pub fn tag_is_reported(tag: &IfdTag) -> bool {
+    !tag.omitted.any() && tag.subdir.is_none() && !tag.flags.unknown
+}
+
+/// The same for a `_variants` alternative, whose `Condition` the walk
+/// resolves itself (`condition_resolved` clears `omitted.condition`).
+#[must_use]
+pub fn alternative_is_reported(tag: &IfdTag) -> bool {
+    let mut omitted = tag.omitted;
+    omitted.condition = false;
+    !omitted.any() && tag.subdir.is_none() && !tag.flags.unknown
+}
+
+/// Whether entry `id` of `table` declares `name`: the plain tag's name, or
+/// any alternative's. A replaying call site pairs an entry with a buffered
+/// engine row by this.
+#[must_use]
+pub fn declares(table: &IfdTable, id: u16, name: &str) -> bool {
+    table.tag(id).is_some_and(|tag| tag.name == name)
+        || table
+            .variant_group(id)
+            .is_some_and(|group| group.alternatives.iter().any(|(_, tag)| tag.name == name))
+}
+
 /// A table a live call site asks [`find_table`] for that the generator
 /// deliberately never emits.
 ///

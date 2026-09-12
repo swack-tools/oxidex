@@ -72,7 +72,7 @@
 use std::collections::HashMap;
 
 use crate::exiftool_tables::{
-    Ctx, Emitted, IfdDir, IfdTable, IfdTag, MemberValue, process_exif, read_ifd,
+    Ctx, Emitted, IfdDir, IfdTable, MemberValue, declares, engine_reports, process_exif, read_ifd,
 };
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::makernotes::shared::engine_value::engine_value_text;
@@ -328,40 +328,6 @@ pub(super) fn is_canon_main_row(row: &Emitted) -> bool {
     row.module == "Canon" && row.table == "Main" && row.group1 == "Canon"
 }
 
-/// Whether `id` declares `name`: the plain tag's name, or any alternative's.
-fn declares(table: &IfdTable, id: u16, name: &str) -> bool {
-    table.tag(id).is_some_and(|tag| tag.name == name)
-        || table
-            .variant_group(id)
-            .is_some_and(|group| group.alternatives.iter().any(|(_, tag)| tag.name == name))
-}
-
-/// Whether the generated table reports `id` at all: a plain tag the walk
-/// reports, or a `_variants` group with an alternative it reports.
-fn engine_reports(table: &IfdTable, id: u16) -> bool {
-    table.tag(id).is_some_and(tag_is_reported)
-        || table.variant_group(id).is_some_and(|group| {
-            group
-                .alternatives
-                .iter()
-                .any(|(_, tag)| alternative_is_reported(tag))
-        })
-}
-
-/// The walk's own filters for a plain tag (`ifd_engine::walk`): not
-/// `Unknown`, nothing omitted, not a `SubDirectory` edge.
-fn tag_is_reported(tag: &IfdTag) -> bool {
-    !tag.omitted.any() && tag.subdir.is_none() && !tag.flags.unknown
-}
-
-/// The same for a `_variants` alternative, whose `Condition` the walk
-/// resolves itself (`condition_resolved` clears `omitted.condition`).
-fn alternative_is_reported(tag: &IfdTag) -> bool {
-    let mut omitted = tag.omitted;
-    omitted.condition = false;
-    !omitted.any() && tag.subdir.is_none() && !tag.flags.unknown
-}
-
 /// `Condition => '$$self{Model} =~ /EOS D30\b/'` (Canon.pm:1286), 0x000c's
 /// first alternative -- the one the engine reports. The residual 0x000c arm
 /// defers to the engine exactly when this holds, and renders alternatives 2
@@ -392,7 +358,9 @@ pub(super) fn internal_serial_is_main_value(model: &str) -> bool {
 mod tests {
     use super::*;
     use crate::core::TagValue;
-    use crate::exiftool_tables::{find_ifd_table, find_table, first_match_ifd};
+    use crate::exiftool_tables::{
+        alternative_is_reported, find_ifd_table, find_table, first_match_ifd, tag_is_reported,
+    };
 
     fn canon_main() -> &'static IfdTable {
         find_ifd_table("Canon", "Main").expect("Canon::Main is generated")

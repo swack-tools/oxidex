@@ -51,10 +51,11 @@ const MAKERNOTE: u16 = 0x927C;
 ///     reproduces the reader's key exactly (including its "IFD:0xNNNN"
 ///     hex fallback for unregistered tags, e.g. "ExifIFD:0x927C" for a
 ///     MakerNote blob).
-///   - InteropIFD tags are additionally special-cased by
-///     `parse_interop_subifd` (`src/core/tiff_helpers.rs`) under a
-///     hard-coded "EXIF:" prefix with its own name table, distinct from
-///     `lookup_tag_name(tag_id, "InteropIFD")`.
+///   - InteropIFD tags: `parse_interop_subifd` (`src/core/tiff_helpers.rs`)
+///     keys every row `InteropIFD:<name>`, i.e. `lookup_tag_name(tag_id,
+///     "InteropIFD")`. Before decision D-1 of slice E-1 it keyed the DCF
+///     tags under a hard-coded "EXIF:" prefix with its own name table; that
+///     second candidate stays until slice E-D deletes `interop_tag_to_name`.
 /// Returns both candidate keys so the Added-tag loop can recognize a
 /// collision precisely instead of treating every key already present in
 /// `original_map` as carried.
@@ -711,6 +712,9 @@ pub fn plan_exif_write(
     // Reader keys that map back to an always-carried entry (Interop/IFD1/
     // MakerNote); see `carried_class_reader_keys`.
     let mut carried_reader_keys: Vec<String> = Vec::new();
+    // `(EXIF:<name>, InteropIFD:<name>)` for every raw-carried Interop entry
+    // with a DCF name; see the Added loop.
+    let mut interop_aliases: Vec<(String, String)> = Vec::new();
     // Every entry placed into the plan, with the value it stands for, so the
     // Added loop can tell a redundant duplicate from a dropped edit.
     let mut placed: Vec<PlacedEntry> = Vec::new();
@@ -751,6 +755,11 @@ pub fn plan_exif_write(
                         reader_key
                     )));
                 }
+            }
+            if entry.ifd == IfdKind::Interop
+                && let [native, alias] = reader_keys.as_slice()
+            {
+                interop_aliases.push((alias.clone(), native.clone()));
             }
             carried_reader_keys.extend(reader_keys);
             placed.push(PlacedEntry {
@@ -806,16 +815,58 @@ pub fn plan_exif_write(
         );
     }
 
+    // An edit to a raw-carried InteropIFD entry the reader surfaces under
+    // `InteropIFD:<name>` -- every Interop row since decision D-1 of slice
+    // E-1 (the DCF tags were `EXIF:`-keyed before, which the Added loop below
+    // visits) -- is an error, never a silent drop: `exif_family_keys` does
+    // not visit the `InteropIFD:` prefix.
+    for key in carried_reader_keys
+        .iter()
+        .filter(|key| key.starts_with("InteropIFD:"))
+    {
+        if let (Some(original_value), Some(value)) = (original_map.get(key), desired.get(key))
+            && value != original_value
+        {
+            return Err(ExifToolError::unsupported_format(format!(
+                "Editing tag '{}' is not yet supported: it belongs to an \
+                 unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
+                 writer always raw-carries",
+                key
+            )));
+        }
+    }
+
     // Added: desired EXIF-family keys not matched to any original entry
     for key in exif_family_keys(desired) {
         if consumed_keys.iter().any(|k| *k == key) {
             continue;
         }
+        // `EXIF:<name>` for a raw-carried Interop DCF entry is that entry
+        // under its family-0 spelling (pinned ExifTool 13.59 writes
+        // `-EXIF:InteropIndex=R03` to [InteropIFD]). Since decision D-1 of
+        // slice E-1 the reader surfaces it only as `InteropIFD:<name>`, so
+        // the carried check below no longer finds `EXIF:<name>` in
+        // `original_map`, and the key would fall through to the add path and
+        // plant a stray tag in IFD0 while the real entry stayed untouched.
+        // Compare it with the row the reader surfaced under either spelling
+        // instead: unchanged is the carry-over, anything else is refused.
+        if let Some((_, native)) = interop_aliases.iter().find(|(alias, _)| *alias == key) {
+            let value = desired.get(&key).unwrap();
+            if original_map.get(&key).or_else(|| original_map.get(native)) == Some(value) {
+                continue;
+            }
+            return Err(ExifToolError::unsupported_format(format!(
+                "Editing tag '{}' is not yet supported: it belongs to an \
+                 unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
+                 writer always raw-carries",
+                key
+            )));
+        }
         // Keys whose physical entry lives in an always-carried IFD class
         // (InteropIFD, IFD1, MakerNote — Design Rule: "unsurfaced classes")
         // are carried byte-for-byte above without ever being diffed against
         // `desired`. The reader can still surface some of them under a
-        // metadata-map key (e.g. "EXIF:InteropIndex", or a MakerNote blob's
+        // metadata-map key (e.g. "InteropIFD:InteropIndex", or a MakerNote blob's
         // "ExifIFD:0x927C" hex fallback). If the caller left such a key
         // unchanged, it's already handled by the carry-over. If the caller
         // genuinely changed it, editing that tag isn't supported by the
@@ -2289,11 +2340,11 @@ mod tests {
     }
 
     /// Loads the real Canon fixture, which has an actual InteropIFD whose
-    /// entries the reader surfaces under "EXIF:InteropIndex" /
-    /// "EXIF:InteropVersion" (see `parse_interop_subifd`). Builds
+    /// entries the reader surfaces under "InteropIFD:InteropIndex" /
+    /// "InteropIFD:InteropVersion" (see `parse_interop_subifd`). Builds
     /// `original_map` the same way `rewrite_jpeg_exif` does in production
     /// (the full JPEG reader), not the synthetic `scan_and_maps` helper,
-    /// since only the real reader surfaces the "EXIF:"-prefixed Interop keys.
+    /// since only the real reader surfaces the Interop keys.
     fn canon_scan_and_maps() -> (ExifScan, MetadataMap, Vec<u8>) {
         let bytes = std::fs::read(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -2309,7 +2360,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            original.contains_key("EXIF:InteropIndex"),
+            original.contains_key("InteropIFD:InteropIndex"),
             "fixture must surface an InteropIFD tag for this test to be meaningful"
         );
         (scan, original, tiff)
@@ -2342,18 +2393,72 @@ mod tests {
     fn plan_changed_interop_key_errors_instead_of_silently_dropping() {
         let (scan, original, _tiff) = canon_scan_and_maps();
         let mut desired = original.clone();
-        let original_value = original.get("EXIF:InteropIndex").unwrap().clone();
+        let original_value = original.get("InteropIFD:InteropIndex").unwrap().clone();
         let new_value = TagValue::new_string("R03 - DCF option file (Adobe RGB)");
         assert_ne!(
             original_value, new_value,
             "test setup must actually change the value"
         );
-        desired.insert("EXIF:InteropIndex", new_value);
+        desired.insert("InteropIFD:InteropIndex", new_value);
         let err = plan_exif_write(&scan, &original, &desired).unwrap_err();
         assert!(
             err.to_string().contains("InteropIFD") || err.to_string().contains("Interop"),
             "expected a clear error about unsupported Interop edits, got: {}",
             err
+        );
+    }
+
+    /// Review finding (E-1 D-1): the family-0 spelling of a carried Interop
+    /// DCF tag. Before D-1 the reader surfaced `EXIF:InteropIndex` and this
+    /// edit was refused; after it the reader surfaces only
+    /// `InteropIFD:InteropIndex`, and without the alias check
+    /// `-EXIF:InteropIndex=R03` reported success while planting a stray
+    /// 0x0001 in IFD0 ("Wrong IFD for 0x0001 InteropIndex" under the pinned
+    /// 13.59 `-validate`) and leaving the InteropIFD entry at THM. Same for
+    /// InteropVersion and RelatedImageWidth.
+    #[test]
+    fn plan_changed_interop_key_under_its_exif_spelling_errors_not_ifd0() {
+        let (scan, original, _tiff) = canon_scan_and_maps();
+        for (key, new_value) in [
+            (
+                "EXIF:InteropIndex",
+                TagValue::new_string("R03 - DCF option file (Adobe RGB)"),
+            ),
+            ("EXIF:InteropVersion", TagValue::new_string("0200")),
+            ("EXIF:RelatedImageWidth", TagValue::Integer(100)),
+        ] {
+            let native = key.replacen("EXIF:", "InteropIFD:", 1);
+            assert!(
+                original.get(key).is_none() && original.get(&native).is_some(),
+                "{key}: the reader surfaces the entry as {native} only"
+            );
+            assert_ne!(original.get(&native), Some(&new_value), "{key}");
+            let mut desired = original.clone();
+            desired.insert(key, new_value);
+            let err = plan_exif_write(&scan, &original, &desired).unwrap_err();
+            assert!(
+                err.to_string().contains("not yet supported") && err.to_string().contains(key),
+                "{key}: expected the carried-class refusal, got: {err}"
+            );
+        }
+        // The same value under the EXIF: spelling is the carry-over: no IFD0
+        // entry, every Interop entry carried.
+        let mut desired = original.clone();
+        desired.insert(
+            "EXIF:InteropIndex",
+            original.get("InteropIFD:InteropIndex").unwrap().clone(),
+        );
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        assert!(
+            !plan.ifd0.iter().any(|e| e.tag_id == 0x0001),
+            "no stray InteropIndex in IFD0"
+        );
+        assert_eq!(
+            plan.interop.len(),
+            scan.entries
+                .iter()
+                .filter(|e| e.ifd == IfdKind::Interop)
+                .count()
         );
     }
 
