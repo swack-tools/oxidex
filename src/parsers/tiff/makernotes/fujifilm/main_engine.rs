@@ -1,5 +1,5 @@
 //! `FujiFilm::Main` through the generated `IFD_FUJIFILM_MAIN` table and the
-//! IFD engine (slice I-6, landing 1).
+//! IFD engine (slice I-6; landing 2 deleted the hand arms it replaced).
 //!
 //! # What this module owns
 //!
@@ -17,9 +17,9 @@
 //!
 //! `FujifilmParser`'s hand loop inserts into one `HashMap<String, String>`
 //! in IFD entry order (last insert under a key wins -- ExifTool's rule for
-//! two tags of equal priority). With the engine on, that loop runs only the
-//! residual arms and the four hand sub-table decoders, and the engine rows
-//! are inserted after it, in emission order (= IFD entry order). That is
+//! two tags of equal priority). That loop runs only the residual arms and
+//! the four hand sub-table decoders, and the engine rows are inserted after
+//! it, in emission order (= IFD entry order). That is
 //! exact whenever no residual or sub-table row shares a key with an engine
 //! row that precedes it in the IFD:
 //!
@@ -55,7 +55,9 @@
 
 use std::collections::HashMap;
 
-use crate::exiftool_tables::{Ctx, Emitted, IfdDir, IfdTable, IfdTag, MemberValue, process_exif};
+#[cfg(test)]
+use crate::exiftool_tables::IfdTag;
+use crate::exiftool_tables::{Ctx, Emitted, IfdDir, IfdTable, MemberValue, process_exif};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::makernotes::shared::engine_value::engine_value_text;
 use crate::parsers::tiff::makernotes::shared::tag_priority::insert_low_priority;
@@ -89,18 +91,19 @@ pub(super) const FUJI_MAIN_RESIDUAL_IDS: &[u16] =
 ///   `sprintf('%s (0x%.4x)')`, FujiFilm.pm:861-870);
 /// * 0x4282 `FaceRecInfo` -- an edge (`ProcessFaceRec`) with no transcribed
 ///   layout (FujiFilm.pm:999).
+#[cfg(test)]
 pub(super) const FUJI_MAIN_UNSUPPLIED: &[u16] = &[0x1304, 0x1446, 0x4282];
 
-/// Whether `id`'s hand arm runs while the engine is on.
+/// Whether `id` is one of the residual ids `parse_note` reads by hand.
 pub(super) fn is_residual(id: u16) -> bool {
     FUJI_MAIN_RESIDUAL_IDS.binary_search(&id).is_ok()
 }
 
 /// Exif.pm:6463 -- the type codes `ProcessExif` reads: 1-13 and 129 (the
-/// Apple-only `int64u` exception cannot apply to a FujiFilm note). The hand
-/// loop applies it with the engine on, exactly as the engine's own walk
-/// does (`ifd_engine::accepted_type`): skip the entry, and abandon the
-/// directory when it is the first one (Exif.pm:6474-6477). This is what
+/// Apple-only `int64u` exception cannot apply to a FujiFilm note). The
+/// residual loop applies it exactly as the engine's own walk does
+/// (`ifd_engine::accepted_type`): skip the entry, and abandon the directory
+/// when it is the first one (Exif.pm:6474-6477). This is what
 /// keeps the all-zero padding entries of FinePixXP150's note (id 0, type 0)
 /// from overwriting its real 0x0000 `Version` with `""`.
 pub(super) fn entry_type_accepted(field_type: u16) -> bool {
@@ -161,26 +164,18 @@ fn insert_row(
 ///   0x1100 `AutoBracketing` X-T3 alternative reads it. `Make` is not
 ///   available to a `MakerNoteParser` and is not guessed at; its only reader,
 ///   0x1304, is withheld.
-/// * `hand_entries` is the hand walk's entry count, for the debug check that
-///   both walks see the same directory.
+///
+/// The residual walk in `parse_note` reads its entries with the same
+/// `read_ifd` the engine's walk uses, so both see one directory.
 pub(super) fn insert_rows(
     table: &'static IfdTable,
     data: &[u8],
     ifd_start: usize,
-    hand_entries: usize,
     model: Option<&str>,
     tags: &mut HashMap<String, String>,
     mut forms: Option<&mut HashMap<String, String>>,
 ) {
     let order = ByteOrder::LittleEndian.to_io_byte_order();
-    // Both walks require the whole entry array to fit (nom `count` in the
-    // hand walk, `read_ifd`'s fit rule); `read_ifd` also refuses a count of
-    // 0 or above 512, and then no engine row exists at all.
-    debug_assert!(
-        crate::exiftool_tables::read_ifd(data, ifd_start, order)
-            .is_none_or(|entries| entries.len() == hand_entries),
-        "the engine and the hand walk disagree on the FujiFilm::Main entry count"
-    );
     let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
     if let Some(model) = model.filter(|m| !m.is_empty()) {
         members.insert("Model", MemberValue::Str(model.to_string()));
@@ -230,6 +225,7 @@ pub(super) fn is_fuji_main_row(row: &Emitted) -> bool {
 
 /// Whether the generated table reports `id` at all: a plain tag the walk
 /// reports, or a `_variants` group with an alternative it reports.
+#[cfg(test)]
 fn engine_reports(table: &IfdTable, id: u16) -> bool {
     table.tag(id).is_some_and(tag_is_reported)
         || table.variant_group(id).is_some_and(|group| {
@@ -242,12 +238,14 @@ fn engine_reports(table: &IfdTable, id: u16) -> bool {
 
 /// The walk's own filters for a plain tag (`ifd_engine::walk`): not
 /// `Unknown`, nothing omitted, not a `SubDirectory` edge.
+#[cfg(test)]
 fn tag_is_reported(tag: &IfdTag) -> bool {
     !tag.omitted.any() && tag.subdir.is_none() && !tag.flags.unknown
 }
 
 /// The same for a `_variants` alternative, whose `Condition` the walk
 /// resolves itself (`condition_resolved` clears `omitted.condition`).
+#[cfg(test)]
 fn alternative_is_reported(tag: &IfdTag) -> bool {
     let mut omitted = tag.omitted;
     omitted.condition = false;
@@ -786,9 +784,10 @@ mod tests {
         assert_eq!(get(&forms, "FujiFilm:Contrast"), Some("256"));
     }
 
-    /// Test 7(f): with the engine on, the hand arms for ids `FujiFilm::Main`
-    /// does not declare (0x1039 `DriveMode`, 0xf001 `RawImageFullWidth`) are
-    /// unreachable.
+    /// Test 7(f): ids `FujiFilm::Main` does not declare (0x1039, which the
+    /// deleted hand table called `DriveMode`, and 0xf001, which it called
+    /// `RawImageFullWidth`) produce nothing: they are neither residual nor
+    /// engine rows.
     #[test]
     fn undeclared_hand_ids_are_skipped_with_the_engine_on() {
         assert!(
@@ -798,6 +797,120 @@ mod tests {
         let (tags, _) = parse(&le_note(&[short(0x1039, 1), long(0xf001, 4000)]), None);
         assert!(!tags.contains_key("FujiFilm:DriveMode"), "{tags:?}");
         assert!(!tags.contains_key("FujiFilm:RawImageFullWidth"), "{tags:?}");
+    }
+
+    /// The labels the deleted hand decoders' unit tests pinned (each written
+    /// there from ExifTool 13.59's own `PrintConv` hashes, and most of them
+    /// the fix for a label the hand table once got wrong), now read through
+    /// the parser and the generated table. A regeneration that loses or
+    /// re-spells one fails here; the real-file values are pinned by the
+    /// oracle carriers in `tests/fujifilm_main_ifd_table.rs`.
+    #[test]
+    fn the_labels_the_hand_decoder_tests_pinned_hold_on_the_engine() {
+        let cases: &[(u16, u32, &str, &str)] = &[
+            (0x1002, 0x0000, "WhiteBalance", "Auto"),
+            (0x1002, 0x0001, "WhiteBalance", "Auto (white priority)"),
+            (0x1002, 0x0002, "WhiteBalance", "Auto (ambiance priority)"),
+            (0x1002, 0x0100, "WhiteBalance", "Daylight"),
+            (0x1002, 0x0200, "WhiteBalance", "Cloudy"),
+            (0x1002, 0x0400, "WhiteBalance", "Incandescent"),
+            (0x1020, 0, "Macro", "Off"),
+            (0x1020, 1, "Macro", "On"),
+            (0x1021, 0, "FocusMode", "Auto"),
+            (0x1021, 1, "FocusMode", "Manual"),
+            (0x1031, 0x0000, "PictureMode", "Auto"),
+            (0x1031, 0x0001, "PictureMode", "Portrait"),
+            (0x1031, 0x0002, "PictureMode", "Landscape"),
+            (0x1031, 0x0006, "PictureMode", "Program AE"),
+            (0x1031, 0x0009, "PictureMode", "Beach & Snow"),
+            (0x1031, 0x0300, "PictureMode", "Manual"),
+            (0x1033, 0, "EXRAuto", "Auto"),
+            (0x1033, 1, "EXRAuto", "Manual"),
+            (0x1034, 0x100, "EXRMode", "HR (High Resolution)"),
+            (0x1034, 0x200, "EXRMode", "SN (Signal to Noise priority)"),
+            (0x1034, 0x300, "EXRMode", "DR (Dynamic Range priority)"),
+            (0x104d, 0, "CropMode", "n/a"),
+            (0x104d, 1, "CropMode", "Full-frame on GFX"),
+            (0x104d, 2, "CropMode", "Sports Finder Mode"),
+            (0x104d, 4, "CropMode", "Electronic Shutter 1.25x Crop"),
+            (0x104d, 8, "CropMode", "Digital Tele-Conv"),
+            (0x1050, 0, "ShutterType", "Mechanical"),
+            (0x1050, 1, "ShutterType", "Electronic"),
+            (0x1050, 2, "ShutterType", "Electronic (long shutter speed)"),
+            (0x1050, 3, "ShutterType", "Electronic Front Curtain"),
+            (0x1154, 1, "PanoramaDirection", "Right"),
+            (0x1154, 2, "PanoramaDirection", "Left"),
+            (0x1154, 3, "PanoramaDirection", "Up"),
+            (0x1154, 4, "PanoramaDirection", "Down"),
+            (0x1201, 0x10000, "AdvancedFilter", "Pop Color"),
+            (0x1201, 0x40000, "AdvancedFilter", "Miniature"),
+            (0x1201, 0x60003, "AdvancedFilter", "Partial Color Green"),
+            (0x1201, 0x130002, "AdvancedFilter", "Expired Film Neutral"),
+            (0x1210, 0x00, "ColorMode", "Standard"),
+            (0x1210, 0x10, "ColorMode", "Chrome"),
+            (0x1210, 0x30, "ColorMode", "B & W"),
+            (0x1300, 0, "BlurWarning", "None"),
+            (0x1300, 1, "BlurWarning", "Blur Warning"),
+            (0x1301, 0, "FocusWarning", "Good"),
+            (0x1301, 1, "FocusWarning", "Out of focus"),
+            (0x1302, 0, "ExposureWarning", "Good"),
+            (0x1302, 1, "ExposureWarning", "Bad exposure"),
+            (0x1400, 1, "DynamicRange", "Standard"),
+            (0x1400, 3, "DynamicRange", "Wide"),
+            (0x1401, 0x0000, "FilmMode", "F0/Standard (Provia)"),
+            (
+                0x1401,
+                0x0120,
+                "FilmMode",
+                "F1b/Studio Portrait Smooth Skin Tone (Astia)",
+            ),
+            (0x1401, 0x0200, "FilmMode", "F2/Fujichrome (Velvia)"),
+            (0x1401, 0x0600, "FilmMode", "Classic Chrome"),
+            (0x1401, 0x0700, "FilmMode", "Eterna"),
+            (0x1401, 0x0800, "FilmMode", "Classic Negative"),
+            (0x1401, 0x0A00, "FilmMode", "Nostalgic Neg"),
+            (0x1401, 0x0B00, "FilmMode", "Reala ACE"),
+            (0x1402, 0x000, "DynamicRangeSetting", "Auto"),
+            (0x1402, 0x001, "DynamicRangeSetting", "Manual"),
+            (0x1402, 0x100, "DynamicRangeSetting", "Standard (100%)"),
+            (0x1402, 0x201, "DynamicRangeSetting", "Wide2 (400%)"),
+            (0x1425, 0x100, "SceneRecognition", "Portrait Image"),
+            (0x1425, 0x200, "SceneRecognition", "Landscape Image"),
+            (0x1443, 0, "DRangePriority", "Auto"),
+            (0x1443, 1, "DRangePriority", "Fixed"),
+            (0x1444, 3, "DRangePriorityAuto", "Plus"),
+            (0x1445, 2, "DRangePriorityFixed", "Strong"),
+            (0x3803, 0x00, "VideoRecordingMode", "Normal"),
+            (0x3803, 0x10, "VideoRecordingMode", "F-log"),
+            (0x3803, 0x20, "VideoRecordingMode", "HLG"),
+            (0x3803, 0x30, "VideoRecordingMode", "F-log2"),
+            (0x3804, 0, "PeripheralLighting", "Off"),
+            (0x3804, 1, "PeripheralLighting", "On"),
+            (0x3806, 1, "VideoCompression", "Log GOP"),
+            (0x3806, 2, "VideoCompression", "All Intra"),
+        ];
+        let mut wrong = Vec::new();
+        for &(id, raw, name, want) in cases {
+            let entry = if raw > u32::from(u16::MAX) {
+                long(id, raw)
+            } else {
+                short(id, raw as u16)
+            };
+            let (tags, _) = parse(&le_note(&[entry]), None);
+            let key = format!("FujiFilm:{name}");
+            if get(&tags, &key) != Some(want) {
+                wrong.push(format!(
+                    "{id:#06x}={raw:#x}: {key} is {:?}, want {want:?}",
+                    get(&tags, &key)
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+
+        // 0x1304 is GEImageSize on GENERAL IMAGING bodies only (withheld),
+        // never the `DynamicRangeWarning` the hand table once invented.
+        let (tags, _) = parse(&le_note(&[short(0x1304, 1)]), None);
+        assert!(tags.is_empty(), "{tags:?}");
     }
 
     /// Test 7(h): the XP150 shape -- a real 0x0000 `undef[4]` `"0130"` first,

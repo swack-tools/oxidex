@@ -24,7 +24,11 @@ pub mod captureone; // Capture One migration complete (Batch 4, Task 4.2)
 pub mod nikoncapture;
 
 // Batch 1: Traditional Camera Manufacturers
-pub mod fujifilm; // Fujifilm migration (Batch 1, Task 1.4)
+// (no `fujifilm` registry: it was never called from anywhere but its own
+// tests, and its names diverged from ExifTool's -- `SerialNumber` for 0x0010,
+// `DriveMode` for 0x1039, which `%FujiFilm::Main` does not declare. It was
+// deleted with the hand `FujiFilm::Main` arms; `makernotes::fujifilm` reads
+// that table through the generated `IFD_FUJIFILM_MAIN`.)
 // (no `leica` registry: it duplicated the Leica MakerNote parser's own tag
 // dispatch under fabricated, non-ExifTool tag ids, was never called from
 // anywhere but its own tests, and has been deleted -- see `makernotes::leica`
@@ -90,7 +94,6 @@ pub mod scalado;
 pub use canon::canon_registry;
 
 // Batch 1 exports
-pub use fujifilm::fujifilm_registry;
 pub use olympus::olympus_registry;
 pub use panasonic::panasonic_registry;
 pub use pentax::pentax_registry;
