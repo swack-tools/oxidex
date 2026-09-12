@@ -13,10 +13,6 @@ use super::lookups::{CAMERA_TYPE2, EQUIPMENT_EXTENDER, EQUIPMENT_LENS_TYPE};
 // Shared PrintConv hashes
 // ===========================================================================
 
-static OFF_ON: &[(i64, &str)] = &[(0, "Off"), (1, "On")];
-static NO_YES: &[(i64, &str)] = &[(0, "No"), (1, "Yes")];
-static COLOR_SPACE: &[(i64, &str)] = &[(0, "sRGB"), (1, "Adobe RGB"), (2, "Pro Photo RGB")];
-
 /// `Olympus.pm` `%filters` -- shared by ArtFilter, MagicFilter and
 /// RawDevArtFilter.
 static FILTERS: &[(i64, &str)] = &[
@@ -144,45 +140,6 @@ fn print_extender(val: &OlyVal) -> Option<String> {
     })
 }
 
-/// Equipment 0x0205/0x0206/0x020A apertures: ExifTool's
-/// `ValueConv => '$val ? sqrt(2)**($val/256) : 0'` then `sprintf("%.1f")`.
-fn print_aperture(val: &OlyVal) -> Option<String> {
-    let v = val.first_int()?;
-    let f = if v == 0 {
-        0.0
-    } else {
-        2f64.sqrt().powf(v as f64 / 256.0)
-    };
-    Some(format!("{:.1}", f))
-}
-
-/// Equipment 0x1001 FlashModel PrintConv.
-static EQUIPMENT_FLASH_MODEL: &[(i64, &str)] = &[
-    (0, "None"),
-    (1, "FL-20"),
-    (2, "FL-50"),
-    (3, "RF-11"),
-    (4, "TF-22"),
-    (5, "FL-36"),
-    (6, "FL-50R"),
-    (7, "FL-36R"),
-    (9, "FL-14"),
-    (11, "FL-600R"),
-    (13, "FL-LM3"),
-    (15, "FL-900R"),
-];
-
-/// Equipment 0x020B LensProperties: ExifTool prints it as `0x%x`.
-fn print_hex(val: &OlyVal) -> Option<String> {
-    let v = val.first_int()?;
-    Some(format!("0x{:x}", v))
-}
-
-/// `"$val mm"`.
-fn print_mm(val: &OlyVal) -> Option<String> {
-    Some(format!("{} mm", val.print_raw()))
-}
-
 /// CameraSettings 0x0405/0x0406: ExifTool prints all-`undef` rationals as
 /// `n/a` (or `n/a (x4)` for four of them) and leaves anything else raw.
 fn print_flash_strength(val: &OlyVal) -> Option<String> {
@@ -210,24 +167,6 @@ fn print_manometer_reading(val: &OlyVal) -> Option<String> {
         super::ifd::fmt_g15(v[0] as f64 / 10.0),
         super::ifd::fmt_g15(v[1] as f64 / 10.0)
     ))
-}
-
-/// CameraSettings 0x0900 ManometerPressure: tenths of a kPa.
-fn print_manometer_pressure(val: &OlyVal) -> Option<String> {
-    let v = val.first_int()?;
-    Some(format!("{} kPa", super::ifd::fmt_g15(v as f64 / 10.0)))
-}
-
-/// CameraSettings 0x0908 DateTimeUTC: stored `YYYY:MM:DD HH:MM:SS`, printed
-/// unchanged by `ConvertDateTime` in the default (no -d) configuration.
-fn print_datetime(val: &OlyVal) -> Option<String> {
-    let s = val.as_string()?;
-    let s = s.trim_end_matches(|c: char| c == '\0' || c.is_whitespace());
-    if s.is_empty() {
-        None
-    } else {
-        Some(s.to_string())
-    }
 }
 
 /// Main 0x0200 SpecialMode: three values -- mode, sequence number, panorama
@@ -267,23 +206,6 @@ fn print_digital_zoom(val: &OlyVal) -> Option<String> {
     } else {
         format!("{}.0", raw)
     })
-}
-
-/// Main 0x1001 ISOValue: `100 * 2 ** ($val - 5)` rounded to two decimals.
-fn print_iso_value(val: &OlyVal) -> Option<String> {
-    let v = match val {
-        OlyVal::Rat(r) => {
-            let (n, d) = *r.first()?;
-            if d == 0 {
-                return None;
-            }
-            n as f64 / d as f64
-        }
-        OlyVal::Int(i) => *i.first()? as f64,
-        _ => return None,
-    };
-    let iso = 100.0 * 2f64.powf(v - 5.0);
-    Some(super::ifd::fmt_g15((iso * 100.0 + 0.5).floor() / 100.0))
 }
 
 /// FocusInfo 0x1209 ManualFlash: `Off`, or `On (1/N strength)`.
@@ -443,106 +365,6 @@ fn print_sensor_temperature_multi(val: &OlyVal) -> Option<String> {
 }
 
 // ===========================================================================
-// Olympus::Main
-// ===========================================================================
-
-pub static MAIN: &[TagDef] = &[
-    TagDef::func(0x0200, "SpecialMode", print_special_mode),
-    TagDef::lookup(
-        0x0202,
-        "Macro",
-        &[(0, "Off"), (1, "On"), (2, "Super Macro")],
-    ),
-    TagDef::lookup(0x0203, "BWMode", &[(0, "Off"), (1, "On"), (6, "(none)")]),
-    TagDef::func(0x0204, "DigitalZoom", print_digital_zoom),
-    TagDef::func(0x0205, "FocalPlaneDiagonal", print_mm),
-    TagDef::raw(0x0206, "LensDistortionParams"),
-    TagDef::text(0x0209, "CameraID"),
-    TagDef::raw(0x020B, "EpsonImageWidth"),
-    TagDef::raw(0x020C, "EpsonImageHeight"),
-    TagDef::text(0x020D, "EpsonSoftware"),
-    TagDef::binary(0x0280, "PreviewImage"),
-    TagDef::raw(0x0300, "PreCaptureFrames"),
-    TagDef::raw(0x0301, "WhiteBoard"),
-    TagDef::lookup(
-        0x0302,
-        "OneTouchWB",
-        &[(0, "Off"), (1, "On"), (2, "On (Preset)")],
-    ),
-    TagDef::raw(0x0303, "WhiteBalanceBracket"),
-    TagDef::raw(0x0304, "WhiteBalanceBias"),
-    TagDef::binary(0x0F00, "DataDump"),
-    TagDef::binary(0x0F01, "DataDump2"),
-    TagDef::raw(0x0F04, "ZoomedPreviewStart"),
-    TagDef::raw(0x0F05, "ZoomedPreviewLength"),
-    TagDef::raw(0x0F06, "ZoomedPreviewSize"),
-    TagDef::func(0x1001, "ISOValue", print_iso_value),
-    TagDef::raw(0x1003, "BrightnessValue"),
-    TagDef::lookup(0x1004, "FlashMode", &[(2, "On"), (3, "Off")]),
-    TagDef::lookup(
-        0x1005,
-        "FlashDevice",
-        &[
-            (0, "None"),
-            (1, "Internal"),
-            (4, "External"),
-            (5, "Internal + External"),
-        ],
-    ),
-    TagDef::raw(0x1006, "ExposureCompensation"),
-    TagDef::raw(0x1008, "LensTemperature"),
-    TagDef::raw(0x1009, "LightCondition"),
-    TagDef::lookup(0x100A, "FocusRange", &[(0, "Normal"), (1, "Macro")]),
-    TagDef::lookup(0x100B, "FocusMode", &[(0, "Auto"), (1, "Manual")]),
-    TagDef::func(0x100C, "ManualFocusDistance", print_mm),
-    TagDef::raw(0x100D, "ZoomStepCount"),
-    TagDef::raw(0x100E, "FocusStepCount"),
-    TagDef::lookup(
-        0x100F,
-        "Sharpness",
-        &[(0, "Normal"), (1, "Hard"), (2, "Soft")],
-    ),
-    TagDef::raw(0x1010, "FlashChargeLevel"),
-    TagDef::typed(0x1011, "ColorMatrix", ftype::TIFF_SSHORT),
-    TagDef::raw(0x1012, "BlackLevel"),
-    TagDef::raw(0x1019, "ColorMatrixNumber"),
-    TagDef::raw(0x1024, "InternalFlashTable"),
-    TagDef::raw(0x1025, "ExternalFlashGValue"),
-    TagDef::lookup(0x1026, "ExternalFlashBounce", NO_YES),
-    TagDef::raw(0x1027, "ExternalFlashZoom"),
-    TagDef::raw(0x1028, "ExternalFlashMode"),
-    TagDef::lookup(
-        0x1029,
-        "Contrast",
-        &[(0, "High"), (1, "Normal"), (2, "Low")],
-    ),
-    TagDef::raw(0x102A, "SharpnessFactor"),
-    TagDef::raw(0x102B, "ColorControl"),
-    TagDef::raw(0x102C, "ValidBits"),
-    TagDef::raw(0x102D, "CoringFilter"),
-    TagDef::raw(0x102E, "OlympusImageWidth"),
-    TagDef::raw(0x102F, "OlympusImageHeight"),
-    TagDef::raw(0x1030, "SceneDetect"),
-    TagDef::raw(0x1034, "CompressionRatio"),
-    TagDef::lookup(0x1035, "PreviewImageValid", NO_YES),
-    // `IsOffset` -- the walk yields the stored number and the caller adds the
-    // MakerNote's base; see `olympus::absolutise_preview_image_start`.
-    TagDef::raw(0x1036, "PreviewImageStart"),
-    TagDef::raw(0x1038, "AFResult"),
-    TagDef::lookup(
-        0x1039,
-        "CCDScanMode",
-        &[(0, "Interlaced"), (1, "Progressive")],
-    ),
-    TagDef::lookup(0x103A, "NoiseReduction", OFF_ON),
-    TagDef::raw(0x103B, "FocusStepInfinity"),
-    TagDef::raw(0x103C, "FocusStepNear"),
-    TagDef::raw(0x103D, "LightValueCenter"),
-    TagDef::raw(0x103E, "LightValuePeriphery"),
-    TagDef::raw(0x103F, "FieldCount"),
-];
-
-// ===========================================================================
 // Olympus::Main -- the rows the generated table cannot produce (slice I-2)
 // ===========================================================================
 //
@@ -652,47 +474,6 @@ pub static ENGINE_MISRENDERS: &[u16] = &[];
 pub static MAIN_INFO: &[TagDef] = &[TagDef::raw(0x0104, "BodyFirmwareVersion")];
 
 // ===========================================================================
-// Olympus::Equipment (0x2010)
-// ===========================================================================
-
-pub static EQUIPMENT: &[TagDef] = &[
-    TagDef::text(0x0000, "EquipmentVersion"),
-    TagDef::str_lookup(0x0100, "CameraType2", CAMERA_TYPE2),
-    TagDef::text_trim(0x0101, "SerialNumber"),
-    TagDef::text(0x0102, "InternalSerialNumber"),
-    TagDef::func(0x0103, "FocalPlaneDiagonal", print_mm),
-    TagDef::func(0x0104, "BodyFirmwareVersion", print_firmware),
-    TagDef::func(0x0201, "LensType", print_lens_type),
-    TagDef::text(0x0202, "LensSerialNumber"),
-    TagDef::text(0x0203, "LensModel"),
-    TagDef::func(0x0204, "LensFirmwareVersion", print_firmware),
-    TagDef::func(0x0205, "MaxApertureAtMinFocal", print_aperture),
-    TagDef::func(0x0206, "MaxApertureAtMaxFocal", print_aperture),
-    TagDef::raw(0x0207, "MinFocalLength"),
-    TagDef::raw(0x0208, "MaxFocalLength"),
-    TagDef::func(0x020A, "MaxAperture", print_aperture),
-    TagDef::func(0x020B, "LensProperties", print_hex),
-    TagDef::func(0x0301, "Extender", print_extender),
-    TagDef::text(0x0302, "ExtenderSerialNumber"),
-    TagDef::text(0x0303, "ExtenderModel"),
-    TagDef::func(0x0304, "ExtenderFirmwareVersion", print_firmware),
-    TagDef::text(0x0403, "ConversionLens"),
-    TagDef::lookup(
-        0x1000,
-        "FlashType",
-        &[
-            (0, "None"),
-            (2, "Simple E-System"),
-            (3, "E-System"),
-            (4, "E-System (body powered)"),
-        ],
-    ),
-    TagDef::lookup(0x1001, "FlashModel", EQUIPMENT_FLASH_MODEL),
-    TagDef::func(0x1002, "FlashFirmwareVersion", print_firmware),
-    TagDef::text(0x1003, "FlashSerialNumber"),
-];
-
-// ===========================================================================
 // Olympus::Equipment -- the rows the generated table cannot produce (I-3)
 // ===========================================================================
 //
@@ -768,15 +549,6 @@ pub static EQUIPMENT_ENGINE_MISRENDERS: &[u16] = &[];
 // Olympus::CameraSettings (0x2020)
 // ===========================================================================
 
-static CS_METERING: &[(i64, &str)] = &[
-    (2, "Center-weighted average"),
-    (3, "Spot"),
-    (5, "ESP"),
-    (261, "Pattern+AF"),
-    (515, "Spot+Highlight control"),
-    (1027, "Spot+Shadow control"),
-];
-
 static CS_FOCUS_MODE_1: &[(i64, &str)] = &[
     (0, "Single AF"),
     (1, "Sequential shooting AF"),
@@ -795,113 +567,6 @@ static CS_FOCUS_MODE_BITS: &[(u32, &str)] = &[
     (7, "Live View Magnification Frame"),
     (8, "AF sensor"),
     (9, "Starry Sky AF"),
-];
-
-static CS_FLASH_MODE_BITS: &[(u32, &str)] = &[
-    (0, "On"),
-    (1, "Fill-in"),
-    (2, "Red-eye"),
-    (3, "Slow-sync"),
-    (4, "Forced On"),
-    (5, "2nd Curtain"),
-];
-
-static CS_NOISE_REDUCTION_BITS: &[(u32, &str)] = &[
-    (0, "Noise Reduction"),
-    (1, "Noise Filter"),
-    (2, "Noise Filter (ISO Boost)"),
-    (3, "Auto"),
-];
-
-static CS_WHITE_BALANCE2: &[(i64, &str)] = &[
-    (0, "Auto"),
-    (1, "Auto (Keep Warm Color Off)"),
-    (16, "7500K (Fine Weather with Shade)"),
-    (17, "6000K (Cloudy)"),
-    (18, "5300K (Fine Weather)"),
-    (20, "3000K (Tungsten light)"),
-    (21, "3600K (Tungsten light-like)"),
-    (22, "Auto Setup"),
-    (23, "5500K (Flash)"),
-    (33, "6600K (Daylight fluorescent)"),
-    (34, "4500K (Neutral white fluorescent)"),
-    (35, "4000K (Cool white fluorescent)"),
-    (36, "White Fluorescent"),
-    (48, "3600K (Tungsten light-like)"),
-    (67, "Underwater"),
-    (256, "One Touch WB 1"),
-    (257, "One Touch WB 2"),
-    (258, "One Touch WB 3"),
-    (259, "One Touch WB 4"),
-    (512, "Custom WB 1"),
-    (513, "Custom WB 2"),
-    (514, "Custom WB 3"),
-    (515, "Custom WB 4"),
-];
-
-static CS_SCENE_MODE: &[(i64, &str)] = &[
-    (0, "Standard"),
-    (6, "Auto"),
-    (7, "Sport"),
-    (8, "Portrait"),
-    (9, "Landscape+Portrait"),
-    (10, "Landscape"),
-    (11, "Night Scene"),
-    (12, "Self Portrait"),
-    (13, "Panorama"),
-    (14, "2 in 1"),
-    (15, "Movie"),
-    (16, "Landscape+Portrait"),
-    (17, "Night+Portrait"),
-    (18, "Indoor"),
-    (19, "Fireworks"),
-    (20, "Sunset"),
-    (21, "Beauty Skin"),
-    (22, "Macro"),
-    (23, "Super Macro"),
-    (24, "Food"),
-    (25, "Documents"),
-    (26, "Museum"),
-    (27, "Shoot & Select"),
-    (28, "Beach & Snow"),
-    (29, "Self Protrait+Timer"),
-    (30, "Candle"),
-    (31, "Available Light"),
-    (32, "Behind Glass"),
-    (33, "My Mode"),
-    (34, "Pet"),
-    (35, "Underwater Wide1"),
-    (36, "Underwater Macro"),
-    (37, "Shoot & Select1"),
-    (38, "Shoot & Select2"),
-    (39, "High Key"),
-    (40, "Digital Image Stabilization"),
-    (41, "Auction"),
-    (42, "Beach"),
-    (43, "Snow"),
-    (44, "Underwater Wide2"),
-    (45, "Low Key"),
-    (46, "Children"),
-    (47, "Vivid"),
-    (48, "Nature Macro"),
-    (49, "Underwater Snapshot"),
-    (50, "Shooting Guide"),
-    (54, "Face Portrait"),
-    (57, "Bulb"),
-    (59, "Smile Shot"),
-    (60, "Quick Shutter"),
-    (63, "Slow Shutter"),
-    (64, "Bird Watching"),
-    (65, "Multiple Exposure"),
-    (66, "e-Portrait"),
-    (67, "Soft Background Shot"),
-    (142, "Hand-held Starlight"),
-    (154, "HDR"),
-    (197, "Panning"),
-    (203, "Light Trails"),
-    (204, "Backlight HDR"),
-    (205, "Silent"),
-    (206, "Multi Focus Shot"),
 ];
 
 static CS_PICTURE_MODE: &[(i64, &str)] = &[
@@ -923,39 +588,6 @@ static CS_PICTURE_MODE: &[(i64, &str)] = &[
     (18, "Monochrome Profile 4"),
     (256, "Monotone"),
     (512, "Sepia"),
-];
-
-static CS_BW_FILTER: &[(i64, &str)] = &[
-    (0, "n/a"),
-    (1, "Neutral"),
-    (2, "Yellow"),
-    (3, "Orange"),
-    (4, "Red"),
-    (5, "Green"),
-];
-
-static CS_PICTURE_TONE: &[(i64, &str)] = &[
-    (0, "n/a"),
-    (1, "Neutral"),
-    (2, "Sepia"),
-    (3, "Blue"),
-    (4, "Purple"),
-    (5, "Green"),
-];
-
-static CS_NOISE_FILTER: &[(&str, &str)] = &[
-    ("-1 -2 1", "Low"),
-    ("-2 -2 1", "Off"),
-    ("0 -2 1", "Standard"),
-    ("0 0 0", "n/a"),
-    ("1 -2 1", "High"),
-];
-
-static CS_PICTURE_MODE_EFFECT: &[(&str, &str)] = &[
-    ("-1 -1 1", "Low"),
-    ("0 -1 1", "Standard"),
-    ("0 0 0", "n/a"),
-    ("1 -1 1", "High"),
 ];
 
 static CS_GRADATION_HEAD: &[(&str, &str)] = &[
@@ -1134,261 +766,6 @@ static CS_FLASH_CONTROL_MODE_LIST: &[ElemConv] = &[ElemConv::Map(&[
     (2, "Auto"),
     (3, "Manual"),
 ])];
-
-pub static CAMERA_SETTINGS: &[TagDef] = &[
-    TagDef::text(0x0000, "CameraSettingsVersion"),
-    TagDef::lookup(0x0100, "PreviewImageValid", NO_YES),
-    // `IsOffset` -- the walk yields the stored number and the caller adds the
-    // MakerNote's base; see `olympus::absolutise_preview_image_start`.
-    TagDef::raw(0x0101, "PreviewImageStart"),
-    TagDef::raw(0x0102, "PreviewImageLength"),
-    TagDef::lookup(
-        0x0200,
-        "ExposureMode",
-        &[
-            (1, "Manual"),
-            (2, "Program"),
-            (3, "Aperture-priority AE"),
-            (4, "Shutter speed priority AE"),
-            (5, "Program-shift"),
-        ],
-    ),
-    TagDef::lookup(0x0201, "AELock", OFF_ON),
-    TagDef::lookup(0x0202, "MeteringMode", CS_METERING),
-    TagDef::raw(0x0203, "ExposureShift"),
-    TagDef::lookup(0x0204, "NDFilter", OFF_ON),
-    TagDef::lookup(
-        0x0300,
-        "MacroMode",
-        &[(0, "Off"), (1, "On"), (2, "Super Macro")],
-    ),
-    TagDef {
-        id: 0x0301,
-        name: "FocusMode",
-        force_type: None,
-        conv: Conv::List(CS_FOCUS_MODE_LIST),
-    },
-    TagDef {
-        id: 0x0302,
-        name: "FocusProcess",
-        force_type: None,
-        conv: Conv::List(CS_FOCUS_PROCESS_LIST),
-    },
-    TagDef::lookup(0x0303, "AFSearch", &[(0, "Not Ready"), (1, "Ready")]),
-    TagDef::func(0x0304, "AFAreas", print_af_areas),
-    TagDef::func(0x0305, "AFPointSelected", print_af_point_selected),
-    TagDef::lookup(0x0306, "AFFineTune", OFF_ON),
-    TagDef::raw(0x0307, "AFFineTuneAdj"),
-    TagDef::raw(0x0308, "FocusBracketStepSize"),
-    TagDef::lookup(
-        0x0309,
-        "AISubjectTrackingMode",
-        &[
-            (0, "Off"),
-            (256, "Motorsports; Object Not Found"),
-            (257, "Motorsports; Racing Car Found"),
-            (258, "Motorsports; Car Found"),
-            (259, "Motorsports; Motorcyle Found"),
-            (512, "Airplanes; Object Not Found"),
-            (513, "Airplanes; Passenger/Transport Plane Found"),
-            (514, "Airplanes; Small Plane/Fighter Jet Found"),
-            (515, "Airplanes; Helicopter Found"),
-            (768, "Trains; Object Not Found"),
-            (769, "Trains; Object Found"),
-            (1024, "Birds; Object Not Found"),
-            (1025, "Birds; Object Found"),
-            (1280, "Dogs & Cats; Object Not Found"),
-            (1281, "Dogs & Cats; Object Found"),
-            (1536, "Human; Object Not Found"),
-            (1537, "Human; Object Found"),
-        ],
-    ),
-    TagDef {
-        id: 0x0400,
-        name: "FlashMode",
-        force_type: None,
-        conv: Conv::Bitmask {
-            map: &[(0, "Off")],
-            bits: CS_FLASH_MODE_BITS,
-        },
-    },
-    TagDef::raw(0x0401, "FlashExposureComp"),
-    TagDef::lookup(
-        0x0403,
-        "FlashRemoteControl",
-        &[
-            (0, "Off"),
-            (1, "Channel 1, Low"),
-            (2, "Channel 2, Low"),
-            (3, "Channel 3, Low"),
-            (4, "Channel 4, Low"),
-            (9, "Channel 1, Mid"),
-            (10, "Channel 2, Mid"),
-            (11, "Channel 3, Mid"),
-            (12, "Channel 4, Mid"),
-            (17, "Channel 1, High"),
-            (18, "Channel 2, High"),
-            (19, "Channel 3, High"),
-            (20, "Channel 4, High"),
-        ],
-    ),
-    TagDef {
-        id: 0x0404,
-        name: "FlashControlMode",
-        force_type: None,
-        conv: Conv::List(CS_FLASH_CONTROL_MODE_LIST),
-    },
-    TagDef::func(0x0405, "FlashIntensity", print_flash_strength),
-    TagDef::func(0x0406, "ManualFlashStrength", print_flash_strength),
-    TagDef::lookup(0x0500, "WhiteBalance2", CS_WHITE_BALANCE2),
-    TagDef::func(0x0501, "WhiteBalanceTemperature", |v| {
-        let n = v.first_int()?;
-        Some(if n == 0 {
-            "Auto".to_string()
-        } else {
-            n.to_string()
-        })
-    }),
-    TagDef::raw(0x0502, "WhiteBalanceBracket"),
-    TagDef::func(0x0503, "CustomSaturation", print_min_max),
-    TagDef::lookup(
-        0x0504,
-        "ModifiedSaturation",
-        &[
-            (0, "Off"),
-            (1, "CM1 (Red Enhance)"),
-            (2, "CM2 (Green Enhance)"),
-            (3, "CM3 (Blue Enhance)"),
-            (4, "CM4 (Skin Tones)"),
-        ],
-    ),
-    TagDef::func(0x0505, "ContrastSetting", print_min_max),
-    TagDef::func(0x0506, "SharpnessSetting", print_min_max),
-    TagDef::lookup(0x0507, "ColorSpace", COLOR_SPACE),
-    TagDef::lookup(0x0509, "SceneMode", CS_SCENE_MODE),
-    TagDef {
-        id: 0x050A,
-        name: "NoiseReduction",
-        force_type: None,
-        conv: Conv::Bitmask {
-            map: &[(0, "(none)")],
-            bits: CS_NOISE_REDUCTION_BITS,
-        },
-    },
-    TagDef::lookup(0x050B, "DistortionCorrection", OFF_ON),
-    TagDef::lookup(0x050C, "ShadingCompensation", OFF_ON),
-    TagDef::raw(0x050D, "CompressionFactor"),
-    TagDef {
-        id: 0x050F,
-        name: "Gradation",
-        force_type: None,
-        conv: Conv::Relist {
-            group: 3,
-            convs: CS_GRADATION_CONVS,
-        },
-    },
-    TagDef {
-        id: 0x0520,
-        name: "PictureMode",
-        force_type: None,
-        conv: Conv::List(CS_PICTURE_MODE_LIST),
-    },
-    TagDef::func(0x0521, "PictureModeSaturation", print_min_max),
-    TagDef::func(0x0523, "PictureModeContrast", print_min_max),
-    TagDef::func(0x0524, "PictureModeSharpness", print_min_max),
-    TagDef::lookup(0x0525, "PictureModeBWFilter", CS_BW_FILTER),
-    TagDef::lookup(0x0526, "PictureModeTone", CS_PICTURE_TONE),
-    TagDef::list_lookup(0x0527, "NoiseFilter", CS_NOISE_FILTER),
-    TagDef {
-        id: 0x0529,
-        name: "ArtFilter",
-        force_type: None,
-        conv: Conv::List(CS_ART_FILTER_LIST),
-    },
-    TagDef {
-        id: 0x052C,
-        name: "MagicFilter",
-        force_type: None,
-        conv: Conv::List(CS_ART_FILTER_LIST),
-    },
-    TagDef::list_lookup(0x052D, "PictureModeEffect", CS_PICTURE_MODE_EFFECT),
-    TagDef {
-        id: 0x052E,
-        name: "ToneLevel",
-        force_type: None,
-        conv: Conv::List(CS_TONE_LEVEL_LIST),
-    },
-    TagDef {
-        id: 0x052F,
-        name: "ArtFilterEffect",
-        force_type: None,
-        conv: Conv::List(CS_ART_FILTER_EFFECT_LIST),
-    },
-    TagDef {
-        id: 0x0532,
-        name: "ColorCreatorEffect",
-        force_type: None,
-        conv: Conv::List(CS_COLOR_CREATOR_LIST),
-    },
-    TagDef {
-        id: 0x0537,
-        name: "MonochromeProfileSettings",
-        force_type: None,
-        conv: Conv::List(CS_MONO_PROFILE_LIST),
-    },
-    TagDef::lookup(
-        0x0538,
-        "FilmGrainEffect",
-        &[(0, "Off"), (1, "Low"), (2, "Medium"), (3, "High")],
-    ),
-    TagDef {
-        id: 0x0539,
-        name: "ColorProfileSettings",
-        force_type: None,
-        conv: Conv::List(CS_COLOR_PROFILE_LIST),
-    },
-    TagDef::raw(0x053A, "MonochromeVignetting"),
-    TagDef::lookup(
-        0x053B,
-        "MonochromeColor",
-        &[
-            (0, "(none)"),
-            (1, "Normal"),
-            (2, "Sepia"),
-            (3, "Blue"),
-            (4, "Purple"),
-            (5, "Green"),
-        ],
-    ),
-    TagDef::func(0x0600, "DriveMode", print_drive_mode),
-    TagDef::func(0x0601, "PanoramaMode", print_panorama_mode),
-    TagDef::lookup(
-        0x0603,
-        "ImageQuality2",
-        &[(1, "SQ"), (2, "HQ"), (3, "SHQ"), (4, "RAW"), (5, "SQ (5)")],
-    ),
-    TagDef::lookup(
-        0x0604,
-        "ImageStabilization",
-        &[
-            (0, "Off"),
-            (1, "On, S-IS1 (All Direction Shake IS)"),
-            (2, "On, S-IS2 (Vertical Shake IS)"),
-            (3, "On, S-IS3 (Horizontal Shake IS)"),
-            (4, "On, S-IS Auto"),
-        ],
-    ),
-    TagDef {
-        id: 0x0821,
-        name: "ISOAutoSettings",
-        force_type: None,
-        conv: Conv::List(CS_ISO_AUTO_SETTINGS_LIST),
-    },
-    TagDef::func(0x0900, "ManometerPressure", print_manometer_pressure),
-    TagDef::func(0x0901, "ManometerReading", print_manometer_reading),
-    TagDef::lookup(0x0902, "ExtendedWBDetect", OFF_ON),
-    TagDef::func(0x0908, "DateTimeUTC", print_datetime),
-];
 
 // ===========================================================================
 // Olympus::CameraSettings -- the rows the generated table cannot produce (I-3)
@@ -1575,72 +952,6 @@ pub static CAMERA_SETTINGS_ENGINE_MISRENDERS: &[u16] = &[];
 // Olympus::RawDevelopment (0x2030)
 // ===========================================================================
 
-static RD_NOISE_REDUCTION_BITS: &[(u32, &str)] = &[
-    (0, "Noise Reduction"),
-    (1, "Noise Filter"),
-    (2, "Noise Filter (ISO Boost)"),
-];
-
-pub static RAW_DEVELOPMENT: &[TagDef] = &[
-    TagDef::text(0x0000, "RawDevVersion"),
-    TagDef::raw(0x0100, "RawDevExposureBiasValue"),
-    TagDef::raw(0x0101, "RawDevWhiteBalanceValue"),
-    TagDef::raw(0x0102, "RawDevWBFineAdjustment"),
-    TagDef::raw(0x0103, "RawDevGrayPoint"),
-    TagDef::raw(0x0104, "RawDevSaturationEmphasis"),
-    TagDef::raw(0x0105, "RawDevMemoryColorEmphasis"),
-    TagDef::raw(0x0106, "RawDevContrastValue"),
-    TagDef::raw(0x0107, "RawDevSharpnessValue"),
-    TagDef::lookup(0x0108, "RawDevColorSpace", COLOR_SPACE),
-    TagDef::lookup(
-        0x0109,
-        "RawDevEngine",
-        &[
-            (0, "High Speed"),
-            (1, "High Function"),
-            (2, "Advanced High Speed"),
-            (3, "Advanced High Function"),
-        ],
-    ),
-    TagDef {
-        id: 0x010A,
-        name: "RawDevNoiseReduction",
-        force_type: None,
-        conv: Conv::Bitmask {
-            map: &[(0, "(none)")],
-            bits: RD_NOISE_REDUCTION_BITS,
-        },
-    },
-    TagDef::lookup(
-        0x010B,
-        "RawDevEditStatus",
-        &[
-            (0, "Original"),
-            (1, "Edited (Landscape)"),
-            (6, "Edited (Portrait)"),
-            (8, "Edited (Portrait)"),
-        ],
-    ),
-    TagDef {
-        id: 0x010C,
-        name: "RawDevSettings",
-        force_type: None,
-        conv: Conv::Bitmask {
-            map: &[(0, "(none)")],
-            bits: &[
-                (0, "WB Color Temp"),
-                (1, "WB Gray Point"),
-                (2, "Saturation"),
-                (3, "Contrast"),
-                (4, "Sharpness"),
-                (5, "Color Space"),
-                (6, "High Function"),
-                (7, "Noise Reduction"),
-            ],
-        },
-    },
-];
-
 // ===========================================================================
 // Olympus::RawDevelopment -- the rows the generated table cannot produce (I-3)
 // ===========================================================================
@@ -1660,88 +971,6 @@ pub static RAW_DEVELOPMENT_RESIDUAL: &[TagDef] = &[TagDef::text(0x0000, "RawDevV
 
 /// No `RAW_DEVELOPMENT_RESIDUAL` row overrides an engine rendering.
 pub static RAW_DEVELOPMENT_ENGINE_MISRENDERS: &[u16] = &[];
-
-// ===========================================================================
-// Olympus::RawDevelopment2 (0x2031)
-// ===========================================================================
-
-pub static RAW_DEVELOPMENT2: &[TagDef] = &[
-    TagDef::text(0x0000, "RawDevVersion"),
-    TagDef::raw(0x0100, "RawDevExposureBiasValue"),
-    TagDef::lookup(
-        0x0101,
-        "RawDevWhiteBalance",
-        &[(1, "Color Temperature"), (2, "Gray Point")],
-    ),
-    TagDef::raw(0x0102, "RawDevWhiteBalanceValue"),
-    TagDef::raw(0x0103, "RawDevWBFineAdjustment"),
-    TagDef::raw(0x0104, "RawDevGrayPoint"),
-    TagDef::raw(0x0105, "RawDevContrastValue"),
-    TagDef::raw(0x0106, "RawDevSharpnessValue"),
-    TagDef::raw(0x0107, "RawDevSaturationEmphasis"),
-    TagDef::raw(0x0108, "RawDevMemoryColorEmphasis"),
-    TagDef::lookup(0x0109, "RawDevColorSpace", COLOR_SPACE),
-    TagDef {
-        id: 0x010A,
-        name: "RawDevNoiseReduction",
-        force_type: None,
-        conv: Conv::Bitmask {
-            map: &[(0, "(none)")],
-            bits: RD_NOISE_REDUCTION_BITS,
-        },
-    },
-    TagDef::lookup(
-        0x010B,
-        "RawDevEngine",
-        &[(0, "High Speed"), (1, "High Function")],
-    ),
-    TagDef::lookup(
-        0x010C,
-        "RawDevPictureMode",
-        &[
-            (1, "Vivid"),
-            (2, "Natural"),
-            (3, "Muted"),
-            (256, "Monotone"),
-            (512, "Sepia"),
-        ],
-    ),
-    TagDef::raw(0x010D, "RawDevPMSaturation"),
-    TagDef::raw(0x010E, "RawDevPMContrast"),
-    TagDef::raw(0x010F, "RawDevPMSharpness"),
-    TagDef::lookup(
-        0x0110,
-        "RawDevPM_BWFilter",
-        &[
-            (1, "Neutral"),
-            (2, "Yellow"),
-            (3, "Orange"),
-            (4, "Red"),
-            (5, "Green"),
-        ],
-    ),
-    TagDef::lookup(
-        0x0111,
-        "RawDevPMPictureTone",
-        &[
-            (1, "Neutral"),
-            (2, "Sepia"),
-            (3, "Blue"),
-            (4, "Purple"),
-            (5, "Green"),
-        ],
-    ),
-    TagDef::raw(0x0112, "RawDevGradation"),
-    TagDef::raw(0x0113, "RawDevSaturation3"),
-    TagDef::lookup(0x0119, "RawDevAutoGradation", OFF_ON),
-    TagDef::raw(0x0120, "RawDevPMNoiseFilter"),
-    TagDef {
-        id: 0x0121,
-        name: "RawDevArtFilter",
-        force_type: None,
-        conv: Conv::List(CS_ART_FILTER_LIST),
-    },
-];
 
 // ===========================================================================
 // Olympus::RawDevelopment2 -- the rows the generated table cannot produce (I-3)
@@ -1811,120 +1040,6 @@ static IP_MULTIPLE_EXPOSURE_MODE_LIST: &[ElemConv] = &[ElemConv::Map(&[
     (3, "On (3 frames)"),
 ])];
 
-/// Olympus.pm:3211-3227, `ImageProcessing` 0x1112 `AspectRatio` -- keyed by
-/// the space-joined `int8u[2]` value.
-static IP_ASPECT_RATIO: &[(&str, &str)] = &[
-    ("1 1", "4:3"),
-    ("1 4", "1:1"),
-    ("2 1", "3:2 (RAW)"),
-    ("2 2", "3:2"),
-    ("3 1", "16:9 (RAW)"),
-    ("3 3", "16:9"),
-    ("4 1", "1:1 (RAW)"),
-    ("4 4", "6:6"),
-    ("5 5", "5:4"),
-    ("6 6", "7:6"),
-    ("7 7", "6:5"),
-    ("8 8", "7:5"),
-    ("9 1", "3:4 (RAW)"),
-    ("9 9", "3:4"),
-];
-
-/// Olympus.pm:3272-3275, `ImageProcessing` 0x1900 `KeystoneCompensation`.
-static IP_KEYSTONE_COMPENSATION: &[(&str, &str)] = &[("0 0", "Off"), ("0 1", "On")];
-
-pub static IMAGE_PROCESSING: &[TagDef] = &[
-    TagDef::text(0x0000, "ImageProcessingVersion"),
-    TagDef::raw(0x0100, "WB_RBLevels"),
-    TagDef::raw(0x0102, "WB_RBLevels3000K"),
-    TagDef::raw(0x0103, "WB_RBLevels3300K"),
-    TagDef::raw(0x0104, "WB_RBLevels3600K"),
-    TagDef::raw(0x0105, "WB_RBLevels3900K"),
-    TagDef::raw(0x0106, "WB_RBLevels4000K"),
-    TagDef::raw(0x0107, "WB_RBLevels4300K"),
-    TagDef::raw(0x0108, "WB_RBLevels4500K"),
-    TagDef::raw(0x0109, "WB_RBLevels4800K"),
-    TagDef::raw(0x010A, "WB_RBLevels5300K"),
-    TagDef::raw(0x010B, "WB_RBLevels6000K"),
-    TagDef::raw(0x010C, "WB_RBLevels6600K"),
-    TagDef::raw(0x010D, "WB_RBLevels7500K"),
-    TagDef::raw(0x010E, "WB_RBLevelsCWB1"),
-    TagDef::raw(0x010F, "WB_RBLevelsCWB2"),
-    TagDef::raw(0x0110, "WB_RBLevelsCWB3"),
-    TagDef::raw(0x0111, "WB_RBLevelsCWB4"),
-    TagDef::raw(0x0113, "WB_GLevel3000K"),
-    TagDef::raw(0x0114, "WB_GLevel3300K"),
-    TagDef::raw(0x0115, "WB_GLevel3600K"),
-    TagDef::raw(0x0116, "WB_GLevel3900K"),
-    TagDef::raw(0x0117, "WB_GLevel4000K"),
-    TagDef::raw(0x0118, "WB_GLevel4300K"),
-    TagDef::raw(0x0119, "WB_GLevel4500K"),
-    TagDef::raw(0x011A, "WB_GLevel4800K"),
-    TagDef::raw(0x011B, "WB_GLevel5300K"),
-    TagDef::raw(0x011C, "WB_GLevel6000K"),
-    TagDef::raw(0x011D, "WB_GLevel6600K"),
-    TagDef::raw(0x011E, "WB_GLevel7500K"),
-    TagDef::raw(0x011F, "WB_GLevel"),
-    TagDef::typed(0x0200, "ColorMatrix", ftype::TIFF_SSHORT),
-    TagDef::raw(0x0300, "Enhancer"),
-    TagDef::raw(0x0301, "EnhancerValues"),
-    TagDef::raw(0x0310, "CoringFilter"),
-    TagDef::raw(0x0311, "CoringValues"),
-    TagDef::raw(0x0600, "BlackLevel2"),
-    TagDef::raw(0x0610, "GainBase"),
-    TagDef::raw(0x0611, "ValidBits"),
-    TagDef::raw(0x0612, "CropLeft"),
-    TagDef::raw(0x0613, "CropTop"),
-    TagDef::raw(0x0614, "CropWidth"),
-    TagDef::raw(0x0615, "CropHeight"),
-    TagDef::raw(0x0805, "SensorCalibration"),
-    TagDef {
-        id: 0x1010,
-        name: "NoiseReduction2",
-        force_type: None,
-        conv: Conv::Bitmask {
-            map: &[(0, "(none)")],
-            bits: RD_NOISE_REDUCTION_BITS,
-        },
-    },
-    TagDef::lookup(0x1011, "DistortionCorrection2", OFF_ON),
-    TagDef::lookup(0x1012, "ShadingCompensation2", OFF_ON),
-    TagDef {
-        id: 0x101C,
-        name: "MultipleExposureMode",
-        force_type: None,
-        conv: Conv::List(IP_MULTIPLE_EXPOSURE_MODE_LIST),
-    },
-    TagDef::list_lookup(0x1112, "AspectRatio", IP_ASPECT_RATIO),
-    TagDef::raw(0x1113, "AspectFrame"),
-    TagDef::raw(0x1200, "FacesDetected"),
-    TagDef::binary(0x1201, "FaceDetectArea"),
-    TagDef::raw(0x1202, "MaxFaces"),
-    TagDef::raw(0x1203, "FaceDetectFrameSize"),
-    TagDef::raw(0x1207, "FaceDetectFrameCrop"),
-    TagDef::typed_func(
-        0x1306,
-        "CameraTemperature",
-        ftype::TIFF_SSHORT,
-        |v| match v.first_int() {
-            Some(0) | None => None,
-            Some(n) => Some(n.to_string()),
-        },
-    ),
-    TagDef::list_lookup(0x1900, "KeystoneCompensation", IP_KEYSTONE_COMPENSATION),
-    TagDef::lookup(
-        0x1901,
-        "KeystoneDirection",
-        &[(0, "Vertical"), (1, "Horizontal")],
-    ),
-    TagDef::raw(0x1906, "KeystoneValue"),
-    TagDef::lookup(
-        0x2110,
-        "GNDFilterType",
-        &[(0, "High"), (1, "Medium"), (2, "Soft")],
-    ),
-];
-
 // ===========================================================================
 // Olympus::ImageProcessing -- the rows the generated table cannot produce (I-3)
 // ===========================================================================
@@ -1977,33 +1092,6 @@ pub static IMAGE_PROCESSING_RESIDUAL: &[TagDef] = &[
 /// The `IMAGE_PROCESSING_RESIDUAL` rows that override an engine rendering --
 /// see the comment above.
 pub static IMAGE_PROCESSING_ENGINE_MISRENDERS: &[u16] = &[];
-
-// ===========================================================================
-// Olympus::FocusInfo (0x2050)
-// ===========================================================================
-
-pub static FOCUS_INFO: &[TagDef] = &[
-    TagDef::text(0x0000, "FocusInfoVersion"),
-    TagDef::raw(0x0210, "SceneDetect"),
-    TagDef::raw(0x0300, "ZoomStepCount"),
-    TagDef::raw(0x0301, "FocusStepCount"),
-    TagDef::raw(0x0303, "FocusStepInfinity"),
-    TagDef::raw(0x0304, "FocusStepNear"),
-    TagDef::list_lookup(0x1201, "ExternalFlash", &[("0 0", "Off"), ("1 0", "On")]),
-    TagDef::lookup(
-        0x1204,
-        "ExternalFlashBounce",
-        &[(0, "Bounce or Off"), (1, "Direct")],
-    ),
-    TagDef::raw(0x1205, "ExternalFlashZoom"),
-    TagDef::list_lookup(
-        0x1208,
-        "InternalFlash",
-        &[("0", "Off"), ("0 0", "Off"), ("1", "On"), ("1 0", "On")],
-    ),
-    TagDef::func(0x1209, "ManualFlash", print_manual_flash),
-    TagDef::lookup(0x120A, "MacroLED", OFF_ON),
-];
 
 /// FocusInfo 0x1500 SensorTemperature has two ExifTool variants selected by
 /// the model and value count; only the multi-value one is unambiguous from
@@ -2068,40 +1156,6 @@ pub static FOCUS_INFO_RESIDUAL: &[TagDef] = &[
 pub static FOCUS_INFO_ENGINE_MISRENDERS: &[u16] = &[];
 
 // ===========================================================================
-// Olympus::RawInfo (0x3000)
-// ===========================================================================
-
-pub static RAW_INFO: &[TagDef] = &[
-    TagDef::text(0x0000, "RawInfoVersion"),
-    TagDef::raw(0x0100, "WB_RBLevelsUsed"),
-    TagDef::raw(0x0110, "WB_RBLevelsAuto"),
-    TagDef::raw(0x0120, "WB_RBLevelsShade"),
-    TagDef::raw(0x0121, "WB_RBLevelsCloudy"),
-    TagDef::raw(0x0122, "WB_RBLevelsFineWeather"),
-    TagDef::raw(0x0123, "WB_RBLevelsTungsten"),
-    TagDef::raw(0x0124, "WB_RBLevelsEveningSunlight"),
-    TagDef::raw(0x0130, "WB_RBLevelsDaylightFluor"),
-    // Olympus.pm:3672 in the pinned 13.59 tree names 0x0131
-    // `WB_RBLevelsDayWhiteFluor`; the earlier `WB_RBLevelsNeutralWhiteFluor`
-    // here was a stale name (a RENAME under `conformance.py`, not a value).
-    TagDef::raw(0x0131, "WB_RBLevelsDayWhiteFluor"),
-    TagDef::raw(0x0132, "WB_RBLevelsCoolWhiteFluor"),
-    TagDef::raw(0x0133, "WB_RBLevelsWhiteFluorescent"),
-    TagDef::typed(0x0200, "ColorMatrix2", ftype::TIFF_SSHORT),
-    TagDef::raw(0x0310, "CoringFilter"),
-    TagDef::raw(0x0311, "CoringValues"),
-    TagDef::raw(0x0600, "BlackLevel2"),
-    TagDef::raw(0x0601, "YCbCrCoefficients"),
-    // Olympus.pm:3695: RawInfo's 0x0611 is `ValidPixelDepth`, not the
-    // `ValidBits` of Main 0x102c / ImageProcessing 0x0611 (stale name).
-    TagDef::raw(0x0611, "ValidPixelDepth"),
-    TagDef::raw(0x0612, "CropLeft"),
-    TagDef::raw(0x0613, "CropTop"),
-    TagDef::raw(0x0614, "CropWidth"),
-    TagDef::raw(0x0615, "CropHeight"),
-];
-
-// ===========================================================================
 // Olympus::RawInfo -- the rows the generated table cannot produce (I-3)
 // ===========================================================================
 //
@@ -2119,6 +1173,109 @@ pub static RAW_INFO_RESIDUAL: &[TagDef] = &[TagDef::text(0x0000, "RawInfoVersion
 
 /// No `RAW_INFO_RESIDUAL` row overrides an engine rendering.
 pub static RAW_INFO_ENGINE_MISRENDERS: &[u16] = &[];
+
+/// `Olympus::Main` rows the generated table WITHHOLDS and this build does not
+/// supply from a RESIDUAL ROW. Three classes, named per entry: a SubDirectory
+/// edge (no value of its own); a row a named hand PASS produces instead; and a
+/// row nothing reports, which is an honest absence. See
+/// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
+/// regeneration that starts withholding a row now reported fails loudly.
+static MAIN_UNSUPPLIED: &[u16] = &[
+    0x0001, // a Minolta cross-reference, no value of its own
+    0x0003, // MinoltaCameraSettings, a SubDirectory
+    0x0201, // Quality -- `parse_camera_type_and_quality` (its PrintConv reads the CameraType data member)
+    0x0207, // CameraType -- the same pass (a DataMember behind a Condition)
+    0x0208, // TextInfo -- the same pass, then `text_info::parse`
+    0x0400, // a SubDirectory
+    0x0401, // BlackLevel, withheld with no hand conversion
+    0x0e00, // PrintIM, which has its own parser
+    0x2010, // the Equipment SubIFD edge
+    0x2020, // the CameraSettings edge
+    0x2030, // the RawDevelopment edge
+    0x2031, // the RawDevelopment2 edge
+    0x2040, // the ImageProcessing edge
+    0x2100, // a SubDirectory edge
+    0x2200, // a SubDirectory edge
+    0x2300, // a SubDirectory edge
+    0x2400, // a SubDirectory edge
+    0x2500, // a SubDirectory edge
+    0x2600, // a SubDirectory edge
+    0x2700, // a SubDirectory edge
+    0x2800, // a SubDirectory edge
+    0x2900, // a SubDirectory edge
+    0x3000, // the RawInfo edge
+    0x4000, // the MainInfo edge, re-walked by `main_info_directory`
+    0x5000, // a SubDirectory edge
+];
+
+/// `Olympus::Equipment` rows the generated table WITHHOLDS and this build does not
+/// supply from a RESIDUAL ROW. Three classes, named per entry: a SubDirectory
+/// edge (no value of its own); a row a named hand PASS produces instead; and a
+/// row nothing reports, which is an honest absence. See
+/// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
+/// regeneration that starts withholding a row now reported fails loudly.
+static EQUIPMENT_UNSUPPLIED: &[u16] = &[];
+
+/// `Olympus::CameraSettings` rows the generated table WITHHOLDS and this build does not
+/// supply from a RESIDUAL ROW. Three classes, named per entry: a SubDirectory
+/// edge (no value of its own); a row a named hand PASS produces instead; and a
+/// row nothing reports, which is an honest absence. See
+/// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
+/// regeneration that starts withholding a row now reported fails loudly.
+static CAMERA_SETTINGS_UNSUPPLIED: &[u16] = &[
+    0x030a, // withheld, no hand conversion
+    0x030b, // SubjectDetectInfo, a SubDirectory
+    0x0804, // withheld, no hand conversion
+    0x0903, // withheld, no hand conversion
+    0x0904, // withheld, no hand conversion
+];
+
+/// `Olympus::RawDevelopment` rows the generated table WITHHOLDS and this build does not
+/// supply from a RESIDUAL ROW. Three classes, named per entry: a SubDirectory
+/// edge (no value of its own); a row a named hand PASS produces instead; and a
+/// row nothing reports, which is an honest absence. See
+/// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
+/// regeneration that starts withholding a row now reported fails loudly.
+static RAW_DEVELOPMENT_UNSUPPLIED: &[u16] = &[];
+
+/// `Olympus::RawDevelopment2` rows the generated table WITHHOLDS and this build does not
+/// supply from a RESIDUAL ROW. Three classes, named per entry: a SubDirectory
+/// edge (no value of its own); a row a named hand PASS produces instead; and a
+/// row nothing reports, which is an honest absence. See
+/// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
+/// regeneration that starts withholding a row now reported fails loudly.
+static RAW_DEVELOPMENT2_UNSUPPLIED: &[u16] = &[
+    0x8000, // RawDevSubIFD, a SubDirectory whose target is not enabled
+];
+
+/// `Olympus::ImageProcessing` rows the generated table WITHHOLDS and this build does not
+/// supply from a RESIDUAL ROW. Three classes, named per entry: a SubDirectory
+/// edge (no value of its own); a row a named hand PASS produces instead; and a
+/// row nothing reports, which is an honest absence. See
+/// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
+/// regeneration that starts withholding a row now reported fails loudly.
+static IMAGE_PROCESSING_UNSUPPLIED: &[u16] = &[];
+
+/// `Olympus::FocusInfo` rows the generated table WITHHOLDS and this build does not
+/// supply from a RESIDUAL ROW. Three classes, named per entry: a SubDirectory
+/// edge (no value of its own); a row a named hand PASS produces instead; and a
+/// row nothing reports, which is an honest absence. See
+/// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
+/// regeneration that starts withholding a row now reported fails loudly.
+static FOCUS_INFO_UNSUPPLIED: &[u16] = &[
+    0x0305, // FocusDistance -- `parse_focus_info_model_conditional`, which also feeds the `value_forms` channel Composite DOF/FOV read
+    0x0328, // AFInfo, a SubDirectory whose target is not enabled
+    0x1500, // SensorTemperature -- `parse_focus_info_sensor_temperature` (two model/count-conditional conversions)
+    0x1600, // ImageStabilization -- withheld by a single-entry Condition and never hand-written; MISSING on 36 corpus files, a recorded follow-up
+];
+
+/// `Olympus::RawInfo` rows the generated table WITHHOLDS and this build does not
+/// supply from a RESIDUAL ROW. Three classes, named per entry: a SubDirectory
+/// edge (no value of its own); a row a named hand PASS produces instead; and a
+/// row nothing reports, which is an honest absence. See
+/// [`assert_residual_matches_the_generated_withholding`]. Pinned so a
+/// regeneration that starts withholding a row now reported fails loudly.
+static RAW_INFO_UNSUPPLIED: &[u16] = &[];
 
 #[cfg(test)]
 mod tests {
@@ -2141,83 +1298,90 @@ mod tests {
             .unwrap_or_else(|| panic!("Olympus::{table} is generated"))
     }
 
-    /// `residual` is EXACTLY the set of `hand` rows the generated
-    /// `Olympus::<table>` cannot report: a row that is absent from the
-    /// generated table or withheld there (`Omitted` set) must be in the
-    /// residual, and every other hand row must not be -- with one named
-    /// exception, a row the generated table carries as `Unknown` (ExifTool
-    /// never prints it without `-u`), which stays out of both. Both
-    /// directions matter: a missing residual row is a silently lost tag, a
-    /// superfluous one is a tag inserted twice. `misrenders` (the override
-    /// class) is checked by [`assert_misrenders_are_overrides`], not here: an
-    /// override IS an engine-reported row with a residual twin.
-    fn assert_residual_is_exactly_the_remainder(
+    /// The residual against the GENERATED table alone.
+    ///
+    /// Slice I-2/I-3 checked the residual against the full hand table it
+    /// replaced ("is the residual exactly the remainder?"), which slice I-4
+    /// deleted. This is the successor invariant, and it is stronger for
+    /// resting on no hand-written tag knowledge at all -- every row of it
+    /// comes from `ifd_tables.rs`:
+    ///
+    /// 1. no residual row may duplicate a row the engine REPORTS, or the
+    ///    walk would insert that tag twice (the residual walk runs after the
+    ///    engine's); the only exception is a declared `misrenders` override,
+    ///    whose whole purpose is to overwrite the engine's rendering.
+    /// 2. every row the generated table WITHHOLDS is either supplied by a
+    ///    residual row or named in `unsupplied` -- so a regeneration that
+    ///    starts withholding a row this build reports today fails HERE
+    ///    rather than silently dropping a tag from the output. That is the
+    ///    protection the deleted hand table used to give.
+    /// 3. `unsupplied` may not name a row that is supplied or reported: a
+    ///    stale entry would blind rule 2.
+    ///
+    /// A residual row with no generated tag at all is legitimate and
+    /// expected: the generator never transcribed it (`Main` 0x0280
+    /// `PreviewImage`, 0x0f04/0x0f05 `ZoomedPreview*`, 0x1036
+    /// `PreviewImageStart`; `CameraSettings` 0x0101/0x0102), so the hand row
+    /// is its only producer.
+    fn assert_residual_matches_the_generated_withholding(
         table: &str,
-        hand: &[TagDef],
         residual: &[TagDef],
         misrenders: &[u16],
+        unsupplied: &[u16],
     ) {
         let generated = generated(table);
-        for row in hand {
-            let in_residual = residual
-                .iter()
-                .any(|r| r.id == row.id && !misrenders.contains(&r.id));
-            match generated.tag(row.id) {
-                None => assert!(
-                    in_residual,
-                    "{:#06x} {} is not in the generated Olympus::{table}; the hand row is its only producer and must be in the residual",
-                    row.id, row.name
-                ),
-                Some(tag) if tag.omitted.any() => assert!(
-                    in_residual,
-                    "{:#06x} {} is withheld by the generated Olympus::{table} ({:?}); the hand row is its only producer and must be in the residual",
-                    row.id, row.name, tag.omitted
-                ),
-                Some(tag) if tag.flags.unknown => assert!(
-                    !in_residual,
-                    "{:#06x} {} is `Unknown => 1` in Olympus.pm: ExifTool never reports it without -u, so no hand row may re-add it",
-                    row.id, row.name
-                ),
-                Some(tag) => {
-                    assert!(
-                        !in_residual,
-                        "{:#06x} {} is produced by the engine (Olympus::{table}); a residual row would insert it twice",
-                        row.id, row.name
-                    );
-                    assert_eq!(
-                        tag.name, row.name,
-                        "{:#06x} (Olympus::{table}): the generated name must equal the hand name or the `Olympus:<name>` key changes",
-                        row.id
-                    );
-                    assert!(
-                        tag.subdir.is_none(),
-                        "{:#06x} {} is a SubDirectory in the generated Olympus::{table}, not a value",
-                        row.id,
-                        row.name
-                    );
-                }
+        // Every id the table declares, and whether ANY alternative reports
+        // it: a variant group's alternatives are `IfdTag`s too, and a group
+        // whose every alternative is withheld reports nothing.
+        let mut reported: Vec<u16> = Vec::new();
+        let mut withheld: Vec<u16> = Vec::new();
+        for tag in generated.tags {
+            if tag.omitted.any() {
+                withheld.push(tag.id)
+            } else {
+                reported.push(tag.id)
             }
         }
+        for group in generated.variants {
+            if group.alternatives.iter().any(|(_, t)| !t.omitted.any()) {
+                reported.push(group.id);
+            } else {
+                withheld.push(group.id);
+            }
+        }
+        withheld.retain(|id| !reported.contains(id));
+
         for row in residual {
             if misrenders.contains(&row.id) {
                 continue;
             }
             assert!(
-                hand.iter().any(|m| m.id == row.id && m.name == row.name),
-                "{:#06x} {} in the Olympus::{table} residual is not a hand row; a withheld-row residual may only restate what the hand table already had",
+                !reported.contains(&row.id),
+                "{:#06x} {} is reported by the generated Olympus::{table}; a residual row would insert it twice",
                 row.id,
                 row.name
             );
         }
+        for id in &withheld {
+            let supplied = residual.iter().any(|r| r.id == *id);
+            assert!(
+                supplied || unsupplied.contains(id),
+                "{id:#06x} is withheld by the generated Olympus::{table} and no residual row supplies it: \
+                 either add the hand row or name it in the table's UNSUPPLIED list with the reason"
+            );
+        }
+        for id in unsupplied {
+            assert!(
+                withheld.contains(id),
+                "{id:#06x} is in Olympus::{table}'s UNSUPPLIED list but the generated table does not withhold it (stale entry)"
+            );
+            assert!(
+                !residual.iter().any(|r| r.id == *id),
+                "{id:#06x} is in Olympus::{table}'s UNSUPPLIED list and also a residual row"
+            );
+        }
     }
 
-    /// The override class: every id in `misrenders` is a residual row AND a
-    /// row the generated table reports (present, not withheld, not
-    /// `Unknown`, not a SubDirectory) under the same name -- otherwise it is
-    /// not an override of anything and belongs in the first class or
-    /// nowhere. When the engine defect an entry cites is fixed, the entry
-    /// comes out of both lists; nothing here can tell that the rendering is
-    /// now right, so the corpus A/B on the affected carriers is the check.
     fn assert_misrenders_are_overrides(table: &str, residual: &[TagDef], misrenders: &[u16]) {
         let generated = generated(table);
         for id in misrenders {
@@ -2245,7 +1409,12 @@ mod tests {
     /// `MAIN_RESIDUAL` against the generated `Olympus::Main` (slice I-2).
     #[test]
     fn main_residual_is_exactly_the_generated_tables_remainder() {
-        assert_residual_is_exactly_the_remainder("Main", MAIN, MAIN_RESIDUAL, ENGINE_MISRENDERS);
+        assert_residual_matches_the_generated_withholding(
+            "Main",
+            MAIN_RESIDUAL,
+            ENGINE_MISRENDERS,
+            MAIN_UNSUPPLIED,
+        );
     }
 
     #[test]
@@ -2259,11 +1428,11 @@ mod tests {
 
     #[test]
     fn equipment_residual_is_exactly_the_generated_tables_remainder() {
-        assert_residual_is_exactly_the_remainder(
+        assert_residual_matches_the_generated_withholding(
             "Equipment",
-            EQUIPMENT,
             EQUIPMENT_RESIDUAL,
             EQUIPMENT_ENGINE_MISRENDERS,
+            EQUIPMENT_UNSUPPLIED,
         );
         assert_misrenders_are_overrides(
             "Equipment",
@@ -2274,11 +1443,11 @@ mod tests {
 
     #[test]
     fn camera_settings_residual_is_exactly_the_generated_tables_remainder() {
-        assert_residual_is_exactly_the_remainder(
+        assert_residual_matches_the_generated_withholding(
             "CameraSettings",
-            CAMERA_SETTINGS,
             CAMERA_SETTINGS_RESIDUAL,
             CAMERA_SETTINGS_ENGINE_MISRENDERS,
+            CAMERA_SETTINGS_UNSUPPLIED,
         );
         assert_misrenders_are_overrides(
             "CameraSettings",
@@ -2289,11 +1458,11 @@ mod tests {
 
     #[test]
     fn raw_development_residual_is_exactly_the_generated_tables_remainder() {
-        assert_residual_is_exactly_the_remainder(
+        assert_residual_matches_the_generated_withholding(
             "RawDevelopment",
-            RAW_DEVELOPMENT,
             RAW_DEVELOPMENT_RESIDUAL,
             RAW_DEVELOPMENT_ENGINE_MISRENDERS,
+            RAW_DEVELOPMENT_UNSUPPLIED,
         );
         assert_misrenders_are_overrides(
             "RawDevelopment",
@@ -2304,11 +1473,11 @@ mod tests {
 
     #[test]
     fn raw_development2_residual_is_exactly_the_generated_tables_remainder() {
-        assert_residual_is_exactly_the_remainder(
+        assert_residual_matches_the_generated_withholding(
             "RawDevelopment2",
-            RAW_DEVELOPMENT2,
             RAW_DEVELOPMENT2_RESIDUAL,
             RAW_DEVELOPMENT2_ENGINE_MISRENDERS,
+            RAW_DEVELOPMENT2_UNSUPPLIED,
         );
         assert_misrenders_are_overrides(
             "RawDevelopment2",
@@ -2319,11 +1488,11 @@ mod tests {
 
     #[test]
     fn image_processing_residual_is_exactly_the_generated_tables_remainder() {
-        assert_residual_is_exactly_the_remainder(
+        assert_residual_matches_the_generated_withholding(
             "ImageProcessing",
-            IMAGE_PROCESSING,
             IMAGE_PROCESSING_RESIDUAL,
             IMAGE_PROCESSING_ENGINE_MISRENDERS,
+            IMAGE_PROCESSING_UNSUPPLIED,
         );
         assert_misrenders_are_overrides(
             "ImageProcessing",
@@ -2334,11 +1503,11 @@ mod tests {
 
     #[test]
     fn raw_info_residual_is_exactly_the_generated_tables_remainder() {
-        assert_residual_is_exactly_the_remainder(
+        assert_residual_matches_the_generated_withholding(
             "RawInfo",
-            RAW_INFO,
             RAW_INFO_RESIDUAL,
             RAW_INFO_ENGINE_MISRENDERS,
+            RAW_INFO_UNSUPPLIED,
         );
         assert_misrenders_are_overrides("RawInfo", RAW_INFO_RESIDUAL, RAW_INFO_ENGINE_MISRENDERS);
     }
@@ -2352,11 +1521,11 @@ mod tests {
     /// (`focus_info_hand_pass_emits_exactly_the_withheld_alternatives`).
     #[test]
     fn focus_info_residual_is_exactly_the_generated_tables_remainder() {
-        assert_residual_is_exactly_the_remainder(
+        assert_residual_matches_the_generated_withholding(
             "FocusInfo",
-            FOCUS_INFO,
             FOCUS_INFO_RESIDUAL,
             FOCUS_INFO_ENGINE_MISRENDERS,
+            FOCUS_INFO_UNSUPPLIED,
         );
         assert_misrenders_are_overrides(
             "FocusInfo",
@@ -2368,42 +1537,28 @@ mod tests {
     #[test]
     fn focus_mode_uses_exiftool_list_printconv() {
         // E-M1: raw "0 65" -> "Single AF; S-AF, Imager AF"
-        let def = conv_of(CAMERA_SETTINGS, 0x0301);
+        let def = conv_of(CAMERA_SETTINGS_RESIDUAL, 0x0301);
         let v = OlyVal::Int(vec![0, 65]);
         assert_eq!(apply_conv(def, &v).unwrap(), "Single AF; S-AF, Imager AF");
     }
 
     #[test]
     fn focus_process_prints_extra_elements_raw() {
-        let def = conv_of(CAMERA_SETTINGS, 0x0302);
+        let def = conv_of(CAMERA_SETTINGS_RESIDUAL, 0x0302);
         let v = OlyVal::Int(vec![1, 64]);
         assert_eq!(apply_conv(def, &v).unwrap(), "AF Used; 64");
     }
 
     #[test]
-    fn noise_reduction_bitmask_names_bit_three_auto() {
-        let def = conv_of(CAMERA_SETTINGS, 0x050A);
-        assert_eq!(apply_conv(def, &OlyVal::Int(vec![8])).unwrap(), "Auto");
-        assert_eq!(apply_conv(def, &OlyVal::Int(vec![0])).unwrap(), "(none)");
-    }
-
-    #[test]
-    fn flash_mode_zero_is_off_not_a_bitmask_miss() {
-        let def = conv_of(CAMERA_SETTINGS, 0x0400);
-        assert_eq!(apply_conv(def, &OlyVal::Int(vec![0])).unwrap(), "Off");
-        assert_eq!(apply_conv(def, &OlyVal::Int(vec![2])).unwrap(), "Fill-in");
-    }
-
-    #[test]
     fn gradation_relists_the_first_three_values() {
-        let def = conv_of(CAMERA_SETTINGS, 0x050F);
+        let def = conv_of(CAMERA_SETTINGS_RESIDUAL, 0x050F);
         let v = OlyVal::Int(vec![0, -1, 1, 0]);
         assert_eq!(apply_conv(def, &v).unwrap(), "Normal; User-Selected");
     }
 
     #[test]
     fn tone_level_names_every_fourth_element() {
-        let def = conv_of(CAMERA_SETTINGS, 0x052E);
+        let def = conv_of(CAMERA_SETTINGS_RESIDUAL, 0x052E);
         let v = OlyVal::Int(vec![-31999, 0, -7, 7, -31998, 0, -7, 7, 0, 0, 0, 0]);
         assert_eq!(
             apply_conv(def, &v).unwrap(),
@@ -2413,7 +1568,7 @@ mod tests {
 
     #[test]
     fn color_creator_effect_uses_label_templates() {
-        let def = conv_of(CAMERA_SETTINGS, 0x0532);
+        let def = conv_of(CAMERA_SETTINGS_RESIDUAL, 0x0532);
         let v = OlyVal::Int(vec![0, 0, 29, 0, -4, 3]);
         assert_eq!(
             apply_conv(def, &v).unwrap(),
@@ -2422,15 +1577,8 @@ mod tests {
     }
 
     #[test]
-    fn camera_type2_maps_the_body_code() {
-        let def = conv_of(EQUIPMENT, 0x0100);
-        let v = OlyVal::Bytes(b"S0047\0".to_vec());
-        assert_eq!(apply_conv(def, &v).unwrap(), "E-M1");
-    }
-
-    #[test]
     fn lens_type_keys_on_bytes_0_2_3() {
-        let def = conv_of(EQUIPMENT, 0x0201);
+        let def = conv_of(EQUIPMENT_RESIDUAL, 0x0201);
         let v = OlyVal::Int(vec![0, 0, 0x15, 0, 0, 0]);
         assert_eq!(
             apply_conv(def, &v).unwrap(),
@@ -2440,7 +1588,7 @@ mod tests {
 
     #[test]
     fn body_firmware_version_is_hex_with_an_inserted_point() {
-        let def = conv_of(EQUIPMENT, 0x0104);
+        let def = conv_of(EQUIPMENT_RESIDUAL, 0x0104);
         assert_eq!(
             apply_conv(def, &OlyVal::Int(vec![0x1005])).unwrap(),
             "1.005"
@@ -2463,16 +1611,9 @@ mod tests {
 
     #[test]
     fn af_areas_renders_corner_pairs() {
-        let def = conv_of(CAMERA_SETTINGS, 0x0304);
+        let def = conv_of(CAMERA_SETTINGS_RESIDUAL, 0x0304);
         let v = OlyVal::Int(vec![0xC845_E56B, 0, 0]);
         assert_eq!(apply_conv(def, &v).unwrap(), "(200,69)-(229,107)");
         assert_eq!(apply_conv(def, &OlyVal::Int(vec![0, 0])).unwrap(), "none");
-    }
-
-    #[test]
-    fn min_max_triples_match_exiftool_wording() {
-        let def = conv_of(CAMERA_SETTINGS, 0x0505);
-        let v = OlyVal::Int(vec![0, -5, 5]);
-        assert_eq!(apply_conv(def, &v).unwrap(), "0 (min -5, max 5)");
     }
 }

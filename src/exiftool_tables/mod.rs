@@ -481,8 +481,14 @@ mod tests {
             refused += here;
             tables += usize::from(here > 0);
         }
-        assert_eq!(refused, 23, "fields whose PrintConv the generator refused");
-        assert_eq!(tables, 11, "tables carrying at least one such field");
+        // Slice I-4 (parenthesised Condition groups) let two more binary
+        // tables past Gate A -- Nikon::AFInfo2V0101 and ::AFInfo2V0400,
+        // refused -> eligible, nothing moved the other way -- so their fields
+        // are emitted now and their refused PrintConvs are counted here. The
+        // invariant above (refused => no conversion) is what this test is
+        // for; these two numbers only say how much honest absence there is.
+        assert_eq!(refused, 28, "fields whose PrintConv the generator refused");
+        assert_eq!(tables, 12, "tables carrying at least one such field");
     }
 
     /// The other half of the `conv_dropped` story: the conversions that were

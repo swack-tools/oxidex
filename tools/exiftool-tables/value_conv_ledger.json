@@ -5,11 +5,11 @@
   "schema": 1,
   "value_conv": {
     "compiled": 981,
-    "refused": 270,
+    "refused": 275,
     "refused_by_reason": {
       "input_domain": 11,
       "nonexpr": 57,
-      "shape": 202
+      "shape": 207
     },
     "top_refused_expressions": [
       {
@@ -41,6 +41,10 @@
         "uses": 6
       },
       {
+        "expression": "join(\" \", unpack(\"H2\"x7, $val))",
+        "uses": 5
+      },
+      {
         "expression": "return undef if $val !~ /[^0\\0 ]/; # ignore if empty if ($val =~ s/(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(.)/$1:$2:$3 $4:$5:$6.$7/s) { $val .= TimeZoneString(unpack('c', $8) * 15); } return $val;",
         "uses": 4
       },
@@ -49,7 +53,7 @@
         "uses": 4
       },
       {
-        "expression": "join(\" \", unpack(\"H2\"x7, $val))",
+        "expression": "join(\" \", unpack(\"H2\"x20, $val))",
         "uses": 4
       },
       {
@@ -86,10 +90,6 @@
       },
       {
         "expression": "$val - ($self->{Model}=~/DiMAGE A2/ ? 5 : 3)",
-        "uses": 3
-      },
-      {
-        "expression": "join(\" \", unpack(\"H2\"x20, $val))",
         "uses": 3
       },
       {
