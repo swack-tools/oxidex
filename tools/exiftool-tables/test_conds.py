@@ -215,11 +215,40 @@ class RefusalTests(unittest.TestCase):
         self.assertIsNotNone(reason, condition)
         self.assertIn(reason_fragment, reason, condition)
 
-    def test_parenthesised_grouping(self):
+    def test_parenthesised_grouping_compiles(self):
+        # Slice I-4. Grouping restarts the precedence ladder, so
+        # `(A or B) and C` is `And(Or(A, B), C)` -- not the `Or(A, And(B, C))`
+        # the bare chain gives. Canon.pm's `CanonCameraInfoPowerShot` is the
+        # real carrier; verify_cond.py probes both against the Perl.
+        src = conds.compile_cond('$format eq "int32u" and ($count == 138 or $count == 148)')
+        self.assertIsNotNone(src)
+        self.assertTrue(src.startswith("Cond::And(&Cond::FormatEq"), src)
+        self.assertIn("Cond::Or(&Cond::CountCmp", src)
+        grouped = conds.compile_cond("($$self{A} or $$self{B}) and $$self{C}")
+        self.assertIsNotNone(grouped)
+        self.assertTrue(grouped.startswith("Cond::And(&Cond::Or("), grouped)
+        # An atom may contain its own parentheses; the scanner tracks depth
+        # and does not cut the atom at an inner `)`.
+        self.assertIsNotNone(conds.compile_cond("defined($$self{X}) and $count == 2"))
+
+    def test_a_side_effect_inside_a_group_still_refuses(self):
+        # The safety property grouping must not break: Sony.pm's Tag9400a
+        # assigns a data member inside the group. Compiling the syntax while
+        # dropping the assignment would be a silent wrong answer, so the
+        # assignment atom is refused and the whole group with it.
         self.assertRefused(
-            '$format eq "int32u" and ($count == 138 or $count == 148)', "unrecognised condition atom"
+            "$$valPt =~ /^[\\x07]/ or ($$valPt =~ /^[\\x5e]/ and $$self{DoubleCipher} = 1)",
+            "unrecognised condition atom",
         )
-        self.assertRefused("($$self{A} or $$self{B}) and $$self{C}", "unrecognised condition atom")
+        self.assertRefused(
+            "$count <= 25 and $count != 21 and $$self{AEInfoSize} = $count",
+            "unrecognised condition atom",
+        )
+
+    def test_not_over_a_parenthesised_group(self):
+        # Negation is a per-atom flag in this schema, not a node, so a `not`
+        # over a group is refused rather than mis-grouped as `(not A) or B`.
+        self.assertRefused("not ($$self{A} or $$self{B})", "outside the grammar")
 
     def test_not_over_a_double_pipe_chain(self):
         # Perl: `not A || B` is `not (A || B)`; `(not A) || B` would be wrong.

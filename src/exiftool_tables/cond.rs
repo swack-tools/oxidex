@@ -234,6 +234,19 @@ pub enum Cond {
     /// An unset `$format` (a binary-table walk never binds one) compares as
     /// Perl's undef: `eq` false, `ne` true.
     FormatEq { value: &'static str, negate: bool },
+    /// `$format =~ /pattern/[i]` / `!~` (`negate` for `!~`) -- Canon.pm's
+    /// `CanonCameraInfoUnknown32`/`...16` (`$format =~ /^int32/`,
+    /// `/^int16/`). The subject is the entry's format NAME as `ProcessExif`
+    /// binds it (Exif.pm:6713, `$formatName[$format]`), a closed ASCII
+    /// vocabulary; `pattern` is the same vetted subset [`Cond::MemberRegex`]
+    /// carries. An unset `$format` (a binary-table walk never binds one) is
+    /// Perl's undef: `=~` false, `!~` true -- the rule [`Cond::FormatEq`]
+    /// already follows.
+    FormatRegex {
+        pattern: &'static str,
+        ignore_case: bool,
+        negate: bool,
+    },
     /// `$count <op> N` -- `$count` as `ProcessExif` binds it: the entry's
     /// own count field, `Get32u($dataPt, $entry+4)` (Exif.pm:6461), handed
     /// to `GetTagInfo` at Exif.pm:6719-6720 (`#### eval Condition ($self,
@@ -345,6 +358,16 @@ impl Cond {
                 _ => false,
             },
             Cond::FormatEq { value, negate } => (ctx.format == Some(*value)) != *negate,
+            Cond::FormatRegex {
+                pattern,
+                ignore_case,
+                negate,
+            } => {
+                let matched = ctx
+                    .format
+                    .is_some_and(|f| regex_match_str(pattern, *ignore_case, f));
+                matched ^ negate
+            }
             Cond::CountCmp { op, value } => ctx.count.is_some_and(|c| op.apply(c, *value)),
             Cond::MemberDefined { member, negate } => ctx.members.contains_key(*member) ^ negate,
             Cond::Or(left, right) => {
