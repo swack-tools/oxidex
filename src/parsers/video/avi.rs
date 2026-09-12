@@ -534,8 +534,13 @@ fn parse_pentax_data_list(
                 // `insert_low_priority_retained`'s synthetic `"<key> (N)"`
                 // duplicate marker (LensType/LensFocalLength/PentaxModelID)
                 // and records it as a real, always-losing occurrence rather
-                // than a literal `"Tag (N)"` tag name.
-                for (tag_name, tag_value_str) in makernote_tags {
+                // than a literal `"Tag (N)"` tag name. `in_record_order`
+                // keeps the copies' file order out of the HashMap's hands.
+                for (tag_name, tag_value_str) in
+                    crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(
+                        makernote_tags,
+                    )
+                {
                     crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
                         metadata,
                         tag_name,

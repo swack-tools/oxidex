@@ -3743,7 +3743,11 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
 
     // Add manufacturer tags to metadata
     // Note: tag names already include manufacturer prefix (e.g., "Canon:", "Nikon:")
-    for (tag_name, tag_value_str) in makernote_tags {
+    // `in_record_order`, not the HashMap's own order: each occurrence takes
+    // the next file-order value, which `-a` output renders.
+    for (tag_name, tag_value_str) in
+        crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags)
+    {
         // Canon's display and ValueConv belong to the same occurrence.
         // Attach before arbitration so a losing copy cannot mutate the winner.
         if tag_name.starts_with("Canon:")
@@ -7475,6 +7479,106 @@ mod canon_lens_identity_tests {
         assert_eq!(
             map.get_string("Composite:LensID"),
             Some("Canon EF 50mm f/1.8")
+        );
+    }
+}
+
+#[cfg(test)]
+mod makernote_record_order_tests {
+    use super::*;
+
+    /// A big-endian "PENTAX \0" MakerNote with the four entries
+    /// `Pentax/PentaxOptioSVi.jpg` and `Pentax/PentaxK100D.jpg` duplicate
+    /// tags through: 0x0005 `PentaxModelID` 76405 ("Optio SVi"), 0x003f
+    /// `LensRec` `07 f4` and 0x0207 `LensInfo` `00 00 00 00` (two
+    /// `LensType`s), and 0x0215 `CameraInfo` whose first LONG is 76400
+    /// ("Optio SV"). Offsets count from the block, so the CameraInfo LONGs
+    /// laid down at index 64 are addressed as 64.
+    fn optio_svi_makernote() -> Vec<u8> {
+        let entries: [(u16, u16, u32, u32); 4] = [
+            (0x0005, 4, 1, 76_405),
+            (0x003F, 1, 4, 0x07F4_0000),
+            (0x0207, 1, 4, 0x0000_0000),
+            (0x0215, 4, 5, 64),
+        ];
+        let mut out = b"PENTAX \0MM".to_vec();
+        out.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+        for (tag, format, count, value) in entries {
+            out.extend_from_slice(&tag.to_be_bytes());
+            out.extend_from_slice(&format.to_be_bytes());
+            out.extend_from_slice(&count.to_be_bytes());
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.resize(64, 0);
+        for long in [76_400u32, 20_040_101, 1, 0, 7] {
+            out.extend_from_slice(&long.to_be_bytes());
+        }
+        out
+    }
+
+    /// Every occurrence the MakerNote merge recorded, in `order` -- the
+    /// sequence `-a` output renders (`cli::tag_resolution` sorts by it).
+    fn recorded_sequence(makernote: &[u8]) -> Vec<(String, String)> {
+        let mut map = MetadataMap::new();
+        map.insert("IFD0:Make", TagValue::new_string("PENTAX Corporation"));
+        parse_makernote(
+            &MakerNoteContext::detached(makernote),
+            ByteOrder::BigEndian,
+            &mut map,
+        );
+        map.all_occurrences()
+            .map(|(key, occurrence)| {
+                let value = match occurrence.raw.as_string() {
+                    Some(text) => text.to_string(),
+                    None => format!("{:?}", occurrence.raw),
+                };
+                (key, value)
+            })
+            .collect()
+    }
+
+    /// The MakerNote parsers hand back a `HashMap`, and std gives every new
+    /// `HashMap` its own `RandomState` keys, so each run below iterates the
+    /// parser's output in a different order. The merge must not let that
+    /// order reach the occurrences' file order: on PentaxOptioSVi.jpg and
+    /// PentaxOptioL20.jpg it swapped `PentaxModelID`'s two copies between
+    /// runs of one binary, and in text `-G1 -a -s` it shuffled every
+    /// MakerNote tag of every file.
+    ///
+    /// The pinned 13.59 oracle's `-G1 -a -s` on PentaxOptioSVi.jpg prints
+    /// `PentaxModelID : Optio SVi` (0x0005) before `PentaxModelID : Optio SV`
+    /// (0x0215 CameraInfo), and its `-j -G1 -a` keeps only `Optio SVi`;
+    /// `LensType` follows the same file order (0x003f `LensRec` before 0x0207
+    /// `LensInfo`).
+    #[test]
+    fn makernote_merge_records_the_same_sequence_on_every_run() {
+        let makernote = optio_svi_makernote();
+        let first = recorded_sequence(&makernote);
+        for run in 1..32 {
+            assert_eq!(
+                recorded_sequence(&makernote),
+                first,
+                "run {run} recorded the MakerNote in a different order"
+            );
+        }
+
+        let copies = |key: &str| -> Vec<&str> {
+            first
+                .iter()
+                .filter(|(k, _)| k == key)
+                .map(|(_, v)| v.as_str())
+                .collect()
+        };
+        assert_eq!(
+            copies("Pentax:PentaxModelID"),
+            ["Optio SVi", "Optio SV"],
+            "the 0x0005 copy precedes the CameraInfo copy, as the oracle prints them"
+        );
+        assert_eq!(
+            copies("Pentax:LensType"),
+            ["smc PENTAX-DA 21mm F3.2 AL Limited", "M-42 or No Lens"],
+            "the 0x003f LensRec copy precedes the 0x0207 LensInfo copy"
         );
     }
 }

@@ -1060,8 +1060,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // Pentax on any given call, and both need the
                         // shared merge point (Canon's `Priority => 0`
                         // duplicates, Pentax's low-priority-retained
-                        // duplicate marker).
-                        for (tag_name, tag_value) in makernote_tags {
+                        // duplicate marker) -- in `in_record_order`, since
+                        // each occurrence takes the next file-order value.
+                        for (tag_name, tag_value) in
+                            crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(
+                                makernote_tags,
+                            )
+                        {
                             if tag_name.starts_with("Canon:")
                                 && let Some(raw) = value_forms.remove(&tag_name)
                             {
@@ -1714,7 +1719,9 @@ fn extract_rw2_embedded_exif_tags(
             &mut tags,
         ) {
             Ok(()) => {
-                for (tag_name, tag_value) in tags {
+                for (tag_name, tag_value) in
+                    crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(tags)
+                {
                     metadata.insert(tag_name, TagValue::new_string(tag_value));
                 }
             }
@@ -3332,7 +3339,9 @@ fn parse_adobe_makn_record(block: &[u8], make: &str, metadata: &mut MetadataMap)
     // `insert_low_priority_retained`'s synthetic `"<key> (N)"` duplicate
     // marker and records it as a real, always-losing occurrence rather than
     // a literal `"Tag (N)"` tag name.
-    for (tag_name, tag_value) in tags {
+    for (tag_name, tag_value) in
+        crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(tags)
+    {
         if attach_canon_value(metadata, &tag_name, &tag_value, &mut forms, true) {
             continue;
         }
@@ -4617,7 +4626,9 @@ fn parse_cr3_cmt3_makernotes(data: &[u8], metadata: &mut MetadataMap) {
     // demotes `Canon:FocalLength`/`FNumber`/`ExposureTime` to the
     // `Priority => 0` ExifTool itself declares for them; see that
     // function's doc comment for the `Canon.pm` citations.
-    for (tag_name, tag_value) in makernote_tags {
+    for (tag_name, tag_value) in
+        crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags)
+    {
         if attach_canon_value(metadata, &tag_name, &tag_value, &mut forms, true) {
             continue;
         }
@@ -4737,7 +4748,7 @@ fn parse_cr3_ctmd_makernotes(ctmd: &[u8], metadata: &mut MetadataMap) {
                                 // through `record_makernote_tag` for the
                                 // same `Priority => 0` demotion CMT3's own
                                 // handler applies.
-                                for (name, value) in tags {
+                                for (name, value) in crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(tags) {
                                     if attach_canon_value(metadata, &name, &value, &mut forms, true) { continue; }
                                     crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
                                         metadata,
@@ -5075,7 +5086,7 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
                     ) {
                         eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
                     } else {
-                        for (tag_name, tag_value) in makernote_tags {
+                        for (tag_name, tag_value) in crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags) {
                             if attach_canon_value(&mut metadata, &tag_name, &tag_value, &mut forms, false) { continue; }
                             metadata.insert(tag_name, TagValue::new_string(tag_value));
                         }
@@ -7963,7 +7974,7 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                             );
                                         } else {
                                             // Add parsed MakerNote tags to metadata
-                                            for (tag_name, tag_value) in makernote_tags {
+                                            for (tag_name, tag_value) in crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags) {
                                                 metadata.insert(
                                                     tag_name,
                                                     TagValue::new_string(tag_value),
