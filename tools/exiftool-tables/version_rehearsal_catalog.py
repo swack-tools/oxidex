@@ -92,14 +92,45 @@ def _official_api_url(url: str) -> bool:
     return parsed.path in {f"/repos/{REPOSITORY}/tags", f"/repositories/{REPOSITORY_ID}/tags"}
 
 
+def _page_coordinates(url: str) -> tuple[int, int]:
+    """Return the canonical official tag-page coordinates.
+
+    GitHub may switch the repository path in a Link header, but the page
+    sequence itself is part of the captured population.  Accepting arbitrary
+    query strings would let a saved page 1 point directly at page 4 and still
+    appear complete.  Parse query pairs rather than using a dict so duplicate
+    keys cannot make the effective page ambiguous.
+    """
+    if not _official_api_url(url):
+        raise Refused("pagination link is not the official ExifTool tag API")
+    parsed = urllib.parse.urlparse(url)
+    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    values: dict[str, str] = {}
+    for key, value in pairs:
+        if key in values:
+            raise Refused("pagination link has a duplicate query key")
+        values[key] = value
+    if set(values) != {"per_page", "page"}:
+        raise Refused("pagination link has unsupported or missing query keys")
+    try:
+        per_page = int(values["per_page"])
+        page = int(values["page"])
+    except ValueError as exc:
+        raise Refused("pagination link has a nonnumeric page coordinate") from exc
+    if not 1 <= per_page <= 100 or page < 1:
+        raise Refused("pagination link has an out-of-range page coordinate")
+    if values["per_page"] != str(per_page) or values["page"] != str(page):
+        raise Refused("pagination link has a noncanonical page coordinate")
+    return per_page, page
+
+
 def _next_url(headers: dict[str, str]) -> str | None:
     link = next((value for key, value in headers.items() if key.lower() == "link"), "")
     match = LINK_NEXT_RE.search(link)
     if match is None:
         return None
     url = match.group(1)
-    if not _official_api_url(url):
-        raise Refused("pagination next link is not the official ExifTool API")
+    _page_coordinates(url)
     return url
 
 
@@ -223,8 +254,17 @@ def capture_tag_catalog(get: Callable[[str], Response], captured_at: str | None 
     failures: list[dict[str, Any]] = []
     current = TAG_PAGE_URL
     seen: set[str] = set()
+    expected_per_page, expected_page = _page_coordinates(current)
     complete = True
     while current is not None:
+        try:
+            per_page, page = _page_coordinates(current)
+            if per_page != expected_per_page or page != expected_page:
+                raise Refused("pagination sequence is not contiguous")
+        except Refused as exc:
+            complete = False
+            failures.append({"kind": "page_malformed", "url": current, "detail": str(exc)})
+            break
         if current in seen:
             complete = False
             failures.append({"kind": "pagination_cycle", "url": current})
@@ -246,6 +286,10 @@ def capture_tag_catalog(get: Callable[[str], Response], captured_at: str | None 
             if not isinstance(listed, list):
                 raise Refused("tag page was not a JSON list")
             next_url = _next_url(response.headers)
+            if next_url is not None:
+                next_per_page, next_page = _page_coordinates(next_url)
+                if next_per_page != expected_per_page or next_page != expected_page + 1:
+                    raise Refused("pagination next link does not advance exactly one page")
         except Refused as exc:
             complete = False
             failures.append({"kind": "page_malformed", "url": current, "detail": str(exc), "body_sha256": record["body_sha256"]})
@@ -265,6 +309,7 @@ def capture_tag_catalog(get: Callable[[str], Response], captured_at: str | None 
                 item["identity"] = _resolve_numeric_tag(name, listed_entry, get)
             entries.append(item)
         current = next_url
+        expected_page += 1
     payload = {
         "schema": CAPTURE_SCHEMA,
         "kind": "oxidex_exiftool_official_tag_capture",
@@ -290,10 +335,16 @@ def verify_capture(capture: dict[str, Any]) -> None:
     payload = {key: value for key, value in capture.items() if key != "capture_sha256"}
     if capture.get("capture_sha256") != sha256_json(payload):
         raise Refused("capture manifest identity changed")
+    expected_per_page, expected_page = _page_coordinates(TAG_PAGE_URL)
+    if capture["complete"] and not capture["pages"]:
+        raise Refused("complete capture has no tag pages")
     source_rows: list[Any] = []
     for page_index, page in enumerate(capture["pages"]):
         if not isinstance(page, dict) or not _official_api_url(page.get("url", "")) or page.get("status") != 200:
             raise Refused("capture page identity is malformed")
+        per_page, page_number = _page_coordinates(page["url"])
+        if per_page != expected_per_page or page_number != expected_page:
+            raise Refused("capture page sequence is not contiguous")
         text = page.get("body_utf8")
         if not isinstance(text, str) or page.get("body_sha256") != sha256_bytes(text.encode("utf-8")):
             raise Refused("capture page body digest differs")
@@ -301,6 +352,10 @@ def verify_capture(capture: dict[str, Any]) -> None:
             raise Refused("capture page link header is malformed")
         if page.get("next_url") != _next_url({"Link": page["link_header"]}):
             raise Refused("capture pagination link differs from raw header")
+        if page["next_url"] is not None:
+            next_per_page, next_page = _page_coordinates(page["next_url"])
+            if next_per_page != expected_per_page or next_page != expected_page + 1:
+                raise Refused("capture pagination next link does not advance exactly one page")
         if page_index + 1 < len(capture["pages"]) and page["next_url"] != capture["pages"][page_index + 1].get("url"):
             raise Refused("capture page sequence differs from pagination links")
         if page_index + 1 == len(capture["pages"]) and capture["complete"] and page["next_url"] is not None:
@@ -313,6 +368,7 @@ def verify_capture(capture: dict[str, Any]) -> None:
             raise Refused("capture page body is not a tag list")
         for index, row in enumerate(listed):
             source_rows.append((page_index, index, row))
+        expected_page += 1
     if len(source_rows) != len(capture["entries"]):
         raise Refused("capture entries do not cover raw pages")
     for item, (page_index, index, listed) in zip(capture["entries"], source_rows, strict=True):
