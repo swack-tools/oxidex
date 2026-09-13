@@ -716,7 +716,10 @@ fn visit_order(table: &'static BinaryTable) -> Vec<(i64, Candidate)> {
 /// numeric for numeric Conditions; other values use the same Perl text the
 /// legacy representation can prove. A rational with width-dependent text is
 /// deliberately not invented.
-fn member_value(raw: &DecodedValue) -> Option<cond::MemberValue> {
+/// The exact scalar state a modeled `RawConv => $$self{Member} = $val`
+/// stores.  Keyed-directory readers use the same closed state domain; they
+/// must not stringify a value that this binary reader would refuse.
+pub(crate) fn member_value(raw: &DecodedValue) -> Option<cond::MemberValue> {
     match raw {
         DecodedValue::Integer(n) => Some(cond::MemberValue::Num(*n)),
         DecodedValue::StringBytes(bytes) => Some(cond::MemberValue::Bytes(bytes.clone())),
