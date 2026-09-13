@@ -12,13 +12,18 @@ VALUES are the real oracle's job: the same fixture is also run through
 tree, which must PASS. Run with
 `python3 -m unittest discover -s tools/exiftool-tables -p 'test*.py'`.
 """
+import copy
+import hashlib
+import os
 import pathlib
 import re
+import types
 import tempfile
 import unittest
 
 import reachability
 import verify
+import verify_serial_directory
 
 HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "fixtures" / "ifd_tables_sample.rs"
@@ -790,6 +795,249 @@ class ExpectedEdge(unittest.TestCase):
             e(self._fact(byteorder="LittleEndian"))[0], True))
         self.assertEqual(e(self._fact(maxsubdirs="20"))[0]["max_subdirs"], 20)
         self.assertIsNone(e(self._fact(maxsubdirs="many"))[0])
+
+
+class SerialProcessorProvenance(unittest.TestCase):
+    """The serial edge exception is a three-way native/artifact join.
+
+    These use raw oracle-shaped facts and a tiny independently shaped artifact
+    object. They do not invoke codegen: mutating any provenance operand must
+    make a custom target unwalked again.
+    """
+
+    @staticmethod
+    def _fact():
+        return {
+            "tagtable": "Image::ExifTool::Canon::AFInfo2", "start": "-", "base": "-",
+            "processproc": "-", "byteorder": "-", "validate": True, "fixformat": "-",
+            "subifd": False, "maxsubdirs": "-", "dirname": "-",
+        }
+
+    @staticmethod
+    def _code(deparse="sub body"):
+        return {
+            "__perl": "CODE", "resolved": True,
+            "__name": "Image::ExifTool::Canon::ProcessSerialData",
+            "source_file": "Image/ExifTool/Canon.pm",
+            "source_sha256": "a" * 64,
+            "__deparse": deparse,
+        }
+
+    def _helper(self, deparse=None):
+        return {
+            "__perl": "CODE", "resolved": True,
+            "__name": "Image::ExifTool::Canon::Validate",
+            "source_file": "Image/ExifTool/Canon.pm", "source_sha256": "a" * 64,
+            "__deparse": deparse or (
+                "($$@) { package Image::ExifTool::Canon; use strict; "
+                "(my($dataPt, $offset, @vals) = @_); "
+                "(my($dataVal) = &Image::ExifTool::Get16u($dataPt, $offset)); "
+                "my($val); foreach $val (@vals) { (($val == $dataVal) and (return 1)); } "
+                "(return (undef)); }"
+            ),
+        }
+
+    def _inputs(self):
+        fact = self._fact()
+        code = self._code()
+        identity = (
+            code["__name"], code["source_file"], code["source_sha256"],
+            hashlib.sha256(code["__deparse"].encode("utf-8")).hexdigest(),
+        )
+        tables = {("Canon", "AFInfo2"): types.SimpleNamespace(processor=identity)}
+        edge = ("Canon", "AFInfo2", "target", code)
+        return fact, edge, {("Canon", "AFInfo2"): code}, tables, self._helper()
+
+    def test_authenticated_serial_target_is_walkable(self):
+        fact, edge, processors, tables, helper = self._inputs()
+        got, _ = verify.expected_ifd_edge(
+            fact, ("Canon", "Main"), edge, processors, tables, helper
+        )
+        self.assertEqual((got["processor"], got["unwalked"]), ("Serial", False))
+
+    def test_processor_provenance_mutations_fail_closed(self):
+        fact, edge, processors, tables, helper = self._inputs()
+        # A stale serial artifact body/source record, a changed effective
+        # override, or a missing protocol record must not leave a Native edge
+        # executable merely because its TagTable looks familiar.
+        for changed_edge, changed_tables in (
+            ((edge[0], edge[1], edge[2], self._code("changed body")), tables),
+            (edge, {("Canon", "AFInfo2"): types.SimpleNamespace(processor=(
+                "Image::ExifTool::Canon::ProcessSerialData", "Image/ExifTool/Canon.pm",
+                "b" * 64, tables[("Canon", "AFInfo2")].processor[3],
+            ))}),
+            (None, tables),
+        ):
+            got, _ = verify.expected_ifd_edge(
+                fact, ("Canon", "Main"), changed_edge, processors, changed_tables, helper
+            )
+            self.assertEqual((got["processor"], got["unwalked"]), ("Native", True))
+
+    def test_pending_serial_validation_is_native_and_unwalked(self):
+        # A ProcessSerialData target whose native Validate has no accepted
+        # primitive is an explicit non-execution state. It must not be called
+        # Serial merely because the table processor has a familiar name.
+        gen = copy.deepcopy(_parsed())
+        oracle = copy.deepcopy(_oracle())
+        key = ("Exif", "Main", "33424")
+        code = self._code()
+        identity = verify._processor_identity(code)
+        oracle.subdirs[key]["validate"] = True
+        oracle.processors[key] = ("Kodak", "IFD", "target", code)
+        oracle.table_processors[("Kodak", "IFD")] = code
+        # Geometry helper is source-authenticated but outside the closed
+        # U16 membership primitive, so Native+unwalked is the only honest
+        # staged spelling.
+        oracle.validation_functions[key] = self._helper("($$$) { return 0; }")
+        gen.tags[key]["subdir"].update({
+            "validate": True, "validation": None, "processor": "Native",
+            "unwalked": "serial Validate lacks authenticated primitive",
+        })
+        serial = {("Kodak", "IFD"): types.SimpleNamespace(processor=identity)}
+        _, failed = verify.verify_ifd(gen, oracle, serial_tables=serial)
+        self.assertEqual(failed, 0)
+        gen.tags[key]["subdir"]["processor"] = "Serial"
+        gen.tags[key]["subdir"]["unwalked"] = None
+        _, failed = verify.verify_ifd(gen, oracle, serial_tables=serial)
+        self.assertGreater(failed, 0)
+
+    def test_processor_protocol_rows_are_strict(self):
+        code = self._code()
+        text = "\n".join((
+            "NATIVE_PROCESSOR\tCanon\tAFInfo2\t" + verify.json.dumps(code, sort_keys=True),
+            "IFD\tCanon\tMain\t38\tPROCESSOR\tCanon\tAFInfo2\ttarget\t"
+            + verify.json.dumps(code, sort_keys=True),
+        ))
+        oracle = verify.parse_ifd_oracle(text)
+        self.assertEqual(oracle.processors[("Canon", "Main", "38")][:3],
+                         ("Canon", "AFInfo2", "target"))
+        with self.assertRaises(SystemExit):
+            verify.parse_ifd_oracle(text + "\n" + text.splitlines()[1])
+
+
+
+@unittest.skipUnless(
+    os.environ.get("OXIDEX_IFD_SERIAL_MUTATION_TEST") == "1",
+    "set OXIDEX_IFD_SERIAL_MUTATION_TEST=1 with canonical artifact/oracle paths",
+)
+class GeneratedSerialEdgeMutations(unittest.TestCase):
+    """Live-artifact mutation fence for the IFD -> serial provenance join.
+
+    This is deliberately opt-in: the paths are produced by the sanctioned
+    canonical dump/regen flow, not copied into a hand-written fixture.  When
+    requested, a missing input is an error, never a skip.
+    """
+
+    def setUp(self):
+        required = {
+            name: os.environ.get(name) for name in (
+                "OXIDEX_IFD_GENERATED", "OXIDEX_SERIAL_GENERATED", "OXIDEX_IFD_SERIAL_ORACLE",
+            )
+        }
+        for name, raw in required.items():
+            self.assertTrue(raw, f"{name} is required when mutation test is enabled")
+            self.assertTrue(pathlib.Path(raw).is_file(), f"{name} is not a readable file: {raw!r}")
+        self.ifd_path = pathlib.Path(required["OXIDEX_IFD_GENERATED"])
+        self.serial_path = pathlib.Path(required["OXIDEX_SERIAL_GENERATED"])
+        self.oracle = verify.parse_ifd_oracle(
+            pathlib.Path(required["OXIDEX_IFD_SERIAL_ORACLE"]).read_text(encoding="utf-8")
+        )
+
+    def _verify(self, ifd_path, serial_path):
+        gen = verify.parse_ifd_rust(ifd_path)
+        serial = verify_serial_directory.parse_artifact(serial_path).tables
+        return verify.verify_ifd(gen, self.oracle, serial_tables=serial)
+
+    @staticmethod
+    def _canon_tag_span(src, key):
+        # Work inside the actual Canon Main tag literal. The test carries no
+        # layout/value knowledge: it merely chooses authenticated source rows
+        # whose generated processor/validation facts are under audit.
+        table_begin = src.index('pub static IFD_CANON_MAIN')
+        marker = f"id: 0x{key:04x},"
+        begin = src.index(marker, table_begin)
+        end = src.find("        IfdTag {", begin + len(marker))
+        return begin, len(src) if end < 0 else end
+
+    @classmethod
+    def _replace_for_canon_key(cls, src, key, old, new):
+        begin, end = cls._canon_tag_span(src, key)
+        part = src[begin:end]
+        if part.count(old) != 1:
+            raise AssertionError((key, old, part.count(old)))
+        return src[:begin] + part.replace(old, new) + src[end:]
+
+    @classmethod
+    def _remove_canon_validation(cls, src, key):
+        begin, end = cls._canon_tag_span(src, key)
+        label = "validation:"
+        value_start = src.index(label, begin, end) + len(label)
+        value_end = verify._value_span(src, value_start)
+        return src[:value_start] + " None" + src[value_end:]
+
+    @staticmethod
+    def _replace_afinfo2_serial_processor(src, old, new):
+        begin = src.index('pub static SERIAL_CANON_AFINFO2')
+        end = src.find('pub static ', begin + 1)
+        if end < 0:
+            end = len(src)
+        part = src[begin:end]
+        if part.count(old) != 1:
+            raise AssertionError((old, part.count(old)))
+        return src[:begin] + part.replace(old, new) + src[end:]
+
+    def test_actual_generated_canon_serial_provenance_mutations_fail(self):
+        import tempfile
+
+        original_ifd = self.ifd_path.read_text(encoding="utf-8")
+        original_serial = self.serial_path.read_text(encoding="utf-8")
+        _, baseline = self._verify(self.ifd_path, self.serial_path)
+        self.assertEqual(baseline, 0, "generated source must verify before mutations")
+        mutations = {
+            "serial_to_native": (
+                self._replace_for_canon_key(
+                    original_ifd, 0x0026,
+                    "processor: IfdSubdirProcessor::Serial,",
+                    "processor: IfdSubdirProcessor::Native,",
+                ), original_serial,
+            ),
+            "validation_removed": (
+                self._remove_canon_validation(original_ifd, 0x003c),
+                original_serial,
+            ),
+            "validation_operand_drift": (
+                self._replace_for_canon_key(
+                    original_ifd, 0x0026, "offset: 0,", "offset: 1,"
+                ), original_serial,
+            ),
+            "serial_processor_body_drift": (
+                original_ifd,
+                self._replace_afinfo2_serial_processor(
+                    original_serial,
+                    'source_body_sha256: "ab5cb31e06a991a02f5569f1c008303c0505d28caf7ae2ec044aeede9c9f999c",',
+                    'source_body_sha256: "' + "0" * 64 + '",',
+                ),
+            ),
+            "serial_downgrade_with_validation_removed": (
+                self._replace_for_canon_key(
+                    self._replace_for_canon_key(
+                        self._remove_canon_validation(original_ifd, 0x0026), 0x0026,
+                        "processor: IfdSubdirProcessor::Serial,",
+                        "processor: IfdSubdirProcessor::Native,",
+                    ), 0x0026, "unwalked: None,", 'unwalked: Some("forced downgrade"),',
+                ),
+                original_serial,
+            ),
+        }
+        with tempfile.TemporaryDirectory() as td:
+            td = pathlib.Path(td)
+            for name, (ifd, serial) in mutations.items():
+                ifd_path, serial_path = td / f"{name}-ifd.rs", td / f"{name}-serial.rs"
+                ifd_path.write_text(ifd, encoding="utf-8")
+                serial_path.write_text(serial, encoding="utf-8")
+                _, failed = self._verify(ifd_path, serial_path)
+                self.assertGreater(failed, 0, name)
+
 
 
 class ReachabilityCensus(unittest.TestCase):

@@ -105,8 +105,10 @@
 #                                                               Condition (6)
 #   IFD MODULE TABLE KEY  SUBDIR    TAGTABLE START BASE PROCESSPROC BYTEORDER VALIDATE
 #                                   FIXFORMAT SUBIFD MAXSUBDIRS DIRNAME       (15)
-#   IFD MODULE TABLE KEY  VALIDATION EXPRESSION CALLEE SOURCE_FILE SOURCE_SHA256 (9)
-#                                   -- scalar SubDirectory Validate provenance
+#   IFD MODULE TABLE KEY  VALIDATION EXPRESSION CALLEE SOURCE_FILE SOURCE_SHA256 JSON-HELPER (10)
+#                                   -- scalar SubDirectory Validate provenance/body fact
+#   IFD MODULE TABLE KEY  PROCESSOR TARGET_MODULE TARGET_TABLE ORIGIN JSON-FACT (9)
+#                                   -- final effective child processor after all modules load
 #
 # KEY is the integer tag id as ExifTool keys it, or `"$k#$i"` for the i-th
 # alternative of a `_variants` arrayref (same convention as the binary rows).
@@ -154,6 +156,17 @@ sub clean { my $s = txt($_[0]); $s =~ s/[\t\n\r]+/ /g; return $s }
 # Source-file provenance comes from the live callee CODE ref, not the dump
 # or generated audit record. A changed helper invalidates a stale artifact
 # even when its owning module's tag tables did not change.
+sub keyed_validation_helper_fact {
+    my ($expression) = @_;
+    return processor_unresolved_fact('', 'validation_expression_unavailable')
+        unless defined $expression && !ref $expression
+            && $expression =~ /^\s*((?:[A-Za-z_]\w*::)+[A-Za-z_]\w*)\s*\(/;
+    my $callee = $1;
+    no strict 'refs';
+    my $cv = *{$callee}{CODE};
+    return processor_code_ref_fact($cv, $callee);
+}
+
 sub keyed_validation_source {
     my ($expression) = @_;
     return ('', '', '') unless defined $expression && !ref $expression;
@@ -673,6 +686,12 @@ sub dash_text {
     return ref $v ? '__REF__' : clean($v);
 }
 
+# Resolve effective SubDirectory processors only after all modules have loaded:
+# an override or target table can be rebound by a later module.  The raw
+# `SUBDIR` record remains the source spelling; this separate fact is the
+# authenticated executable binding the generated serial edge depends on.
+my @ifd_subdir_processors;
+
 # Emit every IFD row for one tag-info entry `$e` at `$key`. `$plain` is true
 # for a scalar-keyed entry and false for a `_variants` alternative (only the
 # former gets a CONDITION row -- see the header).
@@ -747,9 +766,14 @@ sub emit_ifd_entry {
             || (defined $fix && !ref $fix && $fix eq 'ifd')) ? 1 : 0;
         print join("\t", @p, 'SUBDIR', $tagtable, $start, $base, $proc, $bo, $validate,
                    dash_text($fix), $subifd, $max, $dir), "\n";
+        push @ifd_subdir_processors, {
+            module => $mod, table => $sym, key => $key, tagtable => $tagtable,
+            override => (ref $sd eq 'HASH' ? $sd->{ProcessProc} : undef),
+        };
         if (ref $sd eq 'HASH' && defined $sd->{Validate} && !ref $sd->{Validate}) {
             print join("\t", @p, 'VALIDATION', clean($sd->{Validate}),
-                       keyed_validation_source($sd->{Validate})), "\n";
+                       keyed_validation_source($sd->{Validate}),
+                       JSON::PP->new->canonical->encode(keyed_validation_helper_fact($sd->{Validate}))), "\n";
         }
     }
 
@@ -925,6 +949,39 @@ for my $key (sort keys %processor_tables) {
     $processor_facts{$key} = $fact;
     print join("\t", 'NATIVE_PROCESSOR', $mod, $sym,
         JSON::PP->new->canonical->encode($fact)), "\n";
+}
+
+# The raw IFD SUBDIR fact says whether ProcessProc was present, but its target
+# table and any CODE override are only final after the complete module walk.
+# Bind that effective processor here with the same source/deparse provenance
+# used for NATIVE_PROCESSOR.  This is source-derived protocol, never a
+# Canon/table selector.
+for my $edge (sort {
+       $a->{module} cmp $b->{module}
+    || $a->{table} cmp $b->{table}
+    || $a->{key} cmp $b->{key}
+} @ifd_subdir_processors) {
+    my ($target_mod, $target_table) = ('-', '-');
+    if ($edge->{tagtable} =~ /^Image::ExifTool::([A-Za-z_]\w*)::([A-Za-z_]\w*)$/) {
+        ($target_mod, $target_table) = ($1, $2);
+    }
+    my ($origin, $fact);
+    if (defined $edge->{override}) {
+        $origin = 'override';
+        $fact = ref($edge->{override}) eq 'CODE'
+            ? processor_code_ref_fact($edge->{override}, 'SubDirectory::ProcessProc')
+            : processor_unresolved_fact('SubDirectory::ProcessProc', 'subdirectory_processproc_not_code');
+    } elsif ($target_mod ne '-') {
+        $origin = 'target';
+        $fact = $processor_facts{"$target_mod\t$target_table"}
+            // processor_unresolved_fact("Image::ExifTool::${target_mod}::${target_table}::PROCESS_PROC",
+                'target_processproc_unavailable');
+    } else {
+        $origin = 'unresolved';
+        $fact = processor_unresolved_fact('SubDirectory::TagTable', 'target_table_unparseable');
+    }
+    print join("\t", 'IFD', $edge->{module}, $edge->{table}, $edge->{key}, 'PROCESSOR',
+        $target_mod, $target_table, $origin, JSON::PP->new->canonical->encode($fact)), "\n";
 }
 for my $key (sort keys %processor_tables) {
     my ($mod, $sym) = split /\t/, $key, 2;
