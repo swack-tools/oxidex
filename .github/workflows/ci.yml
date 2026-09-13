@@ -582,6 +582,12 @@ jobs:
           export OXIDEX_TABLES_JSON="$DUMP" OXIDEX_SONY_DUMP="$DUMP"
           export OXIDEX_SERIAL_RUST="$GITHUB_WORKSPACE/src/exiftool_tables/serial_tables.rs"
           python3 tools/exiftool-tables/verify_serial_directory.py "$OXIDEX_SERIAL_RUST" "$DUMP"
+          # Exercise mutations of the actual generated parent/child artifacts,
+          # including a downgrade that removes both processor and validation.
+          export OXIDEX_IFD_SERIAL_MUTATION_TEST=1
+          export OXIDEX_IFD_GENERATED="$GITHUB_WORKSPACE/src/exiftool_tables/ifd_tables.rs"
+          export OXIDEX_SERIAL_GENERATED="$OXIDEX_SERIAL_RUST"
+          export OXIDEX_IFD_SERIAL_ORACLE="$PROCESSORS"
           export OXIDEX_WORD_KEYED_RUST="$GITHUB_WORKSPACE/src/exiftool_tables/keyed_tables.rs"
           export OXIDEX_PROCESSOR_INVENTORY="$PROCESSORS"
           export OXIDEX_WORD_PROCESSOR=Image::ExifTool::CanonCustom::ProcessCanonCustom

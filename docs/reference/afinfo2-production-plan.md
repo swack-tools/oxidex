@@ -98,3 +98,34 @@ regeneration, exact exported-fixture oracle checks, the pair after retirement,
 upgrade proof, full corpus and final hosted acceptance remain required before
 merge. No Canon reader is counted as merged retirement yet; no project-wide
 percentage follows from this bounded work.
+
+The exact seven TIFF byte vectors used by the public-reader tests are now
+exported and independently replayed through pinned ExifTool, in both display
+and numeric modes. All 14 native invocations exit successfully and all seven
+sets of asserted values/omissions agree. These corrected successful fixtures
+have no maker-note offset warning; the warning in the earlier scratch layout
+is retained as historical evidence only. Full duplicate selection and native
+warning output remain outside these public-reader assertions.
+
+The final display corpus pair at runtime `3d0353f4` covers all 4,238 files and
+518,919 native tags. Both builds have 468,087 correct rows, VALUE 420, MISSING
+12,240, RENAME 22 and EXTRA 1,560. There are no meaningful per-file raw-output
+changes, lost matched keys, input-hash changes or parse/crash failures. The
+supervisor retains exit 1 for native's existing zero-byte FujiFilmISPro.jpg
+diagnostic; both OxiDex processes exit 0 for that file. Elapsed time: 281.730
+seconds. This demonstrates a producer migration without changing corpus output.
+
+A separate immutable CLI triple comparison uses the seven exact fixtures and
+three real files, limited to source-defined AFInfo2 fields plus RawDataOffset.
+It records eight display and 25 numeric-form improvements with zero scoped
+regressions. Fourteen unchanged observations are native Unknown fields
+requested with `-u`, which the current OxiDex CLI does not expose; these are
+not silently counted as successful extraction. Native warning text remains
+outside that CLI comparison.
+
+The first official regeneration attempt at `62535db7` completed its tier-1
+generation and independent checks, but failed the write-set guard because the
+coordinator edited this plan and CI configuration while it ran. No declared
+artifact changed. This is an invalid complete-run attempt, not an accepted
+regeneration. Commit those edits, freeze the tree and rerun both tiers before
+claiming the pipeline passes; the failed log and snapshots are retained.
