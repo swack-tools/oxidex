@@ -8740,15 +8740,14 @@ mod tests {
         assert_eq!(result.get("Canon:Canon_AFInfo_0x000b"), None);
     }
 
-    /// Mirrors the AFInfo2 record of
-    /// `/tmp/oxidex-exiftool-cache/combined-samples/Canon1DmkIII.jpg`, whose
-    /// `exiftool -s` output is `AFAreaMode: Single-point AF`, `NumAFPoints: 45`,
+    /// Exercises the AFInfo2 values of the Canon1DmkIII.jpg sample, whose
+    /// pinned ExifTool output is `AFAreaMode: Single-point AF`, `NumAFPoints: 45`,
     /// `AFImageWidth: 3888`, `AFImageHeight: 2592`, `AFPointsInFocus: 13`.
     #[test]
     fn test_parse_af_info2_array() {
         let n = 45usize;
         let mut af_info2: Vec<i16> = vec![
-            0,    // key 0: AFInfoSize
+            0,    // key 0: deliberately invalid AFInfoSize, repaired below
             2,    // key 1: AFAreaMode -> 'Single-point AF'
             45,   // key 2: NumAFPoints
             45,   // key 3: ValidAFPoints
@@ -8763,6 +8762,15 @@ mod tests {
         af_info2.extend(std::iter::repeat_n(-554i16, n)); // key 11: AFAreaYPositions
         af_info2.extend_from_slice(&[0x2000, 0x0000, 0x0000]); // key 12: bit 13 set
 
+        // Native Canon::Main validates the child's stored byte size before
+        // reading AFInfo2. The old fixture left this zero and only passed
+        // because the retired manual decoder skipped that validation.
+        let invalid = canon_makernote_with_short_array(0x0026, &af_info2);
+        let rejected = parse_canon_makernote_impl(&invalid, ByteOrder::LittleEndian).unwrap();
+        assert!(!rejected.contains_key("Canon:AFAreaMode"));
+        assert!(!rejected.contains_key("Canon:NumAFPoints"));
+
+        af_info2[0] = i16::try_from(af_info2.len() * 2).unwrap();
         let data = canon_makernote_with_short_array(0x0026, &af_info2);
 
         let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();
