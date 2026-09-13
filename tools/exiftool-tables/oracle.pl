@@ -546,18 +546,22 @@ sub processor_native_value {
         return { kind => 'scalar_ref', value => processor_native_value($$value, $depth + 1, $seen) };
     }
     my $id = refaddr($value);
-    return { kind => 'cycle', ref_kind => $kind } if defined $id && $seen->{$id}++;
+    return { kind => 'cycle', ref_kind => $kind } if defined $id && $seen->{$id};
+    $seen->{$id} = 1 if defined $id;
+    my $result;
     if ($kind eq 'ARRAY') {
-        return { kind => 'array', items => [ map { processor_native_value($_, $depth + 1, $seen) } @$value ] };
-    }
-    if ($kind eq 'HASH') {
+        $result = { kind => 'array', items => [ map { processor_native_value($_, $depth + 1, $seen) } @$value ] };
+    } elsif ($kind eq 'HASH') {
         my %map;
         for my $key (sort keys %$value) {
             $map{txt($key)} = processor_native_value($value->{$key}, $depth + 1, $seen);
         }
-        return { kind => 'hash', map => \%map };
+        $result = { kind => 'hash', map => \%map };
+    } else {
+        $result = { kind => 'ref', ref_kind => $kind };
     }
-    return { kind => 'ref', ref_kind => $kind };
+    delete $seen->{$id} if defined $id;
+    return $result;
 }
 
 sub processor_native_property {
