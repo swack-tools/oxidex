@@ -382,9 +382,31 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // make, now pinned 13.59's 0xa20e); the C3 PNG pin fails with the engine
     // off.
     //
-    // Decision D-2 (its own commit): not in this tree. ApertureValue 0x9202
-    // and MaxApertureValue 0x9205 stay on their hand arms
-    // (`EXIF_IFD_HAND_KEPT`).
+    // Decision D-2 (its own commit, after the call site): ApertureValue
+    // 0x9202 and MaxApertureValue 0x9205 leave the hand arm for the engine,
+    // whose `2**($val/2)` withholds a value Perl numifies but the runtime
+    // cannot (`undef` from a 0/0 rational, the two-count `2.971 1`, `inf`
+    // from a zero denominator): absent instead of the hand's wrong `undef` /
+    // `2.971 1` / `inf` (ExifTool prints 1.0 / 2.8 / Inf; construct K-N turns
+    // them into matches). A `2**($val/2)` that overflows (CanonEOS20Da.jpg's
+    // 2147483648/1) keeps the hand arm's `Inf` (the non-finite rule). Same
+    // instrument, control = the call site:
+    //     D-2        TOTAL 150 15925 0 47 928 158
+    // exactly 9 VALUE -> MISSING: ApertureValue SamsungDigimax220SE,
+    // HMX-H300; MaxApertureValue SamsungGT-B2710, GT-S3370, GT-S5350,
+    // HMX-H300, SM-C200, SM-R210, SonyDPP-FP60; 0 files otherwise moved;
+    // `-j`/`-n`/`--extended-output -j` over 457 files: only those 9 rows and
+    // the crafted `undef` / `2.971 1` / `inf` carriers' rows removed. The
+    // crafted 7/0 MaxApertureValue (hand `inf`, oracle `Inf`) is the one
+    // class conformance.py, which compares numerically, files as matched ->
+    // MISSING (6 crafted rows, no corpus file). Writes are control's: a
+    // by-name edit or deletion of a withheld value reaches its entry through
+    // the writers' row-less rule (the call site's); 64 by-name writes -- set,
+    // delete, `EXIF:`, bare name -- of the 9 corpus and 7 crafted pairs, and
+    // 6 -TagsFromFile copies onto them, keep control's bytes and status
+    // (control's own APEX encoding included: `-ExifIFD:MaxApertureValue=2.8`
+    // stores 14/5, which pinned 13.59 reads as 2.6). Reverting D-2's commit
+    // alone restores the hand arms.
     //
     // Decision D-3 (its own commit): not in this tree. `SubDirectory` edge
     // ids keep their hand rows (`EXIF_IFD_SILENCE_EDGES` is false).

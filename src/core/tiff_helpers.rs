@@ -862,12 +862,17 @@ pub fn parse_exif_subifd(
 }
 
 /// Engine-reported ExifIFD ids the hand arm keeps producing for now, one
-/// landing at a time (`DirEngineRows::keep_hand`). D-2 moves these: 0x9202
-/// ApertureValue and 0x9205 MaxApertureValue, whose `ValueConv`
-/// (`2**($val/2)`) the engine refuses to run on a value Perl would numify
-/// but the generated runtime cannot (`undef` from a 0/0 rational, the
-/// two-count `2.971 1`), so moving them turns 9 census VALUE rows into
-/// MISSING -- its own, separately revertable decision.
+/// landing at a time (`DirEngineRows::keep_hand`).
+///
+/// Decision D-2 of slice E-2 moved 0x9202 ApertureValue and 0x9205
+/// MaxApertureValue to the engine: where their `ValueConv` (`2**($val/2)`)
+/// meets a value Perl would numify but the generated runtime cannot (`undef`
+/// from a 0/0 rational, the two-count `2.971 1`, `inf` from a zero
+/// denominator), the engine withholds the tag -- an absent tag instead of the
+/// hand arm's wrong `undef` / `2.971 1` / `inf` (ExifTool prints `1.0` /
+/// `2.8` / `Inf`); construct K-N turns those into matches. A value whose
+/// `2**($val/2)` overflows keeps the hand arm's `Inf` (`exif_dir_engine`'s
+/// non-finite rule).
 ///
 /// 0x9400 AmbientTemperature (`PrintConv => '"$val C"'`, Exif.pm:2532-2538)
 /// stays with its hand arm until the generator can tell a raw `$val` from a
@@ -881,7 +886,7 @@ pub fn parse_exif_subifd(
 /// `-0` would break every computed zero instead. The hand arm prints the
 /// rational's sign (`exiftool_compat` rule 16b), so it keeps the row: the
 /// engine made 5 matched corpus rows VALUE (review finding, E-2). Sorted.
-const EXIF_IFD_HAND_KEPT: &[u16] = &[0x9202, 0x9205, 0x9400];
+const EXIF_IFD_HAND_KEPT: &[u16] = &[0x9400];
 
 /// Whether `SubDirectory` edge ids (other than the 0xa005 pointer) report
 /// nothing in the ExifIFD, as in ExifTool (Exif.pm:7103-7104: a
@@ -4484,23 +4489,67 @@ mod exif_subifd_tests {
         }
     }
 
-    /// D-2 is its own commit: until it lands, ApertureValue and
-    /// MaxApertureValue keep their hand arms (the value and its APEX `-n`
-    /// form as before the slice).
+    /// Decision D-2: ApertureValue and MaxApertureValue are the engine's.
+    /// A readable APEX value prints ExifTool's `2**($val/2)` f-number with
+    /// its ValueConv number as the `-n` form (ORA t/images Canon.jpg:
+    /// ApertureValue `14.0` / `-n` 14.0000278113061); a value the ValueConv
+    /// cannot numify -- a 0/0 rational, or the two-count `2.971 1` of
+    /// SamsungGT-B2710.jpg -- was read and withheld, so it stays absent
+    /// rather than falling back to the hand arm's `undef` / `2.971 1`
+    /// (ExifTool numifies both: `1.0`, `2.8`; construct K-N).
     #[test]
-    fn aperture_values_keep_their_hand_arms_until_d2() {
+    fn aperture_values_are_the_engines_and_an_unnumifiable_one_is_absent() {
         let at = tail_at(2);
         let data = exif_block(
             &[(0x9202, RATIONAL, 1, at), (0x9205, RATIONAL, 1, at + 8)],
             &[rational(5, 1), rational(0, 0)].concat(),
         );
         let engine = walk_exif(&data, None, exif_main(), &[]);
-        let hand = walk_exif(&data, None, None, &[]);
-        for key in ["ExifIFD:ApertureValue", "ExifIFD:MaxApertureValue"] {
-            assert!(engine.get(key).is_some(), "{key}");
-            assert_eq!(engine.get(key), hand.get(key), "{key}");
-            assert_eq!(engine.occurrences_for(key).len(), 1, "{key}: one producer");
+        assert_eq!(engine.get_string("ExifIFD:ApertureValue"), Some("5.7"));
+        match engine.without_print_conv().get("ExifIFD:ApertureValue") {
+            Some(TagValue::Float(f)) => assert!((f - 2f64.powf(2.5)).abs() < 1e-12, "{f}"),
+            other => panic!("-n ApertureValue: {other:?}"),
         }
+        assert!(engine.get("ExifIFD:MaxApertureValue").is_none());
+        let hand = walk_exif(&data, None, None, &[]);
+        assert!(
+            hand.get("ExifIFD:MaxApertureValue").is_some(),
+            "the hand's undef"
+        );
+
+        let data = exif_block(
+            &[(0x9205, RATIONAL, 2, tail_at(1))],
+            &[rational(2971, 1000), rational(1, 1)].concat(),
+        );
+        assert!(
+            walk_exif(&data, None, exif_main(), &[])
+                .get("ExifIFD:MaxApertureValue")
+                .is_none()
+        );
+
+        // Review finding (E-2, D-2): `2**($val/2)` of 2147483648/1
+        // (CanonEOS20Da.jpg's ApertureValue) overflows; pinned ExifTool
+        // prints `Inf` (crafted `ap_inf.jpg`, `-j -G1 -a -ExifIFD:all`), the
+        // compiled `sprintf("%.1f")` printed Rust's `inf`. The engine drops
+        // the row as its own absence and the hand arm prints `Inf`, as
+        // before D-2. A zero denominator's `inf` input (7/0) is the D-2
+        // class: withheld, absent (ORA `Inf`, the hand arm's `inf`).
+        let data = exif_block(
+            &[(0x9202, RATIONAL, 1, at), (0x9205, RATIONAL, 1, at + 8)],
+            &[rational(2_147_483_648, 1), rational(7, 0)].concat(),
+        );
+        let engine = walk_exif(&data, None, exif_main(), &[]);
+        let hand = walk_exif(&data, None, None, &[]);
+        let aperture = engine
+            .get("ExifIFD:ApertureValue")
+            .expect("the hand arm's row");
+        assert_eq!(Some(aperture), hand.get("ExifIFD:ApertureValue"));
+        assert_eq!(
+            crate::core::exiftool_compat::format_tag_value("ExifIFD:ApertureValue", aperture)
+                .as_string(),
+            Some("Inf")
+        );
+        assert!(engine.get("ExifIFD:MaxApertureValue").is_none());
     }
 
     /// Review finding (E-2): AmbientTemperature as a signed 0/-1 -- the

@@ -550,6 +550,19 @@ fn census_exif_ifd_carriers_match_the_pinned_oracle() {
     }
 }
 
+/// Decision D-2 (its own commit): MaxApertureValue is the engine's, whose
+/// ValueConv (`2**($val/2)`) cannot numify the two-count `2.971 1`
+/// SamsungGT-B2710.jpg writes (pinned ExifTool numifies it and prints
+/// `2.8`): absent, not the hand arm's wrong `2.971 1`. Construct K-N turns
+/// it into a match. Reverting D-2 alone restores the hand row and drops this.
+#[test]
+#[ignore = "needs /tmp/oxidex-exiftool-cache/combined-samples"]
+fn census_d2_an_unnumifiable_max_aperture_value_is_absent() {
+    let b2710 = carrier(&format!("{CORPUS}/Samsung"), "SamsungGT-B2710.jpg")
+        .expect("Samsung/SamsungGT-B2710.jpg is part of the pinned corpus");
+    assert!(b2710.get("ExifIFD:MaxApertureValue").is_none());
+}
+
 /// PNG `eXIf` (entry point C3, `embedded.rs`): no corpus file carries an
 /// InteropIFD this way, so this wraps the TIFF block of t/images Canon.jpg
 /// in a minimal PNG and pins what the pinned oracle prints for the same
