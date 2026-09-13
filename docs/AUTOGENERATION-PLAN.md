@@ -89,6 +89,17 @@ Commit and push reviewable work-branch checkpoints as they are ready, with
 unfinished checks visible. Publishing a checkpoint does not have to wait for
 the complete merge gate. Merging still requires the relevant completed checks.
 
+The current directory-validation checkpoint now completes normal regeneration:
+31 declared outputs, including the inactive keyed definitions, with every
+previous table artifact unchanged. Seven native validation calls have generated
+operands and independent reader proof. Five child edges remain unsupported.
+The next small milestones are to verify and run the shared word-directory
+processor for four of those edges, implement the remaining dynamic-length
+processor, and resolve the four omitted parent rows. Each completion must
+reduce a named blocker count while preserving native behavior. Canon carrier
+activation and removal of the duplicate readers come after those checks;
+publishing these definitions alone earns no runtime automation percentage.
+
 ## How the machines and agents will work
 
 Terra workers take independent tasks: shared compiler changes, independent
@@ -125,6 +136,11 @@ again, and the verifier rejects the stale artifact.
 
 Next, regenerate canonical artifacts and ledgers, resolve the five remaining
 edges and other parent blockers, and prove both CRW and JPEG carrier behavior.
+Four edges share a length-prefixed U16 key/value processor. Compile that native
+body and its model predicate into one shared descriptor, then independently
+verify it and connect its reader. A fifth edge needs dynamic field lengths and
+must remain unsupported until that separate capability is proven. Neither
+camera names nor parent tag IDs belong in the new execution mechanism.
 The i7 currently accepts SSH authentication but fails to open a command session;
 canonical regeneration is blocked, and its lock/job state is unverified. Publish
 checked source checkpoints while that host requirement is unresolved. None of

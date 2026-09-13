@@ -8,7 +8,7 @@ the pin remains 13.59.
 
 Conservative IFD-aware upgrade classification, one generated-output inventory,
 verified Canon CODE references and isolated upgrade orchestration are implemented.
-The inventory contains 30 outputs with the
+The inventory contains 31 outputs, including inactive keyed definitions and the
 [Sony plain producer recovery](../../docs/reference/sony-plain-generator-recovery.md). See the
 [execution plan](../../docs/UPGRADE-NEXT-STEPS.md) for original validation evidence
 and the remaining work. The
@@ -21,7 +21,7 @@ sides; classifier AUTO/HAND percentages do not measure upgrade coding effort.
 ## Commands and scope
 
 ```sh
-just regen-tables          # primary generation, including binary and IFD tables
+just regen-tables          # primary generation, including binary, IFD and keyed tables
 just verify-tables         # independent checks of committed table declarations
 just regen-tables-all      # primary generation plus all declared downstream tables
 just regen-tables-tier2    # downstream generation only
@@ -33,12 +33,12 @@ scripts refuse a dirty tree unless the explicit override is provided and recorde
 These direct generation commands modify the caller's artifacts. Use the bump
 command below when comparing versions in isolated source trees.
 
-`regen.sh` generates binary and IFD tables, file identification, Composite
+`regen.sh` generates binary, IFD and inactive keyed tables, file identification, Composite
 definitions and compiled Composite expressions, FITS names, and expression/value-
 conversion ledgers. `regen-all.sh` adds vendor subdirectory tables, Nikon AF-point
 grids, bespoke transcriptions, recovered Sony/Minolta/Nikon generators, Macintosh
 CJK charset tables, GeoTIFF key maps, DICOM dictionaries and lens alternatives.
-`artifacts.py` is the single output inventory: 8 tier-1 and 22 tier-2 artifacts.
+`artifacts.py` is the single output inventory: 9 tier-1 and 22 tier-2 artifacts.
 Both scripts resolve
 their output paths and formatting sets from it; the bump's promotion/recovery sets
 and CI's tier-2 comparison use the same inventory. The bump classifier also
@@ -46,6 +46,13 @@ reads it when identifying the two vendor files still lacking producers. Composit
 and all four implicit charset outputs are included. Nikon AF points and Leica
 lens data preserve handwritten sections and are accounted for as whole mixed
 files, including during backup.
+
+Keyed definitions are generated, formatted and independently checked by the
+normal tier-1 command. Their presence does not enable a parser: unsupported
+child processors remain explicit blockers and runtime activation is separate.
+Native reader diagnostics retain the error text and source line while using
+authenticated library-relative source paths, so moving the selected library
+does not change these captured facts.
 
 `just bump-exiftool <version>` invokes `upgrade_transaction.py` through the
 existing shell entry point. See the transaction contract below and the historical
@@ -106,7 +113,7 @@ for the restored field, bounded validation and remaining real-file acceptance.
 ## Generated-output inventory and write checks
 
 ```sh
-python3 tools/exiftool-tables/artifacts.py paths                 # all 30 outputs
+python3 tools/exiftool-tables/artifacts.py paths                 # all 31 outputs
 python3 tools/exiftool-tables/artifacts.py paths --tier 2        # downstream outputs
 python3 tools/exiftool-tables/artifacts.py paths --tier 1 --kind rust --absolute
 python3 tools/exiftool-tables/artifacts.py path composite-compute
@@ -223,7 +230,7 @@ conditions or conversion semantics. Catalog size is not extraction coverage.
 ```text
 ExifTool loaded tables -> dump_tables.pl -> tables.json
   -> verify_exprs.py -> expression PASS ledger
-  -> codegen.py -> binary_tables.rs + ifd_tables.rs + conversion accounting
+  -> codegen.py -> binary_tables.rs + ifd_tables.rs + keyed_tables.rs + conversion accounting
   -> codegen_composite.py -> Composite definitions and expression computations
   -> downstream generators -> vendor-specific artifacts
 

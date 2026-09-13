@@ -13,8 +13,8 @@ class ManifestTests(unittest.TestCase):
     def test_unique_valid_partition_and_selectors(self):
         artifacts.validate()
         all_items = artifacts.select()
-        self.assertEqual(len(all_items), 30)
-        self.assertEqual(len(artifacts.select(1)), 8)
+        self.assertEqual(len(all_items), 31)
+        self.assertEqual(len(artifacts.select(1)), 9)
         self.assertEqual(len(artifacts.select(2)), 22)
         self.assertEqual(set(all_items), set(artifacts.select(1) + artifacts.select(2)))
         self.assertTrue(all(a.path.endswith('.rs') for a in artifacts.select(kind='rust')))

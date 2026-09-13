@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -88,6 +89,30 @@ class BinaryReaderContract(unittest.TestCase):
             self.assertEqual(fact["source_file"], "Image/ExifTool.pm")
             self.assertEqual(fact["source_sha256"], hashlib.sha256(self.core.read_bytes()).hexdigest())
 
+    def test_capture_is_portable_across_absolute_relative_and_copied_libraries(self):
+        # A real native error and warning retain their text and source line;
+        # neither may encode which path loaded this identical Perl source.
+        self.write_core("v", 'warn "boundary warning" if $_[1] > length(${$_[0]}); '
+                             "return DoUnpackStd('S', @_);")
+        first = self.dump()
+        copied = Path(self.tmp.name) / "other checkout" / "lib"
+        shutil.copytree(self.lib, copied)
+        for lib in ("lib", str(copied)):
+            with self.subTest(lib=lib):
+                result = subprocess.run(
+                    ["/usr/bin/perl", str(DUMP), lib], cwd=self.tmp.name,
+                    check=True, text=True, capture_output=True,
+                )
+                self.assertEqual(json.loads(result.stdout), first)
+        for case in first["get16u_probe"]["boundary_cases"]:
+            if case["name"] != "offset_beyond_end":
+                self.assertIsNone(case["error"])
+                continue
+            self.assertEqual(case["expected_outcome"], "error")
+            self.assertTrue(case["matches_expected_native_outcome"])
+            self.assertRegex(case["error"], r"outside of string in unpack at Image/ExifTool\.pm line [0-9]+\.\n$")
+            self.assertRegex(case["warning"], r"^boundary warning at Image/ExifTool\.pm line [0-9]+\.\n$")
+
     def test_canonical_table_dump_uses_isolated_contract_snapshot(self):
         standalone = self.dump()
         result = subprocess.run(
@@ -122,6 +147,23 @@ class BinaryReaderContract(unittest.TestCase):
             self.assertTrue(fact["resolved"])
             self.assertEqual(fact["__name"], expected_names[name])
         self.assertIn("Fixture", table_dump["modules"])
+
+    def test_restore_diagnostics_are_portable_without_relabeling_unknown_locations(self):
+        self.write_core("v", 'warn "unmapped at /outside/Image/ExifTool.pm line 19.\\n" '
+                             "if $_[1] > length(${$_[0]}); return DoUnpackStd('S', @_);")
+        # Fail precisely the two restore calls, after the observation orders
+        # and after the complete numeric/boundary probe. Preserve native errors.
+        self.core.write_text(self.core.read_text().replace(
+            "sub SetByteOrder {", "our $set_calls = 0;\nsub SetByteOrder {\n"
+            '++$set_calls; die "restore failure" if $set_calls == 3 || $set_calls == 8;'))
+        result = self.dump()
+        for section in ("observations", "get16u_probe"):
+            self.assertRegex(result[section]["restore_error"],
+                             r"^restore failure at Image/ExifTool\.pm line [0-9]+\.\n$")
+        for case in result["get16u_probe"]["boundary_cases"]:
+            if case["name"] == "offset_beyond_end":
+                self.assertEqual(case["warning"],
+                                 "unmapped at /outside/Image/ExifTool.pm line 19.\n")
 
     def test_parent_loaded_builtin_override_blocks_contract(self):
         self.fixture.write_text(textwrap.dedent("""\

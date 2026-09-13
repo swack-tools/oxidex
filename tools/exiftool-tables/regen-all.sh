@@ -3,8 +3,8 @@
 # Run both currently wired ExifTool-table generation tiers against the
 # pinned release. Remaining source-resolution/transaction gaps are in README.md.
 #
-# Tier 1 (tools/exiftool-tables/regen.sh) produces binary_tables.rs, the
-# filetype tables, Composite definitions and FITS keywords. Tier 2 is
+# Tier 1 (tools/exiftool-tables/regen.sh) produces binary, IFD and inactive keyed
+# directory tables, filetype tables, Composite definitions and FITS keywords. Tier 2 is
 # everything downstream of it that regen.sh never touched: the MakerNote
 # sub-directory tables (codegen_subdirs.py), the Nikon AF-point name grids
 # (dump_af_points.pl + codegen_af_points.py), the six one-off

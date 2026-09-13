@@ -2996,6 +2996,7 @@ def main():
             f"perl:    {_PERL} -- {capability}",
             f"target:  {args.generated_rs}",
             f"ifd:     {ifd_path}" + ("" if ifd_present else "  (absent -> IFD stage skipped)"),
+            f"keyed:   {args.keyed_generated or '(not requested)'}",
         ],
     )
     (

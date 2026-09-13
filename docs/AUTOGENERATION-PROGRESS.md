@@ -48,16 +48,34 @@ reads and ten boundary cases. Changing only native `Get16u` from a 16-bit to a
 32-bit read blocks all seven newly generated checks and rejects all seven
 stale artifact checks.
 
-Focused Python checks, 17 Rust reader tests, three Rust primitive tests and the
-repository's exact CI lint command pass. The
-[checkpoint](reference/directory-validation-checkpoint.md) records the final
+The complete Python tool suite passes 638 tests in 194 seconds. Focused Python
+checks, 18 Rust reader tests, three Rust primitive tests and the repository's
+exact CI lint command also pass. The
+[checkpoint](reference/directory-validation-checkpoint.md) records the current
 Python count and scope. Native probing also corrected a boundary bug: a short
 read at the buffer end coerces to zero, whereas starting beyond the buffer
 rejects the child. Earlier failed attempts remain recorded.
 
-Canonical dump/ledger regeneration is pending: the i7 authenticates but cannot
-open a command session, so its current lock/job state is unverified. No
-production activation, corpus gain or manual Canon retirement is claimed.
+Canonical regeneration now passes locally using isolated Perl 5.38.2 and
+pinned ExifTool 13.59. The official two-tier command completed in 158 seconds;
+all prior table artifacts remain byte-identical. The new keyed definitions
+are the 31st declared output, and the refreshed expression ledger authenticates
+the new native-source dump. All 607 expressions passed, with 16,789 comparisons,
+zero disagreements and 14 inapplicable probe errors. The independent keyed
+inventory accounts for 61 source rows, including four explicit omissions.
+
+The full native dump is byte-identical for absolute and relative library
+locations after diagnostic paths were made portable. Source-file hashes and
+error text/line numbers remain intact. The local interpreter also reproduced
+the historical canonical dump exactly before the capture change.
+
+Published source checkpoints are `51e4d864` and `46f585d1`; the reviewed next
+word-directory compiler is published separately at `6a993607`. Regeneration
+and routine committed-artifact verification are part of this follow-up. These
+are work-branch checkpoints, not merged production activation. Five child
+edges and other parent omissions still block the Canon route; no corpus gain
+or manual Canon retirement is claimed. The i7 command channel remains
+unverified; this regeneration did not use or claim its shared lock.
 
 ## What the pilot must prove
 

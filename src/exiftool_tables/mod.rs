@@ -47,6 +47,7 @@ pub mod ifd_schema;
 pub mod ifd_tables;
 pub mod keyed_engine;
 pub mod keyed_schema;
+pub mod keyed_tables;
 pub mod runtime;
 pub mod subdir;
 pub mod validation;

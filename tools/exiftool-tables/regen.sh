@@ -49,6 +49,9 @@ OUT="$(artifact_path binary)"
 # second output file. Written together with $OUT so the two can never come
 # from different dumps (their EXIFTOOL_VERSION stamps are tested equal).
 IFD_OUT="$(artifact_path ifd)"
+# Generate and verify inactive keyed definitions too; publishing their source
+# facts does not enable a runtime parser route.
+KEYED_OUT="$(artifact_path keyed)"
 JSON="$CACHE/tables-$VERSION.json"
 EXPR_LEDGER="$(artifact_path expr-ledger)"
 VALUE_CONV_LEDGER="$(artifact_path value-ledger)"
@@ -79,6 +82,7 @@ python3 "$HERE/verify_exprs.py" "$JSON" \
 echo
 echo ">> generating Rust"
 python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
+    --keyed-out "$KEYED_OUT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
 echo
@@ -117,7 +121,8 @@ echo ">> verifying generated Rust against ExifTool (independent path)"
 # verdict -- on every run since the check landed (reproduced 2026-09-06 on the
 # i7). A generator must never commit on the operator's behalf, so the
 # alternative ordering is not available.
-OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/verify.py" "$OUT" "$LIB" --oracle "$HERE/oracle.pl"
+OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/verify.py" "$OUT" "$LIB" --oracle "$HERE/oracle.pl" \
+    --keyed-generated "$KEYED_OUT"
 
 echo
-echo ">> done: $OUT and $IFD_OUT"
+echo ">> done: $OUT, $IFD_OUT and $KEYED_OUT"
