@@ -46,9 +46,10 @@ and zero skips**, in 566.450 seconds. The initial threaded-Perl failure was
 reproduced locally and fixed; the eight focused probe tests pass on both
 threaded and non-threaded Perl 5.38.2.
 
-The next reviewed source batch is committed on
-`codex/ciff-opaque-native-integration-20260913`; its first published complete
-inventory checkpoint is `37c32d58`. It accounts for all eight source-selected
+The source batch merged in PR #756 as `eb700430` at 11:46 UTC. All five
+hosted checks passed at `298917dd`, including 735 canonical Python tests,
+zero failures and zero skips, in 653.244 seconds. Its first published complete
+inventory checkpoint was `37c32d58`. It accounts for all eight source-selected
 serial tables: **130 entries, 132 alternatives, 115 clear at the source gate
 and 17 with explicit refusals**. One table also retains a priority-policy
 blocker. A complete processor grammar rejects changed executable behavior;
@@ -62,13 +63,37 @@ ordering. Final output groups/conversions and actual image digest computation
 remain outside these probes' proof. Warnings are recorded separately from the
 chronological callback trace. The combined checkpoint at `66c430c6` passes **37 focused tests, zero
 failures and zero skips**, on both threaded and non-threaded Perl 5.38.2
-against pinned ExifTool 13.59. Full hosted checks remain required for merge.
+against pinned ExifTool 13.59. The full hosted checks then passed for #756.
 
-The next delivery is one shared serial reader and source-driven Rust emitter,
-followed by native/Rust replay. Their worker commits are staged separately and
-still need combined compilation and review. No production route is enabled;
-**one unsupported Canon child processor, four omitted parent rows and zero
-Canon manual readers retired** remain the production status.
+The shared serial reader and Rust emitter are now combined on
+`codex/shared-serial-integration-20260913`, with pipeline checkpoint `9693ef9e`.
+The [runtime checkpoint](reference/serial-runtime-checkpoint.md) records the
+proof and its limits. All eight tables remain accounted for: **106 emitted
+alternatives and 26 explicit omissions**, with zero independent verifier
+mismatches. This is stricter than the source-only 115/17 split because the
+emitter also refuses unproved runtime formats and missing-member conditions.
+Four tables clear the definition gate; native/Rust replay currently covers
+Real AudioV3 and AudioV4 only.
+
+All 64 focused Python tests pass with zero failures and zero skips in
+65.023 seconds. The full `cargo clippy --all-features -- -D warnings` check
+and formatting check pass. All 13 shared-reader unit tests pass. The explicit
+native/Rust test passes
+its ten cases on both threaded and non-threaded Perl 5.38.2, using the actual
+generated tables. Official regeneration passes across 32 declared artifacts;
+all generated Rust is unchanged. The expression ledger initially records the
+local absolute invocation paths. Re-running its producer with the portable
+invocation reproduces the committed ledger exactly. All 607 expressions agree
+on 16,789 applicable comparisons; 14 inputs are inapplicable.
+
+This checkpoint still needs its final hosted gate and merge. No production
+route is enabled; **one unsupported Canon child processor, four omitted parent
+rows and zero Canon manual readers retired** remain the production status.
+The Real AudioV4 retirement draft is separately committed and published at
+`118afac7`. Source review accepts its narrow behavior, but it still needs a
+fresh Rust build, native output comparison, full-corpus pair and upgrade-flow
+proof. Its metadata occurrence API retains the existing group-0/group-2
+limitations; native warning output and V3/V5 activation also remain unfinished.
 
 The first additional retirement candidate is Real AudioV4's manually specified
 31-entry sequence. It uses the same native serial processor and can prove reuse
