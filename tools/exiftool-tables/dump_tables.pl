@@ -295,6 +295,18 @@ my @TAG_KEYS = qw(
     FixFormat SubIFD
 );
 
+# Write routing is deliberately captured beside, rather than inside, the read
+# projection above.  Read codegen has a closed grammar and must not become more
+# permissive merely because a source row names a write-only control.  The
+# sidecar below retains the raw source values for a later write compiler to
+# authenticate and model independently.
+my @WRITE_CONTROL_KEYS = qw(
+    Writable WriteGroup RawConvInv ValueConvInv PrintConvInv
+    Validate Mandatory DelValue Deletable WriteAlso WriteCheck WriteCondition
+    WriteHook WriteLast WritePseudo CanCreate
+);
+my %WRITE_KNOWN_TAG_KEY = map { $_ => 1 } (@TAG_KEYS, @WRITE_CONTROL_KEYS);
+
 sub scrub {
     my ($v, $depth) = @_;
     $depth //= 0;
@@ -362,6 +374,227 @@ sub classify_conv {
     return { kind => 'other', dump => scrub($v) };
 }
 
+# The live table graph contains runtime references such as Composite tags'
+# `Table` back-pointer.  They are not serializable source operands and may be
+# cyclic.  Preserve their reference kind explicitly while keeping ordinary
+# source hashes, arrays, scalar refs, CODE, undef, zero, and empty strings
+# distinct.  This is intentionally separate from read-side `scrub`, whose
+# historical output must remain byte-for-byte stable.
+sub write_scrub {
+    my ($v, $depth, $seen) = @_;
+    $depth //= 0;
+    $seen //= {};
+    return undef unless defined $v;
+    return { __deep => 1 } if $depth > 12;
+    my $kind = ref($v);
+    return to_text($v) unless $kind;
+    if ($kind eq 'CODE') {
+        my $name = code_name($v);
+        my $source = deparse($v);
+        return {
+            __perl => 'CODE', __opaque => JSON::PP::true,
+            (defined $name ? (__name => $name) : ()),
+            (defined $source ? (__deparse => $source) : ()),
+        };
+    }
+    return write_scrub($$v, $depth + 1, $seen) if $kind eq 'SCALAR';
+    my $id = refaddr($v);
+    return { __ref => $kind, __cycle => JSON::PP::true }
+        if defined $id && $seen->{$id};
+    $seen->{$id} = 1 if defined $id;
+    my $out;
+    if ($kind eq 'ARRAY') {
+        $out = [ map { write_scrub($_, $depth + 1, $seen) } @$v ];
+    } elsif ($kind eq 'HASH') {
+        my %hash;
+        for my $key (sort keys %$v) {
+            $hash{to_text($key)} = write_scrub($v->{$key}, $depth + 1, $seen);
+        }
+        $out = \%hash;
+    } else {
+        $out = { __ref => $kind };
+    }
+    delete $seen->{$id} if defined $id;
+    return $out;
+}
+
+# Write facts preserve the original value even for a conversion.  The
+# classification is a convenience for a future compiler, never a replacement
+# for the raw source operand.  In particular, a present-but-undef value is
+# distinguishable from an absent key through the surrounding `present` flag.
+sub write_source_property {
+    my ($hash, $key) = @_;
+    return { present => JSON::PP::false } unless exists $hash->{$key};
+    my %property = (
+        present => JSON::PP::true,
+        value => write_scrub($hash->{$key}),
+    );
+    if ($key =~ /^(?:RawConvInv|ValueConvInv|PrintConvInv)$/) {
+        $property{classification} = classify_conv($hash->{$key});
+    }
+    return \%property;
+}
+
+sub is_table_property {
+    my ($key) = @_;
+    no warnings 'once';
+    return $TABLE_META{$key} || $Image::ExifTool::specialTags{$key};
+}
+
+sub dump_write_entry {
+    my ($entry) = @_;
+    my $kind = ref($entry) || 'SCALAR';
+    if (!$entry || !ref($entry)) {
+        return {
+            entry_kind => $kind,
+            value => scrub($entry),
+        };
+    }
+    if ($kind eq 'ARRAY') {
+        return {
+            entry_kind => 'ARRAY',
+            # Array order is native variant-selection order.  Do not sort it.
+            alternatives => [ map { dump_write_entry($_) } @$entry ],
+        };
+    }
+    return { entry_kind => $kind, value => scrub($entry) } unless $kind eq 'HASH';
+
+    my %properties;
+    my %unknown;
+    for my $key (sort keys %$entry) {
+        my $property = write_source_property($entry, $key);
+        $properties{to_text($key)} = $property;
+        $unknown{to_text($key)} = $property unless $WRITE_KNOWN_TAG_KEY{$key};
+    }
+    my %controls = map { $_ => write_source_property($entry, $_) } @WRITE_CONTROL_KEYS;
+    return {
+        entry_kind => 'HASH',
+        properties => \%properties,
+        write_controls => \%controls,
+        unknown_properties => \%unknown,
+    };
+}
+
+sub dump_write_table {
+    my ($module, $table, $full_name, $hash) = @_;
+    my (%properties, %unknown);
+    for my $key (sort keys %$hash) {
+        next unless is_table_property($key);
+        my $property = write_source_property($hash, $key);
+        $properties{to_text($key)} = $property;
+        $unknown{to_text($key)} = $property unless $TABLE_META{$key};
+    }
+    my %controls = map { $_ => write_source_property($hash, $_) }
+        qw(WRITABLE WRITE_GROUP WRITE_PROC CHECK_PROC);
+    my %rows;
+    for my $key (sort keys %$hash) {
+        next if is_table_property($key) || $key =~ /^_/;
+        $rows{to_text($key)} = dump_write_entry($hash->{$key});
+    }
+    return {
+        module => $module,
+        table => $table,
+        full_name => $full_name,
+        table_properties => \%properties,
+        write_controls => \%controls,
+        unknown_table_properties => \%unknown,
+        rows => \%rows,
+        row_count => scalar(keys %rows),
+    };
+}
+
+# ExifTool's write functions are often only prototype declarations while an
+# input table is being loaded.  Its AUTOLOAD convention derives the file from
+# the fully-qualified function name.  Requiring that file is a load operation,
+# not a call: it cannot run an arbitrary writer against dummy metadata.  We do
+# this only for a prototype-only CV; normal loaded procedures keep their actual
+# table-owned binding unchanged.
+sub prototype_only_code {
+    my ($cv) = @_;
+    my $body = deparse($cv);
+    return 0 unless defined $body;
+    return $body =~ /^\s*\([^{};]*\)\s*;\s*$/s ? 1 : 0;
+}
+
+sub write_autoload_file {
+    my ($name) = @_;
+    return undef unless defined $name && $name =~ /^(?:[A-Za-z_]\w*::)+[A-Za-z_]\w*$/;
+    my @part = split /::/, $name;
+    return undef unless @part >= 3 && $part[0] eq 'Image' && $part[1] eq 'ExifTool';
+    return "Image/ExifTool/Write$part[2].pl" if @part == 4;
+    return 'Image/ExifTool/Shift.pl' if $part[-1] eq 'ShiftTime';
+    return 'Image/ExifTool/Writer.pl';
+}
+
+sub hydrate_write_procedures {
+    my ($tables) = @_;
+    my %status;
+    for my $full_name (sort keys %$tables) {
+        my $hash = $tables->{$full_name}{hash};
+        for my $key (qw(WRITE_PROC CHECK_PROC)) {
+            next unless ref($hash->{$key}) eq 'CODE';
+            my $cv = $hash->{$key};
+            next unless prototype_only_code($cv);
+            my $name = code_name($cv);
+            my $file = write_autoload_file($name);
+            my $id = refaddr($cv);
+            if (!defined $file) {
+                $status{$id} = { reason => 'autoload_target_unavailable' };
+                next;
+            }
+            my $loaded = eval { require $file; 1 };
+            if (!$loaded) {
+                $status{$id} = { reason => 'autoload_load_failed', autoload_file => $file };
+                next;
+            }
+            # A successful require which leaves the stored CV as a prototype
+            # is still not an implementation fact.
+            if (prototype_only_code($cv)) {
+                $status{$id} = { reason => 'autoload_did_not_define', autoload_file => $file };
+            } else {
+                $status{$id} = { autoload_file => $file };
+            }
+        }
+    }
+    return \%status;
+}
+
+sub effective_write_code_fact {
+    my ($hash, $key, $fallback_name, $lib_abs, $status) = @_;
+    return { present => JSON::PP::false } unless exists $hash->{$key};
+    my $value = $hash->{$key};
+    my $declared = write_source_property($hash, $key);
+    if (ref($value) ne 'CODE') {
+        return {
+            present => JSON::PP::true,
+            declared => $declared,
+            effective => unresolved_code_fact($fallback_name, 'write_proc_not_code'),
+        };
+    }
+    my $load = $status->{refaddr($value)};
+    if ($load && $load->{reason}) {
+        my $fact = unresolved_code_fact(code_name($value) // $fallback_name, $load->{reason});
+        $fact->{autoload_file} = $load->{autoload_file} if exists $load->{autoload_file};
+        return { present => JSON::PP::true, declared => $declared, effective => $fact };
+    }
+    if (prototype_only_code($value)) {
+        return {
+            present => JSON::PP::true,
+            declared => $declared,
+            effective => unresolved_code_fact(code_name($value) // $fallback_name,
+                'prototype_only_write_proc'),
+        };
+    }
+    # Capture only the bounded package-local reader dependency, as for
+    # PROCESS_PROC.  Writer admission still needs a distinct body recognizer.
+    return {
+        present => JSON::PP::true,
+        declared => $declared,
+        effective => code_ref_fact($value, $fallback_name, $lib_abs, undef, undef, 0),
+        ($load && exists $load->{autoload_file} ? (autoload_file => $load->{autoload_file}) : ()),
+    };
+}
+
 sub dump_tag_entry {
     my ($entry) = @_;
     my $r = ref $entry;
@@ -402,7 +635,7 @@ sub dump_tag_entry {
 }
 
 sub dump_module {
-    my ($module, $validate_function_names, $processor_tables) = @_;
+    my ($module, $validate_function_names, $processor_tables, $write_tables) = @_;
     my $pkg = "Image::ExifTool::$module";
     eval "require $pkg; 1" or do {
         return { module => $module, error => "$@" };
@@ -448,6 +681,13 @@ sub dump_module {
                 cv => $hash->{PROCESS_PROC}, module => $module, table => $sym,
             };
         }
+        # The write sidecar owns a raw reference to every live tag table, not
+        # only tables which currently look writable.  A later compiler must be
+        # able to tell absent controls from an unsupported or newly introduced
+        # one, and zero-row tables are source facts too.
+        $write_tables->{"${pkg}::${sym}"} = {
+            hash => $hash, module => $module, table => $sym,
+        };
 
         $tables{$sym} = {
             full_name => "${pkg}::${sym}",
@@ -517,9 +757,11 @@ my %out;
 my %subdirectory_validate_function_names;
 my %subdirectory_validate_functions;
 my %processor_tables;
+my %write_tables;
+my %native_write_tables;
 my ($ok, $failed) = (0, 0);
 for my $m (@modules) {
-    my $r = dump_module($m, \%subdirectory_validate_function_names, \%processor_tables);
+    my $r = dump_module($m, \%subdirectory_validate_function_names, \%processor_tables, \%write_tables);
     if ($r->{error}) {
         $failed++;
         warn "SKIP $m: $r->{error}";
@@ -548,6 +790,24 @@ for my $full_name (sort keys %processor_tables) {
     $out{$entry->{module}}{tables}{$entry->{table}}{meta}{PROCESS_PROC} = $fact;
 }
 
+# Resolve prototype-only writer declarations after every selected module is
+# loaded.  This is intentionally after the read dump was built: writer module
+# loading must not alter the existing read projection.  The sidecar gets the
+# table's stored CV, its final implementation source fact, and raw source
+# controls separately.
+my $write_autoload_status = hydrate_write_procedures(\%write_tables);
+for my $full_name (sort keys %write_tables) {
+    my $entry = $write_tables{$full_name};
+    my $fact = dump_write_table($entry->{module}, $entry->{table}, $full_name, $entry->{hash});
+    $fact->{effective_write_proc} = effective_write_code_fact(
+        $entry->{hash}, 'WRITE_PROC', "${full_name}::WRITE_PROC",
+        $EXIFTOOL_LIB_ABS, $write_autoload_status);
+    $fact->{effective_check_proc} = effective_write_code_fact(
+        $entry->{hash}, 'CHECK_PROC', "${full_name}::CHECK_PROC",
+        $EXIFTOOL_LIB_ABS, $write_autoload_status);
+    $native_write_tables{$entry->{module}}{$entry->{table}} = $fact;
+}
+
 # The child captures byte-order state without changing this table-walking
 # process. These facts prove that the final loaded CODE refs are the same ones
 # the child observed; a later module override makes the contract unresolved.
@@ -567,6 +827,10 @@ print $json->encode({
     modules_ok       => $ok,
     modules_failed   => $failed,
     modules          => \%out,
+    # Facts only: no reader or writer consumes this sidecar yet.  Keeping it
+    # separate prevents write-only properties from becoming accidental read
+    # admission or changing the existing module/table/tag projection.
+    native_write_tables => \%native_write_tables,
     subdirectory_validate_functions => \%subdirectory_validate_functions,
     native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
 });
