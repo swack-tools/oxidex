@@ -49,6 +49,9 @@ pub mod keyed_engine;
 pub mod keyed_schema;
 pub mod keyed_tables;
 pub mod runtime;
+pub mod serial_engine;
+pub mod serial_schema;
+pub mod serial_tables;
 pub mod subdir;
 pub mod validation;
 
@@ -87,6 +90,16 @@ pub use runtime::{
     decode_binary_table_variants, decode_bits, fractional_census, to_exiftool_value, to_tag_value,
     unknown_fallback,
 };
+pub use serial_engine::{
+    SerialDir, SerialEmissionSink, SerialWalkResult, process_serial_directory,
+};
+pub use serial_schema::{
+    OmittedSerialNativeRow, OmittedSerialNativeTable, SerialCount, SerialEntry, SerialFormat,
+    SerialProcessorFacts, SerialTable, SerialTag,
+};
+pub use serial_tables::{
+    ALL_SERIAL_TABLES, OMITTED_SERIAL_NATIVE_ROWS, OMITTED_SERIAL_NATIVE_TABLES,
+};
 pub use subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
 pub use validation::{SizeExpectation, U16SizeCheck};
 
@@ -106,6 +119,16 @@ pub fn find_table(module: &str, table: &str) -> Option<&'static BinaryTable> {
 #[must_use]
 pub fn find_keyed_table(module: &str, table: &str) -> Option<&'static KeyedDirectoryTable> {
     ALL_KEYED_TABLES
+        .iter()
+        .copied()
+        .find(|t| t.module == module && t.table == table)
+}
+
+/// Look up source-generated serial facts. A table in this inventory remains
+/// inactive until a caller explicitly enables it through [`SerialEmissionSink`].
+#[must_use]
+pub fn find_serial_table(module: &str, table: &str) -> Option<&'static SerialTable> {
+    ALL_SERIAL_TABLES
         .iter()
         .copied()
         .find(|t| t.module == module && t.table == table)

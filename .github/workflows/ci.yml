@@ -374,6 +374,16 @@ jobs:
             -- --ignored --exact --nocapture | tee "$RUNNER_TEMP/word-native-replay.log"
           # Cargo also succeeds when a mistyped exact selector runs no tests.
           grep -F 'test result: ok. 1 passed; 0 failed;' "$RUNNER_TEMP/word-native-replay.log"
+      - name: Compare generated serial tables with pinned native processor
+        env:
+          EXIFTOOL_PERL: perl
+        run: |
+          set -euo pipefail
+          export OXIDEX_PINNED_EXIFTOOL="$(dirname "$EXIFTOOL")"
+          cargo test --all-features --test serial_directory_native \
+            real_audio_serial_tables_replay_pinned_native_callbacks \
+            -- --ignored --exact --nocapture | tee "$RUNNER_TEMP/serial-native-replay.log"
+          grep -F 'test result: ok. 1 passed; 0 failed;' "$RUNNER_TEMP/serial-native-replay.log"
       - name: Verify C header is up-to-date
         run: |
           cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
@@ -569,6 +579,8 @@ jobs:
           # the source-rebinding, complete-inventory and native replay cases.
           export OXIDEX_PINNED_EXIFTOOL="$ROOT"
           export OXIDEX_TABLES_JSON="$DUMP" OXIDEX_SONY_DUMP="$DUMP"
+          export OXIDEX_SERIAL_RUST="$GITHUB_WORKSPACE/src/exiftool_tables/serial_tables.rs"
+          python3 tools/exiftool-tables/verify_serial_directory.py "$OXIDEX_SERIAL_RUST" "$DUMP"
           export OXIDEX_WORD_KEYED_RUST="$GITHUB_WORKSPACE/src/exiftool_tables/keyed_tables.rs"
           export OXIDEX_PROCESSOR_INVENTORY="$PROCESSORS"
           export OXIDEX_WORD_PROCESSOR=Image::ExifTool::CanonCustom::ProcessCanonCustom

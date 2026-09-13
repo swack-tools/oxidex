@@ -70,6 +70,14 @@ else:
         dump(args[0]);output(flag('-o'),'binary');output(flag('--ifd-out'),'ifd')
         output(flag('--keyed-out'),'keyed')
         output(flag('--value-conv-ledger-out'),'value-ledger')
+    elif name=='serial_directory.py':
+        dump(args[0]);output(flag('--rust-output'),'serial')
+        assert flag('--rust-output')==artifact('serial_directory')
+        output(flag('--output'),'serial-report')
+    elif name=='verify_serial_directory.py':
+        assert pathlib.Path(args[0]).resolve()==artifact('serial_directory')
+        assert pathlib.Path(args[0]).read_text()=='generated explicit-A serial\n'
+        dump(args[1])
     elif name in ('codegen_filetypes.py','codegen_fits.py','gen_sony_main_extra_tables.py','gen_minolta_a100_tables.py','gen_nikon_settings_tables.py','gen_sony_plain_tables.py'):
         dump(args[0]);output(flag('-o'),name)
     elif name=='codegen_composite.py':
@@ -204,6 +212,11 @@ class RegenerationShellTests(unittest.TestCase):
                 for name in self.extra_leaves():
                     self.assertEqual(names.count(name), 1, names)
                 self.assertEqual(names.count('verify_exprs.py'), int(full))
+                self.assertEqual(names.count('serial_directory.py'), int(full))
+                self.assertEqual(names.count('verify_serial_directory.py'), int(full))
+                if full:
+                    self.assertLess(names.index('serial_directory.py'), names.index('rustfmt'))
+                    self.assertGreater(names.index('verify_serial_directory.py'), names.index('rustfmt'))
                 self.assertEqual(names.count('rustfmt'), 2 if full else 1)
                 format_calls = [c for c in calls if c['tool'] == 'rustfmt']
                 for call, tier in zip(format_calls, (1, 2) if full else (2,)):
@@ -226,6 +239,15 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(calls[-1]['tool'], leaf)
                 self.assertIn('injected leaf failure: ' + leaf, result.stderr)
                 self.assertIn('regeneration write-set PASS', result.stdout)
+                self.assertNotIn('>> done:', result.stdout)
+
+    def test_serial_producer_and_verifier_failures_survive_tier_one_guard(self):
+        for leaf in ('serial_directory.py', 'verify_serial_directory.py'):
+            with self.subTest(leaf=leaf):
+                result, calls = self.run_regeneration(full=True, env={'CONTROL_FAIL': leaf})
+                self.assertEqual(result.returncode, 47, result.stdout + result.stderr)
+                self.assertEqual(calls[-1]['tool'], leaf)
+                self.assertIn('injected leaf failure: ' + leaf, result.stderr)
                 self.assertNotIn('>> done:', result.stdout)
 
     def test_undeclared_writes_refuse_on_success_and_on_leaf_failure(self):

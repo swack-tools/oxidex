@@ -1312,6 +1312,11 @@ verify-tables version="":
         --keyed-generated src/exiftool_tables/keyed_tables.rs \
         --word-processor Image::ExifTool::CanonCustom::ProcessCanonCustom \
         --native-inventory --native-inventory-table Sony:Tag202a
+    # Serial completeness is checked against a fresh native source population.
+    SERIAL_DUMP="$CACHE/serial-verify-$VERSION.json"
+    "${EXIFTOOL_PERL:-perl}" tools/exiftool-tables/dump_tables.pl "$LIB" > "$SERIAL_DUMP"
+    python3 tools/exiftool-tables/verify_serial_directory.py \
+        src/exiftool_tables/serial_tables.rs "$SERIAL_DUMP"
     # Step 27's structure check above proves an edge was transcribed. This
     # live-Perl oracle proves its generated Start/Base arithmetic evaluates
     # identically (ExifTool.pm:10118-10137), using this exact pinned tree.
