@@ -39,6 +39,11 @@
 #   NATIVE_PROCESSOR MODULE TABLE JSON-FACT -- every table-owned PROCESS_PROC,
 #                                               emitted after all modules load;
 #                                               separate from KEYED scope
+#   NATIVE_PROCESSOR_TABLE MODULE TABLE JSON-FACT -- table identity/properties,
+#                                               including zero-row tables
+#   NATIVE_PROCESSOR_ROW MODULE TABLE RAW_ID VARIANT JSON-FACT -- one record
+#                                               per plain entry or array alternative;
+#                                               VARIANT is '-' or zero-based decimal
 #
 # The trailing empty column on HOOK/VARFMT lines is not decorative: it is
 # what keeps them from colliding with a NAME line on column count (both
@@ -123,6 +128,7 @@ use Cwd qw(abs_path);
 use Digest::SHA qw(sha256_hex);
 use File::Spec ();
 use FindBin;
+use Scalar::Util qw(refaddr);
 use lib $FindBin::Bin;
 use JSON::PP ();
 use OxiDex::NativeReaderContract ();
@@ -519,6 +525,127 @@ sub flag_fact {
     return exists $x->{$name} ? $x->{$name} : $e->{$name};
 }
 
+# The custom-processor inventory is intentionally source-shaped.  It never
+# recognizes a processor body or a generated layout: consumers join a table's
+# independently captured PROCESS_PROC fact to these raw table/entry records.
+# A property distinguishes absent from present-but-undef and retains reference
+# kinds without evaluating arbitrary native code.
+sub processor_native_value {
+    my ($value, $depth, $seen) = @_;
+    $depth //= 0;
+    $seen //= {};
+    return { kind => 'undef' } unless defined $value;
+    return { kind => 'deep' } if $depth > 4;
+    my $kind = ref($value);
+    return { kind => 'scalar', value => txt($value) } unless $kind;
+    if ($kind eq 'CODE') {
+        my $name = sub_name($value);
+        return { kind => 'code', (length($name) ? (name => $name) : ()) };
+    }
+    if ($kind eq 'SCALAR') {
+        return { kind => 'scalar_ref', value => processor_native_value($$value, $depth + 1, $seen) };
+    }
+    my $id = refaddr($value);
+    return { kind => 'cycle', ref_kind => $kind } if defined $id && $seen->{$id}++;
+    if ($kind eq 'ARRAY') {
+        return { kind => 'array', items => [ map { processor_native_value($_, $depth + 1, $seen) } @$value ] };
+    }
+    if ($kind eq 'HASH') {
+        my %map;
+        for my $key (sort keys %$value) {
+            $map{txt($key)} = processor_native_value($value->{$key}, $depth + 1, $seen);
+        }
+        return { kind => 'hash', map => \%map };
+    }
+    return { kind => 'ref', ref_kind => $kind };
+}
+
+sub processor_native_property {
+    my ($hash, $key) = @_;
+    return { present => JSON::PP::false } unless ref($hash) eq 'HASH' && exists $hash->{$key};
+    return { present => JSON::PP::true, value => processor_native_value($hash->{$key}) };
+}
+
+# A SubDirectory may hold the actual target table hash, which is cyclic and not
+# a literal edge operand.  Preserve literal edge members exactly while making a
+# target reference explicit rather than recursively serializing a second table.
+sub processor_native_edge {
+    my ($value) = @_;
+    return processor_native_value($value) unless ref($value) eq 'HASH';
+    my %map;
+    for my $key (sort keys %$value) {
+        my $item = $value->{$key};
+        if ($key eq 'TagTable' && ref($item)) {
+            $map{txt($key)} = { kind => 'ref', ref_kind => ref($item) };
+        } else {
+            $map{txt($key)} = processor_native_value($item);
+        }
+    }
+    return { kind => 'hash', map => \%map };
+}
+
+my @PROCESSOR_ROW_PROPERTIES = qw(
+    Name Description Format Writable Count Groups Notes Mask BitShift Condition
+    PrintConv ValueConv RawConv PrintConvInv ValueConvInv Hook SubDirectory Flags
+    Unknown Hidden Avoid Binary Protected List Priority ByteOrder DataMember
+    RelatedTag SeparateTable PrintHex Base Offset ChangeBase Require Desire Inhibit
+    BitsPerWord BitsTotal FixFormat SubIFD
+);
+
+sub processor_entry_name {
+    my ($entry) = @_;
+    return txt($entry) unless ref($entry);
+    return undef unless ref($entry) eq 'HASH';
+    my $expanded = expanded_flags($entry);
+    my $name = exists($expanded->{Name}) ? $expanded->{Name} : $entry->{Name};
+    return defined($name) && !ref($name) ? txt($name) : undef;
+}
+
+sub processor_entry_fact {
+    my ($entry) = @_;
+    my $kind = ref($entry) || 'SCALAR';
+    my %fact = (entry_kind => $kind, name => processor_entry_name($entry));
+    return \%fact unless ref($entry) eq 'HASH';
+    my %properties;
+    for my $key (@PROCESSOR_ROW_PROPERTIES) {
+        $properties{$key} = $key eq 'SubDirectory'
+            ? (exists($entry->{$key})
+                ? { present => JSON::PP::true, value => processor_native_edge($entry->{$key}) }
+                : { present => JSON::PP::false })
+            : processor_native_property($entry, $key);
+    }
+    my $expanded = expanded_flags($entry);
+    my %expanded_properties;
+    for my $key (sort keys %$expanded) {
+        $expanded_properties{txt($key)} = processor_native_value($expanded->{$key});
+    }
+    $fact{properties} = \%properties;
+    $fact{expanded_properties} = \%expanded_properties;
+    my %effective_flags;
+    for my $key (qw(Unknown Binary List Protected Avoid Priority)) {
+        $effective_flags{$key} = processor_native_value(flag_fact($entry, $expanded, $key));
+    }
+    $fact{effective_flags} = \%effective_flags;
+    return \%fact;
+}
+
+sub processor_row_records {
+    my ($table) = @_;
+    my @records;
+    for my $key (sort keys %$table) {
+        next if $key =~ /^_/ || $Image::ExifTool::specialTags{$key};
+        my $entry = $table->{$key};
+        if (ref($entry) eq 'ARRAY') {
+            for my $variant (0 .. $#$entry) {
+                push @records, [ clean($key), "$variant", processor_entry_fact($entry->[$variant]) ];
+            }
+        } else {
+            push @records, [ clean($key), '-', processor_entry_fact($entry) ];
+        }
+    }
+    return @records;
+}
+
 # '-' when absent, `__REF__` for a reference, else the cleaned text.
 sub dash_text {
     my ($v) = @_;
@@ -680,7 +807,7 @@ for my $mod (grep { !$skip{$_} } @mods) {
         # Record every table-owned PROCESS_PROC, including custom processors
         # outside the current binary/IFD/keyed output scopes.  Facts are
         # emitted only after all modules load, when package dispatch is final.
-        $processor_tables{"$mod\t$sym"} = $pp if ref $pp eq 'CODE';
+        $processor_tables{"$mod\t$sym"} = { cv => $pp, table => $t } if ref $pp eq 'CODE';
         my $is_bin = 0;
         if (ref $pp eq 'CODE') {
             my $cv = eval { B::svref_2object($pp) };
@@ -766,12 +893,33 @@ for my $mod (grep { !$skip{$_} } @mods) {
 # it gives a verifier current native PROCESS_PROC and package-local reader
 # facts without reusing the word-directory recognizer.  It is emitted after
 # the module walk so later glob replacements are visible.
+my %processor_facts;
 for my $key (sort keys %processor_tables) {
     my ($mod, $sym) = split /\t/, $key, 2;
-    my $fact = processor_code_ref_fact($processor_tables{$key},
+    my $fact = processor_code_ref_fact($processor_tables{$key}{cv},
         "Image::ExifTool::${mod}::${sym}::PROCESS_PROC");
+    $processor_facts{$key} = $fact;
     print join("\t", 'NATIVE_PROCESSOR', $mod, $sym,
         JSON::PP->new->canonical->encode($fact)), "\n";
+}
+for my $key (sort keys %processor_tables) {
+    my ($mod, $sym) = split /\t/, $key, 2;
+    my $table = $processor_tables{$key}{table};
+    my @rows = processor_row_records($table);
+    my $named = scalar grep { defined $_->[2]{name} } @rows;
+    my $table_fact = {
+        processor => $processor_facts{$key},
+        groups => processor_native_property($table, 'GROUPS'),
+        format => processor_native_property($table, 'FORMAT'),
+        first_entry => processor_native_property($table, 'FIRST_ENTRY'),
+        row_record_count => scalar(@rows), named_row_count => $named,
+    };
+    print join("\t", 'NATIVE_PROCESSOR_TABLE', $mod, $sym,
+        JSON::PP->new->canonical->encode($table_fact)), "\n";
+    for my $row (@rows) {
+        print join("\t", 'NATIVE_PROCESSOR_ROW', $mod, $sym, $row->[0], $row->[1],
+            JSON::PP->new->canonical->encode($row->[2])), "\n";
+    }
 }
 
 # Run the primitive oracle in isolation, then authenticate its refs against
