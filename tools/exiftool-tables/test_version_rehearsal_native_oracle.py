@@ -64,7 +64,24 @@ class T(unittest.TestCase):
    with self.assertRaises(o.Refused): o.write_probe_report(out,report)
  def test_old_read_only_shape_refuses(self):
   with self.assertRaises(o.Refused): o._case({'name':'x','fixture':'x','read':{'args':['-j'],'expectation':'success'},'write':{'args':['-j'],'expectation':'success'}})
-class CliT(T):
+class CliT(unittest.TestCase):
+    def test_cli_real_materialized_jpeg_success_and_write_once(self):
+        pointer = Path('/tmp/oxidex-sony-plain-current.txt')
+        if not pointer.is_file():
+            self.skipTest('shared evidence unavailable')
+        root = Path(pointer.read_text().strip()) / 'shared-pilot/write-upgrade-integration-20260913/first-random-pair-20260913'
+        attempt = root / 'source-attempt-01'
+        source = attempt / 'sources/exiftool-11.78-ca8685788f5763c547349f239764bd19cf1952da'
+        if not source.is_dir():
+            self.skipTest('real selected source unavailable')
+        with TemporaryDirectory() as directory:
+            temp = Path(directory); cases = temp / 'cases.json'; output = temp / 'report.json'
+            cases.write_text(json.dumps([{'name':'jpeg-comment','fixture':str(HERE.parent.parent/'tests/fixtures/jpeg/tag_matrix_base.jpg'),'read':{'query':'FileType','expectation':'value','value':'JPEG'},'write':{'operation':'set','tag':'Comment','value':'cli-ready','readback':'cli-ready'}}]))
+            state = json.loads((attempt/'source-state.json').read_text()); command = state['stages'][0]['command']; capture, raw = command[4], command[6]
+            argv=[str(Path(sys.executable).resolve()),str(HERE/'version_rehearsal_native_oracle.py'),'--capture',capture,'--catalog',str(root/'catalog.normalized.json'),'--plan',str(root/'run-plan.json'),'--resolution',str(attempt/'resolution.json'),'--materialization',str(attempt/'materialization.json'),'--archive-cache',str(attempt/'cache'),'--source-root',str(attempt/'sources'),'--release','11.78','--perl','/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2','--cases',str(cases),'--output',str(output)]
+            result=subprocess.run(argv,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr); report=json.loads(output.read_text()); self.assertEqual(report['state'],'ready'); self.assertEqual(report['cases'][0]['readback']['stdout'].strip(),'cli-ready')
+            again=subprocess.run(argv,capture_output=True,text=True); self.assertEqual(again.returncode,2); self.assertEqual(json.loads(output.read_text()),report)
     def test_cli_requires_case_array_and_write_once_output(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
