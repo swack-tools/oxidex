@@ -907,7 +907,7 @@ class WholeDump(unittest.TestCase):
         self.assertIn(
             'IfdTag { id: 0x0203, name: "BWMode", format: None, count: None, '
             'writable: Some("int16u"), groups: TagGroups::NONE, flags: IfdFlags::NONE, '
-            "omitted: Omitted::NONE, raw_conv: None, value_conv: None, "
+            "condition: None, omitted: Omitted::NONE, raw_conv: None, value_conv: None, "
             'print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On"), (6, "(none)")]), subdir: None }',
             olympus,
         )
