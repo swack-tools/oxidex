@@ -193,6 +193,16 @@ def _release_identity(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _oracle_binding(variant: str, release: dict[str, Any]) -> dict[str, Any]:
+    """Bind one OxiDex variant to the native source of the same release."""
+    return {
+        "variant": variant,
+        "native_release_identity": _release_identity(release),
+        "read_vs_native": "unrun",
+        "write_vs_native": "unrun",
+    }
+
+
 def make_plan(catalog: dict[str, Any], seed: int, sample_index: int, pair_count: int, repository_commit: str) -> dict[str, Any]:
     verify_catalog(catalog)
     if not isinstance(repository_commit, str) or not GIT_OID_RE.fullmatch(repository_commit):
@@ -214,7 +224,27 @@ def make_plan(catalog: dict[str, Any], seed: int, sample_index: int, pair_count:
         "sample_index": sample_index,
         "pair_count": pair_count,
         "pairs": [
-            {"pair_index": index, "old": _release_identity(old), "new": _release_identity(new)}
+            {
+                "pair_index": index,
+                "old": _release_identity(old),
+                "new": _release_identity(new),
+                "native_oracles": {
+                    "old": _oracle_binding("old", old),
+                    "new": _oracle_binding("new", new),
+                },
+                "comparison_contract": {
+                    "schema": "per-version-native-v1",
+                    "required": [
+                        "oxidex_old_vs_native_old",
+                        "oxidex_new_vs_native_new",
+                        "native_old_to_native_new_delta",
+                    ],
+                    "cross_version_output_equality": "not_required",
+                    "newer_native_supersedes_older_native": True,
+                    "accepted_native_delta_examples": ["upstream_bug_fix", "new_tag", "type_change", "format_change"],
+                    "unsupported_new_semantics": "explicit_gap_never_old_fallback",
+                },
+            }
             for index, (old, new) in enumerate(selected)
         ],
         "untested_eligible_releases": sorted(untested, key=lambda row: release_key(row["release"])),
@@ -225,9 +255,10 @@ def make_plan(catalog: dict[str, Any], seed: int, sample_index: int, pair_count:
         ],
         "execution": {
             "state": "plan_only",
-            "read": "unrun",
-            "write": "unrun",
-            "explicit_limit": "selection is not native read/write proof or upgrade success",
+            "per_version_read_vs_native": "unrun",
+            "per_version_write_vs_native": "unrun",
+            "native_old_to_native_new_delta": "unrun",
+            "explicit_limit": "selection is not native read/write proof, native-delta classification, or upgrade success",
         },
     }
     return {**payload, "plan_sha256": sha256_json(payload)}
@@ -268,6 +299,26 @@ def verify_plan(plan: dict[str, Any], catalog: dict[str, Any] | None = None) -> 
                     raise Refused("pair release identity differs from catalog")
         if release_key(old["release"]) >= release_key(new["release"]):
             raise Refused("pair must have distinct old/new releases in numeric order")
+        oracles = pair.get("native_oracles")
+        if not isinstance(oracles, dict):
+            raise Refused("pair lacks native oracle bindings")
+        for label, release in (("old", old), ("new", new)):
+            binding = oracles.get(label)
+            if not isinstance(binding, dict) or binding.get("variant") != label:
+                raise Refused(f"pair lacks {label} native oracle binding")
+            if binding.get("native_release_identity") != release:
+                raise Refused(f"{label} native oracle binding does not match its selected release")
+            if binding.get("read_vs_native") != "unrun" or binding.get("write_vs_native") != "unrun":
+                raise Refused("planning plan cannot claim native comparison success")
+        contract = pair.get("comparison_contract")
+        if not isinstance(contract, dict) or contract.get("schema") != "per-version-native-v1":
+            raise Refused("pair lacks per-version comparison contract")
+        if contract.get("required") != ["oxidex_old_vs_native_old", "oxidex_new_vs_native_new", "native_old_to_native_new_delta"]:
+            raise Refused("pair comparison contract is incomplete")
+        if contract.get("cross_version_output_equality") != "not_required" or contract.get("newer_native_supersedes_older_native") is not True:
+            raise Refused("pair comparison contract incorrectly freezes cross-version output")
+        if contract.get("unsupported_new_semantics") != "explicit_gap_never_old_fallback":
+            raise Refused("pair comparison contract permits unsupported old fallback")
         pair_key = f"{old['release']}->{new['release']}"
         if pair_key in seen:
             raise Refused("duplicate pair in plan")
