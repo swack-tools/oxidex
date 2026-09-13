@@ -428,7 +428,27 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // control's bytes and status. Reverting D-3's commit alone restores the
     // rows.
     //
-    // Gate B of record: EXIFE2_GATEB_PENDING
+    // Gate B of record, E-2 (i7-missing-census.sh: conformance.py over 4,238
+    // files, pinned 13.59, clean trees, on the i7; per-file diff
+    // i7-ab-diff.py, rows compared as sets):
+    //     control   census c746 (04eaf6e1)           TOTAL 4238 468012 22 477 12258 1562
+    //     treatment census e2r  (efbd3511)          TOTAL 4238 468085 22 422 12240 1560
+    // 58 files: 27 MISSING -> matched (FocalPlaneX/YResolution and
+    // FocalPlaneResolutionUnit 12 on the four Leica files, EXIF:X/YResolution
+    // 6 (3 files), MakerNotes:LensModel 1, Composite
+    // ScaleFactor35efl/CircleOfConfusion/FOV/LensID 8), 46 VALUE -> matched
+    // (Composite:LightValue 28, FNumber 4, CreateDate 4, FocalLength35efl 2,
+    // SceneType 2, LensModel 2, ExposureTime, ShutterSpeed, DateTimeOriginal,
+    // ExposureCompensation), D-2's 9 VALUE -> MISSING (the files named
+    // above), 2 EXTRA removed (ExifIFD:LensModel, D-3's ApplicationNotes);
+    // 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA; oracle rows conserve
+    // (480,769). i7-ab-diff.py prints FAIL for D-2's nine rows ("matched ->
+    // MISSING (or newly visible oracle row)"): they were value_diff rows in
+    // the control. The same 58 files and per-file transitions reproduce on
+    // the pre-rebase base (census e2 of 5ae7a579 on 7e928390 vs census l2:
+    // 468002 -> 468075), so the rebase onto #746 changed nothing in E-2.
+    // Rebased again onto 8f0fdaf4 (#747) for landing; the census of that
+    // tree against its own control is in the landing commit.
     ("Exif", "Main"),
     // FujiFilm::Main -- slice I-6. The table is `%Image::ExifTool::FujiFilm::Main`
     // (FujiFilm.pm:84-1022, pinned 13.59), reached from MakerNoteFujiFilm
