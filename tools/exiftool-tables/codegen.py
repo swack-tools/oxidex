@@ -3970,6 +3970,9 @@ REPORT = (
         ("bounded edges explicitly unwalked", "keyed_edge_unwalked"),
         ("atomic variant groups withheld", "keyed_variant"),
         ("rows with an unsupported source shape", "keyed_row_shape"),
+        ("word processor bodies or provenance refused", "keyed_word_processor"),
+        ("word rows with unsupported handler value shape", "keyed_word_value_shape"),
+        ("word rows with unsupported subdirectories", "keyed_word_subdirectory"),
     )),
 )
 

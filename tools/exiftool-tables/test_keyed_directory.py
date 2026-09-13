@@ -5,8 +5,10 @@ change emitted facts and that unavailable ProcessCanonRaw condition context is
 withheld before a future caller can accidentally invent a retry.
 """
 
+import copy
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -18,6 +20,8 @@ import codegen
 import conds
 import keyed_directory
 import verify
+from test_native_reader_contract import snapshot
+from test_word_directory import PERL, PINNED, REPO_ROOT, _capture, _reader_contract, fixture_processor
 
 
 PROC = {"__perl": "CODE", "__name": "Image::ExifTool::CanonRaw::ProcessCanonRaw"}
@@ -34,6 +38,25 @@ def doc(main):
     }}}}
 
 
+def word_doc(processor=None):
+    process = processor or fixture_processor()
+    return {
+        "native_reader_contracts": {"unsigned16": snapshot()},
+        "modules": {"Any": {"tables": {
+            "Main": {"meta": {"PROCESS_PROC": PROC, "GROUPS": {"0": "MakerNotes"}}, "tags": {
+                "0x1001": {"Name": "Child", "SubDirectory": {
+                    "TagTable": "Image::ExifTool::Any::Word",
+                }},
+            }},
+            "Word": {"meta": {"PROCESS_PROC": process, "GROUPS": {"0": "MakerNotes", "2": "Camera"}}, "tags": {
+                "1": {"Name": "One", "PrintConv": {0: "Off", 1: "On"}},
+                "2": {"Name": "Two", "Condition": "$$self{Model} =~ /WORD/", "PrintConv": {0: "No", 1: "Yes"}},
+            }},
+            "Empty": {"meta": {"PROCESS_PROC": process, "GROUPS": {"0": "MakerNotes"}}, "tags": {}},
+        }}},
+    }
+
+
 class Selection(unittest.TestCase):
     def test_selection_is_processor_identity_not_module_or_table(self):
         self.assertTrue(keyed_directory.is_keyed_directory_table({"PROCESS_PROC": PROC}))
@@ -43,6 +66,157 @@ class Selection(unittest.TestCase):
     def test_dump_identity_shape_is_accepted(self):
         # This is the shape dump_tables.pl preserves for CanonRaw::Main.
         self.assertEqual(keyed_directory.processor_name({"PROCESS_PROC": PROC}), PROC["__name"])
+
+    def test_word_layout_is_recognized_from_body_and_keeps_zero_row_table(self):
+        source, stats = keyed_directory.generate(word_doc())
+        self.assertIn("KEYED_ANY_WORD", source)
+        self.assertIn("KEYED_ANY_EMPTY", source)
+        self.assertIn("KeyedLayout::LengthPrefixedU16Pairs(WordDirectory {", source)
+        self.assertIn("key_shift: 8", source)
+        self.assertIn("value_format: Fmt::Int8u", source)
+        self.assertIn('name: "One"', source)
+        self.assertIn('name: "Two"', source)
+        # The parent edge sees the generated target by identity, so its
+        # processor blocker disappears without a module/table allowlist.
+        parent = source.split("KEYED_ANY_WORD", 1)[0]
+        self.assertNotIn('"target_processor"', parent)
+        self.assertFalse(stats["keyed_word_processor"])
+
+    def test_word_layout_keeps_a_wide_native_mask_as_numeric_descriptor_data(self):
+        process = fixture_processor()
+        process["__deparse"] = process["__deparse"].replace("& 255", "& 511", 1)
+        source, _ = keyed_directory.generate(word_doc(process))
+        self.assertIn("value_mask: 511", source)
+        self.assertIn("value_format: Fmt::Int8u", source)
+
+    def test_word_candidate_without_authenticated_facts_is_counted_and_withheld(self):
+        process = fixture_processor()
+        process["resolved"] = False
+        source, stats = keyed_directory.generate(word_doc(process))
+        self.assertNotIn("KEYED_ANY_WORD", source)
+        self.assertNotIn("KEYED_ANY_EMPTY", source)
+        self.assertEqual(stats["keyed_word_processor"], 2)
+        # The Ciff parent stays visible, with its target plainly unwalked.
+        self.assertIn('"target_processor"', source)
+
+    def test_word_target_with_gate_a_refusal_remains_explicitly_unwalked(self):
+        for name, mutation in (
+            ("value metadata", lambda tag: tag.update(Format="int16u")),
+            ("subdirectory", lambda tag: tag.update(SubDirectory={"TagTable": "Image::ExifTool::Any::Other"})),
+        ):
+            native = word_doc()
+            mutation(native["modules"]["Any"]["tables"]["Word"]["tags"]["1"])
+            source, stats = keyed_directory.generate(native)
+            parent = source.split("KEYED_ANY_WORD", 1)[0]
+            word = source.split("KEYED_ANY_WORD", 1)[1].split("\npub static ", 1)[0]
+            with self.subTest(name=name):
+                self.assertIn('"target_gate_a"', parent)
+                self.assertNotIn('"target_processor"', parent)
+                self.assertIn('gate_a: GateA { blocked_by: &[', word)
+                self.assertGreater(stats["keyed_edge_unwalked"], 0)
+
+    def test_existing_binary_target_remains_supported_alongside_word_layouts(self):
+        source, stats = keyed_directory.generate(doc({
+            "0x1001": {"Name": "MakeModel", "SubDirectory": {
+                "TagTable": "Image::ExifTool::Any::MakeModel",
+            }},
+        }))
+        parent = source.split("KEYED_ANY_MAIN", 1)[1].split("\npub static ", 1)[0]
+        self.assertIn('table: "MakeModel"', parent)
+        self.assertNotIn('"target_processor"', parent)
+        self.assertFalse(stats["keyed_edge_unwalked"])
+
+
+@unittest.skipUnless(PINNED, "set OXIDEX_PINNED_EXIFTOOL for native word-table generation")
+class PinnedWordTableGeneration(unittest.TestCase):
+    """Full source replay for CanonCustom's authenticated word processor.
+
+    The dump must include Canon's binary targets as well as CanonRaw and
+    CanonCustom.  Otherwise a valid CanonRaw parent edge looks unwalkable
+    merely because its target table was excluded from the input.  The injected
+    fact is captured from the actual native CV, including its package-local
+    Get16u binding.  It models the post-capture shape that the dump pipeline
+    carries; no Rust artifact is hand-authored here.
+    """
+
+    TABLE_ROWS = {
+        "Functions10D": 17,
+        "Functions1D": 22,
+        "Functions20D": 18,
+        "Functions30D": 19,
+        "Functions350D": 9,
+        "Functions400D": 11,
+        "Functions5D": 21,
+        "FunctionsD30": 15,
+        "FuncsUnknown": 0,
+    }
+
+    def setUp(self):
+        recorded_dump = os.environ.get("OXIDEX_TABLES_JSON")
+        if recorded_dump:
+            self.document = json.loads(Path(recorded_dump).read_text())
+        else:
+            result = subprocess.run(
+                [PERL, str(REPO_ROOT / "tools" / "exiftool-tables" / "dump_tables.pl"),
+                 str(Path(PINNED) / "lib")],
+                check=True, text=True, capture_output=True,
+            )
+            self.document = json.loads(result.stdout)
+        process = _capture(PINNED)
+        captured = self.document["modules"]["CanonCustom"]["tables"]
+        if recorded_dump:
+            recorded = captured["Functions10D"]["meta"]["PROCESS_PROC"]
+            self.assertTrue(recorded.get("resolved"))
+            self.assertEqual(recorded.get("__name"), process["__name"])
+            self.assertEqual(recorded.get("source_file"), process["source_file"])
+            self.assertEqual(recorded.get("source_sha256"), process["source_sha256"])
+        captured_tables = []
+        for table, data in captured.items():
+            meta = data.get("meta") or {}
+            if meta.get("PROCESS_PROC", {}).get("__name") == process["__name"]:
+                meta["PROCESS_PROC"] = copy.deepcopy(process)
+                captured_tables.append(table)
+        self.assertEqual(set(captured_tables), set(self.TABLE_ROWS))
+        self.document["native_reader_contracts"] = {"unsigned16": _reader_contract(PINNED)}
+        self.source, self.stats = keyed_directory.generate(self.document)
+
+    def _table(self, table):
+        symbol = f"KEYED_CANONCUSTOM_{table.upper()}"
+        start = self.source.index(symbol)
+        stop = self.source.find("\npub static ", start + 1)
+        return self.source[start:] if stop < 0 else self.source[start:stop]
+
+    def test_actual_source_generates_target_tables_and_zero_row_table(self):
+        self.assertEqual(self.source.count("KeyedLayout::LengthPrefixedU16Pairs(WordDirectory {"),
+                         len(self.TABLE_ROWS))
+        for table, rows in self.TABLE_ROWS.items():
+            with self.subTest(table=table):
+                generated = self._table(table)
+                self.assertIn("KeyedLayout::LengthPrefixedU16Pairs(WordDirectory {", generated)
+                self.assertEqual(generated.count('name: "'), rows)
+        self.assertIn('KEYED_CANONCUSTOM_FUNCSUNKNOWN', self.source)
+        self.assertEqual(sum(self.TABLE_ROWS.values()), 132)
+
+    def test_parent_processor_blocker_clears_only_after_authenticated_target_generation(self):
+        parent = self._table("Main") if "KEYED_CANONCUSTOM_MAIN" in self.source else self.source
+        # CanonRaw::Main is generated after CanonCustom in sorted module order.
+        parent_start = self.source.index("KEYED_CANONRAW_MAIN")
+        parent_stop = self.source.find("\npub static ", parent_start + 1)
+        parent = self.source[parent_start:] if parent_stop < 0 else self.source[parent_start:parent_stop]
+        for name in ("CustomFunctions10D", "CustomFunctionsD30", "CustomFunctionsD60", "CustomFunctionsUnknown"):
+            field = parent[parent.index(f'name: "{name}"'):]
+            next_field = field.find('KeyedTag {', len('KeyedTag {'))
+            field = field if next_field < 0 else field[:next_field]
+            self.assertNotIn('"target_processor"', field)
+        # The complete source input leaves one CanonRaw child processor
+        # explicit.  It is ProcessSerialData, not a failed word-table capture.
+        af_info = parent[parent.index('name: "CanonAFInfo"'):]
+        next_field = af_info.find('KeyedTag {', len('KeyedTag {'))
+        af_info = af_info if next_field < 0 else af_info[:next_field]
+        self.assertIn('module: "Canon", table: "AFInfo"', af_info)
+        self.assertIn('unwalked: &["target_processor"]', af_info)
+        self.assertEqual(parent.count('"target_processor"'), 1)
+        self.assertEqual(self.stats["keyed_edge_unwalked"], 1)
 
 
 class InitialContext(unittest.TestCase):

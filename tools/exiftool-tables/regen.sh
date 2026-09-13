@@ -122,7 +122,8 @@ echo ">> verifying generated Rust against ExifTool (independent path)"
 # i7). A generator must never commit on the operator's behalf, so the
 # alternative ordering is not available.
 OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/verify.py" "$OUT" "$LIB" --oracle "$HERE/oracle.pl" \
-    --keyed-generated "$KEYED_OUT"
+    --keyed-generated "$KEYED_OUT" \
+    --word-processor Image::ExifTool::CanonCustom::ProcessCanonCustom
 
 echo
 echo ">> done: $OUT, $IFD_OUT and $KEYED_OUT"

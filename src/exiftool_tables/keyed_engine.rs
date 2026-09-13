@@ -11,7 +11,10 @@ use crate::io::ByteOrder;
 use super::cond::{Ctx, MemberValue};
 use super::engine::{self, Emitted};
 use super::runtime;
-use super::{Fmt, IfdFlags, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, find_table};
+use super::{
+    Cond, Fmt, IfdFlags, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, WordDirectory,
+    find_keyed_table, find_table,
+};
 
 /// Carrier projection applied after generated tag/table group resolution.
 ///
@@ -53,13 +56,30 @@ impl<'a> KeyedBlock<'a> {
 pub trait KeyedEmissionSink {
     fn emit(&mut self, row: Emitted);
 
+    /// Surface a source-declared reader warning. The default keeps existing
+    /// inactive callers unchanged until a carrier chooses where warnings go.
+    fn warn(&mut self, _warning: &'static str) {}
+
+    /// Whether this caller requested native-style directory diagnostics.
+    ///
+    /// The default is deliberately quiet: a generated keyed layout cannot
+    /// enable verbose output until a carrier explicitly asks for it.
+    fn verbose_enabled(&self) -> bool {
+        false
+    }
+
+    /// Mirror ExifTool's `VerboseDir` callback for an invoked word directory.
+    /// `entry_count` is the source expression `size / 2 - 1`, so an odd-size
+    /// directory retains its native fractional diagnostic value.
+    fn verbose_directory(&mut self, _directory: &'static str, _entry_count: f64) {}
+
     fn keyed_enabled(&self, _table: &'static KeyedDirectoryTable) -> bool {
         false
     }
 }
 
 /// Counts withheld keyed-reader work. None of these conditions produces output.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct KeyedWalkResult {
     pub entries_seen: usize,
     pub emitted: usize,
@@ -77,15 +97,101 @@ pub struct KeyedWalkResult {
     /// A source-authenticated child Validate returned false. Native skips only
     /// that child and continues the enclosing keyed directory.
     pub validation_rejected: usize,
+    /// Each native `HandleTag` invocation made by the length-prefixed u16
+    /// layout, before unknown/omitted reporting policy may suppress output.
+    /// `Index` is not a metadata value, but preserving it here proves the
+    /// source handler contract without adding a public output field.
+    pub word_entries: Vec<WordDirectoryEntry>,
+    /// One record for each source-described word processor actually invoked.
+    /// Gate A/Gate B skips produce no trace, which distinguishes them from a
+    /// native processor that returned false after warning.
+    pub word_traces: Vec<WordDirectoryTrace>,
 }
 
-/// Read one keyed directory and same-table CIFF subdirectories.
+/// The parameter record supplied to native `HandleTag` for a source-described
+/// u16 word pair. This is a reader trace, not emitted metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WordDirectoryEntry {
+    pub raw_id: u16,
+    pub value: i64,
+    pub index: usize,
+    pub format: Fmt,
+    pub count: usize,
+    pub size: usize,
+}
+
+/// One source-described word processor invocation, before metadata rows are
+/// selected, converted, or suppressed. This mirrors the independently
+/// captured native callback boundary: return status, warnings, and raw
+/// `HandleTag` operands are observable separately from final output.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WordDirectoryTrace {
+    pub module: &'static str,
+    pub table: &'static str,
+    pub returned: bool,
+    pub warnings: Vec<&'static str>,
+    /// Native `VerboseDir` calls made for this processor invocation.
+    pub verbose_directories: Vec<WordDirectoryVerbose>,
+    pub entries: Vec<WordDirectoryEntry>,
+}
+
+/// One native-style `VerboseDir` callback from a word-directory processor.
 ///
-/// A named zero-start value block is dispatched only when it names an existing
-/// binary table that independently passes Gate A and Gate B. All other target
-/// shapes remain explicit refusals.
+/// `entry_count` keeps the exact source arithmetic (`size / 2 - 1`) rather
+/// than rounding an odd-sized source buffer to a number of decoded words.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WordDirectoryVerbose {
+    pub directory: &'static str,
+    pub entry_count: f64,
+}
+
+impl KeyedWalkResult {
+    fn merge(&mut self, child: Self) {
+        self.entries_seen += child.entries_seen;
+        self.emitted += child.emitted;
+        self.gate_a_blocked += child.gate_a_blocked;
+        self.gate_b_blocked += child.gate_b_blocked;
+        self.malformed_directory += child.malformed_directory;
+        self.high_bit_error += child.high_bit_error;
+        self.duplicate_directory += child.duplicate_directory;
+        self.initial_context_refusal += child.initial_context_refusal;
+        self.omitted += child.omitted;
+        self.bad_value += child.bad_value;
+        self.large_scalar += child.large_scalar;
+        self.unwalked_edge += child.unwalked_edge;
+        self.unavailable_target += child.unavailable_target;
+        self.validation_rejected += child.validation_rejected;
+        self.word_entries.extend(child.word_entries);
+        self.word_traces.extend(child.word_traces);
+    }
+}
+
+/// Read one source-described keyed directory.
+///
+/// The caller supplies the bounded carrier block and Gate B through `sink`.
+/// This dispatches only a generated layout; it never identifies a Canon table
+/// by tag ID or enables a production parser route.
 #[must_use]
 pub fn process_keyed_directory(
+    table: &'static KeyedDirectoryTable,
+    block: KeyedBlock<'_>,
+    ctx: &mut Ctx,
+    sink: &mut dyn KeyedEmissionSink,
+) -> KeyedWalkResult {
+    match table.layout {
+        KeyedLayout::Ciff10 => process_ciff10_directory(table, block, ctx, sink),
+        KeyedLayout::LengthPrefixedU16Pairs(word) => {
+            process_word_directory(table, word, block, ctx, sink)
+        }
+    }
+}
+
+/// Read one CIFF10 directory and same-table CIFF subdirectories.
+///
+/// A named zero-start value block is dispatched only when it names a generated
+/// binary or keyed table that independently passes Gate A and the caller's
+/// Gate B policy. All other target shapes remain explicit refusals.
+fn process_ciff10_directory(
     table: &'static KeyedDirectoryTable,
     block: KeyedBlock<'_>,
     ctx: &mut Ctx,
@@ -165,6 +271,198 @@ pub fn process_keyed_directory(
         }
     }
     result
+}
+
+/// Read the complete, source-authenticated `ProcessCanonCustom` shape.
+///
+/// The header exception is deliberately after the exact equality fast path:
+/// native code does not inspect `Model` when the ordinary length matches.
+/// `Get16u`'s undef numeric coercion is represented by `u16_or_zero`, so an
+/// odd final pair remains a native zero-valued `HandleTag` attempt.
+fn process_word_directory(
+    table: &'static KeyedDirectoryTable,
+    word: WordDirectory,
+    block: KeyedBlock<'_>,
+    ctx: &mut Ctx,
+    sink: &mut dyn KeyedEmissionSink,
+) -> KeyedWalkResult {
+    let mut result = KeyedWalkResult::default();
+    if !table.gate_a.passes() {
+        result.gate_a_blocked = 1;
+        return result;
+    }
+    if !sink.keyed_enabled(table) {
+        result.gate_b_blocked = 1;
+        return result;
+    }
+    if !word.exact_length_first || !word.missing_model_as_empty || !word.short_u16_as_zero {
+        result.unwalked_edge = 1;
+        return result;
+    }
+
+    let mut trace = WordDirectoryTrace {
+        module: table.module,
+        table: table.table,
+        returned: false,
+        warnings: Vec::new(),
+        verbose_directories: Vec::new(),
+        entries: Vec::new(),
+    };
+
+    let header = u16_or_zero(block.data, 0, block.byte_order);
+    let directory_size = block.data.len();
+    if usize::from(header) != directory_size {
+        let model_matches = eval_missing_model_as_empty(word.model_condition, ctx);
+        let adjusted = usize::from(header).checked_add(word.header_adjustment);
+        if !model_matches || adjusted != Some(directory_size) {
+            result.bad_value += 1;
+            sink.warn(word.invalid_warning);
+            trace.warnings.push(word.invalid_warning);
+            result.word_traces.push(trace);
+            return result;
+        }
+    }
+
+    if word.pair_stride == 0 || word.index_divisor == 0 || word.key_shift >= u16::BITS as usize {
+        result.bad_value += 1;
+        result.word_traces.push(trace);
+        return result;
+    }
+    if sink.verbose_enabled() {
+        let entry_count = directory_size as f64 / 2.0 - 1.0;
+        sink.verbose_directory(word.verbose_directory, entry_count);
+        trace.verbose_directories.push(WordDirectoryVerbose {
+            directory: word.verbose_directory,
+            entry_count,
+        });
+    }
+    let mut position = word.pair_start;
+    while position < directory_size {
+        let packed = u16_or_zero(block.data, position, block.byte_order);
+        let raw_id = packed >> word.key_shift;
+        let Some(mask) = u16::try_from(word.value_mask).ok() else {
+            result.bad_value += 1;
+            result.word_traces.push(trace);
+            return result;
+        };
+        let value = packed & mask;
+        let Some(index) = position
+            .checked_div(word.index_divisor)
+            .and_then(|value| value.checked_sub(word.index_bias))
+        else {
+            result.bad_value += 1;
+            result.word_traces.push(trace);
+            return result;
+        };
+        let entry = WordDirectoryEntry {
+            raw_id,
+            value: i64::from(value),
+            index,
+            format: word.value_format,
+            count: word.value_count,
+            size: word.value_size,
+        };
+        result.word_entries.push(entry);
+        trace.entries.push(entry);
+        result.entries_seen += 1;
+
+        let resolved = with_word_selection_context(word, ctx, |ctx| {
+            resolve_tag(table, raw_id, ctx, &mut result, true)
+        });
+        if let Some(resolved) = resolved {
+            if resolved.tag.edge.is_some() {
+                // The authenticated population has no word-table child
+                // subdirectories. Do not infer an edge from a tag name.
+                result.unwalked_edge += 1;
+                result.word_traces.push(trace);
+                return result;
+            }
+            // HandleTag receives the processor's numeric `$val` directly.
+            // Format/Count/Size guide tag selection but do not re-read or
+            // truncate this masked u16 value.
+            let raw = runtime::DecodedValue::Integer(i64::from(value));
+            if matches!(
+                emit_resolved_scalar(table, block.scope, resolved, raw, ctx, sink, &mut result),
+                ScalarAction::Tainted
+            ) {
+                result.word_traces.push(trace);
+                return result;
+            }
+        }
+
+        let Some(next) = position.checked_add(word.pair_stride) else {
+            result.bad_value += 1;
+            result.word_traces.push(trace);
+            return result;
+        };
+        position = next;
+    }
+    trace.returned = true;
+    result.word_traces.push(trace);
+    result
+}
+
+/// `Cond::MemberRegex` normally treats an absent member as a failed match.
+/// This native processor instead applies Perl's regex operator to undef, whose
+/// string subject is empty. Keep the temporary binding local to the header
+/// exception and restore the caller state before processing any pair.
+fn eval_missing_model_as_empty(condition: Cond, ctx: &mut Ctx) -> bool {
+    if ctx.members.contains_key("Model") {
+        return condition.eval(ctx);
+    }
+    ctx.members.insert("Model", MemberValue::Str(String::new()));
+    let matched = condition.eval(ctx);
+    ctx.members.remove("Model");
+    matched
+}
+
+/// `HandleTag` supplies Format and Count while choosing its tag information.
+/// The word compiler currently accepts only `int8u`/1/1, but the reader uses
+/// the descriptor rather than hard-coding that shape so a reviewed expansion
+/// cannot silently lose the selection inputs.
+fn with_word_selection_context<T>(
+    word: WordDirectory,
+    ctx: &mut Ctx,
+    f: impl FnOnce(&mut Ctx) -> T,
+) -> T {
+    let prior_format = ctx.format;
+    let prior_count = ctx.count;
+    ctx.format = Some(word_format_name(word.value_format));
+    ctx.count = i64::try_from(word.value_count).ok();
+    let value = f(ctx);
+    ctx.format = prior_format;
+    ctx.count = prior_count;
+    value
+}
+
+fn word_format_name(format: Fmt) -> &'static str {
+    match format {
+        Fmt::Int8u => "int8u",
+        Fmt::Int8s => "int8s",
+        Fmt::Int16u => "int16u",
+        Fmt::Int16s => "int16s",
+        Fmt::Int16uRev => "int16uRev",
+        Fmt::Int32u => "int32u",
+        Fmt::Int32s => "int32s",
+        Fmt::Int32uRev => "int32uRev",
+        Fmt::Int64u => "int64u",
+        Fmt::Int64s => "int64s",
+        Fmt::Float => "float",
+        Fmt::Double => "double",
+        Fmt::Rational32u => "rational32u",
+        Fmt::Rational32s => "rational32s",
+        Fmt::Rational64u => "rational64u",
+        Fmt::Rational64s => "rational64s",
+        Fmt::Fixed16s => "fixed16s",
+        Fmt::Fixed16u => "fixed16u",
+        Fmt::Fixed32s => "fixed32s",
+        Fmt::Fixed32u => "fixed32u",
+        Fmt::Extended => "extended",
+        Fmt::PString => "pstring",
+        Fmt::Str(_) | Fmt::RemainderString => "string",
+        Fmt::Undef(_) => "undef",
+        Fmt::Var(_) => "var",
+    }
 }
 
 enum KeyedWork<'a> {
@@ -278,7 +576,7 @@ fn process_entry<'a>(
         (offset, size, declared_size)
     };
 
-    let resolved = resolve_tag(table, raw_id, ctx, result);
+    let resolved = resolve_tag(table, raw_id, ctx, result, false);
     // CIFF type controls same-parent recursion, including unknown keys.
     if !inline && matches!(entry_type, 0x28 | 0x30) {
         let Some(child) = bounded_block(block, value_offset, value_size) else {
@@ -345,29 +643,49 @@ fn process_entry<'a>(
                     result.validation_rejected += 1;
                     return KeyedEntryAction::Continue;
                 }
-                let Some(target_table) = find_table(module, target) else {
+                if let Some(target_table) = find_table(module, target) {
+                    if !target_table.gate_a.passes() {
+                        result.gate_a_blocked += 1;
+                        return KeyedEntryAction::Tainted;
+                    }
+                    if !super::is_enabled(target_table) {
+                        result.gate_b_blocked += 1;
+                        return KeyedEntryAction::Tainted;
+                    }
+                    let mut rows = Vec::new();
+                    let outcome = with_dir_name(ctx, tag.name.to_owned(), |ctx| {
+                        engine::process_binary_data_checked(
+                            target_table,
+                            engine::Dir::whole(child.data, child.byte_order),
+                            ctx,
+                            &mut rows,
+                        )
+                    });
+                    if outcome == engine::BinaryWalkOutcome::Tainted {
+                        return KeyedEntryAction::Tainted;
+                    }
+                    for row in rows {
+                        sink.emit(re_scope(row, child.scope));
+                        result.emitted += 1;
+                    }
+                } else if let Some(target_table) = find_keyed_table(module, target) {
+                    // A named keyed child remains just as opt-in as its parent:
+                    // generated presence never substitutes for carrier evidence.
+                    if !target_table.gate_a.passes() {
+                        result.gate_a_blocked += 1;
+                        return KeyedEntryAction::Tainted;
+                    }
+                    if !sink.keyed_enabled(target_table) {
+                        result.gate_b_blocked += 1;
+                        return KeyedEntryAction::Tainted;
+                    }
+                    let child_result = with_dir_name(ctx, tag.name.to_owned(), |ctx| {
+                        process_keyed_directory(target_table, child, ctx, sink)
+                    });
+                    result.merge(child_result);
+                } else {
                     result.unavailable_target += 1;
                     return KeyedEntryAction::Tainted;
-                };
-                if !super::is_enabled(target_table) {
-                    result.gate_b_blocked += 1;
-                    return KeyedEntryAction::Tainted;
-                }
-                let mut rows = Vec::new();
-                let outcome = with_dir_name(ctx, tag.name.to_owned(), |ctx| {
-                    engine::process_binary_data_checked(
-                        target_table,
-                        engine::Dir::whole(child.data, child.byte_order),
-                        ctx,
-                        &mut rows,
-                    )
-                });
-                if outcome == engine::BinaryWalkOutcome::Tainted {
-                    return KeyedEntryAction::Tainted;
-                }
-                for row in rows {
-                    sink.emit(re_scope(row, child.scope));
-                    result.emitted += 1;
                 }
             }
         }
@@ -399,6 +717,34 @@ fn process_entry<'a>(
         result.bad_value += 1;
         return KeyedEntryAction::Continue;
     };
+    match emit_resolved_scalar(table, block.scope, resolved, raw, ctx, sink, result) {
+        ScalarAction::Continue => KeyedEntryAction::Continue,
+        ScalarAction::Tainted => KeyedEntryAction::Tainted,
+    }
+}
+
+enum ScalarAction {
+    Continue,
+    Tainted,
+}
+
+/// Apply the shared keyed tag-reporting semantics after a layout has supplied
+/// one logical scalar. CIFF and source-authenticated word directories differ
+/// only in obtaining that scalar; selection, state, conversion and emission
+/// stay in this one path.
+fn emit_resolved_scalar(
+    table: &'static KeyedDirectoryTable,
+    scope: KeyedScope,
+    resolved: ResolvedTag,
+    raw: runtime::DecodedValue,
+    ctx: &mut Ctx,
+    sink: &mut dyn KeyedEmissionSink,
+    result: &mut KeyedWalkResult,
+) -> ScalarAction {
+    let tag = resolved.tag;
+    if tag.flags.unknown {
+        return ScalarAction::Continue;
+    }
     let mut omitted = tag.omitted;
     if resolved.condition_resolved {
         omitted.condition = false;
@@ -410,7 +756,7 @@ fn process_entry<'a>(
                 // An unrepresentable state value could change every following
                 // source Condition. Stop this directory rather than leave
                 // stale state for its later siblings.
-                return KeyedEntryAction::Tainted;
+                return ScalarAction::Tainted;
             };
             ctx.members.insert(member, member_value);
             omitted.raw_conv = false;
@@ -420,16 +766,16 @@ fn process_entry<'a>(
     if omitted.raw_conv && tag.raw_conv.is_none() {
         result.omitted += 1;
         // An unmodeled RawConv may mutate state shared by later entries.
-        return KeyedEntryAction::Tainted;
+        return ScalarAction::Tainted;
     }
     if omitted.any() {
         result.omitted += 1;
-        return KeyedEntryAction::Continue;
+        return ScalarAction::Continue;
     }
     let (value, value_conv) = if tag.flags.binary && tag.value_conv.is_none() {
         let Some(len) = keyed_perl_length(&raw) else {
             result.omitted += 1;
-            return KeyedEntryAction::Continue;
+            return ScalarAction::Continue;
         };
         (
             TagValue::String(format!(
@@ -440,7 +786,7 @@ fn process_entry<'a>(
     } else {
         let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
             result.omitted += 1;
-            return KeyedEntryAction::Continue;
+            return ScalarAction::Continue;
         };
         let unconverted = || {
             if tag.flags.list {
@@ -458,8 +804,7 @@ fn process_entry<'a>(
         module: table.module,
         table: table.table,
         group0: tag.groups.g0.unwrap_or(table.group0),
-        group1: block
-            .scope
+        group1: scope
             .group1_override
             .unwrap_or(tag.groups.g1.unwrap_or(table.group1)),
         group2: tag.groups.g2.unwrap_or(table.group2),
@@ -475,7 +820,7 @@ fn process_entry<'a>(
         rational: None,
     });
     result.emitted += 1;
-    KeyedEntryAction::Continue
+    ScalarAction::Continue
 }
 
 /// ExifTool.pm:9469-9473 after keyed code generation has applied table
@@ -509,10 +854,11 @@ fn resolve_tag(
     raw_id: u16,
     ctx: &mut Ctx,
     result: &mut KeyedWalkResult,
+    allow_format_count_context: bool,
 ) -> Option<ResolvedTag> {
     if let Some(tag) = table.tags.iter().find(|tag| tag.raw_id == raw_id) {
         if let Some(condition) = tag.condition {
-            if condition.needs_value_context() {
+            if condition_needs_unavailable_context(condition, allow_format_count_context) {
                 result.initial_context_refusal += 1;
                 return None;
             }
@@ -526,11 +872,9 @@ fn resolve_tag(
         });
     }
     let group = table.variants.iter().find(|group| group.raw_id == raw_id)?;
-    if group
-        .alternatives
-        .iter()
-        .any(|(condition, _)| condition.needs_value_context())
-    {
+    if group.alternatives.iter().any(|(condition, _)| {
+        condition_needs_unavailable_context(*condition, allow_format_count_context)
+    }) {
         result.initial_context_refusal += 1;
         return None;
     }
@@ -546,6 +890,31 @@ fn resolve_tag(
         }
     }
     None
+}
+
+/// A CIFF lookup has no `$format`, `$count`, or `$$valPt` retry context. A
+/// source-authenticated word directory supplies the first two through
+/// `HandleTag`, but it still has no byte-slice value context. Keep that
+/// distinction explicit so an accepted future `ValPt` condition cannot be
+/// evaluated against invented data.
+fn condition_needs_unavailable_context(condition: Cond, allow_format_count_context: bool) -> bool {
+    match condition {
+        Cond::ValPtRegex { .. } => true,
+        Cond::FormatEq { .. } | Cond::FormatRegex { .. } | Cond::CountCmp { .. } => {
+            !allow_format_count_context
+        }
+        Cond::And(left, right) | Cond::Or(left, right) => {
+            condition_needs_unavailable_context(*left, allow_format_count_context)
+                || condition_needs_unavailable_context(*right, allow_format_count_context)
+        }
+        Cond::SetMember { source, then, .. } => {
+            (matches!(source, super::EffectSource::Count) && !allow_format_count_context)
+                || then.is_some_and(|next| {
+                    condition_needs_unavailable_context(*next, allow_format_count_context)
+                })
+        }
+        _ => false,
+    }
 }
 
 fn native_count(tag: &KeyedTag, format: Fmt, value_size: usize, inline: bool) -> usize {
@@ -605,6 +974,13 @@ fn u16_at(data: &[u8], offset: usize, order: ByteOrder) -> Option<u16> {
     })
 }
 
+/// `Get16u` returns undef for an incomplete word; the authenticated native
+/// processor immediately uses that result in numeric operations, where Perl
+/// coerces it to zero. This helper is intentionally layout-local.
+fn u16_or_zero(data: &[u8], offset: usize, order: ByteOrder) -> u16 {
+    u16_at(data, offset, order).unwrap_or(0)
+}
+
 fn u32_at(data: &[u8], offset: usize, order: ByteOrder) -> Option<u32> {
     let bytes: [u8; 4] = data.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
     Some(match order {
@@ -616,11 +992,13 @@ fn u32_at(data: &[u8], offset: usize, order: ByteOrder) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
 
     use super::*;
     use crate::exiftool_tables::{
-        Cond, GateA, IfdFlags, KeyedNativeFacts, KeyedStart, KeyedVariantGroup, Omitted, PrintConv,
-        RawConvEffect, SizeExpectation, TagGroups, U16SizeCheck,
+        ALL_KEYED_TABLES, Cond, GateA, IfdFlags, KeyedNativeFacts, KeyedStart, KeyedVariantGroup,
+        Omitted, PrintConv, RawConvEffect, SizeExpectation, TagGroups, U16SizeCheck,
     };
 
     const FACTS: KeyedNativeFacts = KeyedNativeFacts {
@@ -648,12 +1026,50 @@ mod tests {
     #[derive(Default)]
     struct Sink {
         rows: Vec<Emitted>,
+        warnings: Vec<&'static str>,
+        verbose: bool,
+        verbose_directories: Vec<WordDirectoryVerbose>,
         enabled: bool,
+    }
+
+    #[derive(Default)]
+    struct ParentOnlySink {
+        rows: Vec<Emitted>,
+        warnings: Vec<&'static str>,
+    }
+
+    impl KeyedEmissionSink for ParentOnlySink {
+        fn emit(&mut self, row: Emitted) {
+            self.rows.push(row);
+        }
+
+        fn warn(&mut self, warning: &'static str) {
+            self.warnings.push(warning);
+        }
+
+        fn keyed_enabled(&self, table: &'static KeyedDirectoryTable) -> bool {
+            table.module == "CanonRaw" && table.table == "Main"
+        }
     }
 
     impl KeyedEmissionSink for Sink {
         fn emit(&mut self, row: Emitted) {
             self.rows.push(row);
+        }
+
+        fn warn(&mut self, warning: &'static str) {
+            self.warnings.push(warning);
+        }
+
+        fn verbose_enabled(&self) -> bool {
+            self.verbose
+        }
+
+        fn verbose_directory(&mut self, directory: &'static str, entry_count: f64) {
+            self.verbose_directories.push(WordDirectoryVerbose {
+                directory,
+                entry_count,
+            });
         }
 
         fn keyed_enabled(&self, _table: &'static KeyedDirectoryTable) -> bool {
@@ -768,6 +1184,704 @@ mod tests {
             &mut sink,
         );
         (sink, result)
+    }
+
+    const WORD_LAYOUT: WordDirectory = WordDirectory {
+        pair_start: 2,
+        pair_stride: 2,
+        key_shift: 8,
+        // This deliberately exceeds `int8u`: HandleTag is given the masked
+        // processor value, not a byte decoded from the carrier.
+        value_mask: 0x01ff,
+        header_adjustment: 2,
+        model_condition: Cond::MemberRegex {
+            member: "Model",
+            pattern: "^$",
+            ignore_case: false,
+            negate: false,
+        },
+        exact_length_first: true,
+        missing_model_as_empty: true,
+        short_u16_as_zero: true,
+        index_divisor: 2,
+        index_bias: 1,
+        value_format: Fmt::Int8u,
+        value_count: 1,
+        value_size: 1,
+        invalid_warning: "Invalid CanonCustom data",
+        verbose_directory: "CanonCustom",
+        source_file: "CanonCustom.pm",
+        source_sha256: "fixture-source",
+        source_body_sha256: "fixture-body",
+        reader_contract_sha256: "fixture-contract",
+    };
+
+    const fn word_table(
+        tags: &'static [KeyedTag],
+        variants: &'static [KeyedVariantGroup],
+    ) -> KeyedDirectoryTable {
+        KeyedDirectoryTable {
+            layout: KeyedLayout::LengthPrefixedU16Pairs(WORD_LAYOUT),
+            tags,
+            variants,
+            ..EMPTY_TABLE
+        }
+    }
+
+    fn words(order: ByteOrder, header: u16, pairs: &[u16], trailing: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        push_u16(&mut out, header, order);
+        for pair in pairs {
+            push_u16(&mut out, *pair, order);
+        }
+        out.extend_from_slice(trailing);
+        out
+    }
+
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        assert_eq!(hex.len() % 2, 0, "probe fixture hex must be byte-aligned");
+        hex.as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                std::str::from_utf8(pair)
+                    .ok()
+                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                    .expect("probe fixture hex must be valid")
+            })
+            .collect()
+    }
+
+    /// Invoke the independently maintained native v1 word-processor probe.
+    /// This test is deliberately ignored by default because it needs the
+    /// pinned ExifTool tree and a Perl whose module set can load it; the
+    /// focused native-validation command supplies both variables explicitly.
+    fn probe_word_processor(requests: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        let root = std::env::var("OXIDEX_PINNED_EXIFTOOL")
+            .expect("ignored native probe needs OXIDEX_PINNED_EXIFTOOL");
+        let perl =
+            std::env::var("EXIFTOOL_PERL").expect("ignored native probe needs EXIFTOOL_PERL");
+        let probe = format!(
+            "{}/tools/exiftool-tables/probe_word_processor.pl",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let mut child = Command::new(perl)
+            .arg(probe)
+            .arg("--lib")
+            .arg("lib")
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start native word-processor probe");
+        {
+            let stdin = child.stdin.as_mut().expect("native probe stdin");
+            for request in requests {
+                writeln!(
+                    stdin,
+                    "{}",
+                    serde_json::to_string(request).expect("serialize probe request")
+                )
+                .expect("write native probe request");
+            }
+        }
+        let output = child
+            .wait_with_output()
+            .expect("wait for native word-processor probe");
+        assert!(
+            output.status.success(),
+            "native probe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "native probe wrote stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).expect("native probe JSONL response"))
+            .collect()
+    }
+
+    fn native_number(value: &serde_json::Value) -> i64 {
+        value["numeric"]
+            .as_i64()
+            .expect("native probe scalar numeric value")
+    }
+
+    #[test]
+    fn word_directory_preserves_numeric_mask_and_handle_tag_selection_in_both_orders() {
+        static FORMAT_IS_INT8U: Cond = Cond::FormatEq {
+            value: "int8u",
+            negate: false,
+        };
+        static COUNT_IS_ONE: Cond = Cond::CountCmp {
+            op: crate::exiftool_tables::CmpOp::Eq,
+            value: 1,
+        };
+        static FORMAT_AND_COUNT: Cond = Cond::And(&FORMAT_IS_INT8U, &COUNT_IS_ONE);
+        static ROW: KeyedTag = tag(1, "CustomFunction", Some(Fmt::Int8u), Some(1));
+        static ALTERNATIVES: [(Cond, KeyedTag); 1] = [(FORMAT_AND_COUNT, ROW)];
+        static VARIANTS: [KeyedVariantGroup; 1] = [KeyedVariantGroup {
+            raw_id: 1,
+            alternatives: &ALTERNATIVES,
+        }];
+        static TABLE: KeyedDirectoryTable = word_table(&[], &VARIANTS);
+
+        for order in [ByteOrder::Big, ByteOrder::Little] {
+            // `0x01ff >> 8` selects key 1, and a source-authorized `0x1ff`
+            // mask preserves numeric 511 despite the HandleTag Format being
+            // `int8u` selection metadata.
+            let data = words(order, 4, &[0x01ff], &[]);
+            let (sink, result) = walk_test(&TABLE, &data, order);
+            assert_eq!(result.entries_seen, 1);
+            assert_eq!(
+                result.word_entries,
+                vec![WordDirectoryEntry {
+                    raw_id: 1,
+                    value: 511,
+                    index: 0,
+                    format: Fmt::Int8u,
+                    count: 1,
+                    size: 1,
+                }]
+            );
+            assert_eq!(sink.rows.len(), 1);
+            assert_eq!(sink.rows[0].name, "CustomFunction");
+            assert_eq!(sink.rows[0].value, TagValue::Integer(511));
+            assert_eq!(result.word_traces.len(), 1);
+            assert!(result.word_traces[0].returned);
+            assert!(result.word_traces[0].warnings.is_empty());
+            assert!(result.word_traces[0].verbose_directories.is_empty());
+            assert!(sink.verbose_directories.is_empty());
+            assert_eq!(result.word_traces[0].entries, result.word_entries);
+        }
+    }
+
+    #[test]
+    fn word_directory_verbose_projection_is_opt_in_and_keeps_native_size_expression() {
+        static TAGS: [KeyedTag; 1] = [tag(1, "CustomFunction", Some(Fmt::Int8u), Some(1))];
+        static TABLE: KeyedDirectoryTable = word_table(&TAGS, &[]);
+        // Native calls `VerboseDir('CanonCustom', $size / 2 - 1)`. An odd
+        // byte count must stay 1.5 rather than being rounded to decoded pairs.
+        let data = words(ByteOrder::Little, 3, &[0x0102], &[0x34]);
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        let mut verbose = Sink {
+            enabled: true,
+            verbose: true,
+            ..Sink::default()
+        };
+        let result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&data, ByteOrder::Little, scope()),
+            &mut ctx,
+            &mut verbose,
+        );
+        assert_eq!(
+            result.word_traces[0].verbose_directories,
+            vec![WordDirectoryVerbose {
+                directory: "CanonCustom",
+                entry_count: 1.5,
+            }]
+        );
+        assert_eq!(
+            verbose.verbose_directories,
+            result.word_traces[0].verbose_directories
+        );
+
+        let mut quiet_members = HashMap::new();
+        let mut quiet_ctx = Ctx::new(&mut quiet_members);
+        let mut quiet = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let quiet_result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&data, ByteOrder::Little, scope()),
+            &mut quiet_ctx,
+            &mut quiet,
+        );
+        assert!(quiet_result.word_traces[0].verbose_directories.is_empty());
+        assert!(quiet.verbose_directories.is_empty());
+    }
+
+    #[test]
+    fn word_trace_distinguishes_native_rejection_from_gated_or_empty_processing() {
+        static TAGS: [KeyedTag; 1] = [tag(1, "CustomFunction", Some(Fmt::Int8u), Some(1))];
+        static TABLE: KeyedDirectoryTable = word_table(&TAGS, &[]);
+
+        // A source processor was invoked and rejected the header. Its warning
+        // and false return are visible separately from generic counters.
+        let rejected = words(ByteOrder::Big, 4, &[0x0102, 0x0304], &[]);
+        let mut rejected_members = HashMap::from([(
+            "Model",
+            MemberValue::Str("does-not-match-empty-fixture".into()),
+        )]);
+        let mut rejected_ctx = Ctx::new(&mut rejected_members);
+        let mut rejected_sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let rejected_result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&rejected, ByteOrder::Big, scope()),
+            &mut rejected_ctx,
+            &mut rejected_sink,
+        );
+        assert_eq!(rejected_result.bad_value, 1);
+        assert_eq!(rejected_sink.warnings, vec!["Invalid CanonCustom data"]);
+        assert_eq!(
+            rejected_result.word_traces,
+            vec![WordDirectoryTrace {
+                module: "Test",
+                table: "Main",
+                returned: false,
+                warnings: vec!["Invalid CanonCustom data"],
+                verbose_directories: vec![],
+                entries: vec![],
+            }]
+        );
+
+        // A zero-byte directory is a successful native invocation with no
+        // HandleTag calls; it is not the same result as rejection.
+        let mut empty_members = HashMap::new();
+        let mut empty_ctx = Ctx::new(&mut empty_members);
+        let mut empty_sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let empty_result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&[], ByteOrder::Big, scope()),
+            &mut empty_ctx,
+            &mut empty_sink,
+        );
+        assert_eq!(empty_result.word_traces.len(), 1);
+        assert!(empty_result.word_traces[0].returned);
+        assert!(empty_result.word_traces[0].warnings.is_empty());
+        assert!(empty_result.word_traces[0].entries.is_empty());
+        assert!(empty_sink.warnings.is_empty());
+
+        // Gate B never invokes the source processor, so it deliberately has
+        // no native-style return or warning trace.
+        let mut gated_members = HashMap::new();
+        let mut gated_ctx = Ctx::new(&mut gated_members);
+        let mut gated_sink = Sink::default();
+        let gated_result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&[], ByteOrder::Big, scope()),
+            &mut gated_ctx,
+            &mut gated_sink,
+        );
+        assert_eq!(gated_result.gate_b_blocked, 1);
+        assert!(gated_result.word_traces.is_empty());
+        assert!(gated_sink.warnings.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires the pinned ExifTool tree and EXIFTOOL_PERL; run in the native validation wave"]
+    fn generated_word_directory_matches_native_probe_v1() {
+        let table = find_keyed_table("CanonCustom", "FunctionsD30")
+            .expect("canonical generated FunctionsD30 table");
+        let KeyedLayout::LengthPrefixedU16Pairs(word) = table.layout else {
+            panic!("FunctionsD30 must retain its generated word layout");
+        };
+        assert!(table.gate_a.passes());
+        assert_eq!(word.source_file, "Image/ExifTool/CanonCustom.pm");
+
+        let cases = vec![
+            serde_json::json!({
+                "protocol": "oxidex.word_processor.v1",
+                "module": "CanonCustom",
+                "table": "FunctionsD30",
+                "case": {
+                    "name": "ii-normal", "byte_order": "II", "data_hex": "060002010403",
+                    "dir_start": 0, "dir_len": 6, "members": {},
+                },
+            }),
+            serde_json::json!({
+                "protocol": "oxidex.word_processor.v1",
+                "module": "Image::ExifTool::CanonCustom",
+                "table": "FunctionsD30",
+                "case": {
+                    "name": "mm-normal", "byte_order": "MM", "data_hex": "000601020304",
+                    "dir_start": 0, "dir_len": 6, "members": {},
+                },
+            }),
+            serde_json::json!({
+                "protocol": "oxidex.word_processor.v1",
+                "module": "CanonCustom",
+                "table": "FunctionsD30",
+                "case": {
+                    "name": "verbose-normal", "byte_order": "II", "data_hex": "060002010403",
+                    "dir_start": 0, "dir_len": 6, "members": {}, "verbose": true,
+                },
+            }),
+            serde_json::json!({
+                "protocol": "oxidex.word_processor.v1",
+                "module": "CanonCustom",
+                "table": "FunctionsD30",
+                "case": {
+                    "name": "missing-model-rejects-exception", "byte_order": "II", "data_hex": "0300020134",
+                    "dir_start": 0, "dir_len": 5, "members": {}, "verbose": true,
+                },
+            }),
+            serde_json::json!({
+                "protocol": "oxidex.word_processor.v1",
+                "module": "CanonCustom",
+                "table": "FunctionsD30",
+                "case": {
+                    "name": "d60-length-exception", "byte_order": "II", "data_hex": "0300020134",
+                    "dir_start": 0, "dir_len": 5, "members": {"Model": "EOS D60"}, "verbose": true,
+                },
+            }),
+            serde_json::json!({
+                "protocol": "oxidex.word_processor.v1",
+                "module": "CanonCustom",
+                "table": "FunctionsD30",
+                "case": {
+                    "name": "mm-odd-short", "byte_order": "MM", "data_hex": "00050102ff",
+                    "dir_start": 0, "dir_len": 5, "members": {},
+                },
+            }),
+            serde_json::json!({
+                "protocol": "oxidex.word_processor.v1",
+                "module": "CanonCustom",
+                "table": "FunctionsD30",
+                "case": {
+                    "name": "empty", "byte_order": "II", "data_hex": "",
+                    "dir_start": 0, "dir_len": 0, "members": {}, "verbose": true,
+                },
+            }),
+        ];
+        let replies = probe_word_processor(&cases);
+        assert_eq!(replies.len(), cases.len());
+
+        for (request, reply) in cases.iter().zip(replies) {
+            assert_eq!(reply["protocol"], "oxidex.word_processor.v1");
+            assert_eq!(reply["ok"], true, "native probe response: {reply}");
+            assert_eq!(
+                reply["unexpected_side_effects"],
+                serde_json::json!([]),
+                "native probe response: {reply}"
+            );
+            assert_eq!(
+                reply["selection"]["process"]["source_file"], word.source_file,
+                "native source identity changed"
+            );
+            assert_eq!(
+                reply["selection"]["process"]["source_sha256"], word.source_sha256,
+                "native source digest changed"
+            );
+            assert_eq!(
+                reply["selection"]["process"]["source_body_sha256"], word.source_body_sha256,
+                "native processor body digest changed"
+            );
+            assert_eq!(
+                reply["selection"]["reader_binding"]["requested"],
+                "Image::ExifTool::CanonCustom::Get16u"
+            );
+            assert_eq!(
+                reply["selection"]["reader_binding"]["name"],
+                "Image::ExifTool::Get16u"
+            );
+
+            let order = match request["case"]["byte_order"]
+                .as_str()
+                .expect("probe byte order")
+            {
+                "II" => ByteOrder::Little,
+                "MM" => ByteOrder::Big,
+                other => panic!("unsupported probe order {other}"),
+            };
+            let data = hex_bytes(
+                request["case"]["data_hex"]
+                    .as_str()
+                    .expect("probe data hex"),
+            );
+            let mut members = HashMap::new();
+            if let Some(model) = request["case"]["members"]["Model"].as_str() {
+                members.insert("Model", MemberValue::Str(model.to_owned()));
+            }
+            let mut ctx = Ctx::new(&mut members);
+            let mut sink = Sink {
+                enabled: true,
+                verbose: request["case"]["verbose"].as_bool().unwrap_or(false),
+                ..Sink::default()
+            };
+            let result = process_keyed_directory(
+                table,
+                KeyedBlock::new(&data, order, native_scope()),
+                &mut ctx,
+                &mut sink,
+            );
+            assert_eq!(result.word_traces.len(), 1);
+            let trace = &result.word_traces[0];
+            assert_eq!(trace.module, "CanonCustom");
+            assert_eq!(trace.table, "FunctionsD30");
+            assert_eq!(trace.returned, native_number(&reply["returned"]) == 1);
+            assert_eq!(trace.entries, result.word_entries);
+
+            let native_warnings = reply["warnings"]
+                .as_array()
+                .expect("native warnings array")
+                .iter()
+                .filter_map(|arguments| arguments[0]["string"].as_str())
+                .map(str::trim_end)
+                .collect::<Vec<_>>();
+            assert_eq!(trace.warnings, native_warnings);
+            assert_eq!(sink.warnings, trace.warnings);
+
+            let native_verbose = reply["verbose_dirs"]
+                .as_array()
+                .expect("native VerboseDir array");
+            assert_eq!(trace.verbose_directories.len(), native_verbose.len());
+            assert_eq!(sink.verbose_directories, trace.verbose_directories);
+            for (rust, native) in trace.verbose_directories.iter().zip(native_verbose) {
+                assert_eq!(
+                    rust.directory,
+                    native[0]["string"]
+                        .as_str()
+                        .expect("native verbose directory name")
+                );
+                let native_count = native[1]["numeric"]
+                    .as_f64()
+                    .expect("native verbose directory count");
+                assert_eq!(rust.entry_count, native_count);
+            }
+
+            let native_tags = reply["handle_tags"]
+                .as_array()
+                .expect("native HandleTag array");
+            assert_eq!(trace.entries.len(), native_tags.len());
+            for (entry, native) in trace.entries.iter().zip(native_tags) {
+                assert_eq!(i64::from(entry.raw_id), native_number(&native["raw_id"]));
+                assert_eq!(entry.value, native_number(&native["value"]));
+                assert_eq!(entry.index as i64, native_number(&native["index"]));
+                assert_eq!(word_format_name(entry.format), native["format"]["string"]);
+                assert_eq!(entry.count as i64, native_number(&native["count"]));
+                assert_eq!(entry.size as i64, native_number(&native["size"]));
+            }
+        }
+    }
+
+    #[test]
+    fn generated_canonraw_child_dispatches_to_word_table_without_unblocking_main() {
+        let main = find_keyed_table("CanonRaw", "Main").expect("canonical generated CanonRaw Main");
+        let target = find_keyed_table("CanonCustom", "FunctionsD30")
+            .expect("canonical generated FunctionsD30");
+        assert!(!main.gate_a.passes(), "full CanonRaw Main remains blocked");
+        assert!(target.gate_a.passes());
+
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let child = words(order, 4, &[0x0101], &[]);
+            let carrier = ciff(order, &[(0x1033, child)]);
+            let mut members = HashMap::from([("Model", MemberValue::Str("EOS D30".into()))]);
+            let mut ctx = Ctx::new(&mut members);
+            let mut blocked_sink = Sink {
+                enabled: true,
+                ..Sink::default()
+            };
+            let blocked = process_keyed_directory(
+                main,
+                KeyedBlock::new(&carrier, order, native_scope()),
+                &mut ctx,
+                &mut blocked_sink,
+            );
+            assert_eq!(blocked.gate_a_blocked, 1);
+            assert!(blocked.word_traces.is_empty());
+            assert!(blocked_sink.rows.is_empty());
+
+            // Test only the generated 0x1033 edge: every source tag,
+            // variant, validation operand, and target identity remains from
+            // the immutable canonical parent. The local Gate A projection
+            // does not claim the full parent is ready.
+            let narrowed: &'static KeyedDirectoryTable = Box::leak(Box::new(KeyedDirectoryTable {
+                gate_a: GateA { blocked_by: &[] },
+                ..*main
+            }));
+            let mut routed_members = HashMap::from([("Model", MemberValue::Str("EOS D30".into()))]);
+            let mut routed_ctx = Ctx::new(&mut routed_members);
+            let mut routed_sink = Sink {
+                enabled: true,
+                ..Sink::default()
+            };
+            let routed = process_keyed_directory(
+                narrowed,
+                KeyedBlock::new(&carrier, order, native_scope()),
+                &mut routed_ctx,
+                &mut routed_sink,
+            );
+            assert_eq!(routed.validation_rejected, 0);
+            assert_eq!(routed.gate_a_blocked, 0);
+            assert_eq!(routed.gate_b_blocked, 0);
+            assert_eq!(routed.word_traces.len(), 1);
+            assert!(routed.word_traces[0].returned);
+            assert_eq!(routed.word_traces[0].module, "CanonCustom");
+            assert_eq!(routed.word_traces[0].table, "FunctionsD30");
+            assert_eq!(
+                routed.word_traces[0].entries,
+                vec![WordDirectoryEntry {
+                    raw_id: 1,
+                    value: 1,
+                    index: 0,
+                    format: Fmt::Int8u,
+                    count: 1,
+                    size: 1,
+                }]
+            );
+            assert_eq!(routed_sink.rows.len(), 1);
+            assert_eq!(routed_sink.rows[0].name, "LongExposureNoiseReduction");
+            assert_eq!(routed_sink.rows[0].value, TagValue::String("On".into()));
+
+            let mut gate_b_members = HashMap::from([("Model", MemberValue::Str("EOS D30".into()))]);
+            let mut gate_b_ctx = Ctx::new(&mut gate_b_members);
+            let mut parent_only_sink = ParentOnlySink::default();
+            let gate_b = process_keyed_directory(
+                narrowed,
+                KeyedBlock::new(&carrier, order, native_scope()),
+                &mut gate_b_ctx,
+                &mut parent_only_sink,
+            );
+            assert_eq!(gate_b.gate_b_blocked, 1);
+            assert!(gate_b.word_traces.is_empty());
+            assert!(parent_only_sink.rows.is_empty());
+            assert!(parent_only_sink.warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn canonical_word_registry_is_complete_but_remains_unrouted() {
+        let word_tables = ALL_KEYED_TABLES
+            .iter()
+            .copied()
+            .filter(|table| matches!(table.layout, KeyedLayout::LengthPrefixedU16Pairs(_)))
+            .collect::<Vec<_>>();
+        assert_eq!(word_tables.len(), 9);
+        assert_eq!(
+            word_tables
+                .iter()
+                .map(|table| table.tags.len())
+                .sum::<usize>(),
+            132
+        );
+        assert!(word_tables.iter().all(|table| {
+            table.module == "CanonCustom"
+                && table.gate_a.passes()
+                && matches!(table.layout, KeyedLayout::LengthPrefixedU16Pairs(_))
+        }));
+        // Generated presence is only schema/reader data: the concrete caller
+        // policy remains disabled unless a future carrier opts in.
+        let funcs_d30 = find_keyed_table("CanonCustom", "FunctionsD30").unwrap();
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        let mut disabled = Sink::default();
+        let result = process_keyed_directory(
+            funcs_d30,
+            KeyedBlock::new(&[], ByteOrder::Little, native_scope()),
+            &mut ctx,
+            &mut disabled,
+        );
+        assert_eq!(result.gate_b_blocked, 1);
+        assert!(result.word_traces.is_empty());
+    }
+
+    #[test]
+    fn word_directory_uses_empty_missing_model_only_for_length_exception() {
+        static TAGS: [KeyedTag; 1] = [tag(1, "CustomFunction", Some(Fmt::Int8u), Some(1))];
+        static TABLE: KeyedDirectoryTable = word_table(&TAGS, &[]);
+        // Header says four bytes while the bounded directory has six. The
+        // missing `Model` is the native empty regex subject, so `+ 2` admits
+        // this carrier without permanently inventing a model member.
+        let data = words(ByteOrder::Big, 4, &[0x01ff, 0x0201], &[]);
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        let mut sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&data, ByteOrder::Big, scope()),
+            &mut ctx,
+            &mut sink,
+        );
+        assert_eq!(result.bad_value, 0);
+        assert_eq!(result.entries_seen, 2);
+        assert!(!members.contains_key("Model"));
+
+        static FAST_LAYOUT: WordDirectory = WordDirectory {
+            model_condition: Cond::SetMember {
+                member: "HeaderMustNotReadModel",
+                source: crate::exiftool_tables::EffectSource::Const(1),
+                then: None,
+            },
+            ..WORD_LAYOUT
+        };
+        static FAST_TABLE: KeyedDirectoryTable = KeyedDirectoryTable {
+            layout: KeyedLayout::LengthPrefixedU16Pairs(FAST_LAYOUT),
+            tags: &TAGS,
+            ..EMPTY_TABLE
+        };
+        let exact_data = words(ByteOrder::Big, 4, &[0x01ff], &[]);
+        let mut fast_members = HashMap::new();
+        let mut fast_ctx = Ctx::new(&mut fast_members);
+        let mut fast_sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let fast_result = process_keyed_directory(
+            &FAST_TABLE,
+            KeyedBlock::new(&exact_data, ByteOrder::Big, scope()),
+            &mut fast_ctx,
+            &mut fast_sink,
+        );
+        assert_eq!(fast_result.bad_value, 0);
+        assert!(!fast_members.contains_key("HeaderMustNotReadModel"));
+    }
+
+    #[test]
+    fn word_directory_coerces_odd_final_u16_to_zero_in_physical_order() {
+        static TAGS: [KeyedTag; 2] = [
+            tag(1, "First", Some(Fmt::Int8u), Some(1)),
+            tag(0, "ShortWord", Some(Fmt::Int8u), Some(1)),
+        ];
+        static TABLE: KeyedDirectoryTable = word_table(&TAGS, &[]);
+        // The final byte cannot form a u16. Native `Get16u` returns undef,
+        // then its numeric use yields zero and still invokes HandleTag.
+        for order in [ByteOrder::Big, ByteOrder::Little] {
+            let data = words(order, 5, &[0x01ff], &[0xff]);
+            let (sink, result) = walk_test(&TABLE, &data, order);
+            assert_eq!(
+                result.word_entries,
+                vec![
+                    WordDirectoryEntry {
+                        raw_id: 1,
+                        value: 511,
+                        index: 0,
+                        format: Fmt::Int8u,
+                        count: 1,
+                        size: 1,
+                    },
+                    WordDirectoryEntry {
+                        raw_id: 0,
+                        value: 0,
+                        index: 1,
+                        format: Fmt::Int8u,
+                        count: 1,
+                        size: 1,
+                    },
+                ]
+            );
+            assert_eq!(
+                sink.rows.iter().map(|row| row.name).collect::<Vec<_>>(),
+                vec!["First", "ShortWord"]
+            );
+        }
     }
 
     #[test]
