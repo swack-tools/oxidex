@@ -61,8 +61,8 @@ class VersionRehearsalTests(unittest.TestCase):
         catalog = self.normalized()
         self.assertEqual(len(catalog["entries"]), 5)
         self.assertEqual(catalog["entries"][1]["classification"], {"state": "excluded", "reason": "tag_name_not_numeric_release"})
-        self.assertEqual(catalog["entries"][3]["classification"], {"state": "unclassified", "reason": "missing_or_invalid_archive_sha256"})
-        self.assertEqual([row["name"] for row in vr.eligible_releases(catalog)], ["13.57", "13.59", "13.60"])
+        self.assertEqual(catalog["entries"][3]["classification"], {"state": "eligible"})
+        self.assertEqual([row["name"] for row in vr.eligible_releases(catalog)], ["13.57", "13.58", "13.59", "13.60"])
 
     def test_deterministic_replay_and_ordered_distinct_pairs(self):
         first = self.plan(seed=99, sample_index=4)
@@ -84,7 +84,11 @@ class VersionRehearsalTests(unittest.TestCase):
     def test_same_version_and_ambiguous_identity_are_refused(self):
         catalog = self.normalized()
         duplicate = copy.deepcopy(catalog_entries())
-        duplicate["entries"].extend([release("13.59", OID_D, SHA_B), release("13.60", OID_D, SHA_B)])
+        duplicate["entries"].extend([
+            release("13.58", OID_D, SHA_B),
+            release("13.59", OID_D, SHA_B),
+            release("13.60", OID_D, SHA_B),
+        ])
         duplicate_normalized = vr.normalize_catalog(duplicate)
         with self.assertRaisesRegex(vr.Refused, "at least two"):
             vr.eligible_releases(duplicate_normalized)
@@ -116,8 +120,14 @@ class VersionRehearsalTests(unittest.TestCase):
         plan = vr.make_plan(catalog, 12, 0, 1, "e" * 40)
         selected = {side["release"] for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
         untested = {row["release"]: row["reason"] for row in plan["untested_eligible_releases"]}
-        self.assertEqual(selected | set(untested), {"13.57", "13.59", "13.60"})
+        self.assertEqual(selected | set(untested), {"13.57", "13.58", "13.59", "13.60"})
         self.assertTrue(all(reason == "not_selected_by_seeded_pair_plan" for reason in untested.values()))
+
+    def test_archive_presence_does_not_filter_pair_selection(self):
+        catalog = self.normalized()
+        plan = self.plan(seed=12)
+        self.assertTrue(all(pair["source_resolution"]["state"] == "unresolved" for pair in plan["pairs"]))
+        self.assertIn("13.58", {entry["name"] for entry in vr.eligible_releases(catalog)})
 
     def test_duplicate_run_outputs_are_refused_and_initial_status_is_all_unrun(self):
         plan = self.plan()

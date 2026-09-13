@@ -22,7 +22,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-SCHEMA = 1
+# Schema 2 intentionally separates all-release pair selection from archive
+# retrieval.  Schema-1 raw catalog inputs remain normalizable, but a saved
+# normalized schema-1 catalog/plan is not silently reused under new semantics.
+SCHEMA = 2
 SELECTOR = "python-random-mt19937-v1"
 RELEASE_RE = re.compile(r"^[0-9]+\.[0-9]+$")
 GIT_OID_RE = re.compile(r"^[0-9a-f]{40,64}$")
@@ -72,22 +75,27 @@ def release_key(tag: str) -> tuple[int, int]:
 
 
 def _identity_reason(raw: dict[str, Any]) -> str | None:
-    name = raw.get("name")
+    """Validate the identity needed to select a release, not its archive.
+
+    Archives are resolved only after seeded selection.  Requiring a cached
+    archive digest here would shrink the candidate population toward releases
+    somebody happened to fetch previously.
+    """
     tag_object = raw.get("tag_object")
     peeled_commit = raw.get("peeled_commit")
-    archive = raw.get("archive")
     if not isinstance(tag_object, str) or not GIT_OID_RE.fullmatch(tag_object):
         return "missing_or_invalid_tag_object"
     if not isinstance(peeled_commit, str) or not GIT_OID_RE.fullmatch(peeled_commit):
         return "missing_or_invalid_peeled_commit"
-    if not isinstance(archive, dict):
-        return "missing_archive_identity"
-    expected_url = f"https://github.com/exiftool/exiftool/archive/refs/tags/{name}.tar.gz"
-    if archive.get("url") != expected_url:
-        return "missing_or_invalid_archive_url"
-    if not isinstance(archive.get("sha256"), str) or not SHA256_RE.fullmatch(archive["sha256"]):
-        return "missing_or_invalid_archive_sha256"
     return None
+
+
+def archive_url(release: str, peeled_commit: str) -> str:
+    if not isinstance(release, str) or not RELEASE_RE.fullmatch(release):
+        raise Refused("archive URL requires a numeric ExifTool release")
+    if not isinstance(peeled_commit, str) or not GIT_OID_RE.fullmatch(peeled_commit):
+        raise Refused("archive URL requires the selected immutable commit")
+    return f"https://github.com/exiftool/exiftool/archive/{peeled_commit}.tar.gz"
 
 
 def normalize_catalog(raw: dict[str, Any]) -> dict[str, Any]:
@@ -188,12 +196,10 @@ def select_pairs(catalog: dict[str, Any], seed: int, sample_index: int, pair_cou
 
 
 def _release_identity(entry: dict[str, Any]) -> dict[str, Any]:
-    archive = entry["archive"]
     return {
         "release": entry["name"],
         "tag_object": entry["tag_object"],
         "peeled_commit": entry["peeled_commit"],
-        "archive": {"url": archive["url"], "sha256": archive["sha256"]},
     }
 
 
@@ -239,6 +245,14 @@ def _plan_payload(catalog: dict[str, Any], seed: int, sample_index: int, pair_co
                 "native_oracles": {
                     "old": _oracle_binding("old", old),
                     "new": _oracle_binding("new", new),
+                },
+                "source_resolution": {
+                    "state": "unresolved",
+                    "required_archive_urls": {
+                        "old": archive_url(old["name"], old["peeled_commit"]),
+                        "new": archive_url(new["name"], new["peeled_commit"]),
+                    },
+                    "limit": "archive bytes and digests are resolved only after seeded selection",
                 },
                 "comparison_contract": {
                     "schema": "per-version-native-v1",
