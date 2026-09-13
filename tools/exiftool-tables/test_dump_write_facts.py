@@ -30,7 +30,8 @@ class NativeWriteFacts(unittest.TestCase):
         (self.lib / "Image/ExifTool.pm").write_text(
             "package Image::ExifTool; our $VERSION = 'fixture'; "
             "our %specialTags = map { $_ => 1 } "
-            "qw(GROUPS WRITE_PROC CHECK_PROC WRITABLE WRITE_GROUP FORMAT FIRST_ENTRY); 1;\n",
+            "qw(GROUPS WRITE_PROC CHECK_PROC WRITABLE WRITE_GROUP FORMAT FIRST_ENTRY);\n"
+            """sub DoAutoLoad { my $autoload = shift; my @callInfo = split /::/, $autoload, 0; my $file = 'Image/ExifTool/Write'; return if $callInfo[$#callInfo] eq 'DESTROY'; if (@callInfo == 4) { $file .= "$callInfo[2].pl"; } elsif ($callInfo[-1] eq 'ShiftTime') { $file = 'Image/ExifTool/Shift.pl'; } else { $file .= 'r.pl'; } require $file; no strict 'refs'; return &$autoload(@_); } 1;\n""",
             encoding="utf-8",
         )
         self.exif = package / "Exif.pm"
@@ -40,7 +41,8 @@ class NativeWriteFacts(unittest.TestCase):
         self.write_writer("return 1;")
         self.write_later("return 'late';")
 
-    def write_exif(self, host_group: str):
+    def write_exif(self, host_group: str, host_group_expr: str | None = None):
+        write_group = host_group_expr if host_group_expr is not None else f"'{host_group}'"
         self.exif.write_text(textwrap.dedent(f"""\
             package Image::ExifTool::Exif;
             sub WriteExif($$$);
@@ -54,7 +56,7 @@ class NativeWriteFacts(unittest.TestCase):
                 WRITABLE => 0,
                 0x13c => {{
                     Name => 'HostComputer', Writable => 'string',
-                    WriteGroup => '{host_group}', RawConvInv => '$val',
+                    WriteGroup => {write_group}, RawConvInv => '$val',
                     ValueConvInv => 0, PrintConvInv => '', Mandatory => 0,
                     DelValue => '', Validate => undef,
                     FutureWriterSwitch => {{ zero => 0, empty => '', undef => undef }},
@@ -127,6 +129,22 @@ class NativeWriteFacts(unittest.TestCase):
         # Table defaults and row overrides remain separate source facts.
         self.assertEqual(table["write_controls"]["WRITE_GROUP"],
                          {"present": True, "value": "ExifIFD"})
+
+    def test_scalar_reference_is_not_collapsed_to_literal(self):
+        self.write_exif("unused", host_group_expr="\\'IFD0'")
+        value = self.sidecar(self.dump())["rows"]["316"]["write_controls"]["WriteGroup"]["value"]
+        self.assertEqual(value, {"__ref": "SCALAR", "value": "IFD0"})
+
+    def test_mutated_autoload_router_refuses_forced_writer_loading(self):
+        core = self.lib / "Image/ExifTool.pm"
+        text = core.read_text(encoding="utf-8")
+        core.write_text(text.replace("Image/ExifTool/Write", "Image/ExifTool/Broken", 1), encoding="utf-8")
+        doc = self.dump()
+        router = doc["native_write_autoload"]
+        self.assertFalse(router["supported"])
+        effective = self.sidecar(doc)["effective_write_proc"]["effective"]
+        self.assertFalse(effective["resolved"])
+        self.assertEqual(effective["reason"], "autoload_router_unsupported")
 
     def test_forward_declarations_capture_loaded_writer_bodies(self):
         doc = self.dump()

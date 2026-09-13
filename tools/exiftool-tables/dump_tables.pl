@@ -397,8 +397,15 @@ sub write_scrub {
             (defined $source ? (__deparse => $source) : ()),
         };
     }
-    return write_scrub($$v, $depth + 1, $seen) if $kind eq 'SCALAR';
     my $id = refaddr($v);
+    if ($kind eq 'SCALAR') {
+        return { __ref => 'SCALAR', __cycle => JSON::PP::true }
+            if defined $id && $seen->{$id};
+        $seen->{$id} = 1 if defined $id;
+        my $out = { __ref => 'SCALAR', value => write_scrub($$v, $depth + 1, $seen) };
+        delete $seen->{$id} if defined $id;
+        return $out;
+    }
     return { __ref => $kind, __cycle => JSON::PP::true }
         if defined $id && $seen->{$id};
     $seen->{$id} = 1 if defined $id;
@@ -526,8 +533,52 @@ sub write_autoload_file {
     return 'Image/ExifTool/Writer.pl';
 }
 
+# ExifTool routes prototype writer declarations through DoAutoLoad.  The
+# dumper may load an implementation only if it sees the closed, generic routing
+# body below in the *actual loaded* core CV.  This protects the sidecar from
+# claiming an implementation after an upstream routing change; it does not
+# treat the routing fact as writer admission.
+sub write_autoload_router_fact {
+    my ($lib_abs) = @_;
+    no strict 'refs';
+    my $cv = *{'Image::ExifTool::DoAutoLoad'}{CODE};
+    return unresolved_code_fact('Image::ExifTool::DoAutoLoad', 'code_ref_unavailable') unless $cv;
+    return code_ref_fact($cv, 'Image::ExifTool::DoAutoLoad', $lib_abs, undef, undef, 0);
+}
+
+sub write_autoload_router_supported {
+    my ($fact) = @_;
+    return 0 unless $fact->{resolved} && ($fact->{__name} // '') eq 'Image::ExifTool::DoAutoLoad';
+    my $flat = $fact->{__deparse};
+    return 0 unless defined $flat;
+    $flat =~ s/\s+//g;
+    # Ordered executable fragments from the generic native dispatcher: split
+    # name, reject DESTROY, choose the four-part/ShiftTime/default file, load
+    # it, then tail-call the resolved routine.  Names and file construction are
+    # generic ExifTool mechanism, never table or vendor selection.
+    my @parts = (
+        'split(/::/,$autoload,0)',
+        "'Image/ExifTool/Write'",
+        "\$callInfo[\$#callInfo]eq'DESTROY'",
+        '@callInfo==4',
+        '$file.="$callInfo[2].pl"',
+        "\$callInfo[-1]eq'ShiftTime'",
+        "\$file='Image/ExifTool/Shift.pl'",
+        "\$file.='r.pl'",
+        'require$file',
+        'return&$autoload(@_)',
+    );
+    my $at = -1;
+    for my $part (@parts) {
+        my $next = index($flat, $part, $at + 1);
+        return 0 if $next < 0;
+        $at = $next;
+    }
+    return 1;
+}
+
 sub hydrate_write_procedures {
-    my ($tables) = @_;
+    my ($tables, $router) = @_;
     my %status;
     for my $full_name (sort keys %$tables) {
         my $hash = $tables->{$full_name}{hash};
@@ -538,6 +589,10 @@ sub hydrate_write_procedures {
             my $name = code_name($cv);
             my $file = write_autoload_file($name);
             my $id = refaddr($cv);
+            if (!$router->{supported}) {
+                $status{$id} = { reason => 'autoload_router_unsupported' };
+                next;
+            }
             if (!defined $file) {
                 $status{$id} = { reason => 'autoload_target_unavailable' };
                 next;
@@ -795,7 +850,12 @@ for my $full_name (sort keys %processor_tables) {
 # loading must not alter the existing read projection.  The sidecar gets the
 # table's stored CV, its final implementation source fact, and raw source
 # controls separately.
-my $write_autoload_status = hydrate_write_procedures(\%write_tables);
+my $write_autoload_router = write_autoload_router_fact($EXIFTOOL_LIB_ABS);
+my $write_autoload_router_status = {
+    router => $write_autoload_router,
+    supported => write_autoload_router_supported($write_autoload_router) ? JSON::PP::true : JSON::PP::false,
+};
+my $write_autoload_status = hydrate_write_procedures(\%write_tables, $write_autoload_router_status);
 for my $full_name (sort keys %write_tables) {
     my $entry = $write_tables{$full_name};
     my $fact = dump_write_table($entry->{module}, $entry->{table}, $full_name, $entry->{hash});
@@ -830,6 +890,7 @@ print $json->encode({
     # Facts only: no reader or writer consumes this sidecar yet.  Keeping it
     # separate prevents write-only properties from becoming accidental read
     # admission or changing the existing module/table/tag projection.
+    native_write_autoload => $write_autoload_router_status,
     native_write_tables => \%native_write_tables,
     subdirectory_validate_functions => \%subdirectory_validate_functions,
     native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
