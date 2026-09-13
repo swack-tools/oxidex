@@ -444,7 +444,12 @@ def _native_groups(raw: Any, module: str) -> tuple[str, str, str]:
         _fail("serial native GROUPS is malformed")
     if set(raw) - {"0", "1", "2"}:
         _fail("serial native GROUPS has unsupported index")
-    return tuple(raw.get(str(index)) if raw.get(str(index)) not in {None, "", "0"} else (module if index < 2 else "Other") for index in range(3))
+    first_module = module.split("::", 1)[0] if isinstance(module, str) else ""
+    if re.fullmatch(r"[A-Za-z_]\w*", first_module) is None:
+        _fail("serial native module is malformed for GetTagTable group defaults")
+    # ExifTool's `Image::.*?::([^:]*)` takes the first component after
+    # Image::ExifTool, rather than the full nested module spelling.
+    return tuple(raw.get(str(index)) if raw.get(str(index)) not in {None, "", "0"} else (first_module if index < 2 else "Other") for index in range(3))
 
 
 def _native_format(tag: dict[str, Any], default: str) -> tuple[str, tuple[Any, ...]]:
@@ -608,16 +613,24 @@ def audit(document: dict[str, Any], artifact: Artifact) -> Audit:
     mismatches: list[str] = []
     expected_rows = sum(len(table.rows) for table in native.values())
     emitted_rows = sum(len(table.rows) for table in artifact.tables.values())
+    native_row_keys = {row_key for table in native.values() for row_key in table.rows}
+    for row_key in sorted(set(artifact.omissions) - native_row_keys):
+        mismatches.append(f"{row_key}: generated omission has no selected native source alternative")
     for key in sorted(set(native) - set(artifact.tables) - set(artifact.omitted_tables)):
         mismatches.append(f"{key}: selected native table absent from artifact and table omissions")
     for key in sorted((set(artifact.tables) | set(artifact.omitted_tables)) - set(native)):
         mismatches.append(f"{key}: artifact table has no selected native processor")
     for key in sorted(set(artifact.tables) & set(artifact.omitted_tables)):
         mismatches.append(f"{key}: table appears as both emitted and omitted")
+    # `serial_descriptor_refused` is an emitter-side report, not independent
+    # proof about a native table.  Accepting it here would let an artifact put
+    # every selected table in this sidecar and evade all row/provenance checks.
+    # A later verifier may add a native, separately implemented refusal rule;
+    # until then a selected table must be emitted and audited.
+    for key in sorted(set(native) & set(artifact.omitted_tables)):
+        mismatches.append(f"{key}: selected native table is wholly omitted without independent native proof")
     for key, native_table in sorted(native.items()):
         if key in artifact.omitted_tables:
-            if artifact.omitted_tables[key] != ("serial_descriptor_refused",):
-                mismatches.append(f"{key}: table omission reasons do not name descriptor refusal")
             continue
         emitted = artifact.tables.get(key)
         if emitted is None:

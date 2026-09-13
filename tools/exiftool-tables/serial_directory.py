@@ -633,6 +633,21 @@ def _gate_src(reasons):
     return "&[" + ", ".join(f'(\"{codegen.rust_str(reason)}\", {count})' for reason, count in reasons) + "]"
 
 
+def _table_default_module(module):
+    """Return ExifTool's default group module for a captured table owner.
+
+    ``GetTagTable`` matches the first component after ``Image::ExifTool`` in
+    ``Image::ExifTool::<module>::<table>``.  A nested captured module is thus
+    ``Fixture`` for ``Fixture::Nested``, not the entire owner spelling.
+    """
+    if not isinstance(module, str) or not module:
+        raise SerialDirectoryRefused("serial table module is unavailable for native group defaults")
+    first = module.split("::", 1)[0]
+    if re.fullmatch(r"[A-Za-z_]\w*", first) is None:
+        raise SerialDirectoryRefused("serial table module is malformed for native group defaults")
+    return first
+
+
 def _table_group(groups, family, module):
     """Resolve a table group with native ``GetTagTable`` defaults.
 
@@ -647,7 +662,7 @@ def _table_group(groups, family, module):
     # false.  _table_meta already authenticates GROUPS values as strings.
     if isinstance(value, str) and value not in ("", "0"):
         return value
-    return module if family in (0, 1) else "Other"
+    return _table_default_module(module) if family in (0, 1) else "Other"
 
 
 def _serial_tag_literal(alternative):

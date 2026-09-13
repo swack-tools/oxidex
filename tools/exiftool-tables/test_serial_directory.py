@@ -153,6 +153,14 @@ class SerialDescriptorTests(unittest.TestCase):
         source = serial_directory.serial_rust_source(population)
         self.assertIn('group0: "Fixture", group1: "Fixture", group2: "Other",', source)
 
+    def test_rust_emitter_uses_first_nested_module_component_for_native_defaults(self):
+        changed = table()
+        population = serial_directory.compile_serial_population(
+            {"modules": {"Fixture::Nested": {"tables": {"Serial": changed}}}}
+        )
+        source = serial_directory.serial_rust_source(population)
+        self.assertIn('module: "Fixture::Nested", table: "Serial", group0: "MakerNotes", group1: "Fixture", group2: "Camera",', source)
+
     def test_rust_emitter_keeps_refused_table_in_table_sidecar(self):
         malformed = table()
         malformed["tags"] = []
@@ -381,6 +389,29 @@ class CopiedNativeSerialSource(unittest.TestCase):
         )
         self.assertEqual(native.stderr, "")
         self.assertEqual(json.loads(native.stdout), {"0": "MakerNotes", "1": "Canon", "2": "Camera"})
+
+    def test_native_get_tag_table_uses_first_component_of_nested_owner_module(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as directory:
+            lib = Path(directory) / "lib"
+            package = lib / "Image" / "ExifTool" / "Fixture" / "Nested.pm"
+            package.parent.mkdir(parents=True)
+            package.write_text(
+                "package Image::ExifTool::Fixture::Nested;\n"
+                "use strict;\n"
+                "our %Main = ( GROUPS => { 0 => 'MakerNotes', 2 => 'Camera' } );\n"
+                "1;\n",
+                encoding="utf-8",
+            )
+            native = subprocess.run(
+                [CANONICAL_PERL, "-I", str(lib), "-I", str(Path(PINNED_SOURCE) / "lib"),
+                 "-MJSON::PP", "-MImage::ExifTool", "-e",
+                 'my $table = Image::ExifTool::GetTagTable("Image::ExifTool::Fixture::Nested::Main") '
+                 'or die "missing native nested table\\n"; print encode_json($table->{GROUPS}), "\\n";'],
+                text=True, capture_output=True, check=True, timeout=15,
+            )
+        self.assertEqual(native.stderr, "")
+        self.assertEqual(json.loads(native.stdout), {"0": "MakerNotes", "1": "Fixture", "2": "Camera"})
 
     def test_source_count_mutation_changes_fresh_descriptor_and_rejects_stale(self):
         baseline_source = self.dump(Path(PINNED_SOURCE) / "lib")
