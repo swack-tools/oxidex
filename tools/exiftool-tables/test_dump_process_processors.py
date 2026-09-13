@@ -8,6 +8,7 @@ package-local reader after the table module loaded.
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -17,6 +18,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DUMP = REPO_ROOT / "tools/exiftool-tables/dump_tables.pl"
+PERL = os.environ.get("EXIFTOOL_PERL", "/usr/bin/perl")
 
 
 class ProcessProcessorFacts(unittest.TestCase):
@@ -70,7 +72,7 @@ class ProcessProcessorFacts(unittest.TestCase):
 
     def dump(self):
         result = subprocess.run(
-            ["/usr/bin/perl", str(DUMP), str(self.lib), "Fixture", "Reader", "ZZLater"],
+            [PERL, str(DUMP), str(self.lib), "Fixture", "Reader", "ZZLater"],
             check=True, text=True, capture_output=True,
         )
         return json.loads(result.stdout)
@@ -141,7 +143,7 @@ class ProcessProcessorFacts(unittest.TestCase):
         self.assertIsNone(fact["source_sha256"])
 
 
-PINNED = Path("/Users/allen/Documents/Codex/2026-09-10/oxidex-worktree-cleanup-audit/handoff-continuation/ci-repair/real-audio/exiftool-src")
+PINNED = Path(os.environ.get("OXIDEX_PINNED_EXIFTOOL", REPO_ROOT / "target/exiftool-src" / ("exiftool-" + (REPO_ROOT / ".exiftool-version").read_text().strip())))
 ORACLE = REPO_ROOT / "tools/exiftool-tables/oracle.pl"
 
 
@@ -152,14 +154,14 @@ class PinnedCanonCustom(unittest.TestCase):
 
     def dump(self, lib):
         result = subprocess.run(
-            ["/usr/bin/perl", str(DUMP), str(lib), "CanonCustom"],
+            [PERL, str(DUMP), str(lib), "CanonCustom"],
             check=True, text=True, capture_output=True,
         )
         return json.loads(result.stdout)["modules"]["CanonCustom"]["tables"]["Functions5D"]["meta"]["PROCESS_PROC"]
 
     def oracle(self, lib):
         result = subprocess.run(
-            ["/usr/bin/perl", str(ORACLE), str(lib)],
+            [PERL, str(ORACLE), str(lib)],
             check=True, text=True, capture_output=True,
         )
         for line in result.stdout.splitlines():

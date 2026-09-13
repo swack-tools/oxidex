@@ -436,7 +436,9 @@ jobs:
     # to compile-bound jobs and buy nothing here -- 2x is for the Warp queue
     # (seconds, vs minutes on the GitHub-hosted pool), not for the cores.
     runs-on: warp-ubuntu-latest-x64-2x
-    timeout-minutes: 10
+    # Native source replay adds a measured 399-second local suite to the
+    # previous six-minute verification job. Keep room for cold hosted runs.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The release comes from .exiftool-version, the repo-wide pin. This job
@@ -552,12 +554,26 @@ jobs:
           # returned zero hits, so nothing anywhere said so. Same recipe as
           # `just check-staleness`'s stage 0, inlined (no `just` on this
           # runner).
-          (cd tools/exiftool-tables && python3 -m unittest discover -p 'test_*.py' -v)
-
           ROOT="$EXIFTOOL_SOURCE"
           LIB="$ROOT/lib"
           DUMP="$RUNNER_TEMP/tables-${ET_VERSION}.json"
-          perl tools/exiftool-tables/dump_tables.pl "$LIB" > "$DUMP"
+          PROCESSORS="$RUNNER_TEMP/native-processors-${ET_VERSION}.tsv"
+          unset PERL5LIB PERLLIB PERL5OPT
+          export EXIFTOOL_PERL=perl LENS_TEST_PERL=perl
+          "$EXIFTOOL_PERL" tools/exiftool-tables/dump_tables.pl "$LIB" > "$DUMP"
+          "$EXIFTOOL_PERL" tools/exiftool-tables/oracle.pl "$LIB" > "$PROCESSORS"
+          test -s "$DUMP"
+          test -s "$PROCESSORS"
+          test -f "$LIB/Image/ExifTool/CanonCustom.pm"
+          # Supply the native inputs explicitly: without them unittest skips
+          # the source-rebinding, complete-inventory and native replay cases.
+          export OXIDEX_PINNED_EXIFTOOL="$ROOT"
+          export OXIDEX_TABLES_JSON="$DUMP" OXIDEX_SONY_DUMP="$DUMP"
+          export OXIDEX_WORD_KEYED_RUST="$GITHUB_WORKSPACE/src/exiftool_tables/keyed_tables.rs"
+          export OXIDEX_PROCESSOR_INVENTORY="$PROCESSORS"
+          export OXIDEX_WORD_PROCESSOR=Image::ExifTool::CanonCustom::ProcessCanonCustom
+          export OXIDEX_ALLOW_DIRTY_TREE=1
+          (cd tools/exiftool-tables && python3 -m unittest discover -p 'test_*.py' -v)
 
           TMPFIX="$RUNNER_TEMP/staleness-fixtures"
           mkdir -p "$TMPFIX"
