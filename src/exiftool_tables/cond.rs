@@ -461,7 +461,6 @@ impl Cond {
             }
         }
     }
-
 }
 
 /// Perl truthiness of an optional member value: absent is false (an

@@ -14,9 +14,7 @@ use super::IfdFlags;
 use super::cond::Ctx;
 use super::engine::{self, Emitted};
 use super::runtime::{self, DecodedValue};
-use super::serial_schema::{
-    SerialCount, SerialEntry, SerialPrintConv, SerialTable, SerialTag,
-};
+use super::serial_schema::{SerialCount, SerialEntry, SerialPrintConv, SerialTable, SerialTag};
 
 /// The bounded `dirInfo` values ProcessSerialData receives from its carrier.
 #[derive(Clone, Copy, Debug)]
@@ -451,9 +449,9 @@ mod tests {
 
     use super::*;
     use crate::exiftool_tables::{
-        Cond, EffectSource, GateA, IfdFlags, Omitted, PrintConv, RawConvEffect, SerialCondition, SerialCount,
-        SerialEntry, SerialFormat, SerialMissingMember, SerialPrintConv, SerialProcessorFacts,
-        SerialTable, SerialTag, TagGroups,
+        Cond, EffectSource, GateA, IfdFlags, Omitted, PrintConv, RawConvEffect, SerialCondition,
+        SerialCount, SerialEntry, SerialFormat, SerialMissingMember, SerialPrintConv,
+        SerialProcessorFacts, SerialTable, SerialTag, TagGroups,
     };
 
     static PROCESSOR: SerialProcessorFacts = SerialProcessorFacts {
@@ -1063,7 +1061,10 @@ mod tests {
         // signed scalar list, then masks every 16-bit word before indexing.
         let result = walk(table, &[1, 0, 0, 0x80, 3, 0], &mut sink, &mut members);
         assert_eq!(result.emitted, 1);
-        assert_eq!(sink.rows[0].value, TagValue::String("0,31,32,33".to_owned()));
+        assert_eq!(
+            sink.rows[0].value,
+            TagValue::String("0,31,32,33".to_owned())
+        );
         assert_eq!(
             decode_bits_words(&DecodedValue::Integer(-1), 16),
             Some("0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15".to_owned())

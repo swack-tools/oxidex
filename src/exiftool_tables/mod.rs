@@ -95,7 +95,8 @@ pub use serial_engine::{
 };
 pub use serial_schema::{
     OmittedSerialNativeRow, OmittedSerialNativeTable, SerialCondition, SerialCount, SerialEntry,
-    SerialFormat, SerialMissingMember, SerialPrintConv, SerialProcessorFacts, SerialTable, SerialTag,
+    SerialFormat, SerialMissingMember, SerialPrintConv, SerialProcessorFacts, SerialTable,
+    SerialTag,
 };
 pub use serial_tables::{
     ALL_SERIAL_TABLES, OMITTED_SERIAL_NATIVE_ROWS, OMITTED_SERIAL_NATIVE_TABLES,

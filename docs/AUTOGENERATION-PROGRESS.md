@@ -4,6 +4,16 @@ This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
 
 ## Current checkpoint — September 13
 
+Latest combined Canon definitions: **AFInfo 14/14 and AFInfo2 16/16**, both
+independently verified after formatting. Across all eight serial tables,
+emitted alternatives rise **106 -> 122** and omissions fall **26 -> 10**.
+This checkpoint is implemented and definition-validated; final execution and
+regeneration checks are pending, and it is not merged or active in Canon.
+The [Canon plan](reference/serial-afinfo-plan.md) records the failed pipeline
+attempt, its formatting repair and the remaining acceptance work.
+
+The following entries retain the completed milestones and their exact evidence.
+
 PR #754 merged as `1138a880` at 10:11 UTC, following #753 (`1a47cfa3`) and
 integration `72eae8a5`. The shared word processor now generates nine
 native tables containing 132 rows, including the empty fallback table.

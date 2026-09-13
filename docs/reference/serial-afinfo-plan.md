@@ -90,3 +90,24 @@ and pinned source. Independent Python and Rust reviews are assigned in
 parallel. Regeneration, Rust compilation and combined acceptance remain
 pending; the committed generated artifact has not yet been updated. No Canon
 parent route or manual reader changes in this checkpoint.
+
+## Combined definition checkpoint
+
+The generated artifact now passes the independent verifier after formatting:
+**132 native alternatives = 122 emitted + 10 explicit omissions**, with zero
+discrepancies. Canon AFInfo is 14/14 and AFInfo2 is 16/16; both clear the
+definition gate. The previous serial artifact emitted 106 alternatives and
+omitted 26. The additional non-Canon entry is in Real MediaProps, which still
+has other blockers. No production Canon route is enabled.
+
+The first official regeneration passed the expression and ordinary table
+checks, then found that the serial verifier rejected a legal trailing comma
+inserted by rustfmt. The parser repair now passes formatted-artifact verification
+and rejects stale source operands. That failed run remains recorded; a complete
+official retry and generated-table Rust execution are still pending.
+
+A copied-source boundary probe also found that native negative counts do not
+follow the reader's checked unsigned path. The compiler and independent verifier
+now withhold dynamic counts unless every selectable prior controller is a proved
+unsigned scalar. Signed payload arrays remain supported. This keeps unknown
+upgrade behavior explicit rather than approximating it.
