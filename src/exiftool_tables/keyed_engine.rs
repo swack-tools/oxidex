@@ -11,7 +11,7 @@ use crate::io::ByteOrder;
 use super::cond::{Ctx, MemberValue};
 use super::engine::{self, Emitted};
 use super::runtime;
-use super::{Fmt, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, find_table};
+use super::{Fmt, IfdFlags, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, find_table};
 
 /// Carrier projection applied after generated tag/table group resolution.
 ///
@@ -275,10 +275,16 @@ fn process_entry<'a>(
             result.bad_value += 1;
             return KeyedEntryAction::Continue;
         };
-        let name = resolved.map_or_else(
-            || format!("CanonRaw_0x{raw_id:04x}"),
-            |selected| selected.tag.name.to_owned(),
-        );
+        // `GetTagInfo` suppresses an Unknown row before ProcessCanonRaw
+        // chooses a directory name. It still walks the structural child, but
+        // under the native fallback name rather than the suppressed row's
+        // Name.
+        let name = resolved
+            .filter(|selected| !selected.tag.flags.unknown)
+            .map_or_else(
+                || format!("CanonRaw_0x{raw_id:04x}"),
+                |selected| selected.tag.name.to_owned(),
+            );
         return KeyedEntryAction::Descend { block: child, name };
     }
 
@@ -286,6 +292,12 @@ fn process_entry<'a>(
         return KeyedEntryAction::Continue;
     };
     let tag = resolved.tag;
+    // ExifTool.pm:9180-9186: selecting an Unknown alternative suppresses it
+    // unless `-u` is requested. Selection is terminal: the next alternative
+    // must not be tried after this return.
+    if tag.flags.unknown {
+        return KeyedEntryAction::Continue;
+    }
     // A refused Condition or Hook can change whether this row exists or how
     // its bytes are located. The other omitted flags are handled after
     // RawConv: FoundTag stores modeled member state before reportability.
@@ -391,16 +403,33 @@ fn process_entry<'a>(
         result.omitted += 1;
         return KeyedEntryAction::Continue;
     }
-    let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
-        result.omitted += 1;
-        return KeyedEntryAction::Continue;
-    };
-    let (value, value_conv) = match runtime::render(tag.print_conv, &converted) {
-        Some(rendered) => (
-            TagValue::String(rendered),
-            Some(runtime::to_exiftool_value(&converted)),
-        ),
-        None => (runtime::to_exiftool_value(&converted), None),
+    let (value, value_conv) = if tag.flags.binary && tag.value_conv.is_none() {
+        let Some(len) = keyed_perl_length(&raw) else {
+            result.omitted += 1;
+            return KeyedEntryAction::Continue;
+        };
+        (
+            TagValue::String(format!(
+                "(Binary data {len} bytes, use -b option to extract)"
+            )),
+            None,
+        )
+    } else {
+        let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
+            result.omitted += 1;
+            return KeyedEntryAction::Continue;
+        };
+        let unconverted = || {
+            if tag.flags.list {
+                runtime::to_tag_value(&converted)
+            } else {
+                runtime::to_exiftool_value(&converted)
+            }
+        };
+        match runtime::render(tag.print_conv, &converted) {
+            Some(rendered) => (TagValue::String(rendered), Some(unconverted())),
+            None => (unconverted(), None),
+        }
     };
     sink.emit(Emitted {
         module: table.module,
@@ -414,11 +443,33 @@ fn process_entry<'a>(
         name: tag.name,
         value,
         value_conv,
-        low_priority: false,
-        avoid: false,
+        // The keyed compiler has already folded table PRIORITY and AVOID into
+        // the tag flags. Only ExifTool's final Avoid default remains here.
+        low_priority: effective_priority(tag.flags) == Some(0),
+        avoid: tag.flags.avoid,
     });
     result.emitted += 1;
     KeyedEntryAction::Continue
+}
+
+/// ExifTool.pm:9469-9473 after keyed code generation has applied table
+/// PRIORITY/AVOID precedence. A remaining Avoid supplies priority zero only
+/// when neither source-level priority was defined.
+fn effective_priority(flags: IfdFlags) -> Option<i64> {
+    flags.priority.or(if flags.avoid { Some(0) } else { None })
+}
+
+/// `length($$val)` for a keyed Binary placeholder. ProcessCanonRaw already
+/// handed this exact ReadValue result to FoundTag; `perl_string` is the shared
+/// scalar representation used for non-list output.
+fn keyed_perl_length(value: &runtime::DecodedValue) -> Option<usize> {
+    match value {
+        runtime::DecodedValue::Undefined(bytes) | runtime::DecodedValue::StringBytes(bytes) => {
+            Some(bytes.len())
+        }
+        runtime::DecodedValue::String(text) => Some(text.len()),
+        other => other.perl_string().map(|text| text.len()),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -542,7 +593,7 @@ mod tests {
 
     use super::*;
     use crate::exiftool_tables::{
-        Cond, GateA, KeyedNativeFacts, KeyedStart, KeyedVariantGroup, Omitted, PrintConv,
+        Cond, GateA, IfdFlags, KeyedNativeFacts, KeyedStart, KeyedVariantGroup, Omitted, PrintConv,
         RawConvEffect, TagGroups,
     };
 
@@ -552,6 +603,7 @@ mod tests {
         condition: None,
         groups: TagGroups::NONE,
         subdir: None,
+        flags: IfdFlags::NONE,
     };
     const EMPTY_TAGS: &[KeyedTag] = &[];
     const EMPTY_VARIANTS: &[super::super::KeyedVariantGroup] = &[];
@@ -594,6 +646,7 @@ mod tests {
             name,
             format,
             count,
+            flags: IfdFlags::NONE,
             condition: None,
             raw_conv: None,
             omitted: Omitted::NONE,
@@ -1063,6 +1116,91 @@ mod tests {
         let (sink, result) = walk_test(&TABLE, &data, ByteOrder::Little);
         assert_eq!(result.emitted, 1);
         assert_eq!(sink.rows[0].value, TagValue::Integer(9));
+    }
+
+    #[test]
+    fn reporting_flags_keep_unknown_selection_terminal_and_preserve_output_policy() {
+        // `GetTagInfo` selects the first matching Unknown alternative, then
+        // returns undef unless -u is requested. The following ordinary row
+        // must not be tried as a fallback.
+        static UNKNOWN: KeyedTag = KeyedTag {
+            flags: IfdFlags {
+                unknown: true,
+                ..IfdFlags::NONE
+            },
+            ..tag(1, "Unknown", Some(Fmt::Int8u), None)
+        };
+        static FALLBACK: KeyedTag = tag(1, "Fallback", Some(Fmt::Int8u), None);
+        static UNKNOWN_ALTERNATIVES: [(Cond, KeyedTag); 2] =
+            [(Cond::Always, UNKNOWN), (Cond::Always, FALLBACK)];
+        static UNKNOWN_VARIANTS: [KeyedVariantGroup; 1] = [KeyedVariantGroup {
+            raw_id: 1,
+            alternatives: &UNKNOWN_ALTERNATIVES,
+        }];
+        static UNKNOWN_TABLE: KeyedDirectoryTable = KeyedDirectoryTable {
+            variants: &UNKNOWN_VARIANTS,
+            ..EMPTY_TABLE
+        };
+        let unknown_data = ciff(ByteOrder::Little, &[(0x4001, vec![7])]);
+        let (unknown_sink, unknown_result) =
+            walk_test(&UNKNOWN_TABLE, &unknown_data, ByteOrder::Little);
+        assert!(unknown_sink.rows.is_empty());
+        assert_eq!(unknown_result.emitted, 0);
+
+        static LIST: KeyedTag = KeyedTag {
+            flags: IfdFlags {
+                list: true,
+                ..IfdFlags::NONE
+            },
+            ..tag(2, "List", Some(Fmt::Int8u), Some(2))
+        };
+        static BINARY: KeyedTag = KeyedTag {
+            flags: IfdFlags {
+                binary: true,
+                ..IfdFlags::NONE
+            },
+            ..tag(0x0803, "Binary", Some(Fmt::Str(1)), Some(3))
+        };
+        static AVOID: KeyedTag = KeyedTag {
+            flags: IfdFlags {
+                avoid: true,
+                ..IfdFlags::NONE
+            },
+            ..tag(4, "Avoid", Some(Fmt::Int8u), None)
+        };
+        static EXPLICIT_PRIORITY: KeyedTag = KeyedTag {
+            flags: IfdFlags {
+                avoid: true,
+                priority: Some(1),
+                ..IfdFlags::NONE
+            },
+            ..tag(5, "Priority", Some(Fmt::Int8u), None)
+        };
+        static TAGS: [KeyedTag; 4] = [LIST, BINARY, AVOID, EXPLICIT_PRIORITY];
+        static TABLE: KeyedDirectoryTable = table(&TAGS);
+        let data = ciff(
+            ByteOrder::Little,
+            &[
+                (0x4002, vec![1, 2]),
+                (0x4803, b"hi\0".to_vec()),
+                (0x4004, vec![9]),
+                (0x4005, vec![10]),
+            ],
+        );
+        let (sink, result) = walk_test(&TABLE, &data, ByteOrder::Little);
+        assert_eq!(result.emitted, 4);
+        assert_eq!(
+            sink.rows[0].value,
+            TagValue::Array(vec![TagValue::Integer(1), TagValue::Integer(2)])
+        );
+        assert_eq!(
+            sink.rows[1].value,
+            TagValue::String("(Binary data 2 bytes, use -b option to extract)".into())
+        );
+        assert!(sink.rows[2].low_priority);
+        assert!(sink.rows[2].avoid);
+        assert!(!sink.rows[3].low_priority);
+        assert!(sink.rows[3].avoid);
     }
 
     #[test]
