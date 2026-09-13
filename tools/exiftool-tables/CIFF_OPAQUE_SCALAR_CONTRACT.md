@@ -4,10 +4,11 @@ This note records a source-backed native probe for the four still-omitted
 `CanonRaw::Main` scalar rows. It adds no generated schema, reader, caller, or
 activation.
 
-The probe invokes the pinned `ProcessCanonRaw` against constructed CIFF10
-blocks under both byte orders. It authenticates the processor and
-`ValidateImage` source/body facts, exposes the selected native row facts, and
-observes `FoundTag`, warnings, and `ImageDataHash` calls. It uses
+The probe resolves `CanonRaw::Main` and invokes that table's live
+`PROCESS_PROC` CODE reference against constructed CIFF10 blocks under both byte
+orders. It authenticates that selected processor and `ValidateImage`
+source/body facts, exposes the selected native row facts, and records one
+chronological trace of `FoundTag`, warnings, and `ImageDataHash` calls. It uses
 `File::RandomAccess` over the same complete block passed to the native
 processor, so an external pointer is an absolute offset from the block start.
 
@@ -24,8 +25,9 @@ The observed contract is deliberately split:
   `ValidateImage` helper. The probe captures the native repair of
   `? D8 FF DB` to `FF D8 FF DB`.
 - `RawData` (`0x2005`) invokes `ImageDataHash($raf, size, 'raw')` after seeking
-  the external payload pointer and before normal reporting. The probe captures
-  this absolute pointer, size, and mode; it does not manufacture a digest.
+  the external payload pointer and before normal reporting. The chronological
+  trace captures this absolute pointer, size, mode, then the raw report; it
+  does not manufacture a digest.
 
 A future source-derived schema needs two payload forms: `ExplicitUndef` for a
 literal table `Format => 'undef'`, and `UnformattedBytes` for recognized

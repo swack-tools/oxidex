@@ -10,13 +10,23 @@ use Getopt::Long qw(GetOptions);
 use JSON::PP ();
 use File::Spec ();
 
-my $lib;
-GetOptions('lib=s' => \$lib) or die "usage: $0 --lib RELATIVE_LIB\n";
-die "usage: $0 --lib RELATIVE_LIB\n" unless defined $lib;
-die "lib must be relative\n" if File::Spec->file_name_is_absolute($lib) || $lib =~ m{(?:^|/)\.\.(?:/|$)};
-my $lib_abs = abs_path($lib);
-die "lib must be a directory\n" unless defined($lib_abs) && -d $lib_abs;
-unshift @INC, $lib_abs;
+my ($lib, $fallback_lib);
+GetOptions('lib=s' => \$lib, 'fallback-lib=s' => \$fallback_lib)
+    or die "usage: $0 --lib RELATIVE_LIB [--fallback-lib RELATIVE_LIB]\n";
+die "usage: $0 --lib RELATIVE_LIB [--fallback-lib RELATIVE_LIB]\n" unless defined $lib;
+
+sub relative_lib {
+    my ($label, $path) = @_;
+    die "$label must be relative\n"
+        if File::Spec->file_name_is_absolute($path) || $path =~ m{(?:^|/)\.\.(?:/|$)};
+    my $absolute = abs_path($path);
+    die "$label must be a directory\n" unless defined($absolute) && -d $absolute;
+    return { label => $label, absolute => $absolute };
+}
+
+my @libs = (relative_lib('lib', $lib));
+push @libs, relative_lib('fallback_lib', $fallback_lib) if defined $fallback_lib;
+unshift @INC, map { $_->{absolute} } @libs;
 require Image::ExifTool;
 require Image::ExifTool::CanonRaw;
 require File::RandomAccess;
@@ -38,6 +48,14 @@ sub bytes_fact {
     return { defined => JSON::PP::true, length => length($value), hex => unpack('H*', $value) };
 }
 
+sub source_lib_for {
+    my ($file) = @_;
+    for my $candidate (@libs) {
+        return $candidate if index($file, "$candidate->{absolute}/") == 0;
+    }
+    return undef;
+}
+
 sub code_fact {
     my ($cv) = @_;
     return { resolved => JSON::PP::false, reason => 'not_code' } unless ref($cv) eq 'CODE';
@@ -45,14 +63,16 @@ sub code_fact {
     my $gv = eval { $obj->GV } or return { resolved => JSON::PP::false, reason => 'no_gv' };
     my $name = eval { $gv->STASH->NAME . '::' . $gv->NAME } // '';
     my $file = eval { abs_path($obj->FILE) };
-    return { resolved => JSON::PP::false, name => $name, reason => 'source_outside_lib' }
-        unless defined($file) && index($file, "$lib_abs/") == 0 && -f $file;
+    my $source_lib = defined($file) ? source_lib_for($file) : undef;
+    return { resolved => JSON::PP::false, name => $name, reason => 'source_outside_libs' }
+        unless defined($source_lib) && -f $file;
     open my $fh, '<:raw', $file or return { resolved => JSON::PP::false, name => $name, reason => 'source_unreadable' };
     local $/; my $bytes = <$fh>; close $fh;
     my $body = eval { B::Deparse->new('-p','-sC')->coderef2text($cv) };
     return { resolved => JSON::PP::false, name => $name, reason => 'deparse_unavailable' } unless defined $body;
     return { resolved => JSON::PP::true, name => $name,
-        source_file => File::Spec->abs2rel($file, $lib_abs), source_sha256 => sha256_hex($bytes),
+        source_root => $source_lib->{label},
+        source_file => File::Spec->abs2rel($file, $source_lib->{absolute}), source_sha256 => sha256_hex($bytes),
         source_body_sha256 => sha256_hex($body) };
 }
 
@@ -64,7 +84,7 @@ sub code_fact {
         my $self = $class->SUPER::new;
         $self->{OPTIONS}{Verbose} = 0;
         $self->{OPTIONS}{Binary} = 0;
-        $self->{_found} = []; $self->{_warnings} = []; $self->{_hashes} = [];
+        $self->{_found} = []; $self->{_warnings} = []; $self->{_hashes} = []; $self->{_trace} = [];
         $self->{ImageDataHash} = 1 if $hash;
         return $self;
     }
@@ -77,18 +97,22 @@ sub code_fact {
         my ($self, $tag_info, $value, @args) = @_;
         my $key = $self->SUPER::FoundTag($tag_info, $value, @args);
         my $stored = defined($key) ? $self->{VALUE}{$key} : undef;
-        push @{$self->{_found}}, {
+        my $event = {
             name => main::fact(ref($tag_info) eq 'HASH' ? $tag_info->{Name} : $tag_info),
             key => main::fact($key), input_reference => ref($value) || undef,
             stored_reference => ref($stored) || undef,
             input_bytes => main::bytes_fact($value), stored_bytes => main::bytes_fact($stored),
             group2 => main::fact(ref($tag_info) eq 'HASH' ? $tag_info->{Groups}{2} : undef),
         };
+        push @{$self->{_found}}, $event;
+        push @{$self->{_trace}}, { event => 'FoundTag', %$event };
         return $key;
     }
     sub ImageDataHash {
         my ($self, $raf, $size, $mode) = @_;
-        push @{$self->{_hashes}}, { offset => main::fact($raf->Tell), size => main::fact($size), mode => main::fact($mode) };
+        my $event = { offset => main::fact($raf->Tell), size => main::fact($size), mode => main::fact($mode) };
+        push @{$self->{_hashes}}, $event;
+        push @{$self->{_trace}}, { event => 'ImageDataHash', %$event };
         return 1;
     }
 }
@@ -157,22 +181,33 @@ sub run {
         my $hex = exists($entry->{inline_hex}) ? $entry->{inline_hex} : $entry->{payload_hex};
         return { ok => JSON::PP::false, error => 'entry_hex' } unless defined($hex) && $hex =~ /\A(?:[0-9a-fA-F]{2})*\z/;
     }
+    # Authenticate the source-selected callback before changing native byte-order
+    # state. An unavailable/rebound non-CODE table entry therefore fails without
+    # leaving process-global native state changed.
+    my $table = Image::ExifTool::GetTagTable('Image::ExifTool::CanonRaw::Main');
+    return { protocol => 'oxidex.ciff_opaque.v1', ok => JSON::PP::false, error => 'main_table_unavailable' }
+        unless ref($table) eq 'HASH';
+    my $process = $table->{PROCESS_PROC};
+    my $process_fact = code_fact($process);
+    return { protocol => 'oxidex.ciff_opaque.v1', ok => JSON::PP::false,
+        error => 'main_process_proc_unavailable', selection => { process => $process_fact } }
+        unless $process_fact->{resolved};
+
     my $before = Image::ExifTool::GetByteOrder();
     my $block = make_block($order, $req->{entries});
     my $raf = File::RandomAccess->new(\$block);
     Image::ExifTool::SetByteOrder($order);
     my $et = OxiDex::CiffOpaqueProbe->new_probe($req->{image_data_hash});
-    my $table = Image::ExifTool::GetTagTable('Image::ExifTool::CanonRaw::Main');
     my ($returned, $error);
-    my $ok = eval { $returned = Image::ExifTool::CanonRaw::ProcessCanonRaw($et, { RAF => $raf, DirStart => 0, DirLen => length($block), Nesting => 0, DirName => 'Main' }, $table); 1 };
+    my $ok = eval { $returned = $process->($et, { RAF => $raf, DirStart => 0, DirLen => length($block), Nesting => 0, DirName => 'Main' }, $table); 1 };
     $error = $@ unless $ok;
     my $restore = eval { Image::ExifTool::SetByteOrder($before); 1 };
     $error ||= $@ unless $restore;
     return { protocol => 'oxidex.ciff_opaque.v1', ok => $error ? JSON::PP::false : JSON::PP::true,
         byte_order => { requested => $order, restored => Image::ExifTool::GetByteOrder() }, returned => fact($returned),
-        selection => { process => code_fact(\&Image::ExifTool::CanonRaw::ProcessCanonRaw), validate_image => code_fact(\&Image::ExifTool::ValidateImage),
+        selection => { process => $process_fact, validate_image => code_fact(\&Image::ExifTool::ValidateImage),
             rows => [ map { table_row_fact($table, $_->{tag}) } @{$req->{entries}} ] },
-        found => $et->{_found}, warnings => $et->{_warnings}, image_data_hash => $et->{_hashes}, error => $error || undef };
+        trace => $et->{_trace}, found => $et->{_found}, warnings => $et->{_warnings}, image_data_hash => $et->{_hashes}, error => $error || undef };
 }
 
 while (my $line = <STDIN>) {
