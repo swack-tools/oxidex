@@ -633,9 +633,21 @@ def _gate_src(reasons):
     return "&[" + ", ".join(f'(\"{codegen.rust_str(reason)}\", {count})' for reason, count in reasons) + "]"
 
 
-def _table_group(groups, family, fallback):
-    value = groups.get(str(family), fallback) if isinstance(groups, dict) else fallback
-    return value if isinstance(value, str) else fallback
+def _table_group(groups, family, module):
+    """Resolve a table group with native ``GetTagTable`` defaults.
+
+    ExifTool initializes a loaded table's false group 0 and 1 values from the
+    table-owning module, and its false group 2 value to ``Other``.  The dump
+    preserves the authored ``GROUPS`` hash before that initialization, so the
+    staged literal must apply the same rule rather than treating an absent
+    group 1 as an empty string.
+    """
+    value = groups.get(str(family)) if isinstance(groups, dict) else None
+    # Perl's ``unless`` regards both the empty string and the string "0" as
+    # false.  _table_meta already authenticates GROUPS values as strings.
+    if isinstance(value, str) and value not in ("", "0"):
+        return value
+    return module if family in (0, 1) else "Other"
 
 
 def _serial_tag_literal(alternative):
@@ -750,8 +762,8 @@ def serial_rust_source(population):
             "pub static SERIAL_" + re.sub(r"[^A-Za-z0-9]", "_", f"{module}_{table}").upper() + ": SerialTable = SerialTable { "
             f'module: "{codegen.rust_str(module)}", table: "{codegen.rust_str(table)}", '
             f'group0: "{codegen.rust_str(_table_group(groups, 0, module))}", '
-            f'group1: "{codegen.rust_str(_table_group(groups, 1, ""))}", '
-            f'group2: "{codegen.rust_str(_table_group(groups, 2, "Other"))}", '
+            f'group1: "{codegen.rust_str(_table_group(groups, 1, module))}", '
+            f'group2: "{codegen.rust_str(_table_group(groups, 2, module))}", '
             f"default_format: {default_fmt}, processor: SerialProcessorFacts {{ name: \"{codegen.rust_str(processor_name)}\", source_file: \"{codegen.rust_str(source_file)}\", "
             f"source_sha256: \"{codegen.rust_str(source_sha)}\", source_body_sha256: \"{codegen.rust_str(body_sha)}\" }}, "
             f"gate_a: GateA {{ blocked_by: {_gate_src(sorted(gate_counts.items()))} }}, entries: &[{', '.join(rendered_entries)}] }};\n"

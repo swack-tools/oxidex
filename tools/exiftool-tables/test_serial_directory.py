@@ -140,10 +140,18 @@ class SerialDescriptorTests(unittest.TestCase):
         population = serial_directory.compile_serial_population({"modules": {"Fixture": {"tables": {"Serial": table()}}}})
         source = serial_directory.serial_rust_source(population)
         self.assertIn("pub static SERIAL_FIXTURE_SERIAL: SerialTable", source)
+        self.assertIn('group0: "MakerNotes", group1: "Fixture", group2: "Camera",', source)
         self.assertIn('serial_index: 2, variant: false, alternative: 0, name: Some("Words"), reasons: &["serial_decode_bits_words", "serial_emitter_format"]', source)
         self.assertIn('gate_a: GateA { blocked_by: &[("serial_condition_missing_member", 2), ("serial_decode_bits_words", 1), ("serial_emitter_format", 2)] }', source)
         self.assertIn('serial_index: 3, variant: true, alternative: 0, name: Some("NonEos"), reasons: &["serial_condition_missing_member"]', source)
         self.assertIn('serial_index: 3, variant: true, alternative: 1, name: Some("Skipped"), reasons: &["serial_condition_missing_member"]', source)
+
+    def test_rust_emitter_uses_native_false_group_defaults(self):
+        changed = table()
+        changed["meta"]["GROUPS"] = {"0": "0", "1": "", "2": "0"}
+        population = serial_directory.compile_serial_population({"modules": {"Fixture": {"tables": {"Serial": changed}}}})
+        source = serial_directory.serial_rust_source(population)
+        self.assertIn('group0: "Fixture", group1: "Fixture", group2: "Other",', source)
 
     def test_rust_emitter_keeps_refused_table_in_table_sidecar(self):
         malformed = table()
@@ -363,6 +371,16 @@ class CopiedNativeSerialSource(unittest.TestCase):
         self.assertIn(before, text)
         source.write_text(text.replace(before, after, 1))
         return root
+
+    def test_native_get_tag_table_defaults_omitted_group_one_to_owner_module(self):
+        native = subprocess.run(
+            [CANONICAL_PERL, "-I", str(Path(PINNED_SOURCE) / "lib"), "-MJSON::PP", "-MImage::ExifTool", "-e",
+             'my $table = Image::ExifTool::GetTagTable("Image::ExifTool::Canon::AFInfo") '
+             'or die "missing native Canon::AFInfo table\\n"; print encode_json($table->{GROUPS}), "\\n";'],
+            text=True, capture_output=True, check=True, timeout=15,
+        )
+        self.assertEqual(native.stderr, "")
+        self.assertEqual(json.loads(native.stdout), {"0": "MakerNotes", "1": "Canon", "2": "Camera"})
 
     def test_source_count_mutation_changes_fresh_descriptor_and_rejects_stale(self):
         baseline_source = self.dump(Path(PINNED_SOURCE) / "lib")
