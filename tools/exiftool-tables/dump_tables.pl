@@ -132,28 +132,33 @@ sub direct_code_dependencies {
     return sort keys %calls;
 }
 
-sub code_source_fact {
-    my ($name, $lib_abs, $ancestors, $depth) = @_;
+# Capture the actual CV stored by a table, then resolve its direct calls only
+# after all requested modules loaded.  PROCESS_PROC is a CODE reference in the
+# table, so looking its name up again would silently authenticate a later
+# redefinition rather than the callable table value.  Bare calls, by contrast,
+# use the final package glob at execution time; recording that binding exposes
+# a local `Get16u` replacement without assigning vendor meaning to it.
+sub code_ref_fact {
+    my ($cv, $fallback_name, $lib_abs, $ancestors, $depth, $capture_dependencies) = @_;
+    $capture_dependencies = 1 unless defined $capture_dependencies;
     $ancestors //= {};
     $depth //= 0;
-    return unresolved_code_fact($name, 'dependency_depth_exceeded') if $depth > 8;
-    return unresolved_code_fact($name, 'dependency_cycle') if $ancestors->{$name};
+    my $display_name = defined $fallback_name ? $fallback_name : '';
+    return unresolved_code_fact($display_name, 'dependency_depth_exceeded') if $depth > 8;
     my %fact = (
         __perl  => 'CODE',
         __opaque => JSON::PP::true,
-        __name  => $name,
+        __name  => $display_name,
         resolved => JSON::PP::false,
         __deparse => undef,
         source_file => undef,
         source_sha256 => undef,
     );
-    return { %fact, reason => 'invalid_fully_qualified_name' }
-        unless $name =~ /^(?:[A-Za-z_]\w*::)+[A-Za-z_]\w*$/;
-    no strict 'refs';
-    my $cv = *{$name}{CODE};
     return { %fact, reason => 'code_ref_unavailable' } unless $cv;
     my $resolved_name = code_name($cv);
-    $fact{__name} = $resolved_name if defined $resolved_name;
+    return { %fact, reason => 'code_name_unavailable' } unless defined $resolved_name;
+    return unresolved_code_fact($resolved_name, 'dependency_cycle') if $ancestors->{$resolved_name};
+    $fact{__name} = $resolved_name;
     my $body = deparse($cv);
     return { %fact, reason => 'deparse_unavailable' } unless defined $body;
     $fact{__deparse} = $body;
@@ -162,14 +167,43 @@ sub code_source_fact {
     $fact{source_file} = $source_file;
     $fact{source_sha256} = $source_sha256;
     $fact{resolved} = JSON::PP::true;
-    my %next_ancestors = (%$ancestors, $name => 1);
+    my %next_ancestors = (%$ancestors, $resolved_name => 1);
     my %dependencies;
-    for my $callee (direct_code_dependencies($body, $fact{__name})) {
-        $dependencies{$callee} = code_source_fact(
-            $callee, $lib_abs, \%next_ancestors, $depth + 1);
+    if ($capture_dependencies) {
+        for my $callee (direct_code_dependencies($body, $resolved_name)) {
+            $dependencies{$callee} = code_source_fact(
+                $callee, $lib_abs, \%next_ancestors, $depth + 1);
+        }
+    } else {
+        # A PROCESS_PROC needs only the actual package-local reader it invokes,
+        # not the entire closure of common ProcessBinaryData helpers repeated
+        # once per table.  The reader contract owns the transitive primitive
+        # evidence.  A missing binding remains explicit so consumers refuse.
+        my $package = $resolved_name;
+        $package =~ s/::[A-Za-z_]\w*$//;
+        if ($body =~ /(?<![\w:>])Get16u\s*\(/) {
+            my $binding = "${package}::Get16u";
+            $dependencies{$binding} = code_source_fact(
+                $binding, $lib_abs, \%next_ancestors, $depth + 1, 0);
+        }
     }
     $fact{dependencies} = \%dependencies if %dependencies;
     return \%fact;
+}
+
+sub code_source_fact {
+    my ($name, $lib_abs, $ancestors, $depth, $capture_dependencies) = @_;
+    $capture_dependencies = 1 unless defined $capture_dependencies;
+    $ancestors //= {};
+    $depth //= 0;
+    return unresolved_code_fact($name, 'dependency_depth_exceeded') if $depth > 8;
+    return unresolved_code_fact($name, 'dependency_cycle') if $ancestors->{$name};
+    return unresolved_code_fact($name, 'invalid_fully_qualified_name')
+        unless $name =~ /^(?:[A-Za-z_]\w*::)+[A-Za-z_]\w*$/;
+    no strict 'refs';
+    my $cv = *{$name}{CODE};
+    return unresolved_code_fact($name, 'code_ref_unavailable') unless $cv;
+    return code_ref_fact($cv, $name, $lib_abs, $ancestors, $depth, $capture_dependencies);
 }
 
 sub validate_function_fact {
@@ -368,7 +402,7 @@ sub dump_tag_entry {
 }
 
 sub dump_module {
-    my ($module, $validate_function_names) = @_;
+    my ($module, $validate_function_names, $processor_tables) = @_;
     my $pkg = "Image::ExifTool::$module";
     eval "require $pkg; 1" or do {
         return { module => $module, error => "$@" };
@@ -405,6 +439,14 @@ sub dump_module {
         my %meta;
         for my $k (grep { $TABLE_META{$_} } @keys) {
             $meta{$k} = scrub($hash->{$k});
+        }
+        # Preserve the table's actual PROCESS_PROC CV.  Its complete source
+        # fact is filled after every module has loaded, when package-local
+        # bare-reader bindings are final.
+        if (ref $hash->{PROCESS_PROC} eq 'CODE') {
+            $processor_tables->{"${pkg}::${sym}"} = {
+                cv => $hash->{PROCESS_PROC}, module => $module, table => $sym,
+            };
         }
 
         $tables{$sym} = {
@@ -474,9 +516,10 @@ unless (@modules) {
 my %out;
 my %subdirectory_validate_function_names;
 my %subdirectory_validate_functions;
+my %processor_tables;
 my ($ok, $failed) = (0, 0);
 for my $m (@modules) {
-    my $r = dump_module($m, \%subdirectory_validate_function_names);
+    my $r = dump_module($m, \%subdirectory_validate_function_names, \%processor_tables);
     if ($r->{error}) {
         $failed++;
         warn "SKIP $m: $r->{error}";
@@ -492,6 +535,17 @@ for my $m (@modules) {
 for my $name (sort keys %subdirectory_validate_function_names) {
     $subdirectory_validate_functions{$name} = validate_function_fact(
         $name, $EXIFTOOL_LIB_ABS);
+}
+
+# Replace the shallow PROCESS_PROC scrub with the actual table CV provenance
+# and final package-local dependencies.  Keeping the fact at the table's own
+# metadata path lets a consumer join source identity to the processor without
+# a vendor/table switch.  Every table retains its own fact even when several
+# tables share a CODE ref.
+for my $full_name (sort keys %processor_tables) {
+    my $entry = $processor_tables{$full_name};
+    my $fact = code_ref_fact($entry->{cv}, "${full_name}::PROCESS_PROC", $EXIFTOOL_LIB_ABS, undef, undef, 0);
+    $out{$entry->{module}}{tables}{$entry->{table}}{meta}{PROCESS_PROC} = $fact;
 }
 
 # The child captures byte-order state without changing this table-walking
