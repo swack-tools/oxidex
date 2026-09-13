@@ -19,8 +19,9 @@ def _sha(p:Path)->str:
   for b in iter(lambda:f.read(1048576),b''): h.update(b)
  return h.hexdigest()
 def _regular(p:Path,label:str)->Path:
+ if p.is_symlink(): raise Refused(f"{label} must not be a symbolic link")
  p=p.resolve()
- if p.is_symlink() or not p.is_file(): raise Refused(f"{label} must be an existing regular file")
+ if not p.is_file(): raise Refused(f"{label} must be an existing regular file")
  return p
 def _query(v:Any,label:str)->str:
  if not isinstance(v,str) or TAG.fullmatch(v) is None: raise Refused(f"{label} must be a tag name")
@@ -35,14 +36,16 @@ def _case(v:Any)->dict[str,Any]:
  if not isinstance(w,dict) or w.get('operation') not in {'set','delete'}: raise Refused(f"{v['name']}: write operation must be set or delete")
  tag=_query(w.get('tag'),f"{v['name']} write tag")
  if w['operation']=='set':
-  if not isinstance(w.get('value'),str): raise Refused(f"{v['name']}: set value required")
+  if not isinstance(w.get('value'),str) or not isinstance(w.get('readback'),str): raise Refused(f"{v['name']}: set requires explicit string readback")
   if '\0' in w['value']: raise Refused(f"{v['name']}: NUL write requires a separate binary writer contract")
+  if '\n' in w['value'] or '\n' in w['readback']: raise Refused(f"{v['name']}: newline scalar readback requires structured JSON contract")
+ if w['operation']=='delete' and w.get('readback') is not None: raise Refused(f"{v['name']}: delete must require absent readback")
  expected=w.get('readback')
  if expected is not None and not isinstance(expected,str): raise Refused(f"{v['name']}: readback must be string or null")
  return {'name':v['name'],'fixture':Path(v['fixture']),'read':{'query':q,**r},'write':{'tag':tag,**w}}
 def _env()->dict[str,str]:
  e=dict(os.environ)
- for k in ('PERL5LIB','PERL5OPT','PERL_MM_OPT','PERL_MB_OPT','PERL_LOCAL_LIB_ROOT'): e.pop(k,None)
+ for k in ('PERL5LIB','PERLLIB','PERL5OPT','PERL_MM_OPT','PERL_MB_OPT','PERL_LOCAL_LIB_ROOT'): e.pop(k,None)
  return e
 def _run(argv:list[str],run:Callable[...,subprocess.CompletedProcess[str]])->dict[str,Any]:
  try:
