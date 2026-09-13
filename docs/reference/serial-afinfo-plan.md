@@ -1,4 +1,11 @@
-# Next: complete the two Canon autofocus table definitions
+# Canon autofocus definitions and remaining production migration
+
+Definition delivery merged in PR #759 as `8887e5d9` at 14:22 UTC on
+September 13. All five required hosted checks pass, including 766 canonical
+Python tests and all three native/Rust table replays. Both Canon tables are
+complete at the definition gate. The historical checkpoints below retain
+their original validation state; the current next delivery is the
+[AFInfo2 production migration](afinfo2-production-plan.md).
 
 Real AudioV4 retirement merged in #758. The next goal is to make Canon AFInfo
 and AFInfo2 run through the same shared serial machinery, then remove their

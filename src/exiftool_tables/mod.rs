@@ -40,6 +40,7 @@ pub mod binary_tables;
 pub mod cond;
 pub mod enabled;
 pub mod enabled_ifd;
+pub mod enabled_serial;
 pub mod engine;
 pub mod exprs;
 pub mod ifd_engine;
@@ -65,14 +66,15 @@ pub use cond::{
 };
 pub use enabled::{ENABLED, is_enabled};
 pub use enabled_ifd::ENABLED_IFD;
+pub use enabled_serial::{ENABLED_SERIAL, is_enabled as is_serial_enabled};
 pub use engine::{Cursor, Dir, Emitted, Step, process_binary_data, read_value};
 pub use ifd_engine::{
-    EntryRead, IfdDir, IfdEntry, MAX_IFD_ENTRIES, RootReads, process_exif, process_exif_decoded,
-    read_ifd,
+    EntryRead, IfdDir, IfdEntry, MAX_IFD_ENTRIES, RootReads, SerialSubdirRead, process_exif,
+    process_exif_decoded, read_ifd,
 };
 pub use ifd_schema::{
-    IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
-    RawConvEffect,
+    IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag,
+    IfdVariantGroup, RawConvEffect,
 };
 pub use ifd_tables::{ALL_IFD_TABLES, IFD_EXIFTOOL_VERSION};
 pub use keyed_engine::{

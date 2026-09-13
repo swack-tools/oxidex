@@ -791,13 +791,8 @@ const CANON_SERIAL_NUMBER: u16 = 0x000C;
 const CANON_CAMERA_INFO: u16 = 0x000D;
 const CANON_CUSTOM_FUNCTIONS: u16 = 0x000F;
 const CANON_AF_INFO: u16 = 0x0012;
-const CANON_AF_INFO2: u16 = 0x0026;
 /// Canon.pm:1726 -- 16-byte undef value rendered with `unpack("H*", $val)`.
 const CANON_IMAGE_UNIQUE_ID: u16 = 0x0028;
-/// ExifTool Canon.pm:1764 -- `0x3c => { Name => 'AFInfo3', ... TagTable =>
-/// 'Image::ExifTool::Canon::AFInfo2' }`. A second MakerNote tag carrying the very same
-/// `%Canon::AFInfo2` record, used by the G1XmkII and the EOS M bodies after it.
-const CANON_AF_INFO3: u16 = 0x003C;
 /// ExifTool Canon.pm:1757 -- `0x38 => { Name => 'BatteryType', Writable =>
 /// 'undef', Condition => '$count == 76', RawConv =>
 /// '$val=~/^.{4}([^\0]+)/s ? $1 : undef' }`: the first four bytes are a
@@ -1140,36 +1135,6 @@ const AF_INFO_VARIABLE_START: usize = 8;
 const AF_INFO_COUNT_WITH_UNKNOWN_TAIL: u32 = 36;
 /// `Format => 'int16u[8]'` on `Canon_AFInfo_0x000b` (Canon.pm:6492).
 const AF_INFO_UNKNOWN_TAIL_WORDS: usize = 8;
-
-// AFInfo2 sequence indices (tag 0x0026)
-//
-// ExifTool `%Image::ExifTool::Canon::AFInfo2` (Canon.pm:6503), also serial
-// (`PROCESS_PROC => \&ProcessSerialData`, `FORMAT => 'int16u'`). Keys 0..7 are scalars:
-//
-// ```text
-//     0 => { Name => 'AFInfoSize', Unknown => 1, ... },
-//     1 => { Name => 'AFAreaMode', PrintConv => { ... } },
-//     2 => { Name => 'NumAFPoints', RawConv => '$$self{NumAFPoints} = $val', },
-//     3 => { Name => 'ValidAFPoints', ... },
-//     4 => { Name => 'CanonImageWidth', ... },
-//     5 => { Name => 'CanonImageHeight', ... },
-//     6 => { Name => 'AFImageWidth', ... },
-//     7 => 'AFImageHeight',
-//     8 => { Name => 'AFAreaWidths', Format => 'int16s[$val{2}]', },
-//     9 => { Name => 'AFAreaHeights', Format => 'int16s[$val{2}]', },
-//     10 => { Name => 'AFAreaXPositions', Format => 'int16s[$val{2}]', },
-//     11 => { Name => 'AFAreaYPositions', Format => 'int16s[$val{2}]', },
-//     12 => { Name => 'AFPointsInFocus', Format => 'int16s[int(($val{2}+15)/16)]', ... },
-// ```
-const AF_INFO2_AF_AREA_MODE: usize = 1;
-const AF_INFO2_NUM_AF_POINTS: usize = 2;
-const AF_INFO2_VALID_AF_POINTS: usize = 3;
-const AF_INFO2_CANON_IMAGE_WIDTH: usize = 4;
-const AF_INFO2_CANON_IMAGE_HEIGHT: usize = 5;
-const AF_INFO2_AF_IMAGE_WIDTH: usize = 6;
-const AF_INFO2_AF_IMAGE_HEIGHT: usize = 7;
-/// First variable-length slot of `%Canon::AFInfo2` (Perl key 8, `AFAreaWidths`).
-const AF_INFO2_VARIABLE_START: usize = 8;
 
 // FlashInfo array indices (tag 0x0003)
 const FLASH_INFO_FLASH_GUIDE_NUMBER: usize = 0;
@@ -2973,65 +2938,6 @@ const_decoder!(
     pub BRACKET_MODE,
     i16,
     [(0, "Off"), (1, "AEB"), (2, "FEB"), (3, "ISO"), (4, "WB"),]
-);
-
-// Canon AFAreaMode decoder (AFInfo2 key 1)
-//
-// ExifTool `%Image::ExifTool::Canon::AFInfo2` key 1 (Canon.pm:6517):
-//
-// ```text
-//     1 => {
-//         Name => 'AFAreaMode',
-//         PrintConv => {
-//             0 => 'Off (Manual Focus)',
-//             1 => 'AF Point Expansion (surround)', #PH
-//             2 => 'Single-point AF',
-//             # 3 - n/a
-//             4 => 'Auto', #forum6237 (AiAF on A570IS)
-//             5 => 'Face Detect AF',
-//             6 => 'Face + Tracking', #PH (NC, EOS M, live view)
-//             7 => 'Zone AF', #46
-//             8 => 'AF Point Expansion (4 point)', #46/PH/forum6237
-//             9 => 'Spot AF', #46
-//             10 => 'AF Point Expansion (8 point)', #forum6237
-//             11 => 'Flexizone Multi (49 point)', #PH (NC, EOS M, live view; 750D 49 points)
-//             12 => 'Flexizone Multi (9 point)', #PH (750D, 9 points)
-//             13 => 'Flexizone Single', #PH (EOS M default, live view) ...
-//             14 => 'Large Zone AF', #PH/forum6237 (7DmkII)
-//             16 => 'Large Zone AF (vertical)', #forum16223
-//             17 => 'Large Zone AF (horizontal)', #forum16223
-//             19 => 'Flexible Zone AF 1', #github268 (R7)
-//             20 => 'Flexible Zone AF 2', #github268 (R7)
-//             21 => 'Flexible Zone AF 3', #github268 (R7)
-//             22 => 'Whole Area AF', #github268 (R7)
-//         },
-//     },
-// ```
-const_decoder!(
-    pub AF_AREA_MODE,
-    i16,
-    [
-        (0, "Off (Manual Focus)"),
-        (1, "AF Point Expansion (surround)"),
-        (2, "Single-point AF"),
-        (4, "Auto"),
-        (5, "Face Detect AF"),
-        (6, "Face + Tracking"),
-        (7, "Zone AF"),
-        (8, "AF Point Expansion (4 point)"),
-        (9, "Spot AF"),
-        (10, "AF Point Expansion (8 point)"),
-        (11, "Flexizone Multi (49 point)"),
-        (12, "Flexizone Multi (9 point)"),
-        (13, "Flexizone Single"),
-        (14, "Large Zone AF"),
-        (16, "Large Zone AF (vertical)"),
-        (17, "Large Zone AF (horizontal)"),
-        (19, "Flexible Zone AF 1"),
-        (20, "Flexible Zone AF 2"),
-        (21, "Flexible Zone AF 3"),
-        (22, "Whole Area AF"),
-    ]
 );
 
 // Canon white balance decoder for ShotInfo
@@ -5328,6 +5234,22 @@ fn parse_canon_makernote_directory(
     // returning whatever tags we found even if parsing isn't perfect
     let _ = parse_ifd_entries(data, byte_order, &config, |entry, ifd_data| {
         hand_entries += 1;
+        let entry_index = hand_entries - 1;
+        // A source-selected serial child keeps its parent entry index from
+        // the IFD walk. An enabled route owns this entry on both native
+        // completion and explicit execution refusal. Its retired manual
+        // producer cannot reinterpret invalid or unsupported bytes.
+        if let Some(engine) = main_engine.as_mut()
+            && matches!(
+                engine.replay_serial(entry_index, &mut tags, &mut value_forms),
+                Some(
+                    crate::exiftool_tables::SerialSubdirRead::Handled
+                        | crate::exiftool_tables::SerialSubdirRead::Refused
+                )
+            )
+        {
+            return;
+        }
         // A row the generated table reports and no residual arm owns: the
         // engine's row for this entry goes in HERE, at the entry's own
         // position, so a later same-named sub-table row (Processing's
@@ -7008,141 +6930,6 @@ fn parse_canon_makernote_directory(
                                 // which of the two duplicates it then prefers is not
                                 // observable in this corpus, so that case is left alone
                                 // rather than guessed at.
-                                tags.insert(
-                                    "Canon:PrimaryAFPoint".to_string(),
-                                    af_info_slot_as_int16u(value),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            // AFInfo2 (tag 0x0026) - autofocus information used by newer Canon models.
-            // AFInfo3 (tag 0x003c) is the same `%Canon::AFInfo2` record under a second
-            // tag id (Canon.pm:1764). The two are alternatives, not siblings: all 42
-            // sample-corpus files that carry 0x003c carry no 0x0026 at all, so reading
-            // only 0x0026 left them with no AF tags whatsoever.
-            CANON_AF_INFO2 | CANON_AF_INFO3 => {
-                if let Some(array) =
-                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
-                {
-                    if let Some(&mode) = array.get(AF_INFO2_AF_AREA_MODE) {
-                        tags.insert("Canon:AFAreaMode".to_string(), AF_AREA_MODE.decode(mode));
-                    }
-
-                    // Same `ProcessSerialData` rule as AFInfo above: present slots are
-                    // reported unconditionally. Keys 3/4/5 were transcribed into the
-                    // comment on the index constants but never read, so ValidAFPoints,
-                    // CanonImageWidth and CanonImageHeight went missing on every body
-                    // that writes AFInfo2 (e.g. the 1D Mk III, where ExifTool prints
-                    // `ValidAFPoints: 45`, `CanonImageWidth: 3888`,
-                    // `CanonImageHeight: 2592`).
-                    let num_points = array.get(AF_INFO2_NUM_AF_POINTS).copied().unwrap_or(0);
-                    if let Some(&points) = array.get(AF_INFO2_NUM_AF_POINTS) {
-                        tags.insert("Canon:NumAFPoints".to_string(), points.to_string());
-                    }
-                    if let Some(&valid_points) = array.get(AF_INFO2_VALID_AF_POINTS) {
-                        tags.insert("Canon:ValidAFPoints".to_string(), valid_points.to_string());
-                    }
-                    if let Some(&width) = array.get(AF_INFO2_CANON_IMAGE_WIDTH) {
-                        tags.insert("Canon:CanonImageWidth".to_string(), width.to_string());
-                    }
-                    if let Some(&height) = array.get(AF_INFO2_CANON_IMAGE_HEIGHT) {
-                        tags.insert("Canon:CanonImageHeight".to_string(), height.to_string());
-                    }
-
-                    if let Some(&width) = array.get(AF_INFO2_AF_IMAGE_WIDTH) {
-                        tags.insert("Canon:AFImageWidth".to_string(), width.to_string());
-                    }
-                    if let Some(&height) = array.get(AF_INFO2_AF_IMAGE_HEIGHT) {
-                        tags.insert("Canon:AFImageHeight".to_string(), height.to_string());
-                    }
-
-                    // Keys 8+ are variable-length: AFAreaWidths[n], AFAreaHeights[n],
-                    // AFAreaXPositions[n], AFAreaYPositions[n], then AFPointsInFocus as
-                    // ceil(n/16) 16-bit words. EOS bodies carry AFPointsSelected in the
-                    // next same-sized bitset; other bodies use that slot for an unknown
-                    // record with one additional word (Canon.pm AFInfo2 keys 13-14).
-                    if num_points > 0 {
-                        let n = num_points as usize;
-                        let widths_start = AF_INFO2_VARIABLE_START;
-                        let heights_start = widths_start + n;
-                        let x_start = heights_start + n;
-                        let y_start = x_start + n;
-                        let focus_start = y_start + n;
-                        let focus_words = n.div_ceil(16);
-
-                        if array.len() >= heights_start {
-                            tags.insert(
-                                "Canon:AFAreaWidths".to_string(),
-                                join_i16_slice(&array[widths_start..heights_start]),
-                            );
-                        }
-                        if array.len() >= x_start {
-                            tags.insert(
-                                "Canon:AFAreaHeights".to_string(),
-                                join_i16_slice(&array[heights_start..x_start]),
-                            );
-                        }
-                        if array.len() >= y_start {
-                            tags.insert(
-                                "Canon:AFAreaXPositions".to_string(),
-                                join_i16_slice(&array[x_start..y_start]),
-                            );
-                        }
-                        if array.len() >= focus_start {
-                            tags.insert(
-                                "Canon:AFAreaYPositions".to_string(),
-                                join_i16_slice(&array[y_start..focus_start]),
-                            );
-                        }
-                        if array.len() >= focus_start + focus_words {
-                            tags.insert(
-                                "Canon:AFPointsInFocus".to_string(),
-                                decode_bits_16(&array[focus_start..focus_start + focus_words]),
-                            );
-                        }
-                        let selected_start = focus_start + focus_words;
-                        if self_model.contains("EOS") {
-                            if array.len() >= selected_start + focus_words {
-                                tags.insert(
-                                    "Canon:AFPointsSelected".to_string(),
-                                    decode_bits_16(
-                                        &array[selected_start..selected_start + focus_words],
-                                    ),
-                                );
-                            }
-                        } else {
-                            // Key 13's second branch (Canon.pm:6595-6599),
-                            // `Canon_AFInfo2_0x000d`: no Condition, so a non-EOS body
-                            // always lands here, and its
-                            // `Format => 'int16s[int(($val{2}+15)/16)+1]'` is one word
-                            // WIDER than the EOS branch's AFPointsSelected. It carries
-                            // `Unknown => 1` so ExifTool prints nothing for it, but
-                            // ProcessSerialData still advances the cursor past it
-                            // (Canon.pm:10585 gates only the FoundTag, not the `$pos +=
-                            // $len` at Canon.pm:10592). Missing that extra word is why
-                            // key 14 was never reached.
-                            //
-                            // Key 14 (Canon.pm:6600-6604) is then `PrimaryAFPoint`,
-                            // Condition `$$self{Model} !~ /EOS/ and not $$self{AFInfo3}`
-                            // -- one `int16u` under the table's `FORMAT => 'int16u'`
-                            // (Canon.pm:6507), with no PrintConv, so the raw word is the
-                            // printed value. A PowerShot SX740 HS writes 65535 there,
-                            // which is why it is read unsigned rather than through the
-                            // i16 the rest of this record uses.
-                            //
-                            // `$$self{AFInfo3}` is a per-file sticky flag set by tag
-                            // 0x3c's own Condition (Canon.pm:1766), not a per-record one.
-                            // Testing this entry's tag id instead is equivalent here
-                            // because 0x26 sorts before 0x3c in the IFD, so a file
-                            // carrying both would still see the flag clear while 0x26 is
-                            // processed -- and no corpus file carries both anyway.
-                            let primary = selected_start + focus_words + 1;
-                            if entry.tag_id != CANON_AF_INFO3
-                                && let Some(&value) = array.get(primary)
-                            {
                                 tags.insert(
                                     "Canon:PrimaryAFPoint".to_string(),
                                     af_info_slot_as_int16u(value),
@@ -8953,15 +8740,14 @@ mod tests {
         assert_eq!(result.get("Canon:Canon_AFInfo_0x000b"), None);
     }
 
-    /// Mirrors the AFInfo2 record of
-    /// `/tmp/oxidex-exiftool-cache/combined-samples/Canon1DmkIII.jpg`, whose
-    /// `exiftool -s` output is `AFAreaMode: Single-point AF`, `NumAFPoints: 45`,
+    /// Exercises the AFInfo2 values of the Canon1DmkIII.jpg sample, whose
+    /// pinned ExifTool output is `AFAreaMode: Single-point AF`, `NumAFPoints: 45`,
     /// `AFImageWidth: 3888`, `AFImageHeight: 2592`, `AFPointsInFocus: 13`.
     #[test]
     fn test_parse_af_info2_array() {
         let n = 45usize;
         let mut af_info2: Vec<i16> = vec![
-            0,    // key 0: AFInfoSize
+            0,    // key 0: deliberately invalid AFInfoSize, repaired below
             2,    // key 1: AFAreaMode -> 'Single-point AF'
             45,   // key 2: NumAFPoints
             45,   // key 3: ValidAFPoints
@@ -8976,6 +8762,15 @@ mod tests {
         af_info2.extend(std::iter::repeat_n(-554i16, n)); // key 11: AFAreaYPositions
         af_info2.extend_from_slice(&[0x2000, 0x0000, 0x0000]); // key 12: bit 13 set
 
+        // Native Canon::Main validates the child's stored byte size before
+        // reading AFInfo2. The old fixture left this zero and only passed
+        // because the retired manual decoder skipped that validation.
+        let invalid = canon_makernote_with_short_array(0x0026, &af_info2);
+        let rejected = parse_canon_makernote_impl(&invalid, ByteOrder::LittleEndian).unwrap();
+        assert!(!rejected.contains_key("Canon:AFAreaMode"));
+        assert!(!rejected.contains_key("Canon:NumAFPoints"));
+
+        af_info2[0] = i16::try_from(af_info2.len() * 2).unwrap();
         let data = canon_makernote_with_short_array(0x0026, &af_info2);
 
         let result = parse_canon_makernote_impl(&data, ByteOrder::LittleEndian).unwrap();

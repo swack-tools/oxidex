@@ -8,7 +8,7 @@ They do not override the goals or progress rules here.
 See the [working scoreboard](AUTOGENERATION-PROGRESS.md) for the current
 milestone, measured baseline, completed checks and remaining work.
 
-## The goal
+## The goal and the current phase
 
 A change to ExifTool's tag definitions should flow into OxiDex by regeneration,
 without someone retyping the tag name, byte location, camera-selection rule or
@@ -19,14 +19,94 @@ reading numbers, evaluating expressions and decrypting blocks. Tag-specific
 knowledge must come from the pinned ExifTool source. **Moving a hard-coded tag
 rule into a generator or a shared helper does not count as automating it.**
 
-The target is the tag-specific metadata extraction behavior of pinned ExifTool
-13.59 across its formats. The 4,238-file corpus is a test population, not a
-way to exclude unexercised formats from the goal.
+The target is tag-specific reading and writing behavior derived from ExifTool's
+Perl source across its formats and upstream releases. The current working pin
+is 13.59; it does not limit the requested version scope. Every generated build
+must conform to the native release it came from. Native read-only tags have no
+required write path; native writable tags need a separately verified one. The
+4,238-file read corpus is a test population, not a way to exclude unexercised
+behavior or untested versions. The [read/write and version execution plan](reference/read-write-version-plan.md)
+records the expanded finish line, first writer pilot and periodic release tests.
+
+The current implementation batches primarily migrate reading. Completing those
+batches does not establish generated write support. Shared source definitions
+must account for both directions now, while reader and writer execution are
+migrated and verified separately. Write-side inventory and costing are in
+progress; the earlier reading estimate is not a full read/write estimate.
 
 We are finished when all tag-specific rules in that target come
 from that source, the required behavior works, the replaced manual rules are
 removed, and an upgrade demonstrates this. Unsupported behavior and unmeasured
 areas remain unfinished; they cannot disappear from the denominator.
+
+## How it works, in plain English
+
+The inputs are ExifTool's actual Perl tables and executable rules, not comments
+or documentation. We load the pinned source's real table structures and
+translate supported conditions, conversions and processing behavior into
+shared Rust definitions and operations. Unsupported Perl behavior remains
+explicitly unfinished; this is not an arbitrary Perl-to-Rust translator.
+
+A sample is not required to generate a supported tag definition. Samples test
+execution. Independent checks compare generated definitions with the native
+source, constructed files exercise rare rules and boundaries, and real files
+test complete parsing. Track generated, independently verified and exercised
+in a file separately. Absence from the corpus must not erase a native tag.
+
+## Reading and writing share definitions, with separate execution checks
+
+Capture the tag identity, type, placement, permissions, forward conversions and
+available inverse conversions together. Avoid duplicating tag knowledge in a
+second generator for writing. Missing inverse behavior is an explicit refusal,
+not permission to guess a reversal of the read conversion.
+
+OxiDex already has write paths for JPEG, PNG, PDF and walkable TIFF-based
+files, including some RAW containers, in `src/core/operations.rs`. These are
+container routes, not evidence that every native-writable tag is supported.
+The generated Canon reader migration does not activate generated writing.
+
+The source dump captures facts such as `Writable`, `PrintConvInv`,
+`ValueConvInv` and write-processing declarations. Inventory which facts are
+retained, translated, consumed by a writer, manual, unsupported or unclassified
+before counting progress. Writing needs encoding, insertion/deletion, placement
+and offset handling as well as preservation of unrelated metadata and file data.
+
+In parallel with the current reader acceptance, audit the existing writers
+and the shared schema. Select a small native-writable family already understood
+by the reader, generate its write-specific rules through the same source model,
+and retire the duplicate manual rules only after actual write/read-back proof.
+Do not create another vendor-specific translator or defer writer needs until
+the entire reading migration is finished.
+
+Track native writable rules accounted for, generated write rules, manual write
+rules and unsupported/unclassified behavior separately from reading. Test
+create/update/delete on disposable copies, read the results with pinned
+ExifTool, and verify preservation of unmodified data. A source-change rehearsal
+must update write behavior without tag-specific Rust/Python edits. A successful
+read census proves none of these write requirements.
+
+The JPEG matrix is a useful starting instrument. Its committed report is dated
+August 12; it is not a refreshed measurement of this candidate or all formats.
+Native read-only tags are explicitly ineligible for writing, not implementation
+gaps. No current generated-writing percentage has been established.
+
+## Version upgrades and periodic tests
+
+Use the same compiler and shared readers/writers to regenerate for each selected
+native release. Keep an immutable upstream release catalog, reproducible random
+seeds and a per-version result ledger. The existing bump promotion compares both
+binaries against the newer oracle; add a separate non-promoting rehearsal that
+regenerates both releases and checks each against its own native read/write
+behavior. Selection or successful generation alone is not conformance.
+
+Once that runner passes its own tests, exercise a randomly selected distinct
+release pair after three relevant merged batches or one week, whichever comes
+first. The existing hourly continuation records this cadence without launching
+a heavy test on every wake-up. Persist failures, manual interventions,
+unsupported/untested releases and unexercised behavior. Replay known failures
+alongside new selections. Random samples discover gaps; they cannot certify
+all ExifTool versions. No full read/write, all-version completion estimate has
+been established.
 
 ## Where we are now
 
@@ -37,7 +117,7 @@ areas remain unfinished; they cannot disappear from the denominator.
 | Shared binary strings | Merged in PR #747 at `8f0fdaf4`. It preserves raw bytes in saved state, distinguishes a one-byte default from a remainder string, and carries the bounded CameraInfo repair. | This is a shared capability, not a Canon migration. CameraInfo remains a legacy text-domain adapter, and no Canon manual reader has been removed. The prior full-pair supervisor-status limitation remains recorded. |
 | Keyed-directory schema and compiler | Merged in PR #748 at `ebbe1ece`; all final hosted checks passed at `a422e8de`. | Native parent facts and expression declarations are checked. Shared reporting policy merged in #750; the inactive reader merged in #752 at `634e5616`. No production route is active. |
 | Shared word-directory processor | Merged in PR #754 at `1138a880`; nine tables, 132 rows, 698 Python tests and all five hosted jobs pass. | Four of five unsupported child processors now have generated descriptors. Canon production routing and manual-reader retirement remain unfinished. |
-| Shared serial processor | Merged in #757 at `58849bc7`, after #755/#756. Eight tables account for 106 emitted alternatives and 26 omissions; all five hosted checks pass. | The shared reader now has a validated production caller in Real AudioV4. Canon table and parent behavior still need completion. |
+| Shared serial processor | Foundation merged in #757; #759 at `8887e5d9` expands the eight-table total to 122 emitted alternatives and 10 omissions, with all five hosted checks passing. Canon AFInfo 14/14 and AFInfo2 16/16 are generated and natively replayed. | Real AudioV4 is a validated production caller. Canon's next delivery is complete parent routing and manual AFInfo2 reader retirement; definition readiness alone does not count as that migration. |
 | Real AudioV4 retirement | Merged in #758 at `19cb7650`; one manual reader and its 31-slot sequence removed. Full corpus: one Copyright correction, 4,237 other files unchanged. All five hosted checks pass. | Supported source-name changes reach actual output after regeneration with no tag-specific Python/Rust edit. Native occurrence groups, warning output and V3/V5 remain explicit residuals. |
 | Recorded source inventory | Merged in PR #749 at `18a8ef17`; all final hosted checks passed at `72e8e664`. The report accounts for 1,512 table identities and retains 119 tables with no named rows. | This establishes the captured source population. Classifying which rules are generated, manual, unsupported or unclassified remains open; source shape is not automation. |
 | Sony plain generator recovery | PR #745 merged; six tables and 193 rows reproduced | These tables can be rebuilt. This alone does not prove that their behavior is fully automatic. |

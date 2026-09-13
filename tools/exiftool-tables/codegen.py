@@ -27,6 +27,7 @@ import re
 from collections import Counter
 
 import conds
+import directory_validation
 import exprs
 import hooks
 import others
@@ -2158,37 +2159,106 @@ class IfdGenContext:
     itself under the module's `arrays` (:285-313), so the two are equal
     lists of the same 94 rows -- an exact fact, not a name heuristic."""
 
-    def __init__(self, ifd_tables, binary_tables, makernotes_main=None):
+    def __init__(self, ifd_tables, binary_tables, makernotes_main=None,
+                 serial_tables=None, table_processors=None,
+                 validation_helpers=None, reader_contracts=None):
         self.ifd_tables = ifd_tables
         self.binary_tables = binary_tables
         self.makernotes_main = makernotes_main
+        # `(module, table) -> compiled serial processor facts`. This is a
+        # source-derived admission result, never a hand-maintained route list.
+        self.serial_tables = serial_tables or {}
+        # Retain the target table's actual `PROCESS_PROC` so an explicit edge
+        # override can be compared with it before the reader ever sees bytes.
+        self.table_processors = table_processors or {}
+        self.validation_helpers = validation_helpers or {}
+        self.reader_contracts = reader_contracts or {}
 
     @classmethod
     def from_doc(cls, doc):
-        ifd, binary = set(), set()
+        ifd, binary, serial, processors = set(), set(), {}, {}
         for mod_name, mod in doc["modules"].items():
             for tbl_name, tbl in mod.get("tables", {}).items():
                 meta = tbl.get("meta") or {}
+                processors[(mod_name, tbl_name)] = meta.get("PROCESS_PROC")
                 if is_binary_table(meta):
                     binary.add((mod_name, tbl_name))
                 elif is_ifd_table(meta):
                     ifd.add((mod_name, tbl_name))
+                # Import lazily: serial_directory imports this module for
+                # shared literal helpers. At this point codegen is fully
+                # initialized, and using the same source descriptor avoids a
+                # second, name-only ProcessSerialData classifier.
+                try:
+                    import serial_directory
+                except ImportError:
+                    continue
+                try:
+                    descriptor = serial_directory.compile_serial_inventory(mod_name, tbl_name, tbl)
+                except serial_directory.SerialDirectoryRefused:
+                    continue
+                if not descriptor["gate_a"]["blocked_by"]:
+                    serial[(mod_name, tbl_name)] = descriptor["processor"]
         arrays = (doc["modules"].get("MakerNotes") or {}).get("arrays") or {}
         main = arrays.get("Main") if isinstance(arrays, dict) else None
         rows = main.get("rows") if isinstance(main, dict) else None
-        return cls(ifd, binary, rows if isinstance(rows, list) and rows else None)
+        return cls(
+            ifd,
+            binary,
+            rows if isinstance(rows, list) and rows else None,
+            serial,
+            processors,
+            doc.get("subdirectory_validate_functions"),
+            doc.get("native_reader_contracts"),
+        )
 
     def is_makernotes_dispatch(self, variants):
         """`variants` is the `\\@MakerNotes::Main` array itself (see the
         class doc). Absent from the dump -> never (a missing fact refuses)."""
         return self.makernotes_main is not None and variants == self.makernotes_main
 
-    def target_kind(self, module, table):
+    @staticmethod
+    def _same_processor(left, right):
+        """Whether two captured CODE operands select the same native body.
+
+        `SubDirectory.ProcessProc` is an override, not a hint. The target
+        serial descriptor was compiled from the target table's processor, so
+        a different override cannot be sent to it. Source name, deparse and
+        source provenance are all required; shallow CODE facts safely fail.
+        """
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            return False
+        fields = ("__perl", "resolved", "__name", "__deparse", "source_file", "source_sha256")
+        return all(left.get(field) == right.get(field) for field in fields) and left.get("resolved") is True
+
+    def target_kind(self, module, table, override=None):
+        target = (module, table)
+        if target in self.serial_tables:
+            native = self.table_processors.get(target)
+            if override is None or self._same_processor(override, native):
+                return "serial"
+            return "other"
         if (module, table) in self.ifd_tables:
             return "ifd"
         if (module, table) in self.binary_tables:
             return "binary"
         return "other"
+
+    def serial_target(self, module, table):
+        return (module, table) in self.serial_tables
+
+    def compiled_validation(self, expression):
+        """Compile an IFD validation only with a live reader contract."""
+        try:
+            compiled = directory_validation.compile_validation(
+                expression, self.validation_helpers, self.reader_contracts
+            )
+        except directory_validation.ValidationRefused:
+            return None
+        # `None` means helper arguments parsed but the isolated reader did
+        # not authenticate the *loaded* primitive. Keeping this edge unwalked
+        # is required; source shape alone is not an execution permission.
+        return compiled if compiled.reader_contract_sha256 is not None else None
 
 
 def compile_ifd_subdir(tag, stats, ctx, enclosing=None):
@@ -2246,7 +2316,11 @@ def compile_ifd_subdir(tag, stats, ctx, enclosing=None):
             return "None"
 
     pp = sd.get("ProcessProc")
-    if pp is not None:
+    target_kind = ctx.target_kind(module, table, pp)
+    if pp is not None and ctx.serial_target(module, table) and target_kind != "serial":
+        pp_name = pp.get("__name") if isinstance(pp, dict) else (pp if isinstance(pp, str) else None)
+        unwalked.append(f"ProcessProc override differs from target {pp_name or '<unnamed CODE>'}")
+    elif pp is not None and target_kind != "serial":
         pp_name = pp.get("__name") if isinstance(pp, dict) else (pp if isinstance(pp, str) else None)
         if not (pp_name or "").endswith("ProcessBinaryData"):
             unwalked.append(f"ProcessProc {pp_name or '<unnamed CODE>'}")
@@ -2320,14 +2394,28 @@ def compile_ifd_subdir(tag, stats, ctx, enclosing=None):
     dir_src = "None" if dir_name is None else f'Some("{rust_str(dir_name)}")'
 
     validate = sd.get("Validate") is not None
+    validation_src = "None"
+    serial_validation_refused = False
     if validate:
-        # Emitted, so the reachability census sees the edge; the walk refuses
-        # it (`validate: true`), because `#### eval Validate ($val, $dirData,
-        # $subdirStart, $size)` (Exif.pm:7082) is Perl over the directory bytes.
-        stats["ifd_subdir_refused_validate"] += 1
+        # The existing IFD/binary paths deliberately retain their historical
+        # refusal. Only a source-selected serial target may opt into the
+        # independently authenticated U16 comparison primitive.
+        compiled = ctx.compiled_validation(sd.get("Validate")) if target_kind == "serial" else None
+        if compiled is None:
+            # Emitted, so the reachability census sees the edge; the walk
+            # refuses it (`validate: true`) because `#### eval Validate
+            # ($val, $dirData, $subdirStart, $size)` (Exif.pm:7082) is Perl
+            # over directory bytes.
+            stats["ifd_subdir_refused_validate"] += 1
+            if target_kind == "serial":
+                serial_validation_refused = True
+                unwalked.append("serial Validate lacks authenticated primitive")
+        else:
+            validation_src = compiled.rust(rust_str)
+            stats["ifd_subdir_validate_compiled"] += 1
 
     stats["ifd_subdir_edge_modeled"] += 1
-    stats[f"ifd_subdir_edge_target_{ctx.target_kind(module, table)}"] += 1
+    stats[f"ifd_subdir_edge_target_{target_kind}"] += 1
     if sub_ifd:
         stats["ifd_subdir_edge_sub_ifd"] += 1
     if perl_truthy(tag.get("MakerNotes")) or "MakerNotes" in extra:
@@ -2355,7 +2443,8 @@ def compile_ifd_subdir(tag, stats, ctx, enclosing=None):
         f"start: {start_src}, base: {base_src}, byte_order: {byte_order_src}, "
         f"fix_format: {fix_src}, sub_ifd: {'true' if sub_ifd else 'false'}, "
         f"max_subdirs: {max_src}, dir_name: {dir_src}, "
-        f"validate: {'true' if validate else 'false'}, "
+        f"validate: {'true' if validate else 'false'}, validation: {validation_src}, "
+        f"processor: IfdSubdirProcessor::{'Serial' if target_kind == 'serial' and not serial_validation_refused else 'Native'}, "
         f"unwalked: {unwalked_src} }})"
     )
 
@@ -2848,8 +2937,10 @@ use super::cond::{CmpOp, Cond, EffectSource};
 #[allow(unused_imports)]
 use super::ifd_schema::{
     IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
-    RawConvEffect,
+    IfdSubdirProcessor, RawConvEffect,
 };
+#[allow(unused_imports)]
+use super::validation::{SizeExpectation, U16SizeCheck};
 #[allow(unused_imports)]
 use super::subdir::BaseExpr;
 #[allow(unused_imports)]
@@ -2890,10 +2981,12 @@ IFD_REPORT = (
         ("SubDirectory edges modeled", "ifd_subdir_edge_modeled"),
         ("  target is an IFD-style table", "ifd_subdir_edge_target_ifd"),
         ("  target is a ProcessBinaryData table", "ifd_subdir_edge_target_binary"),
+        ("  target is an authenticated ProcessSerialData table", "ifd_subdir_edge_target_serial"),
         ("  target is neither (no transcribed layout)", "ifd_subdir_edge_target_other"),
         ("  Flags SubIFD / FixFormat ifd (sub_ifd: true)", "ifd_subdir_edge_sub_ifd"),
         ("  on a MakerNotes-marked tag (base fixing applies beyond it)", "ifd_subdir_edge_makernotes"),
-        ("  carrying Validate (emitted; the walk refuses it)", "ifd_subdir_refused_validate"),
+        ("  Validate compiled as an authenticated U16 size check (serial targets only)", "ifd_subdir_validate_compiled"),
+        ("  carrying Validate without that proof (emitted; the walk refuses it)", "ifd_subdir_refused_validate"),
         ("  no TagTable = the enclosing table (emitted unwalked; not disqualifying)", "ifd_subdir_same_table_unwalked"),
         ("  ProcessProc other than ProcessBinaryData (emitted unwalked; not disqualifying)", "ifd_subdir_processproc_unwalked"),
     )),

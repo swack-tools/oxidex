@@ -48,7 +48,7 @@
 
 use super::cond::Cond;
 use super::subdir::BaseExpr;
-use super::{ExprId, Fmt, GateA, Omitted, PrintConv, TagGroups};
+use super::{ExprId, Fmt, GateA, Omitted, PrintConv, TagGroups, U16SizeCheck};
 
 /// One `ProcessExif` (IFD-style) tag table.
 #[derive(Clone, Copy, Debug)]
@@ -244,6 +244,20 @@ pub enum IfdByteOrder {
     Unknown,
 }
 
+/// The source-selected processor for an IFD `SubDirectory` target.
+///
+/// `Native` preserves the existing target lookup: an IFD target is walked by
+/// `ProcessExif` and a binary target by `ProcessBinaryData`.  `Serial` is
+/// emitted only when the target table's effective `PROCESS_PROC` (or an
+/// explicitly equivalent `SubDirectory.ProcessProc`) passed the independently
+/// captured `ProcessSerialData` descriptor.  It is deliberately a processor
+/// classification rather than a module/table dispatch key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IfdSubdirProcessor {
+    Native,
+    Serial,
+}
+
 /// One `SubDirectory` edge out of an IFD tag.
 #[derive(Clone, Copy, Debug)]
 pub struct IfdSubdirEdge {
@@ -272,11 +286,20 @@ pub struct IfdSubdirEdge {
     /// `DirName`, when declared (the family-1 name the sub-directory reports
     /// under, e.g. `Olympus2`).
     pub dir_name: Option<&'static str>,
-    /// `Validate` declared: ExifTool evaluates Perl against the directory
-    /// bytes before walking it. Not compiled -- an edge that carries it is
-    /// emitted for the reachability census but never walked
-    /// (`ifd_subdir_refused_validate`).
+    /// `Validate` was declared in the native edge. This preserves the source
+    /// fact even when [`Self::validation`] is unavailable, so legacy IFD and
+    /// binary edges continue to withhold rather than silently acquiring a new
+    /// execution path.
     pub validate: bool,
+    /// A source-authenticated, independently audited size check. This is
+    /// populated only for a supported serial target; `None` alongside
+    /// `validate: true` keeps the edge unwalked.
+    pub validation: Option<U16SizeCheck>,
+    /// The effective native processor selected from the target table's
+    /// `PROCESS_PROC` unless the edge explicitly overrides it. The compiler
+    /// refuses an override that is not equivalent to the target's captured
+    /// serial processor.
+    pub processor: IfdSubdirProcessor,
     /// Emitted for the reachability census but never walked, and why
     /// (slice IFD1, `codegen.py::compile_ifd_subdir`):
     /// `"same-table recursion (TagTable absent)"` -- ExifTool walks the

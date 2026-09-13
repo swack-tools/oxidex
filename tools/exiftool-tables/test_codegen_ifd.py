@@ -418,7 +418,11 @@ class SubdirEdges(unittest.TestCase):
         sd = {"TagTable": "Image::ExifTool::Olympus::Equipment", "Start": "$val",
               "MaxSubdirs": "10", "DirName": "SubIFD", "Validate": "$val =~ /^\\0/"}
         src, stats = self._edge(sd, Flags="SubIFD")
-        self.assertIn('max_subdirs: Some(10), dir_name: Some("SubIFD"), validate: true, unwalked: None }', src)
+        self.assertIn(
+            'max_subdirs: Some(10), dir_name: Some("SubIFD"), validate: true, '
+            'validation: None, processor: IfdSubdirProcessor::Native, unwalked: None }',
+            src,
+        )
         # Emitted AND counted: the walk refuses it, the census still sees it.
         self.assertEqual(stats["ifd_subdir_edge_modeled"], 1)
         self.assertEqual(stats["ifd_subdir_refused_validate"], 1)
@@ -439,7 +443,13 @@ class SubdirEdges(unittest.TestCase):
             pp = {"__perl": "CODE", "__name": name}
             src, stats = self._edge({"TagTable": "Image::ExifTool::Olympus::Equipment", "ProcessProc": pp})
             self.assertIn('module: "Olympus", table: "Equipment", ', src)
-            self.assertTrue(src.endswith(f'validate: false, unwalked: Some("ProcessProc {name}") }})'), src)
+            self.assertTrue(
+                src.endswith(
+                    f'validate: false, validation: None, processor: IfdSubdirProcessor::Native, '
+                    f'unwalked: Some("ProcessProc {name}") }})'
+                ),
+                src,
+            )
             self.assertEqual(
                 _plain(stats),
                 {"ifd_subdir_processproc_unwalked": 1, "ifd_subdir_edge_modeled": 1,
@@ -451,6 +461,84 @@ class SubdirEdges(unittest.TestCase):
         self.assertIn('unwalked: Some("ProcessProc <unnamed CODE>")', src)
         self.assertNotIn("ifd_subdir_processproc_unwalked", codegen.GATE_A_DISQUALIFYING)
         self.assertNotIn("ifd_subdir_refused_processproc", codegen.GATE_A_DISQUALIFYING)
+
+    def test_authenticated_serial_target_compiles_the_shared_u16_validation(self):
+        # The edge's target is selected by its captured target-table processor;
+        # no source module/table/tag spelling participates in this admission.
+        from test_directory_validation import CALL, NAME
+        from test_native_reader_contract import bound_helper, snapshot
+
+        reader = snapshot()
+        processor = {
+            "__perl": "CODE", "resolved": True,
+            "__name": "Image::ExifTool::Any::ProcessSerialData",
+            "__deparse": "closed processor body",
+            "source_file": "Image/ExifTool/Any.pm", "source_sha256": "4" * 64,
+        }
+        ctx = codegen.IfdGenContext(
+            ifd_tables=set(), binary_tables=set(),
+            serial_tables={("Any", "Child"): processor},
+            table_processors={("Any", "Child"): processor},
+            validation_helpers={NAME: bound_helper(reader)},
+            reader_contracts={"unsigned16": reader},
+        )
+        stats = codegen.new_ifd_stats()
+        src = codegen.compile_ifd_subdir(
+            {"SubDirectory": {
+                "TagTable": "Image::ExifTool::Any::Child", "Validate": CALL,
+            }},
+            stats,
+            ctx,
+        )
+        self.assertIn("validation: Some(U16SizeCheck { offset: 0, expected: &[SizeExpectation::Relative(0)]", src)
+        self.assertIn("processor: IfdSubdirProcessor::Serial", src)
+        self.assertEqual(_plain(stats), {
+            "ifd_subdir_edge_modeled": 1,
+            "ifd_subdir_edge_target_serial": 1,
+            "ifd_subdir_validate_compiled": 1,
+        })
+
+    def test_serial_override_or_helper_source_change_refuses_execution(self):
+        from test_directory_validation import CALL, NAME
+        from test_native_reader_contract import bound_helper, snapshot
+
+        reader = snapshot()
+        processor = {
+            "__perl": "CODE", "resolved": True,
+            "__name": "Image::ExifTool::Any::ProcessSerialData",
+            "__deparse": "closed processor body",
+            "source_file": "Image/ExifTool/Any.pm", "source_sha256": "4" * 64,
+        }
+        ctx = codegen.IfdGenContext(
+            ifd_tables=set(), binary_tables=set(),
+            serial_tables={("Any", "Child"): processor},
+            table_processors={("Any", "Child"): processor},
+            validation_helpers={NAME: bound_helper(reader)},
+            reader_contracts={"unsigned16": reader},
+        )
+        def emit(subdir):
+            stats = codegen.new_ifd_stats()
+            return codegen.compile_ifd_subdir({"SubDirectory": subdir}, stats, ctx), stats
+
+        changed = dict(processor, source_sha256="5" * 64)
+        src, stats = emit({
+            "TagTable": "Image::ExifTool::Any::Child", "ProcessProc": changed,
+            "Validate": CALL,
+        })
+        self.assertIn("processor: IfdSubdirProcessor::Native", src)
+        self.assertIn("validation: None", src)
+        self.assertIn("ProcessProc override differs from target", src)
+        self.assertEqual(stats["ifd_subdir_refused_validate"], 1)
+
+        broken_helpers = dict(ctx.validation_helpers)
+        broken = dict(broken_helpers[NAME])
+        broken["__deparse"] = broken["__deparse"].replace("Get16u", "Get32u")
+        ctx.validation_helpers = {NAME: broken}
+        src, stats = emit({"TagTable": "Image::ExifTool::Any::Child", "Validate": CALL})
+        self.assertIn("processor: IfdSubdirProcessor::Native", src)
+        self.assertIn("validation: None", src)
+        self.assertIn('unwalked: Some("serial Validate lacks authenticated primitive")', src)
+        self.assertEqual(stats["ifd_subdir_refused_validate"], 1)
 
     def test_base_through_the_existing_grammar(self):
         src, _ = self._edge({"TagTable": "Image::ExifTool::Olympus::Equipment",
@@ -499,7 +587,8 @@ class SubdirEdges(unittest.TestCase):
         self.assertIn("subdir: Some(IfdSubdirEdge { module: \"Olympus\", table: \"Equipment\", "
                       "start: IfdStart::ValuePtr(0), base: None, byte_order: IfdByteOrder::Inherit, "
                       "fix_format: None, sub_ifd: false, max_subdirs: None, dir_name: None, "
-                      "validate: false, unwalked: None }) }", src)
+                      "validate: false, validation: None, processor: IfdSubdirProcessor::Native, "
+                      "unwalked: None }) }", src)
 
 
 class VariantGroups(unittest.TestCase):
@@ -648,7 +737,8 @@ class SliceIfd1GateA(unittest.TestCase):
             src,
             'Some(IfdSubdirEdge { module: "Exif", table: "Main", start: IfdStart::Val(0), base: None, '
             "byte_order: IfdByteOrder::Inherit, fix_format: None, sub_ifd: true, max_subdirs: None, "
-            'dir_name: Some("ExifIFD"), validate: false, '
+            'dir_name: Some("ExifIFD"), validate: false, validation: None, '
+            'processor: IfdSubdirProcessor::Native, '
             'unwalked: Some("same-table recursion (TagTable absent)") })',
         )
         self.assertEqual(

@@ -65,6 +65,16 @@ class OracleProcessorFacts(unittest.TestCase):
                     { Format => 'int8u', Count => undef },
                 ],
             );
+            # Holder is an IFD-style table. Its child selection has no
+            # ProcessProc override, so oracle.pl resolves the target table's
+            # PROCESS_PROC only after the full module walk.
+            our %Holder = (
+                GROUPS => { 0 => 'EXIF', 1 => 'Fixture', 2 => 'Image' },
+                1 => { Name => 'Child', SubDirectory => { TagTable => 'Image::ExifTool::Fixture::Words' } },
+            );
+            our %Words = ( PROCESS_PROC => \\&ProcessWords, GROUPS => { 0 => 'EXIF' },
+                1 => { Name => 'Word' },
+            );
             our %Empty = ( PROCESS_PROC => \\&ProcessWords, GROUPS => { 0 => 'EXIF' } );
             1;
         """), encoding="utf-8")
@@ -127,6 +137,43 @@ class OracleProcessorFacts(unittest.TestCase):
         self.assertIsNone(unnamed["name"])
         self.assertTrue(unnamed["properties"]["Count"]["present"])
         self.assertEqual(unnamed["properties"]["Count"]["value"], {"kind": "undef"})
+
+    def test_ifd_processor_stream_joins_default_target_after_module_load(self):
+        result = subprocess.run(
+            ["/usr/bin/perl", str(ORACLE), str(self.lib)],
+            check=True, text=True, capture_output=True,
+        )
+        rows = [line.split("\t") for line in result.stdout.splitlines()]
+        record = next(row for row in rows if row[:5] == ["IFD", "Fixture", "Holder", "1", "PROCESSOR"])
+        self.assertEqual(record[5:8], ["Fixture", "Words", "target"])
+        fact = json.loads(record[8])
+        self.assertTrue(fact["resolved"])
+        self.assertEqual(fact["__name"], "Image::ExifTool::Fixture::ProcessWords")
+        self.assertEqual(fact["source_file"], "Image/ExifTool/Fixture.pm")
+        # `NATIVE_PROCESSOR` is the target-side independently emitted record;
+        # identical provenance makes stale target-body artifacts detectable.
+        processors, _tables, _rows = self.facts()
+        self.assertEqual(fact, processors[("Fixture", "Words")])
+
+    def test_ifd_processor_stream_records_explicit_override(self):
+        text = self.fixture.read_text(encoding="utf-8")
+        text = text.replace(
+            "    our %Holder = (", "    sub AlternateProcessor { return 1; }\n    our %Holder = (", 1
+        ).replace(
+            "SubDirectory => { TagTable => 'Image::ExifTool::Fixture::Words' }",
+            "SubDirectory => { TagTable => 'Image::ExifTool::Fixture::Words', ProcessProc => \\&AlternateProcessor }",
+            1,
+        )
+        self.fixture.write_text(text, encoding="utf-8")
+        result = subprocess.run(
+            ["/usr/bin/perl", str(ORACLE), str(self.lib)],
+            check=True, text=True, capture_output=True,
+        )
+        rows = [line.split("\t") for line in result.stdout.splitlines()]
+        record = next(row for row in rows if row[:5] == ["IFD", "Fixture", "Holder", "1", "PROCESSOR"])
+        self.assertEqual(record[5:8], ["Fixture", "Words", "override"])
+        self.assertEqual(json.loads(record[8])["__name"],
+                         "Image::ExifTool::Fixture::AlternateProcessor")
 
     def test_oracle_preserves_unresolved_bare_reader(self):
         self.later.write_text("package Image::ExifTool::ZZLater; 1;\n", encoding="utf-8")

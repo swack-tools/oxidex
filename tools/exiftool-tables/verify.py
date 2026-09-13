@@ -36,6 +36,7 @@ is re-derived from the live Perl hash here; it is not a trusted codegen claim.
 """
 
 import argparse
+import hashlib
 import re
 import subprocess
 import sys
@@ -56,6 +57,7 @@ import verify_directory_validation
 import verify_native_reader
 import verify_word_directory
 import verify_processor_inventory
+import verify_serial_directory
 import verify_word_rows
 import json
 
@@ -2155,6 +2157,8 @@ _IFD_SUBDIR_TAIL_RE = re.compile(
     r'max_subdirs:\s*(?P<max_subdirs>None|Some\(\d+\))\s*,\s*'
     r'dir_name:\s*(?P<dir_name>None|Some\("(?:[^"\\]|\\.)*"\))\s*,\s*'
     r'validate:\s*(?P<validate>true|false)\s*,\s*'
+    r'(?:validation:\s*(?P<validation>None|Some\(\s*U16SizeCheck\s*\{.*?\}\s*\))\s*,\s*'
+    r'processor:\s*IfdSubdirProcessor::(?P<processor>Native|Serial)\s*,\s*)?'
     # rustfmt wraps a long reason as `Some(\n "...",\n)`: whitespace after `Some(` and a
     # trailing comma before `)` are part of the committed shape (ProfileIFD 0xc6f5, whose
     # reason names three refusals, is the first edge long enough to wrap).
@@ -2216,7 +2220,7 @@ def _parse_omitted(text, k):
     return out
 
 
-def _parse_ifd_subdir_value(text, k):
+def _parse_ifd_subdir_value(text, k, require_serial_schema=False):
     """`None` -> None; `Some(IfdSubdirEdge { ... })` -> its facts. The
     `base:` value (`None` or `Some(&BaseExpr::...)`, nested arbitrarily) is
     located by `_value_span` and kept as whitespace-free text."""
@@ -2231,6 +2235,8 @@ def _parse_ifd_subdir_value(text, k):
     tm = _IFD_SUBDIR_TAIL_RE.match(text, base_end)
     if not tm:
         raise SystemExit(f"{k}: unrecognised subdir value (tail) {text!r} {_OUT_OF_DATE}")
+    if require_serial_schema and tm.group("processor") is None:
+        raise SystemExit(f"{k}: serial subdir schema is missing validation/processor fields {_OUT_OF_DATE}")
     return {
         "module": m.group("module"),
         "table": m.group("table"),
@@ -2242,6 +2248,10 @@ def _parse_ifd_subdir_value(text, k):
         "max_subdirs": _some_int(tm.group("max_subdirs")),
         "dir_name": _some_str_opt(tm.group("dir_name")),
         "validate": tm.group("validate") == "true",
+        "validation": verify_directory_validation.parse_rust(
+            tm.group("validation") or "None", unescape
+        ),
+        "processor": tm.group("processor") or "Native",
         "unwalked": _some_str_opt(tm.group("unwalked")),
     }
 
@@ -2267,7 +2277,7 @@ class ParsedIfd(NamedTuple):
     structure: list
 
 
-def _parse_one_ifd_tag(src, f, k, out, v2_schema):
+def _parse_one_ifd_tag(src, f, k, out, v2_schema, require_serial_schema=False):
     if v2_schema:
         condition_start = f.end()
         condition_end = _value_span(src, condition_start)
@@ -2321,7 +2331,9 @@ def _parse_one_ifd_tag(src, f, k, out, v2_schema):
             f"{src[pc_start:pc_end].strip()!r} {_OUT_OF_DATE}"
         )
     subdir_end = _value_span(src, sm.end())
-    tag["subdir"] = _parse_ifd_subdir_value(src[sm.end():subdir_end], k)
+    tag["subdir"] = _parse_ifd_subdir_value(
+        src[sm.end():subdir_end], k, require_serial_schema=require_serial_schema
+    )
     _parse_print_conv(
         src, pc_start, pc_end, k, out.enums, out.bitmasks, out.other_ids, out.print_hexes, out.pc_kinds,
     )
@@ -2345,6 +2357,7 @@ def parse_ifd_rust(path):
         src = fh.read()
     out = ParsedIfd({}, {}, set(), defaultdict(dict), {}, {}, {}, {}, [], [])
     v2_schema = IFD_TAG_V2_RE.search(src) is not None
+    require_serial_schema = "IfdSubdirProcessor" in src
     tag_re = IFD_TAG_V2_RE if v2_schema else IFD_TAG_RE
 
     heads = list(IFD_TABLE_RE.finditer(src))
@@ -2381,7 +2394,7 @@ def parse_ifd_rust(path):
             k = (mod, tbl, str(int(f.group("id"), 0)))
             if k in out.tags:
                 out.structure.append(f"{k}: duplicate id in `tags`")
-            _parse_one_ifd_tag(src, f, k, out, v2_schema)
+            _parse_one_ifd_tag(src, f, k, out, v2_schema, require_serial_schema)
             ids.append(int(f.group("id"), 0))
 
         vm = IFD_VARIANTS_MARKER_RE.search(src, t_end, end)
@@ -2398,7 +2411,7 @@ def parse_ifd_rust(path):
             for pos, f in enumerate(tag_re.finditer(src, a_s, a_e)):
                 k = (mod, tbl, f"{gid}#{pos}")
                 out.variant_keys.add(k)
-                _parse_one_ifd_tag(src, f, k, out, v2_schema)
+                _parse_one_ifd_tag(src, f, k, out, v2_schema, require_serial_schema)
                 if int(f.group("id"), 0) != gid:
                     out.structure.append(
                         f"{k}: alternative carries id {f.group('id')} inside group id {gid}"
@@ -2481,6 +2494,15 @@ class IfdOracle(NamedTuple):
     hooks: set
     conditions: set
     subdirs: dict
+    validations: dict
+    # Full native helper CODE facts for each scalar Validate expression.
+    validation_functions: dict
+    # Authenticated effective processor facts for IFD SubDirectory edges.
+    # `table_processors` is the target table PROCESS_PROC; `processors` is
+    # the source edge's actual override/default binding after all modules load.
+    table_processors: dict
+    processors: dict
+    reader_contracts: dict
     # `PCEXPR` rows: keys whose ExifTool PrintConv is a scalar expression.
     pcexprs: set
 
@@ -2491,9 +2513,26 @@ def parse_ifd_oracle(out):
     a SystemExit: the oracle and the verifier move in lockstep, and a row
     silently ignored is a fact silently unverified."""
     o = IfdOracle({}, {}, {}, {}, {}, defaultdict(dict), defaultdict(dict), set(), {}, {},
-                  {}, {}, {}, set(), set(), {}, set())
+                  {}, {}, {}, set(), set(), {}, {}, {}, {}, {}, {}, set())
     for line in out.splitlines():
         p = line.split("\t")
+        if len(p) == 3 and p[0] == "NATIVE_READER_CONTRACT":
+            if p[1] in o.reader_contracts:
+                raise SystemExit(f"duplicate native reader contract {p[1]!r}")
+            try:
+                o.reader_contracts[p[1]] = json.loads(p[2])
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"invalid native reader contract {p[1]!r}: {exc}") from exc
+            continue
+        if len(p) == 4 and p[0] == "NATIVE_PROCESSOR":
+            key = (p[1], p[2])
+            if key in o.table_processors:
+                raise SystemExit(f"duplicate native processor facts for {key}")
+            try:
+                o.table_processors[key] = json.loads(p[3])
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"invalid native processor facts for {key}: {exc}") from exc
+            continue
         if p[0] != "IFD":
             continue
         n, kind = len(p), p[4] if len(p) > 4 else ""
@@ -2539,6 +2578,22 @@ def parse_ifd_oracle(out):
                 "byteorder": p[9], "validate": p[10] == "1", "fixformat": p[11],
                 "subifd": p[12] == "1", "maxsubdirs": p[13], "dirname": p[14],
             }
+        elif kind == "PROCESSOR" and n == 9:
+            if k in o.processors:
+                raise SystemExit(f"duplicate IFD processor facts for {k}")
+            try:
+                o.processors[k] = (p[5], p[6], p[7], json.loads(p[8]))
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"invalid IFD processor facts for {k}: {exc}") from exc
+        elif kind == "VALIDATION" and n in (9, 10):
+            if k in o.validations:
+                raise SystemExit(f"duplicate IFD validation facts for {k}")
+            o.validations[k] = tuple(p[5:9])
+            if n == 10:
+                try:
+                    o.validation_functions[k] = json.loads(p[9])
+                except json.JSONDecodeError as exc:
+                    raise SystemExit(f"invalid IFD validation helper facts for {k}: {exc}") from exc
         else:
             raise SystemExit(
                 f"unrecognised IFD oracle row {line!r} -- oracle.pl and verify.py "
@@ -2621,29 +2676,103 @@ _SPEC_BYTE_ORDERS = {
 }
 
 
-def expected_ifd_edge(fact, enclosing=None):
-    """Independently decide, from one oracle SUBDIR row, what edge the
-    generator may emit -> `(edge_facts, spec_refuses)`. `enclosing` is the
-    `(module, table)` the row belongs to.
+def _processor_identity(fact):
+    """Return an independently checkable native CODE identity, or ``None``.
 
-    `edge_facts` is None when the facts put the edge outside the spec's
-    grammar for a reason that makes any emitted edge WRONG (a TagTable
-    present but unparseable; a Start outside `$valuePtr`/`$val` +- n; a
-    Base outside the arithmetic grammar; a FixFormat the schema cannot
-    spell; a MaxSubdirs that is not a count). Two shapes are expected
-    EMITTED BUT UNWALKED (`edge_facts["unwalked"]` True; spec v1.1, slice
-    IFD1): no TagTable at all -- ExifTool walks the pointer with the
-    enclosing table (Exif.pm:6939-6944), so the edge must name `enclosing`
-    -- and a ProcessProc other than ProcessBinaryData; the generated edge
-    must carry `unwalked: Some(..)` for exactly these and `None` otherwise.
-    `spec_refuses` is True when the only thing outside the spec is the
-    ByteOrder spelling: the spec lists six spellings, ExifTool itself
-    (Exif.pm:6974-6990) reads `/^Little/i`, `/^Big/i` and treats everything
-    else as detect-from-entry-count, so an edge emitted for, say,
-    `'Little-endian'` with `IfdByteOrder::Little` is not a wrong fact --
-    `verify_ifd` accepts either that or a refusal for it, and counts the
-    former as a note."""
+    This deliberately validates raw oracle facts rather than importing the
+    code generator's acceptance grammar.  A serial edge has execution
+    authority only when both its effective binding and its target table's
+    PROCESS_PROC authenticate the same live CODE ref that the independently
+    parsed serial artifact records.
+    """
+    if not isinstance(fact, dict):
+        return None
+    if fact.get("__perl") != "CODE" or fact.get("resolved") is not True:
+        return None
+    name, source_file, source_sha, deparse = (
+        fact.get("__name"), fact.get("source_file"),
+        fact.get("source_sha256"), fact.get("__deparse"),
+    )
+    if not all(isinstance(v, str) and v for v in (name, source_file, source_sha, deparse)):
+        return None
+    if (Path(source_file).is_absolute() or "\\" in source_file
+            or any(part in {"", ".", ".."} for part in source_file.split("/"))
+            or re.fullmatch(r"[0-9a-f]{64}", source_sha) is None):
+        return None
+    return (name, source_file, source_sha, hashlib.sha256(deparse.encode("utf-8")).hexdigest())
+
+
+_U16_MEMBERSHIP_HELPER = re.compile(
+    r"^\(\$\$@\)\{package(?:[A-Za-z_]\w*::)+[A-Za-z_]\w*;usestrict;"
+    r"\(my\(\$(?P<data>[A-Za-z_]\w*),\$(?P<offset>[A-Za-z_]\w*),@(?P<choices>[A-Za-z_]\w*)\)=@_\);"
+    r"\(my\(\$(?P<read>[A-Za-z_]\w*)\)=&Image::ExifTool::Get16u\(\$(?P=data),\$(?P=offset)\)\);"
+    r"my\(\$(?P<item>[A-Za-z_]\w*)\);foreach\$(?P=item)\(@(?P=choices)\)\{"
+    r"\(\(\$(?P=item)==\$(?P=read)\)and\(return1\)\);\}\(return\(undef\)\);\}$"
+)
+
+
+def _u16_membership_helper(fact):
+    """Independently recognize the closed, side-effect-free U16 helper.
+
+    This deliberately parses raw B::Deparse facts received from oracle.pl;
+    it does not import directory_validation/codegen. Whitespace is irrelevant
+    but every binding, read, comparison, return and absence of extra statement
+    is required.
+    """
+    identity = _processor_identity(fact)
+    if identity is None:
+        return False
+    source = re.sub(r"\s+", "", fact["__deparse"])
+    match = _U16_MEMBERSHIP_HELPER.fullmatch(source)
+    if match is None:
+        return False
+    values = match.groupdict()
+    return len({values["data"], values["offset"], values["read"], values["item"]}) == 4
+
+
+def _serial_processor_admitted(fact, edge_processor, table_processors, serial_tables, validation_helper):
+    """Whether this source edge may name an executable shared serial reader.
+
+    The source ``SUBDIR`` spelling alone is insufficient: a generated serial
+    route must bind the exact native effective PROCESS_PROC (including a
+    ProcessProc override) to the target table's native PROCESS_PROC and to
+    the generated SerialProcessorFacts.  All three joins are independent of
+    module/table names and fail closed on malformed or absent facts.
+    """
+    if edge_processor is None or serial_tables is None or not _u16_membership_helper(validation_helper):
+        return False
+    target_mod, target_table, origin, effective = edge_processor
+    if origin not in {"target", "override"}:
+        return False
+    tagtable = fact.get("tagtable", "-")
+    match = _TAGTABLE_RE.match(tagtable)
+    if match is None or (target_mod, target_table) != match.groups():
+        return False
+    native = _processor_identity(effective)
+    target = _processor_identity(table_processors.get((target_mod, target_table)))
+    table = serial_tables.get((target_mod, target_table))
+    if native is None or target is None or table is None:
+        return False
+    # An override is only executable when it is the same processor that the
+    # target table itself declares. This blocks a stale/rebound CODE ref.
+    if native != target or native != table.processor:
+        return False
+    return native[0].endswith("::ProcessSerialData")
+
+
+def expected_ifd_edge(fact, enclosing=None, edge_processor=None, table_processors=None,
+                      serial_tables=None, validation_helper=None):
+    """Independently decide the permitted generated IFD edge facts.
+
+    A non-binary ProcessProc is normally unwalked.  The narrow exception is a
+    fully authenticated target ProcessSerialData route, independently joined
+    from ``IFD PROCESSOR`` and ``NATIVE_PROCESSOR`` oracle records to the
+    independently parsed serial artifact.  This is a provenance check, not a
+    generator-recognizer import.
+    """
+    table_processors = table_processors or {}
     unwalked = False
+    processor = "Native"
     if fact["tagtable"] == "-":
         if enclosing is None:
             return None, False
@@ -2655,8 +2784,24 @@ def expected_ifd_edge(fact, enclosing=None):
             return None, False
         module, table = m.group(1), m.group(2)
     proc = fact["processproc"]
-    if proc != "-" and not proc.endswith("::ProcessBinaryData"):
-        unwalked = True
+    serial = _serial_processor_admitted(
+        fact, edge_processor, table_processors, serial_tables, validation_helper
+    )
+    if serial:
+        processor = "Serial"
+    else:
+        # ProcessProc on the SubDirectory is an override.  This slice changes
+        # the established generic IFD treatment only for a source-proven
+        # ProcessSerialData target: such a route becomes walkable solely after
+        # the full three-way join above.  Other custom processors retain their
+        # existing Native/unwalked policy until they gain their own reader
+        # contract; broadening this verifier would reclassify unrelated IFD
+        # routes without an implementation or native execution proof.
+        target_identity = _processor_identity(table_processors.get((module, table)))
+        serial_target = (target_identity is not None
+                         and target_identity[0].endswith("::ProcessSerialData"))
+        if ((proc != "-" and not proc.endswith("::ProcessBinaryData")) or serial_target):
+            unwalked = True
     start = fact["start"]
     if start == "-":
         start_v = ("ValuePtr", 0)
@@ -2707,6 +2852,7 @@ def expected_ifd_edge(fact, enclosing=None):
         "max_subdirs": max_v,
         "dir_name": None if fact["dirname"] == "-" else fact["dirname"],
         "validate": fact["validate"],
+        "processor": processor,
         "unwalked": unwalked,
     }, spec_refuses
 
@@ -2733,7 +2879,7 @@ class _Tally:
         return self.ok + self.bad
 
 
-def verify_ifd(gen, orc, show=10):
+def verify_ifd(gen, orc, show=10, serial_tables=None):
     """Compare a `ParsedIfd` with an `IfdOracle` -> `(report_lines, failed)`.
     `failed` is the number of discrepancies (0 = PASS for this stage)."""
     T = lambda: _Tally(show)  # noqa: E731
@@ -2932,28 +3078,58 @@ def verify_ifd(gen, orc, show=10):
             elif fact is None:
                 t_edge.miss((k, "edge emitted but ExifTool has no SubDirectory"))
             else:
-                want, spec_refuses = expected_ifd_edge(fact, (k[0], k[1]))
+                want, spec_refuses = expected_ifd_edge(
+                    fact, (k[0], k[1]), orc.processors.get(k), orc.table_processors, serial_tables,
+                    orc.validation_functions.get(k)
+                )
                 if want is None:
                     t_edge.miss((k, "edge emitted where the facts require a refusal", fact))
                 else:
                     diffs = [
                         f for f in ("module", "table", "start", "byte_order", "fix_format",
-                                    "sub_ifd", "max_subdirs", "dir_name", "validate")
+                                    "sub_ifd", "max_subdirs", "dir_name", "validate", "processor")
                         if edge[f] != want[f]
                     ]
                     if (edge["base"] != "None") != want["base_present"]:
                         diffs.append("base")
                     if (edge["unwalked"] is not None) != want["unwalked"]:
                         diffs.append("unwalked")
+                    compiled_validation = edge["validation"]
+                    native_validation = orc.validations.get(k)
+                    if compiled_validation is not None:
+                        if not edge["validate"]:
+                            diffs.append("validation_without_validate")
+                        problem = verify_directory_validation.mismatch(
+                            compiled_validation, native_validation
+                        )
+                        if problem:
+                            diffs.append(f"validation:{problem}")
+                        reader_sha = compiled_validation[6]
+                        if reader_sha is None:
+                            diffs.append("validation_reader_contract")
+                        else:
+                            problem = verify_native_reader.mismatch(
+                                reader_sha, orc.reader_contracts.get("unsigned16")
+                            )
+                            if problem:
+                                diffs.append(f"validation_reader:{problem}")
+                    elif edge["processor"] == "Serial" and edge["validate"]:
+                        # A serial descent cannot reinterpret an opaque Perl
+                        # Validate. A missing compiled primitive must keep the
+                        # edge unwalked, never become an executable route.
+                        diffs.append("serial_validate_without_authenticated_primitive")
                     if diffs:
-                        t_edge.miss((k, {f: edge[f] for f in diffs},
+                        t_edge.miss((k, {f: edge.get(f) for f in diffs},
                                      {f: want.get(f, want.get("base_present")) for f in diffs}))
                     else:
                         t_edge.hit()
                         if spec_refuses:
                             note_byteorder_outside_spec += 1
         elif fact is not None and om["subdirectory"]:
-            want, spec_refuses = expected_ifd_edge(fact, (k[0], k[1]))
+            want, spec_refuses = expected_ifd_edge(
+                    fact, (k[0], k[1]), orc.processors.get(k), orc.table_processors, serial_tables,
+                    orc.validation_functions.get(k)
+                )
             if want is not None and not spec_refuses:
                 note_edge_refused_modelable += 1
 
@@ -3670,7 +3846,17 @@ def main():
         if not gen_ifd.tables:
             sys.exit(f"parsed 0 IfdTable statics from {ifd_path} -- verifier is broken, "
                      "not the generator; fix the parser before trusting a PASS")
-        ifd_lines, ifd_failed = verify_ifd(gen_ifd, parse_ifd_oracle(oracle_out), args.show)
+        ifd_oracle = parse_ifd_oracle(oracle_out)
+        serial_path = ifd_path.with_name("serial_tables.rs")
+        serial_tables = None
+        if "IfdSubdirProcessor" in ifd_path.read_text(encoding="utf-8"):
+            if not serial_path.is_file():
+                raise SystemExit(
+                    f"serial IFD schema requires {serial_path}, but it is absent; "
+                    "cannot authenticate generated serial child edges"
+                )
+            serial_tables = verify_serial_directory.parse_artifact(serial_path).tables
+        ifd_lines, ifd_failed = verify_ifd(gen_ifd, ifd_oracle, args.show, serial_tables)
         print("\n".join(ifd_lines))
     else:
         print(f"\nIFD tables (slice I-1): SKIPPED -- {ifd_path} does not exist on this tree "
