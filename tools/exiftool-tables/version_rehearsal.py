@@ -141,9 +141,13 @@ def normalize_catalog(raw: dict[str, Any]) -> dict[str, Any]:
 def verify_catalog(catalog: dict[str, Any]) -> None:
     if catalog.get("schema") != SCHEMA or not isinstance(catalog.get("entries"), list):
         raise Refused("unsupported normalized catalog")
-    expected = catalog.get("catalog_sha256")
-    payload = {k: v for k, v in catalog.items() if k != "catalog_sha256"}
-    if not isinstance(expected, str) or expected != sha256_json(payload):
+    raw = {
+        "catalog_source": catalog.get("catalog_source"),
+        "captured_at": catalog.get("captured_at"),
+        "entries": [entry.get("raw") if isinstance(entry, dict) else entry for entry in catalog["entries"]],
+    }
+    expected = normalize_catalog(raw)
+    if catalog != expected:
         raise Refused("catalog identity changed or is malformed")
 
 
@@ -203,8 +207,12 @@ def _oracle_binding(variant: str, release: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def make_plan(catalog: dict[str, Any], seed: int, sample_index: int, pair_count: int, repository_commit: str) -> dict[str, Any]:
+def _plan_payload(catalog: dict[str, Any], seed: int, sample_index: int, pair_count: int, repository_commit: str) -> dict[str, Any]:
     verify_catalog(catalog)
+    if (not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed < 2**64
+            or not isinstance(sample_index, int) or isinstance(sample_index, bool) or sample_index < 0
+            or not isinstance(pair_count, int) or isinstance(pair_count, bool) or pair_count < 1):
+        raise Refused("plan selector inputs are malformed")
     if not isinstance(repository_commit, str) or not GIT_OID_RE.fullmatch(repository_commit):
         raise Refused("repository commit must be a full git object id")
     selected = select_pairs(catalog, seed, sample_index, pair_count)
@@ -261,76 +269,40 @@ def make_plan(catalog: dict[str, Any], seed: int, sample_index: int, pair_count:
             "explicit_limit": "selection is not native read/write proof, native-delta classification, or upgrade success",
         },
     }
+    return payload
+
+
+def make_plan(catalog: dict[str, Any], seed: int, sample_index: int, pair_count: int, repository_commit: str) -> dict[str, Any]:
+    payload = _plan_payload(catalog, seed, sample_index, pair_count, repository_commit)
     return {**payload, "plan_sha256": sha256_json(payload)}
 
 
 def verify_plan(plan: dict[str, Any], catalog: dict[str, Any] | None = None) -> None:
     if plan.get("schema") != SCHEMA or plan.get("kind") != "oxidex_exiftool_version_rehearsal_plan":
         raise Refused("unsupported run plan")
+    if catalog is None:
+        raise Refused("catalog is required to verify a deterministic plan")
+    verify_catalog(catalog)
+    if plan.get("catalog_sha256") != catalog["catalog_sha256"]:
+        raise Refused("catalog identity differs from recorded plan")
     expected = plan.get("plan_sha256")
     payload = {k: v for k, v in plan.items() if k != "plan_sha256"}
     if not isinstance(expected, str) or expected != sha256_json(payload):
         raise Refused("plan identity changed or is malformed")
-    eligible_by_release: dict[str, dict[str, Any]] | None = None
-    if catalog is not None:
-        verify_catalog(catalog)
-        if plan.get("catalog_sha256") != catalog["catalog_sha256"]:
-            raise Refused("catalog identity differs from recorded plan")
-        eligible_by_release = {entry["raw"]["name"]: entry["raw"] for entry in catalog["entries"]
-                               if entry["classification"]["state"] == "eligible"}
-    seen: set[str] = set()
-    for pair in plan.get("pairs", []):
-        if not isinstance(pair, dict):
-            raise Refused("malformed pair")
-        old, new = pair.get("old"), pair.get("new")
-        if not isinstance(old, dict) or not isinstance(new, dict):
-            raise Refused("pair lacks release identities")
-        for release in (old, new):
-            # Reapply the same exact requirements before future execution.
-            reason = _identity_reason({"name": release.get("release"), **release})
-            if not isinstance(release.get("release"), str) or not RELEASE_RE.fullmatch(release["release"]) or reason:
-                raise Refused("pair has missing or ambiguous release identity")
-            if eligible_by_release is not None:
-                actual = eligible_by_release.get(release["release"])
-                expected = {"release": actual["name"], "tag_object": actual["tag_object"],
-                            "peeled_commit": actual["peeled_commit"],
-                            "archive": {"url": actual["archive"]["url"], "sha256": actual["archive"]["sha256"]}} if actual else None
-                if expected != release:
-                    raise Refused("pair release identity differs from catalog")
-        if release_key(old["release"]) >= release_key(new["release"]):
-            raise Refused("pair must have distinct old/new releases in numeric order")
-        oracles = pair.get("native_oracles")
-        if not isinstance(oracles, dict):
-            raise Refused("pair lacks native oracle bindings")
-        for label, release in (("old", old), ("new", new)):
-            binding = oracles.get(label)
-            if not isinstance(binding, dict) or binding.get("variant") != label:
-                raise Refused(f"pair lacks {label} native oracle binding")
-            if binding.get("native_release_identity") != release:
-                raise Refused(f"{label} native oracle binding does not match its selected release")
-            if binding.get("read_vs_native") != "unrun" or binding.get("write_vs_native") != "unrun":
-                raise Refused("planning plan cannot claim native comparison success")
-        contract = pair.get("comparison_contract")
-        if not isinstance(contract, dict) or contract.get("schema") != "per-version-native-v1":
-            raise Refused("pair lacks per-version comparison contract")
-        if contract.get("required") != ["oxidex_old_vs_native_old", "oxidex_new_vs_native_new", "native_old_to_native_new_delta"]:
-            raise Refused("pair comparison contract is incomplete")
-        if contract.get("cross_version_output_equality") != "not_required" or contract.get("newer_native_supersedes_older_native") is not True:
-            raise Refused("pair comparison contract incorrectly freezes cross-version output")
-        if contract.get("unsupported_new_semantics") != "explicit_gap_never_old_fallback":
-            raise Refused("pair comparison contract permits unsupported old fallback")
-        pair_key = f"{old['release']}->{new['release']}"
-        if pair_key in seen:
-            raise Refused("duplicate pair in plan")
-        seen.add(pair_key)
+    try:
+        canonical = _plan_payload(catalog, plan["seed"], plan["sample_index"], plan["pair_count"], plan["repository_commit"])
+    except (KeyError, TypeError) as exc:
+        raise Refused("plan lacks deterministic selector inputs") from exc
+    if payload != canonical:
+        raise Refused("plan differs from deterministic catalog selection")
 
 
 def _run_id(plan: dict[str, Any]) -> str:
     return f"rehearsal-{plan['plan_sha256'][:16]}"
 
 
-def initial_journal(plan: dict[str, Any]) -> dict[str, Any]:
-    verify_plan(plan)
+def initial_journal(plan: dict[str, Any], catalog: dict[str, Any]) -> dict[str, Any]:
+    verify_plan(plan, catalog)
     variants: dict[str, dict[str, str]] = {}
     for pair in plan["pairs"]:
         for release in (pair["old"], pair["new"]):
@@ -343,7 +315,16 @@ def initial_journal(plan: dict[str, Any]) -> dict[str, Any]:
         "phase": "planned",
         "active": None,
         "events": [{"event": "plan_created", "at_unix": time.time()}],
-        "pairs": [{"pair_index": pair["pair_index"], "state": "unrun", "failure": None} for pair in plan["pairs"]],
+        "pairs": [
+            {
+                "pair_index": pair["pair_index"],
+                "old_release": pair["old"]["release"],
+                "new_release": pair["new"]["release"],
+                "state": "unrun",
+                "failure": None,
+            }
+            for pair in plan["pairs"]
+        ],
         "releases": variants,
         "untested_eligible_releases": plan["untested_eligible_releases"],
         "execution_limit": "all read/write states are unrun; planning is not proof",
@@ -361,7 +342,7 @@ def create_run(plan: dict[str, Any], catalog: dict[str, Any], run_dir: Path) -> 
     journal_path = run_dir / "status.json"
     atomic_json(catalog_path, catalog)
     atomic_json(plan_path, plan)
-    atomic_json(journal_path, initial_journal(plan))
+    atomic_json(journal_path, initial_journal(plan, catalog))
     return plan_path, journal_path
 
 
@@ -375,9 +356,18 @@ def load_verified_run(run_dir: Path, catalog: dict[str, Any] | None = None) -> t
         raise Refused("unsupported journal")
     if journal.get("plan_sha256") != plan["plan_sha256"] or journal.get("run_id") != _run_id(plan):
         raise Refused("journal does not belong to immutable plan")
-    if journal.get("phase") not in {"planned", "running", "interrupted", "failed"}:
+    phase = journal.get("phase")
+    if phase not in {"planned", "running", "interrupted", "failed"}:
         raise Refused("journal has unsupported phase")
-    for release, state in journal.get("releases", {}).items():
+    expected_releases = {
+        side["release"]
+        for pair in plan["pairs"]
+        for side in (pair["old"], pair["new"])
+    }
+    releases = journal.get("releases")
+    if not isinstance(releases, dict) or set(releases) != expected_releases:
+        raise Refused("journal releases differ from selected plan releases")
+    for release, state in releases.items():
         if not isinstance(release, str) or not isinstance(state, dict):
             raise Refused("journal has malformed release state")
         if state.get("read") not in {"unrun", "failed"} or state.get("write") not in {"unrun", "failed"}:
@@ -385,9 +375,42 @@ def load_verified_run(run_dir: Path, catalog: dict[str, Any] | None = None) -> t
         expected_state = "failed" if "failed" in {state.get("read"), state.get("write")} else "unrun"
         if state.get("state") != expected_state:
             raise Refused("journal release aggregate does not match read/write states")
-    for pair in journal.get("pairs", []):
-        if not isinstance(pair, dict) or pair.get("state") not in {"unrun", "failed"}:
+    expected_pairs = [
+        {
+            "pair_index": pair["pair_index"],
+            "old_release": pair["old"]["release"],
+            "new_release": pair["new"]["release"],
+        }
+        for pair in plan["pairs"]
+    ]
+    pairs = journal.get("pairs")
+    if not isinstance(pairs, list) or len(pairs) != len(expected_pairs):
+        raise Refused("journal pairs differ from selected plan pairs")
+    for pair, expected_pair in zip(pairs, expected_pairs, strict=True):
+        if not isinstance(pair, dict) or any(pair.get(key) != value for key, value in expected_pair.items()):
+            raise Refused("journal pairs differ from selected plan pairs")
+        if pair.get("state") not in {"unrun", "failed"}:
             raise Refused("planning journal cannot claim pair success")
+        failure = pair.get("failure")
+        if pair["state"] == "unrun" and failure is not None:
+            raise Refused("unrun journal pair cannot record a failure")
+        if pair["state"] == "failed":
+            if (not isinstance(failure, dict) or failure.get("release") not in {pair["old_release"], pair["new_release"]}
+                    or failure.get("operation") not in {"read", "write"} or not isinstance(failure.get("detail"), str)
+                    or not failure["detail"]):
+                raise Refused("journal failure does not belong to selected pair")
+            if releases[failure["release"]].get(failure["operation"]) != "failed":
+                raise Refused("journal pair failure disagrees with release state")
+    if journal.get("untested_eligible_releases") != plan["untested_eligible_releases"]:
+        raise Refused("journal untested scope differs from immutable plan")
+    active = journal.get("active")
+    if phase == "running":
+        if not isinstance(active, dict) or not isinstance(active.get("stage"), str):
+            raise Refused("running journal lacks an active pair")
+        if active.get("pair_index") not in {pair["pair_index"] for pair in expected_pairs}:
+            raise Refused("active journal pair is not selected")
+    elif active is not None:
+        raise Refused("non-running journal cannot retain an active pair")
     return plan, journal
 
 
@@ -409,16 +432,18 @@ def record_failure(run_dir: Path, pair_index: int, release: str, operation: str,
     """Record an observed future-run failure without allowing a synthetic pass."""
     if operation not in {"read", "write"}:
         raise Refused("failure operation must be read or write")
+    if not isinstance(detail, str) or not detail:
+        raise Refused("failure detail must be nonempty text")
     plan, journal = load_verified_run(run_dir)
-    if journal["phase"] not in {"running", "interrupted"}:
-        raise Refused("only a running or recovered pair can record a failure")
+    if journal["phase"] != "running" or journal.get("active", {}).get("pair_index") != pair_index:
+        raise Refused("failure must belong to the active pair")
+    selected_pair = next((pair for pair in plan["pairs"] if pair["pair_index"] == pair_index), None)
+    if selected_pair is None or release not in {selected_pair["old"]["release"], selected_pair["new"]["release"]}:
+        raise Refused("release does not belong to selected pair")
     if release not in journal["releases"]:
         raise Refused("release is not selected by this run")
     journal["releases"][release][operation] = "failed"
     journal["releases"][release]["state"] = "failed"
-    selected_pair = next((pair for pair in plan["pairs"] if pair["pair_index"] == pair_index), None)
-    if selected_pair is None or release not in {selected_pair["old"]["release"], selected_pair["new"]["release"]}:
-        raise Refused("release does not belong to selected pair")
     for pair in journal["pairs"]:
         if pair["pair_index"] == pair_index:
             pair.update(state="failed", failure={"release": release, "operation": operation, "detail": detail})

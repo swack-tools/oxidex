@@ -37,6 +37,7 @@ def catalog_entries():
             {"name": "v13.58", "tag_object": OID_B},
             release("13.57", OID_A, SHA_A),
             {"name": "13.58", "tag_object": OID_B, "peeled_commit": OID_B, "archive": {"url": "https://github.com/exiftool/exiftool/archive/refs/tags/13.58.tar.gz"}},
+            release("13.60", OID_D, SHA_B),
         ],
     }
 
@@ -48,12 +49,20 @@ class VersionRehearsalTests(unittest.TestCase):
     def plan(self, seed=7, sample_index=0, pair_count=1):
         return vr.make_plan(self.normalized(), seed, sample_index, pair_count, "e" * 40)
 
+    @staticmethod
+    def rehash_plan(plan):
+        plan["plan_sha256"] = vr.sha256_json({key: value for key, value in plan.items() if key != "plan_sha256"})
+
+    @staticmethod
+    def rehash_catalog(catalog):
+        catalog["catalog_sha256"] = vr.sha256_json({key: value for key, value in catalog.items() if key != "catalog_sha256"})
+
     def test_catalog_preserves_unclassified_and_excluded_entries(self):
         catalog = self.normalized()
-        self.assertEqual(len(catalog["entries"]), 4)
+        self.assertEqual(len(catalog["entries"]), 5)
         self.assertEqual(catalog["entries"][1]["classification"], {"state": "excluded", "reason": "tag_name_not_numeric_release"})
         self.assertEqual(catalog["entries"][3]["classification"], {"state": "unclassified", "reason": "missing_or_invalid_archive_sha256"})
-        self.assertEqual([row["name"] for row in vr.eligible_releases(catalog)], ["13.57", "13.59"])
+        self.assertEqual([row["name"] for row in vr.eligible_releases(catalog)], ["13.57", "13.59", "13.60"])
 
     def test_deterministic_replay_and_ordered_distinct_pairs(self):
         first = self.plan(seed=99, sample_index=4)
@@ -70,11 +79,12 @@ class VersionRehearsalTests(unittest.TestCase):
         self.assertEqual(pair["native_oracles"]["new"]["native_release_identity"], pair["new"])
         self.assertEqual(pair["comparison_contract"]["cross_version_output_equality"], "not_required")
         self.assertTrue(pair["comparison_contract"]["newer_native_supersedes_older_native"])
+        self.assertEqual(len(self.plan(seed=99, sample_index=4, pair_count=2)["pairs"]), 2)
 
     def test_same_version_and_ambiguous_identity_are_refused(self):
         catalog = self.normalized()
         duplicate = copy.deepcopy(catalog_entries())
-        duplicate["entries"].append(release("13.59", OID_D, SHA_B))
+        duplicate["entries"].extend([release("13.59", OID_D, SHA_B), release("13.60", OID_D, SHA_B)])
         duplicate_normalized = vr.normalize_catalog(duplicate)
         with self.assertRaisesRegex(vr.Refused, "at least two"):
             vr.eligible_releases(duplicate_normalized)
@@ -82,7 +92,7 @@ class VersionRehearsalTests(unittest.TestCase):
         bad_plan["pairs"][0]["new"]["release"] = bad_plan["pairs"][0]["old"]["release"]
         # The immutable checksum catches mutation before the semantic check.
         with self.assertRaisesRegex(vr.Refused, "identity changed"):
-            vr.verify_plan(bad_plan)
+            vr.verify_plan(bad_plan, self.normalized())
 
     def test_changed_catalog_identity_refuses_plan_reuse(self):
         catalog = self.normalized()
@@ -97,15 +107,12 @@ class VersionRehearsalTests(unittest.TestCase):
         plan = self.plan()
         pair = plan["pairs"][0]
         pair["native_oracles"]["old"]["native_release_identity"] = copy.deepcopy(pair["new"])
-        payload = {k: v for k, v in plan.items() if k != "plan_sha256"}
-        plan["plan_sha256"] = vr.sha256_json(payload)
-        with self.assertRaisesRegex(vr.Refused, "old native oracle binding"):
+        self.rehash_plan(plan)
+        with self.assertRaisesRegex(vr.Refused, "deterministic catalog selection"):
             vr.verify_plan(plan, self.normalized())
 
     def test_unselected_eligible_release_is_explicitly_untested(self):
-        raw = catalog_entries()
-        raw["entries"].append(release("13.60", OID_D, SHA_B))
-        catalog = vr.normalize_catalog(raw)
+        catalog = self.normalized()
         plan = vr.make_plan(catalog, 12, 0, 1, "e" * 40)
         selected = {side["release"] for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
         untested = {row["release"]: row["reason"] for row in plan["untested_eligible_releases"]}
@@ -129,14 +136,72 @@ class VersionRehearsalTests(unittest.TestCase):
             run_dir = Path(tmp) / "run"
             vr.create_run(plan, self.normalized(), run_dir)
             vr.start_pair(run_dir, 0)
-            recovered = vr.recover_interrupted(run_dir, self.normalized())
-            self.assertEqual(recovered["phase"], "interrupted")
-            self.assertTrue(all(v["read"] == v["write"] == "unrun" for v in recovered["releases"].values()))
             selected = plan["pairs"][0]["old"]["release"]
             failed = vr.record_failure(run_dir, 0, selected, "write", "native validation failed")
             self.assertEqual(failed["phase"], "failed")
             self.assertEqual(failed["releases"][selected]["write"], "failed")
             self.assertEqual(failed["pairs"][0]["failure"]["detail"], "native validation failed")
+
+    def test_interrupted_recovery_preserves_unrun(self):
+        plan = self.plan()
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            vr.create_run(plan, self.normalized(), run_dir)
+            vr.start_pair(run_dir, 0)
+            recovered = vr.recover_interrupted(run_dir, self.normalized())
+            self.assertEqual(recovered["phase"], "interrupted")
+            self.assertTrue(all(v["read"] == v["write"] == "unrun" for v in recovered["releases"].values()))
+
+    def test_rehashed_selector_or_scope_mutations_are_refused(self):
+        for mutation in (
+            lambda plan: plan.__setitem__("seed", plan["seed"] + 1),
+            lambda plan: plan.__setitem__("pair_count", 2),
+            lambda plan: plan.__setitem__("pairs", []),
+            lambda plan: plan.__setitem__("untested_eligible_releases", []),
+        ):
+            with self.subTest(mutation=mutation):
+                plan = self.plan()
+                mutation(plan)
+                self.rehash_plan(plan)
+                with self.assertRaisesRegex(vr.Refused, "deterministic catalog selection"):
+                    vr.verify_plan(plan, self.normalized())
+
+    def test_rehashed_catalog_classification_mutation_is_refused(self):
+        catalog = self.normalized()
+        catalog["entries"][0]["classification"] = {"state": "excluded", "reason": "invented"}
+        self.rehash_catalog(catalog)
+        with self.assertRaisesRegex(vr.Refused, "catalog identity changed"):
+            vr.verify_catalog(catalog)
+
+    def test_journal_refuses_missing_extra_or_duplicate_pairs_releases_and_scope(self):
+        plan = self.plan(pair_count=2)
+        for mutate in (
+            lambda journal: journal["pairs"].pop(),
+            lambda journal: journal["pairs"].append(copy.deepcopy(journal["pairs"][0])),
+            lambda journal: journal["pairs"].__setitem__(0, {**journal["pairs"][0], "old_release": "not-selected"}),
+            lambda journal: journal["releases"].pop(next(iter(journal["releases"]))),
+            lambda journal: journal["releases"].__setitem__("not-selected", {"read": "unrun", "write": "unrun", "state": "unrun"}),
+            lambda journal: journal.__setitem__("untested_eligible_releases", [{"release": "not-selected", "reason": "invented"}]),
+        ):
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as tmp:
+                run_dir = Path(tmp) / "run"
+                vr.create_run(plan, self.normalized(), run_dir)
+                status_path = run_dir / "status.json"
+                journal = json.loads(status_path.read_text())
+                mutate(journal)
+                status_path.write_text(json.dumps(journal))
+                with self.assertRaisesRegex(vr.Refused, "journal (pairs|releases|untested scope)"):
+                    vr.load_verified_run(run_dir)
+
+    def test_failure_must_belong_to_active_pair(self):
+        plan = self.plan(pair_count=2)
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            vr.create_run(plan, self.normalized(), run_dir)
+            vr.start_pair(run_dir, 0)
+            other = plan["pairs"][1]
+            with self.assertRaisesRegex(vr.Refused, "active pair"):
+                vr.record_failure(run_dir, other["pair_index"], other["old"]["release"], "read", "wrong active pair")
 
     def test_mutated_plan_and_journal_identity_are_refused(self):
         plan = self.plan()
