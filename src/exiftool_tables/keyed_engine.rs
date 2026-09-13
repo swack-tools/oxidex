@@ -1125,6 +1125,87 @@ mod tests {
     }
 
     #[test]
+    fn inline_bounded_value_validation_uses_all_eight_ciff_bytes_in_both_orders() {
+        // ProcessCanonRaw gives an inline CIFF value a declared `$size` of
+        // eight. Native Validate sees the complete eight-byte `$value`; the
+        // terminal u16 below is deliberately at bytes 6..8, not in a sliced
+        // prefix. A nonzero accepted word also detects swapped byte order.
+        static VALIDATION: U16SizeCheck = U16SizeCheck {
+            offset: 6,
+            expected: &[SizeExpectation::Relative(0)],
+            expression: "Test::Validate($dirData,$subdirStart + 6,$size)",
+            callee: "Test::Validate",
+            source_file: "test.pm",
+            source_sha256: "test",
+            reader_contract_sha256: None,
+        };
+        static CHILD: KeyedTag = KeyedTag {
+            edge: Some(KeyedEdge::BoundedValue {
+                module: "Unavailable",
+                table: "MustNotBeLookedUp",
+                start: KeyedStart::Zero,
+                validation: Some(VALIDATION),
+                unwalked: &[],
+            }),
+            // Raw IDs retain the type bits. The on-disk inline entry below is
+            // 0x5001: inline bit 0x4000 plus this source key 0x1001.
+            ..tag(0x1001, "InlineChild", None, None)
+        };
+        static LATER: KeyedTag = tag(2, "Later", Some(Fmt::Int8u), None);
+        static TAGS: [KeyedTag; 2] = [CHILD, LATER];
+        static TABLE: KeyedDirectoryTable = table(&TAGS);
+
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let mut accepted = vec![0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6];
+            accepted.extend_from_slice(&match order {
+                ByteOrder::Little => 8u16.to_le_bytes(),
+                ByteOrder::Big => 8u16.to_be_bytes(),
+            });
+            assert_eq!(accepted.len(), 8);
+            let accepted_data = ciff(order, &[(0x5001, accepted)]);
+            let (_, accepted_result) = walk_test(&TABLE, &accepted_data, order);
+            // Reaching the target proves the full inline tail and declared
+            // size are both eight, decoded in the inherited byte order.
+            assert_eq!(accepted_result.validation_rejected, 0);
+            assert_eq!(accepted_result.unavailable_target, 1);
+
+            let mut rejected = vec![0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6];
+            rejected.extend_from_slice(&match order {
+                ByteOrder::Little => 9u16.to_le_bytes(),
+                ByteOrder::Big => 9u16.to_be_bytes(),
+            });
+            assert_eq!(rejected.len(), 8);
+            let data = ciff(order, &[(0x5001, rejected), (0x4002, vec![7])]);
+            let mut members = HashMap::new();
+            members.insert("DIR_NAME", MemberValue::Str("Parent".into()));
+            let mut ctx = Ctx::new(&mut members);
+            let mut sink = Sink {
+                enabled: true,
+                ..Sink::default()
+            };
+            let result = process_keyed_directory(
+                &TABLE,
+                KeyedBlock::new(&data, order, scope()),
+                &mut ctx,
+                &mut sink,
+            );
+            // Nine differs from the declared eight bytes, so validation must
+            // reject without reaching the missing target. The later row and
+            // parent name prove that rejection resumes the parent unchanged.
+            assert_eq!(result.validation_rejected, 1);
+            assert_eq!(result.unavailable_target, 0);
+            assert_eq!(
+                sink.rows.iter().map(|row| row.name).collect::<Vec<_>>(),
+                vec!["Later"]
+            );
+            assert_eq!(
+                members.get("DIR_NAME"),
+                Some(&MemberValue::Str("Parent".into()))
+            );
+        }
+    }
+
+    #[test]
     fn value_context_conditions_and_gate_b_are_never_retried_or_defaulted() {
         static TAG: KeyedTag = KeyedTag {
             condition: Some(Cond::ValPtRegex {

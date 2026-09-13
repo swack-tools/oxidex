@@ -31,8 +31,9 @@ reject the child. This distinction was found by native probing and corrected.
 
 | Instrument | Result | Limit |
 | --- | --- | --- |
-| Focused Python test modules listed below | 56 tests pass | Not the complete tool suite or merge gate. |
-| Rust keyed-reader tests | 17 pass | The production Canon route remains inactive. |
+| Focused Python test modules listed below | 56 tests pass | Focused source, artifact and native-reader checks. |
+| Complete Python tool suite with the recorded native dump and explicit pinned library | 636 tests pass in 199 seconds | This is the tool suite, not the remaining canonical regeneration or carrier gate. |
+| Rust keyed-reader tests | 18 pass, including inline eight-byte validation in both byte orders | The production Canon route remains inactive. |
 | Rust size-check primitive tests | Three pass | Shared operation checks, not carrier coverage. |
 | Exact repository CI lint command | Pass | Broader earlier integration-test lint had 23 existing warnings. |
 | Actual ExifTool 13.59 dump, code generation and independent oracle replay, explicit Perl 5.34.1 | 61 source rows = 57 represented + four explicit omissions; zero missing, stale or mismatched native facts | Local source replay; canonical Perl 5.38.2 regeneration remains required. |
@@ -56,25 +57,30 @@ Evidence is under `shared-pilot/directory-validation-20260913/reader-contract/`
 within the session evidence root; `final/native-replay.json` and
 `final/core-width-mutation.json` retain the source replay and mutation results.
 The system temporary directory's `oxidex-sony-plain-current.txt` points to that
-root. The full native artifact also survives Rust formatting and independent
+root. The inline child regression passes with a nonzero positive control for both
+byte orders, the declared eight-byte size, the complete buffer, and later parent
+continuation after rejection. The full native artifact also survives Rust formatting and independent
 verification. Review corrected multiline digest parsing and requires all ten
 distinct boundary records with their inputs and outcomes. Earlier report-format
 failures and the corrected reader-test fixture failure are preserved; failed attempts are not counted as validation.
 
 ## What remains
 
-1. Complete the full Python tool suite (running at publication) and add the
-   inline eight-byte child validation regression identified by review.
-2. Regenerate official artifacts and ledgers through
+1. Regenerate official artifacts and ledgers through
    `tools/exiftool-tables/regen.sh` with the repository pin and canonical Perl
    5.38.2 environment, holding the i7 heavy-job lock across every phase. The
    new source facts deliberately change the dump hash; an old ledger cannot
    authenticate them. The i7 accepts authentication but currently cannot open
    a command session. Its live lock, processes and native paths are unverified.
-3. Resolve remaining parent/child processing rules and prove both CRW and JPEG
+2. Resolve remaining parent/child processing rules. Four edges at `0x1033`
+   target a common length-prefixed U16 key/value processor; compile its native
+   source into a shared descriptor, including the source model predicate. The
+   `0x1038` edge needs a separate sequential reader with dynamic field lengths.
+   Retain `FreeBytes` and the three opaque image-value rows as unresolved.
+   Prove both CRW and JPEG
    carriers establish the native byte order immediately before reading. A
    consistent initial byte-order switch is not itself part of the fingerprint.
-4. Run required current-head checks and carrier/corpus comparisons before
+3. Run required current-head checks and carrier/corpus comparisons before
    production activation, then retire the replaced manual Make/Model code.
 
 This checkpoint establishes no whole-project automation percentage.

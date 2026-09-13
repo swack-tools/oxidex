@@ -125,6 +125,11 @@ again, and the verifier rejects the stale artifact.
 
 Next, regenerate canonical artifacts and ledgers, resolve the five remaining
 edges and other parent blockers, and prove both CRW and JPEG carrier behavior.
+Four edges share a length-prefixed U16 key/value processor. Compile that native
+body and its model predicate into one shared descriptor, then independently
+verify it and connect its reader. A fifth edge needs dynamic field lengths and
+must remain unsupported until that separate capability is proven. Neither
+camera names nor parent tag IDs belong in the new execution mechanism.
 The i7 currently accepts SSH authentication but fails to open a command session;
 canonical regeneration is blocked, and its lock/job state is unverified. Publish
 checked source checkpoints while that host requirement is unresolved. None of

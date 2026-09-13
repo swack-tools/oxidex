@@ -48,8 +48,9 @@ reads and ten boundary cases. Changing only native `Get16u` from a 16-bit to a
 32-bit read blocks all seven newly generated checks and rejects all seven
 stale artifact checks.
 
-Focused Python checks, 17 Rust reader tests, three Rust primitive tests and the
-repository's exact CI lint command pass. The
+The complete Python tool suite passes 636 tests in 199 seconds. Focused Python
+checks, 18 Rust reader tests, three Rust primitive tests and the repository's
+exact CI lint command also pass. The
 [checkpoint](reference/directory-validation-checkpoint.md) records the final
 Python count and scope. Native probing also corrected a boundary bug: a short
 read at the buffer end coerces to zero, whereas starting beyond the buffer
