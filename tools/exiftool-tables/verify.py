@@ -79,7 +79,7 @@ TABLE_RE = re.compile(
     r'group1:\s*"(?P<group1>[^"]*)",\s*'
     r'group2:\s*"(?P<group2>[^"]*)",\s*'
     r'first_entry:\s*-?\d+,\s*'
-    r'default_format:\s*Fmt::\w+,\s*'
+    r'default_format:\s*Fmt::\w+(?:\(\d+\))?,\s*'
     r'offsets_sound_until:\s*(?P<sound_until>None|Some\(-?\d+\)),',
 )
 # The legacy spelling remains readable until the shared-table schema lands.
@@ -244,6 +244,12 @@ def expected_fmt_literal(spelling):
     """
     if spelling is None:
         return ("None", 1)
+    # In ProcessBinaryData only, an explicit bare `Format => 'string'`
+    # consumes the remainder of the block (ExifTool.pm:9962-9965). This is
+    # distinct from an absent field Format, which inherits the table format
+    # with count one; RemainderString keeps the two native facts separate.
+    if spelling == "string":
+        return ("Some(Fmt::RemainderString)", 1)
     m = _SIZED_FMT_RE.match(spelling)
     if m:
         base, n = m.group(1), int(m.group(2))

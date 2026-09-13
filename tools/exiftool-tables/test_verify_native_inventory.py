@@ -115,6 +115,31 @@ pub static OMITTED_NATIVE_FIELDS: &[OmittedNativeField] = &[
         parsed = verify.parse_rust(path)
         self.assertEqual(len(parsed.fields), len(verify.FIELD_COUNT_RE.findall(source)))
 
+    def test_remainder_string_and_parameterized_default_format_parse(self):
+        self.assertEqual(
+            verify.expected_fmt_literal("string"),
+            ("Some(Fmt::RemainderString)", 1),
+        )
+        self.assertEqual(verify.expected_fmt_literal(None), ("None", 1))
+
+        # Mutate a real regenerated artifact only in a temporary file. This
+        # checks both new literal shapes without depending on a future full
+        # regeneration: table FORMAT => string has a stride payload, while an
+        # explicit per-field bare string is a separate remainder form.
+        source = (REPO_ROOT / "src/exiftool_tables/binary_tables.rs").read_text(encoding="utf-8")
+        source = source.replace(
+            "default_format: Fmt::Int16u,", "default_format: Fmt::Str(1),", 1
+        )
+        source = source.replace(
+            "format: Some(Fmt::Str(4)),", "format: Some(Fmt::RemainderString),", 1
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".rs", encoding="utf-8", delete=False) as fh:
+            fh.write(source)
+            path = Path(fh.name)
+        self.addCleanup(path.unlink)
+        parsed = verify.parse_rust(path)
+        self.assertIn(("Some(Fmt::RemainderString)", 1), parsed.formats.values())
+
 
 class NativeInventoryAccounting(unittest.TestCase):
     def test_every_native_row_is_accounted_once(self):
