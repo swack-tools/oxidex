@@ -424,6 +424,14 @@ def raw_catalog_from_capture(capture: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def verify_capture_binding(capture: dict[str, Any], catalog: dict[str, Any]) -> None:
+    """Require a planner catalog to be exactly derived from saved raw pages."""
+    verify_capture(capture)
+    expected = rehearsal.normalize_catalog(raw_catalog_from_capture(capture))
+    if catalog != expected:
+        raise Refused("planner catalog differs from its saved source capture")
+
+
 def immutable_archive_url(release: str, peeled_commit: str) -> str:
     if not isinstance(peeled_commit, str) or not rehearsal.GIT_OID_RE.fullmatch(peeled_commit):
         raise Refused("immutable archive URL requires a commit object id")
@@ -446,8 +454,9 @@ def _verify_tar_gz(body: bytes) -> None:
         raise Refused("archive bytes are not a readable tar.gz") from exc
 
 
-def resolve_selected_archives(plan: dict[str, Any], catalog: dict[str, Any], get: Callable[[str], Response], max_archive_bytes: int = MAX_ARCHIVE_BYTES) -> dict[str, Any]:
+def resolve_selected_archives(plan: dict[str, Any], catalog: dict[str, Any], capture: dict[str, Any], get: Callable[[str], Response], max_archive_bytes: int = MAX_ARCHIVE_BYTES) -> dict[str, Any]:
     """Fetch/hash exactly the unique releases selected by an immutable plan."""
+    verify_capture_binding(capture, catalog)
     rehearsal.verify_plan(plan, catalog)
     if not isinstance(max_archive_bytes, int) or isinstance(max_archive_bytes, bool) or max_archive_bytes < 1:
         raise Refused("archive byte limit must be positive")
@@ -488,17 +497,20 @@ def resolve_selected_archives(plan: dict[str, Any], catalog: dict[str, Any], get
         "kind": "oxidex_exiftool_selected_source_resolution",
         "plan_sha256": plan["plan_sha256"],
         "catalog_sha256": catalog["catalog_sha256"],
+        "capture_sha256": capture["capture_sha256"],
         "selected_releases": resolved,
         "execution": {"state": "source_identity_resolved_only", "native_read": "unrun", "native_write": "unrun"},
     }
     return {**payload, "resolution_sha256": sha256_json(payload)}
 
 
-def verify_source_resolution(resolution: dict[str, Any], plan: dict[str, Any], catalog: dict[str, Any]) -> None:
+def verify_source_resolution(resolution: dict[str, Any], plan: dict[str, Any], catalog: dict[str, Any], capture: dict[str, Any]) -> None:
+    verify_capture_binding(capture, catalog)
     rehearsal.verify_plan(plan, catalog)
     payload = {key: value for key, value in resolution.items() if key != "resolution_sha256"}
     if (resolution.get("schema") != RESOLUTION_SCHEMA or resolution.get("kind") != "oxidex_exiftool_selected_source_resolution"
             or resolution.get("plan_sha256") != plan["plan_sha256"] or resolution.get("catalog_sha256") != catalog["catalog_sha256"]
+            or resolution.get("capture_sha256") != capture["capture_sha256"]
             or resolution.get("resolution_sha256") != sha256_json(payload) or not isinstance(resolution.get("selected_releases"), list)):
         raise Refused("source resolution identity changed or is malformed")
     expected = {
@@ -545,9 +557,10 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
     output = Path(args.output)
     if output.exists():
         raise Refused(f"resolution output already exists: {output}")
+    capture = rehearsal.read_json(Path(args.capture))
     catalog = rehearsal.normalize_catalog(rehearsal.read_json(Path(args.catalog)))
     plan = rehearsal.read_json(Path(args.plan))
-    resolution = resolve_selected_archives(plan, catalog, lambda url: http_get(url, args.timeout, args.max_archive_bytes), args.max_archive_bytes)
+    resolution = resolve_selected_archives(plan, catalog, capture, lambda url: http_get(url, args.timeout, args.max_archive_bytes), args.max_archive_bytes)
     atomic_json(output, resolution)
     print(json.dumps({"resolution": str(output), "resolution_sha256": resolution["resolution_sha256"], "native_read": "unrun", "native_write": "unrun"}, sort_keys=True))
     return 0
@@ -562,6 +575,7 @@ def main(argv: list[str] | None = None) -> int:
     capture.add_argument("--timeout", type=float, default=20.0)
     capture.set_defaults(func=_cmd_capture)
     resolve = sub.add_parser("resolve-selected", help="fetch/hash immutable commit archives for already selected releases")
+    resolve.add_argument("--capture", required=True, help="raw official capture bound to the planner catalog")
     resolve.add_argument("--catalog", required=True, help="raw capture-derived catalog input")
     resolve.add_argument("--plan", required=True)
     resolve.add_argument("--output", required=True)
