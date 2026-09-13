@@ -3651,7 +3651,7 @@ def gen_expr_enum(used):
         return (
             "\n/// No Perl expressions were translated in this build.\n"
             "#[derive(Clone, Copy, Debug)]\npub enum ExprId {}\n\n"
-            "#[derive(Clone, Debug)]\npub enum ExprValue { Number(f64), String(String) }\n\n"
+            "#[derive(Clone, Debug)]\npub enum ExprValue { Number(f64), String(String), Bytes(Vec<u8>) }\n\n"
             "impl ExprId {\n"
             "    #[must_use]\n"
             "    pub fn apply(&self, _val: f64) -> Option<String> { None }\n"
@@ -3660,11 +3660,15 @@ def gen_expr_enum(used):
             "    #[must_use]\n"
             "    pub fn apply_bytes(&self, _val: &[u8]) -> Option<String> { None }\n"
             "    #[must_use]\n"
+            "    pub fn apply_string_bytes(&self, _val: &[u8]) -> Option<String> { None }\n"
+            "    #[must_use]\n"
             "    pub fn value_num(&self, _val: f64) -> Option<ExprValue> { None }\n"
             "    #[must_use]\n"
             "    pub fn value_str(&self, _val: &str) -> Option<ExprValue> { None }\n"
             "    #[must_use]\n"
             "    pub fn value_bytes(&self, _val: &[u8]) -> Option<ExprValue> { None }\n"
+            "    #[must_use]\n"
+            "    pub fn value_string_bytes(&self, _val: &[u8]) -> Option<ExprValue> { None }\n"
             "    #[must_use]\n"
             "    pub fn apply_list(&self, _val: &[f64]) -> Option<String> { None }\n"
             "    #[must_use]\n"
@@ -3674,10 +3678,12 @@ def gen_expr_enum(used):
     render_num = []
     render_str = []
     render_bytes = []
+    render_string_bytes = []
     render_list = []
     value_num = []
     value_str = []
     value_bytes = []
+    value_string_bytes = []
     value_list = []
     for ident, expr in sorted(used.items()):
         domain, rty, rexpr = exprs.translate_or_compile_any(expr)
@@ -3705,6 +3711,20 @@ def gen_expr_enum(used):
         elif domain == "str":
             render_str.append(f"            ExprId::{ident} => Some({body}),")
             value_str.append(f"            ExprId::{ident} => Some(ExprValue::String({body})),")
+            # `string` fields reach ProcessBinaryData as unflagged Perl byte
+            # scalars.  The one source-approved string operation whose byte
+            # semantics we have independently pinned is trailing native-\s
+            # removal.  It must preserve the converted bytes for a following
+            # PrintConv or saved member; repairing UTF-8 here would change the
+            # value the next native operation sees.  Other str-domain programs
+            # remain deliberately unavailable to StringBytes.
+            if exprs.is_trim_trailing_ws_form(expr):
+                render_string_bytes.append(
+                    f"            ExprId::{ident} => crate::exiftool_tables::runtime::fix_utf8(&crate::exiftool_tables::exprs::trim_trailing_ws_bytes(val)),"
+                )
+                value_string_bytes.append(
+                    f"            ExprId::{ident} => Some(ExprValue::Bytes(crate::exiftool_tables::exprs::trim_trailing_ws_bytes(val))),"
+                )
         elif domain == "list":
             # A fixed-count field's elements as `&[f64]` (see exprs.py
             # _compile_list and runtime.rs's Array arms). A list conversion
@@ -3755,6 +3775,8 @@ pub enum ExprId {{
 pub enum ExprValue {{
     Number(f64),
     String(String),
+    /// An oracle-approved byte-string ValueConv result before output repair.
+    Bytes(Vec<u8>),
 }}
 
 impl ExprId {{
@@ -3781,6 +3803,17 @@ impl ExprId {{
         }}
     }}
 
+    /// Render a ProcessBinaryData `string` byte scalar. This is deliberately
+    /// separate from `apply_bytes`, whose `undef` inputs admit a different
+    /// closed expression domain.
+    #[must_use]
+    pub fn apply_string_bytes(&self, val: &[u8]) -> Option<String> {{
+        let _ = val;
+        match self {{
+{arms_or_none(render_string_bytes)}
+        }}
+    }}
+
     #[must_use]
     pub fn value_num(&self, val: f64) -> Option<ExprValue> {{
         let _ = val;
@@ -3802,6 +3835,16 @@ impl ExprId {{
         let _ = val;
         match self {{
 {arms_or_none(value_bytes)}
+        }}
+    }}
+
+    /// Convert a ProcessBinaryData `string` byte scalar without output
+    /// repair. This domain is intentionally narrower than `value_bytes`.
+    #[must_use]
+    pub fn value_string_bytes(&self, val: &[u8]) -> Option<ExprValue> {{
+        let _ = val;
+        match self {{
+{arms_or_none(value_string_bytes)}
         }}
     }}
 

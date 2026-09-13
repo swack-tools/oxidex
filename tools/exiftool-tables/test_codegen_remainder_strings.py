@@ -102,6 +102,18 @@ class RemainderStringSchema(unittest.TestCase):
         self.assertIn('index: 24, sub: None, name: "PDBFileName"', output)
         self.assertIn("format: Some(Fmt::RemainderString)", output)
 
+    def test_native_byte_trim_is_emitted_as_a_byte_preserving_value_result(self):
+        # `$val =~ s/\\s+$//; $val` is a closed, independently probed native
+        # byte operation. It may run before a PrintConv, so its ValueConv
+        # result cannot become repaired display text at this boundary.
+        output = codegen.gen_expr_enum({
+            "Trim": r"$val =~ s/\s+$//; $val",
+        })
+        self.assertIn("Bytes(Vec<u8>)", output)
+        self.assertIn("value_string_bytes", output)
+        self.assertIn("trim_trailing_ws_bytes(val)", output)
+        self.assertIn("ExprValue::Bytes", output)
+
 
 if __name__ == "__main__":
     unittest.main()

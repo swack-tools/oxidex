@@ -159,7 +159,10 @@ def _regex_ast_ok(node):
             return False
         if opname == "subpattern":
             # av = (group_number, add_flags, del_flags, subpattern)
-            if not _regex_ast_ok(av[3]):
+            # Scoped flags such as `(?i:...)`/`(?u:...)` alter Perl's byte
+            # matching rules. Top-level `/i` is represented explicitly in
+            # Cond and proved separately; no inline flag scope is modeled.
+            if av[1] or av[2] or not _regex_ast_ok(av[3]):
                 return False
         elif opname == "branch":
             # av = (None, [branch1, branch2, ...])
@@ -225,7 +228,7 @@ def _perl_regex_to_rust(pattern):
     return "".join(out)
 
 
-def _validate_regex_pattern(pattern):
+def _validate_regex_pattern(pattern, *, ascii_source_only=False):
     """Structural validation via Python's own regex-parser AST, not a
     character allowlist -- see module docstring. Raises CondCompileError if
     the pattern is unparseable or uses a construct outside the vetted subset.
@@ -233,6 +236,11 @@ def _validate_regex_pattern(pattern):
     -> `\\x00` translation callers do for the bytes domain): Rust's `regex`
     crate syntax agrees with Perl's on every construct this allowlist admits.
     """
+    if ascii_source_only and (
+        any(ord(char) > 0x7f for char in pattern)
+        or re.search(r"\\(?:u|U|N)|\\x\{", pattern)
+    ):
+        raise CondCompileError(f"regex {pattern!r} uses an unmodeled Unicode spelling")
     try:
         ast = sre_parse.parse(pattern)
     except re.error as e:
@@ -263,7 +271,10 @@ def _compile_atom(text):
         op, pattern, flags = m.group(3), m.group(4), m.group(5)
         if any(f not in "i" for f in flags):
             raise CondCompileError(f"unsupported regex flags {flags!r}")
-        _validate_regex_pattern(pattern)
+        # A RawConv data member may be an unflagged Perl byte scalar. Keep
+        # member patterns to ASCII byte grammar; high-byte `$valPt` patterns
+        # use the separately proven byte path below.
+        _validate_regex_pattern(pattern, ascii_source_only=True)
         rust_pattern = _perl_regex_to_rust(pattern)
         negate = "true" if op == "!~" else "false"
         ic = "true" if "i" in flags else "false"

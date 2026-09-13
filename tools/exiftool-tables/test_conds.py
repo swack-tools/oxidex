@@ -228,6 +228,22 @@ class RegexSpellingTests(unittest.TestCase):
         self.assertIsNone(conds.compile_cond("$$self{Model} =~ m(^E-M)"))
         self.assertIsNone(conds.compile_cond("$$valPt =~ m{^http://ns.adobe.com/xmp/extension/\\0}"))
 
+    def test_member_regexes_stay_in_the_proven_ascii_byte_subset(self):
+        # A RawConv member can be an unflagged Perl byte scalar. Native
+        # CanonRaw probes prove byte `\\b` and top-level /i, but scoped flags
+        # and Unicode member literals can change those semantics.
+        for condition in (
+            "$$self{Model} =~ /é/",
+            "$$self{Model} =~ /(?i:EOS)/",
+            "$$self{Model} =~ /(?u:\\bEOS\\b)/",
+            r"$$self{Model} =~ /\u00e9/",
+        ):
+            self.assertIsNone(conds.compile_cond(condition), condition)
+        self.assertIsNotNone(conds.compile_cond(r"$$self{Model} =~ /\xE9/"))
+        # `$valPt` remains its own raw-byte grammar: pinned IFD Conditions
+        # legitimately use high-byte signatures there.
+        self.assertIsNotNone(conds.compile_cond(r"$$valPt =~ /\xe9/"))
+
 
 class RefusalTests(unittest.TestCase):
     """Everything outside the closed set stays refused -- and says why."""
