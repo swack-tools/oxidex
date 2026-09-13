@@ -8,7 +8,7 @@ the pin remains 13.59.
 
 Conservative IFD-aware upgrade classification, one generated-output inventory,
 verified Canon CODE references and isolated upgrade orchestration are implemented.
-The inventory contains 31 outputs, including inactive keyed definitions and the
+The inventory contains 32 outputs, including inactive keyed and serial definitions and the
 [Sony plain producer recovery](../../docs/reference/sony-plain-generator-recovery.md). See the
 [execution plan](../../docs/UPGRADE-NEXT-STEPS.md) for original validation evidence
 and the remaining work. The
@@ -21,7 +21,7 @@ sides; classifier AUTO/HAND percentages do not measure upgrade coding effort.
 ## Commands and scope
 
 ```sh
-just regen-tables          # primary generation, including binary, IFD and keyed tables
+just regen-tables          # primary generation, including binary, IFD, keyed and serial tables
 just verify-tables         # independent checks of committed table declarations
 just regen-tables-all      # primary generation plus all declared downstream tables
 just regen-tables-tier2    # downstream generation only
@@ -33,12 +33,12 @@ scripts refuse a dirty tree unless the explicit override is provided and recorde
 These direct generation commands modify the caller's artifacts. Use the bump
 command below when comparing versions in isolated source trees.
 
-`regen.sh` generates binary, IFD and inactive keyed tables, file identification, Composite
+`regen.sh` generates binary, IFD and inactive keyed/serial tables, file identification, Composite
 definitions and compiled Composite expressions, FITS names, and expression/value-
 conversion ledgers. `regen-all.sh` adds vendor subdirectory tables, Nikon AF-point
 grids, bespoke transcriptions, recovered Sony/Minolta/Nikon generators, Macintosh
 CJK charset tables, GeoTIFF key maps, DICOM dictionaries and lens alternatives.
-`artifacts.py` is the single output inventory: 9 tier-1 and 22 tier-2 artifacts.
+`artifacts.py` is the single output inventory: 10 tier-1 and 22 tier-2 artifacts.
 Both scripts resolve
 their output paths and formatting sets from it; the bump's promotion/recovery sets
 and CI's tier-2 comparison use the same inventory. The bump classifier also
@@ -113,7 +113,7 @@ for the restored field, bounded validation and remaining real-file acceptance.
 ## Generated-output inventory and write checks
 
 ```sh
-python3 tools/exiftool-tables/artifacts.py paths                 # all 31 outputs
+python3 tools/exiftool-tables/artifacts.py paths                 # all 32 outputs
 python3 tools/exiftool-tables/artifacts.py paths --tier 2        # downstream outputs
 python3 tools/exiftool-tables/artifacts.py paths --tier 1 --kind rust --absolute
 python3 tools/exiftool-tables/artifacts.py path composite-compute

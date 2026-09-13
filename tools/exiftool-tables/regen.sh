@@ -52,6 +52,7 @@ IFD_OUT="$(artifact_path ifd)"
 # Generate and verify inactive keyed definitions too; publishing their source
 # facts does not enable a runtime parser route.
 KEYED_OUT="$(artifact_path keyed)"
+SERIAL_OUT="$(artifact_path serial)"
 JSON="$CACHE/tables-$VERSION.json"
 EXPR_LEDGER="$(artifact_path expr-ledger)"
 VALUE_CONV_LEDGER="$(artifact_path value-ledger)"
@@ -84,6 +85,11 @@ echo ">> generating Rust"
 python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
     --keyed-out "$KEYED_OUT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
+
+echo
+echo ">> generating inactive serial-directory facts"
+python3 "$HERE/serial_directory.py" "$JSON" \
+    --output "$CACHE/serial-$VERSION.json" --rust-output "$SERIAL_OUT"
 
 echo
 echo ">> extracting file-identification tables"
@@ -126,4 +132,8 @@ OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/verify.py" "$OUT" "$LIB" --oracle "$HER
     --word-processor Image::ExifTool::CanonCustom::ProcessCanonCustom
 
 echo
-echo ">> done: $OUT, $IFD_OUT and $KEYED_OUT"
+echo ">> verifying serial definitions and omission inventory"
+python3 "$HERE/verify_serial_directory.py" "$SERIAL_OUT" "$JSON"
+
+echo
+echo ">> done: $OUT, $IFD_OUT, $KEYED_OUT and $SERIAL_OUT"
