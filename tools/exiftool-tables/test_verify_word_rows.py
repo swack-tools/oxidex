@@ -3,7 +3,6 @@
 from collections import namedtuple
 import json
 from pathlib import Path
-from types import SimpleNamespace
 import os
 import sys
 import unittest
@@ -207,11 +206,14 @@ class WordRowsTests(unittest.TestCase):
         )
         parsed = keyed_verify.parse_keyed_rust(Path(os.environ["OXIDEX_WORD_KEYED_RUST"]))
         processor_name = os.environ.get("OXIDEX_WORD_PROCESSOR", "Image::ExifTool::CanonCustom::ProcessCanonCustom")
-        selected = {key for key, fact in inventory.processors.items() if fact.get("__name") == processor_name}
-        generated = SimpleNamespace(**parsed._asdict(), layouts={(key.module, key.table): object() for key in selected})
+        # Audit the actual parsed layouts. Rebuilding this map from the native
+        # selection would hide missing or misclassified generated tables.
         omissions = keyed_verify.parse_omitted_keyed_native_rows(Path(os.environ["OXIDEX_WORD_KEYED_RUST"]))
-        result = rows.audit_word_rows(generated, omissions, inventory, {processor_name})
+        result = rows.audit_word_rows(parsed, omissions, inventory, {processor_name})
         self.assertTrue(result.ok, result.mismatches)
+        self.assertGreater(result.expected_tables, 0)
+        self.assertEqual(result.generated_tables, result.expected_tables)
+        self.assertEqual(result.generated_rows, result.expected_rows)
 
     def test_layouts_filter_all_keyed_tables_but_legacy_projection_is_exact(self):
         inv = processor.parse_processor_inventory(inventory_text())

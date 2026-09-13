@@ -15,6 +15,7 @@ from test_native_reader_contract import snapshot
 
 
 PINNED = os.environ.get("OXIDEX_PINNED_EXIFTOOL")
+PERL = os.environ.get("EXIFTOOL_PERL", "/usr/bin/perl")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 READER_DUMP = REPO_ROOT / "tools" / "exiftool-tables" / "dump_binary_reader_contract.pl"
 
@@ -106,7 +107,7 @@ $record->{dependencies} = { "$package\::Get16u" => fact("$package\::Get16u") };
 print JSON::PP->new->canonical->encode($record);
 '''
     result = subprocess.run(
-        ["/usr/bin/perl", *include, "-MB::Deparse", "-e", script, *libraries],
+        [PERL, *include, "-MB::Deparse", "-e", script, *libraries],
         check=True, text=True, capture_output=True,
     )
     return json.loads(result.stdout)
@@ -114,7 +115,7 @@ print JSON::PP->new->canonical->encode($record);
 
 def _reader_contract(root):
     result = subprocess.run(
-        ["/usr/bin/perl", str(READER_DUMP), str(Path(root) / "lib")],
+        [PERL, str(READER_DUMP), str(Path(root) / "lib")],
         check=True, text=True, capture_output=True,
     )
     contract = json.loads(result.stdout)
