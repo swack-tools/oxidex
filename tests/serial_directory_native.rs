@@ -2,10 +2,11 @@
 //!
 //! This test intentionally compares only the surface that the native probe
 //! observes: `FoundTag` input values, `GetTagInfo` selection/group facts, and
-//! bounded `ReadValue` progression through the selected `Real::AudioV3` and
-//! `Real::AudioV4` tables. The probe itself records that a `FoundTag` callback
-//! does **not** prove final ExifTool key/group reporting, so these assertions
-//! do not claim carrier activation or final metadata-group parity.
+//! bounded `ReadValue` progression through the selected `Real::AudioV3`,
+//! `Real::AudioV4`, `Canon::AFInfo`, and `Canon::AFInfo2` tables. The probe
+//! itself records that a `FoundTag` callback does **not** prove final ExifTool
+//! key/group reporting, so these assertions do not claim carrier activation
+//! or final metadata-group parity.
 //!
 //! Run explicitly with the canonical native environment:
 //!
@@ -25,16 +26,16 @@ use std::process::{Command, Stdio};
 use oxidex::core::TagValue;
 use oxidex::exiftool_oracle::repo_pin;
 use oxidex::exiftool_tables::{
-    Ctx, Emitted, MemberValue, SerialDir, SerialEmissionSink, SerialTable, find_serial_table,
-    process_serial_directory,
+    find_serial_table, process_serial_directory, Ctx, Emitted, MemberValue, SerialDir,
+    SerialEmissionSink, SerialTable,
 };
 use oxidex::io::ByteOrder;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const CANONICAL_PERL: &str = "v5.38.2";
 const PROBE: &str = "tools/exiftool-tables/probe_serial_processor.pl";
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Order {
     Ii,
     Mm,
@@ -82,7 +83,9 @@ struct NativeEnv {
     source: PathBuf,
 }
 
+#[derive(Clone, Copy)]
 struct ReplayCase<'a> {
+    module: &'static str,
     table: &'static str,
     name: &'static str,
     order: Order,
@@ -90,6 +93,37 @@ struct ReplayCase<'a> {
     dir_start: usize,
     dir_len: usize,
     unknown: bool,
+    members: &'a [MemberSeed],
+}
+
+#[derive(Clone, Copy)]
+enum MemberSeed {
+    Text(&'static str, &'static str),
+    Number(&'static str, i64),
+}
+
+impl MemberSeed {
+    fn insert_native(self, members: &mut serde_json::Map<String, Value>) {
+        match self {
+            Self::Text(name, value) => {
+                members.insert(name.to_owned(), Value::String(value.to_owned()));
+            }
+            Self::Number(name, value) => {
+                members.insert(name.to_owned(), Value::Number(value.into()));
+            }
+        }
+    }
+
+    fn insert_rust(self, members: &mut HashMap<&'static str, MemberValue>) {
+        match self {
+            Self::Text(name, value) => {
+                members.insert(name, MemberValue::Str(value.to_owned()));
+            }
+            Self::Number(name, value) => {
+                members.insert(name, MemberValue::Num(value));
+            }
+        }
+    }
 }
 
 impl NativeEnv {
@@ -219,14 +253,67 @@ fn real_v4(order: Order) -> Vec<u8> {
     out
 }
 
+/// Construct the native numeric-key sequence for Canon::AFInfo. The table,
+/// rather than this fixture, decides which index-11 alternative consumes the
+/// supplied tail words.
+fn afinfo(
+    order: Order,
+    point_count: u16,
+    x: &[u16],
+    y: &[u16],
+    focus: &[u16],
+    tail: &[u16],
+) -> Vec<u8> {
+    assert_eq!(x.len(), usize::from(point_count));
+    assert_eq!(y.len(), usize::from(point_count));
+    assert_eq!(focus.len(), (usize::from(point_count) + 15) / 16);
+    let mut out = Vec::new();
+    for value in [point_count, 1, 1_000, 800, 200, 150, 40, 30] {
+        u16(&mut out, order, value);
+    }
+    for values in [x, y, focus, tail] {
+        for value in values {
+            u16(&mut out, order, *value);
+        }
+    }
+    out
+}
+
+/// Construct Canon::AFInfo2 through its selected index-13 payload. The four
+/// signed arrays and focus words are source-counted by NumAFPoints at slot 2.
+fn afinfo2(
+    order: Order,
+    point_count: u16,
+    area_words: &[u16],
+    focus: &[u16],
+    tail: &[u16],
+) -> Vec<u8> {
+    assert_eq!(area_words.len(), usize::from(point_count));
+    assert_eq!(focus.len(), (usize::from(point_count) + 15) / 16);
+    let mut out = Vec::new();
+    for value in [99, 2, point_count, point_count, 1_000, 800, 200, 150] {
+        u16(&mut out, order, value);
+    }
+    for values in [area_words, area_words, area_words, area_words, focus, tail] {
+        for value in values {
+            u16(&mut out, order, *value);
+        }
+    }
+    out
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn native_replay(native: &NativeEnv, case: &ReplayCase<'_>) -> Value {
+    let mut members = serde_json::Map::new();
+    for member in case.members {
+        member.insert_native(&mut members);
+    }
     let request = json!({
         "protocol": "oxidex.serial_processor.v1",
-        "module": "Real",
+        "module": case.module,
         "table": case.table,
         "case": {
             "name": case.name,
@@ -236,7 +323,7 @@ fn native_replay(native: &NativeEnv, case: &ReplayCase<'_>) -> Value {
             "dir_len": case.dir_len,
             "unknown": if case.unknown { 1 } else { 0 },
             "verbose": 1,
-            "members": {},
+            "members": members,
         },
     });
     let probe = Path::new(env!("CARGO_MANIFEST_DIR")).join(PROBE);
@@ -296,12 +383,19 @@ fn native_replay(native: &NativeEnv, case: &ReplayCase<'_>) -> Value {
 fn rust_replay(
     table: &'static SerialTable,
     case: &ReplayCase<'_>,
-) -> (Vec<Emitted>, oxidex::exiftool_tables::SerialWalkResult) {
+) -> (
+    Vec<Emitted>,
+    oxidex::exiftool_tables::SerialWalkResult,
+    HashMap<&'static str, MemberValue>,
+) {
     let mut sink = Sink {
         unknown: case.unknown,
         ..Sink::default()
     };
     let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
+    for member in case.members {
+        member.insert_rust(&mut members);
+    }
     let result = process_serial_directory(
         table,
         SerialDir {
@@ -315,7 +409,7 @@ fn rust_replay(
         &mut Ctx::new(&mut members),
         &mut sink,
     );
-    (sink.rows, result)
+    (sink.rows, result, members)
 }
 
 fn native_rows(reply: &Value) -> Vec<(String, String)> {
@@ -348,6 +442,41 @@ fn row_value(value: &TagValue) -> String {
 fn rust_rows(rows: &[Emitted]) -> Vec<(String, String)> {
     rows.iter()
         .map(|row| (row.name.to_owned(), row_value(&row.value)))
+        .collect()
+}
+
+fn emitted_value(rows: &[Emitted], name: &str) -> String {
+    let row = rows
+        .iter()
+        .find(|row| row.name == name)
+        .unwrap_or_else(|| panic!("missing emitted {name}"));
+    row_value(&row.value)
+}
+
+fn emitted_count(rows: &[Emitted], name: &str) -> usize {
+    rows.iter().filter(|row| row.name == name).count()
+}
+
+fn native_read(reply: &Value, serial_index: usize) -> (&str, i64, i64, &str) {
+    let read = reply["read_values"]
+        .as_array()
+        .expect("native read_values array")
+        .get(serial_index)
+        .unwrap_or_else(|| panic!("missing native ReadValue at serial index {serial_index}"));
+    (
+        read["format"]["string"].as_str().expect("native format"),
+        read["offset"]["numeric"].as_i64().expect("native offset"),
+        read["count"]["numeric"].as_i64().expect("native count"),
+        read["value"]["string"].as_str().expect("native raw value"),
+    )
+}
+
+fn native_indices(reply: &Value, key: &str) -> Vec<i64> {
+    reply[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("native {key} array"))
+        .iter()
+        .map(|item| item["index"]["numeric"].as_i64().expect("native index"))
         .collect()
 }
 
@@ -396,12 +525,12 @@ fn assert_source_groups(table: &'static SerialTable, reply: &Value) {
     }
 }
 
-fn table(name: &str) -> &'static SerialTable {
-    let table =
-        find_serial_table("Real", name).unwrap_or_else(|| panic!("Real::{name} must be generated"));
+fn table(module: &str, name: &str) -> &'static SerialTable {
+    let table = find_serial_table(module, name)
+        .unwrap_or_else(|| panic!("{module}::{name} must be generated"));
     assert!(
         table.gate_a.passes(),
-        "Real::{name} gate A: {:?}",
+        "{module}::{name} gate A: {:?}",
         table.gate_a.blocked_by
     );
     table
@@ -409,11 +538,11 @@ fn table(name: &str) -> &'static SerialTable {
 
 fn assert_case(native: &NativeEnv, case: &ReplayCase<'_>) {
     let native_reply = native_replay(native, case);
-    let table = table(case.table);
-    let (rows, result) = rust_replay(table, case);
+    let table = table(case.module, case.table);
+    let (rows, result, _) = rust_replay(table, case);
     assert!(
         !result.tainted,
-        "{}: shared serial reader refused a native V3/V4 subset case: {result:?}",
+        "{}: shared serial reader refused a native generated-table case: {result:?}",
         case.name
     );
     assert_eq!(
@@ -434,6 +563,7 @@ fn real_audio_serial_tables_replay_pinned_native_callbacks() {
         assert_case(
             &native,
             &ReplayCase {
+                module: "Real",
                 table: "AudioV3",
                 name: "v3-normal",
                 order,
@@ -441,12 +571,14 @@ fn real_audio_serial_tables_replay_pinned_native_callbacks() {
                 dir_start: 0,
                 dir_len: v3.len(),
                 unknown: false,
+                members: &[],
             },
         );
         let v4 = real_v4(order);
         assert_case(
             &native,
             &ReplayCase {
+                module: "Real",
                 table: "AudioV4",
                 name: "v4-normal",
                 order,
@@ -454,6 +586,7 @@ fn real_audio_serial_tables_replay_pinned_native_callbacks() {
                 dir_start: 0,
                 dir_len: v4.len(),
                 unknown: false,
+                members: &[],
             },
         );
     }
@@ -463,6 +596,7 @@ fn real_audio_serial_tables_replay_pinned_native_callbacks() {
         assert_case(
             &native,
             &ReplayCase {
+                module: "Real",
                 table: "AudioV3",
                 name,
                 order: Order::Ii,
@@ -470,6 +604,7 @@ fn real_audio_serial_tables_replay_pinned_native_callbacks() {
                 dir_start: 0,
                 dir_len: normal.len(),
                 unknown,
+                members: &[],
             },
         );
     }
@@ -485,6 +620,7 @@ fn real_audio_serial_tables_replay_pinned_native_callbacks() {
         assert_case(
             &native,
             &ReplayCase {
+                module: "Real",
                 table: "AudioV3",
                 name,
                 order: Order::Ii,
@@ -492,6 +628,7 @@ fn real_audio_serial_tables_replay_pinned_native_callbacks() {
                 dir_start: 0,
                 dir_len: data.len(),
                 unknown: false,
+                members: &[],
             },
         );
     }
@@ -501,6 +638,7 @@ fn real_audio_serial_tables_replay_pinned_native_callbacks() {
     assert_case(
         &native,
         &ReplayCase {
+            module: "Real",
             table: "AudioV3",
             name: "v3-bounded-nonzero-offset",
             order: Order::Ii,
@@ -508,6 +646,265 @@ fn real_audio_serial_tables_replay_pinned_native_callbacks() {
             dir_start: 3,
             dir_len: normal.len(),
             unknown: false,
+            members: &[],
         },
     );
+}
+
+#[test]
+#[ignore = "requires EXIFTOOL_PERL v5.38.2 and OXIDEX_PINNED_EXIFTOOL; run explicitly"]
+fn canon_afinfo_generated_tables_replay_pinned_native_contract() {
+    // Contract: shared-pilot/serial-afinfo-integration-20260913/
+    // rust-replay-contract-20260913/serial-afinfo-rust-replay-contract.json.
+    // The probe observes raw FoundTag input/cursor facts. Final DecodeBits,
+    // IntEnum, and RawConv state assertions below use the paired direct-native
+    // contract rather than treating callback interception as final rendering.
+    let native = NativeEnv::require();
+    let focus_words = [1_u16, 0x8000];
+    let points = vec![0x8000, 0xffff, 0x7fff]
+        .into_iter()
+        .cycle()
+        .take(17)
+        .collect::<Vec<_>>();
+
+    for order in [Order::Ii, Order::Mm] {
+        let payload = afinfo(order, 17, &points, &points, &focus_words, &[3, 4]);
+        let case = ReplayCase {
+            module: "Canon",
+            table: "AFInfo",
+            name: "afinfo-signed-multiword",
+            order,
+            data: &payload,
+            dir_start: 0,
+            dir_len: payload.len(),
+            unknown: false,
+            members: &[],
+        };
+        let reply = native_replay(&native, &case);
+        let table = table(case.module, case.table);
+        let (rows, result, _) = rust_replay(table, &case);
+        assert!(!result.tainted, "{order:?}: {result:?}");
+        assert_eq!(
+            native_indices(&reply, "get_tag_info"),
+            (0..=12).collect::<Vec<_>>()
+        );
+        assert_eq!(native_read(&reply, 10), ("int16s", 84, 2, "1 -32768"));
+        assert_eq!(emitted_value(&rows, "AFPointsInFocus"), "0,31");
+        assert_eq!(
+            emitted_value(&rows, "AFAreaXPositions"),
+            "-32768 -1 32767 -32768 -1 32767 -32768 -1 32767 -32768 -1 32767 -32768 -1 32767 -32768 -1"
+        );
+        assert_source_groups(table, &reply);
+    }
+
+    let zero = afinfo(Order::Ii, 0, &[], &[], &[], &[1, 3]);
+    let zero_case = ReplayCase {
+        module: "Canon",
+        table: "AFInfo",
+        name: "afinfo-zero-count",
+        order: Order::Ii,
+        data: &zero,
+        dir_start: 0,
+        dir_len: zero.len(),
+        unknown: false,
+        members: &[],
+    };
+    let zero_reply = native_replay(&native, &zero_case);
+    let (zero_rows, zero_result, _) = rust_replay(table("Canon", "AFInfo"), &zero_case);
+    assert!(!zero_result.tainted, "{zero_result:?}");
+    assert_eq!(native_read(&zero_reply, 8), ("int16s", 16, 0, ""));
+    assert!(!zero_rows.iter().any(|row| row.name == "AFAreaXPositions"));
+    assert!(!zero_rows.iter().any(|row| row.name == "AFPointsInFocus"));
+
+    let mut truncated_bytes = afinfo(Order::Ii, 1, &[0x8000], &[0x7fff], &[1], &[3, 4]);
+    truncated_bytes.pop(); // Keep the first PrimaryAFPoint but deny the second.
+    let truncated = ReplayCase {
+        name: "afinfo-truncated-final",
+        data: &truncated_bytes,
+        dir_len: truncated_bytes.len(),
+        ..zero_case
+    };
+    let truncated_reply = native_replay(&native, &truncated);
+    let (truncated_rows, truncated_result, _) = rust_replay(table("Canon", "AFInfo"), &truncated);
+    assert!(!truncated_result.tainted, "{truncated_result:?}");
+    assert_eq!(
+        native_indices(&truncated_reply, "get_tag_info"),
+        (0..=12).collect::<Vec<_>>()
+    );
+    assert_eq!(native_read(&truncated_reply, 11), ("int16u", 22, 1, "3"));
+    assert_eq!(emitted_count(&truncated_rows, "PrimaryAFPoint"), 1);
+
+    let one = afinfo(
+        Order::Ii,
+        1,
+        &[0xfff9],
+        &[9],
+        &[1],
+        &[101, 102, 103, 104, 105, 106, 107, 108, 9],
+    );
+    let hidden = ReplayCase {
+        module: "Canon",
+        table: "AFInfo",
+        name: "afinfo-hidden-unknown-consumes-eight",
+        order: Order::Ii,
+        data: &one,
+        dir_start: 0,
+        dir_len: one.len(),
+        unknown: false,
+        members: &[
+            MemberSeed::Text("Model", "PowerShot G7"),
+            MemberSeed::Number("AFInfoCount", 36),
+        ],
+    };
+    let hidden_reply = native_replay(&native, &hidden);
+    let (hidden_rows, hidden_result, _) = rust_replay(table("Canon", "AFInfo"), &hidden);
+    assert!(!hidden_result.tainted, "{hidden_result:?}");
+    assert_eq!(
+        native_read(&hidden_reply, 11),
+        ("int16u", 22, 8, "101 102 103 104 105 106 107 108")
+    );
+    assert_eq!(native_read(&hidden_reply, 12), ("int16u", 38, 1, "9"));
+    assert!(!hidden_rows
+        .iter()
+        .any(|row| row.name == "Canon_AFInfo_0x000b"));
+    assert_eq!(emitted_value(&hidden_rows, "PrimaryAFPoint"), "9");
+
+    let powershot = ReplayCase {
+        name: "afinfo-powershot-no-count",
+        members: &[MemberSeed::Text("Model", "PowerShot G7")],
+        ..zero_case
+    };
+    let powershot_reply = native_replay(&native, &powershot);
+    let (powershot_rows, powershot_result, _) = rust_replay(table("Canon", "AFInfo"), &powershot);
+    assert!(!powershot_result.tainted, "{powershot_result:?}");
+    assert_eq!(
+        native_indices(&powershot_reply, "get_tag_info"),
+        (0..=12).collect::<Vec<_>>()
+    );
+    assert_eq!(emitted_count(&powershot_rows, "PrimaryAFPoint"), 2);
+
+    let visible = ReplayCase {
+        unknown: true,
+        name: "afinfo-visible-unknown",
+        ..hidden
+    };
+    let visible_reply = native_replay(&native, &visible);
+    let (visible_rows, visible_result, _) = rust_replay(table("Canon", "AFInfo"), &visible);
+    assert!(!visible_result.tainted, "{visible_result:?}");
+    assert!(native_rows(&visible_reply)
+        .iter()
+        .any(|(name, _)| name == "Canon_AFInfo_0x000b"));
+    assert!(visible_rows
+        .iter()
+        .any(|row| row.name == "Canon_AFInfo_0x000b"));
+
+    let eos = ReplayCase {
+        name: "afinfo-eos-stops-at-eleven",
+        members: &[MemberSeed::Text("Model", "EOS R7")],
+        ..zero_case
+    };
+    let eos_reply = native_replay(&native, &eos);
+    let (eos_rows, eos_result, _) = rust_replay(table("Canon", "AFInfo"), &eos);
+    assert_eq!(
+        native_indices(&eos_reply, "get_tag_info"),
+        (0..=11).collect::<Vec<_>>()
+    );
+    assert_eq!(eos_result.no_matching_alternative, 1);
+    assert!(!eos_rows.iter().any(|row| row.name == "PrimaryAFPoint"));
+}
+
+#[test]
+#[ignore = "requires EXIFTOOL_PERL v5.38.2 and OXIDEX_PINNED_EXIFTOOL; run explicitly"]
+fn canon_afinfo2_generated_table_replays_state_enum_and_trailing_count() {
+    let native = NativeEnv::require();
+    let one = [0xfff9_u16];
+    let focus = [1_u16];
+    let payload = afinfo2(Order::Ii, 1, &one, &focus, &[101, 42, 77]);
+    let powershot = ReplayCase {
+        module: "Canon",
+        table: "AFInfo2",
+        name: "afinfo2-powershot-trailing-add",
+        order: Order::Ii,
+        data: &payload,
+        dir_start: 0,
+        dir_len: payload.len(),
+        unknown: true,
+        members: &[MemberSeed::Text("Model", "PowerShot G7")],
+    };
+    let reply = native_replay(&native, &powershot);
+    let table = table("Canon", "AFInfo2");
+    let (rows, result, members) = rust_replay(table, &powershot);
+    assert!(!result.tainted, "{result:?}");
+    assert_eq!(
+        native_indices(&reply, "get_tag_info"),
+        (0..=14).collect::<Vec<_>>()
+    );
+    assert_eq!(native_read(&reply, 13), ("int16s", 26, 2, "101 42"));
+    assert_eq!(native_read(&reply, 14), ("int16u", 30, 1, "77"));
+    assert_eq!(emitted_value(&rows, "AFAreaMode"), "Single-point AF");
+    assert_eq!(emitted_value(&rows, "AFPointsInFocus"), "0");
+    assert_eq!(emitted_value(&rows, "Canon_AFInfo2_0x000d"), "101 42");
+    assert_eq!(emitted_value(&rows, "PrimaryAFPoint"), "77");
+    assert_eq!(members.get("NumAFPoints"), Some(&MemberValue::Num(1)));
+    assert_source_groups(table, &reply);
+
+    let unknown_mode = afinfo2(Order::Mm, 1, &one, &focus, &[101, 42, 77]);
+    let unknown = ReplayCase {
+        name: "afinfo2-mm-enum-miss",
+        order: Order::Mm,
+        data: &unknown_mode,
+        ..powershot
+    };
+    // Native table data owns the enum map. Change only its raw slot-one word
+    // so the pinned native miss and generated shared IntEnum must both render
+    // ExifTool's exact unknown spelling.
+    let mut unknown_bytes = unknown.data.to_vec();
+    unknown_bytes[2..4].copy_from_slice(&3_u16.to_be_bytes());
+    let unknown = ReplayCase {
+        data: &unknown_bytes,
+        ..unknown
+    };
+    let unknown_reply = native_replay(&native, &unknown);
+    let (unknown_rows, unknown_result, _) = rust_replay(table, &unknown);
+    assert!(!unknown_result.tainted, "{unknown_result:?}");
+    assert_eq!(native_read(&unknown_reply, 1).3, "3");
+    assert_eq!(emitted_value(&unknown_rows, "AFAreaMode"), "Unknown (3)");
+
+    let absent_afinfo3 = ReplayCase {
+        name: "afinfo2-afinfo3-absent",
+        ..powershot
+    };
+    let (_, absent_result, _) = rust_replay(table, &absent_afinfo3);
+    assert_eq!(absent_result.no_matching_alternative, 0);
+    let present_afinfo3 = ReplayCase {
+        name: "afinfo2-afinfo3-present-stops",
+        members: &[
+            MemberSeed::Text("Model", "PowerShot G7"),
+            MemberSeed::Number("AFInfo3", 1),
+        ],
+        ..powershot
+    };
+    let present_reply = native_replay(&native, &present_afinfo3);
+    let (present_rows, present_result, _) = rust_replay(table, &present_afinfo3);
+    assert_eq!(
+        native_indices(&present_reply, "get_tag_info"),
+        (0..=14).collect::<Vec<_>>()
+    );
+    assert_eq!(present_result.no_matching_alternative, 1);
+    assert!(!present_rows.iter().any(|row| row.name == "PrimaryAFPoint"));
+
+    let eos = ReplayCase {
+        name: "afinfo2-eos-selects-af-points",
+        members: &[MemberSeed::Text("Model", "EOS R7")],
+        ..powershot
+    };
+    let eos_reply = native_replay(&native, &eos);
+    let (eos_rows, eos_result, _) = rust_replay(table, &eos);
+    assert_eq!(
+        native_indices(&eos_reply, "get_tag_info"),
+        (0..=14).collect::<Vec<_>>()
+    );
+    assert_eq!(eos_result.no_matching_alternative, 1);
+    assert_eq!(emitted_value(&eos_rows, "AFPointsSelected"), "0");
+    assert!(!eos_rows.iter().any(|row| row.name == "PrimaryAFPoint"));
 }

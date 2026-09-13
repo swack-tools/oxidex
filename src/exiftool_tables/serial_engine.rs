@@ -1116,6 +1116,31 @@ mod tests {
             },
             missing_member: SerialMissingMember::EmptyStringForStringOps,
         };
+        let missing_empty_eq = SerialCondition {
+            cond: Cond::MemberStrEq {
+                member: "Model",
+                value: "",
+                negate: false,
+            },
+            missing_member: SerialMissingMember::EmptyStringForStringOps,
+        };
+        let missing_nonempty_eq = SerialCondition {
+            cond: Cond::MemberStrEq {
+                member: "Model",
+                value: "EOS",
+                negate: false,
+            },
+            missing_member: SerialMissingMember::EmptyStringForStringOps,
+        };
+        let missing_positive_regex = SerialCondition {
+            cond: Cond::MemberRegex {
+                member: "Model",
+                pattern: "EOS",
+                ignore_case: false,
+                negate: false,
+            },
+            missing_member: SerialMissingMember::EmptyStringForStringOps,
+        };
         let defined = SerialCondition {
             cond: Cond::MemberDefined {
                 member: "Model",
@@ -1127,6 +1152,9 @@ mod tests {
         let mut ctx = Ctx::new(&mut members);
         assert!(short_circuit.eval(&mut ctx));
         assert!(!ctx.members.contains_key("Unexpected"));
+        assert!(missing_empty_eq.eval(&mut ctx));
+        assert!(!missing_nonempty_eq.eval(&mut ctx));
+        assert!(!missing_positive_regex.eval(&mut ctx));
         assert!(missing_regex.eval(&mut ctx));
         assert!(!defined.eval(&mut ctx));
     }
