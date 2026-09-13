@@ -86,7 +86,6 @@ pub enum Dm {
     FacesDetected,
     FlashFired,
     LensMount,
-    Locations,
     MetaVersion,
     TagB042,
     TagVersion,

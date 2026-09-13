@@ -6,6 +6,7 @@
 //! conversion is not one of the forms [`super::binary_data`] implements is
 //! omitted entirely rather than emitted with a guessed value.
 
+// shared-table-retirement: {"migrations":[{"module":"Sony","owner":"shared","source":"src/parsers/tiff/makernotes/sony/enciphered_tables.rs","table":"Tag202a"}],"schema":1}
 use super::binary_data::{BinTable, BinTag, Cond, Dm, Fmt, Hook, NumCmp, Other, Pc, Raw, Vc};
 
 #[rustfmt::skip]
@@ -569,26 +570,6 @@ static T13: &[BinTag] = &[
     BinTag { index: 6284, name: "AspectRatio", cond: Cond::Always, fmt: Fmt::Default, count: 1, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::Map(M33, Other::None), hook: Hook::None, print_hex: false, low_priority: true, subdir: None },
 ];
 #[rustfmt::skip]
-static T14: &[BinTag] = &[
-    BinTag { index: 1, name: "FocalPlaneAFPointsUsed", cond: Cond::Always, fmt: Fmt::U8, count: 1, mask: 0, raw: Raw::Store(Dm::Locations), vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 2, name: "FocalPlaneAFPointArea", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 1.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 6, name: "FocalPlaneAFPointLocation1", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 1.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 10, name: "FocalPlaneAFPointLocation2", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 2.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 14, name: "FocalPlaneAFPointLocation3", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 3.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 18, name: "FocalPlaneAFPointLocation4", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 4.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 22, name: "FocalPlaneAFPointLocation5", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 5.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 26, name: "FocalPlaneAFPointLocation6", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 6.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 30, name: "FocalPlaneAFPointLocation7", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 7.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 34, name: "FocalPlaneAFPointLocation8", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 8.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 38, name: "FocalPlaneAFPointLocation9", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 9.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 42, name: "FocalPlaneAFPointLocation10", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 10.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 46, name: "FocalPlaneAFPointLocation11", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 11.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 50, name: "FocalPlaneAFPointLocation12", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 12.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 54, name: "FocalPlaneAFPointLocation13", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 13.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 58, name: "FocalPlaneAFPointLocation14", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 14.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-    BinTag { index: 62, name: "FocalPlaneAFPointLocation15", cond: Cond::DmCmp(Dm::Locations, NumCmp::Ge, 15.0_f64), fmt: Fmt::U16, count: 2, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
-];
-#[rustfmt::skip]
 static T15: &[BinTag] = &[
     BinTag { index: 2, name: "FacesDetected", cond: Cond::Always, fmt: Fmt::Default, count: 1, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::Map(M35, Other::None), hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
     BinTag { index: 189, name: "FaceDetection", cond: Cond::ModelRe(true, r"^DSLR-(A450|A500|A550)$"), fmt: Fmt::Default, count: 1, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::Map(M36, Other::None), hook: Hook::None, print_hex: false, low_priority: false, subdir: None },
@@ -972,11 +953,6 @@ pub static TABLES: &[BinTable] = &[
         tags: T13,
     },
     BinTable {
-        name: "Tag202a",
-        fmt: Fmt::U8,
-        tags: T14,
-    },
-    BinTable {
         name: "Tag900b",
         fmt: Fmt::Default,
         tags: T15,
@@ -1105,27 +1081,26 @@ pub mod idx {
     pub const TAG2010G: usize = 11;
     pub const TAG2010H: usize = 12;
     pub const TAG2010I: usize = 13;
-    pub const TAG202A: usize = 14;
-    pub const TAG900B: usize = 15;
-    pub const TAG9050A: usize = 16;
-    pub const TAG9050B: usize = 17;
-    pub const TAG9050C: usize = 18;
-    pub const TAG9050D: usize = 19;
-    pub const TAG9400A: usize = 20;
-    pub const TAG9400B: usize = 21;
-    pub const TAG9400C: usize = 22;
-    pub const TAG9401: usize = 23;
-    pub const TAG9402: usize = 24;
-    pub const TAG9403: usize = 25;
-    pub const TAG9404A: usize = 26;
-    pub const TAG9404B: usize = 27;
-    pub const TAG9404C: usize = 28;
-    pub const TAG9405A: usize = 29;
-    pub const TAG9405B: usize = 30;
-    pub const TAG9406: usize = 31;
-    pub const TAG9406B: usize = 32;
-    pub const TAG940A: usize = 33;
-    pub const TAG940C: usize = 34;
-    pub const TAG940E: usize = 35;
-    pub const TAG9416: usize = 36;
+    pub const TAG900B: usize = 14;
+    pub const TAG9050A: usize = 15;
+    pub const TAG9050B: usize = 16;
+    pub const TAG9050C: usize = 17;
+    pub const TAG9050D: usize = 18;
+    pub const TAG9400A: usize = 19;
+    pub const TAG9400B: usize = 20;
+    pub const TAG9400C: usize = 21;
+    pub const TAG9401: usize = 22;
+    pub const TAG9402: usize = 23;
+    pub const TAG9403: usize = 24;
+    pub const TAG9404A: usize = 25;
+    pub const TAG9404B: usize = 26;
+    pub const TAG9404C: usize = 27;
+    pub const TAG9405A: usize = 28;
+    pub const TAG9405B: usize = 29;
+    pub const TAG9406: usize = 30;
+    pub const TAG9406B: usize = 31;
+    pub const TAG940A: usize = 32;
+    pub const TAG940C: usize = 33;
+    pub const TAG940E: usize = 34;
+    pub const TAG9416: usize = 35;
 }

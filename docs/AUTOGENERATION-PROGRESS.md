@@ -21,7 +21,7 @@ The duplicated Sony handling must then be removed.
 | Real-file coverage | 41 files; 142 native rows | Exact native focus values match. Paired full-output comparison results are identical per file. Four files with the same tag name from other tables were excluded. | Candidate and control are compared per file, with no unexplained changes. This scoped check passes. |
 | Boundary coverage | 14 complete TIFF carriers | Library and CLI reproduce the native expectations for both byte orders, zero/one/fifteen points, short records and a rejected signature. | The candidate reproduces those results through both the library and CLI. This check passes. |
 | Automatic upstream changes | No complete pilot proof at the start | Actual native dump, regeneration and independent artifact checking pass for rename, enum, offset and new-row changes. Each stale artifact is rejected. | All four change types pass this chain; broader upgrade behavior is measured separately. |
-| Duplicate custom handling | One Sony root rule and 17 custom table declarations | The candidate removes the root rule. The 17 old declarations remain. | The replaced handling is removed in a verified, merged change. |
+| Duplicate custom handling | One Sony root rule and 17 custom table declarations | The candidate removes the root rule, all 17 declarations and their unused saved-value slot. A mechanical removal tool reproduces the exact artifact and records its source identity. The final removal passes lint, workspace tests and a build; its corpus check is pending. | The replaced handling is removed in a verified, merged change. |
 | Merged pilot progress | Zero | Work remains on an isolated branch. | Review and required gates pass, then the migration is merged. |
 
 The source is pinned ExifTool 13.59. Native measurements use its explicit Perl
@@ -55,14 +55,28 @@ unchanged during these checks. This correction does not
 claim new parser coverage: current callers still do not pass `Make` and
 `TIFF_TYPE` where those three tags need them.
 
+The follow-up retirement removes the 17 duplicate `Tag202a` entries and the
+unused `Locations` slot. The other 36 custom Sony tables remain. This is not
+a recovery of their missing generator. The ownership manifest contains only
+source/table identities, and the removal tool mechanically adjusts table
+indices after deleting the selected table. It refuses unsupported source
+shapes and checks the recognized consumer forms documented in the tool README;
+it is not a general Rust alias or data-flow analysis.
+
+Independent review accepted the removal. Replaying it from the original
+`1a63822e` artifact reproduces both the committed artifact and identity record
+exactly. In-place replay leaves source and ledger bytes and modification times
+unchanged. The retirement's own lint, complete workspace and build checks pass;
+the workspace took 244 seconds. The final corpus comparison and complete Python
+tool-suite rerun remain pending. Earlier corpus results above describe the
+pilot before this removal and are not substituted for its final check.
+
 ## What is still open
 
-- Integrate and validate the reviewed duplicate-table removal. The corrected
-  workspace command and full-corpus comparison pass for the pilot; changes to
-  runtime behavior still need their own check.
-- Remove the retained custom declarations through a trustworthy generation
-  path. Their recovered Sony-specific producer still has unresolved review
-  findings, so it is not an accepted dependency for this migration.
+- Finish the final corpus and Python checks for the integrated duplicate-table
+  removal, then complete the pilot's Linux gate and merge review. The separate
+  Sony-specific recovery draft still has unresolved findings and is not a
+  dependency of the mechanical retirement.
 - Complete the wider inventory of manual, generated, unsupported and
   unclassified source rules, then refresh generated-route attribution on one
   recorded source revision.
@@ -98,10 +112,11 @@ passes. The workspace check exposed a build-setting collision already
 documented in the repository; the gate omitted the prescribed test setting.
 The corrected i7 workspace invocation passed: 5,564 tests, 68 skipped, 871
 seconds including compilation. The corrected doctest, table verification and
-JPEG matrix stages also pass. The exact-base control build is complete and
-the paired Linux corpus run remains in progress under the shared lock. The
-original failed gate remains recorded, and the shared gate script has not
-been changed.
+JPEG matrix stages also pass. The paired Linux corpus run is complete: all
+4,238 files were processed; total matches rose from 468,002 to 468,012 and
+missing rows fell from 12,268 to 12,258, with other aggregate columns unchanged.
+The final per-file reconciliation is being recorded separately. The original
+failed gate remains recorded, and the shared gate script has not been changed.
 
 Update this scoreboard after each validation or landing milestone. Do not
 replace an unfinished check with a count of generated lines or active agents.

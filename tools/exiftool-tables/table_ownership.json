@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "migrations": [
+    {
+      "source": "src/parsers/tiff/makernotes/sony/enciphered_tables.rs",
+      "module": "Sony",
+      "table": "Tag202a",
+      "owner": "shared"
+    }
+  ]
+}

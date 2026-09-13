@@ -56,6 +56,38 @@ and Nikon `encrypted_tables.rs`. Sony main-extra, Sony plain, Minolta A100 and
 Nikon settings now have producers. `regen-all.sh` names the remaining
 limits; generated once does not mean automatically refreshable.
 
+The shared Sony focus-table migration removes the 17 `Tag202a` declarations
+from the legacy enciphered artifact. `table_ownership.json` records table
+ownership without copying tag rules. `retire_binary_tables.py` performs the
+mechanical removal and checks the remaining table indices; it is not a
+recovered native producer for the other legacy tables. Its identity ledger
+preserves the original input/output hashes and index range. Supported native
+changes to the shared table continue through the normal shared generator.
+
+After a future accepted producer rebuilds the legacy artifact, apply the
+ownership transform from the repository root:
+
+```sh
+python3 tools/exiftool-tables/retire_binary_tables.py \
+  --manifest tools/exiftool-tables/table_ownership.json \
+  --source src/parsers/tiff/makernotes/sony/enciphered_tables.rs \
+  --input src/parsers/tiff/makernotes/sony/enciphered_tables.rs \
+  --output src/parsers/tiff/makernotes/sony/enciphered_tables.rs \
+  --shared-tables src/exiftool_tables/binary_tables.rs \
+  --enabled-tables src/exiftool_tables/enabled.rs \
+  --consumer-root src \
+  --identity-out tools/exiftool-tables/table_ownership_identity.json
+```
+
+An already recorded in-place replay verifies the current route and references
+without changing the artifact or ledger. A separate output path receives the
+verified bytes. A regenerated retired root handle refuses rather than silently
+restoring duplicate handling. The consumer scan recognizes documented literal
+Rust forms; aliases, macros and general data flow require review. Native
+inventory and runtime comparisons remain the proof of equivalent behavior.
+The transform is not yet an automatically invoked `regen-all.sh` producer;
+the remaining legacy producer is still unaccepted.
+
 Nikon settings is checked against freshly loaded Perl by
 `verify_nikon_settings.py` after regeneration. Its 197 rows and 131 maps are
 unchanged. The custom handwritten processor remains; the verifier checks
