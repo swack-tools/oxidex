@@ -36,6 +36,8 @@ areas remain unfinished; they cannot disappear from the denominator.
 | Sony focus-table pilot | Merged in PR #746 at `04eaf6e1`, including removal of 17 duplicate entries. Final CI is green at `a1626cb6`; the 4,238-file pair records ten raw-ID fixes and no other per-file changes. | The shared route now replaces the duplicate Sony producer. Remaining source-inventory work is broader than this pilot. |
 | Shared binary strings | Merged in PR #747 at `8f0fdaf4`. It preserves raw bytes in saved state, distinguishes a one-byte default from a remainder string, and carries the bounded CameraInfo repair. | This is a shared capability, not a Canon migration. CameraInfo remains a legacy text-domain adapter, and no Canon manual reader has been removed. The prior full-pair supervisor-status limitation remains recorded. |
 | Keyed-directory schema and compiler | Merged in PR #748 at `ebbe1ece`; all final hosted checks passed at `a422e8de`. | Native parent facts and expression declarations are checked. Shared reporting policy merged in #750; the inactive reader merged in #752 at `634e5616`. No production route is active. |
+| Shared word-directory processor | Merged in PR #754 at `1138a880`; nine tables, 132 rows, 698 Python tests and all five hosted jobs pass. | Four of five unsupported child processors now have generated descriptors. Canon production routing and manual-reader retirement remain unfinished. |
+| Dynamic serial-processor validation | Implemented and independently reviewed at `f313e38a`; eight native tests pass again on integration checkpoint `c5bc4c9f`. | The probe observes native behavior needed to validate the next compiler and reader. It generates no tag rules and clears no production blocker by itself. |
 | Recorded source inventory | Merged in PR #749 at `18a8ef17`; all final hosted checks passed at `72e8e664`. The report accounts for 1,512 table identities and retains 119 tables with no named rows. | This establishes the captured source population. Classifying which rules are generated, manual, unsupported or unclassified remains open; source shape is not automation. |
 | Sony plain generator recovery | PR #745 merged; six tables and 193 rows reproduced | These tables can be rebuilt. This alone does not prove that their behavior is fully automatic. |
 | Sony enciphered recovery | Producer and independent verifier preserved; M4 review found five blockers; not landed | The draft still has a Sony-specific translation layer. Its review remains useful, but it is not the architecture target. |
@@ -99,9 +101,10 @@ rows; independent definition and reader-binding checks pass. Its generated
 descriptors clear four of those five child-processing refusals. These are
 source-level results. Native/Rust replay, including verbose reporting, and
 real generated child dispatch pass at `f613820d`. Official regeneration passes
-with zero declared changes at `b9c7f206`. After full Python and hosted checks
-and merge, the next small milestones are to implement the remaining dynamic-length
-processor, and resolve the four omitted parent rows. Each completion must
+with zero declared changes at `b9c7f206`. The corrected full Python suite passes
+698 tests with zero skips; all five hosted jobs pass on `443c8458`, merged in
+PR #754 at `1138a880`. The next small milestones are to implement the remaining
+dynamic-length processor and resolve the four omitted parent rows. Each completion must
 reduce a named blocker count while preserving native behavior. Canon carrier
 activation and removal of the duplicate readers come after those checks;
 publishing these definitions alone earns no runtime automation percentage.
@@ -133,24 +136,35 @@ is already merged; its failed gate attempts and corrections remain below.
 The keyed-directory schema/compiler and shared reporting policy are merged in
 PRs #748 and #750. The separate reader merged in #752 at `634e5616`, including
 reviewed fixes for legacy parent continuation and directory-state restoration.
-It has no production caller. The current work-branch checkpoint translates seven
+It has no production caller. Directory validation merged in #753 and translates seven
 native validation calls into common size comparisons and independently verifies
 their numeric-reader source and byte-order state. Actual native replay clears
-all seven validation-proof blockers; five child edges retain other unsupported
-processing rules. A reader-only source mutation makes all seven checks refuse
+all seven validation-proof blockers; that milestone left five child edges with
+unsupported processing rules. A reader-only source mutation makes all seven checks refuse
 again, and the verifier rejects the stale artifact.
 
-Next, regenerate canonical artifacts and ledgers, resolve the five remaining
-edges and other parent blockers, and prove both CRW and JPEG carrier behavior.
-Four edges share a length-prefixed U16 key/value processor. Compile that native
-body and its model predicate into one shared descriptor, then independently
-verify it and connect its reader. A fifth edge needs dynamic field lengths and
-must remain unsupported until that separate capability is proven. Neither
-camera names nor parent tag IDs belong in the new execution mechanism.
-The i7 currently accepts SSH authentication but fails to open a command session;
-canonical regeneration is blocked, and its lock/job state is unverified. Publish
-checked source checkpoints while that host requirement is unresolved. None of
-these checkpoints removes a Canon manual reader by itself.
+Canonical artifacts and ledgers were regenerated successfully with local Perl
+5.38.2. The four word-processor edges are resolved at the definition level in
+#754. The remaining work is ordered as follows:
+
+1. Compile sequential fields and lengths that depend on earlier raw values from
+   the native serial processor. The [native probe](reference/serial-processor-checkpoint.md)
+   is validated; the descriptor and shared reader remain to be implemented.
+   Account for every condition and conversion before reducing the final
+   unsupported-child count from one to zero.
+2. Resolve the four omitted parent rows using shared byte handling. An explicit
+   one-byte `undef` field differs from an unformatted inline payload containing
+   all eight bytes. Raw image data also needs the native absolute-span hash
+   behavior. Completion means 61 represented parent rows and zero omissions,
+   with independent native checks; the serial-child blocker is separate.
+3. Prove real CRW and JPEG carrier behavior, enable the verified generated
+   route, and remove the duplicate manual readers. Report those removals and
+   the per-file comparison separately from generated definitions.
+
+Neither camera names nor parent tag IDs belong in the new shared execution
+mechanisms. No remote host availability is assumed: refresh reachability and
+the shared lock before any future i7 job. No i7 work was needed for #754's
+canonical regeneration or the serial-probe checkpoint.
 
 The source inventory merged in PR #749 preserves every captured table identity,
 including unclassified shapes. PR #751 merged at `35487962` and joins all 1,512 identities to an
@@ -173,8 +187,8 @@ raw files and Canon metadata embedded in JPEG. It has three distinct outcomes:
 
 Each outcome gets its own implemented, validated and merged status. The source
 inventory currently identifies eight explicit remainder-string fields in eight
-tables. Seven Canon validation calls now have local source/reader proof, while
-canonical artifacts and production routing remain unfinished. These are
+tables. Seven Canon validation calls and canonical artifacts are verified and
+merged; production routing remains unfinished. These are
 implementation milestones, not current output gains.
 
 We do not yet have an evidence-based date for 100%. Record implementation,
