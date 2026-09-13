@@ -72,17 +72,18 @@ def _field_format(tag, default, stats):
         return None, None
     m = codegen.SIZED_RE.match(f)
     if m:
-        base, count = m.group(1), int(m.group(2))
-        if base == "string":
-            return f"Some(Fmt::Str({count}))", f
-        if base == "undef":
-            return f"Some(Fmt::Undef({count}))", f
-        if base in codegen.SCALAR_FORMATS:
-            return f"Some(Fmt::{codegen.SCALAR_FORMATS[base][0]})", base
+        # ProcessCanonRaw passes its Format directly to ReadValue.  Unlike
+        # ProcessBinaryData, it does not normalise `int16u[N]`/`string[N]`
+        # first; ExifTool.pm:6290-6293 warns that those are unknown formats.
+        # Refuse the whole row rather than importing the other reader's
+        # convenient but wrong array interpretation.
         stats["keyed_format"] += 1
         return None, None
     if f == "string":
-        return "Some(Fmt::RemainderString)", f
+        # ProcessCanonRaw retains source Count (or derives it from value
+        # size when Count is false); it never assigns `$count = $more`.
+        # `Str(1)` gives its one-byte width to that future reader.
+        return "Some(Fmt::Str(1))", f
     if f in codegen.SCALAR_FORMATS:
         return f"Some(Fmt::{codegen.SCALAR_FORMATS[f][0]})", f
     if f in codegen.PER_FIELD_FORMATS:

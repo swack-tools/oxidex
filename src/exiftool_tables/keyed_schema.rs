@@ -33,6 +33,9 @@ pub struct KeyedTag {
     pub raw_id: u16,
     pub name: &'static str,
     pub format: Option<Fmt>,
+    /// Verbatim numeric Count when the source declares one. `None` is
+    /// undefined; `Some(0)` is false and must trigger ProcessCanonRaw's
+    /// size/format fallback. A reader must not replace either with one.
     pub count: Option<usize>,
     pub condition: Option<Cond>,
     pub raw_conv: Option<RawConvEffect>,
