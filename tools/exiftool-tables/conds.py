@@ -822,3 +822,41 @@ def needs_process_binary_data_retry_context(condition):
         )
         for kind, atom in tokens
     )
+
+
+def needs_initial_get_tag_info_context(condition):
+    """Whether an initial-only GetTagInfo call lacks a Condition input.
+
+    `ProcessCanonRaw` calls GetTagInfo before it has `$valPt`, `$format`, or
+    `$count`, and never retries it after decoding the entry.  This is stricter
+    than ProcessBinaryData's retry (which supplies `$valPt` only), so it is a
+    caller capability check rather than a change to the shared grammar.
+    Assignment tails are inspected recursively: accepting `($$self{Seen}=1)
+    and $count == 6` based only on the assignment would invent context.
+    """
+    if condition is None or not isinstance(condition, str) or not condition.strip():
+        return False
+    try:
+        text = _collapse_ws_outside_literals(condition.strip())
+        set_member = _RE_SETMEMBER_WITH_TAIL.match(text)
+        if set_member is not None:
+            source_text, tail = set_member.group(3), set_member.group(4)
+            return source_text in {"$valPt", "$format", "$count"} or (
+                tail is not None and needs_initial_get_tag_info_context(tail)
+            )
+        set_member = _RE_SETMEMBER_BARE.match(text)
+        if set_member is not None:
+            return set_member.group(3) in {"$valPt", "$format", "$count"}
+        tokens = _tokenize(text)
+    except CondCompileError:
+        return False
+    return any(
+        kind == "atom"
+        and (
+            _RE_FORMAT_ATOM.match(atom)
+            or _RE_FORMAT_REGEX.match(atom)
+            or _RE_COUNT_ATOM.match(atom)
+            or "$valPt" in atom
+        )
+        for kind, atom in tokens
+    )

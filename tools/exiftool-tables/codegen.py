@@ -3959,6 +3959,18 @@ REPORT = (
         ("Start expression outside the closed grammar", "subdir_refused_start"),
         ("Base expression outside the closed grammar", "subdir_refused_base"),
     )),
+    ("keyed-directory schema only (no reader or caller is activated)", (
+        ("rows with unsupported raw-id spelling", "keyed_raw_id"),
+        ("rows with no usable name", "keyed_name"),
+        ("native Unknown rows withheld", "keyed_unknown"),
+        ("rows with unsupported format", "keyed_format"),
+        ("rows with unrepresentable Count", "keyed_count"),
+        ("rows whose initial Condition lacks context", "keyed_condition"),
+        ("malformed/unsupported SubDirectory rows", "keyed_subdirectory"),
+        ("bounded edges explicitly unwalked", "keyed_edge_unwalked"),
+        ("atomic variant groups withheld", "keyed_variant"),
+        ("rows with an unsupported source shape", "keyed_row_shape"),
+    )),
 )
 
 
@@ -3974,6 +3986,10 @@ def main():
         help="write the IFD-style (Exif::ProcessExif) tables here "
         "(src/exiftool_tables/ifd_tables.rs); they are generated and reported "
         "either way, so the shared ExprId enum in -o does not depend on this flag",
+    )
+    ap.add_argument(
+        "--keyed-out",
+        help="write source facts for native keyed directories (schema/inventory only; no reader activation)",
     )
     args = ap.parse_args()
 
@@ -4111,6 +4127,19 @@ def main():
             fh.write(ifd_joined)
             fh.write(ifd_index)
         print(f"wrote IFD tables     {args.ifd_out}")
+
+    if args.keyed_out:
+        # Kept opt-in until a keyed reader and a reviewed caller exist.  This
+        # file carries source facts and explicit omissions only; it is not a
+        # route or an enablement list.
+        import keyed_directory
+        keyed_src, keyed_stats = keyed_directory.generate(doc, verified_exprs)
+        with open(args.keyed_out, "w", encoding="utf-8") as fh:
+            fh.write(keyed_src)
+        print(f"wrote keyed tables   {args.keyed_out}")
+        for key, value in keyed_stats.items():
+            if key.startswith("keyed_") and value:
+                stats[key] += value
 
     ue = stats.pop("unsupported_exprs")
     pcd = stats.pop("pc_directives_dropped")
