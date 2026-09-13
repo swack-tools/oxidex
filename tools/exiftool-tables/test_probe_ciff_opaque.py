@@ -155,20 +155,25 @@ class CiffOpaqueNativeReplay(unittest.TestCase):
         self.assertEqual(process["source_file"], "Image/ExifTool/CanonRaw.pm")
         self.assertEqual(reply["found"], [])
 
-    def test_copied_source_missing_main_process_is_rejected_before_invocation(self):
-        def remove_process(source):
-            marker = r"PROCESS_PROC => \&ProcessCanonRaw,"
-            self.assertIn(marker, source)
-            return source.replace(marker, "PROCESS_PROC => undef,", 1)
+    def test_copied_source_noncode_main_process_is_rejected_before_byte_order_mutation(self):
+        marker = r"PROCESS_PROC => \&ProcessCanonRaw,"
+        probe_source = PROBE.read_text()
+        self.assertLess(probe_source.index("my $process = $table->{PROCESS_PROC};"),
+                        probe_source.index("Image::ExifTool::SetByteOrder($order);"))
+        for replacement in ("undef", "'not_a_code_ref'"):
+            with self.subTest(replacement=replacement):
+                def remove_process(source, replacement=replacement):
+                    self.assertIn(marker, source)
+                    return source.replace(marker, f"PROCESS_PROC => {replacement},", 1)
 
-        temporary, root = copied_canonraw_source(remove_process)
-        with temporary:
-            reply, = replay([request("II", [{"tag": 0x4001, "inline_hex": "0102030405060708"}])],
-                              root=root, fallback="fallback")
-        self.assertFalse(reply["ok"])
-        self.assertEqual(reply["error"], "main_process_proc_unavailable")
-        self.assertFalse(reply["selection"]["process"]["resolved"])
-        self.assertEqual(reply["selection"]["process"]["reason"], "not_code")
+                temporary, root = copied_canonraw_source(remove_process)
+                with temporary:
+                    reply, = replay([request("MM", [{"tag": 0x4001, "inline_hex": "0102030405060708"}])],
+                                      root=root, fallback="fallback")
+                self.assertFalse(reply["ok"])
+                self.assertEqual(reply["error"], "main_process_proc_unavailable")
+                self.assertFalse(reply["selection"]["process"]["resolved"])
+                self.assertEqual(reply["selection"]["process"]["reason"], "not_code")
 
     def test_copied_source_reordered_hash_is_observed_in_chronological_trace(self):
         def reorder(source):
