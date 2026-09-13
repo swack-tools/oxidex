@@ -697,6 +697,36 @@ sub effective_write_code_fact {
     };
 }
 
+# These helpers supply the first UTF-8 scalar writer's value validation and
+# serialization path.  Capture their *final loaded* bindings separately from
+# table WRITE_PROC/CHECK_PROC provenance: a later mechanism compiler must
+# recognize their bodies before it can execute them.  code_source_fact keeps
+# the established depth/cycle limits and makes a missing helper explicit.
+sub hydrate_write_helpers {
+    # Writer.pl defines the shared WriteValue/CheckValue helpers but is not
+    # necessarily loaded by a table's WriteExif implementation.  This is a
+    # module load only, after all requested table modules are captured; it
+    # never invokes a writer against metadata.
+    return { loaded => JSON::PP::true } if $INC{'Image/ExifTool/Writer.pl'};
+    return { loaded => JSON::PP::true } if eval { require 'Image/ExifTool/Writer.pl'; 1 };
+    return { loaded => JSON::PP::false, reason => 'write_helper_load_failed' };
+}
+
+sub native_write_helper_facts {
+    my ($lib_abs, $status) = @_;
+    if (!$status->{loaded}) {
+        my $reason = $status->{reason} // 'write_helper_load_failed';
+        return {
+            write_value => unresolved_code_fact('Image::ExifTool::WriteValue', $reason),
+            check_value => unresolved_code_fact('Image::ExifTool::CheckValue', $reason),
+        };
+    }
+    return {
+        write_value => code_source_fact('Image::ExifTool::WriteValue', $lib_abs),
+        check_value => code_source_fact('Image::ExifTool::CheckValue', $lib_abs),
+    };
+}
+
 sub dump_tag_entry {
     my ($entry) = @_;
     my $r = ref $entry;
@@ -915,6 +945,12 @@ for my $full_name (sort keys %write_tables) {
     $native_write_tables{$entry->{module}}{$entry->{table}} = $fact;
 }
 
+# Hydration above may load Writer.pl.  Snapshot the helper package bindings
+# only now, after all selected modules and any permitted writer autoloads have
+# settled.  This does not alter the read projection or route a native writer.
+my $write_helper_status = hydrate_write_helpers();
+my $native_write_helpers = native_write_helper_facts($EXIFTOOL_LIB_ABS, $write_helper_status);
+
 # The child captures byte-order state without changing this table-walking
 # process. These facts prove that the final loaded CODE refs are the same ones
 # the child observed; a later module override makes the contract unresolved.
@@ -939,6 +975,7 @@ print $json->encode({
     # admission or changing the existing module/table/tag projection.
     native_write_autoload => $write_autoload_router_status,
     native_write_tables => \%native_write_tables,
+    native_write_helpers => $native_write_helpers,
     subdirectory_validate_functions => \%subdirectory_validate_functions,
     native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
 });

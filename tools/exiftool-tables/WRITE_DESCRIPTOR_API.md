@@ -22,6 +22,26 @@ Those procedure facts are **not** a writer admission and are not interpreted
 as an implementation of `WriteExif` or `CheckExif`. A later writer must require
 its own closed native-mechanism contract before it can use a candidate.
 
+## Shared value-helper provenance
+
+The dump also carries a top-level `native_write_helpers` map with
+`write_value` and `check_value` facts. Each uses the established CODE fact
+shape: `resolved`, callable name, deparse, normalized source path, source and
+deparse SHA-256 values, and bounded direct dependency facts. The dumper records
+the final package bindings only after every requested table module and permitted
+writer autoload has settled. It then loads `Image/ExifTool/Writer.pl` solely to
+make these shared helper bindings observable; it never calls a native writer.
+An unreadable helper module or missing callable remains an explicit unresolved
+fact.
+
+This map is provenance for a future default UTF-8 scalar mechanism, not proof
+that `WriteValue` or `CheckValue` is safe to execute. A mechanism compiler must
+still recognize the required native bodies and test their effects. Non-default
+`CharsetEXIF` encoding requires a separate option and `Encode` contract; it
+must not be inferred from these helper facts. The sidecar is ignored by the
+inactive descriptor generator, so adding or changing helper provenance cannot
+admit a writer candidate by itself.
+
 Every source table and every source row alternative not in the initial class is
 recorded in `OMITTED_WRITE_NATIVE_TABLES` or `OMITTED_WRITE_NATIVE_ROWS` with
 named reasons. Reader omission flags are never used for this accounting. The
