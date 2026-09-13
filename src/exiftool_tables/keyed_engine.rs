@@ -31,7 +31,6 @@ pub struct KeyedBlock<'a> {
     pub byte_order: ByteOrder,
     pub scope: KeyedScope,
     pub max_scalar_bytes: usize,
-    pub max_entries: usize,
 }
 
 impl<'a> KeyedBlock<'a> {
@@ -42,7 +41,6 @@ impl<'a> KeyedBlock<'a> {
             byte_order,
             scope,
             max_scalar_bytes: 512,
-            max_entries: 4096,
         }
     }
 }
@@ -148,10 +146,6 @@ fn walk(
         result.malformed_directory += 1;
         return;
     };
-    if count > block.max_entries {
-        result.malformed_directory += 1;
-        return;
-    }
     let Some(entries_end) = directory_offset.checked_add(2).and_then(|start| {
         count
             .checked_mul(10)
@@ -613,6 +607,22 @@ mod tests {
             &mut sink,
         );
         (sink, result)
+    }
+
+    #[test]
+    fn native_u16_directory_count_has_no_reader_entry_cap() {
+        // ProcessCanonRaw accepts the full u16 entry count and relies on
+        // directory-byte bounds. A well-formed 4,097-entry CIFF directory
+        // must not acquire an arbitrary reader refusal.
+        static TAGS: [KeyedTag; 1] = [tag(1, "Value", Some(Fmt::Int8u), None)];
+        static TABLE: KeyedDirectoryTable = table(&TAGS);
+        let entries = vec![(0x4001, vec![7]); 4097];
+        let data = ciff(ByteOrder::Little, &entries);
+        let (sink, result) = walk_test(&TABLE, &data, ByteOrder::Little);
+        assert_eq!(result.entries_seen, 4097);
+        assert_eq!(result.emitted, 4097);
+        assert_eq!(result.malformed_directory, 0);
+        assert_eq!(sink.rows.len(), 4097);
     }
 
     #[test]
