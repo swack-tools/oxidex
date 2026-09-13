@@ -4,6 +4,28 @@ This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
 
 ## Current checkpoint — September 13
 
+The current Canon AFInfo2/AFInfo3 reader retirement is committed and published
+at `ff1e364c`, but not merged. It deletes the shared manual reader arm, eight
+private sequence offsets, two parent IDs and the private 20-value mode enum.
+The generated reader now owns these two parent routes. Independent source
+review, exact public-fixture native replay, the 67-file bounded pair, the full
+4,238-file pair and all 32-artifact regeneration checks pass. Full corpus
+output is unchanged; the bounded pair adds two correct rows and removes 40
+extras. The 140 focused Python tests execute the actual artifact mutation
+checks with no skips. A copied native field rename also reaches actual output after official
+regeneration with no handwritten tag-rule edit. Final hosted acceptance remains. See the
+[production plan](reference/afinfo2-production-plan.md) for failed attempts,
+exact evidence, and remaining old-AFInfo/CanonRaw scope.
+
+These results concern reading. The plan now explicitly shares source definitions
+between reading and writing, while tracking write execution and preservation
+separately. Two independent source audits are identifying existing writer rules
+and missing shared-schema facts. No generated-writing percentage or full
+read/write delivery estimate exists yet. The earlier 97.3% reading conformance
+and route-disabled measurements say nothing about write support.
+
+### Latest merged checkpoint
+
 Latest combined Canon definitions: **AFInfo 14/14 and AFInfo2 16/16**, both
 independently verified after formatting. Across all eight serial tables,
 emitted alternatives rise **106 -> 122** and omissions fall **26 -> 10**.

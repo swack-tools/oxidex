@@ -8,7 +8,7 @@ They do not override the goals or progress rules here.
 See the [working scoreboard](AUTOGENERATION-PROGRESS.md) for the current
 milestone, measured baseline, completed checks and remaining work.
 
-## The goal
+## The goal and the current phase
 
 A change to ExifTool's tag definitions should flow into OxiDex by regeneration,
 without someone retyping the tag name, byte location, camera-selection rule or
@@ -19,14 +19,72 @@ reading numbers, evaluating expressions and decrypting blocks. Tag-specific
 knowledge must come from the pinned ExifTool source. **Moving a hard-coded tag
 rule into a generator or a shared helper does not count as automating it.**
 
-The target is the tag-specific metadata extraction behavior of pinned ExifTool
-13.59 across its formats. The 4,238-file corpus is a test population, not a
-way to exclude unexercised formats from the goal.
+The target is tag-specific reading and writing behavior of pinned ExifTool
+13.59 across its formats. Native read-only tags have no required write path;
+native writable tags need a separately verified one. The 4,238-file read
+corpus is a test population, not a way to exclude unexercised behavior.
+
+The current implementation batches primarily migrate reading. Completing those
+batches does not establish generated write support. Shared source definitions
+must account for both directions now, while reader and writer execution are
+migrated and verified separately. Write-side inventory and costing are in
+progress; the earlier reading estimate is not a full read/write estimate.
 
 We are finished when all tag-specific rules in that target come
 from that source, the required behavior works, the replaced manual rules are
 removed, and an upgrade demonstrates this. Unsupported behavior and unmeasured
 areas remain unfinished; they cannot disappear from the denominator.
+
+## How it works, in plain English
+
+The inputs are ExifTool's actual Perl tables and executable rules, not comments
+or documentation. We load the pinned source's real table structures and
+translate supported conditions, conversions and processing behavior into
+shared Rust definitions and operations. Unsupported Perl behavior remains
+explicitly unfinished; this is not an arbitrary Perl-to-Rust translator.
+
+A sample is not required to generate a supported tag definition. Samples test
+execution. Independent checks compare generated definitions with the native
+source, constructed files exercise rare rules and boundaries, and real files
+test complete parsing. Track generated, independently verified and exercised
+in a file separately. Absence from the corpus must not erase a native tag.
+
+## Reading and writing share definitions, with separate execution checks
+
+Capture the tag identity, type, placement, permissions, forward conversions and
+available inverse conversions together. Avoid duplicating tag knowledge in a
+second generator for writing. Missing inverse behavior is an explicit refusal,
+not permission to guess a reversal of the read conversion.
+
+OxiDex already has write paths for JPEG, PNG, PDF and walkable TIFF-based
+files, including some RAW containers, in `src/core/operations.rs`. These are
+container routes, not evidence that every native-writable tag is supported.
+The generated Canon reader migration does not activate generated writing.
+
+The source dump captures facts such as `Writable`, `PrintConvInv`,
+`ValueConvInv` and write-processing declarations. Inventory which facts are
+retained, translated, consumed by a writer, manual, unsupported or unclassified
+before counting progress. Writing needs encoding, insertion/deletion, placement
+and offset handling as well as preservation of unrelated metadata and file data.
+
+In parallel with the current reader acceptance, audit the existing writers
+and the shared schema. Select a small native-writable family already understood
+by the reader, generate its write-specific rules through the same source model,
+and retire the duplicate manual rules only after actual write/read-back proof.
+Do not create another vendor-specific translator or defer writer needs until
+the entire reading migration is finished.
+
+Track native writable rules accounted for, generated write rules, manual write
+rules and unsupported/unclassified behavior separately from reading. Test
+create/update/delete on disposable copies, read the results with pinned
+ExifTool, and verify preservation of unmodified data. A source-change rehearsal
+must update write behavior without tag-specific Rust/Python edits. A successful
+read census proves none of these write requirements.
+
+The JPEG matrix is a useful starting instrument. Its committed report is dated
+August 12; it is not a refreshed measurement of this candidate or all formats.
+Native read-only tags are explicitly ineligible for writing, not implementation
+gaps. No current generated-writing percentage has been established.
 
 ## Where we are now
 

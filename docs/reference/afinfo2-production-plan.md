@@ -93,11 +93,12 @@ codegen tests and full Clippy pass. Retain that failed attempt in the evidence.
 Independent artifact review also found that supported processor selection was
 not yet verified and that old AFInfo's unsupported geometry validator was
 incorrectly emitted as executable. The generator now leaves that distinct
-edge explicitly unwalked. The processor-oracle repair, full official
-regeneration, exact exported-fixture oracle checks, the pair after retirement,
-upgrade proof, full corpus and final hosted acceptance remain required before
-merge. No Canon reader is counted as merged retirement yet; no project-wide
-percentage follows from this bounded work.
+edge explicitly unwalked. The processor-oracle repair is integrated at
+`62535db7`; independent whole-batch source review accepts `ff1e364c`. Exact
+exported-fixture checks, the pair after retirement and full corpus are accepted
+below. Final hosted acceptance remains required before merge.
+No Canon reader is counted as merged retirement yet; no project-wide percentage
+follows from this bounded work.
 
 The exact seven TIFF byte vectors used by the public-reader tests are now
 exported and independently replayed through pinned ExifTool, in both display
@@ -127,5 +128,37 @@ The first official regeneration attempt at `62535db7` completed its tier-1
 generation and independent checks, but failed the write-set guard because the
 coordinator edited this plan and CI configuration while it ran. No declared
 artifact changed. This is an invalid complete-run attempt, not an accepted
-regeneration. Commit those edits, freeze the tree and rerun both tiers before
-claiming the pipeline passes; the failed log and snapshots are retained.
+regeneration. The failed log and snapshots are retained.
+
+The frozen retry at `ff1e364c` passes both tiers in 91.262 seconds: all 32
+declared artifacts reproduce with zero changes. The actual generated parent
+mutation test also runs with fresh canonical oracle inputs: all 140 focused
+Python tests pass with zero skips, including processor, validation and stale
+artifact rejection checks.
+
+The final bounded pair uses immutable `3d0353f4` after removing the manual
+reader: 53 real and 14 constructed inputs, 12,758 native tags, correct rows
+11,841 -> 11,843 and extras 43 -> 3. VALUE remains seven. There are no process
+failures, changed inputs, lost matched keys or real-file raw-output changes.
+The six constructed-file changes match the earlier checkpoint; retaining the
+manual reader is therefore not what produced those accepted results.
+
+This delivery migrates reading. Generated writing and its create/update/delete
+preservation tests remain a separate workstream in the main plan.
+
+The supported source-change proof passes. A copied pinned Canon.pm changes
+only AFInfo2 entry 8's name from AFAreaWidths to UpgradeAFAreaWidths. Official
+regeneration of all 32 artifacts succeeds in 247.561 seconds; four generated
+files change (the serial name and associated source/dump provenance). Clippy
+passes, then the isolated proof build completes in 56.001 seconds. Proof
+commit `28f3f0dc` changes no handwritten Rust/Python or carrier code.
+
+On the exact II/MM public fixtures in display and numeric modes, the regenerated
+binary changes that output key, preserves its value and matches the independently
+executed modified native source. All other meaningful output is unchanged.
+The original unfiltered comparison is retained: two first reads changed the
+filesystem FileAccessDate. The accepted comparison excludes only that established
+volatile key; it does not ignore any tag-value discrepancy. This proves the
+selected supported name change, not arbitrary Perl translation or a release
+upgrade. Evidence is under the batch's `source-upgrade-proof/` and the preserved
+native `BATCH/source-upgrade-proof/native-proof/` subdirectory.
