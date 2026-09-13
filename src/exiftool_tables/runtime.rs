@@ -24,6 +24,9 @@ pub enum DecodedValue {
     Float(f64),
     UnsignedRational(u32, u32),
     SignedRational(i32, i32),
+    /// A NUL-truncated native `string` value before ExifTool's output-only
+    /// UTF-8 repair. RawConv state sees these exact bytes.
+    StringBytes(Vec<u8>),
     String(String),
     Undefined(Vec<u8>),
     /// A repeated scalar field (`format[N]` in ExifTool's table schema).
@@ -96,9 +99,9 @@ impl DecodedValue {
     /// its raw bytes and printed `(Binary data 8 bytes, ...)` where ExifTool
     /// prints `Mobipocket`.
     ///
-    /// Bytes that are not valid UTF-8 yield `None`, which is not a loss: a
-    /// generated `StrEnum`'s keys are all `&str`, so no non-UTF-8 value could
-    /// have matched one.
+    /// [`Self::StringBytes`] is handled directly by [`render`], where enum
+    /// keys compare as their original UTF-8 byte literals and a miss gets its
+    /// native `Unknown (...)` wrapper before output-only UTF-8 repair.
     ///
     /// A fixed-count field's `$val` is ONE string: `ReadValue` returns
     /// `join(' ', @vals)` for more than one element (ExifTool.pm:6330), and
@@ -141,6 +144,8 @@ impl DecodedValue {
         match self {
             Self::Integer(value) => Some(value.to_string()),
             Self::Float(value) => Some(super::exprs::perl_num(*value)),
+            // Raw strings become display text only at this output boundary.
+            Self::StringBytes(bytes) => fix_utf8(bytes),
             Self::String(value) => Some(value.clone()),
             Self::Undefined(bytes) => String::from_utf8(bytes.clone()).ok(),
             Self::UnsignedRational(..) | Self::SignedRational(..) => None,
@@ -237,6 +242,10 @@ pub fn apply_value_conv(
         | DecodedValue::Float(_)
         | DecodedValue::UnsignedRational(..)
         | DecodedValue::SignedRational(..) => conversion.value_num(value.number()?),
+        // ProcessBinaryData string fields are unflagged byte scalars. Their
+        // closed byte-string domain is distinct from `undef` bytes: a byte
+        // conversion accepted for the latter is not evidence it may run here.
+        DecodedValue::StringBytes(value) => conversion.value_string_bytes(value),
         DecodedValue::String(value) => conversion.value_str(value),
         DecodedValue::Undefined(value) => conversion.value_bytes(value),
         // A fixed-count field's ValueConv sees the space-joined list ReadValue
@@ -264,6 +273,7 @@ pub fn apply_value_conv(
         }
         ExprValue::Number(value) => DecodedValue::Float(value),
         ExprValue::String(value) => DecodedValue::String(value),
+        ExprValue::Bytes(value) => DecodedValue::StringBytes(value),
     })
 }
 
@@ -301,6 +311,9 @@ pub fn to_tag_value(value: &DecodedValue) -> TagValue {
             numerator: *n,
             denominator: *d,
         },
+        DecodedValue::StringBytes(bytes) => {
+            TagValue::String(fix_utf8(bytes).expect("FixUTF8 always produces valid UTF-8"))
+        }
         DecodedValue::String(s) => TagValue::String(s.clone()),
         DecodedValue::Undefined(bytes) => TagValue::Binary(bytes.clone()),
         DecodedValue::Array(values) => TagValue::Array(values.iter().map(to_tag_value).collect()),
@@ -771,6 +784,18 @@ fn decode_field(
     if matches!(format, Fmt::Var(_)) {
         return None;
     }
+    // A bare binary-table `Format => 'string'` consumes the record remainder
+    // (ExifTool.pm:9970), unlike the IFD-only `Fmt::Str(0)` convention. An
+    // offset exactly at the end never reaches ReadValue in ProcessBinaryData
+    // because its `$more <= 0` check ends the walk first.
+    if format == Fmt::RemainderString {
+        let bytes = data.get(offset..)?;
+        if bytes.is_empty() {
+            return None;
+        }
+        let raw = decode_value_of(bytes, format, byte_order)?;
+        return Some(DecodedField { field, raw });
+    }
     // pstring carries its own length in the byte at `offset`
     // (ExifTool.pm:9972-9975: `$count = Get8u($dataPt, ($entry++)+$dirStart)`).
     // The count byte is consumed here so `decode_value_of` sees only the
@@ -899,11 +924,15 @@ pub fn decode_value_of(bytes: &[u8], format: Fmt, byte_order: ByteOrder) -> Opti
         // (ExifTool.pm:9972-9975). `decode_field` has already sliced `bytes` to
         // exactly the payload, so the length byte is gone by the time we get
         // here -- this arm and Str share the truncate-at-NUL rule.
-        Fmt::PString | Fmt::Str(_) => {
+        Fmt::PString | Fmt::Str(_) | Fmt::RemainderString => {
             let end = bytes
                 .iter()
                 .position(|byte| *byte == 0)
                 .unwrap_or(bytes.len());
+            // The stateless decode API has no RawConv execution context, so
+            // it projects directly to display text. The shared binary walker
+            // preserves the same bytes as `StringBytes` until after any
+            // RawConv state effect (engine.rs::read_value).
             DecodedValue::String(fix_utf8(&bytes[..end])?)
         }
         Fmt::Undef(_) => DecodedValue::Undefined(bytes.to_vec()),
@@ -1055,6 +1084,17 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
             None => unknown_text(&value.perl_string()?),
         }),
         PrintConv::StrEnum(map) => {
+            if let DecodedValue::StringBytes(bytes) = value {
+                let display = fix_utf8(bytes)?;
+                return Some(
+                    map.iter()
+                        .find(|(candidate, _)| candidate.as_bytes() == bytes)
+                        .map_or_else(
+                            || unknown_text(&display),
+                            |(_, rendered)| (*rendered).to_string(),
+                        ),
+                );
+            }
             let key = value.enum_key()?;
             Some(
                 map.iter()
@@ -1070,6 +1110,7 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
             | DecodedValue::Float(_)
             | DecodedValue::UnsignedRational(..)
             | DecodedValue::SignedRational(..) => expression.apply(value.number()?),
+            DecodedValue::StringBytes(value) => expression.apply_string_bytes(value),
             DecodedValue::String(value) => expression.apply_str(value),
             DecodedValue::Undefined(value) => expression.apply_bytes(value),
             // A fixed-count field's PrintConv on the elements as numbers --
@@ -2359,6 +2400,45 @@ mod tests {
         assert_eq!(
             render(platform, &DecodedValue::Undefined(vec![0xff, 0xfe])),
             None
+        );
+        // Fixed ProcessBinaryData strings remain raw bytes through PrintConv:
+        // a known ASCII key matches directly, while a non-UTF-8 miss gets
+        // ExifTool's Unknown wrapper before JSON's FixUTF8 projection.
+        let aiff = PrintConv::StrEnum(&[("NONE", "None")]);
+        assert_eq!(
+            render(aiff, &DecodedValue::StringBytes(b"NONE".to_vec())),
+            Some("None".to_string())
+        );
+        assert_eq!(
+            render(aiff, &DecodedValue::StringBytes(b"\xe9ABC".to_vec())),
+            Some("Unknown (?ABC)".to_string())
+        );
+    }
+
+    #[test]
+    fn byte_string_value_conv_retains_raw_bytes_until_output() {
+        // Kodak::Type7 SerialNumber carries the recognized native byte
+        // expression `$val =~ s/\\s+$//; $val`. Its invalid leading byte
+        // must survive the ValueConv: the pinned ProcessBinaryData probe sees
+        // e9414243, while only final JSON output repairs it to ?ABC.
+        let table = find_table("Kodak", "Type7").expect("generated Kodak::Type7");
+        let field = table
+            .fields
+            .iter()
+            .find(|field| field.name == "SerialNumber")
+            .expect("generated SerialNumber");
+        assert!(!field.omitted.value_conv);
+        let converted = apply_value_conv(
+            field.value_conv,
+            &DecodedValue::StringBytes(b"\xe9ABC \t\n".to_vec()),
+        );
+        assert_eq!(
+            converted,
+            Some(DecodedValue::StringBytes(b"\xe9ABC".to_vec()))
+        );
+        assert_eq!(
+            converted.as_ref().map(to_tag_value),
+            Some(TagValue::String("?ABC".to_string()))
         );
     }
 

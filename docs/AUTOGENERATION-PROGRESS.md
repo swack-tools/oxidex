@@ -1,14 +1,16 @@
 # Autogeneration progress
 
 This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
-The current milestone is one complete Sony focus-table migration. It is
-implemented in a work branch and is being validated; it has not landed.
-The committed pilot is published on `codex/sony-shared-table-migration-20260912`
-in ready-for-review PR #746. Hosted CI passes at `c3d0acd7`. Linux code checks
-and the final paired corpus comparison pass at `92dac917`, which has identical
-runtime and Rust test inputs. Final evidence and mandatory native inventory
-checks are being published before merge. The earlier complete comparison at
-`1a63822e` and the final retirement checks have separate evidence below.
+The Sony focus-table pilot merged in PR #746 at `04eaf6e1`; final CI is green
+at `a1626cb6`. It removed 17 duplicate declarations and brought the ten
+raw-ID fixes into the shared route. Its earlier comparisons, failed gate
+attempts and retirement checks remain below as history.
+
+The current milestone is the shared binary string capability at `019dd530`. Its
+first full candidate lost 55 previously correct rows through the legacy
+CameraInfo adapter; the published repair restores them. The repaired full
+candidate is artifact-complete, while both full-pair supervisor exit statuses
+are unavailable and explicitly retained as that validation limitation.
 
 ## What the pilot must prove
 
@@ -24,8 +26,8 @@ The duplicated Sony handling must then be removed.
 | Real-file coverage | 41 files; 142 native rows | Exact native focus values match. Paired full-output comparison results are identical per file. Four files with the same tag name from other tables were excluded. | Candidate and control are compared per file, with no unexplained changes. This scoped check passes. |
 | Boundary coverage | 14 complete TIFF carriers | Library and CLI reproduce the native expectations for both byte orders, zero/one/fifteen points, short records and a rejected signature. | The candidate reproduces those results through both the library and CLI. This check passes. |
 | Automatic upstream changes | No complete pilot proof at the start | Actual native dump, regeneration and independent artifact checking pass for rename, enum, offset and new-row changes. Each stale artifact is rejected. | All four change types pass the artifact chain. Runtime/carrier checks use the unchanged native pilot; executing each mutated artifact and broader upgrade behavior remain separate work. |
-| Duplicate custom handling | One Sony root rule and 17 custom table declarations | The candidate removes the root rule, all 17 declarations and their unused saved-value slot. A mechanical removal tool reproduces the exact artifact and records its source identity. Final local/Linux code checks and the corpus pair pass. | The replaced handling is removed in a verified, merged change. Merge remains. |
-| Merged pilot progress | Zero | Work remains on an isolated branch. | Review and required gates pass, then the migration is merged. |
+| Duplicate custom handling | One Sony root rule and 17 custom table declarations | PR #746 removes the root rule, all 17 declarations and their unused saved-value slot. A mechanical removal tool reproduces the exact artifact and records its source identity. Final local/Linux code checks and the corpus pair pass. | Complete for this pilot; wider source inventory remains open. |
+| Merged pilot progress | Zero | PR #746 merged at `04eaf6e1`; final CI is green at `a1626cb6`. | Complete for this pilot. |
 
 The source is pinned ExifTool 13.59. Native measurements use its explicit Perl
 reader; the 41-file producer identification also checks the native verbose
@@ -120,14 +122,22 @@ debts remain visible; this follow-up does not claim they pass.
 
 Shared string support is committed and pushed through `a93f1e4d`. It distinguishes
 a table's one-byte default from a field that reads the remaining record,
-preserves raw bytes in saved state, and repairs invalid text only at output.
-Independent native cases cover CanonRaw MakeModel and EXE DebugRSDS. Native
+preserves raw bytes in shared-engine saved state, and repairs invalid text at
+shared output projection. CameraInfo is a legacy text-domain adapter that
+projects those bytes with FixUTF8 before its own later processing; that adapter
+is compatible but not proof of byte-exact state semantics and remains migration
+debt. Independent native cases cover CanonRaw MakeModel and EXE DebugRSDS. Native
 review also found and corrected AIFF enum fallback and Kodak whitespace-trim
 behavior. The local workspace run passes 5,916 tests including doctests, with
 117 ignored; lint and the C-header check pass. The final formatting check and
 all 563 Python tool tests pass. Independent native inventory checks for
 CanonRaw MakeModel, EXE DebugRSDS and Kodak Type7 pass with zero mismatches.
-The full paired corpus comparison remains to be completed.
+The first complete pair exposed 55 lost correct rows; the `019dd530`
+CameraInfo repair has a 55-file bounded proof and an artifact-complete full
+candidate. Against the prior control it changes matched rows from 468,012 to
+468,013, leaves 12,258 MISSING, 1,562 EXTRA and 22 RENAME rows unchanged, and
+removes one Panasonic value mismatch. Both full-pair supervisor exit statuses
+are unavailable, so this is explicitly artifact-only evidence.
 
 A later boundary probe found that global inline Unicode regex flags bypassed
 the compiler's refusal for scoped flags. Native Perl and the Rust byte matcher
@@ -148,16 +158,21 @@ edges and the other manual Canon child producers remain separate work.
 
 ## What is still open
 
-- Publish the final evidence and required native-inventory invocation, finish
-  their hosted checks, then merge the integrated pilot. The separate
-  Sony-specific recovery draft still has unresolved findings and is not a
-  dependency of the mechanical retirement.
+- Review and merge the shared binary string capability. Preserve the initial
+  55-row regression, bounded repair proof and full-pair artifact-only caveat.
+  The separate Sony-specific recovery draft still has unresolved findings and
+  is not a dependency of the merged mechanical retirement.
 - Complete the wider inventory of manual, generated, unsupported and
   unclassified source rules, then refresh generated-route attribution on one
   recorded source revision.
+- The keyed-schema compiler checkpoint at `4d017bc6` has 579 Python tests
+  passing. Its full-dump replay found a missing keyed-only `ExprId` and is
+  under repair; it has no runtime validation or activation claim.
 
-The broader binary-artifact check now accounts for 8,228 native rows: 6,993
-generated and 1,235 declared omissions. Its stale records and unsupported
+At the Sony-pilot checkpoint, the broader binary-artifact check accounted for
+8,228 native rows: 6,993 generated and 1,235 declared omissions. The current
+shared binary artifact has 7,002 fields; neither figure is a whole-project
+automation denominator. Its stale records and unsupported
 omission explanations were corrected. It still fails strict completeness on
 2,854 enum entries across 49 maps whose native fallback behavior is unsupported.
 These are source-inventory findings, not a count of missing runtime tags or an

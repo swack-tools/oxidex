@@ -29,8 +29,9 @@ cluster in the residue):
   7. `$$self{Member} & 0xNN`               -> MemberBitAnd  (7th, maintainer add)
 
 Plus `$format`/`$count` comparisons (a named eighth bucket in the census,
-1.5% of uses) as MemberCmp's un-membered siblings (FormatEq/CountCmp), and
-the ExifTool assignment-as-condition idiom (`($$self{Member} = EXPR) and
+1.5% of uses) as MemberCmp's un-membered siblings (FormatEq/CountCmp) for
+ProcessExif callers; ProcessBinaryData keeps them omitted because its retry
+binds neither value. The ExifTool assignment-as-condition idiom (`($$self{Member} = EXPR) and
 ...`, `$$self{Member} = 1`) as SetMember -- see `src/exiftool_tables/cond.rs`
 module doc for the ExifTool.pm citation on why that idiom needs its own
 shape rather than folding into a comparison.
@@ -139,6 +140,9 @@ _RE_COUNT_ATOM = re.compile(r"^\$count\s*(==|!=|>=|<=|>|<)\s*(-?\d+)$")
 # idiom (Canon.pm:1312, Pentax.pm:4343, Sony.pm:902).
 _RE_SETMEMBER = re.compile(rf"^\(\s*{_MEMBER}\s*=\s*(\$count|-?\d+)\s*\)$")
 _RE_SETMEMBER_BARE = re.compile(rf"^{_MEMBER}\s*=\s*(\$count|-?\d+)$")
+_RE_SETMEMBER_WITH_TAIL = re.compile(
+    rf"^\(\s*{_MEMBER}\s*=\s*(\$count|-?\d+)\s*\)(?:\s+and\s+(.*))?$"
+)
 
 _CMP_OP = {"==": "Eq", "!=": "Ne", ">=": "Ge", "<=": "Le", ">": "Gt", "<": "Lt"}
 
@@ -155,7 +159,10 @@ def _regex_ast_ok(node):
             return False
         if opname == "subpattern":
             # av = (group_number, add_flags, del_flags, subpattern)
-            if not _regex_ast_ok(av[3]):
+            # Scoped flags such as `(?i:...)`/`(?u:...)` alter Perl's byte
+            # matching rules. Top-level `/i` is represented explicitly in
+            # Cond and proved separately; no inline flag scope is modeled.
+            if av[1] or av[2] or not _regex_ast_ok(av[3]):
                 return False
         elif opname == "branch":
             # av = (None, [branch1, branch2, ...])
@@ -221,7 +228,7 @@ def _perl_regex_to_rust(pattern):
     return "".join(out)
 
 
-def _validate_regex_pattern(pattern):
+def _validate_regex_pattern(pattern, *, ascii_source_only=False):
     """Structural validation via Python's own regex-parser AST, not a
     character allowlist -- see module docstring. Raises CondCompileError if
     the pattern is unparseable or uses a construct outside the vetted subset.
@@ -229,6 +236,18 @@ def _validate_regex_pattern(pattern):
     -> `\\x00` translation callers do for the bytes domain): Rust's `regex`
     crate syntax agrees with Perl's on every construct this allowlist admits.
     """
+    if ascii_source_only and (
+        any(ord(char) > 0x7f for char in pattern)
+        or re.search(r"\\(?:u|U|N)|\\x\{", pattern)
+    ):
+        raise CondCompileError(f"regex {pattern!r} uses an unmodeled Unicode spelling")
+    # `sre_parse` stores scoped flags on a SUBPATTERN node, but consumes a
+    # global `(?i)`/`(?u)` prefix into its parser state before this structural
+    # walk sees it. Native byte-mode evidence covers only Perl's external
+    # top-level `/i`, represented separately in Cond; any inline flag form
+    # therefore stays outside the closed grammar.
+    if re.search(r"\(\?[a-zA-Z-]+(?:[:)])", pattern):
+        raise CondCompileError(f"regex {pattern!r} uses inline flags outside the vetted subset")
     try:
         ast = sre_parse.parse(pattern)
     except re.error as e:
@@ -259,7 +278,10 @@ def _compile_atom(text):
         op, pattern, flags = m.group(3), m.group(4), m.group(5)
         if any(f not in "i" for f in flags):
             raise CondCompileError(f"unsupported regex flags {flags!r}")
-        _validate_regex_pattern(pattern)
+        # A RawConv data member may be an unflagged Perl byte scalar. Keep
+        # member patterns to ASCII byte grammar; high-byte `$valPt` patterns
+        # use the separately proven byte path below.
+        _validate_regex_pattern(pattern, ascii_source_only=True)
         rust_pattern = _perl_regex_to_rust(pattern)
         negate = "true" if op == "!~" else "false"
         ic = "true" if "i" in flags else "false"
@@ -366,7 +388,7 @@ def _compile_setmember(text):
     caller tries other shapes next)."""
     # `(...) and <rest>`: split once on the top-level ' and ' that follows a
     # balanced-paren assignment.
-    m = re.match(rf"^\(\s*{_MEMBER}\s*=\s*(\$count|-?\d+)\s*\)(?:\s+and\s+(.*))?$", text.strip())
+    m = _RE_SETMEMBER_WITH_TAIL.match(text.strip())
     if m:
         member = _member_name(text)
         source_text = m.group(3)
@@ -763,3 +785,40 @@ def compile_cond(condition):
     if not isinstance(condition, str) or not condition.strip():
         return "Cond::Always"
     return compile_cond_atoms_conjunction(condition)
+
+
+def needs_process_binary_data_retry_context(condition):
+    """Whether a compiled Condition reads `$format` or `$count` in
+    `ProcessBinaryData`'s GetTagInfo retry.
+
+    That retry passes only a capped raw `$valPt`; it does *not* bind the
+    later-resolved field format or count (ExifTool.pm:9929-9943). The same
+    grammar is also used by ProcessExif, where those values are meaningful,
+    so this is deliberately a caller-side eligibility check rather than a
+    global grammar refusal.
+    """
+    if condition is None or not isinstance(condition, str) or not condition.strip():
+        return False
+    try:
+        text = _collapse_ws_outside_literals(condition.strip())
+        set_member = _RE_SETMEMBER_WITH_TAIL.match(text)
+        if set_member is not None:
+            source_text, tail = set_member.group(3), set_member.group(4)
+            return source_text == "$count" or (
+                tail is not None and needs_process_binary_data_retry_context(tail)
+            )
+        set_member = _RE_SETMEMBER_BARE.match(text)
+        if set_member is not None:
+            return set_member.group(3) == "$count"
+        tokens = _tokenize(text)
+    except CondCompileError:
+        return False
+    return any(
+        kind == "atom"
+        and (
+            _RE_FORMAT_ATOM.match(atom)
+            or _RE_FORMAT_REGEX.match(atom)
+            or _RE_COUNT_ATOM.match(atom)
+        )
+        for kind, atom in tokens
+    )

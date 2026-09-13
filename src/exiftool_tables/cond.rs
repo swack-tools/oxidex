@@ -82,6 +82,10 @@ use std::collections::HashMap;
 /// populate whichever variant the member actually holds.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MemberValue {
+    /// A raw Perl byte scalar from ProcessBinaryData string RawConv. It is
+    /// intentionally distinct from UTF-8 text: FixUTF8 is an output repair,
+    /// not a state conversion.
+    Bytes(Vec<u8>),
     Str(String),
     Num(i64),
 }
@@ -352,8 +356,11 @@ impl Cond {
                 value,
                 negate,
             } => {
-                let eq =
-                    matches!(ctx.members.get(*member), Some(MemberValue::Str(s)) if s == value);
+                let eq = match ctx.members.get(*member) {
+                    Some(MemberValue::Bytes(bytes)) => bytes.as_slice() == value.as_bytes(),
+                    Some(MemberValue::Str(s)) => s == value,
+                    _ => false,
+                };
                 eq ^ negate
             }
             Cond::MemberRegex {
@@ -363,6 +370,9 @@ impl Cond {
                 negate,
             } => {
                 let matched = match ctx.members.get(*member) {
+                    Some(MemberValue::Bytes(bytes)) => {
+                        regex_match_bytes(pattern, *ignore_case, bytes)
+                    }
                     Some(MemberValue::Str(s)) => regex_match_str(pattern, *ignore_case, s),
                     _ => false,
                 };
@@ -370,7 +380,7 @@ impl Cond {
             }
             Cond::ValPtRegex { pattern, negate } => {
                 let matched = match ctx.val_pt {
-                    Some(bytes) => regex_match_bytes(pattern, bytes),
+                    Some(bytes) => regex_match_bytes(pattern, false, bytes),
                     None => false,
                 };
                 matched ^ negate
@@ -444,6 +454,7 @@ fn perl_truthy(v: Option<&MemberValue>) -> bool {
     match v {
         None => false,
         Some(MemberValue::Num(n)) => *n != 0,
+        Some(MemberValue::Bytes(bytes)) => !bytes.is_empty() && bytes.as_slice() != b"0",
         Some(MemberValue::Str(s)) => !s.is_empty() && s != "0",
     }
 }
@@ -474,9 +485,10 @@ fn regex_match_str(pattern: &str, ignore_case: bool, subject: &str) -> bool {
 /// `[\x05\xff]`, JPEG `\xff\xd8\xff`, ...); every binary-table `$$valPt`
 /// pattern is ASCII, which is why it never showed. Byte mode also makes
 /// `.`/`\w`/`\b` byte-wise, which is Perl's semantics on a byte string.
-fn regex_match_bytes(pattern: &str, subject: &[u8]) -> bool {
+fn regex_match_bytes(pattern: &str, ignore_case: bool, subject: &[u8]) -> bool {
     match regex::bytes::RegexBuilder::new(pattern)
         .unicode(false)
+        .case_insensitive(ignore_case)
         .build()
     {
         Ok(re) => re.is_match(subject),
@@ -561,6 +573,22 @@ mod tests {
             negate: true,
         };
         assert!(!neg.eval(&mut Ctx::new(&mut members)));
+    }
+
+    #[test]
+    fn byte_member_regex_keeps_perl_byte_boundaries_and_case_rules() {
+        // ProcessBinaryData string RawConv state is a Perl byte scalar. An
+        // invalid byte before the ASCII word must remain a non-word byte for
+        // `\b`, and /i applies to the following ASCII bytes without first
+        // repairing the subject to UTF-8.
+        let mut members = ctx_with(&[("Model", MemberValue::Bytes(b"\xe9eOs-1".to_vec()))]);
+        let cond = Cond::MemberRegex {
+            member: "Model",
+            pattern: r"\bEOS\b",
+            ignore_case: true,
+            negate: false,
+        };
+        assert!(cond.eval(&mut Ctx::new(&mut members)));
     }
 
     #[test]

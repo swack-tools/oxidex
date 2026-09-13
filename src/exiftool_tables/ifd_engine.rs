@@ -349,13 +349,22 @@ fn entry_type(code: u16) -> Option<EntryType> {
 fn accepted_type(code: u16, in_maker_notes: bool, ctx: &cond::Ctx) -> Option<EntryType> {
     let accepted = (1..=13).contains(&code)
         || code == 129
-        || (code == 16 && in_maker_notes && member_str(ctx, "Make") == Some("Apple"));
+        || (code == 16
+            && in_maker_notes
+            && member_bytes(ctx, "Make").is_some_and(|make| make == b"Apple"));
     if accepted { entry_type(code) } else { None }
 }
 
-fn member_str<'c>(ctx: &'c cond::Ctx, member: &str) -> Option<&'c str> {
+/// A member's original byte representation where one exists.
+///
+/// `ProcessBinaryData` RawConv can seed the shared map with a Perl byte
+/// scalar. Do not force it through UTF-8 merely to perform IFD's ASCII
+/// Make/Model guards: an invalid byte after an ASCII prefix is still part of
+/// a matching Perl byte string.
+fn member_bytes<'c>(ctx: &'c cond::Ctx, member: &str) -> Option<&'c [u8]> {
     match ctx.members.get(member) {
-        Some(MemberValue::Str(s)) => Some(s.as_str()),
+        Some(MemberValue::Bytes(bytes)) => Some(bytes),
+        Some(MemberValue::Str(s)) => Some(s.as_bytes()),
         _ => None,
     }
 }
@@ -364,7 +373,7 @@ fn member_str<'c>(ctx: &'c cond::Ctx, member: &str) -> Option<&'c str> {
 /// bodies write an empty first entry, so a bad first entry is not evidence
 /// of a corrupted IFD for them).
 fn model_is_ilce(ctx: &cond::Ctx) -> bool {
-    member_str(ctx, "Model").is_some_and(|m| m.starts_with("ILCE"))
+    member_bytes(ctx, "Model").is_some_and(|model| model.starts_with(b"ILCE"))
 }
 
 // ---------------------------------------------------------------------------
@@ -2164,6 +2173,13 @@ mod tests {
             vec![("Raw", TagValue::Integer(7))],
             "Exif.pm:6475: Sony ILCE bodies get `next` instead"
         );
+        let mut members = HashMap::new();
+        members.insert("Model", MemberValue::Bytes(b"ILCE-7M4\xe9".to_vec()));
+        assert_eq!(
+            values(&run_with(&PLAIN, &data, order, Some(0), &mut members)),
+            vec![("Raw", TagValue::Integer(7))],
+            "an invalid byte after the ASCII model prefix must not erase it"
+        );
         // Not the first entry: `next`, the rest of the directory is read.
         let data = ifd(
             order,
@@ -2205,6 +2221,16 @@ mod tests {
                 // 9 misses PLAIN's IntEnum: ExifTool's `Unknown (9)` (4b-i).
                 ("Mode", TagValue::String("Unknown (9)".to_string()))
             ]
+        );
+        let mut members = HashMap::new();
+        members.insert("Make", MemberValue::Bytes(b"Apple".to_vec()));
+        assert_eq!(
+            values(&run_with(&PLAIN, &data, order, Some(0), &mut members)),
+            vec![
+                ("Raw", TagValue::Integer(7)),
+                ("Mode", TagValue::String("Unknown (9)".to_string()))
+            ],
+            "an ASCII byte scalar is the same Make value native Perl compares"
         );
     }
 

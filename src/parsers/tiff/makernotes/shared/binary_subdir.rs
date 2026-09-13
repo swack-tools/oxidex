@@ -47,7 +47,10 @@ use std::collections::HashMap;
 
 use super::tag_priority;
 use crate::exiftool_tables::engine::{self, Cursor, Step};
-use crate::exiftool_tables::{Fmt as TableFmt, runtime::DecodedValue};
+use crate::exiftool_tables::{
+    Fmt as TableFmt,
+    runtime::{self, DecodedValue},
+};
 use crate::io::ByteOrder as IoByteOrder;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
@@ -338,6 +341,10 @@ fn read_elem(record: &[u8], at: usize, fmt: Fmt, order: ByteOrder) -> Option<Ele
     match engine::read_value(record, at, shared_fmt(fmt), 1, more, order)? {
         DecodedValue::Integer(n) => Some(Elem::Num(n)),
         DecodedValue::Float(v) => Some(Elem::Real(v)),
+        // This legacy subdirectory adapter has only an output-text `Elem`
+        // domain. The common reader keeps ProcessBinaryData bytes raw through
+        // effects; crossing into this adapter is its final text boundary.
+        DecodedValue::StringBytes(bytes) => runtime::fix_utf8(&bytes).map(Elem::Text),
         DecodedValue::String(s) => Some(Elem::Text(s)),
         DecodedValue::Undefined(bytes) => Some(Elem::Text(
             bytes
@@ -682,6 +689,20 @@ mod tests {
             &mut tags,
         );
         assert_eq!(tags.get("X:Name").map(String::as_str), Some("Bob"));
+
+        // A non-UTF-8 fixed string reaches this legacy text-only adapter only
+        // after the shared reader has preserved its byte value. Its final
+        // display projection uses ExifTool's FixUTF8 rule, not replacement
+        // character decoding or a dropped field.
+        let mut tags = HashMap::new();
+        decode_binary_subdir(
+            &S_TABLE,
+            b"\xe9ABC\0\xff\xff\xff",
+            ByteOrder::LittleEndian,
+            "X",
+            &mut tags,
+        );
+        assert_eq!(tags.get("X:Name").map(String::as_str), Some("?ABC"));
     }
 
     #[test]

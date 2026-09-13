@@ -377,6 +377,21 @@ pub fn trim_trailing_ws(val: &str) -> String {
         .to_string()
 }
 
+/// Byte-string form of [`trim_trailing_ws`].
+///
+/// Binary `string` values are native Perl byte scalars. Keep their exact
+/// bytes through a ValueConv, including invalid UTF-8, until the final output
+/// projection. This operation is intentionally limited to the pinned
+/// `$val =~ s/\s+$//; $val` expression recognized by `exprs.py`.
+#[must_use]
+pub fn trim_trailing_ws_bytes(val: &[u8]) -> Vec<u8> {
+    let end = val
+        .iter()
+        .rposition(|byte| !matches!(*byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0c | 0x0b))
+        .map_or(0, |index| index + 1);
+    val[..end].to_vec()
+}
+
 /// `Image::ExifTool::CanonCustom::ConvertPfn($val)`.
 ///
 /// ExifTool (`CanonCustom.pm:2624-2628`, pinned 13.59):
@@ -1023,6 +1038,12 @@ mod tests {
         assert_eq!(trim_trailing_ws("abc\u{85}"), "abc\u{85}");
         assert_eq!(trim_trailing_ws("abc\u{2003}"), "abc\u{2003}");
         assert_eq!(trim_trailing_ws("abc\u{a0} "), "abc\u{a0}");
+
+        // The same source-derived operation must retain unflagged Perl bytes
+        // through ValueConv; UTF-8 repair belongs only to the output layer.
+        assert_eq!(trim_trailing_ws_bytes(b"\xe9ABC \t\n"), b"\xe9ABC");
+        assert_eq!(trim_trailing_ws_bytes(b" \t\n"), b"");
+        assert_eq!(trim_trailing_ws_bytes(b"\xc3\xa9\x85 "), b"\xc3\xa9\x85");
     }
 
     #[test]

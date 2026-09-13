@@ -1,0 +1,76 @@
+{
+  "native_contract": {
+    "fixtures": [
+      "CanonRaw MakeModel",
+      "EXE DebugRSDS",
+      "Kodak Type7",
+      "AIFF Common"
+    ],
+    "formats": "Inherited default string reads one byte; explicit bare field string reads the remaining bytes; fixed string[N] clips then NUL-truncates.",
+    "state": "RawConv receives NUL-truncated bytes before output repair; valid UTF-8 and invalid bytes remain byte state."
+  },
+  "remaining": [
+    "CameraInfo is a legacy text-domain adapter; its later state processing is not byte-exact proof and remains migration debt.",
+    "No Canon caller has been enabled or retired by this capability.",
+    "Inactive byte PrintConv dispatch and unsupported string operations remain explicit work."
+  ],
+  "scope": "shared binary string bytes, fixed strings, and bare remainder strings",
+  "source": {
+    "capability_commit": "a93f1e4ddfd6adf58673529bd678f531b2a7b279",
+    "expression_ledger_sha256": "1bdfd6ba80cbf8528133895dc31bddb02cfec17c2c556ba58ad34e3334a99873",
+    "native_dump_sha256": "193cf4e91326f53c7bdfd674cb10da0937c8bcdb4c0285ad4f507fd9f96a8fb8",
+    "repair_commit": "019dd5307a2bd54b76195f0b814687c9e8ddfe46"
+  },
+  "validation": {
+    "first_full_candidate": {
+      "binary_source": "db61e34b",
+      "difference": "55 previously correct rows became MISSING: 49 FirmwareVersion, 4 MakerNotes:ISO, 1 FirmwareRevision, and 1 ShortOwnerName.",
+      "result": "regression"
+    },
+    "full_pair": {
+      "candidate": {
+        "extra": 1562,
+        "files": 4238,
+        "matched": 468013,
+        "missing": 12258,
+        "renames": 22,
+        "value_diff": 476
+      },
+      "candidate_binary_sha256": "39b58688c2558dd84e27c4d4e629bb5ac81373b0594690780804c7ced2474308",
+      "candidate_source": "019dd530",
+      "caveat": "Both full-pair supervisor exit statuses are unavailable after host detachment. The control and repaired candidate artifacts have valid 4,238-file JSON, TOTAL and write footers, no fatal log, and the 480,769-tag floor. The original control had no content manifest; the current manifest has matching 4,238 paths and a maximum mtime preceding its start, which is limited reuse evidence rather than byte identity proof.",
+      "control": {
+        "extra": 1562,
+        "files": 4238,
+        "matched": 468012,
+        "missing": 12258,
+        "renames": 22,
+        "value_diff": 477
+      },
+      "control_binary_sha256": "70c42edb63d3e435d25372ee203c423588cef57e7b937423630d8d4308843dff",
+      "control_source": "5bd15e0042b3d93fdc28c3b3d10b3a1eb4f1d37b",
+      "difference": "Only Panasonic RecognizedFace3Age is repaired; no newly missing, extra, or renamed row.",
+      "raw_json_sha256": {
+        "candidate": "0cf324a5995e394ea57502487808908637449bdea011f884ca7abf8beb07b1e6",
+        "control": "4fe4434230c0a38e4fa462feac8752a9a959bba7d25898230813b36850c74146"
+      }
+    },
+    "merged_checkpoint": {
+      "all_features_clippy": "not rerun after the merge; prior 019dd530 all-features Clippy passed, and hosted CI remains required for the merged branch",
+      "focused_default_tests": [
+        "CameraInfo 12/12 passed: /tmp/oxidex-camera-info-019dd530-merged.log",
+        "engine fail-closed member test 1/1 passed: /tmp/oxidex-engine-fail-closed-merged.log"
+      ]
+    },
+    "prior_rust_batch": "db61e34b: Clippy, workspace tests, and cbindgen check passed.",
+    "repair": {
+      "bounded_pair": "55 selected files, 18,680 pinned-oracle tags; both commands exited 0; no MISSING or EXTRA difference; Panasonic RecognizedFace3Age becomes native-correct.",
+      "reason": "CameraInfo's legacy reader matched only DecodedValue::String and silently discarded shared StringBytes."
+    },
+    "repair_checks": [
+      "019dd530: CameraInfo focused tests 12/12 passed.",
+      "019dd530: cargo clippy --all-features -- -Dwarnings passed.",
+      "merged checkpoint: CameraInfo focused tests 12/12 and fail-closed member test 1/1 passed."
+    ]
+  }
+}
