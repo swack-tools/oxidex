@@ -49,6 +49,8 @@ pub mod keyed_engine;
 pub mod keyed_schema;
 pub mod keyed_tables;
 pub mod runtime;
+pub mod serial_engine;
+pub mod serial_schema;
 pub mod subdir;
 pub mod validation;
 
@@ -86,6 +88,13 @@ pub use runtime::{
     RefusalCounts, TableDecode, all_fractional_census, apply_value_conv, decode_binary_table,
     decode_binary_table_variants, decode_bits, fractional_census, to_exiftool_value, to_tag_value,
     unknown_fallback,
+};
+pub use serial_engine::{
+    SerialDir, SerialEmissionSink, SerialWalkResult, process_serial_directory,
+};
+pub use serial_schema::{
+    OmittedSerialNativeRow, OmittedSerialNativeTable, SerialCount, SerialEntry, SerialFormat,
+    SerialProcessorFacts, SerialTable, SerialTag,
 };
 pub use subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
 pub use validation::{SizeExpectation, U16SizeCheck};
