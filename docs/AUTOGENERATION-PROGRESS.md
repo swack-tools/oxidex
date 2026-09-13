@@ -39,23 +39,45 @@ The [checkpoint record](reference/word-directory-checkpoint.md) separates
 these checks and publication states. Completed checkpoints are committed and
 pushed without waiting for the whole merge gate.
 
-The next [serial-processor checkpoint](reference/serial-processor-checkpoint.md)
-adds an independently reviewed native probe and eight passing tests. It is
-published at `f313e38a` and revalidated on fresh-base integration `c5bc4c9f`.
-Its first hosted run at `7c9dce65` exposed a threaded-Perl representation gap.
-That exact failure was reproduced locally; repair `f214accd` passes all eight
-tests on both threaded and non-threaded Perl 5.38.2. Corrected hosted checks
-remain pending, so this serial checkpoint is not yet merged.
-This is validation infrastructure: no serial descriptor or Rust reader is
-implemented, no production route is enabled, and the remaining counts stay
-**one unsupported child processor and four omitted parent rows**.
+The [serial-processor checkpoint](reference/serial-processor-checkpoint.md)
+merged in PR #755 as `93d19e24` at 11:18 UTC. All five hosted checks passed
+on final head `6c9e38ed`, including **706 native Python tests, zero failures
+and zero skips**, in 566.450 seconds. The initial threaded-Perl failure was
+reproduced locally and fixed; the eight focused probe tests pass on both
+threaded and non-threaded Perl 5.38.2.
 
-The next compiler milestone must derive sequential field layouts, prior-value
-lengths, conditions and conversions from native source. The next byte-handling
-milestone must resolve the four parent omissions, including raw image span/hash
-semantics. Activation and removal of duplicate Canon readers follow those
-checks. Code written for a probe or shared reader does not count as retired
-manual tag knowledge.
+The next reviewed source batch is committed on
+`codex/ciff-opaque-native-integration-20260913`; its first published complete
+inventory checkpoint is `37c32d58`. It accounts for all eight source-selected
+serial tables: **130 entries, 132 alternatives, 115 clear at the source gate
+and 17 with explicit refusals**. One table also retains a priority-policy
+blocker. A complete processor grammar rejects changed executable behavior;
+supported table-data changes still compile. These are source representability
+counts, not counts of executable Rust rows.
+
+The same batch adds actual Real AudioV3/V4 native replay and copied-source
+provenance checks at `66c430c6`, plus native CIFF opaque-data probes. Their
+observations cover reads, raw callbacks, image-span arguments and relevant
+ordering. Final output groups/conversions and actual image digest computation
+remain outside these probes' proof. Warnings are recorded separately from the
+chronological callback trace. The combined checkpoint at `66c430c6` passes **37 focused tests, zero
+failures and zero skips**, on both threaded and non-threaded Perl 5.38.2
+against pinned ExifTool 13.59. Full hosted checks remain required for merge.
+
+The next delivery is one shared serial reader and source-driven Rust emitter,
+followed by native/Rust replay. Their worker commits are staged separately and
+still need combined compilation and review. No production route is enabled;
+**one unsupported Canon child processor, four omitted parent rows and zero
+Canon manual readers retired** remain the production status.
+
+The first additional retirement candidate is Real AudioV4's manually specified
+31-entry sequence. It uses the same native serial processor and can prove reuse
+outside Canon. Count it as retired only after shared-path execution, native
+output/group checks, real fixtures, supported source mutations and a paired
+corpus comparison pass, then remove the duplicate manual sequence. AudioV3 is
+a cross-module control and potential new coverage; it has no existing manual
+sequence to retire. Canon carrier verification and removal of duplicate readers
+remain separate unfinished work.
 
 ### Latest recorded percentage has an unresolved validation defect
 
