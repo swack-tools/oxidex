@@ -1080,6 +1080,8 @@ def _parse_keyed_tag(src, match, key, fields, enums, pc_refused, facts, source_f
         if len(pairs) != expected:
             raise SystemExit("keyed PartialEnumInt parser is out of date; fix it before trusting a PASS")
         enums[key] = {a: unescape(b) for a, b in pairs}
+    elif not print_conv.startswith(("PrintConv::None", "PrintConv::Expr(", "PrintConv::Bitmask {")):
+        raise SystemExit(f"unrecognised keyed print_conv {print_conv!r}; fix the verifier before trusting a PASS")
     groups_marker = re.compile(r"\s*,\s*groups:\s*").search(src, pc_end)
     if groups_marker is None:
         raise SystemExit("KeyedTag lacks groups after print_conv")
@@ -1511,6 +1513,10 @@ def native_inventory(
 def _keyed_expected_format(spelling):
     if spelling is None:
         return "None"
+    if spelling == "string":
+        return "Some(Fmt::Str(1))"
+    if _SIZED_FMT_RE.fullmatch(spelling):
+        return None
     expected = expected_fmt_literal(spelling)
     return expected[0] if expected is not None else None
 
@@ -1674,6 +1680,17 @@ def keyed_native_inventory(generated, omissions, or_names, or_enums, or_rawfmts,
             keyed_fact_mismatches.append((table, f"table groups {generated.table_groups.get(table)!r} != native {expected_groups!r}"))
     for table in generated.table_scope - table_scope:
         keyed_fact_mismatches.append((table, "generated keyed table has no live keyed processor identity"))
+    for key in sorted(generated_keys - set(native)):
+        keyed_fact_mismatches.append((key, "generated keyed row has no live native row"))
+    for key in sorted(set(native) & generated_keys):
+        if key in generated.pc_refused:
+            continue
+        for enum_key, native_value in or_enums.get(key, {}).items():
+            got_value = generated.enums.get(key, {}).get(norm_key(enum_key))
+            if got_value is not None and got_value != native_value:
+                keyed_fact_mismatches.append(
+                    (key, f"enum {norm_key(enum_key)!r} {got_value!r} != native {native_value!r}")
+                )
     for key, omission in declared.items():
         if omission.source_facts != expected_source(key):
             keyed_fact_mismatches.append((key, "omission native facts differ from live source"))

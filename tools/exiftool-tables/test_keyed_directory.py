@@ -75,6 +75,16 @@ class SourceDrivenFacts(unittest.TestCase):
         self.assertIn('reasons: &["count"]', src)
         self.assertEqual(stats["keyed_count"], 1)
 
+    def test_keyed_string_is_counted_bytes_and_sized_formats_are_refused(self):
+        src, stats = keyed_directory.generate(doc({
+            "0x0801": {"Name": "ThreeBytes", "Format": "string", "Count": 3},
+            "0x1005": {"Name": "Sized", "Format": "int16u[3]"},
+        }))
+        self.assertIn('raw_id: 0x0801, name: "ThreeBytes", format: Some(Fmt::Str(1)), count: Some(3)', src)
+        self.assertIn('raw_id: "0x1005", variant: false, name: Some("Sized"), native:', src)
+        self.assertIn('reasons: &["format"]', src)
+        self.assertEqual(stats["keyed_format"], 1)
+
     def test_parent_id_and_target_mutations_change_schema_without_a_tag_rule(self):
         base = {"0x080a": {"Name": "CanonRawMakeModel", "SubDirectory": {"TagTable": "Image::ExifTool::Any::MakeModel"}}}
         moved = {"0x0809": base["0x080a"]}
@@ -191,6 +201,30 @@ class IndependentInventory(unittest.TestCase):
             {}, {}, {}, set(), set(), {}, {}, {("Any", "Main"): ("MakerNotes", "", "")}, {}, {}, {},
         )
         self.assertEqual(inv.missing, (key,))
+
+    def test_inventory_rejects_enum_value_drift_generated_orphans_and_unknown_printconv(self):
+        path = self._artifact({"0x1001": {"Name": "Mode", "PrintConv": {
+            "kind": "enum", "map": {"0": "Off", "1": "On"}, "directives": {},
+        }}})
+        src = path.read_text()
+        key = ("Any", "Main", "4097")
+        oracle_args = ({key: "Mode"}, {key: {"0": "Off", "1": "On"}}, {}, {}, set(), set(), {},
+                       {}, {("Any", "Main"): ("MakerNotes", "", "")}, {}, {}, {})
+        drift = path.with_name("enum-drift.rs")
+        drift.write_text(src.replace('"On"', '"Broken"'), encoding="utf-8")
+        inv = verify.keyed_native_inventory(
+            verify.parse_keyed_rust(drift), verify.parse_omitted_keyed_native_rows(drift), *oracle_args
+        )
+        self.assertTrue(any("enum '1'" in why for _key, why in inv.keyed_fact_mismatches))
+        orphan = verify.keyed_native_inventory(
+            verify.parse_keyed_rust(path), verify.parse_omitted_keyed_native_rows(path),
+            {}, {}, {}, {}, set(), set(), {}, {}, {("Any", "Main"): ("MakerNotes", "", "")}, {}, {}, {},
+        )
+        self.assertTrue(any("no live native row" in why for _key, why in orphan.keyed_fact_mismatches))
+        unknown = path.with_name("unknown-printconv.rs")
+        unknown.write_text(src.replace("PrintConv::IntEnum", "PrintConv::Mystery"), encoding="utf-8")
+        with self.assertRaises(SystemExit):
+            verify.parse_keyed_rust(unknown)
 
 
 if __name__ == "__main__":
