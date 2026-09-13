@@ -71,9 +71,30 @@ class _Body:
             raise WordDirectoryRefused("processor diagnostic is not a literal string")
         value = self.tokens[self.at]
         self.at += 1
-        # Deparse uses ordinary quoted literals here; literal_eval would also
-        # interpret Perl-only escapes.  The captured literal remains evidence.
-        return value[1:-1]
+        quote, text = value[0], value[1:-1]
+        out, at = [], 0
+        while at < len(text):
+            char = text[at]
+            if char in "$@" and quote == '"':
+                raise WordDirectoryRefused("processor diagnostic has unmodeled Perl interpolation")
+            if char != "\\":
+                out.append(char)
+                at += 1
+                continue
+            if at + 1 == len(text):
+                raise WordDirectoryRefused("processor diagnostic has a trailing escape")
+            escaped = text[at + 1]
+            if quote == "'":
+                # Single-quoted Perl only unescapes a quote and backslash.
+                out.append(escaped if escaped in "\\'" else "\\" + escaped)
+            else:
+                decoded = {"n": "\n", "r": "\r", "t": "\t", "f": "\f", "b": "\b",
+                           "a": "\a", "e": "\x1b", "\\": "\\", '"': '"', "$": "$", "@": "@"}
+                if escaped not in decoded:
+                    raise WordDirectoryRefused("processor diagnostic escape is outside the shared literal grammar")
+                out.append(decoded[escaped])
+            at += 2
+        return "".join(out)
 
     def number(self, *, maximum=0xffffffff):
         if self.at >= len(self.tokens) or re.fullmatch(r"(?:0|[1-9]\d*)", self.tokens[self.at]) is None:
@@ -109,12 +130,17 @@ def _provenance(fact):
     return file, sha
 
 
-def _reader_fingerprint(processor, reader_contracts):
+def _reader_fingerprint(processor, reader_contracts, package):
     try:
         snapshot = reader_contracts.get("unsigned16") if isinstance(reader_contracts, dict) else None
         reader_sha = native_reader_contract.fingerprint(snapshot)
         dependencies = processor.get("dependencies")
-        get16u = dependencies.get("Image::ExifTool::Get16u") if isinstance(dependencies, dict) else None
+        # B::Deparse leaves this processor's calls bare.  The capture must
+        # therefore follow the actual package symbol selected by that body;
+        # accepting a fabricated core-package fact would miss a local glob
+        # rebind while preserving the identical deparsed processor text.
+        binding = f"{package}::Get16u"
+        get16u = dependencies.get(binding) if isinstance(dependencies, dict) else None
         expected = native_reader_facts.source_fact(snapshot["loaded_functions"]["get16u"], "Image::ExifTool::Get16u")
         if native_reader_facts.source_fact(get16u, "Image::ExifTool::Get16u") != expected:
             raise native_reader_facts.ReaderRefused("processor reader differs from loaded reader")
@@ -132,6 +158,19 @@ def _condition(regex):
     closing = regex.rfind("/")
     if closing <= 0:
         raise WordDirectoryRefused("processor exception is not a source regex")
+    # Perl interpolates unescaped scalar and array sigils in a regex literal.
+    # The shared Rust regex operand is static, so accepting `/\$size/` as the
+    # characters dollar/size is fine but accepting `/$size/` would silently
+    # freeze a runtime-native value into the wrong literal pattern.
+    pattern = regex[1:closing]
+    escaped = False
+    for char in pattern:
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char in "$@":
+            raise WordDirectoryRefused("processor regex has unmodeled Perl interpolation")
     value = conds.compile_cond("$$self{Model} =~ " + regex)
     if value is None:
         raise WordDirectoryRefused("processor model predicate is outside the shared condition grammar")
@@ -193,14 +232,15 @@ class LengthPrefixedU16Pairs:
 def compile_word_directory(processor, reader_contracts):
     """Compile one complete native processor body into source-derived operands."""
     file, sha = _provenance(processor)
-    reader_sha = _reader_fingerprint(processor, reader_contracts)
     body_source = processor.get("__deparse")
     body = _Body(body_source)
 
     body.take("(", "$", "$", "$", ")", "{", "package")
     if body.at >= len(body.tokens) or re.fullmatch(_FQ, body.tokens[body.at]) is None:
         raise WordDirectoryRefused("processor package is unavailable")
+    package = body.tokens[body.at]
     body.at += 1
+    reader_sha = _reader_fingerprint(processor, reader_contracts, package)
     body.take(";", "use", "strict", ";", "(", "my", "(")
     et, directory, table = body.scalar(), None, None
     body.take(",")
