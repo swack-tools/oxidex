@@ -38,9 +38,10 @@ supported or generated runtime tables.
 | Parent CIFF definitions | 61 native rows = 57 represented + 4 explicit omissions; zero native fact discrepancies | Parent still has one unsupported child processor and four omitted rows. |
 | Child-processing refusals | Five before, one after generation | This does not enable a carrier or retire manual code. |
 | Translated expressions | 607 passed; 16,789 matching probes; 14 inapplicable probe inputs | Expression validation is distinct from word-directory execution. |
-| Rust reader and native replay | 24 keyed-reader tests pass; the explicitly selected native/Rust test passes all six cases using generated tables | Both byte orders, invalid headers, short reads, missing model state and parent dispatch are covered. Verbose-directory reporting remains a review finding under correction. |
-| Rust lint | Exact CI Clippy command passed | Must remain green after the verbose-reporting correction. |
-| Official two-tier regeneration | Partial; fourth attempt next | Earlier attempts stopped on a missing Rust import, an unreported processor counter, then a legacy Sony selector rejecting enriched processor facts. All three causes are corrected; a complete pass is still required. |
+| Rust reader and native replay | 25 keyed-reader tests pass; the explicitly selected native/Rust test passes all seven cases using generated tables | Both byte orders, invalid headers, short reads, missing model state, parent dispatch and verbose-directory callbacks are covered. |
+| Rust lint and formatting | Exact CI Clippy command and formatting check pass at `f613820d` | Hosted checks remain a separate merge condition. |
+| Official two-tier regeneration | PASS at `b9c7f206`, 196 seconds, zero declared net changes | Earlier failed attempts are preserved; the later verbose correction changes runtime and tests only. |
+| Full Python suite | Pending serial rerun | An earlier attempt used a wrong native source-root setting and was stopped after a test started Clippy outside its assigned build scope. No full-suite pass is claimed. |
 | Runtime migration and retirement | Not complete | No production Canon route is enabled; no duplicate Canon reader is removed. |
 
 Regeneration uses isolated Perl 5.38.2, Archive::Zip 1.68 and repository-pinned
@@ -59,23 +60,25 @@ and records its return, warnings and handler arguments. Matching a source
 digest alone is deliberately not treated as matching execution.
 
 Evidence is under the task's `shared-pilot/word-directory-20260913/` directory:
-`canonical-r1/`, `canonical-r2/`, `canonical-r3/`, `rust-native-r1/`,
+`canonical-r1/`, `canonical-r2/`, `canonical-r3/`, `canonical-r4/`,
+`rust-native-r1/`, `rust-native-r2/`,
 `definition-verification.json`,
 `definition-verification.log`, `clippy-initial.json` and publication records.
 The owned checkout's local `HANDOFF.md` locates this task evidence.
 
 Published checkpoints: definitions and documentation `ff1237ea`, runtime
 validation `90034b1c`, shared-processor compatibility `88e07a47`, combined
-branch `a4dd6af1`. These are pushed work-branch commits, not merged runtime
-activation.
+branch `a4dd6af1`, CI enforcement `b9c7f206`, and verbose replay
+`00db6529`. The validated combined source is `f613820d`. These are work-branch
+checkpoints, not merged runtime activation.
 
 ## Next measurable steps
 
-1. Finish the official two-tier regeneration and publish its exact verdict.
-2. Complete verbose-directory reporting and extend native/Rust replay to
-   compare that effect. The quiet-mode replay and real generated parent-edge
-   dispatch checks already pass. CI explicitly runs the native test and
-   rejects a successful command that selects zero tests.
+1. Complete the full Python rerun and hosted PR checks, then squash-merge
+   the reviewed checkpoint on a freshly checked integration base.
+2. Keep the explicit native replay gate in CI. It now compares return values,
+   warnings, every handler argument and verbose directory events; it rejects
+   a successful command that selects zero tests.
 3. Implement the remaining dynamic-length processor and resolve the four
    omitted parent rows, recording each reduction in unsupported rules.
 4. Verify both real Canon carriers, enable the validated path and remove the

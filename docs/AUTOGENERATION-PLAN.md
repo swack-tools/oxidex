@@ -97,10 +97,10 @@ child edges.
 The current word-directory checkpoint generates nine tables and all 132 native
 rows; independent definition and reader-binding checks pass. Its generated
 descriptors clear four of those five child-processing refusals. These are
-source-level results. The quiet-mode native/Rust replay and real generated
-child dispatch tests pass at published checkpoint `a4dd6af1`. The next small
-milestones are to cover verbose reporting, finish official regeneration,
-implement the remaining dynamic-length
+source-level results. Native/Rust replay, including verbose reporting, and
+real generated child dispatch pass at `f613820d`. Official regeneration passes
+with zero declared changes at `b9c7f206`. After full Python and hosted checks
+and merge, the next small milestones are to implement the remaining dynamic-length
 processor, and resolve the four omitted parent rows. Each completion must
 reduce a named blocker count while preserving native behavior. Canon carrier
 activation and removal of the duplicate readers come after those checks;

@@ -15,24 +15,27 @@ This is definition coverage; production routing remains inactive.
 Four of the parent's five unsupported child processors now have generated
 descriptors. One dynamic-length processor and four omitted parent rows remain.
 No Canon manual reader has been retired and no project-wide percentage has
-been remeasured. The next measurable result is complete native/Rust execution
-agreement, including verbose reporting, followed by the remaining processor,
-real-carrier verification and removal of duplicate readers.
+been remeasured. The next measurable results are the remaining processor,
+real-carrier verification and removal of duplicate readers, after this
+checkpoint passes its full checks and merges.
 
-At published checkpoint `a4dd6af1`, 24 Rust reader tests pass and the explicit
-native/Rust comparison passes all six cases with the real generated tables.
-The generated parent-edge dispatch check also passes. Independent review found
-that verbose-directory reporting still needs to be implemented and compared.
-CI now explicitly selects the native test and rejects a zero-test run.
+The combined source at `f613820d` passes 25 Rust reader tests and the explicit
+native/Rust comparison passes all seven cases with the real generated tables.
+This includes the generated parent edge, verbose-directory reporting, rejected
+headers, short reads and both byte orders. CI explicitly selects the native
+test and rejects a zero-test run. Clippy and formatting pass.
 
-All 607 translated expressions passed 16,789 native comparisons; 14 probe
-inputs were inapplicable. Official regeneration reached the older Sony
-producer, whose selector rejected enriched processor facts. That compatibility
-fix is pushed as `88e07a47`; the full two-tier rerun remains pending. The
-[checkpoint record](reference/word-directory-checkpoint.md) preserves the three
-failed regeneration attempts and distinguishes definition, runtime and merge
-status. Completed checkpoints are committed and pushed without waiting for the
-whole merge gate.
+Official two-tier regeneration passes at `b9c7f206` in 196 seconds and
+reproduces every declared artifact with zero net changes. All 607 translated
+expressions pass 16,789 native comparisons; 14 probe inputs are inapplicable.
+The earlier three failed regeneration attempts remain recorded. The full
+Python suite is being rerun serially after a wrong source-root setting and
+an unexpected compiler invocation in the first attempt; no full-suite pass
+is claimed. Hosted PR checks and merge remain pending.
+
+The [checkpoint record](reference/word-directory-checkpoint.md) separates
+these checks and publication states. Completed checkpoints are committed and
+pushed without waiting for the whole merge gate.
 
 ## Earlier milestones and evidence
 
