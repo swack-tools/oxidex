@@ -130,13 +130,16 @@ impl DirEngineRows {
     /// relative order of the two rows.
     ///
     /// Returns whether a row existed (recorded or dropped by `keep`). `false`
-    /// means the engine refused the entry, and that absence is NOT always
-    /// ExifTool's: `ifd_engine::locate`'s `table_ifd.rs` floor refuses an
-    /// out-of-line value stored anywhere before the end of the directory,
-    /// where ExifTool refuses only one that overlaps it (Exif.pm:6549; the
-    /// K-O construct, E-2 commit 1), and a directory `read_ifd` refuses has
-    /// no rows at all. So the caller decides: the InteropIFD caller falls
-    /// back to its hand arm, the pre-engine producer, for that entry.
+    /// means the engine refused the entry, and that absence is not always
+    /// ExifTool's: a directory `read_ifd` refuses has no rows at all (its
+    /// entry bound is stricter than ExifTool's), and a value outside the
+    /// TIFF block the engine walks may still be inside what the hand reader
+    /// reaches. (Until K-O, E-2 commit 1, the `table_ifd.rs` floor also
+    /// refused a value stored before the directory, which ExifTool reads
+    /// unless its offset points into the TIFF header: `Exif::Main` now has
+    /// Exif.pm:6539's header check and 6549's overlap rule.) So the caller
+    /// decides: the InteropIFD caller falls back to its hand arm, the
+    /// pre-engine producer, for that entry.
     pub(crate) fn replay(
         &mut self,
         id: u16,
@@ -713,11 +716,14 @@ mod tests {
         assert!(metadata.get("InteropIFD:ResolutionUnit").is_none());
     }
 
-    /// The floor refusal `replay` reports as `false`: an out-of-line value
-    /// stored before the directory, which ExifTool reads (Exif.pm:6549 only
-    /// refuses an overlap) and `ifd_engine::locate`'s floor refuses.
+    /// K-O (E-2 commit 1, spec 7.1 test 13 on the real table): an
+    /// out-of-line value stored entirely BEFORE the directory, past the TIFF
+    /// header, is read, as ExifTool reads it (Exif.pm:6549 refuses an
+    /// overlap, Exif.pm:6539 an offset below 8; this one, at 8, is neither).
+    /// Before K-O the `table_ifd.rs` floor refused it and `replay` reported
+    /// `false`.
     #[test]
-    fn a_value_stored_before_the_directory_has_no_row_and_replay_says_so() {
+    fn a_value_stored_before_the_directory_is_read() {
         // Header, then the 8-byte rational at 8, then the IFD at 16.
         let mut tiff = b"II\x2a\0\x10\0\0\0".to_vec();
         tiff.extend([72u32.to_le_bytes(), 1u32.to_le_bytes()].concat());
@@ -727,24 +733,43 @@ mod tests {
         tiff.extend(1u32.to_le_bytes());
         tiff.extend(8u32.to_le_bytes());
         tiff.extend(0u32.to_le_bytes());
-        let mut rows = walk(
-            &IFD_EXIF_MAIN,
-            &tiff,
-            16,
-            ByteOrder::LittleEndian,
-            "InteropIFD",
-            &MetadataMap::new(),
-        );
-        assert_eq!(rows.entries(), Some(1));
+        let walk_as = |tiff: &[u8], dir| {
+            walk(
+                &IFD_EXIF_MAIN,
+                tiff,
+                16,
+                ByteOrder::LittleEndian,
+                dir,
+                &MetadataMap::new(),
+            )
+        };
+        for dir in ["InteropIFD", "ExifIFD"] {
+            let mut rows = walk_as(&tiff, dir);
+            assert_eq!(rows.entries(), Some(1));
+            let mut metadata = MetadataMap::new();
+            assert!(rows.replay(
+                0x011a,
+                &mut metadata,
+                |name: &str| format!("{dir}:{name}"),
+                |_, _| true
+            ));
+            assert_eq!(
+                metadata.get(&format!("{dir}:XResolution")),
+                Some(&TagValue::Integer(72)),
+                "{dir}"
+            );
+        }
+        // A value that overlaps the entry array is still refused: the
+        // rational at 16 starts on the entry count itself.
+        tiff[26..30].copy_from_slice(&16u32.to_le_bytes());
+        let mut rows = walk_as(&tiff, "ExifIFD");
         assert!(rows.rows.is_empty(), "{:?}", rows.rows);
-        let mut metadata = MetadataMap::new();
         assert!(!rows.replay(
             0x011a,
-            &mut metadata,
-            |name: &str| format!("InteropIFD:{name}"),
+            &mut MetadataMap::new(),
+            |name: &str| format!("ExifIFD:{name}"),
             |_, _| true
         ));
-        assert!(metadata.is_empty());
     }
 
     #[test]

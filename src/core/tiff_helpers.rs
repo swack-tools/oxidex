@@ -1047,9 +1047,9 @@ fn interop_keep(name: &str, metadata: &MetadataMap) -> bool {
 /// ([`exif_dir_engine::walk`]), replayed at its entry's position in the hand
 /// walk below; [`INTEROP_RESIDUAL_IDS`] stay with their hand arms, and every
 /// other id produces nothing, as the hand arm dropped every id it did not
-/// name. An engine-reported entry the engine refused (no row: the floor
-/// refuses a value stored before the directory, which ExifTool reads, or a
-/// directory `read_ifd` refuses) keeps its hand arm for that entry. Engine
+/// name. An engine-reported entry the engine refused (no row: a value it
+/// cannot locate inside the TIFF block, or a directory `read_ifd` refuses)
+/// keeps its hand arm for that entry. Engine
 /// rows are recorded at the hand arms' priority ([`SHIM_DEFAULT_PRIORITY`];
 /// `DirEngineRows::at_priority`). With the table off, the hand arms run
 /// alone exactly as before the slice (the E-1/E-2 fallback; E-D deletes it).
@@ -1150,10 +1150,10 @@ fn parse_interop_directory(
             // An engine-reported id replays its row here; any other id
             // produces nothing, as the hand arm dropped every id it did not
             // name (the `_` arm below). An engine-reported id with no row --
-            // the engine refused the value (its floor refuses a value stored
-            // before the directory, which ExifTool reads: Exif.pm:6549 is
-            // an overlap rule, K-O in E-2) or the whole directory -- falls
-            // through to its hand arm, the pre-engine producer.
+            // the engine refused the value (one it cannot locate inside the
+            // TIFF block; before K-O also one stored before the directory)
+            // or the whole directory -- falls through to its hand arm, the
+            // pre-engine producer.
             if engine.owner(*tag_id, false) != exif_dir_engine::Owner::Engine
                 || engine.replay(*tag_id, metadata, interop_key, interop_keep)
             {
@@ -4820,6 +4820,54 @@ mod ifd1_tests {
         );
     }
 
+    /// K-O (E-2 commit 1) keeps Exif.pm:6539: an IFD1 value whose stored
+    /// offset points into the 8-byte TIFF header is "Suspicious" and skipped
+    /// (`$valuePtr < 8`; no `Exif::Main` directory sets `ZeroOffsetOK`),
+    /// although it lies before the directory, where the overlap rule alone
+    /// would read it. The recheck's crafted `hdroff0.jpg` / `hdroff4.jpg`
+    /// (IFD1 XResolution at offset 0 / 4): pinned 13.59 `-G1 -a -EXIF:all`
+    /// prints `[IFD1] YResolution 96`, no XResolution, and the warning
+    /// "Suspicious IFD1 offset for XResolution"; without the check the engine
+    /// read the header bytes `II*\0` / `8` as XResolution 346409.125.
+    #[test]
+    fn an_ifd1_value_in_the_tiff_header_is_refused() {
+        let mut data = build_two_ifd_tiff(
+            &[],
+            &[
+                (TAG_X_RESOLUTION, RATIONAL, 1, rational(72, 1)),
+                (TAG_Y_RESOLUTION, RATIONAL, 1, rational(96, 1)),
+            ],
+        );
+        // IFD0 (no entries) at 8, IFD1 at 14: XResolution's value field is
+        // at 14 + 2 + 8.
+        assert_eq!(&data[24..28], &44u32.to_le_bytes(), "the layout");
+        for at in [0u32, 4] {
+            data[24..28].copy_from_slice(&at.to_le_bytes());
+            let reader = TestReader::new(data.clone());
+            let mut metadata = MetadataMap::new();
+            parse_ifd1(
+                &reader,
+                &data,
+                8,
+                0,
+                ByteOrder::LittleEndian,
+                0,
+                true,
+                &mut metadata,
+            );
+            assert!(
+                metadata.get("IFD1:XResolution").is_none(),
+                "offset {at}: {:?}",
+                metadata.get("IFD1:XResolution")
+            );
+            assert_eq!(
+                metadata.get("IFD1:YResolution"),
+                Some(&TagValue::Integer(96)),
+                "offset {at}: the next entry is still read"
+            );
+        }
+    }
+
     /// `--no-print-conv` (ExifTool `-n`) shows the engine's pre-PrintConv
     /// value, not the printed label: pinned 13.59 `-n -G1 -j` on
     /// AppleQT-200.jpg prints `"IFD1:ResolutionUnit": 2`,
@@ -5731,15 +5779,19 @@ mod interop_tests {
     }
 
     /// Review finding (E-1, rev-exactness `crafted/before.*`,
-    /// `crafted2/idx8_before.*`): out-of-line values stored BEFORE the
-    /// Interop directory. ExifTool reads them (Exif.pm:6549 refuses only an
-    /// overlap; pinned 13.59 prints `[InteropIFD] XResolution 72`,
-    /// `YResolution 96`, and `-n` InteropIndex `ASCIIR98` with no warning);
-    /// the engine's floor refuses them, so those entries keep their hand
-    /// arms -- byte-identical to the engine-off fallback -- instead of
-    /// vanishing. The inline ResolutionUnit is still the engine's.
+    /// `crafted2/idx8_before.*`), resolved by K-O (E-2 commit 1): out-of-line
+    /// values stored BEFORE the Interop directory, past the TIFF header.
+    /// ExifTool reads them (Exif.pm:6549 refuses an overlap, Exif.pm:6539 an
+    /// offset below 8; these are neither); until K-O the engine's
+    /// `table_ifd.rs` floor refused them and these entries fell back to
+    /// their hand arms. Now the engine reads them itself, and every row is
+    /// the pinned 13.59 oracle's (the same bytes behind IFD0 -> ExifIFD
+    /// 0xa005 in a crafted JPEG, `exiftool-pinned.sh -G1 -a -s [-n]
+    /// -InteropIFD:all`: `Unknown (ASCIIR98)` / `-n` `ASCIIR98`, XResolution
+    /// 72, YResolution 96, ResolutionUnit `inches` / `-n` 2, no warning
+    /// but the JPEG's own "Missing JPEG SOS").
     #[test]
-    fn a_value_stored_before_the_directory_keeps_its_hand_arm() {
+    fn a_value_stored_before_the_directory_is_the_engines() {
         assert!(engine_is_on());
         // header(8) | XRes 72/1 @8 | YRes 96/1 @16 | "ASCIIR98" @24 | IFD @32
         let mut data = b"II\x2a\0\x20\0\0\0".to_vec();
@@ -5762,47 +5814,33 @@ mod interop_tests {
             data.extend(value.to_le_bytes());
         }
         data.extend(0u32.to_le_bytes());
-        let parse = |table: Option<&'static IfdTable>| {
-            let tiff_len = data.len() as u64;
-            let reader = TestReader::new(data.clone());
-            let mut metadata = MetadataMap::new();
-            parse_interop_directory(
-                &reader,
-                32,
-                ByteOrder::LittleEndian,
-                0,
-                tiff_len,
-                table,
-                &mut metadata,
-            );
-            metadata
-        };
-        let engine = parse(find_ifd_table("Exif", "Main"));
-        let hand = parse(None);
+        let tiff_len = data.len() as u64;
+        let reader = TestReader::new(data.clone());
+        let mut engine = MetadataMap::new();
+        parse_interop_directory(
+            &reader,
+            32,
+            ByteOrder::LittleEndian,
+            0,
+            tiff_len,
+            find_ifd_table("Exif", "Main"),
+            &mut engine,
+        );
         let index_key = format!("{INTEROP_DCF_GROUP}:InteropIndex");
-        for key in [
-            index_key.as_str(),
-            "InteropIFD:XResolution",
-            "InteropIFD:YResolution",
-        ] {
-            assert!(engine.get(key).is_some(), "{key} lost with the engine on");
-            assert_eq!(engine.get(key), hand.get(key), "{key}: not the hand arm");
-        }
-        assert_eq!(
-            engine.get("InteropIFD:XResolution"),
-            Some(&TagValue::new_rational(72, 1))
-        );
-        assert_eq!(
-            engine.get("InteropIFD:YResolution"),
-            Some(&TagValue::new_rational(96, 1))
-        );
-        assert_eq!(engine.get_string(&index_key), Some("ASCIIR98"));
+        assert_eq!(engine.get_string(&index_key), Some("Unknown (ASCIIR98)"));
         assert_eq!(
             engine.without_print_conv().get_string(&index_key),
             Some("ASCIIR98"),
             "the oracle's -n form"
         );
-        // Inline, so the engine's: its `-n` form is the stored code.
+        assert_eq!(
+            engine.get("InteropIFD:XResolution"),
+            Some(&TagValue::Integer(72))
+        );
+        assert_eq!(
+            engine.get("InteropIFD:YResolution"),
+            Some(&TagValue::Integer(96))
+        );
         assert_eq!(
             engine.get_string("InteropIFD:ResolutionUnit"),
             Some("inches")
@@ -5810,6 +5848,46 @@ mod interop_tests {
         assert_eq!(
             engine.without_print_conv().get("InteropIFD:ResolutionUnit"),
             Some(&TagValue::Integer(2))
+        );
+    }
+
+    /// The fallback the floor needed still stands for the refusals that
+    /// remain: a value the engine cannot locate at all -- here one stored
+    /// past the end of the TIFF block the engine walks, which the hand
+    /// reader reaches -- keeps its hand arm instead of vanishing.
+    #[test]
+    fn a_value_the_engine_cannot_locate_keeps_its_hand_arm() {
+        assert!(engine_is_on());
+        let x_offset = tail_offset_for(2) as u32;
+        let (data, _) = build_interop(
+            &[
+                (TAG_X_RESOLUTION, RATIONAL, 1, x_offset),
+                (TAG_RESOLUTION_UNIT, SHORT, 1, 2),
+            ],
+            &[72u32.to_le_bytes(), 1u32.to_le_bytes()].concat(),
+        );
+        // The engine's slice stops short of the rational; the reader does not.
+        let tiff_len = u64::from(x_offset);
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_interop_directory(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            0,
+            tiff_len,
+            find_ifd_table("Exif", "Main"),
+            &mut metadata,
+        );
+        assert_eq!(
+            metadata.get("InteropIFD:XResolution"),
+            Some(&TagValue::new_rational(72, 1)),
+            "the hand arm's value"
+        );
+        assert_eq!(
+            metadata.get_string("InteropIFD:ResolutionUnit"),
+            Some("inches"),
+            "inline: still the engine's"
         );
     }
 
