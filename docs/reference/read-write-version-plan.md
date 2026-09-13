@@ -150,3 +150,13 @@ Evidence relative to the continuation evidence root is
 and its stage logs. This is local foundation validation; hosted review and
 landing remain pending. No successful release upgrade is claimed by a saved
 plan, a verified archive, or the 388-entry catalog.
+
+Independent foundation review then found two source-identity gaps. Repair
+`66f28379` retains each requested dependency binding alongside its final
+callable provenance, including anonymous callables, and rejects release pairs
+that resolve to the same source commit during selection and verification.
+All 57 affected Python tests pass. An independent binding-only mutation changes
+the rendered candidate, and that rendered Rust compiles. The saved 11.78/12.64
+plan still verifies without reselection. No runtime Rust or canonical generated
+artifact changed after the full gate above. Ready PR #761 is awaiting hosted
+checks on the final source head.

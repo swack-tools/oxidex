@@ -78,7 +78,10 @@ regeneration with zero changes (236.627 seconds), native processor checks,
 831 Python tests with zero skips (528.143 seconds), and 6,022 Rust tests with
 zero failures and 124 ignored (136.323 seconds). Formatting, full Clippy and
 diff checks also passed. The ignored tests are unexercised. This foundation
-awaits hosted review and landing; no new production writer is enabled.
+is in ready PR #761. Two independent review fixes preserve dependency binding
+names and reject same-source upgrade pairs; all 57 affected Python tests pass,
+and a binding-only mutation changes compilable generated candidate Rust.
+Hosted checks and landing remain pending; no new production writer is enabled.
 
 ### Previous merged definitions checkpoint
 
