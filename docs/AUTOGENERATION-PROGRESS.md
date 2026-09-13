@@ -4,8 +4,9 @@ This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
 The current milestone is one complete Sony focus-table migration. It is
 implemented in a work branch and is being validated; it has not landed.
 The committed pilot is published on `codex/sony-shared-table-migration-20260912`
-at `1a63822e`. Its complete corpus comparison now passes. Follow-up test and
-retirement changes have their own review and validation status below.
+at `5bd15e00`, including the retirement of the duplicate declarations. The
+complete corpus comparison at `1a63822e` passes. Follow-up test and retirement
+changes have their own review and validation status below.
 
 ## What the pilot must prove
 
@@ -17,7 +18,7 @@ The duplicated Sony handling must then be removed.
 | Measure | Starting point | Current evidence | Done when |
 | --- | --- | --- | --- |
 | Native table entries | 17; the shared generator already knew their layout, while a custom Sony reader supplied the output | Independent native inventory finds 17 native and 17 generated entries, with zero discrepancies for this table. | All are independently accounted for and their runtime behavior is verified. |
-| Stored-value and selection rules | One stored value; 16 dependent conditions; one parent selection condition | Exact CI lint and the complete Rust workspace command pass after correcting the stale test inventories. The Python tool suite passes: 530 tests run, one skipped. | Native comparisons and the combined Rust checks pass. Retirement changes still require their own validation. |
+| Stored-value and selection rules | One stored value; 16 dependent conditions; one parent selection condition | Exact CI lint and the complete Rust workspace command pass after correcting the stale test inventories. The final Python tool suite passes: 549 tests run, one skipped. | Native comparisons and the combined Rust checks pass. Retirement still requires its final corpus and Linux checks. |
 | Real-file coverage | 41 files; 142 native rows | Exact native focus values match. Paired full-output comparison results are identical per file. Four files with the same tag name from other tables were excluded. | Candidate and control are compared per file, with no unexplained changes. This scoped check passes. |
 | Boundary coverage | 14 complete TIFF carriers | Library and CLI reproduce the native expectations for both byte orders, zero/one/fifteen points, short records and a rejected signature. | The candidate reproduces those results through both the library and CLI. This check passes. |
 | Automatic upstream changes | No complete pilot proof at the start | Actual native dump, regeneration and independent artifact checking pass for rename, enum, offset and new-row changes. Each stale artifact is rejected. | All four change types pass this chain; broader upgrade behavior is measured separately. |
@@ -67,14 +68,15 @@ Independent review accepted the removal. Replaying it from the original
 `1a63822e` artifact reproduces both the committed artifact and identity record
 exactly. In-place replay leaves source and ledger bytes and modification times
 unchanged. The retirement's own lint, complete workspace and build checks pass;
-the workspace took 244 seconds. The final corpus comparison and complete Python
-tool-suite rerun remain pending. Earlier corpus results above describe the
+the workspace took 244 seconds. All 19 retirement checks pass, and the complete
+Python tool suite passes: 549 tests run, one skipped, in 193 seconds. The final
+corpus comparison and Linux pilot gate remain pending. Earlier corpus results above describe the
 pilot before this removal and are not substituted for its final check.
 
 ## What is still open
 
-- Finish the final corpus and Python checks for the integrated duplicate-table
-  removal, then complete the pilot's Linux gate and merge review. The separate
+- Complete the integrated pilot's Linux gate with a paired corpus comparison
+  that saves per-file detail, then finish merge review. The separate
   Sony-specific recovery draft still has unresolved findings and is not a
   dependency of the mechanical retirement.
 - Complete the wider inventory of manual, generated, unsupported and
@@ -115,8 +117,12 @@ seconds including compilation. The corrected doctest, table verification and
 JPEG matrix stages also pass. The paired Linux corpus run is complete: all
 4,238 files were processed; total matches rose from 468,002 to 468,012 and
 missing rows fell from 12,268 to 12,258, with other aggregate columns unchanged.
-The final per-file reconciliation is being recorded separately. The original
-failed gate remains recorded, and the shared gate script has not been changed.
+This Linux pair did not save per-file JSON, so it cannot prove that regressions
+were absent. Its missing evidence is recorded explicitly. The final combined
+pilot gate will save both control and candidate JSON and compare the signed
+per-file discrepancies; repeating the older raw-ID branch pair is unnecessary.
+The original failed gate remains recorded, and the shared gate script has not
+been changed.
 
 Update this scoreboard after each validation or landing milestone. Do not
 replace an unfinished check with a count of generated lines or active agents.
