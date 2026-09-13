@@ -96,11 +96,11 @@ class NativeSerialProcessorReplay(unittest.TestCase):
     def setUpClass(cls):
         version = subprocess.check_output([PERL, "-e", "print $^V"], text=True).strip()
         if version != CANONICAL_PERL:
-            raise unittest.SkipTest(
+            raise AssertionError(
                 f"serial replay requires canonical Perl {CANONICAL_PERL}, got {version}"
             )
         if not (Path(PINNED) / "lib" / "Image" / "ExifTool" / "Canon.pm").is_file():
-            raise unittest.SkipTest("selected pinned source does not contain Canon.pm")
+            raise AssertionError("selected pinned source does not contain Canon.pm")
 
     def assert_common(self, reply):
         self.assertTrue(reply["ok"], reply)
