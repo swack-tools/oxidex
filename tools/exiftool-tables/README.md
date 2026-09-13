@@ -290,6 +290,13 @@ its digest to match `expr_oracle_ledger.json`. Read the skipped-test messages:
 a version match alone does not establish that the ledger checks ran. Keep the
 dump digest and executed/skipped counts with the validation record.
 
+The [serial-processor probe](../../docs/reference/serial-processor-checkpoint.md)
+has eight native-only checks. Set `OXIDEX_PINNED_EXIFTOOL` to the pinned source
+root and `EXIFTOOL_PERL` to Perl 5.38.2 to run them. They observe the actual
+table-owned processor and reader binding; they do not validate a Rust serial
+reader or final metadata output. An omitted input skips these optional local
+checks; an explicitly wrong input fails. CI supplies the required inputs.
+
 ## Where to spend effort
 
 Use the [remaining-work backlog](../../docs/AUTOMATION-AND-TESTER-PLAN.md).
