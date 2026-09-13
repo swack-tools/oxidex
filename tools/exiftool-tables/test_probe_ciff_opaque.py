@@ -157,14 +157,16 @@ class CiffOpaqueNativeReplay(unittest.TestCase):
 
     def test_copied_source_noncode_main_process_is_rejected_before_byte_order_mutation(self):
         marker = r"PROCESS_PROC => \&ProcessCanonRaw,"
-        probe_source = PROBE.read_text()
-        self.assertLess(probe_source.index("my $process = $table->{PROCESS_PROC};"),
-                        probe_source.index("Image::ExifTool::SetByteOrder($order);"))
         for replacement in ("undef", "'not_a_code_ref'"):
             with self.subTest(replacement=replacement):
                 def remove_process(source, replacement=replacement):
                     self.assertIn(marker, source)
-                    return source.replace(marker, f"PROCESS_PROC => {replacement},", 1)
+                    source = source.replace(marker, f"PROCESS_PROC => {replacement},", 1)
+                    # Execute the real rejection path with a native state-write
+                    # trap, rather than inferring execution order from source.
+                    return source + "\n{ no warnings qw(redefine prototype); " + \
+                        "*Image::ExifTool::SetByteOrder = sub { " + \
+                        "die 'byte order changed before rejecting processor'; }; }\n1;\n"
 
                 temporary, root = copied_canonraw_source(remove_process)
                 with temporary:
