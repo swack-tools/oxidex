@@ -99,23 +99,46 @@ sub code_fact {
     };
 }
 
+sub has_bare_scalar_callsite {
+    my ($processor, $expected) = @_;
+    my $root = eval { B::svref_2object($processor)->ROOT };
+    return 0 unless defined($root) && $$root;
+    my $found = 0;
+    no warnings qw(redefine once);
+    local *B::OP::oxidex_serial_read_value_callsite = sub {
+        my ($op) = @_;
+        return unless eval { $op->name } eq 'gv';
+        my $gv = eval { $op->gv };
+        my $name = eval { $gv->STASH->NAME . '::' . $gv->NAME };
+        return unless defined($name) && $name eq $expected;
+        my $parents = B::parents();
+        return unless ref($parents) eq 'ARRAY';
+        my %ancestor = map { (eval { $_->name } // '') => 1 } @$parents;
+        # The B 5.38.2 tree proves an executable direct CV call whose result is
+        # stored in a scalar. This deliberately excludes method_named calls,
+        # package-qualified GVs, quoted text, and an uncalled symbol binding.
+        $found = 1 if $ancestor{entersub} && $ancestor{padsv_store};
+    };
+    my $walked = eval { B::walkoptree_slow($root, 'oxidex_serial_read_value_callsite'); 1 };
+    return 0 unless $walked;
+    return $found;
+}
+
 sub selected_bare_binding {
     my ($processor, $symbol) = @_;
     my $processor_name = code_name($processor);
     return (undef, 'processor_name_unavailable') unless defined $processor_name;
     my ($package) = $processor_name =~ /\A(.+)::[^:]+\z/;
     return (undef, 'processor_package_unavailable') unless defined $package;
-    my $deparse = eval { B::Deparse->new('-p', '-sC')->coderef2text($processor) };
-    return (undef, 'processor_deparse_unavailable') unless defined $deparse;
-    # This native-only probe supports the exact scalar-assignment form used by
-    # ProcessSerialData. A qualified, object-dispatched, quoted, or indirect
-    # source shape must fail closed rather than be relabelled as the package
-    # binding merely because a same-named symbol happens to exist.
-    return (undef, "bare_${symbol}_not_found")
-        unless $deparse =~ /\(\s*my\s*\(\s*\$val\s*\)\s*=\s*\Q$symbol\E\s*\(/;
     no strict 'refs';
     my $binding = *{"${package}::${symbol}"}{CODE};
     return (undef, "bare_${symbol}_binding_unavailable") unless ref($binding) eq 'CODE';
+    # This native-only probe is intentionally version-scoped to canonical
+    # Perl 5.38.2. Its optree must contain the direct scalar entersub that
+    # targets this exact package binding. A qualified, object-dispatched,
+    # quoted, or indirect source shape fails closed.
+    return (undef, "bare_${symbol}_callsite_unavailable")
+        unless has_bare_scalar_callsite($processor, "${package}::${symbol}");
     my $fact = code_fact($binding, "${package}::${symbol}");
     return (undef, "bare_${symbol}_$fact->{reason}") unless $fact->{resolved};
     $fact->{binding_package} = $package;
