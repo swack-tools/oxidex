@@ -53,10 +53,25 @@ preserving old semantics silently is not a successful upgrade. The published
 seeded planner records this contract but has no executable rehearsal stages
 yet. Review found plan/journal validation gaps; the repair at `44cf6135`
 passed 17 focused tests and five independent altered-plan checks, and is
-integrated as `21eed548`. Full source identity capture and execution remain
+integrated as `21eed548`. Official catalog capture now records four pages and 388 numeric release tags
+with immutable commit identities. Archive materialization and execution remain
 unfinished. The
 [version plan](reference/read-write-version-plan.md) separates these unfinished
 stages and never treats random samples as proof of all releases.
+
+The integrated inactive compiler emits **22 string candidates in one table**
+from the recorded native dump. This is source classification, with **zero new
+production writer routes**. Independent mutation checks cover malformed source
+provenance, table identities and group defaults. The shared raw TIFF editing
+primitive passes **16 focused tests** and full Clippy after independent review;
+it contains no tag-name lookup and remains inactive. Complete JPEG/TIFF native
+proof, actual helper translation, public identity resolution and exact-value
+input are the next writer requirements.
+
+The combined regeneration attempt completed tier-1 oracle checks and then
+failed its workspace guard because the untracked handoff was edited. Preserve
+the failed result; it is not a passing full regeneration. The retry must freeze
+all workspace files and complete tier 2 plus the full Python suite.
 
 ### Previous merged definitions checkpoint
 

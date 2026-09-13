@@ -48,7 +48,8 @@ not certify other releases or behaviors.
    placement and write type; use the existing JPEG/TIFF surgical mechanisms.
    Verify insert, update, growth, shrinkage and deletion against native ExifTool
    in both byte orders, preserving unrelated metadata and image/file payload.
-   Keep defined-empty values distinct from deletion. Both EXIF family names
+   Include default UTF-8 text and embedded NUL through a generic exact-value
+   input, and keep defined-empty values distinct from deletion. Both EXIF family names
    and physical IFD names must address the same generated identity; the
    pre-migration EXIF-qualified deletion silently succeeds without deleting,
    while TIFF deletion is explicitly unsupported. Preserve these as baseline
@@ -107,7 +108,31 @@ complete loader-token grammar after rejecting two earlier bypasses. The full
 153-module read projection is unchanged. Planner repair checks exact catalog
 selection, matching-version oracle bindings, selected journal membership and
 untested scope; 17 focused tests and five independent altered-plan checks pass.
-These are source and planning foundations: writer activation, official live
-catalog/source capture, both-version regeneration/builds and real read/write
-comparisons are still required. Combined official regeneration is the next
-integration check. No successful release upgrade is claimed by a saved plan.
+The inactive writer compiler is integrated through `10c89560`. On the recorded
+native dump it emits one table with 22 string candidates; those rows have no
+production write route. Captured identities, procedure provenance and effective
+native groups are preserved. Independent mutations reject malformed identities
+and change the candidate when supported source facts change. Procedure hashes
+are evidence of origin, not proof that the procedure is translated.
+
+The official release capture is integrated through `4c584dd8`. The saved capture
+contains four pages and 388 numeric release tags with resolved commit identities.
+Review found skipped-page and duplicate-next-link acceptance; both repairs and
+failed probes are retained. Selection and immutable source identity are now
+implemented. Archive materialization, both-version regeneration/builds, native
+old-to-new comparison and real read/write comparisons remain unfinished.
+
+The inactive raw TIFF editing primitive is integrated through `059f56d1`.
+It accepts resolved directory/tag/type/value operations and deletion without a
+manual tag-name lookup. Sixteen focused tests and full Clippy pass; independent
+review accepted directory-graph and size-bound fixes. Complete-carrier proof,
+source helper translation and public generated identity routing remain separate
+requirements. No production writing behavior is changed by this checkpoint.
+
+The first combined official regeneration stopped at its workspace guard because
+an untracked handoff changed during the run. Tier-1 oracle checks completed;
+tier 2 and the full Python suite did not run. Preserve that failed attempt, and
+freeze all workspace files, including handoff notes, for the retry. The recorded
+expression ledger changed only its native dump identity after write-fact capture.
+Combined validation remains pending. No successful release upgrade is claimed
+by a saved plan or by the 388-entry catalog.
