@@ -428,7 +428,46 @@ pub fn process_binary_data(
     out: &mut Vec<Emitted>,
 ) {
     let mut guard = Guard::new();
-    walk(table, dir, ctx, &mut guard, out);
+    // ProcessDirectory resumes its caller after a child ProcessBinaryData
+    // table stops. Preserve that legacy public behavior for ICC, H264, and
+    // every existing direct caller.
+    let _ = walk_with_policy(table, dir, ctx, &mut guard, out, ChildTaintPolicy::Contain);
+}
+
+/// Process a binary table and expose whether an unmodeled stateful operation
+/// made its remaining sibling work unsafe. The keyed reader deliberately
+/// chooses propagation because its own pending frames may evaluate Conditions
+/// against the child's shared member state.
+pub(crate) fn process_binary_data_checked(
+    table: &'static BinaryTable,
+    dir: Dir<'_>,
+    ctx: &mut cond::Ctx,
+    out: &mut Vec<Emitted>,
+) -> BinaryWalkOutcome {
+    let mut guard = Guard::new();
+    walk_with_policy(
+        table,
+        dir,
+        ctx,
+        &mut guard,
+        out,
+        ChildTaintPolicy::Propagate,
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BinaryWalkOutcome {
+    Complete,
+    Tainted,
+}
+
+/// Whether a child table's locally unsafe tail is also unsafe for its caller.
+/// `ProcessDirectory` contains that stop for legacy direct callers; the keyed
+/// reader opts in to propagation because it has deferred parent frames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChildTaintPolicy {
+    Contain,
+    Propagate,
 }
 
 /// One raw table candidate, kept unresolved until the walk reaches its native
@@ -472,10 +511,21 @@ pub(super) fn walk(
     guard: &mut Guard,
     out: &mut Vec<Emitted>,
 ) {
+    let _ = walk_with_policy(table, dir, ctx, guard, out, ChildTaintPolicy::Contain);
+}
+
+fn walk_with_policy(
+    table: &'static BinaryTable,
+    dir: Dir<'_>,
+    ctx: &mut cond::Ctx,
+    guard: &mut Guard,
+    out: &mut Vec<Emitted>,
+    child_taint_policy: ChildTaintPolicy,
+) -> BinaryWalkOutcome {
     let size = dir.size();
     let increment = i64::from(table.default_format.size());
     if increment <= 0 {
-        return;
+        return BinaryWalkOutcome::Complete;
     }
     let cursor = Cursor::new(size, increment);
 
@@ -538,7 +588,7 @@ pub(super) fn walk(
             || (field.omitted.raw_conv && field.raw_conv.is_none())
             || (field.omitted.subdirectory && field.subdir.is_none())
         {
-            return;
+            return BinaryWalkOutcome::Tainted;
         }
 
         // D1 (Step 10): past this bound `index * increment` is a nominal
@@ -567,7 +617,23 @@ pub(super) fn walk(
 
         // ExifTool.pm:10102 -- a SubDirectory field is a pointer, never a value.
         if let Some(edge) = &field.subdir {
-            descend(table, field, edge, &raw, &dir, at, more, ctx, guard, out);
+            if descend(
+                table,
+                field,
+                edge,
+                &raw,
+                &dir,
+                at,
+                more,
+                ctx,
+                guard,
+                out,
+                child_taint_policy,
+            ) == BinaryWalkOutcome::Tainted
+                && child_taint_policy == ChildTaintPolicy::Propagate
+            {
+                return BinaryWalkOutcome::Tainted;
+            }
             continue;
         }
 
@@ -582,7 +648,7 @@ pub(super) fn walk(
                     // a domain this closed MemberValue model cannot preserve,
                     // the safe answer is to stop this table before later
                     // fields can observe a fabricated or absent value.
-                    return;
+                    return BinaryWalkOutcome::Tainted;
                 };
                 // FoundTag runs RawConv before it considers whether to report
                 // a tag. The assignment returns `$val`, so clearing this
@@ -631,6 +697,7 @@ pub(super) fn walk(
             avoid: false,
         });
     }
+    BinaryWalkOutcome::Complete
 }
 
 /// One `GetTagInfo` lookup. `value_context` is absent for the native first
@@ -716,7 +783,10 @@ fn visit_order(table: &'static BinaryTable) -> Vec<(i64, Candidate)> {
 /// numeric for numeric Conditions; other values use the same Perl text the
 /// legacy representation can prove. A rational with width-dependent text is
 /// deliberately not invented.
-fn member_value(raw: &DecodedValue) -> Option<cond::MemberValue> {
+/// The exact scalar state a modeled `RawConv => $$self{Member} = $val`
+/// stores.  Keyed-directory readers use the same closed state domain; they
+/// must not stringify a value that this binary reader would refuse.
+pub(crate) fn member_value(raw: &DecodedValue) -> Option<cond::MemberValue> {
     match raw {
         DecodedValue::Integer(n) => Some(cond::MemberValue::Num(*n)),
         DecodedValue::StringBytes(bytes) => Some(cond::MemberValue::Bytes(bytes.clone())),
@@ -749,18 +819,19 @@ fn descend(
     ctx: &mut cond::Ctx,
     guard: &mut Guard,
     out: &mut Vec<Emitted>,
-) {
-    let Some(target) = find_table(edge.module, edge.table) else {
+    child_taint_policy: ChildTaintPolicy,
+) -> BinaryWalkOutcome {
+    let Some(target) = binary_target(edge.module, edge.table) else {
         // Not a defect in the edge: many targets (`IPTC::Main`,
         // `LNK::LinkInfo`'s neighbours) are not ProcessBinaryData tables this
         // crate transcribed a layout for. See subdir.rs.
-        return;
+        return BinaryWalkOutcome::Complete;
     };
-    if !target.enabled() {
+    if !binary_walkable(target) {
         // Opt-in (Step 28 D1): an edge never enables its target. Walking into
         // a table that has not passed both gates would enable it by the back
         // door, with no allowlist line to review or revert.
-        return;
+        return BinaryWalkOutcome::Complete;
     }
     let dir_start = i64::try_from(dir.dir_start).unwrap_or(i64::MAX);
     let data_len = i64::try_from(dir.data.len()).unwrap_or(i64::MAX);
@@ -795,12 +866,12 @@ fn descend(
             // the empty string are false.
             let val = raw.as_integer().unwrap_or(0);
             if val == 0 {
-                return;
+                return BinaryWalkOutcome::Complete;
             }
             let start = expr.eval(val, dir_start);
             // ExifTool.pm:10131.
             if start < dir_start || start > data_len {
-                return;
+                return BinaryWalkOutcome::Complete;
             }
             // ExifTool.pm:10132-10133: DirLen is not modeled by this schema,
             // so the `unless` arm is the only one reachable.
@@ -809,19 +880,19 @@ fn descend(
         }
     };
     let Ok(start) = usize::try_from(start) else {
-        return;
+        return BinaryWalkOutcome::Complete;
     };
     let Ok(len) = usize::try_from(len) else {
-        return;
+        return BinaryWalkOutcome::Complete;
     };
 
     // ExifTool.pm:9066 -- `$addr = DirStart + DataPos + Base`.
     let addr = i64::try_from(start).unwrap_or(i64::MAX) + dir.data_pos + subdir_base;
     if !guard.admit(addr, std::ptr::from_ref(target) as usize, not_dup) {
-        return;
+        return BinaryWalkOutcome::Complete;
     }
     guard.depth += 1;
-    walk(
+    let outcome = walk_with_policy(
         target,
         Dir {
             data: dir.data,
@@ -834,14 +905,93 @@ fn descend(
         ctx,
         guard,
         out,
+        child_taint_policy,
     );
     guard.depth -= 1;
+    outcome
+}
+
+/// Resolve an enabled binary target. Tests can temporarily register a
+/// hand-built target, keeping the production registry and gates unchanged.
+fn binary_target(module: &str, table: &str) -> Option<&'static BinaryTable> {
+    #[cfg(test)]
+    {
+        tests::registered_table(module, table).or_else(|| find_table(module, table))
+    }
+    #[cfg(not(test))]
+    {
+        find_table(module, table)
+    }
+}
+
+fn binary_walkable(table: &'static BinaryTable) -> bool {
+    table.enabled() || {
+        #[cfg(test)]
+        {
+            tests::registered_enabled(table)
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
     use super::*;
     use crate::exiftool_tables::{Omitted, PrintConv, RawConvEffect, TagGroups};
+
+    // -- Test-only binary target registry ------------------------------------
+    //
+    // The generated allowlist intentionally leaves arbitrary fixture tables
+    // off. Registering a pointer makes it findable and walkable only in this
+    // module's tests, so nested-child control flow can be pinned without
+    // changing production gates or generated data.
+    thread_local! {
+        static REGISTERED: RefCell<Vec<&'static BinaryTable>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn registered_enabled(table: &'static BinaryTable) -> bool {
+        REGISTERED.with(|registered| {
+            registered
+                .borrow()
+                .iter()
+                .any(|candidate| std::ptr::eq(*candidate, table))
+        })
+    }
+
+    pub(super) fn registered_table(module: &str, table: &str) -> Option<&'static BinaryTable> {
+        REGISTERED.with(|registered| {
+            registered
+                .borrow()
+                .iter()
+                .copied()
+                .find(|candidate| candidate.module == module && candidate.table == table)
+        })
+    }
+
+    struct Registered(usize);
+
+    impl Registered {
+        fn new(tables: &[&'static BinaryTable]) -> Self {
+            REGISTERED.with(|registered| registered.borrow_mut().extend_from_slice(tables));
+            Self(tables.len())
+        }
+    }
+
+    impl Drop for Registered {
+        fn drop(&mut self) {
+            REGISTERED.with(|registered| {
+                let mut registered = registered.borrow_mut();
+                let keep = registered.len() - self.0;
+                registered.truncate(keep);
+            });
+        }
+    }
 
     // -- Cursor: ExifTool.pm:9957-9964 --------------------------------------
 
@@ -1427,6 +1577,83 @@ mod tests {
         fields: UNRESOLVED_SUBDIR_FIELDS,
         ..STATE
     };
+    // A real ProcessDirectory call resumes this parent after the child has
+    // stopped at its unmodeled RawConv. The synthetic registered child lets
+    // this exact nested control flow be tested without enabling a table.
+    static NESTED_TAINT_EDGE: SubdirEdge = SubdirEdge {
+        module: "Test",
+        table: "NestedTaintedChild",
+        start: Start::FieldRelative(1),
+        base: None,
+        byte_order: None,
+        validate: false,
+    };
+    static NESTED_TAINT_CHILD_FIELDS: &[Field] = &[Field {
+        index: 0,
+        sub: None,
+        name: "ChildUnmodeledRawConv",
+        format: None,
+        count: 1,
+        mask: None,
+        condition: None,
+        raw_conv: None,
+        omitted: Omitted {
+            raw_conv: true,
+            ..Omitted::NONE
+        },
+        value_conv: None,
+        print_conv: PrintConv::None,
+        subdir: None,
+        hook: &[],
+        groups: TagGroups::NONE,
+    }];
+    static NESTED_TAINT_CHILD: BinaryTable = BinaryTable {
+        table: "NestedTaintedChild",
+        fields: NESTED_TAINT_CHILD_FIELDS,
+        ..STATE
+    };
+    static NESTED_TAINT_PARENT_FIELDS: &[Field] = &[
+        Field {
+            index: 0,
+            sub: None,
+            name: "ChildDirectory",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted {
+                subdirectory: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: Some(NESTED_TAINT_EDGE),
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 1,
+            sub: None,
+            name: "AfterChild",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static NESTED_TAINT_PARENT: BinaryTable = BinaryTable {
+        table: "NestedTaintedParent",
+        fields: NESTED_TAINT_PARENT_FIELDS,
+        ..STATE
+    };
     const MODEL_IS_EOS: cond::Cond = cond::Cond::MemberRegex {
         member: "Model",
         pattern: "EOS",
@@ -1781,6 +2008,8 @@ mod tests {
 
     #[test]
     fn unmodeled_raw_conv_and_subdirectory_are_tail_barriers() {
+        use std::collections::HashMap;
+
         // An unmodeled RawConv can write `$$self` through FoundTag
         // (ExifTool.pm:10159-10169). An unmodeled SubDirectory may write the
         // same shared state while it processes the child (10102-10151).
@@ -1792,7 +2021,62 @@ mod tests {
                 "{} must not reach its second field",
                 table.table
             );
+            let mut members = HashMap::new();
+            let mut ctx = cond::Ctx::new(&mut members);
+            let mut out = Vec::new();
+            assert_eq!(
+                process_binary_data_checked(
+                    table,
+                    Dir::whole(&[1, 7], ByteOrder::Big),
+                    &mut ctx,
+                    &mut out,
+                ),
+                BinaryWalkOutcome::Tainted,
+                "{} must expose its unsafe tail to a keyed parent",
+                table.table
+            );
         }
+    }
+
+    #[test]
+    fn nested_child_taint_is_contained_for_legacy_and_propagates_for_keyed() {
+        let _registered = Registered::new(&[&NESTED_TAINT_CHILD]);
+        // The old `descend()` had no return value, so ProcessBinaryData
+        // resumed the parent and emitted this later sibling. That remains the
+        // public wrapper's contract for ICC/H264 callers. Checked keyed
+        // descent instead exposes the child state hazard to its own frames.
+        let data = [0, 7];
+        let mut legacy_members = HashMap::new();
+        let mut legacy_ctx = cond::Ctx::new(&mut legacy_members);
+        let mut legacy_rows = Vec::new();
+        process_binary_data(
+            &NESTED_TAINT_PARENT,
+            Dir::whole(&data, ByteOrder::Big),
+            &mut legacy_ctx,
+            &mut legacy_rows,
+        );
+        assert_eq!(
+            legacy_rows.iter().map(|row| row.name).collect::<Vec<_>>(),
+            vec!["AfterChild"],
+            "legacy ProcessDirectory resumes the parent after the child stops"
+        );
+
+        let mut checked_members = HashMap::new();
+        let mut checked_ctx = cond::Ctx::new(&mut checked_members);
+        let mut checked_rows = Vec::new();
+        assert_eq!(
+            process_binary_data_checked(
+                &NESTED_TAINT_PARENT,
+                Dir::whole(&data, ByteOrder::Big),
+                &mut checked_ctx,
+                &mut checked_rows,
+            ),
+            BinaryWalkOutcome::Tainted
+        );
+        assert!(
+            checked_rows.is_empty(),
+            "keyed callers must stop their pending parent work"
+        );
     }
 
     #[test]
