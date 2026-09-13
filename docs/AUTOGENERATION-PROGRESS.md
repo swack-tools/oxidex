@@ -42,6 +42,10 @@ pushed without waiting for the whole merge gate.
 The next [serial-processor checkpoint](reference/serial-processor-checkpoint.md)
 adds an independently reviewed native probe and eight passing tests. It is
 published at `f313e38a` and revalidated on fresh-base integration `c5bc4c9f`.
+Its first hosted run at `7c9dce65` exposed a threaded-Perl representation gap.
+That exact failure was reproduced locally; repair `f214accd` passes all eight
+tests on both threaded and non-threaded Perl 5.38.2. Corrected hosted checks
+remain pending, so this serial checkpoint is not yet merged.
 This is validation infrastructure: no serial descriptor or Rust reader is
 implemented, no production route is enabled, and the remaining counts stay
 **one unsupported child processor and four omitted parent rows**.

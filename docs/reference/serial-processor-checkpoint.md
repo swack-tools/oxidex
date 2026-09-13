@@ -53,6 +53,17 @@ source mutations verify that rebinding the reader changes observed values,
 while unsupported callback bypasses and deceptive call shapes refuse.
 This is a finite validation scope, not equivalence for arbitrary native Perl.
 
+The first hosted run at `7c9dce65` failed: 706 Python tests ran, with ten
+failing subcases in these eight new tests. The local Perl build was
+non-threaded; the threaded build represents the same direct scalar call with
+different operation nodes. An isolated threaded Perl 5.38.2 reproduced all ten
+failures on the unchanged checkpoint. The repair, reviewed at `9ff5c749` and
+integrated at `f214accd`, resolves the callee through the selected processor's
+own pad and checks the exact scalar assignment structure. All eight tests now
+pass on both Perl builds, including the misleading-call mutation controls.
+The corrected hosted run remains required before merge. The earlier failure
+and both build configurations are retained in the evidence.
+
 Run the focused checks from the repository root with explicit selected inputs:
 
 ```bash
@@ -71,6 +82,9 @@ Evidence is in the task's `shared-pilot/serial-native-20260913/validation.json`,
 `perl-syntax.log` and `canonical-native-tests.log`. Publication proof is in
 `shared-pilot/word-directory-20260913/serial-probe-publication.json`. The owned
 checkout's untracked `HANDOFF.md` locates the task evidence.
+The platform correction adds `hosted-native-failure.log`,
+`threaded-before-fix.json` and `dual-perl-validation.json` under the serial
+evidence directory.
 
 ## Next measurable results
 
