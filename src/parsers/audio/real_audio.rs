@@ -33,11 +33,13 @@ const RA_SIGNATURE: &[u8] = b".ra\xfd";
 const BODY_READ_LEN: usize = 512;
 
 /// Project source-described `FoundTag` rows into the parser's existing
-/// occurrence store.  The map's visible key is ExifTool group 1 plus name,
-/// as the old RealAudio parser used; priority and `-n` form remain attached to
-/// the occurrence.  `MetadataMap` has no public group-2 projection seam, so
-/// the source group-2 fact remains on the generated row and is not claimed by
-/// this carrier's visible map.
+/// occurrence store. The visible key remains ExifTool group 1 plus name, as
+/// the old RealAudio parser used; priority and the `-n` form remain attached
+/// to the occurrence. This insertion API derives occurrence group 0 from that
+/// visible key (`Real-RA4`), keeps generated group 1 (`Real-RA4`), and has no
+/// group-2 parameter. Native AudioV4 group 0 (`Real`) and group 2 (including
+/// per-row `Author`) therefore remain descriptor facts, not occurrence-level
+/// metadata claims in this narrow carrier migration.
 struct MetadataSink<'a> {
     metadata: &'a mut MetadataMap,
 }
