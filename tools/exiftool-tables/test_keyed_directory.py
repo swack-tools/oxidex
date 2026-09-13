@@ -8,6 +8,7 @@ withheld before a future caller can accidentally invent a retry.
 import copy
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -20,7 +21,7 @@ import conds
 import keyed_directory
 import verify
 from test_native_reader_contract import snapshot
-from test_word_directory import PINNED, REPO_ROOT, _capture, _reader_contract, fixture_processor
+from test_word_directory import PERL, PINNED, REPO_ROOT, _capture, _reader_contract, fixture_processor
 
 
 PROC = {"__perl": "CODE", "__name": "Image::ExifTool::CanonRaw::ProcessCanonRaw"}
@@ -128,25 +129,54 @@ class Selection(unittest.TestCase):
 
 @unittest.skipUnless(PINNED, "set OXIDEX_PINNED_EXIFTOOL for native word-table generation")
 class PinnedWordTableGeneration(unittest.TestCase):
-    """Source replay for the three CanonCustom tables reached by CanonRaw.
+    """Full source replay for CanonCustom's authenticated word processor.
 
-    The injected fact is captured from the actual native CV, including its
-    package-local Get16u binding.  It models the post-capture shape that the
-    dump pipeline will carry; no Rust artifact is hand-authored here.
+    The dump must include Canon's binary targets as well as CanonRaw and
+    CanonCustom.  Otherwise a valid CanonRaw parent edge looks unwalkable
+    merely because its target table was excluded from the input.  The injected
+    fact is captured from the actual native CV, including its package-local
+    Get16u binding.  It models the post-capture shape that the dump pipeline
+    carries; no Rust artifact is hand-authored here.
     """
 
-    TABLE_ROWS = {"Functions10D": 17, "FunctionsD30": 15, "FuncsUnknown": 0}
+    TABLE_ROWS = {
+        "Functions10D": 17,
+        "Functions1D": 22,
+        "Functions20D": 18,
+        "Functions30D": 19,
+        "Functions350D": 9,
+        "Functions400D": 11,
+        "Functions5D": 21,
+        "FunctionsD30": 15,
+        "FuncsUnknown": 0,
+    }
 
     def setUp(self):
-        result = subprocess.run(
-            ["/usr/bin/perl", str(REPO_ROOT / "tools" / "exiftool-tables" / "dump_tables.pl"),
-             str(Path(PINNED) / "lib"), "CanonRaw", "CanonCustom"],
-            check=True, text=True, capture_output=True,
-        )
-        self.document = json.loads(result.stdout)
+        recorded_dump = os.environ.get("OXIDEX_TABLES_JSON")
+        if recorded_dump:
+            self.document = json.loads(Path(recorded_dump).read_text())
+        else:
+            result = subprocess.run(
+                [PERL, str(REPO_ROOT / "tools" / "exiftool-tables" / "dump_tables.pl"),
+                 str(Path(PINNED) / "lib")],
+                check=True, text=True, capture_output=True,
+            )
+            self.document = json.loads(result.stdout)
         process = _capture(PINNED)
-        for table in self.TABLE_ROWS:
-            self.document["modules"]["CanonCustom"]["tables"][table]["meta"]["PROCESS_PROC"] = copy.deepcopy(process)
+        captured = self.document["modules"]["CanonCustom"]["tables"]
+        if recorded_dump:
+            recorded = captured["Functions10D"]["meta"]["PROCESS_PROC"]
+            self.assertTrue(recorded.get("resolved"))
+            self.assertEqual(recorded.get("__name"), process["__name"])
+            self.assertEqual(recorded.get("source_file"), process["source_file"])
+            self.assertEqual(recorded.get("source_sha256"), process["source_sha256"])
+        captured_tables = []
+        for table, data in captured.items():
+            meta = data.get("meta") or {}
+            if meta.get("PROCESS_PROC", {}).get("__name") == process["__name"]:
+                meta["PROCESS_PROC"] = copy.deepcopy(process)
+                captured_tables.append(table)
+        self.assertEqual(set(captured_tables), set(self.TABLE_ROWS))
         self.document["native_reader_contracts"] = {"unsigned16": _reader_contract(PINNED)}
         self.source, self.stats = keyed_directory.generate(self.document)
 
@@ -157,12 +187,15 @@ class PinnedWordTableGeneration(unittest.TestCase):
         return self.source[start:] if stop < 0 else self.source[start:stop]
 
     def test_actual_source_generates_target_tables_and_zero_row_table(self):
+        self.assertEqual(self.source.count("KeyedLayout::LengthPrefixedU16Pairs(WordDirectory {"),
+                         len(self.TABLE_ROWS))
         for table, rows in self.TABLE_ROWS.items():
             with self.subTest(table=table):
                 generated = self._table(table)
                 self.assertIn("KeyedLayout::LengthPrefixedU16Pairs(WordDirectory {", generated)
                 self.assertEqual(generated.count('name: "'), rows)
         self.assertIn('KEYED_CANONCUSTOM_FUNCSUNKNOWN', self.source)
+        self.assertEqual(sum(self.TABLE_ROWS.values()), 132)
 
     def test_parent_processor_blocker_clears_only_after_authenticated_target_generation(self):
         parent = self._table("Main") if "KEYED_CANONCUSTOM_MAIN" in self.source else self.source
@@ -175,9 +208,15 @@ class PinnedWordTableGeneration(unittest.TestCase):
             next_field = field.find('KeyedTag {', len('KeyedTag {'))
             field = field if next_field < 0 else field[:next_field]
             self.assertNotIn('"target_processor"', field)
-        # Other incomplete ProcessCanonCustom candidates stay visible; this
-        # test does not create a table-name waiver for them.
-        self.assertGreater(self.stats["keyed_word_processor"], 0)
+        # The complete source input leaves one CanonRaw child processor
+        # explicit.  It is ProcessSerialData, not a failed word-table capture.
+        af_info = parent[parent.index('name: "CanonAFInfo"'):]
+        next_field = af_info.find('KeyedTag {', len('KeyedTag {'))
+        af_info = af_info if next_field < 0 else af_info[:next_field]
+        self.assertIn('module: "Canon", table: "AFInfo"', af_info)
+        self.assertIn('unwalked: &["target_processor"]', af_info)
+        self.assertEqual(parent.count('"target_processor"'), 1)
+        self.assertEqual(self.stats["keyed_edge_unwalked"], 1)
 
 
 class InitialContext(unittest.TestCase):
