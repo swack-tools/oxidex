@@ -224,6 +224,12 @@ mod tests {
             metadata.get("Real-RA4:Title"),
             Some(&TagValue::new_string("The Sewing Girls"))
         );
+        assert_eq!(
+            metadata.get("Real-RA4:Copyright"),
+            Some(&TagValue::new_string(
+                "** institut f?r universelle zusammenh?nge"
+            ))
+        );
         // ArtistLen/CommentLen are zero in this fixture: absent, not empty.
         assert_eq!(metadata.get("Real-RA4:Artist"), None);
         assert_eq!(metadata.get("Real-RA4:Comment"), None);
@@ -294,6 +300,25 @@ mod tests {
         );
         assert_eq!(metadata.get("Real-RA4:Title"), None);
         assert_eq!(metadata.get("Real-RA4:Artist"), None);
+    }
+
+    #[test]
+    fn incomplete_artist_is_not_reinterpreted_as_copyright_or_comment() {
+        // Native ProcessSerialData stops when the declared Artist span does
+        // not fit in ProcessReal's 512-byte read. The former manual cursor
+        // stayed at that span after failure, then reused its bytes as later
+        // string lengths and invented Copyright and Comment values.
+        let title = vec![b'A'; 255];
+        let artist = vec![b'B'; 255];
+        let bytes = audio_v4(&title, &artist, b"copyright", b"comment");
+        let metadata = parse_real_audio_metadata(&TestReader::new(bytes)).expect("parses");
+        assert_eq!(
+            metadata.get("Real-RA4:Title"),
+            Some(&TagValue::new_string("A".repeat(255)))
+        );
+        for name in ["Artist", "Copyright", "Comment"] {
+            assert_eq!(metadata.get(&format!("Real-RA4:{name}")), None);
+        }
     }
 
     struct RecordingReader {
