@@ -1,0 +1,31 @@
+# Inactive write descriptor API
+
+`write_descriptors.py` consumes `native_write_tables` and may be selected with
+`codegen.py --write-out`. Its generated Rust is not re-exported by OxiDex and
+creates no writer route. It is an input candidate for a later, independently
+verified writer-mechanism contract.
+
+The first closed class is a plain `Exif::Main` scalar row with native
+`Writable => 'string'` and a literal effective `WriteGroup` in `IFD0`, `ExifIFD`,
+or `GPS`. Each
+candidate carries only source-derived `raw_id`, `name`, `WritePhysicalGroup`,
+and `WriteValueType::Ascii`, together with actual loaded autoload/`WRITE_PROC`/
+`CHECK_PROC` provenance: name, relative source file, source SHA-256, B::Deparse
+SHA-256, and captured direct dependencies.
+
+Those procedure facts are **not** a writer admission and are not interpreted
+as an implementation of `WriteExif` or `CheckExif`. A later writer must require
+its own closed native-mechanism contract before it can use a candidate.
+
+Every source table and every source row alternative not in the initial class is
+recorded in `OMITTED_WRITE_NATIVE_TABLES` or `OMITTED_WRITE_NATIVE_ROWS` with
+named reasons. Reader omission flags are never used for this accounting. The
+sidecars preserve source identity, including zero-row tables and array
+alternative order.
+
+The descriptor faithfully carries ordinary native physical `IFD0`, `ExifIFD`,
+and `GPS` group strings. A future runtime may stage those writer primitives
+separately; their presence here is not an activation claim. A changed name or
+compatible added string row produces a changed descriptor; an unmodeled
+physical group, type, write control, unknown property, or unresolved procedure
+provenance is a refusal rather than a guessed writer operation.
