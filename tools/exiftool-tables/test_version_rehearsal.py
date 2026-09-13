@@ -98,6 +98,29 @@ class VersionRehearsalTests(unittest.TestCase):
         with self.assertRaisesRegex(vr.Refused, "identity changed"):
             vr.verify_plan(bad_plan, self.normalized())
 
+    def test_same_peeled_commit_pairs_refuse_on_creation_and_verification(self):
+        same_source = {
+            "catalog_source": catalog_entries()["catalog_source"],
+            "captured_at": "2026-09-13T00:00:00Z",
+            "entries": [
+                release("13.58", OID_A, SHA_A),
+                release("13.59", OID_A, SHA_B),
+            ],
+        }
+        with self.assertRaisesRegex(vr.Refused, "distinct-source pairs"):
+            vr.make_plan(vr.normalize_catalog(same_source), 7, 0, 1, "e" * 40)
+
+        forged = self.plan()
+        pair = forged["pairs"][0]
+        pair["new"]["peeled_commit"] = pair["old"]["peeled_commit"]
+        pair["native_oracles"]["new"]["native_release_identity"]["peeled_commit"] = pair["old"]["peeled_commit"]
+        pair["source_resolution"]["required_archive_urls"]["new"] = vr.archive_url(
+            pair["new"]["release"], pair["old"]["peeled_commit"]
+        )
+        self.rehash_plan(forged)
+        with self.assertRaisesRegex(vr.Refused, "same peeled source commit"):
+            vr.verify_plan(forged, self.normalized())
+
     def test_changed_catalog_identity_refuses_plan_reuse(self):
         catalog = self.normalized()
         plan = vr.make_plan(catalog, 3, 0, 1, "e" * 40)

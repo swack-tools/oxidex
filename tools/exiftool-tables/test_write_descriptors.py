@@ -126,6 +126,27 @@ class InactiveWriteDescriptorTests(unittest.TestCase):
         self.assertIn('INACTIVE_WRITE_RUNTIME_STATUS: &str = "inactive_source_candidates_no_writer_route"', source)
         self.assertIn('do not activate a writer or authenticate the', source)
 
+    def test_dependency_binding_survives_anonymous_final_callable(self):
+        changed = document()
+        deps = changed["native_write_tables"]["Exif"]["Main"]["effective_write_proc"]["effective"]["dependencies"]
+        deps["Image::ExifTool::Exif::WriteHelper"] = code_fact(
+            "Image::ExifTool::__ANON__", "anonymous-helper-body"
+        )
+        source, report = population(changed)
+        self.assertEqual(report.emitted_rows, 1)
+        self.assertIn(
+            'binding: "Image::ExifTool::Exif::WriteHelper", fact: NativeWriteProcedureProvenance { name: "Image::ExifTool::__ANON__"',
+            source,
+        )
+
+    def test_malformed_dependency_binding_refuses_candidate(self):
+        changed = document()
+        deps = changed["native_write_tables"]["Exif"]["Main"]["effective_write_proc"]["effective"]["dependencies"]
+        deps["not a callable binding"] = code_fact("Image::ExifTool::Exif::WriteHelper", "helper")
+        source, report = population(changed)
+        self.assertEqual((report.emitted_tables, report.emitted_rows), (0, 0))
+        self.assertIn('"write_provenance_unresolved"', source)
+
     def test_name_and_compatible_new_row_follow_source_without_tag_allowlist(self):
         changed = document()
         changed["native_write_tables"]["Exif"]["Main"]["rows"] = {

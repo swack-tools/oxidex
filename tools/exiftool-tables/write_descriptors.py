@@ -166,10 +166,18 @@ def _procedure_provenance(fact: Any, context: str) -> dict[str, Any]:
 
     dependencies = fact.get("dependencies", {})
     dependencies = _mapping(dependencies, f"{context}.dependencies")
-    result["dependencies"] = [
-        _procedure_provenance(dep, f"{context}.dependencies[{name!r}]")
-        for name, dep in sorted(dependencies.items())
-    ]
+    result["dependencies"] = []
+    for binding, dependency in sorted(dependencies.items()):
+        # The source fact is keyed by the exact glob that the owning procedure
+        # calls.  Keeping only the final CV identity would lose an anonymous
+        # or rebound glob, making a later mechanism authenticate the wrong
+        # callable.  This is provenance only, never execution admission.
+        if not isinstance(binding, str) or _CODE_NAME_RE.fullmatch(binding) is None:
+            raise WriteDescriptorError(f"{context}.dependencies has a malformed binding")
+        result["dependencies"].append({
+            "binding": binding,
+            "fact": _procedure_provenance(dependency, f"{context}.dependencies[{binding!r}]"),
+        })
     return result
 
 
@@ -363,7 +371,11 @@ def _rust_string(value: str) -> str:
 
 
 def _rust_provenance(fact: Mapping[str, Any]) -> str:
-    deps = ", ".join(_rust_provenance(dep) for dep in fact["dependencies"])
+    deps = ", ".join(
+        "NativeWriteProcedureDependency { "
+        f"binding: {_rust_string(dependency['binding'])}, fact: {_rust_provenance(dependency['fact'])} }}"
+        for dependency in fact["dependencies"]
+    )
     return (
         "NativeWriteProcedureProvenance { "
         f"name: {_rust_string(fact['name'])}, source_file: {_rust_string(fact['source_file'])}, "
@@ -400,7 +412,12 @@ pub struct NativeWriteProcedureProvenance {{
     pub source_file: &'static str,
     pub source_sha256: &'static str,
     pub body_sha256: &'static str,
-    pub dependencies: &'static [NativeWriteProcedureProvenance],
+    /// Each dependency retains the exact source glob binding and final CV fact.
+    pub dependencies: &'static [NativeWriteProcedureDependency],
+}}
+pub struct NativeWriteProcedureDependency {{
+    pub binding: &'static str,
+    pub fact: NativeWriteProcedureProvenance,
 }}
 pub struct InactiveWriteScalarString {{
     pub raw_id: u16,

@@ -185,9 +185,16 @@ def select_pairs(catalog: dict[str, Any], seed: int, sample_index: int, pair_cou
     if sample_index < 0 or pair_count < 1:
         raise Refused("sample index must be nonnegative and pair count positive")
     releases = eligible_releases(catalog)
-    pairs = list(itertools.combinations(releases, 2))
+    # A release name alone is not a source-version boundary: two distinct tags
+    # can legally peel to one commit.  A rehearsal must compare two immutable
+    # sources, so exclude those duplicate-source pairs before seeded sampling.
+    pairs = [
+        (old, new)
+        for old, new in itertools.combinations(releases, 2)
+        if old["peeled_commit"] != new["peeled_commit"]
+    ]
     if pair_count > len(pairs):
-        raise Refused(f"pair count {pair_count} exceeds {len(pairs)} available unordered pairs")
+        raise Refused(f"pair count {pair_count} exceeds {len(pairs)} available distinct-source pairs")
     rng = random.Random(f"{SELECTOR}:{seed}:{sample_index}")
     selected = rng.sample(pairs, pair_count)
     # itertools combinations has each pair in increasing release order; verify
@@ -304,6 +311,20 @@ def verify_plan(plan: dict[str, Any], catalog: dict[str, Any] | None = None) -> 
         raise Refused("catalog identity differs from recorded plan")
     expected = plan.get("plan_sha256")
     payload = {k: v for k, v in plan.items() if k != "plan_sha256"}
+    # Do not let a rehashed historical or hand-authored plan reuse one native
+    # source under two release labels. Creation filters these pairs; this
+    # direct check keeps verification fail-closed if a stored plan is altered.
+    pairs = plan.get("pairs")
+    if isinstance(pairs, list):
+        for pair in pairs:
+            if not isinstance(pair, dict):
+                continue
+            old = pair.get("old")
+            new = pair.get("new")
+            if (isinstance(old, dict) and isinstance(new, dict)
+                    and isinstance(old.get("peeled_commit"), str)
+                    and old.get("peeled_commit") == new.get("peeled_commit")):
+                raise Refused("plan selects the same peeled source commit twice")
     if not isinstance(expected, str) or expected != sha256_json(payload):
         raise Refused("plan identity changed or is malformed")
     try:
