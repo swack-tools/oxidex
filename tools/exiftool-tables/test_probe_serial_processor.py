@@ -268,7 +268,13 @@ class NativeSerialProcessorReplay(unittest.TestCase):
         mutations = {
             "object-whitespace-arrow": "my $val = $et -> ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);",
             "package-qualified": "my $val = Image::ExifTool::ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);",
-            "quoted-token": "my $val = 'ReadValue(';",
+            "full-shape-quoted-token": "my $val = 4; my $note = '(my ($val) = ReadValue(' ;",
+            "multiline-quoted-token": (
+                "my $val = 4;\n"
+                "        my $note = <<'OXIDEX_READ_VALUE_NOTE';\n"
+                "(my ($val) = ReadValue(\n"
+                "OXIDEX_READ_VALUE_NOTE\n"
+            ),
         }
         for name, replacement in mutations.items():
             with self.subTest(form=name):
@@ -282,7 +288,7 @@ class NativeSerialProcessorReplay(unittest.TestCase):
                                       fallback="fallback")
                 self.assertFalse(reply["ok"])
                 self.assertEqual(reply["error"]["kind"], "read_value_fact")
-                self.assertEqual(reply["error"]["message"], "bare_ReadValue_not_found")
+                self.assertEqual(reply["error"]["message"], "bare_ReadValue_callsite_unavailable")
 
     def test_copied_source_package_callback_bypasses_are_rejected(self):
         mutations = {
