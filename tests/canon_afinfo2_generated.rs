@@ -17,6 +17,8 @@
 use oxidex::core::MetadataMap;
 use oxidex::core::operations::read_metadata;
 use std::fs;
+use std::io::Write;
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug)]
 enum Endian {
@@ -257,7 +259,33 @@ fn canon_tiff(order: Endian, model: &str, children: &[Child], later_sibling: boo
     bytes
 }
 
-fn read_carrier(bytes: &[u8]) -> MetadataMap {
+/// When `OXIDEX_AFINFO2_TEST_EXPORT_DIR` is set, retain the exact input that
+/// the public reader receives for an independent native replay.  `create_new`
+/// keeps a second test run from silently replacing a reviewed fixture.
+fn export_fixture(label: &str, bytes: &[u8]) {
+    let Some(dir) = std::env::var_os("OXIDEX_AFINFO2_TEST_EXPORT_DIR") else {
+        return;
+    };
+    let dir = Path::new(&dir);
+    fs::create_dir_all(dir).expect("create AFInfo2 fixture export directory");
+    let path = dir.join(format!("{label}.tif"));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap_or_else(|error| {
+            panic!(
+                "export {label} without overwrite at {}: {error}",
+                path.display()
+            )
+        });
+    file.write_all(bytes).unwrap_or_else(|error| {
+        panic!("write exported AFInfo2 fixture {}: {error}", path.display())
+    });
+}
+
+fn read_carrier(label: &str, bytes: &[u8]) -> MetadataMap {
+    export_fixture(label, bytes);
     let file = tempfile::Builder::new()
         .suffix(".tif")
         .tempfile()
@@ -281,12 +309,19 @@ fn assert_present(metadata: &MetadataMap, key: &str, expected: &str) {
 #[test]
 fn generated_afinfo2_route_handles_signed_multiword_records_in_both_orders() {
     for order in [Endian::Ii, Endian::Mm] {
-        let metadata = read_carrier(&canon_tiff(
-            order,
-            "Canon Test",
-            &[child(Parent::AfInfo2, order, 17)],
-            true,
-        ));
+        let label = match order {
+            Endian::Ii => "valid-afinfo2-ii",
+            Endian::Mm => "valid-afinfo2-mm",
+        };
+        let metadata = read_carrier(
+            label,
+            &canon_tiff(
+                order,
+                "Canon Test",
+                &[child(Parent::AfInfo2, order, 17)],
+                true,
+            ),
+        );
 
         // Pinned ExifTool's dynamic-corrected controls report these exact
         // values.  In particular, 0x8001 is signed -32767 and the two bit
@@ -305,21 +340,29 @@ fn generated_afinfo2_route_handles_signed_multiword_records_in_both_orders() {
 
 #[test]
 fn afinfo3_state_and_eos_condition_suppress_primary_but_leave_child_output() {
-    for (parent, model, label) in [
-        (Parent::AfInfo3, "Canon Test", "AFInfo3 parent state"),
-        (Parent::AfInfo2, "Canon EOS Test", "EOS model condition"),
+    for (parent, model, assertion_label, export_label) in [
+        (
+            Parent::AfInfo3,
+            "Canon Test",
+            "AFInfo3 parent state",
+            "afinfo3-state-ii",
+        ),
+        (
+            Parent::AfInfo2,
+            "Canon EOS Test",
+            "EOS model condition",
+            "eos-afinfo2-ii",
+        ),
     ] {
-        let metadata = read_carrier(&canon_tiff(
-            Endian::Ii,
-            model,
-            &[child(parent, Endian::Ii, 17)],
-            true,
-        ));
+        let metadata = read_carrier(
+            export_label,
+            &canon_tiff(Endian::Ii, model, &[child(parent, Endian::Ii, 17)], true),
+        );
         assert_present(&metadata, "Canon:AFAreaMode", "Single-point AF");
         assert_present(&metadata, "Canon:AFPointsInFocus", "0,15,16");
         assert!(
             shown(&metadata, "Canon:PrimaryAFPoint").is_none(),
-            "{label} must select no PrimaryAFPoint alternative"
+            "{assertion_label} must select no PrimaryAFPoint alternative"
         );
         assert_present(&metadata, "Canon:RawDataOffset", "305419896");
     }
@@ -327,36 +370,45 @@ fn afinfo3_state_and_eos_condition_suppress_primary_but_leave_child_output() {
 
 #[test]
 fn rejected_size_and_zero_count_do_not_prevent_later_main_entries() {
-    let invalid = read_carrier(&canon_tiff(
-        Endian::Ii,
-        "Canon Test",
-        &[invalid_size_child(Endian::Ii)],
-        true,
-    ));
+    let invalid = read_carrier(
+        "invalid-size-ii",
+        &canon_tiff(
+            Endian::Ii,
+            "Canon Test",
+            &[invalid_size_child(Endian::Ii)],
+            true,
+        ),
+    );
     // Native `Validate($dirData, $subdirStart, $size)` rejects this child
     // before AFInfo2 selection.  It continues the parent IFD, which is why
     // the unrelated Main scalar must still be visible.
     assert!(shown(&invalid, "Canon:AFAreaMode").is_none());
     assert_present(&invalid, "Canon:RawDataOffset", "305419896");
 
-    let truncated = read_carrier(&canon_tiff(
-        Endian::Ii,
-        "Canon Test",
-        &[truncated_child(Endian::Ii)],
-        true,
-    ));
+    let truncated = read_carrier(
+        "truncated-afinfo2-ii",
+        &canon_tiff(
+            Endian::Ii,
+            "Canon Test",
+            &[truncated_child(Endian::Ii)],
+            true,
+        ),
+    );
     // The native control warns that it cannot read Main 0x0026, but continues
     // to 0x0081.  The public reader has no warning channel, so absence plus
     // continuation is the observable contract.
     assert!(shown(&truncated, "Canon:AFAreaMode").is_none());
     assert_present(&truncated, "Canon:RawDataOffset", "305419896");
 
-    let zero = read_carrier(&canon_tiff(
-        Endian::Mm,
-        "Canon Test",
-        &[child(Parent::AfInfo2, Endian::Mm, 0)],
-        true,
-    ));
+    let zero = read_carrier(
+        "zero-count-afinfo2-mm",
+        &canon_tiff(
+            Endian::Mm,
+            "Canon Test",
+            &[child(Parent::AfInfo2, Endian::Mm, 0)],
+            true,
+        ),
+    );
     // A well-formed zero-count child is 20 bytes: eight fixed fields, no
     // arrays/bitset, then the one native non-EOS unknown word and primary.
     // It has no AFAreaWidths but its later scalar and parent sibling remain.
