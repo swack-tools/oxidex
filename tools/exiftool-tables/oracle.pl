@@ -36,6 +36,9 @@
 #   KEYED MODULE TABLE  INDEX  FLAGS U B L P A PRIORITY -- shared reporting policy (11)
 #   KEYED MODULE TABLE  INDEX  GROUPS G0 G1 G2        -- raw tag groups (8)
 #   KEYED MODULE TABLE  INDEX  SUBDIR TAGTABLE START VALIDATE PROCESSPROC (9)
+#   NATIVE_PROCESSOR MODULE TABLE JSON-FACT -- every table-owned PROCESS_PROC,
+#                                               emitted after all modules load;
+#                                               separate from KEYED scope
 #
 # The trailing empty column on HOOK/VARFMT lines is not decorative: it is
 # what keeps them from colliding with a NAME line on column count (both
@@ -118,6 +121,7 @@ use Encode qw(decode);
 use B ();
 use Cwd qw(abs_path);
 use Digest::SHA qw(sha256_hex);
+use File::Spec ();
 use FindBin;
 use lib $FindBin::Bin;
 use JSON::PP ();
@@ -380,6 +384,97 @@ sub sub_name {
     return eval { $gv->STASH->NAME . '::' . $gv->NAME } // '';
 }
 
+# PROCESS_PROC is a table-owned CODE reference.  Capture that exact CV only
+# after all modules load, while resolving bare calls through the final package
+# glob they use at execution time.  This oracle deliberately duplicates the
+# dumper's provenance work instead of importing it: a verifier needs an
+# independently live source fact, not shared extractor behavior.
+my $PROCESSOR_LIB_ABS = abs_path($LIB);
+sub processor_unresolved_fact {
+    my ($name, $reason) = @_;
+    return {
+        __perl => 'CODE', __opaque => JSON::PP::true, __name => $name,
+        resolved => JSON::PP::false, __deparse => undef,
+        source_file => undef, source_sha256 => undef, reason => $reason,
+    };
+}
+
+sub processor_source_file_fact {
+    my ($cv) = @_;
+    my $file = eval { B::svref_2object($cv)->FILE };
+    return (undef, undef, 'source_file_unavailable') unless defined $file && length $file;
+    my $abs = abs_path($file);
+    return (undef, undef, 'source_file_unreadable') unless defined $abs && -f $abs;
+    my $prefix = $PROCESSOR_LIB_ABS . '/';
+    return (undef, undef, 'source_outside_selected_lib') unless index($abs, $prefix) == 0;
+    open(my $fh, '<:raw', $abs) or return (undef, undef, 'source_file_unreadable');
+    local $/;
+    my $bytes = <$fh>;
+    close($fh) or return (undef, undef, 'source_file_unreadable');
+    return (File::Spec->abs2rel($abs, $PROCESSOR_LIB_ABS), sha256_hex($bytes), undef);
+}
+
+sub processor_deparse {
+    my ($cv) = @_;
+    return undef unless eval { require B::Deparse; 1 };
+    my $text = eval { B::Deparse->new('-p', '-sC')->coderef2text($cv) };
+    # Preserve the exact B::Deparse text.  The generated descriptor hashes
+    # this input, so whitespace normalization here would make independently
+    # equivalent live facts look stale for no source-semantic reason.
+    return defined $text ? txt($text) : undef;
+}
+
+sub processor_code_source_fact;
+sub processor_code_ref_fact {
+    my ($cv, $fallback_name, $ancestors, $depth) = @_;
+    $ancestors //= {};
+    $depth //= 0;
+    my $display_name = defined $fallback_name ? $fallback_name : '';
+    return processor_unresolved_fact($display_name, 'dependency_depth_exceeded') if $depth > 8;
+    return processor_unresolved_fact($display_name, 'code_ref_unavailable') unless $cv;
+    my $name = sub_name($cv);
+    return processor_unresolved_fact($display_name, 'code_name_unavailable') unless length $name;
+    return processor_unresolved_fact($name, 'dependency_cycle') if $ancestors->{$name};
+    my $body = processor_deparse($cv);
+    return processor_unresolved_fact($name, 'deparse_unavailable') unless defined $body;
+    my ($source_file, $source_sha256, $source_error) = processor_source_file_fact($cv);
+    return processor_unresolved_fact($name, $source_error) if defined $source_error;
+    my %fact = (
+        __perl => 'CODE', __opaque => JSON::PP::true, __name => $name,
+        resolved => JSON::PP::true, __deparse => $body,
+        source_file => $source_file, source_sha256 => $source_sha256,
+    );
+    # Keep the processor record bounded.  The generic unsigned-reader
+    # contract already authenticates Get16u's transitive mechanism; repeating
+    # ProcessBinaryData's full helper closure per table would make the oracle
+    # stream unboundedly large.  A bare Get16u dispatch is the one direct
+    # operand the staged word directory must bind.
+    my %next_ancestors = (%$ancestors, $name => 1);
+    my %dependencies;
+    my $package = $name;
+    $package =~ s/::[A-Za-z_]\w*$//;
+    if ($body =~ /(?<![\w:>])Get16u\s*\(/) {
+        my $binding = "${package}::Get16u";
+        $dependencies{$binding} = processor_code_source_fact($binding, \%next_ancestors, $depth + 1);
+    }
+    $fact{dependencies} = \%dependencies if %dependencies;
+    return \%fact;
+}
+
+sub processor_code_source_fact {
+    my ($name, $ancestors, $depth) = @_;
+    $ancestors //= {};
+    $depth //= 0;
+    return processor_unresolved_fact($name, 'dependency_depth_exceeded') if $depth > 8;
+    return processor_unresolved_fact($name, 'dependency_cycle') if $ancestors->{$name};
+    return processor_unresolved_fact($name, 'invalid_fully_qualified_name')
+        unless $name =~ /^(?:[A-Za-z_]\w*::)+[A-Za-z_]\w*$/;
+    no strict 'refs';
+    my $cv = *{$name}{CODE};
+    return processor_unresolved_fact($name, 'code_ref_unavailable') unless $cv;
+    return processor_code_ref_fact($cv, $name, $ancestors, $depth);
+}
+
 # Whether `$t` is in the IFD scope: ProcessExif is ExifTool's default
 # PROCESS_PROC (ExifTool.pm's ProcessDirectory falls back to it), so a tag
 # table with no PROCESS_PROC at all is one, and so is one naming it
@@ -565,6 +660,7 @@ opendir(my $dh, "$LIB/Image/ExifTool") or die "opendir: $!";
 my @mods = sort map { s/\.pm$//r } grep { /\.pm$/ } readdir($dh);
 closedir $dh;
 my %skip = map { $_ => 1 } qw(BuildTagLookup TagLookup TagNames Writer Shift Import Validate Geolocation);
+my %processor_tables;
 
 for my $mod (grep { !$skip{$_} } @mods) {
     die "a module named IFD would collide with the IFD row kind column\n" if $mod eq 'IFD';
@@ -581,6 +677,10 @@ for my $mod (grep { !$skip{$_} } @mods) {
         # independently of dump_tables.pl on purpose.
         my $has_format = defined $t->{FORMAT} && !ref $t->{FORMAT};
         my $pp = $t->{PROCESS_PROC};
+        # Record every table-owned PROCESS_PROC, including custom processors
+        # outside the current binary/IFD/keyed output scopes.  Facts are
+        # emitted only after all modules load, when package dispatch is final.
+        $processor_tables{"$mod\t$sym"} = $pp if ref $pp eq 'CODE';
         my $is_bin = 0;
         if (ref $pp eq 'CODE') {
             my $cv = eval { B::svref_2object($pp) };
@@ -660,6 +760,18 @@ for my $mod (grep { !$skip{$_} } @mods) {
 
         emit_ifd_table($mod, $sym, $t) if $is_ifd;
     }
+}
+
+# This stream is independent of dump_tables.pl and is deliberately source-only:
+# it gives a verifier current native PROCESS_PROC and package-local reader
+# facts without reusing the word-directory recognizer.  It is emitted after
+# the module walk so later glob replacements are visible.
+for my $key (sort keys %processor_tables) {
+    my ($mod, $sym) = split /\t/, $key, 2;
+    my $fact = processor_code_ref_fact($processor_tables{$key},
+        "Image::ExifTool::${mod}::${sym}::PROCESS_PROC");
+    print join("\t", 'NATIVE_PROCESSOR', $mod, $sym,
+        JSON::PP->new->canonical->encode($fact)), "\n";
 }
 
 # Run the primitive oracle in isolation, then authenticate its refs against
