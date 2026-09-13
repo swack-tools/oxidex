@@ -13,12 +13,13 @@ use super::engine::{self, Emitted};
 use super::runtime;
 use super::{Fmt, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, find_table};
 
-/// Output family selected by the carrier, rather than a keyed source row.
+/// Carrier projection applied after generated tag/table group resolution.
+///
+/// CIFF APP0 sets ExifTool's `SET_GROUP1`; it does not replace the source
+/// table's family-0 or family-2 groups. CRW has no carrier override.
 #[derive(Clone, Copy, Debug)]
 pub struct KeyedScope {
-    pub group0: &'static str,
-    pub group1: &'static str,
-    pub group2: &'static str,
+    pub group1_override: Option<&'static str>,
 }
 
 /// A caller-validated CIFF value block.
@@ -393,9 +394,12 @@ fn process_entry<'a>(
     sink.emit(Emitted {
         module: table.module,
         table: table.table,
-        group0: tag.groups.g0.unwrap_or(block.scope.group0),
-        group1: tag.groups.g1.unwrap_or(block.scope.group1),
-        group2: tag.groups.g2.unwrap_or(block.scope.group2),
+        group0: tag.groups.g0.unwrap_or(table.group0),
+        group1: block
+            .scope
+            .group1_override
+            .unwrap_or(tag.groups.g1.unwrap_or(table.group1)),
+        group2: tag.groups.g2.unwrap_or(table.group2),
         name: tag.name,
         value,
         value_conv,
@@ -499,9 +503,7 @@ fn with_dir_name(ctx: &mut Ctx, value: String, f: impl FnOnce(&mut Ctx)) {
 
 fn re_scope(row: Emitted, scope: KeyedScope) -> Emitted {
     Emitted {
-        group0: scope.group0,
-        group1: scope.group1,
-        group2: scope.group2,
+        group1: scope.group1_override.unwrap_or(row.group1),
         ..row
     }
 }
@@ -600,9 +602,13 @@ mod tests {
 
     fn scope() -> KeyedScope {
         KeyedScope {
-            group0: "Carrier",
-            group1: "Carrier",
-            group2: "Other",
+            group1_override: Some("Carrier"),
+        }
+    }
+
+    fn native_scope() -> KeyedScope {
+        KeyedScope {
+            group1_override: None,
         }
     }
 
@@ -710,7 +716,48 @@ mod tests {
             assert_eq!(result.emitted, 2);
             assert_eq!(sink.rows[0].value, TagValue::Integer(0x1234));
             assert_eq!(sink.rows[1].value, TagValue::String("1 2".into()));
-            assert!(sink.rows.iter().all(|row| row.group0 == "Carrier"));
+            assert!(sink.rows.iter().all(|row| row.group0 == "Test"));
+            assert!(sink.rows.iter().all(|row| row.group1 == "Carrier"));
+            assert!(sink.rows.iter().all(|row| row.group2 == "Other"));
+        }
+    }
+
+    #[test]
+    fn carrier_overrides_only_group1_after_source_group_resolution() {
+        static TAG: KeyedTag = KeyedTag {
+            groups: TagGroups {
+                g0: Some("Source0"),
+                g1: Some("Source1"),
+                g2: Some("Source2"),
+            },
+            ..tag(1, "Value", Some(Fmt::Int8u), None)
+        };
+        static TAGS: [KeyedTag; 1] = [TAG];
+        static TABLE: KeyedDirectoryTable = KeyedDirectoryTable {
+            group0: "Table0",
+            group1: "Table1",
+            group2: "Table2",
+            tags: &TAGS,
+            ..EMPTY_TABLE
+        };
+        let data = ciff(ByteOrder::Little, &[(0x4001, vec![7])]);
+        for (scope, expected_group1) in [(native_scope(), "Source1"), (scope(), "Carrier")] {
+            let mut members = HashMap::new();
+            let mut ctx = Ctx::new(&mut members);
+            let mut sink = Sink {
+                enabled: true,
+                ..Sink::default()
+            };
+            let result = process_keyed_directory(
+                &TABLE,
+                KeyedBlock::new(&data, ByteOrder::Little, scope),
+                &mut ctx,
+                &mut sink,
+            );
+            assert_eq!(result.emitted, 1);
+            assert_eq!(sink.rows[0].group0, "Source0");
+            assert_eq!(sink.rows[0].group1, expected_group1);
+            assert_eq!(sink.rows[0].group2, "Source2");
         }
     }
 
