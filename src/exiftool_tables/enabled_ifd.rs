@@ -408,8 +408,25 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // stores 14/5, which pinned 13.59 reads as 2.6). Reverting D-2's commit
     // alone restores the hand arms.
     //
-    // Decision D-3 (its own commit): not in this tree. `SubDirectory` edge
-    // ids keep their hand rows (`EXIF_IFD_SILENCE_EDGES` is false).
+    // Decision D-3 (its own commit, after D-2): an ExifIFD `SubDirectory`
+    // edge id other than the 0xa005 pointer reports nothing
+    // (Exif.pm:7103-7104). Same instrument, control = D-2:
+    //     D-3        TOTAL 150 15925 0 47 928 157
+    // exactly DJI_XT2's ApplicationNotes EXTRA gone; `-j`/`-n`/`-x` over 457
+    // files: only that row removed. Accepted loss: ExifTool still reports an
+    // edge tag requested BY NAME (Exif.pm:7104 `$$et{REQ_TAG_LOOKUP}`;
+    // pinned `-j -ApplicationNotes` on DJI_XT2.jpg prints its binary
+    // placeholder), and so did oxidex before D-3; a silenced edge has no row,
+    // so `-ExifIFD:ApplicationNotes` now returns nothing (27 edge ids; the
+    // default listing, which the census scores, gains), and `-TagsFromFile
+    // DJI_XT2.jpg -ExifIFD:ApplicationNotes` copies nothing where control
+    // and pinned 13.59 copy the 1,035 bytes (the CLI still says "1 tags
+    // copied"). Writes to the file itself are control's: `-ExifIFD:
+    // ApplicationNotes=abc` and `-ExifIFD:ApplicationNotes=` reach the entry
+    // through the writers' row-less rule (the call site's); 4 by-name writes
+    // and 2 other -TagsFromFile copies onto and from DJI_XT2.jpg keep
+    // control's bytes and status. Reverting D-3's commit alone restores the
+    // rows.
     //
     // Gate B of record: EXIFE2_GATEB_PENDING
     ("Exif", "Main"),

@@ -890,9 +890,25 @@ const EXIF_IFD_HAND_KEPT: &[u16] = &[0x9400];
 
 /// Whether `SubDirectory` edge ids (other than the 0xa005 pointer) report
 /// nothing in the ExifIFD, as in ExifTool (Exif.pm:7103-7104: a
-/// sub-directory tag is processed, never reported). Decision D-3, its own
-/// commit; until then the hand arm keeps reporting them.
-const EXIF_IFD_SILENCE_EDGES: bool = false;
+/// sub-directory tag is processed, never reported unless requested by name
+/// or with the `MakerNotes` option). Decision D-3 of slice E-2, its own
+/// commit: before it the hand arm reported them (DJI_XT2.jpg's 0x02bc
+/// ApplicationNotes, an XMP edge, was a census EXTRA).
+///
+/// Accepted loss, by name only: ExifTool DOES report an edge tag requested
+/// by name (Exif.pm:7104 `next unless $doMaker or
+/// $$et{REQ_TAG_LOOKUP}{lc($tagStr)} ...` -- pinned `-j -ApplicationNotes`
+/// on DJI_XT2.jpg prints its `(Binary data 1035 bytes, ...)`), and before
+/// D-3 so did oxidex (`-ExifIFD:ApplicationNotes`). A silenced edge has no
+/// row, so that request now returns nothing: the default listing (the
+/// census) gains, a by-name request of one of the 27 edge ids loses -- and
+/// with it a by-name copy, `-TagsFromFile DJI_XT2.jpg
+/// -ExifIFD:ApplicationNotes`, which control and ExifTool make. A
+/// by-name-only row needs the request to reach this walk (`ReadOptions`
+/// does not), a later change. Writes to the file itself are unaffected: the
+/// surgical writers still edit or delete an entry the reader surfaces no row
+/// for. Revert this commit alone to restore the rows.
+const EXIF_IFD_SILENCE_EDGES: bool = true;
 
 /// The key an engine-produced ExifIFD row is recorded under: ExifTool's
 /// family 1, as the hand arm (`lookup_tag_name(id, "ExifIFD")`) keys it.
@@ -4594,18 +4610,28 @@ mod exif_subifd_tests {
         );
     }
 
-    /// D-3 is its own commit: until it lands, a `SubDirectory` edge id in the
-    /// ExifIFD (DJI_XT2.jpg's 0x02bc ApplicationNotes) keeps its hand row.
+    /// Decision D-3: a `SubDirectory` edge id in the ExifIFD reports nothing
+    /// (Exif.pm:7103-7104), as pinned ExifTool's `-a -G1` over the census
+    /// shows for DJI_XT2.jpg's 0x02bc ApplicationNotes; the hand arm alone
+    /// (engine off) still reports it. The 0xa005 pointer stays the hand's
+    /// (spec 0.4): a well-formed one is followed, not reported.
+    ///
+    /// This pins the accepted by-name loss too (review finding, E-2; see
+    /// [`EXIF_IFD_SILENCE_EDGES`]): the map has no edge row at all, so
+    /// `-ExifIFD:ApplicationNotes` finds nothing where pinned ExifTool's
+    /// `-ApplicationNotes` reports the tag. A change that restores by-name
+    /// rows turns this red on purpose.
     #[test]
-    fn edge_ids_keep_their_hand_rows_until_d3() {
+    fn edge_ids_report_nothing() {
         let data = exif_block(&[(0x02bc, UNDEFINED, 8, tail_at(1))], b"<x:xmp/>");
         let engine = walk_exif(&data, None, exif_main(), &[]);
+        assert!(engine.get("ExifIFD:ApplicationNotes").is_none());
+        assert!(engine.is_empty(), "{:?}", engine.keys().collect::<Vec<_>>());
         let hand = walk_exif(&data, None, None, &[]);
-        assert!(engine.get("ExifIFD:ApplicationNotes").is_some());
-        assert_eq!(
-            engine.get("ExifIFD:ApplicationNotes"),
-            hand.get("ExifIFD:ApplicationNotes")
-        );
+        assert!(hand.get("ExifIFD:ApplicationNotes").is_some());
+        // An 0x8825 GPSInfo edge misplaced in an ExifIFD: silent too.
+        let data = exif_block(&[(0x8825, 4, 1, 0)], &[]);
+        assert!(walk_exif(&data, None, exif_main(), &[]).is_empty());
     }
 
     /// The TIFF block of a JPEG's first `Exif\0\0` APP1 segment.

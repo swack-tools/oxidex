@@ -686,6 +686,18 @@ fn entries_exiftool_refuses_report_nothing() {
     assert!(header_offset.get("IFD1:XResolution").is_none());
 }
 
+/// Decision D-3 (its own commit): an ExifIFD `SubDirectory` edge id reports
+/// nothing -- DJI_XT2.jpg's 0x02bc ApplicationNotes, an XMP sub-directory;
+/// pinned `-a -G1 -ExifIFD:all` does not list it (only a by-name request
+/// extracts it). Reverting D-3 alone restores the hand row and drops this.
+#[test]
+#[ignore = "needs /tmp/oxidex-exiftool-cache/combined-samples"]
+fn census_d3_an_edge_id_reports_nothing() {
+    let xt2 = carrier(&format!("{CORPUS}/DJI"), "DJI_XT2.jpg")
+        .expect("DJI/DJI_XT2.jpg is part of the pinned corpus");
+    assert!(xt2.get("ExifIFD:ApplicationNotes").is_none());
+}
+
 fn hex(text: &str) -> Vec<u8> {
     let digits: Vec<u8> = text.bytes().filter(u8::is_ascii_hexdigit).collect();
     digits
