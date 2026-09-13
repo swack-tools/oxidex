@@ -737,13 +737,71 @@ pub fn process_exif(
     ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
 ) {
+    process_exif_decoded(table, dir, ctx, out);
+}
+
+/// What the walk did with one entry of the ROOT directory
+/// ([`process_exif_decoded`]).
+///
+/// A caller that walks the same directory by other means (a hand arm) needs
+/// to tell an absence ExifTool shares from one only this engine makes: the
+/// first must stay an absence, the second may fall back to the other reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryRead {
+    /// `ReadValue` (Exif.pm:6782) produced the entry's value. It has a row
+    /// in `out`, or a conversion rule withheld the tag (a `RawConv` or
+    /// `ValueConv` returning undef, a withheld conversion) -- the engine's
+    /// report either way.
+    Decoded,
+    /// Refused on a rule ExifTool applies to the same bytes, so ExifTool
+    /// reports nothing for the entry either: a type code `ProcessExif`
+    /// rejects (Exif.pm:6463-6478, and every entry after a bad FIRST entry,
+    /// "assume corrupted IFD"), a value it warns about and skips -- an
+    /// offset into the TIFF header (Exif.pm:6539) or an overlap with the
+    /// directory (Exif.pm:6549; both 6673-6678), an offset outside the data (Exif.pm:6551-6552; no `RAF` here, which is
+    /// ExifTool's case for a JPEG APP1 or any in-memory block), an
+    /// impossible size (Exif.pm:6505-6509) --, an entry past the exhausted
+    /// warning budget (Exif.pm:6455-6457), or an excessive count
+    /// (Exif.pm:6763-6773).
+    Refused,
+    /// Not read, for a reason of this engine's own: a value it cannot
+    /// locate without a base, an unmodelled `Format` override, an
+    /// unresolved tag or `Condition`, a value it cannot decode. ExifTool may
+    /// well read it.
+    Unread,
+}
+
+/// What [`process_exif_decoded`] reports about the ROOT directory, beside
+/// the rows themselves.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RootReads {
+    /// What the walk did with each entry, in entry order.
+    pub entries: Vec<EntryRead>,
+    /// `(row, entry)`: for every row the root directory itself emitted, its
+    /// index in `out` and the index of the entry that produced it. Rows a
+    /// `SubDirectory` edge produced are not listed.
+    pub rows: Vec<(usize, usize)>,
+}
+
+/// [`process_exif`], also reporting what the walk did with each entry of
+/// the ROOT directory and which entry each of its rows came from
+/// ([`RootReads`]). `None` when the directory itself was refused
+/// ([`read_ifd`], or the root guard).
+pub fn process_exif_decoded(
+    table: &'static IfdTable,
+    dir: IfdDir<'_>,
+    ctx: &mut cond::Ctx,
+    out: &mut Vec<Emitted>,
+) -> Option<RootReads> {
     let mut guard = Guard::new();
     // ExifTool.pm:9065-9072: `ProcessDirectory` records the root directory's
     // address too, which is what stops a table that points at itself.
     if !guard.admit(ifd_addr(dir.ifd_start), table_key(table), false) {
-        return;
+        return None;
     }
-    walk(table, dir, ctx, &mut guard, out);
+    let mut decoded = RootReads::default();
+    walk(table, dir, ctx, &mut guard, out, Some(&mut decoded))?;
+    Some(decoded)
 }
 
 /// The `$$self{PROCESSED}` key for an IFD walked at `start`.
@@ -771,16 +829,31 @@ fn table_key<T>(table: &'static T) -> usize {
     std::ptr::from_ref(table) as usize
 }
 
+/// One directory. `decoded`, when given, receives the [`RootReads`] of this
+/// directory (see [`process_exif_decoded`]); `None` is returned only when
+/// [`read_ifd`] refuses the directory.
 fn walk(
     table: &'static IfdTable,
     dir: IfdDir<'_>,
     ctx: &mut cond::Ctx,
     guard: &mut Guard,
     out: &mut Vec<Emitted>,
-) {
+    mut decoded: Option<&mut RootReads>,
+) -> Option<()> {
     // Exif.pm:6344-6358.
-    let Some(entries) = read_ifd(dir.data, dir.ifd_start, dir.byte_order) else {
-        return;
+    let entries = read_ifd(dir.data, dir.ifd_start, dir.byte_order)?;
+    if let Some(reads) = decoded.as_deref_mut() {
+        reads.entries.clear();
+        reads.entries.resize(entries.len(), EntryRead::Unread);
+        reads.rows.clear();
+    }
+    // Every entry from `from` on is one ExifTool never reaches.
+    let refuse_rest = |decoded: &mut Option<&mut RootReads>, from: usize| {
+        if let Some(reads) = decoded.as_deref_mut() {
+            for flag in &mut reads.entries[from..] {
+                *flag = EntryRead::Refused;
+            }
+        }
     };
     // Exif.pm:6539/6549 or the maker-note floor (module doc).
     let rule = DirectoryRule::for_table(table, dir.ifd_start, entries.len());
@@ -797,7 +870,8 @@ fn walk(
     for (index, entry) in entries.iter().enumerate() {
         // Exif.pm:6455-6457.
         if warn_count > 10 {
-            return;
+            refuse_rest(&mut decoded, index);
+            return Some(());
         }
         // Exif.pm:6463-6478.
         let Some(ty) = accepted_type(entry.field_type, in_maker_notes, ctx) else {
@@ -809,7 +883,11 @@ fn walk(
             // Exif.pm:6474-6477: "assume corrupted IFD if this is our first
             // entry (except Sony ILCE which have an empty first entry)".
             if index == 0 && !model_is_ilce(ctx) {
-                return;
+                refuse_rest(&mut decoded, index);
+                return Some(());
+            }
+            if let Some(reads) = decoded.as_deref_mut() {
+                reads.entries[index] = EntryRead::Refused;
             }
             continue;
         };
@@ -818,6 +896,9 @@ fn walk(
             Ok(located) => located,
             Err(Refusal::Warned) => {
                 warn_count += 1;
+                if let Some(reads) = decoded.as_deref_mut() {
+                    reads.entries[index] = EntryRead::Refused;
+                }
                 continue;
             }
             Err(Refusal::Silent) => continue,
@@ -864,12 +945,21 @@ fn walk(
             && !matches!(plan.kind, Kind::Str | Kind::Undef)
             && !(tag.name == "TransferFunction" && plan.count == 196_608)
         {
+            if let Some(reads) = decoded.as_deref_mut() {
+                reads.entries[index] = EntryRead::Refused;
+            }
             continue;
         }
         // Exif.pm:6782, 6915.
         let Some(raw) = decode_plan(&located, plan, dir.byte_order) else {
             continue;
         };
+        if let Some(reads) = decoded.as_deref_mut() {
+            reads.entries[index] = EntryRead::Decoded;
+        }
+        // ExifTool.pm:6312-6320: `ReadValue` keeps the fraction beside the
+        // number (`TAG_EXTRA{Rational}`, Exif.pm:7185).
+        let fraction = single_rational(&raw);
         // ExifTool.pm:6107-6120: the rational `ReadValue` hands on is already
         // `RoundFloat($n / $d, 10)`, so everything below -- the `RawConv`
         // member, `ValueConv`, `PrintConv`, the unconverted report -- sees
@@ -890,7 +980,8 @@ fn walk(
         if omitted.any() {
             continue;
         }
-        let (value, value_conv) = if tag.flags.binary && tag.value_conv.is_none() {
+        let binary = tag.flags.binary && tag.value_conv.is_none();
+        let (value, value_conv) = if binary {
             // ExifTool.pm:3535-3539: a `Binary` tag with no `ValueConv` gets
             // `\$val`, and the CLI prints the placeholder with `length($$val)`
             // (exiftool:3983-3988). A `ValueConv`, when present, runs
@@ -936,10 +1027,32 @@ fn walk(
             group2: tag.groups.g2.unwrap_or(table.group2),
             name: tag.name,
             value,
-            value_conv,
             low_priority: effective_priority(table, tag) == Some(0),
             avoid: tag.flags.avoid,
+            // Only where `value` is the rational's number unconverted.
+            rational: fraction
+                .filter(|_| !binary && tag.value_conv.is_none() && value_conv.is_none()),
+            value_conv,
         });
+        if let Some(reads) = decoded.as_deref_mut() {
+            reads.rows.push((out.len() - 1, index));
+        }
+    }
+    Some(())
+}
+
+/// The `(numerator, denominator)` of a single rational `ReadValue` result
+/// (either signedness; a zero denominator included, as ExifTool keeps
+/// `"$ratNumer/$ratDenom"` for it too), else `None`.
+fn single_rational(raw: &DecodedValue) -> Option<(i64, i64)> {
+    match *raw {
+        DecodedValue::UnsignedRational(numerator, denominator) => {
+            Some((i64::from(numerator), i64::from(denominator)))
+        }
+        DecodedValue::SignedRational(numerator, denominator) => {
+            Some((i64::from(numerator), i64::from(denominator)))
+        }
+        _ => None,
     }
 }
 
@@ -1407,7 +1520,8 @@ fn descend(
                     continue;
                 }
                 guard.depth += 1;
-                walk(
+                // A refused sub-directory is simply not walked (`None`).
+                let _ = walk(
                     target,
                     IfdDir {
                         data,
@@ -1419,6 +1533,7 @@ fn descend(
                     ctx,
                     guard,
                     out,
+                    None,
                 );
                 guard.depth -= 1;
             }
@@ -2097,7 +2212,69 @@ mod tests {
             } else {
                 assert!(got.is_empty(), "{overlaps} warnings: {got:?}");
             }
+            // Every refusal here is ExifTool's own ("Suspicious ... offset",
+            // then "Too many warnings"): `Refused`, never `Unread`, so a
+            // caller with another reader for the same entries does not put
+            // back what ExifTool refuses.
+            let mut members = HashMap::new();
+            let mut ctx = cond::Ctx::new(&mut members);
+            let reads = process_exif_decoded(
+                &EXIF_STRINGS,
+                IfdDir {
+                    data: &data,
+                    ifd_start: 0,
+                    base: Some(0),
+                    byte_order: order,
+                    group1: None,
+                },
+                &mut ctx,
+                &mut Vec::new(),
+            )
+            .unwrap()
+            .entries;
+            let mut expected = vec![EntryRead::Refused; overlaps];
+            expected.push(if read {
+                EntryRead::Decoded
+            } else {
+                EntryRead::Refused
+            });
+            assert_eq!(reads, expected, "{overlaps} overlaps");
         }
+    }
+
+    /// A bad FIRST entry is ExifTool's "assume corrupted IFD" (Exif.pm:
+    /// 6474-6477): the whole directory is `Refused`, entry by entry.
+    #[test]
+    fn a_bad_first_entry_refuses_the_whole_directory() {
+        let order = ByteOrder::Big;
+        let data = ifd(
+            order,
+            &[
+                entry(order, 0x0001, 99, 1, [0, 0, 0, 0]),
+                entry(order, 0x0003, 7, 1, [0x2a, 0, 0, 0]),
+            ],
+            &[],
+        );
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+        let reads = process_exif_decoded(
+            &EXIF_STRINGS,
+            IfdDir {
+                data: &data,
+                ifd_start: 0,
+                base: Some(0),
+                byte_order: order,
+                group1: None,
+            },
+            &mut ctx,
+            &mut out,
+        );
+        assert!(out.is_empty());
+        assert_eq!(
+            reads.map(|reads| reads.entries),
+            Some(vec![EntryRead::Refused, EntryRead::Refused])
+        );
     }
 
     /// Exif.pm:6539 (`$valuePtr < 8 and not $$dirInfo{ZeroOffsetOK}`): an
@@ -2139,6 +2316,33 @@ mod tests {
             } else {
                 assert!(got.is_empty(), "{suspicious} warnings: {got:?}");
             }
+            // ExifTool's own refusal: `Refused`, never `Unread`, so the
+            // ExifIFD caller does not put the hand arm's reading of the
+            // header bytes back (crafted `hdroff0.jpg`: control printed
+            // ExposureTime 346409.1, pinned 13.59 nothing).
+            let mut members = HashMap::new();
+            let mut ctx = cond::Ctx::new(&mut members);
+            let reads = process_exif_decoded(
+                &EXIF_STRINGS,
+                IfdDir {
+                    data: &data,
+                    ifd_start: 8,
+                    base: Some(0),
+                    byte_order: order,
+                    group1: None,
+                },
+                &mut ctx,
+                &mut Vec::new(),
+            )
+            .unwrap()
+            .entries;
+            let mut expected = vec![EntryRead::Refused; suspicious];
+            expected.push(if read {
+                EntryRead::Decoded
+            } else {
+                EntryRead::Refused
+            });
+            assert_eq!(reads, expected, "{suspicious} header offsets");
         }
     }
 
@@ -2153,6 +2357,67 @@ mod tests {
         plain(0x0006, "Empty"),
     ];
     static NUMERIC: IfdTable = table("Numeric", NUMERIC_TAGS);
+
+    /// `process_exif_decoded`: one [`EntryRead`] per root entry --
+    /// `Decoded` once its value was read (even if nothing is reported for
+    /// it), `Refused` where ExifTool refuses the same entry (a bad type code,
+    /// an offset past the data), `Unread` for the engine's own gaps; `None`
+    /// for a refused directory. And `Emitted::rational` keeps an unconverted
+    /// single rational's fraction.
+    #[test]
+    fn process_exif_decoded_flags_read_entries_and_rows_keep_the_fraction() {
+        let order = ByteOrder::Big;
+        let floor = trailer_at(4) as u32;
+        let data = ifd(
+            order,
+            &[
+                // Read and reported: 3/2 out of line.
+                entry(order, 0x0002, 5, 1, bytes32(order, floor)),
+                // An entry type ProcessExif refuses (not the first entry).
+                entry(order, 0x0001, 99, 1, [0, 0, 0, 0]),
+                // Past the end of `data`.
+                entry(order, 0x0003, 5, 2, bytes32(order, floor + 100)),
+                // Read, but no tag in the table: reported by nobody.
+                entry(order, 0x00ee, 3, 1, [0, 7, 0, 0]),
+            ],
+            &[0, 0, 0, 3, 0, 0, 0, 2],
+        );
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+        let dir = IfdDir {
+            data: &data,
+            ifd_start: 0,
+            base: Some(0),
+            byte_order: order,
+            group1: None,
+        };
+        let decoded = process_exif_decoded(&NUMERIC, dir, &mut ctx, &mut out);
+        let decoded = decoded.expect("an accepted directory");
+        assert_eq!(
+            decoded.entries,
+            [
+                EntryRead::Decoded,
+                EntryRead::Refused,
+                EntryRead::Refused,
+                EntryRead::Unread,
+            ]
+        );
+        assert_eq!(decoded.rows, [(0, 0)], "the one row came from entry 0");
+        assert_eq!(values(&out), vec![("Ratio", TagValue::Float(1.5))]);
+        assert_eq!(out[0].rational, Some((3, 2)));
+        assert_eq!(out[0].value_conv, None);
+        let refused = process_exif_decoded(
+            &NUMERIC,
+            IfdDir {
+                data: &data[..10],
+                ..dir
+            },
+            &mut ctx,
+            &mut Vec::new(),
+        );
+        assert_eq!(refused, None);
+    }
 
     #[test]
     fn a_zero_count_entry_reads_as_the_empty_value() {

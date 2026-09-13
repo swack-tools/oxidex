@@ -125,6 +125,16 @@ pub struct TagOccurrence {
     /// `PrintConv` form. Always `None` for shim-minted occurrences, for the
     /// same reason as `value`.
     pub print: Option<TagValue>,
+    /// The value as the file stores it, typed the way a writer serializes
+    /// or copies a tag (a SHORT as `Integer`, a RATIONAL as its fraction, an
+    /// `undef` run as its bytes) -- for a producer whose `raw` is not that:
+    /// the ExifIFD engine (slice E-2) stores ExifTool's printed value as
+    /// `raw` (`ColorSpace` `sRGB`, `Padding` `(Binary data ...)`) and keeps
+    /// the entry's typed value here, exactly what the hand arm stored as
+    /// `raw` before it. Read only by the paths that rebuild or copy a tag
+    /// without the original bytes (the PNG `eXIf` rebuild,
+    /// `copy_metadata`). `None` everywhere else, where `raw` already is it.
+    pub stored: Option<TagValue>,
     /// `FoundTag`'s `Priority` (`ExifTool.pm:9539`+): higher wins, ties
     /// broken by file order. See [`SHIM_DEFAULT_PRIORITY`] for what
     /// shim-minted occurrences get and why.
@@ -178,6 +188,7 @@ impl TagOccurrence {
             raw: value,
             value: None,
             print: None,
+            stored: None,
             priority,
             is_list: false,
             order,

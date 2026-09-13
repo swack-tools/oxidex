@@ -183,6 +183,8 @@ impl TagSink {
         // invalidation now happens here, at the one place a occurrence's
         // `raw` can change without going through `record`.
         self.occurrences[idx].value = None;
+        // The stored form likewise stands for the old `raw`.
+        self.occurrences[idx].stored = None;
         Some(&mut self.occurrences[idx].raw)
     }
 

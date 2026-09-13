@@ -171,9 +171,16 @@ pub fn parse_resources_metadata(reader: &dyn FileReader) -> Result<MetadataMap> 
                                             )
                                         {
                                             if !jpeg_meta.is_empty() {
-                                                // Merge metadata
-                                                for (k, v) in jpeg_meta {
-                                                    embedded_metadata.insert(k, v);
+                                                // Merge metadata: each winner
+                                                // with its --no-print-conv form,
+                                                // in file order.
+                                                for (k, occurrence) in
+                                                    jpeg_meta.winners_in_file_order()
+                                                {
+                                                    embedded_metadata.insert_carrying_forms(
+                                                        k.clone(),
+                                                        occurrence,
+                                                    );
                                                 }
                                                 found_embedded_metadata = true;
                                             }
@@ -223,9 +230,10 @@ pub fn parse_resources_metadata(reader: &dyn FileReader) -> Result<MetadataMap> 
         }
     }
 
-    // Merge embedded metadata
-    for (k, v) in embedded_metadata {
-        metadata.insert(k, v);
+    // Merge embedded metadata, each winner with its --no-print-conv form, in
+    // file order (`winners_in_file_order`).
+    for (k, occurrence) in embedded_metadata.winners_in_file_order() {
+        metadata.insert_carrying_forms(k.clone(), occurrence);
     }
 
     if metadata.len() == 1 {

@@ -40,13 +40,15 @@
 use crate::core::metadata_map::MetadataMap;
 use crate::core::operations_helpers::{read_u16, read_u32};
 
+use crate::core::tag_value::TagValue;
 use crate::error::{ExifToolError, Result};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::tag_db::lookup_tag_name;
 use crate::tag_db::tag_registry::{declared_ieee_field_type, get_tag_descriptor};
 use crate::writers::exif_surgical::{
-    IfdKind, descriptor_tag_id, native_to_byte_order, requires_subifd_write,
-    tag_value_to_field_for_key, validate_changed,
+    IfdKind, descriptor_tag_id, engine_reader_key, key_writes_tag_id, native_to_byte_order,
+    removal_names_rowless_entry, requires_subifd_write, tag_value_to_field_for_key,
+    validate_changed,
 };
 
 /// IFD0 tag pointing to the ExifIFD
@@ -254,6 +256,20 @@ pub fn rewrite_tiff_file(
     original: &MetadataMap,
     desired: &MetadataMap,
 ) -> Result<Vec<u8>> {
+    rewrite_tiff_file_with_removals(file_bytes, original, desired, &[])
+}
+
+/// [`rewrite_tiff_file`], plus the keys the caller asked by name to delete.
+/// A removal of a key the reader surfaced is told by its absence from
+/// `desired`; `removed` matters only for an entry the reader surfaced no row
+/// for (`exif_surgical::removal_names_rowless_entry`), and is refused like
+/// every other removal here.
+pub(crate) fn rewrite_tiff_file_with_removals(
+    file_bytes: &[u8],
+    original: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> Result<Vec<u8>> {
     let scan = scan_tiff(file_bytes)?;
     let bo = scan.byte_order;
 
@@ -271,15 +287,53 @@ pub fn rewrite_tiff_file(
     let mut added_exif: Vec<NewRecord> = Vec::new();
     let mut added_gps: Vec<NewRecord> = Vec::new();
 
+    // Engine names the reader gives ExifIFD entries `tag_db` writes to a
+    // different id (`exif_surgical::ReaderKey::Borrowed`): the TIFF/EP
+    // FocalPlaneXResolution 0x920e surfaces as `ExifIFD:FocalPlaneXResolution`,
+    // which writes 0xa20e. The entry is carried; the name, unchanged, is not
+    // an edit, and changed, is added under its own id (pass 2).
+    let mut borrowed: Vec<String> = Vec::new();
+
+    // Located entries the reader surfaced no row for, each with the value an
+    // explicit edit patched it to (pass 2). Such an entry's names are not an
+    // add: the key is the caller's edit of that very entry. Slice E-2's D-2
+    // and D-3 took the rows of ExifIFD 0x9205 MaxApertureValue values the
+    // engine withholds and of 0x02bc ApplicationNotes-style edges away; with
+    // the names consumed, as before, an edit the writer patched while the
+    // reader surfaced the entry was dropped in silence.
+    let mut rowless: Vec<(&LocatedEntry, Option<TagValue>)> = Vec::new();
+
     // --- Pass 1: located entries (modify in place, or refuse a removal) ---
     for entry in &scan.entries {
-        let keys = entry_keys(entry);
+        let mut keys = entry_keys(entry);
+        if entry.ifd == IfdKind::ExifIfd
+            && !keys.iter().any(|k| original.contains_key(k))
+            && let Some(engine_key) = engine_reader_key(entry.tag_id, original)
+        {
+            if key_writes_tag_id(&engine_key, entry.tag_id) {
+                keys.insert(0, engine_key);
+            } else {
+                borrowed.push(engine_key);
+            }
+        }
         // The key the reader actually used for this entry. The reader's group
         // assignment is not always the physical IFD -- Panasonic RW2 surfaces
         // IFD0's XResolution as "EXIF:XResolution" -- so both spellings are
         // candidates and the one the reader emitted wins.
         let Some(base_key) = keys.iter().find(|k| original.contains_key(k)) else {
-            consumed.extend(keys); // reader never surfaced it: nothing to diff
+            // Reader never surfaced it: nothing to diff, and never dropped.
+            if let Some(key) = removed
+                .iter()
+                .find(|k| removal_names_rowless_entry(k, entry.ifd, entry.tag_id, original))
+            {
+                return Err(ExifToolError::unsupported_format(format!(
+                    "Removing tag '{}' from a TIFF-structured file is not yet \
+                     supported: this writer edits entries in place and cannot \
+                     shrink an IFD table",
+                    key
+                )));
+            }
+            rowless.push((entry, None));
             continue;
         };
         if !desired.contains_key(base_key) {
@@ -326,12 +380,15 @@ pub fn rewrite_tiff_file(
             if value == original_value {
                 continue; // untouched — carried by not touching its bytes
             }
-            return Err(ExifToolError::unsupported_format(format!(
-                "Editing tag '{}' is not yet supported for TIFF-structured \
-                 files: it lives outside IFD0/ExifIFD/GPS (SubIFD, IFD1 or \
-                 MakerNote), which this writer carries untouched",
-                key
-            )));
+            if !borrowed.iter().any(|k| k == key) {
+                return Err(ExifToolError::unsupported_format(format!(
+                    "Editing tag '{}' is not yet supported for TIFF-structured \
+                     files: it lives outside IFD0/ExifIFD/GPS (SubIFD, IFD1 or \
+                     MakerNote), which this writer carries untouched",
+                    key
+                )));
+            }
+            // A borrowed engine name: added below under the name's own id.
         }
 
         if requires_subifd_write(key) {
@@ -351,6 +408,46 @@ pub fn rewrite_tiff_file(
             ExifToolError::parse_error(format!("Tag '{}' has no numeric EXIF id", key))
         })?;
         validate_changed(key, value)?;
+        // The caller's edit of an entry the reader surfaced no row for:
+        // patched in place with the entry's own field type, as pass 1 patches
+        // a surfaced one. `EXIF:` names the family, so it may be any of the
+        // three IFDs; a second spelling must carry the same value.
+        let in_ifd = |ifd: IfdKind| {
+            if key.starts_with("ExifIFD:") {
+                ifd == IfdKind::ExifIfd
+            } else if key.starts_with("GPS:") {
+                ifd == IfdKind::Gps
+            } else if key.starts_with("EXIF:") {
+                matches!(ifd, IfdKind::Ifd0 | IfdKind::ExifIfd | IfdKind::Gps)
+            } else {
+                ifd == IfdKind::Ifd0
+            }
+        };
+        if let Some((entry, patched)) = rowless
+            .iter_mut()
+            .find(|(entry, _)| entry.tag_id == tag_id && in_ifd(entry.ifd))
+        {
+            match patched {
+                Some(previous) if previous == value => continue,
+                Some(_) => {
+                    return Err(ExifToolError::unsupported_format(format!(
+                        "Cannot write tag '{}': it resolves to {} tag 0x{:04X}, \
+                         which another name already writes with a different \
+                         value; write the tag under a single name.",
+                        key,
+                        entry.ifd.prefix(),
+                        tag_id,
+                    )));
+                }
+                None => {}
+            }
+            let (ft, count, native) =
+                tag_value_to_field_for_key(key, value, Some(entry.field_type))?;
+            let bytes = native_to_byte_order(ft, &native, bo);
+            write_record_value(&mut out, entry.record_offset, ft, count, &bytes, bo);
+            *patched = Some(value.clone());
+            continue;
+        }
         // As in the EXIF writer: a created tag has no existing entry to take
         // an IEEE 754 width from, so the declared type has to supply it.
         let (ft, count, native) =
@@ -649,6 +746,116 @@ mod tests {
         m.insert("IFD0:Orientation", TagValue::new_string("Horizontal"));
         m.insert("IFD0:StripOffsets", TagValue::Integer(80));
         m
+    }
+
+    /// A little-endian TIFF: IFD0 (ExifOffset -> 26), an ExifIFD of SHORT
+    /// `entries` at 26; and the reader's map of it.
+    fn tiff_with_exif_shorts(entries: &[(u16, u16)]) -> (Vec<u8>, MetadataMap) {
+        let mut t = b"II\x2a\0\x08\0\0\0".to_vec();
+        t.extend(1u16.to_le_bytes());
+        t.extend([0x69, 0x87, 4, 0, 1, 0, 0, 0]);
+        t.extend(26u32.to_le_bytes());
+        t.extend(0u32.to_le_bytes());
+        t.extend((entries.len() as u16).to_le_bytes());
+        for (tag, value) in entries {
+            t.extend(tag.to_le_bytes());
+            t.extend(3u16.to_le_bytes());
+            t.extend(1u32.to_le_bytes());
+            t.extend(u32::from(*value).to_le_bytes());
+        }
+        t.extend(0u32.to_le_bytes());
+        let reader = crate::test_support::TestReader::new(t.clone());
+        let map = crate::core::operations::parse_tiff_metadata(&reader).unwrap();
+        (t, map)
+    }
+
+    fn exif_ifd_shorts(file: &[u8]) -> Vec<(u16, u16)> {
+        let scan = scan_tiff(file).unwrap();
+        scan.entries
+            .iter()
+            .filter(|e| e.ifd == IfdKind::ExifIfd)
+            .map(|e| {
+                let at = e.record_offset;
+                (
+                    u16::from_le_bytes([file[at], file[at + 1]]),
+                    u16::from_le_bytes([file[at + 8], file[at + 9]]),
+                )
+            })
+            .collect()
+    }
+
+    /// Review finding (E-2, D-2/D-3): an ExifIFD entry the reader surfaces no
+    /// row for (DJI_XT2.jpg's 0x02bc ApplicationNotes after D-3, a withheld
+    /// 0x9205 MaxApertureValue after D-2; ExposureProgram stands in here) is
+    /// still the entry an explicit edit of its name writes: patched in place
+    /// exactly as while the reader surfaced it, where its names used to be
+    /// consumed and the edit dropped in silence. A deletion by name is
+    /// refused, as every deletion here is, not carried in silence.
+    #[test]
+    fn a_rowless_entry_is_edited_in_place_and_its_deletion_refused() {
+        let (file, surfaced) = tiff_with_exif_shorts(&[(0x8822, 2), (0xa001, 1)]);
+        assert!(surfaced.contains_key("ExifIFD:ExposureProgram"));
+        let mut rowless = surfaced.clone();
+        rowless.remove("ExifIFD:ExposureProgram");
+
+        assert_eq!(rewrite_tiff_file(&file, &rowless, &rowless).unwrap(), file);
+        let edit = |original: &MetadataMap, key: &str| {
+            let mut desired = original.clone();
+            desired.insert(key, TagValue::Integer(3));
+            rewrite_tiff_file(&file, original, &desired)
+        };
+        let expected = edit(&surfaced, "ExifIFD:ExposureProgram").unwrap();
+        assert_eq!(exif_ifd_shorts(&expected), [(0x8822, 3), (0xa001, 1)]);
+        assert_eq!(edit(&rowless, "ExifIFD:ExposureProgram").unwrap(), expected);
+        assert_eq!(edit(&rowless, "EXIF:ExposureProgram").unwrap(), expected);
+
+        let mut both = rowless.clone();
+        both.insert("ExifIFD:ExposureProgram", TagValue::Integer(3));
+        both.insert("EXIF:ExposureProgram", TagValue::Integer(3));
+        assert_eq!(rewrite_tiff_file(&file, &rowless, &both).unwrap(), expected);
+        both.insert("EXIF:ExposureProgram", TagValue::Integer(4));
+        assert!(rewrite_tiff_file(&file, &rowless, &both).is_err());
+
+        let removed = ["ExifIFD:ExposureProgram".to_string()];
+        let err = rewrite_tiff_file_with_removals(&file, &rowless, &rowless, &removed)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Removing tag 'ExifIFD:ExposureProgram'"),
+            "{err}"
+        );
+        // Another IFD's name is not this entry's.
+        let removed = ["IFD0:ExposureProgram".to_string()];
+        assert_eq!(
+            rewrite_tiff_file_with_removals(&file, &rowless, &rowless, &removed).unwrap(),
+            file
+        );
+    }
+
+    /// Review finding (E-2): the reader names the TIFF/EP 0x9210 by the
+    /// generated `Exif::Main` (`ExifIFD:FocalPlaneResolutionUnit`), a name
+    /// `tag_db` writes to the EXIF 2.x 0xa210. An edit of that name was
+    /// refused as a tag "outside IFD0/ExifIFD/GPS"; pinned
+    /// `exiftool-pinned.sh -ExifIFD:FocalPlaneResolutionUnit=3` (and control
+    /// b4808958) keep 0x9210 = 2 and add 0xa210 = 3. An unchanged name is
+    /// no edit at all.
+    #[test]
+    fn a_legacy_entrys_engine_name_is_added_under_its_own_id() {
+        let (file, original) = tiff_with_exif_shorts(&[(0x9210, 2), (0xa001, 1)]);
+        assert_eq!(
+            original.get_string("ExifIFD:FocalPlaneResolutionUnit"),
+            Some("inches")
+        );
+        assert_eq!(
+            rewrite_tiff_file(&file, &original, &original).unwrap(),
+            file
+        );
+        let mut desired = original.clone();
+        desired.insert("ExifIFD:FocalPlaneResolutionUnit", TagValue::Integer(3));
+        let out = rewrite_tiff_file(&file, &original, &desired).unwrap();
+        let mut shorts = exif_ifd_shorts(&out);
+        shorts.sort_unstable();
+        assert_eq!(shorts, [(0x9210, 2), (0xa001, 1), (0xa210, 3)]);
     }
 
     #[test]

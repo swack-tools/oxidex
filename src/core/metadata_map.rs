@@ -198,6 +198,32 @@ impl MetadataMap {
         group1: &str,
         instance: super::tag_occurrence::Instance,
     ) -> Option<TagValue> {
+        self.insert_occurrence_with_forms(
+            key,
+            display_value,
+            no_print_conv_value,
+            None,
+            priority,
+            group1,
+            instance,
+        )
+    }
+
+    /// [`insert_occurrence_with_raw`](Self::insert_occurrence_with_raw),
+    /// also attaching the value as the file stores it
+    /// ([`TagOccurrence::stored`]) -- for a producer whose display value is
+    /// ExifTool's printed one (the ExifIFD engine rows).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_occurrence_with_forms<K: Into<String>>(
+        &mut self,
+        key: K,
+        display_value: TagValue,
+        no_print_conv_value: TagValue,
+        stored: Option<TagValue>,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+    ) -> Option<TagValue> {
         let key = key.into();
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
@@ -206,6 +232,66 @@ impl MetadataMap {
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
         occurrence.value = Some(no_print_conv_value);
+        occurrence.stored = stored;
+        self.sink.record(key, occurrence);
+        previous
+    }
+
+    /// Records a copy of another map's winning `source` occurrence under
+    /// `key` at this map's `priority` / `group1` / `instance` -- its value,
+    /// AND its `--no-print-conv` form when it carries one
+    /// ([`TagOccurrence::value`]), with its stored form
+    /// ([`TagOccurrence::stored`]). For a parser that re-homes another walk's
+    /// winners (a container re-entering the JPEG/TIFF/embedded-EXIF parsers):
+    /// copying the flattened [`MetadataMap::iter`] value through `insert()`
+    /// keeps only the printed form, so `--no-print-conv` would show the label
+    /// of every row whose producer stores ExifTool's PrintConv output with its
+    /// ValueConv form beside it -- the IFD engine's IFD1, ExifIFD and
+    /// InteropIFD rows (`ColorSpace` `sRGB` where ExifTool's `-n` prints `1`).
+    pub(crate) fn insert_copied_occurrence<K: Into<String>>(
+        &mut self,
+        key: K,
+        source: &TagOccurrence,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+    ) -> Option<TagValue> {
+        match &source.value {
+            Some(value) => self.insert_occurrence_with_forms(
+                key,
+                source.raw.clone(),
+                value.clone(),
+                source.stored.clone(),
+                priority,
+                group1,
+                instance,
+            ),
+            None => self.insert_occurrence(key, source.raw.clone(), priority, group1, instance),
+        }
+    }
+
+    /// [`insert()`](Self::insert) of `source`'s value under `key` -- the
+    /// shim's priority, group1 and instance, a fresh file-order slot -- that
+    /// keeps `source`'s `--no-print-conv` form ([`TagOccurrence::value`])
+    /// and stored form ([`TagOccurrence::stored`]).
+    /// For a parser that used to flatten another walk's winners through
+    /// `iter()` + `insert()` (the PDF resource and DCT-image merges, MIFF's
+    /// APP1 profile): exactly that copy, minus the loss of the form, which
+    /// the ExifIFD engine's rows need (`ColorSpace` `sRGB` / `-n` 1) and
+    /// Composite inputs read. [`insert_copied_occurrence`](Self::
+    /// insert_copied_occurrence) is the same for a caller that sets its own
+    /// priority.
+    pub(crate) fn insert_carrying_forms<K: Into<String>>(
+        &mut self,
+        key: K,
+        source: &TagOccurrence,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, source.raw.clone(), order);
+        occurrence.value = source.value.clone();
+        occurrence.stored = source.stored.clone();
         self.sink.record(key, occurrence);
         previous
     }
@@ -401,6 +487,20 @@ impl MetadataMap {
         self.sink.winner_occurrences()
     }
 
+    /// [`MetadataMap::winner_occurrences`] in file order (`TagOccurrence::
+    /// order`), for a parser that re-homes another walk's winners into its
+    /// own map. The winners live in a `HashMap`, so iterating them directly
+    /// visits them in a per-process random order, and the order they are
+    /// copied in is the order the receiving map's folds (bare-name `-TAG`
+    /// answers, Composite inputs) see: two copies of one tag under different
+    /// keys at one priority -- `ExifIFD:FNumber` and a maker note's
+    /// `Canon:FNumber` -- then fold differently from run to run.
+    pub(crate) fn winners_in_file_order(&self) -> Vec<(&String, &TagOccurrence)> {
+        let mut winners: Vec<_> = self.winner_occurrences().collect();
+        winners.sort_by_key(|(_, occurrence)| occurrence.order);
+        winners
+    }
+
     /// A copy of this map with each tag's stored value swapped for the form
     /// `--no-print-conv` should show.
     ///
@@ -519,6 +619,77 @@ mod tests {
         let map = MetadataMap::new();
         assert_eq!(map.len(), 0);
         assert!(map.is_empty());
+    }
+
+    /// `insert_copied_occurrence` carries the `--no-print-conv` form a
+    /// plain `insert()` of the flattened value would drop.
+    #[test]
+    fn a_copied_occurrence_keeps_its_no_print_conv_form() {
+        use super::super::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+        let mut source = MetadataMap::new();
+        source.insert_occurrence_with_raw(
+            "ExifIFD:ColorSpace",
+            TagValue::new_string("sRGB"),
+            TagValue::Integer(1),
+            SHIM_DEFAULT_PRIORITY,
+            "",
+            Instance::default(),
+        );
+        source.insert("ExifIFD:ExifVersion", TagValue::new_string("0232"));
+        let mut copy = MetadataMap::new();
+        for (key, occurrence) in source.winner_occurrences() {
+            copy.insert_copied_occurrence(key.clone(), occurrence, 0, "", Instance::default());
+        }
+        assert_eq!(copy.get_string("ExifIFD:ColorSpace"), Some("sRGB"));
+        let n = copy.without_print_conv();
+        assert_eq!(n.get("ExifIFD:ColorSpace"), Some(&TagValue::Integer(1)));
+        assert_eq!(n.get_string("ExifIFD:ExifVersion"), Some("0232"));
+        assert_eq!(copy.occurrences_for("ExifIFD:ColorSpace")[0].priority, 0);
+    }
+
+    /// `winners_in_file_order` is the source's recording order, whatever
+    /// the winners' `HashMap` visits; `insert_carrying_forms` is `insert()`
+    /// (the shim's priority: 0 for `XMP-exif`, 1 otherwise) plus the `-n`
+    /// form.
+    #[test]
+    fn winners_copy_in_file_order_with_their_forms() {
+        use super::super::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+        let mut source = MetadataMap::new();
+        let keys: Vec<String> = (0..64).map(|i| format!("ExifIFD:Tag{i}")).collect();
+        for key in &keys {
+            source.insert(key.as_str(), TagValue::Integer(1));
+        }
+        source.insert_occurrence_with_raw(
+            "ExifIFD:ColorSpace",
+            TagValue::new_string("sRGB"),
+            TagValue::Integer(1),
+            SHIM_DEFAULT_PRIORITY,
+            "",
+            Instance::default(),
+        );
+        source.insert("XMP-exif:ColorSpace", TagValue::new_string("sRGB"));
+        let order: Vec<&String> = source
+            .winners_in_file_order()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        let mut expected: Vec<&String> = keys.iter().collect();
+        let tail = [
+            "ExifIFD:ColorSpace".to_string(),
+            "XMP-exif:ColorSpace".to_string(),
+        ];
+        expected.extend(tail.iter());
+        assert_eq!(order, expected);
+
+        let mut copy = MetadataMap::new();
+        for (key, occurrence) in source.winners_in_file_order() {
+            copy.insert_carrying_forms(key.clone(), occurrence);
+        }
+        assert_eq!(copy.get_string("ExifIFD:ColorSpace"), Some("sRGB"));
+        let n = copy.without_print_conv();
+        assert_eq!(n.get("ExifIFD:ColorSpace"), Some(&TagValue::Integer(1)));
+        assert_eq!(copy.occurrences_for("ExifIFD:ColorSpace")[0].priority, 1);
+        assert_eq!(copy.occurrences_for("XMP-exif:ColorSpace")[0].priority, 0);
     }
 
     #[test]

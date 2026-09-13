@@ -128,6 +128,16 @@ const RST7_MARKER: u16 = 0xFFD7;
 /// # }
 /// ```
 pub fn write_exif_to_jpeg(reader: &dyn FileReader, metadata: &MetadataMap) -> Result<Vec<u8>> {
+    write_exif_to_jpeg_with_removals(reader, metadata, &[])
+}
+
+/// [`write_exif_to_jpeg`], plus the keys the caller asked by name to delete
+/// (`exif_surgical::plan_exif_write_with_removals`).
+pub(crate) fn write_exif_to_jpeg_with_removals(
+    reader: &dyn FileReader,
+    metadata: &MetadataMap,
+    removed: &[String],
+) -> Result<Vec<u8>> {
     // Step 1: Parse original JPEG segments
     let segments = parse_segments(reader)?;
 
@@ -135,7 +145,9 @@ pub fn write_exif_to_jpeg(reader: &dyn FileReader, metadata: &MetadataMap) -> Re
     // original byte order, MakerNotes preserved) — issue #20
     let file_size = reader.size() as usize;
     let file_bytes = reader.read(0, file_size)?;
-    let new_exif_segment = crate::writers::exif_surgical::rewrite_jpeg_exif(file_bytes, metadata)?;
+    let new_exif_segment = crate::writers::exif_surgical::rewrite_jpeg_exif_with_removals(
+        file_bytes, metadata, removed,
+    )?;
 
     // Step 3: Entropy-coded scan data follows the SOS header and is not
     // segment-structured; the parser cannot represent it (it either stops or

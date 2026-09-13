@@ -33,6 +33,8 @@ const X_RESOLUTION: u16 = 0x011A;
 const ARTIST: u16 = 0x013B;
 const GPS_DOP: u16 = 0x000B;
 const APERTURE_VALUE: u16 = 0x9202;
+const EXPOSURE_TIME: u16 = 0x829A;
+const F_NUMBER: u16 = 0x829D;
 const GPS_MEASURE_MODE: u16 = 0x000A;
 const GPS_DIFFERENTIAL: u16 = 0x001E;
 
@@ -106,6 +108,30 @@ fn tiff_entry(path: &Path, ifd: IfdKind, tag_id: u16) -> RawEntry {
         .unwrap_or_else(|| panic!("no {ifd:?} entry for tag 0x{tag_id:04x}"))
 }
 
+/// The single unsigned RATIONAL a JPEG's EXIF entry stores, as
+/// `(numerator, denominator)` in the TIFF's own byte order.
+fn jpeg_rational(path: &Path, ifd: IfdKind, tag_id: u16) -> (u32, u32) {
+    let bytes = fs::read(path).expect("read written jpeg");
+    let exif_start = bytes
+        .windows(b"Exif\0\0".len())
+        .position(|window| window == b"Exif\0\0")
+        .expect("written jpeg must contain EXIF APP1 data")
+        + b"Exif\0\0".len();
+    let little = bytes[exif_start..].starts_with(b"II");
+    let entry = jpeg_entry(path, ifd, tag_id);
+    assert_eq!(entry.field_type, RATIONAL);
+    assert_eq!(entry.count, 1);
+    let word = |at: usize| {
+        let b: [u8; 4] = entry.value[at..at + 4].try_into().unwrap();
+        if little {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        }
+    };
+    (word(0), word(4))
+}
+
 /// Returns an EXIF entry from a JPEG's APP1 TIFF payload.
 fn jpeg_entry(path: &Path, ifd: IfdKind, tag_id: u16) -> RawEntry {
     let bytes = fs::read(path).expect("read written jpeg");
@@ -138,7 +164,18 @@ fn jpeg_integer_tag_is_settable() {
 fn jpeg_rational_tag_is_settable_from_a_fraction() {
     let file = write_to_copy(JPEG_FIXTURE, ".jpg", "-ExifIFD:ExposureTime=1/250");
     assert_eq!(
+        jpeg_rational(file.path(), IfdKind::ExifIfd, EXPOSURE_TIME),
+        (1, 250)
+    );
+    // Pinned ExifTool 13.59 on the written file: `-n` prints the quotient
+    // (0.004), the PrintConv `1/250`. Since slice E-2 the ExifIFD row is the
+    // generated table's, and so is its `-n` form.
+    assert_eq!(
         read_tag(file.path(), "ExifIFD:ExposureTime").as_deref(),
+        Some("0.004")
+    );
+    assert_eq!(
+        read_tag_mode(file.path(), "ExifIFD:ExposureTime", false).as_deref(),
         Some("1/250")
     );
 }
@@ -149,12 +186,21 @@ fn jpeg_rational_tag_is_settable_from_a_decimal() {
     // 0.004 into 1/250; a decimal and its fraction must agree.
     let by_decimal = write_to_copy(JPEG_FIXTURE, ".jpg", "-ExifIFD:FNumber=5.6");
     assert_eq!(
+        jpeg_rational(by_decimal.path(), IfdKind::ExifIfd, F_NUMBER),
+        (28, 5)
+    );
+    // Pinned `-v3`: `FNumber = 5.6 (28/5)`; `-n` prints 5.6.
+    assert_eq!(
         read_tag(by_decimal.path(), "ExifIFD:FNumber").as_deref(),
-        Some("28/5")
+        Some("5.6")
     );
 
     let by_decimal = write_to_copy(JPEG_FIXTURE, ".jpg", "-ExifIFD:ExposureTime=0.004");
     let by_fraction = write_to_copy(JPEG_FIXTURE, ".jpg", "-ExifIFD:ExposureTime=1/250");
+    assert_eq!(
+        jpeg_rational(by_decimal.path(), IfdKind::ExifIfd, EXPOSURE_TIME),
+        jpeg_rational(by_fraction.path(), IfdKind::ExifIfd, EXPOSURE_TIME),
+    );
     assert_eq!(
         read_tag(by_decimal.path(), "ExifIFD:ExposureTime"),
         read_tag(by_fraction.path(), "ExifIFD:ExposureTime"),

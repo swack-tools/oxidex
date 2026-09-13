@@ -303,14 +303,16 @@ fn parse_image_member(
     // tag set, which is `operations.rs` Step 6 here. The instance keeps the
     // arbitration of `ExifTool.pm:9564`: a second image member cannot
     // displace the first one's values.
-    for (key, value) in image_metadata.iter() {
+    // Each winner with its `--no-print-conv` form (`insert_copied_occurrence`),
+    // in file order (`winners_in_file_order`).
+    for (key, occurrence) in image_metadata.winners_in_file_order() {
         if key.starts_with("File:") || key.starts_with("Composite:") {
             continue;
         }
         let group1 = key.split(':').next().unwrap_or_default().to_owned();
-        metadata.insert_occurrence(
+        metadata.insert_copied_occurrence(
             key.as_str(),
-            value.clone(),
+            occurrence,
             SHIM_DEFAULT_PRIORITY,
             &group1,
             instance,
