@@ -40,12 +40,27 @@ class T(unittest.TestCase):
    if '-MArchive::Zip' in argv: return subprocess.CompletedProcess(argv,0,'','')
    raise subprocess.TimeoutExpired(argv,1)
   report=self.invoke(run); self.assertEqual(report['state'],'failed'); self.assertEqual(report['cases'][0]['read']['state'],'timeout')
+  with TemporaryDirectory() as d:
+   out=Path(d)/'timeout.json'; o.write_probe_report(out,report); self.assertEqual(json.loads(out.read_text())['cases'][0]['read']['state'],'timeout')
  def test_public_spawn_persists_report(self):
   def run(argv,**kw):
    if argv[-1]=='-ver': return subprocess.CompletedProcess(argv,0,'13.59\n','')
    if '-MArchive::Zip' in argv: return subprocess.CompletedProcess(argv,0,'','')
    raise OSError('gone')
   report=self.invoke(run); self.assertEqual(report['state'],'failed'); self.assertEqual(report['cases'][0]['read']['state'],'spawn_failed')
+  with TemporaryDirectory() as d:
+   out=Path(d)/'spawn.json'; o.write_probe_report(out,report); self.assertEqual(json.loads(out.read_text())['cases'][0]['read']['state'],'spawn_failed')
+ def test_structured_case_refusals(self):
+  base={'name':'safe','fixture':'x','read':{'query':'FileType','expectation':'value','value':'JPEG'},'write':{'operation':'set','tag':'Comment','value':'x','readback':'x'}}
+  bad=({**base,'name':'../escape'},{**base,'read':{'query':'../other','expectation':'value','value':'x'}},{**base,'write':{'operation':'set','tag':'Comment','value':'x'}},{**base,'write':{'operation':'delete','tag':'Comment','readback':'retained'}},{**base,'write':{'operation':'set','tag':'Comment','value':'a\0b','readback':'a\0b'}},{**base,'write':{'operation':'set','tag':'Comment','value':'a\nb','readback':'a\nb'}})
+  for case in bad:
+   with self.assertRaises(o.Refused): o._case(case)
+ def test_symlink_and_report_overwrite_refuse(self):
+  with TemporaryDirectory() as d:
+   root=Path(d); target=root/'target'; target.write_text('x'); link=root/'link'; link.symlink_to(target)
+   with self.assertRaises(o.Refused): o._regular(link,'fixture')
+   payload={'schema':o.SCHEMA,'kind':o.KIND}; report={**payload,'probe_sha256':o.catalog_stage.sha256_json(payload)}; out=root/'report.json'; o.write_probe_report(out,report)
+   with self.assertRaises(o.Refused): o.write_probe_report(out,report)
  def test_old_read_only_shape_refuses(self):
   with self.assertRaises(o.Refused): o._case({'name':'x','fixture':'x','read':{'args':['-j'],'expectation':'success'},'write':{'args':['-j'],'expectation':'success'}})
 if __name__=='__main__': unittest.main()
