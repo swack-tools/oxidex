@@ -28,6 +28,10 @@ use Encode qw(decode);
 use Digest::SHA qw(sha256_hex);
 use Cwd qw(abs_path);
 use File::Spec ();
+use File::Basename qw(dirname);
+use FindBin;
+use lib $FindBin::Bin;
+use OxiDex::NativeReaderContract ();
 use Scalar::Util qw(refaddr);
 use B ();
 
@@ -490,6 +494,15 @@ for my $name (sort keys %subdirectory_validate_function_names) {
         $name, $EXIFTOOL_LIB_ABS);
 }
 
+# The child captures byte-order state without changing this table-walking
+# process. These facts prove that the final loaded CODE refs are the same ones
+# the child observed; a later module override makes the contract unresolved.
+my $unsigned_reader_contract = OxiDex::NativeReaderContract::finalise_loaded_contract(
+    OxiDex::NativeReaderContract::capture_isolated_contract(
+        $^X, File::Spec->catfile(dirname(abs_path($0) // $0),
+            'dump_binary_reader_contract.pl'), $EXIFTOOL_LIB),
+    $EXIFTOOL_LIB_ABS);
+
 # ->utf8 makes the encoder emit UTF-8 *bytes*.  Without it JSON::PP returns a
 # character string and print() downgrades anything under U+0100 to a raw
 # Latin-1 byte -- which is exactly how a copyright sign in a Notes field ends
@@ -501,4 +514,5 @@ print $json->encode({
     modules_failed   => $failed,
     modules          => \%out,
     subdirectory_validate_functions => \%subdirectory_validate_functions,
+    native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
 });

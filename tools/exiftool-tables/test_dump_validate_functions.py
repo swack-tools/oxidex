@@ -89,6 +89,12 @@ class ValidateFunctionFacts(unittest.TestCase):
 
     def test_collects_loaded_helpers_from_scalar_variant_and_flags(self):
         dump = self.dump()
+        # This intentionally minimal Image::ExifTool stub has no unsigned
+        # reader primitives. The isolated contract extractor must fail closed
+        # without preventing ordinary table/helper facts from being dumped.
+        contract = dump["native_reader_contracts"]["unsigned16"]
+        self.assertFalse(contract["resolved"])
+        self.assertEqual(contract["reason"], "extractor_failed")
         facts = dump["subdirectory_validate_functions"]
         helper = facts["Image::ExifTool::Fixture::Validate"]
         self.assertEqual(helper["__perl"], "CODE")
