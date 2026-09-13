@@ -69,10 +69,12 @@ Work from freshly fetched `e664e063` is recorded in the
 milestone reproduces the existing six tables and 193 rows exactly, adds
 independent native declaration verification, and puts the output under the
 shared transaction. The complete tier-2 run passes with zero output drift.
-Next fix raw-key identity separately: a production-module probe confirms that
-keys `CameraSettings3[276]` and `[276.1]` are treated as alternatives and
-`ImageNumber` is omitted. `FolderNumber` already decodes correctly. The runtime
-repair must emit both fields and preserve actual conditional alternatives.
+The [raw-key identity repair](./reference/sony-raw-id-runtime.md) is now
+implemented separately: generated exact IDs distinguish
+`CameraSettings3[276]` and `[276.1]`, restoring `ImageNumber` while preserving
+actual conditional alternatives. Both fields match native ExifTool in six
+synthetic TIFF carriers and all 68 Sony tests pass. Complete the workspace
+and real-file/runtime gates before landing or claiming a corpus gain.
 Sony enciphered and Nikon encrypted remain larger producer recoveries.
 
 The earlier paired censuses established the 7.63% result at `79101d7d`; that

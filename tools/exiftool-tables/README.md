@@ -66,9 +66,10 @@ Sony plain uses `gen_sony_plain_tables.py` with the selected fresh dump, then
 `verify_sony_plain.py --input <output> --exiftool-dir <source> --perl <interpreter>`
 checks its six tables, 193 rows, 72 maps and one bitmap against live Perl.
 The native verifier parses the whole Rust DSL independently of the producer.
-It reports the existing raw-key 276/276.1 reader collision explicitly; unchanged
-declarations do not establish runtime parity. See its recovery report for
-the demonstrated missing field and the separate runtime repair requirements.
+It requires the generated `RAW_TAG_IDS` array and checks exact native ID order
+and variant repetition. Shared byte offsets are reported separately from tag
+identity. See the [runtime repair report](../../docs/reference/sony-raw-id-runtime.md)
+for the restored field, bounded validation and remaining real-file acceptance.
 
 ## Generated-output inventory and write checks
 

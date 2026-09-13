@@ -439,6 +439,11 @@ below retain their original scope; they are not current census results.
   repair before claiming that behavior is equivalent. See
   [the recovery record](reference/sony-plain-generator-recovery.md).
 
+  The following [raw-ID runtime repair](reference/sony-raw-id-runtime.md)
+  generates identity separately from byte offsets and restores both fields
+  in six synthetic TIFF carriers. Its full real-file acceptance is separate
+  from the unchanged-output producer recovery recorded above.
+
   All six were deliberately **not** reconstructed in Step 14, and the
   distinction from the five that were matters: `dump_tables.pl` already
   carries every one of these tables' raw fields (they are ordinary

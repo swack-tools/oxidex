@@ -369,6 +369,18 @@ static T5: &[BinTag] = &[
     BinTag { index: 94, name: "FaceInfo2", cond: Cond::All(&[Cond::DmTruthy(Dm::FacesDetected), Cond::DmCmp(Dm::FaceInfoOffset, NumCmp::Eq, 94.0_f64), Cond::DmCmp(Dm::FaceInfoLength, NumCmp::Eq, 37.0_f64)]), fmt: Fmt::Default, count: 1, mask: 0, raw: Raw::None, vc: Vc::None, pc: Pc::None, hook: Hook::None, print_hex: false, low_priority: false, subdir: Some(4) },
 ];
 
+/// Native tag IDs, aligned with each table's emitted rows. True variants
+/// repeat one ID; independent fractional keys retain distinct identities.
+#[rustfmt::skip]
+pub static RAW_TAG_IDS: &[&[&str]] = &[
+    &["0", "1", "2", "3", "4", "5", "6", "7", "8", "12", "13", "15", "16", "17", "18", "19", "20", "21", "22", "24", "25", "26", "27", "28", "29", "30", "31", "34", "35", "40", "41", "42", "43", "44", "45", "46", "47", "48", "60", "61", "62", "63", "64", "76", "77", "80", "81", "83", "84", "85", "86", "88", "106", "154", "155"], // CameraSettings
+    &["0", "1", "2", "3", "4", "5", "6", "7", "8", "11", "12", "14", "15", "16", "17", "18", "19", "20", "22", "23", "24", "25", "26", "27", "31", "37", "38", "39", "40", "41", "60", "61", "62", "63", "64", "76", "77", "83", "84", "85", "86", "88", "126", "127", "131"], // CameraSettings2
+    &["0", "1", "2", "3", "4", "5", "6", "7", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "22", "23", "24", "25", "32", "33", "35", "36", "37", "38", "39", "40", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "56", "131", "132", "133", "134", "135", "136", "139", "153", "268", "276", "276.1", "512", "643", "644", "645", "646", "647", "648", "651", "780", "788", "790", "1008", "1011", "1015", "1024", "1026"], // CameraSettings3
+    &["0", "32", "64", "96", "128", "160", "192", "224"], // FaceInfo1
+    &["0", "37", "74", "111", "148", "185", "222", "259"], // FaceInfo2
+    &["2", "6", "26", "28", "48", "50", "52", "72", "94"], // ShotInfo
+];
+
 /// Every table, indexed by the `SubDir`/`Root` table numbers above.
 pub static TABLES: &[BinTable] = &[
     BinTable {

@@ -108,6 +108,10 @@ The acceptance contract for future changes remains:
 
 ## Next runtime repair
 
+The separate [raw-ID repair](./sony-raw-id-runtime.md) now implements this
+contract and records its bounded validation. The baseline characterization
+above remains the evidence for the original omission.
+
 Keep byte offsets separate from raw declaration identity. A generated sidecar
 can carry exact native raw IDs aligned with the existing table rows, while an
 opt-in reader groups true variants by those IDs. Check all alignment before

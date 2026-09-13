@@ -465,7 +465,7 @@ fn parse_sony_makernote_impl(
                     .iter()
                     .find(|(counts, _, _)| counts.contains(&bytes.len()))
                 {
-                    push_plain(&mut found, *table, bytes, *order, &mut cipher_ctx);
+                    push_plain(&mut found, *table, bytes, *order, &mut cipher_ctx)?;
                 }
             }
             TAG_SHOT_INFO => {
@@ -478,7 +478,7 @@ fn parse_sony_makernote_impl(
                     value.bytes(),
                     byte_order,
                     &mut cipher_ctx,
-                );
+                )?;
             }
             TAG_MINOLTA_MAKERNOTE => {
                 let Some(start) = value.first_int().filter(|v| *v != 0) else {
@@ -615,9 +615,22 @@ fn push_plain(
     bytes: &[u8],
     order: ByteOrder,
     ctx: &mut binary_data::Ctx,
-) {
+) -> Result<()> {
     let mut out = Vec::new();
-    binary_data::process(plain_tables::TABLES, table, bytes, order, ctx, &mut out);
+    binary_data::process_with_ids(
+        plain_tables::TABLES,
+        plain_tables::RAW_TAG_IDS,
+        table,
+        bytes,
+        order,
+        ctx,
+        &mut out,
+    )
+    .map_err(|error| {
+        crate::error::ExifToolError::parse_error(format!(
+            "Sony plain table identity mismatch: {error:?}"
+        ))
+    })?;
     for tag in out {
         found.push(Found::with_form(
             format!("Sony:{}", tag.name),
@@ -630,6 +643,7 @@ fn push_plain(
             tag.value_form,
         ));
     }
+    Ok(())
 }
 
 fn push_all(found: &mut Vec<Found>, tags: HashMap<String, String>, priority: u8) {
@@ -989,6 +1003,37 @@ mod tests {
             tags.get("Sony:CreativeStyle"),
             Some(&"Standard".to_string())
         );
+    }
+
+    #[test]
+    fn camera_settings3_preserves_both_packed_folder_and_image_numbers() {
+        // Native Sony::CameraSettings3 keys 276 and 276.1 address the same
+        // word. Pinned ExifTool's ProcessDirectory produces both fields.
+        for size in [1536, 2048] {
+            for (folder, image, folder_text, image_text) in [
+                (0_u32, 0_u32, "000", "0000"),
+                (123, 4567, "123", "4567"),
+                (999, 9999, "999", "9999"),
+            ] {
+                let mut data = build_makernote(&[(TAG_CAMERA_SETTINGS, 7, size, 20)]);
+                data.resize(20 + size as usize, 0);
+                let packed = 0x04000000 | (folder << 14) | image;
+                data[20 + 276..20 + 280].copy_from_slice(&packed.to_le_bytes());
+                let ctx = MakerNoteContext::in_tiff(&data, 0, data.len(), 0);
+                let mut tags = HashMap::new();
+                SonyParser
+                    .parse_with_context(&ctx, ByteOrder::LittleEndian, Some("DSLR-A580"), &mut tags)
+                    .unwrap();
+                assert_eq!(
+                    tags.get("Sony:FolderNumber").map(String::as_str),
+                    Some(folder_text)
+                );
+                assert_eq!(
+                    tags.get("Sony:ImageNumber").map(String::as_str),
+                    Some(image_text)
+                );
+            }
+        }
     }
 
     #[test]

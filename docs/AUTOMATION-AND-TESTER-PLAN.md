@@ -161,7 +161,9 @@ and a complete tier-2 run showing no output drift. Its native packed-word
 probe confirms a separate reader defect: integer-offset grouping omits
 `ImageNumber` from raw key 276.1. Recover the producer with that limitation
 explicit, then repair grouping with independently checked raw IDs and runtime
-regressions. Sony enciphered and Nikon encrypted remain larger jobs.
+regressions. That [raw-ID repair](./reference/sony-raw-id-runtime.md) now passes
+the synthetic carrier and Sony module checks; real-file and full runtime
+acceptance remain pending. Sony enciphered and Nikon encrypted remain larger jobs.
 
 Reconstruct the next missing Sony/Nikon generator or extend a shared expression rule
 when it removes demonstrated release work or unblocks useful runtime behavior.
