@@ -4,7 +4,8 @@ from pathlib import Path
 import subprocess, sys, tarfile
 from tempfile import TemporaryDirectory
 import unittest
-sys.path.insert(0,str(Path(__file__).resolve().parent))
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 import version_rehearsal_native_oracle as o
 import test_version_rehearsal_catalog as c
 
@@ -63,4 +64,23 @@ class T(unittest.TestCase):
    with self.assertRaises(o.Refused): o.write_probe_report(out,report)
  def test_old_read_only_shape_refuses(self):
   with self.assertRaises(o.Refused): o._case({'name':'x','fixture':'x','read':{'args':['-j'],'expectation':'success'},'write':{'args':['-j'],'expectation':'success'}})
-if __name__=='__main__': unittest.main()
+class CliT(T):
+    def test_cli_requires_case_array_and_write_once_output(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cases = root / 'cases.json'
+            cases.write_text('{}')
+            output = root / 'output.json'
+            result = subprocess.run([
+                str(Path(sys.executable).resolve()), str(HERE / 'version_rehearsal_native_oracle.py'),
+                '--capture', str(root/'missing'), '--catalog', str(root/'missing'), '--plan', str(root/'missing'),
+                '--resolution', str(root/'missing'), '--materialization', str(root/'missing'),
+                '--archive-cache', str(root/'cache'), '--source-root', str(root/'sources'), '--release', '13.59',
+                '--perl', str(Path(sys.executable).resolve()), '--cases', str(cases), '--output', str(output),
+            ], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('native readiness refused:', result.stderr)
+            self.assertFalse(output.exists())
+
+if __name__ == '__main__':
+    unittest.main()
