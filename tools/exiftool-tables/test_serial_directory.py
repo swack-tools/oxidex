@@ -15,25 +15,7 @@ PINNED_DUMP = os.environ.get("OXIDEX_TABLES_JSON")
 # Self-contained source-shaped fixture: default tests cover the closed row
 # grammar without requiring a local ExifTool installation. The native class
 # below requires a caller-supplied recorded dump and validates its provenance.
-PROCESSOR_BODY = r'''($$$) {
-    package Image::ExifTool::Fixture;
-    (my($unknown) = $et->Options('Unknown', 1));
-    ($et->{'NO_UNKNOWN'} = 1);
-    ($verbose and $et->VerboseDir('SerialData', (undef), $size));
-    (my($defaultFormat) = ($tagTablePtr->{'FORMAT'} || 'int8u'));
-    ((my $tagInfo = $et->GetTagInfo($tagTablePtr, $index)) or (last));
-    ($count = eval($count));
-    elsif (($format eq 'string')) { }
-    (my($len) = ((&Image::ExifTool::FormatSize($format) || 1) * $count));
-    (my($val) = ReadValue($dataPt, ($pos + $offset), $format, $count, ($size - $pos)));
-    ($val{$index} = $val);
-    if ($tagInfo->{'SubDirectory'}) { }
-    ($count and (my($key) = $et->FoundTag($tagInfo, $val)));
-    ($pos += $len);
-    $et->Options('Unknown', $unknown);
-    delete $et->{'NO_UNKNOWN'};
-}'''
-
+PROCESSOR_BODY = '($$$) {\n    package Image::ExifTool::Canon;\n    use strict;\n    (my($et, $dirInfo, $tagTablePtr) = @_);\n    (my($dataPt) = $dirInfo->{\'DataPt\'});\n    (my($offset) = $dirInfo->{\'DirStart\'});\n    (my($size) = $dirInfo->{\'DirLen\'});\n    (my($base) = ($dirInfo->{\'Base\'} || 0));\n    (my($verbose) = $et->Options(\'Verbose\'));\n    (my($dataPos) = ($dirInfo->{\'DataPos\'} || 0));\n    (my($unknown) = $et->Options(\'Unknown\', 1));\n    ($et->{\'NO_UNKNOWN\'} = 1);\n    ($verbose and $et->VerboseDir(\'SerialData\', (undef), $size));\n    (my($defaultFormat) = ($tagTablePtr->{\'FORMAT\'} || \'int8u\'));\n    my($index, %val);\n    (my($pos) = 0);\n    for (($index = 0); ($tagTablePtr->{$index} and ($pos <= $size)); (++$index)) {\n        ((my $tagInfo = $et->GetTagInfo($tagTablePtr, $index)) or (last));\n        (my($format) = $tagInfo->{\'Format\'});\n        (my($count) = 1);\n        if ($format) {\n            if (($format =~ /(.*)\\[(.*)\\]/)) {\n                ($format = $1);\n                ($count = $2);\n                ($count = eval($count));\n                ($@ and (warn(("Format $tagInfo->{\'Name\'}: $@")), (last)));\n            } elsif (($format eq \'string\')) {\n                ($count = (($size > $pos) ? ($size - $pos) : 0));\n            }\n        } else {\n            ($format = $defaultFormat);\n        }\n        (my($len) = ((&Image::ExifTool::FormatSize($format) || 1) * $count));\n        ((($pos + $len) > $size) and (last));\n        (my($val) = ReadValue($dataPt, ($pos + $offset), $format, $count, ($size - $pos)));\n        (defined($val) or (last));\n        if ($verbose) {\n            $et->VerboseInfo($index, $tagInfo, \'Index\', $index, \'Table\', $tagTablePtr, \'Value\', $val, \'DataPt\', $dataPt, \'Size\', $len, \'Start\', ($pos + $offset), \'Addr\', ((($pos + $offset) + $base) + $dataPos), \'Format\', $format, \'Count\', $count);\n        }\n        ($val{$index} = $val);\n        if ($tagInfo->{\'SubDirectory\'}) {\n            (my($subTablePtr) = GetTagTable($tagInfo->{\'SubDirectory\'}{\'TagTable\'}));\n            (my(%dirInfo) = (\'DataPt\', (\\$val), \'DataPos\', ($dataPos + $pos), \'DirStart\', 0, \'DirLen\', length($val)));\n            $et->ProcessDirectory((\\%dirInfo), $subTablePtr);\n        } elsif ((not($tagInfo->{\'Unknown\'}) or $unknown)) {\n            ($count and (my($key) = $et->FoundTag($tagInfo, $val)));\n            if ($key) {\n                ($et->{\'OPTIONS\'}{\'SaveFormat\'} and ($et->{\'TAG_EXTRA\'}{$key}{\'G6\'} = $format));\n                ($et->{\'OPTIONS\'}{\'SaveBin\'} and ($et->{\'TAG_EXTRA\'}{$key}{\'BinVal\'} = substr($$dataPt, ($pos + $offset), $len)));\n            }\n        }\n        ($pos += $len);\n    }\n    $et->Options(\'Unknown\', $unknown);\n    delete $et->{\'NO_UNKNOWN\'};\n    (return 1);\n}'
 
 def processor(body=PROCESSOR_BODY):
     return {
@@ -143,6 +125,25 @@ class SerialDescriptorTests(unittest.TestCase):
         extra_effect = table(PROCESSOR_BODY.replace("($pos += $len);", "$et->Warn('side effect');\n    ($pos += $len);"))
         with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "callback or statement"):
             self.compile(extra_effect)
+        quoted_fake = table(PROCESSOR_BODY.replace(
+            "(my($unknown) = $et->Options('Unknown', 1));",
+            "(my($unknown) = 1); my($note) = \"Options('Unknown',1)\";",
+        ))
+        with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "lacks ordered|callback or statement|local binding"):
+            self.compile(quoted_fake)
+
+    def test_unmodeled_table_and_row_properties_are_preserved_and_gate_refused(self):
+        changed = table()
+        changed["meta"]["PRIORITY"] = "0"
+        descriptor = self.compile(changed)
+        self.assertEqual(descriptor["table_facts"]["unmodeled"], {"PRIORITY": "0"})
+        self.assertIn(["serial_table_priority", 1], descriptor["gate_a"]["blocked_by"])
+        for property_name in ("Mask", "ByteOrder", "Hook", "DataMember"):
+            row_changed = table()
+            row_changed["tags"]["0"][property_name] = "native"
+            row = self.compile(row_changed)["entries"][0]["alternatives"][0]
+            self.assertEqual(row["native"][property_name], "native")
+            self.assertIn(f"serial_row_property_{property_name}", row["refusals"])
 
     def test_raw_fact_hashing_is_independent_of_recognition(self):
         descriptor = self.compile()
@@ -259,6 +260,8 @@ class PinnedSerialInventory(unittest.TestCase):
                 ["serial_row_shape", 2],
                 ["serial_value_conv", 4],
             ],
+            "table_gate_blocked_by": [["serial_table_priority", 1]],
+            "table_gate_blocked_tables": 1,
         })
         rows = {(row["module"], row["table"]): row for row in population["tables"]}
         self.assertEqual(rows[("Real", "AudioV3")]["descriptor"]["gate_a"]["blocked_by"], [])
@@ -315,6 +318,14 @@ class CopiedNativeSerialSource(unittest.TestCase):
         ))
         descriptor = serial_directory.compile_serial_inventory("Canon", "AFInfo", changed_source)
         self.assertEqual(descriptor["gate_a"]["blocked_by"], [["serial_print_conv_expr", 1]])
+
+    def test_source_unknown_option_mutation_cannot_be_faked_by_a_quoted_string(self):
+        changed_source = self.dump(self.copied(
+            "my $unknown = $et->Options(Unknown => 1);",
+            "my $unknown = 1; my $note = \"Options('Unknown',1)\";",
+        ))
+        with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "lacks ordered|callback or statement|local binding"):
+            serial_directory.compile_serial_inventory("Canon", "AFInfo", changed_source)
 
 
 if __name__ == "__main__":

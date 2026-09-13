@@ -40,37 +40,72 @@ _FQ = re.compile(r"(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*$")
 # effects matter.  The inventory is deliberately inactive, but it will not
 # describe an arbitrary CODE fact as serial processing merely because its name
 # happens to end in ProcessSerialData.
-_REQUIRED_PROCESSOR_STEPS = (
-    ("temporary unknown option", "Options('Unknown',1)"),
-    ("unknown generation suppression", "NO_UNKNOWN"),
-    ("serial verbose callback", "VerboseDir('SerialData'"),
-    ("table default format", "'FORMAT'"),
-    ("serial GetTagInfo", "GetTagInfo"),
-    ("dynamic count evaluation", "eval($count)"),
-    ("remainder string", "eq'string'"),
-    ("field length", "FormatSize($format)"),
-    ("bounded read", "ReadValue"),
-    ("raw value storage", "$val{$index}"),
-    ("subdirectory branch", "SubDirectory"),
-    ("tag reporting", "FoundTag"),
-    ("serial cursor advance", "$pos+=$len"),
-    ("unknown option restore", "Options('Unknown',$unknown)"),
-    ("unknown generation cleanup", "delete$et->{'NO_UNKNOWN'}"),
+# Token grammar for the complete B::Deparse control flow.  Quoted strings and
+# regexes are atomic tokens, so source words inside a diagnostic cannot satisfy
+# a required executable call.  This accepts the one source processor shape and
+# deliberately refuses added statements until they receive an explicit grammar
+# extension; the source-body digest is provenance, never the acceptance rule.
+_PROCESS_TOKEN = re.compile(
+    r"\s+|'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|/(?!\s)(?:\\.|[^/\\])*/[a-z]*"
+    r"|\$(?:[0-9]+|@)|\$\$?[A-Za-z_]\w*|%[A-Za-z_]\w*|@[A-Za-z_]\w*"
+    r"|(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*|\d+|\|\||&&|==|<=|>=|\+=|=~|->|\+\+"
+    r"|[(){}\[\];,=+*/&<>$@%:\\?!.|-]"
 )
+_REQUIRED_PROCESSOR_STEPS = (
+    ("serial processor package", ("package", "Image::ExifTool::Canon", ";", "use", "strict", ";")),
+    ("temporary unknown option", ("$et", "->", "Options", "(", "'Unknown'", ",", "1", ")")),
+    ("unknown generation suppression", ("$et", "->", "{", "'NO_UNKNOWN'", "}", "=", "1")),
+    ("serial verbose callback", ("$et", "->", "VerboseDir", "(", "'SerialData'")),
+    ("table default format", ("$tagTablePtr", "->", "{", "'FORMAT'", "}")),
+    ("serial GetTagInfo", ("$et", "->", "GetTagInfo", "(")),
+    ("dynamic count evaluation", ("$count", "=", "eval", "(", "$count", ")")),
+    ("remainder string", ("$format", "eq", "'string'")),
+    ("field length", ("Image::ExifTool::FormatSize", "(", "$format", ")")),
+    ("bounded read", ("ReadValue", "(")),
+    ("raw value storage", ("$val", "{", "$index", "}", "=", "$val")),
+    ("subdirectory branch", ("$tagInfo", "->", "{", "'SubDirectory'", "}")),
+    ("tag reporting", ("$et", "->", "FoundTag", "(")),
+    ("serial cursor advance", ("$pos", "+=", "$len")),
+    ("unknown option restore", ("$et", "->", "Options", "(", "'Unknown'", ",", "$unknown", ")")),
+    ("unknown generation cleanup", ("delete", "$et", "->", "{", "'NO_UNKNOWN'", "}")),
+)
+_EXPECTED_METHODS = Counter({"Options": 3, "VerboseDir": 1, "GetTagInfo": 1,
+                             "VerboseInfo": 1, "ProcessDirectory": 1, "FoundTag": 1})
+_EXPECTED_CONTROL_COUNTS = Counter({";": 42, "my": 19, "if": 5, "elsif": 2,
+                                    "else": 1, "for": 1, "return": 1, "last": 4,
+                                    "ReadValue": 1, "GetTagTable": 1, "eval": 1,
+                                    "Image::ExifTool::FormatSize": 1, "defined": 1, "length": 1,
+                                    "substr": 1, "warn": 1})
+_EXPECTED_LOCALS = frozenset({"$et", "$dirInfo", "$tagTablePtr", "@_", "$dataPt",
+    "$offset", "$size", "$base", "$verbose", "$dataPos", "$unknown", "$defaultFormat",
+    "$index", "%val", "$pos", "$tagInfo", "$format", "$count", "$@", "$1", "$2",
+    "$len", "$val", "$subTablePtr", "%dirInfo", "$key", "$$dataPt"})
+_TABLE_MODELED_PROPERTIES = frozenset({"PROCESS_PROC", "FORMAT", "GROUPS", "VARS"})
+_TABLE_DOCUMENTARY_PROPERTIES = frozenset({"NOTES"})
+_ROW_MODELED_PROPERTIES = frozenset({"Name", "Format", "Condition", "PrintConv", "RawConv",
+                                     "ValueConv", "SubDirectory", "Groups", "Unknown", "Binary", "List"})
+_ROW_DOCUMENTARY_PROPERTIES = frozenset({"Notes", "_shorthand"})
 
 
-def _collapse(source):
-    """Normalize only whitespace outside quoted Perl literals for step scans."""
+def _processor_tokens(source):
     if not isinstance(source, str):
         raise SerialDirectoryRefused("missing serial processor body")
-    pieces, at = [], 0
-    quoted = re.compile(r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"")
-    for match in quoted.finditer(source):
-        pieces.append(re.sub(r"\s+", "", source[at:match.start()]))
-        pieces.append(match.group())
+    tokens, at = [], 0
+    while at < len(source):
+        match = _PROCESS_TOKEN.match(source, at)
+        if match is None:
+            raise SerialDirectoryRefused("serial processor syntax is outside the closed grammar")
+        if not match.group().isspace():
+            tokens.append(match.group())
         at = match.end()
-    pieces.append(re.sub(r"\s+", "", source[at:]))
-    return "".join(pieces)
+    return tokens
+
+
+def _contains(tokens, wanted, start=0):
+    for at in range(start, len(tokens) - len(wanted) + 1):
+        if tuple(tokens[at:at + len(wanted)]) == wanted:
+            return at
+    return -1
 
 
 def _processor_contract(processor):
@@ -83,33 +118,31 @@ def _processor_contract(processor):
         raise SerialDirectoryRefused(str(error)) from None
     if not identity["name"].endswith(f"::{PROCESS_SERIAL_DATA}") or _FQ.fullmatch(identity["name"]) is None:
         raise SerialDirectoryRefused("processor identity is not a serial-data processor")
-    compact = _collapse(body)
+    tokens = _processor_tokens(body)
     last = -1
     steps = []
-    for effect, token in _REQUIRED_PROCESSOR_STEPS:
-        position = compact.find(token, last + 1)
+    for effect, tokens_required in _REQUIRED_PROCESSOR_STEPS:
+        position = _contains(tokens, tokens_required, last + 1)
         if position < 0:
             raise SerialDirectoryRefused(f"serial processor lacks ordered {effect}")
         last = position
         steps.append(effect)
-    # This source-only checkpoint accepts no extra callbacks or statements.
-    # A future body may be supported after its changed semantics receive a
-    # descriptor version and native proof; silently retaining it here would
-    # turn a source inventory into an unreviewed interpreter.
-    methods = Counter(re.findall(r"->([A-Za-z_]\w*)", compact))
-    expected_methods = Counter({
-        "Options": 3, "VerboseDir": 1, "GetTagInfo": 1, "VerboseInfo": 1,
-        "ProcessDirectory": 1, "FoundTag": 1,
-    })
-    if (methods - expected_methods
-            or any(methods[name] > count for name, count in expected_methods.items())
-            or compact.count("warn(") > 1):
+    methods = Counter(tokens[i + 1] for i, token in enumerate(tokens[:-1])
+                      if token == "->" and re.fullmatch(r"[A-Za-z_]\w*", tokens[i + 1]))
+    controls = Counter(tokens)
+    locals_seen = {token for token in tokens if token != "$" and token.startswith(("$", "%", "@"))}
+    # Every executable statement is accounted for by a required token sequence,
+    # exact callback/control counts and a closed binder set.  This rejects a
+    # string which merely mentions `Options`, a missing callback, and appended
+    # otherwise-unmodeled Perl statements; it is intentionally not a hash of a
+    # known body, so its accepted semantics are visible below.
+    if methods != _EXPECTED_METHODS or any(controls[name] != count for name, count in _EXPECTED_CONTROL_COUNTS.items()):
         raise SerialDirectoryRefused("serial processor has an unsupported callback or statement shape")
-    if "$et->{'NO_UNKNOWN'}=1" not in compact:
-        raise SerialDirectoryRefused("serial processor unknown suppression is not the authenticated assignment")
+    if locals_seen != _EXPECTED_LOCALS:
+        raise SerialDirectoryRefused("serial processor has an unsupported local binding or statement")
     # The native value is saved before the report/subdirectory branch.  This is
     # specifically what lets later Format count expressions consume raw values.
-    if compact.find("$val{$index}") > compact.find("FoundTag"):
+    if _contains(tokens, ("$val", "{", "$index", "}", "=", "$val")) > _contains(tokens, ("$et", "->", "FoundTag", "(")):
         raise SerialDirectoryRefused("serial processor stores converted/reporting value before raw state")
     return {
         **identity,
@@ -207,6 +240,20 @@ def _flags(tag):
     }
 
 
+def _unmodeled_properties(source, modeled, documentary, prefix):
+    if not isinstance(source, dict):
+        raise SerialDirectoryRefused(f"{prefix} source is not a dictionary")
+    reasons = []
+    for name in sorted(source):
+        if name in modeled or name in documentary:
+            continue
+        if name == "PRIORITY" and prefix == "serial_table_property":
+            reasons.append("serial_table_priority")
+        else:
+            reasons.append(f"{prefix}_{name}")
+    return reasons
+
+
 def _alternative(tag, default_format):
     if not isinstance(tag, dict):
         raise SerialDirectoryRefused("serial alternative is not a tag dictionary")
@@ -216,7 +263,10 @@ def _alternative(tag, default_format):
     format_operand = _format_operand(tag, default_format)
     condition = _condition_operand(tag.get("Condition"))
     conversion, refusal = _conversion_operand(tag)
-    reasons = [] if refusal is None else [refusal]
+    reasons = _unmodeled_properties(tag, _ROW_MODELED_PROPERTIES, _ROW_DOCUMENTARY_PROPERTIES,
+                                    "serial_row_property")
+    if refusal is not None:
+        reasons.append(refusal)
     if tag.get("RawConv") is not None:
         reasons.append("serial_raw_conv")
     if tag.get("ValueConv") is not None:
@@ -230,11 +280,7 @@ def _alternative(tag, default_format):
         "conversion": conversion,
         "groups": copy.deepcopy(tag.get("Groups") or {}),
         "flags": _flags(tag),
-        "native": {
-            "format": tag.get("Format"),
-            "condition": tag.get("Condition"),
-            "print_conv": copy.deepcopy(tag.get("PrintConv")),
-        },
+        "native": copy.deepcopy(tag),
         "refusals": reasons,
     }
 
@@ -274,7 +320,9 @@ def _table_meta(meta):
     groups = meta.get("GROUPS") or {}
     if not isinstance(groups, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in groups.items()):
         raise SerialDirectoryRefused("serial table GROUPS are not literal strings")
-    return default_format, groups, variables
+    reasons = _unmodeled_properties(meta, _TABLE_MODELED_PROPERTIES,
+                                    _TABLE_DOCUMENTARY_PROPERTIES, "serial_table_property")
+    return default_format, groups, variables, reasons
 
 
 def is_serial_processor(table_data):
@@ -306,13 +354,13 @@ def compile_serial_inventory(module, table, table_data):
     if not isinstance(table_data, dict):
         raise SerialDirectoryRefused("serial table is not a dictionary")
     meta = table_data.get("meta")
-    default_format, groups, variables = _table_meta(meta)
+    default_format, groups, variables, table_reasons = _table_meta(meta)
     processor = _processor_contract(meta.get("PROCESS_PROC"))
     tags = table_data.get("tags")
     if not isinstance(tags, dict):
         raise SerialDirectoryRefused("serial table tags are not a dictionary")
 
-    entries, blocked = [], Counter()
+    entries, blocked = [], Counter(table_reasons)
     reachable, first_gap, expected_index = True, None, 0
     for raw_index, raw in sorted(tags.items(), key=lambda pair: int(pair[0]) if isinstance(pair[0], str) and pair[0].isdigit() else -1):
         if not isinstance(raw_index, str) or _INTEGER.fullmatch(raw_index) is None:
@@ -349,6 +397,8 @@ def compile_serial_inventory(module, table, table_data):
             "default_format": default_format,
             "groups": groups,
             "variables": variables,
+            "documentary": {name: copy.deepcopy(meta[name]) for name in sorted(_TABLE_DOCUMENTARY_PROPERTIES) if name in meta},
+            "unmodeled": {name: copy.deepcopy(meta[name]) for name in sorted(meta) if name not in _TABLE_MODELED_PROPERTIES and name not in _TABLE_DOCUMENTARY_PROPERTIES},
             "native_table_sha256": facts.canonical_json_sha256({"meta": meta, "tags": tags}),
         },
         "entries": entries,
@@ -419,7 +469,8 @@ def compile_serial_population(document):
 
     table_outcomes = Counter(record["outcome"] for record in records)
     gate_reasons = Counter()
-    compiled_entries = compiled_alternatives = empty_tables = ready_tables = 0
+    table_gate_reasons = Counter()
+    compiled_entries = compiled_alternatives = empty_tables = ready_tables = table_blocked_tables = 0
     clear_alternatives = blocked_alternatives = 0
     for record in records:
         if record["native_entries"] == 0:
@@ -436,7 +487,12 @@ def compile_serial_population(document):
                 else:
                     clear_alternatives += 1
         for reason, count in descriptor["gate_a"]["blocked_by"]:
-            gate_reasons[reason] += count
+            if reason.startswith("serial_table_"):
+                table_gate_reasons[reason] += count
+            else:
+                gate_reasons[reason] += count
+        if table_gate_reasons and any(reason.startswith("serial_table_") for reason, _ in descriptor["gate_a"]["blocked_by"]):
+            table_blocked_tables += 1
         if not descriptor["gate_a"]["blocked_by"]:
             ready_tables += 1
 
@@ -461,6 +517,8 @@ def compile_serial_population(document):
             "row_gate_refused_alternatives": blocked_alternatives,
             "row_gate_clear_tables": ready_tables,
             "row_gate_blocked_by": [[name, count] for name, count in sorted(gate_reasons.items())],
+            "table_gate_blocked_tables": table_blocked_tables,
+            "table_gate_blocked_by": [[name, count] for name, count in sorted(table_gate_reasons.items())],
         },
         "runtime_status": "inventory_only_no_reader_or_route",
     }
