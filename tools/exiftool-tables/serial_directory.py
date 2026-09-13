@@ -40,6 +40,8 @@ _FLOOR_DIV_PRIOR = re.compile(
 )
 _INTEGER = re.compile(r"^(0|[1-9][0-9]*)$")
 _FQ = re.compile(r"(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*$")
+_PROVEN_UNSIGNED_COUNT_FORMATS = frozenset(("int8u", "int16u", "int32u"))
+_UNPROVED_COUNT_CONTROLLER = "serial_count_controller_unproved_unsigned"
 
 # These tokens occur in the native control path in the order in which their
 # effects matter.  The inventory is deliberately inactive, but it will not
@@ -331,6 +333,63 @@ def _entry(index, raw, default_format):
     return {"serial_index": index, "variant": alternatives is not None, "alternatives": compiled}
 
 
+def _count_controller_index(alternative):
+    """Return the prior raw slot a supported count expression reads."""
+    if not isinstance(alternative, dict):
+        return None
+    operand = alternative.get("format")
+    count = operand.get("count") if isinstance(operand, dict) else None
+    if not isinstance(count, dict):
+        return None
+    if count.get("kind") in {"prior_raw_value", "floor_div_prior_raw_value"}:
+        index = count.get("serial_index")
+        return index if isinstance(index, int) and index >= 0 else None
+    return None
+
+
+def _proven_unsigned_count_controller(entry):
+    """Whether every possible selected controller is a one-element uint."""
+    if not isinstance(entry, dict) or entry.get("refusals"):
+        return False
+    alternatives = entry.get("alternatives")
+    if not isinstance(alternatives, list) or not alternatives:
+        return False
+    for alternative in alternatives:
+        if not isinstance(alternative, dict) or alternative.get("refusals"):
+            return False
+        operand = alternative.get("format")
+        count = operand.get("count") if isinstance(operand, dict) else None
+        if (not isinstance(operand, dict)
+                or operand.get("format") not in _PROVEN_UNSIGNED_COUNT_FORMATS
+                or count != {"kind": "fixed", "value": 1}):
+            return False
+    return True
+
+
+def _apply_count_controller_refusals(entries):
+    """Withhold dynamic counts whose source slot can be signed or non-scalar."""
+    by_index = {entry.get("serial_index"): entry for entry in entries if isinstance(entry, dict)}
+    added = Counter()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        index = entry.get("serial_index")
+        alternatives = entry.get("alternatives")
+        if not isinstance(index, int) or not isinstance(alternatives, list):
+            continue
+        for alternative in alternatives:
+            dependency = _count_controller_index(alternative)
+            if dependency is None:
+                continue
+            controller = by_index.get(dependency)
+            if dependency >= index or not _proven_unsigned_count_controller(controller):
+                reasons = alternative.get("refusals")
+                if isinstance(reasons, list) and _UNPROVED_COUNT_CONTROLLER not in reasons:
+                    reasons.append(_UNPROVED_COUNT_CONTROLLER)
+                    added[_UNPROVED_COUNT_CONTROLLER] += 1
+    return added
+
+
 def _table_meta(meta):
     if not isinstance(meta, dict):
         raise SerialDirectoryRefused("serial table metadata is not a dictionary")
@@ -408,6 +467,7 @@ def compile_serial_inventory(module, table, table_data):
         entries.append(entry)
         expected_index = index + 1
 
+    blocked.update(_apply_count_controller_refusals(entries))
     if not entries:
         blocked["serial_empty_table"] += 1
     descriptor = {

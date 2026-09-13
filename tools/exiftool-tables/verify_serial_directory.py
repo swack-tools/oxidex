@@ -100,6 +100,8 @@ _FLOOR = re.compile(
 _MEMBER_REGEX = re.compile(r"^\$\$self\{([^}]+)\}\s*(=~|!~)\s*/((?:\\.|[^/\\])*)/([a-z]*)$", re.S)
 _MEMBER_STRING = re.compile(r"^\$\$self\{([^}]+)\}\s*(eq|ne)\s*'((?:\\.|[^'\\])*)'$", re.S)
 _MEMBER_ARROW_STRING = re.compile(r'^\$self->\{([^}]+)\}\s*(eq|ne)\s*"((?:\\.|[^"\\])*)"$', re.S)
+_PROVEN_UNSIGNED_COUNT_FORMATS = frozenset(("int8u", "int16u", "int32u"))
+_UNPROVED_COUNT_CONTROLLER = "serial_count_controller_unproved_unsigned"
 
 
 def _fail(message: str) -> None:
@@ -805,6 +807,41 @@ def _native_reasons(tag: Any, default: str) -> tuple[dict[str, Any] | None, tupl
     return expected, tuple(sorted(set(reasons)))
 
 
+def _native_count_controller_index(expected: dict[str, Any] | None) -> int | None:
+    if not isinstance(expected, dict):
+        return None
+    count = expected.get("count")
+    if not isinstance(count, tuple) or not count:
+        return None
+    if count[0] in {"prior", "floor"} and isinstance(count[1], int) and count[1] >= 0:
+        return count[1]
+    return None
+
+
+def _native_proven_unsigned_count_controller(rows: dict[RowKey, dict[str, Any]], index: int) -> bool:
+    candidates = [row for key, row in rows.items() if key.index == index]
+    if not candidates:
+        return False
+    for candidate in candidates:
+        expected = candidate.get("expected")
+        if candidate.get("reasons") or not isinstance(expected, dict):
+            return False
+        if (expected.get("format") not in _PROVEN_UNSIGNED_COUNT_FORMATS
+                or expected.get("count") != ("fixed", 1)):
+            return False
+    return True
+
+
+def _apply_native_count_controller_refusals(rows: dict[RowKey, dict[str, Any]]) -> None:
+    """Mirror the source-derived dynamic-count guard without importing the compiler."""
+    for key, row in rows.items():
+        dependency = _native_count_controller_index(row.get("expected"))
+        if dependency is None:
+            continue
+        if dependency >= key.index or not _native_proven_unsigned_count_controller(rows, dependency):
+            row["reasons"] = tuple(sorted(set(row["reasons"]) | {_UNPROVED_COUNT_CONTROLLER}))
+
+
 def _native_row_groups(raw: Any) -> tuple[str | None, str | None, str | None]:
     if raw is None:
         return (None, None, None)
@@ -861,6 +898,7 @@ def native_population(document: dict[str, Any]) -> dict[tuple[str, str], NativeT
                     expected, reasons = _native_reasons(tag, default)
                     rows[key] = {"expected": expected, "reasons": reasons,
                                  "name": tag.get("Name") if isinstance(tag, dict) and isinstance(tag.get("Name"), str) else None}
+            _apply_native_count_controller_refusals(rows)
             key = (module, table)
             if key in output:
                 _fail("duplicate selected serial native table")
