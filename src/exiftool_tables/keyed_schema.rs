@@ -5,7 +5,7 @@
 //! an activation request.
 
 use super::ifd_schema::RawConvEffect;
-use super::{Cond, ExprId, Fmt, GateA, Omitted, PrintConv, TagGroups};
+use super::{Cond, ExprId, Fmt, GateA, IfdFlags, Omitted, PrintConv, TagGroups};
 
 #[derive(Clone, Copy, Debug)]
 pub enum KeyedLayout {
@@ -37,6 +37,11 @@ pub struct KeyedTag {
     /// undefined; `Some(0)` is false and must trigger ProcessCanonRaw's
     /// size/format fallback. A reader must not replace either with one.
     pub count: Option<usize>,
+    /// Shared native reporting policy, with table AVOID and PRIORITY already
+    /// resolved. Do not apply those table overrides a second time. A selected
+    /// disallowed Unknown alternative ends selection; it must not fall through
+    /// to another alternative. Keep every alternative in native source order.
+    pub flags: IfdFlags,
     pub condition: Option<Cond>,
     pub raw_conv: Option<RawConvEffect>,
     pub omitted: Omitted,
@@ -95,6 +100,8 @@ pub struct KeyedNativeFacts {
     pub condition: Option<&'static str>,
     pub groups: TagGroups,
     pub subdir: Option<KeyedNativeSubdir>,
+    /// Expanded native flags with the same resolved table policy as KeyedTag.
+    pub flags: IfdFlags,
 }
 
 #[derive(Clone, Copy, Debug)]
