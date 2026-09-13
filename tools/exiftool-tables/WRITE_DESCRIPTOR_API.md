@@ -9,8 +9,13 @@ The first closed class is a plain `Exif::Main` scalar row with native
 `Writable => 'string'` and a literal effective `WriteGroup` in `IFD0`, `ExifIFD`,
 or `GPS`. Each
 candidate carries only source-derived `raw_id`, `name`, `WritePhysicalGroup`,
-and `WriteValueType::Ascii`, together with actual loaded autoload/`WRITE_PROC`/
-`CHECK_PROC` provenance: name, relative source file, source SHA-256, B::Deparse
+and `WriteValueType::Ascii`, together with its exact fully-qualified native
+table identity and effective native table groups. Group values apply
+`GetTagTable`'s false-value defaults and retain the group-0 context a later
+`CharsetEXIF` encoding contract needs. They are source facts, not a routing or
+encoding decision. The candidate also carries actual loaded autoload/
+`WRITE_PROC`/`CHECK_PROC` provenance: fully-qualified callable name, normalized
+library-relative source file, lowercase SHA-256 source digest, B::Deparse
 SHA-256, and captured direct dependencies.
 
 Those procedure facts are **not** a writer admission and are not interpreted
@@ -29,3 +34,9 @@ separately; their presence here is not an activation claim. A changed name or
 compatible added string row produces a changed descriptor; an unmodeled
 physical group, type, write control, unknown property, or unresolved procedure
 provenance is a refusal rather than a guessed writer operation.
+
+The compiler binds the outer sidecar map key to the inner `module`, `table`,
+and `full_name` before applying this source class. It rejects malformed or
+non-relative provenance paths, non-SHA-256 digests, and unrepresentable group
+maps. `--write-out` is optional: requesting this inactive artifact does not
+change the ordinary generated binary artifact.
