@@ -424,8 +424,27 @@ pub fn process_binary_data(
     walk(table, dir, ctx, &mut guard, out);
 }
 
-/// One tag key's worth of resolved table entry, after `_variants`
-/// first-match-wins has picked a winner.
+/// One raw table candidate, kept unresolved until the walk reaches its native
+/// key. Resolving all variant groups before sorting would let a condition at a
+/// later key observe state that ExifTool has not stored yet.
+#[derive(Clone, Copy)]
+enum Candidate {
+    Field(&'static Field),
+    Variants(&'static cond::VariantGroup),
+}
+
+/// `GetTagInfo`'s first lookup result before `ProcessBinaryData` knows the
+/// final `entry`/`more` bounds. `NeedsValue` is its defined-false sentinel:
+/// only a Condition mentioning `$valPt`, `$format`, or `$count` takes the
+/// retry path with a <=128-byte value pointer (ExifTool.pm:9155-9188,
+/// 9946-9964).
+enum Lookup {
+    Selected(Entry),
+    NeedsValue,
+    Skipped,
+}
+
+/// One tag key's worth of resolved table entry.
 struct Entry {
     field: &'static Field,
     /// True when the field came from a `_variants` group, whose `Condition`
@@ -453,15 +472,67 @@ pub(super) fn walk(
     }
     let cursor = Cursor::new(size, increment);
 
-    for (index, entry) in visit_order(table, ctx) {
-        let (at, more) = match cursor.step(index) {
-            Step::At { entry, more } => (entry, more),
-            // ExifTool.pm:9961: `next` -- try the following key.
-            Step::Skip => continue,
-            // ExifTool.pm:9964: `last` -- abandon the rest of the table.
-            Step::Stop => break,
+    for (index, candidate) in visit_order(table) {
+        // ProcessBinaryData calls GetTagInfo BEFORE it computes the final
+        // entry/more bound. Member-only Conditions, including SetMember
+        // conditions, therefore run even on a key that later ends the walk.
+        // Conditions that ask for a value context return the native retry
+        // sentinel instead and are not evaluated unless this key is in range.
+        let initial = lookup(candidate, ctx, None);
+        // A failed initial GetTagInfo is a native `next` before any offset
+        // arithmetic. In particular, a high skipped key must not `last` the
+        // loop and suppress a later negative key (which sorts at the end).
+        if matches!(initial, Lookup::Skipped) {
+            continue;
+        }
+        let (at, more, entry) = match initial {
+            Lookup::Selected(entry) => match cursor.step(index) {
+                Step::At { entry: at, more } => (at, more, entry),
+                // ExifTool.pm:9961: `next` -- try the following key.
+                Step::Skip => continue,
+                // The final `$more <= 0` check is reached only after a tag
+                // was selected, so only this arm is native `last`.
+                Step::Stop => break,
+            },
+            Lookup::NeedsValue => {
+                // The retry branch has its own pre-read `entry >= $size`
+                // guard at ExifTool.pm:9923-9930. That is `next`, not the
+                // later final `last`, because GetTagInfo has not selected a
+                // tag yet.
+                let (at, more) = match cursor.step(index) {
+                    Step::At { entry: at, more } => (at, more),
+                    Step::Skip | Step::Stop => continue,
+                };
+                let offset =
+                    match usize::try_from(at + i64::try_from(dir.dir_start).unwrap_or(i64::MAX)) {
+                        Ok(offset) => offset,
+                        Err(_) => continue,
+                    };
+                let val_pt_len = usize::try_from(more).unwrap_or(0).min(128);
+                let Some(val_pt) = dir.data.get(offset..offset.saturating_add(val_pt_len)) else {
+                    continue;
+                };
+                match lookup(candidate, ctx, Some(val_pt)) {
+                    Lookup::Selected(entry) => (at, more, entry),
+                    Lookup::NeedsValue | Lookup::Skipped => continue,
+                }
+            }
+            Lookup::Skipped => unreachable!("handled before cursor arithmetic"),
         };
         let field = entry.field;
+
+        // An unmodeled Hook runs before ReadValue and may replace the format
+        // or shift every later offset (ExifTool.pm:10044-10063). An
+        // unmodeled RawConv runs through FoundTag before later keys, and an
+        // unresolved SubDirectory may do the same in its child walk. Each is
+        // an execution dependency, so the tail is not trustworthy until the
+        // corresponding effect is modeled and applied.
+        if field.omitted.hook
+            || (field.omitted.raw_conv && field.raw_conv.is_none())
+            || (field.omitted.subdirectory && field.subdir.is_none())
+        {
+            return;
+        }
 
         // D1 (Step 10): past this bound `index * increment` is a nominal
         // offset, not a trustworthy one, so there is no honest value here at
@@ -496,6 +567,25 @@ pub(super) fn walk(
         let mut omitted = field.omitted;
         if entry.condition_resolved {
             omitted.condition = false;
+        }
+        match field.raw_conv {
+            Some(super::ifd_schema::RawConvEffect::SetMember { member }) => {
+                let Some(value) = member_value(&raw) else {
+                    // `$val` is shared state for later Conditions. If it has
+                    // a domain this closed MemberValue model cannot preserve,
+                    // the safe answer is to stop this table before later
+                    // fields can observe a fabricated or absent value.
+                    return;
+                };
+                // FoundTag runs RawConv before it considers whether to report
+                // a tag. The assignment returns `$val`, so clearing this
+                // local omission is valid only after the state change.
+                ctx.members.insert(member, value);
+                omitted.raw_conv = false;
+            }
+            // This conversion changes only FoundTag's local `$val`; the
+            // value itself remains withheld until a renderer is modeled.
+            Some(super::ifd_schema::RawConvEffect::ValueLocal) | None => {}
         }
         if omitted.any() {
             continue;
@@ -536,38 +626,75 @@ pub(super) fn walk(
     }
 }
 
-/// ExifTool's key order (ExifTool.pm:9917) over the union of `fields` and the
-/// resolved winner of each `_variants` group.
+/// One `GetTagInfo` lookup. `value_context` is absent for the native first
+/// lookup and present only for ProcessBinaryData's retry; `$format`/`$count`
+/// are deliberately always absent for this table kind.
+fn lookup(candidate: Candidate, ctx: &mut cond::Ctx, value_context: Option<&[u8]>) -> Lookup {
+    let mut condition_ctx = cond::Ctx {
+        members: &mut *ctx.members,
+        val_pt: value_context,
+        format: None,
+        count: None,
+    };
+    match candidate {
+        Candidate::Field(field) => {
+            // A standalone source Condition was present but outside the
+            // closed grammar. GetTagInfo decides whether this field exists
+            // before ProcessBinaryData reads it or follows SubDirectory
+            // (ExifTool.pm:9162-9181, 10102), so an unconditional selection
+            // would permit an unproved state write or child walk.
+            if field.condition.is_none() && field.omitted.condition {
+                return Lookup::Skipped;
+            }
+            match field.condition {
+                None => Lookup::Selected(Entry {
+                    field,
+                    condition_resolved: false,
+                }),
+                Some(condition) if value_context.is_none() && condition.needs_value_context() => {
+                    Lookup::NeedsValue
+                }
+                Some(condition) if condition.eval(&mut condition_ctx) => Lookup::Selected(Entry {
+                    field,
+                    condition_resolved: true,
+                }),
+                Some(_) => Lookup::Skipped,
+            }
+        }
+        Candidate::Variants(group) => {
+            for (condition, field) in group.alternatives {
+                if value_context.is_none() && condition.needs_value_context() {
+                    return Lookup::NeedsValue;
+                }
+                if condition.eval(&mut condition_ctx) {
+                    return Lookup::Selected(Entry {
+                        field,
+                        condition_resolved: true,
+                    });
+                }
+            }
+            Lookup::Skipped
+        }
+    }
+}
+
+/// ExifTool's key order (ExifTool.pm:9917) over the union of `fields` and
+/// `_variants` groups. The groups remain unresolved here: their Conditions
+/// execute at this exact key during [`walk`].
 ///
 /// The two live in separate arrays in the generated schema but are one key
 /// space in ExifTool's table, and interleaving them correctly is what makes
 /// `varSize` and `DataMember` ordering mean the same thing here as there.
-fn visit_order(table: &'static BinaryTable, ctx: &mut cond::Ctx) -> Vec<(i64, Entry)> {
-    let mut entries: Vec<(i64, u32, Entry)> = Vec::with_capacity(table.fields.len());
+fn visit_order(table: &'static BinaryTable) -> Vec<(i64, Candidate)> {
+    let mut entries: Vec<(i64, u32, Candidate)> = Vec::with_capacity(table.fields.len());
     for field in table.fields {
-        entries.push((
-            field.index,
-            field.sub.unwrap_or(0),
-            Entry {
-                field,
-                condition_resolved: false,
-            },
-        ));
+        entries.push((field.index, field.sub.unwrap_or(0), Candidate::Field(field)));
     }
     for group in table.variants {
-        // `first_match` applies every alternative's `SetMember` side effects
-        // in ExifTool's own GetTagInfo order, including from alternatives
-        // that lose -- see cond.rs.
-        let Some(field) = cond::first_match(group.alternatives, ctx) else {
-            continue;
-        };
         entries.push((
             group.index,
             group.sub.unwrap_or(0),
-            Entry {
-                field,
-                condition_resolved: true,
-            },
+            Candidate::Variants(group),
         ));
     }
     entries.sort_by_key(|(index, sub, _)| (visit_key(*index), *sub));
@@ -575,6 +702,30 @@ fn visit_order(table: &'static BinaryTable, ctx: &mut cond::Ctx) -> Vec<(i64, En
         .into_iter()
         .map(|(index, _, entry)| (index, entry))
         .collect()
+}
+
+/// The exact scalar text a `$$self{Member} = $val` RawConv stores after
+/// ProcessBinaryData has read and masked the field. Numeric values stay
+/// numeric for numeric Conditions; other values use the same Perl text the
+/// legacy representation can prove. A rational with width-dependent text is
+/// deliberately not invented.
+fn member_value(raw: &DecodedValue) -> Option<cond::MemberValue> {
+    match raw {
+        DecodedValue::Integer(n) => Some(cond::MemberValue::Num(*n)),
+        DecodedValue::String(value) => Some(cond::MemberValue::Str(value.clone())),
+        DecodedValue::Undefined(bytes) => String::from_utf8(bytes.clone())
+            .ok()
+            .map(cond::MemberValue::Str),
+        // `MemberValue` only supports the scalar domains the condition
+        // grammar can compare exactly. Do not stringify floats, rationals or
+        // arrays: a later numeric Condition would otherwise treat an exact
+        // Perl value as an unrelated string. Invalid raw bytes have no Rust
+        // string representation, so they fail closed too.
+        DecodedValue::Float(_)
+        | DecodedValue::UnsignedRational(..)
+        | DecodedValue::SignedRational(..)
+        | DecodedValue::Array(_) => None,
+    }
 }
 
 /// ExifTool.pm:10102-10151 -- open a `SubDirectory` and process it.
@@ -682,7 +833,7 @@ fn descend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exiftool_tables::{Omitted, PrintConv, TagGroups};
+    use crate::exiftool_tables::{Omitted, PrintConv, RawConvEffect, TagGroups};
 
     // -- Cursor: ExifTool.pm:9957-9964 --------------------------------------
 
@@ -852,6 +1003,8 @@ mod tests {
             format: Some(Fmt::Int16u),
             count: 1,
             mask: None,
+            condition: None,
+            raw_conv: None,
             omitted: Omitted::NONE,
             value_conv: None,
             print_conv: PrintConv::None,
@@ -866,6 +1019,8 @@ mod tests {
             format: Some(Fmt::Int16u),
             count: 1,
             mask: None,
+            condition: None,
+            raw_conv: None,
             omitted: Omitted {
                 value_conv: true,
                 ..Omitted::NONE
@@ -896,6 +1051,556 @@ mod tests {
         variants: &[],
     };
 
+    // Native execution order test: key 0's SetMember must happen before the
+    // condition at key 1 and before the variant at key 2 is selected. The
+    // old `visit_order(table, ctx)` selected all variants while Locations was
+    // still absent, silently choosing the fallback.
+    const LOCATIONS_AT_LEAST_TWO: cond::Cond = cond::Cond::MemberCmp {
+        member: "Locations",
+        op: cond::CmpOp::Ge,
+        value: 2,
+    };
+    static STATE_FIELDS: &[Field] = &[
+        Field {
+            index: 0,
+            sub: None,
+            name: "Locations",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: Some(RawConvEffect::SetMember {
+                member: "Locations",
+            }),
+            // The schema remains safe for `decode_binary_table`, which has
+            // no member context. `walk` clears this after applying it.
+            omitted: Omitted {
+                raw_conv: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 1,
+            sub: None,
+            name: "LocationOne",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: Some(LOCATIONS_AT_LEAST_TWO),
+            raw_conv: None,
+            // Same conservative legacy contract; `walk` clears this only
+            // after the Condition returned true at key 1.
+            omitted: Omitted {
+                condition: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static STATE_VARIANTS: &[cond::VariantGroup] = &[cond::VariantGroup {
+        index: 2,
+        sub: None,
+        alternatives: &[
+            (
+                LOCATIONS_AT_LEAST_TWO,
+                Field {
+                    index: 2,
+                    sub: None,
+                    name: "TwoOrMore",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    condition: None,
+                    raw_conv: None,
+                    omitted: Omitted {
+                        condition: true,
+                        ..Omitted::NONE
+                    },
+                    value_conv: None,
+                    print_conv: PrintConv::None,
+                    subdir: None,
+                    hook: &[],
+                    groups: TagGroups::NONE,
+                },
+            ),
+            (
+                cond::Cond::Always,
+                Field {
+                    index: 2,
+                    sub: None,
+                    name: "Fallback",
+                    format: None,
+                    count: 1,
+                    mask: None,
+                    condition: None,
+                    raw_conv: None,
+                    omitted: Omitted {
+                        condition: true,
+                        ..Omitted::NONE
+                    },
+                    value_conv: None,
+                    print_conv: PrintConv::None,
+                    subdir: None,
+                    hook: &[],
+                    groups: TagGroups::NONE,
+                },
+            ),
+        ],
+    }];
+    static STATE: BinaryTable = BinaryTable {
+        module: "Test",
+        table: "State",
+        group0: "MakerNotes",
+        group1: "Test",
+        group2: "Camera",
+        first_entry: 0,
+        default_format: Fmt::Int8u,
+        offsets_sound_until: None,
+        priority: None,
+        gate_a: super::super::GateA { blocked_by: &[] },
+        fields: STATE_FIELDS,
+        variants: STATE_VARIANTS,
+    };
+    static REFUSED_CONDITION_EDGE: SubdirEdge = SubdirEdge {
+        module: "Test",
+        table: "Child",
+        start: Start::FieldRelative(0),
+        base: None,
+        byte_order: None,
+        validate: false,
+    };
+    static UNRESOLVED_CONDITION_FIELDS: &[Field] = &[
+        Field {
+            index: 0,
+            sub: None,
+            name: "UnprovedParent",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: Some(RawConvEffect::SetMember { member: "Unsafe" }),
+            // A source Condition exists, but this fixture deliberately has
+            // no compiled Cond. The edge and SetMember are both unusable.
+            omitted: Omitted {
+                condition: true,
+                raw_conv: true,
+                subdirectory: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: Some(REFUSED_CONDITION_EDGE),
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 1,
+            sub: None,
+            name: "AfterUnprovedParent",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static UNRESOLVED_CONDITION: BinaryTable = BinaryTable {
+        table: "UnresolvedCondition",
+        fields: UNRESOLVED_CONDITION_FIELDS,
+        ..STATE
+    };
+    static HOOK_BARRIER_FIELDS: &[Field] = &[
+        Field {
+            index: 0,
+            sub: None,
+            name: "HookedState",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: Some(RawConvEffect::SetMember { member: "Hooked" }),
+            // The empty data slice marks a Hook the closed grammar refused.
+            // It still executes before this field is read in native Perl.
+            omitted: Omitted {
+                raw_conv: true,
+                hook: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 1,
+            sub: None,
+            name: "AfterHook",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static HOOK_BARRIER: BinaryTable = BinaryTable {
+        table: "HookBarrier",
+        fields: HOOK_BARRIER_FIELDS,
+        ..STATE
+    };
+    static UNMODELED_RAW_CONV_FIELDS: &[Field] = &[
+        Field {
+            index: 0,
+            sub: None,
+            name: "UnmodeledRawConv",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted {
+                raw_conv: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 1,
+            sub: None,
+            name: "AfterRawConv",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static UNMODELED_RAW_CONV: BinaryTable = BinaryTable {
+        table: "UnmodeledRawConv",
+        fields: UNMODELED_RAW_CONV_FIELDS,
+        ..STATE
+    };
+    static VALUE_LOCAL_RAW_CONV_FIELDS: &[Field] = &[
+        Field {
+            index: 0,
+            sub: None,
+            name: "Track",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: Some(RawConvEffect::ValueLocal),
+            // The value-local expression is not yet rendered, so Track is
+            // still withheld. It proves only that later fields are safe.
+            omitted: Omitted {
+                raw_conv: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 1,
+            sub: None,
+            name: "Genre",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static VALUE_LOCAL_RAW_CONV: BinaryTable = BinaryTable {
+        table: "ValueLocalRawConv",
+        fields: VALUE_LOCAL_RAW_CONV_FIELDS,
+        ..STATE
+    };
+    static UNRESOLVED_SUBDIR_FIELDS: &[Field] = &[
+        Field {
+            index: 0,
+            sub: None,
+            name: "UnresolvedSubdir",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted {
+                subdirectory: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 1,
+            sub: None,
+            name: "AfterSubdir",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static UNRESOLVED_SUBDIR: BinaryTable = BinaryTable {
+        table: "UnresolvedSubdir",
+        fields: UNRESOLVED_SUBDIR_FIELDS,
+        ..STATE
+    };
+    static UNREPRESENTABLE_MEMBER_FIELDS: &[Field] = &[
+        Field {
+            index: 0,
+            sub: None,
+            name: "ByteMember",
+            format: Some(Fmt::Undef(1)),
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: Some(RawConvEffect::SetMember { member: "Bytes" }),
+            omitted: Omitted {
+                raw_conv: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 1,
+            sub: None,
+            name: "AfterBytes",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static UNREPRESENTABLE_MEMBER: BinaryTable = BinaryTable {
+        table: "UnrepresentableMember",
+        fields: UNREPRESENTABLE_MEMBER_FIELDS,
+        ..STATE
+    };
+    const SET_BEFORE_BOUND: cond::Cond = cond::Cond::SetMember {
+        member: "SawPastEnd",
+        source: cond::EffectSource::Const(1),
+        then: None,
+    };
+    static PREBOUND_FIELDS: &[Field] = &[Field {
+        index: 1,
+        sub: None,
+        name: "PastEnd",
+        format: None,
+        count: 1,
+        mask: None,
+        condition: Some(SET_BEFORE_BOUND),
+        raw_conv: None,
+        omitted: Omitted {
+            condition: true,
+            ..Omitted::NONE
+        },
+        value_conv: None,
+        print_conv: PrintConv::None,
+        subdir: None,
+        hook: &[],
+        groups: TagGroups::NONE,
+    }];
+    static PREBOUND: BinaryTable = BinaryTable {
+        module: "Test",
+        table: "Prebound",
+        group0: "MakerNotes",
+        group1: "Test",
+        group2: "Camera",
+        first_entry: 0,
+        default_format: Fmt::Int8u,
+        offsets_sound_until: None,
+        priority: None,
+        gate_a: super::super::GateA { blocked_by: &[] },
+        fields: PREBOUND_FIELDS,
+        variants: &[],
+    };
+    const VALUE_CONTEXT_GUARD: cond::Cond = cond::Cond::And(
+        &SET_BEFORE_BOUND,
+        &cond::Cond::ValPtRegex {
+            pattern: r"^\x01",
+            negate: false,
+        },
+    );
+    static VALUE_CONTEXT_PREBOUND_FIELDS: &[Field] = &[Field {
+        index: 1,
+        sub: None,
+        name: "NeedsValue",
+        format: None,
+        count: 1,
+        mask: None,
+        condition: Some(VALUE_CONTEXT_GUARD),
+        raw_conv: None,
+        omitted: Omitted {
+            condition: true,
+            ..Omitted::NONE
+        },
+        value_conv: None,
+        print_conv: PrintConv::None,
+        subdir: None,
+        hook: &[],
+        groups: TagGroups::NONE,
+    }];
+    static VALUE_CONTEXT_PREBOUND: BinaryTable = BinaryTable {
+        fields: VALUE_CONTEXT_PREBOUND_FIELDS,
+        ..PREBOUND
+    };
+    const NEVER: cond::Cond = cond::Cond::MemberCmp {
+        member: "Missing",
+        op: cond::CmpOp::Eq,
+        value: 1,
+    };
+    const FIRST_BYTE_IS_ONE: cond::Cond = cond::Cond::ValPtRegex {
+        pattern: r"^\x01",
+        negate: false,
+    };
+    static NEGATIVE_AFTER_SKIPPED_FIELDS: &[Field] = &[
+        Field {
+            index: 99,
+            sub: None,
+            name: "HighSkipped",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: Some(NEVER),
+            raw_conv: None,
+            omitted: Omitted {
+                condition: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: -1,
+            sub: None,
+            name: "FromEnd",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static NEGATIVE_AFTER_VALUE_RETRY_FIELDS: &[Field] = &[
+        Field {
+            index: 99,
+            sub: None,
+            name: "HighNeedsValue",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: Some(FIRST_BYTE_IS_ONE),
+            raw_conv: None,
+            omitted: Omitted {
+                condition: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: -1,
+            sub: None,
+            name: "FromEnd",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static NEGATIVE_AFTER_SKIPPED: BinaryTable = BinaryTable {
+        table: "NegativeAfterSkipped",
+        fields: NEGATIVE_AFTER_SKIPPED_FIELDS,
+        ..PREBOUND
+    };
+    static NEGATIVE_AFTER_VALUE_RETRY: BinaryTable = BinaryTable {
+        table: "NegativeAfterValueRetry",
+        fields: NEGATIVE_AFTER_VALUE_RETRY_FIELDS,
+        ..PREBOUND
+    };
+
     fn run(table: &'static BinaryTable, data: &[u8]) -> Vec<Emitted> {
         use std::collections::HashMap;
         let mut members = HashMap::new();
@@ -918,6 +1623,201 @@ mod tests {
              Step 28 the generated schema dropped it and each engine \
              hardcoded its own copy"
         );
+    }
+
+    #[test]
+    fn raw_conv_state_and_conditions_execute_at_their_native_keys() {
+        let got = run(&STATE, &[2, 44, 55]);
+        assert_eq!(
+            got.iter().map(|tag| tag.name).collect::<Vec<_>>(),
+            vec!["Locations", "LocationOne", "TwoOrMore"],
+            "key 0 stores Locations before the direct and variant Conditions run"
+        );
+        assert_eq!(got[0].value, TagValue::Integer(2));
+        assert_eq!(got[1].value, TagValue::Integer(44));
+        assert_eq!(got[2].value, TagValue::Integer(55));
+
+        let got = run(&STATE, &[1, 44, 55]);
+        assert_eq!(
+            got.iter().map(|tag| tag.name).collect::<Vec<_>>(),
+            vec!["Locations", "Fallback"],
+            "false direct Condition suppresses its tag and the variant falls back"
+        );
+    }
+
+    #[test]
+    fn unresolved_direct_condition_cannot_trigger_state_or_a_subdirectory() {
+        use std::collections::HashMap;
+
+        // GetTagInfo evaluates a standalone Condition before
+        // ProcessBinaryData reads the field or takes its SubDirectory branch
+        // (ExifTool.pm:9162-9181, 10102). No compiled Cond is therefore a
+        // rejected lookup, rather than permission to use this edge or write
+        // the RawConv data member.
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        assert!(matches!(
+            lookup(
+                Candidate::Field(&UNRESOLVED_CONDITION_FIELDS[0]),
+                &mut ctx,
+                None
+            ),
+            Lookup::Skipped
+        ));
+        let mut out = Vec::new();
+        process_binary_data(
+            &UNRESOLVED_CONDITION,
+            Dir::whole(&[1, 7], ByteOrder::Big),
+            &mut ctx,
+            &mut out,
+        );
+        assert_eq!(
+            out.iter().map(|tag| tag.name).collect::<Vec<_>>(),
+            vec!["AfterUnprovedParent"]
+        );
+        assert!(!members.contains_key("Unsafe"));
+    }
+
+    #[test]
+    fn unexecuted_hook_is_a_barrier_before_state_and_later_offsets() {
+        use std::collections::HashMap;
+
+        // A Hook changes the current format and/or varSize before ReadValue
+        // (ExifTool.pm:10044-10063). The common engine has not executed it,
+        // so neither the member assignment nor the tail can be trusted.
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+        process_binary_data(
+            &HOOK_BARRIER,
+            Dir::whole(&[1, 7], ByteOrder::Big),
+            &mut ctx,
+            &mut out,
+        );
+        assert!(out.is_empty());
+        assert!(!members.contains_key("Hooked"));
+    }
+
+    #[test]
+    fn unmodeled_raw_conv_and_subdirectory_are_tail_barriers() {
+        // An unmodeled RawConv can write `$$self` through FoundTag
+        // (ExifTool.pm:10159-10169). An unmodeled SubDirectory may write the
+        // same shared state while it processes the child (10102-10151).
+        // Neither permits a later parent field to be decoded as if nothing
+        // happened.
+        for table in [&UNMODELED_RAW_CONV, &UNRESOLVED_SUBDIR] {
+            assert!(
+                run(table, &[1, 7]).is_empty(),
+                "{} must not reach its second field",
+                table.table
+            );
+        }
+    }
+
+    #[test]
+    fn proven_value_local_raw_conv_withholds_itself_but_reaches_later_fields() {
+        // Native ID3::v1 Track uses the exact local-only form. It may turn a
+        // leading-zero track into undef, but it cannot alter Genre or table
+        // state; `/usr/bin/perl` against the pinned table reports
+        // Track=missing, Genre=Rock for these bytes.
+        let got = run(&VALUE_LOCAL_RAW_CONV, &[0, 17]);
+        assert_eq!(
+            got.iter()
+                .map(|tag| (tag.name, &tag.value))
+                .collect::<Vec<_>>(),
+            vec![("Genre", &TagValue::Integer(17))]
+        );
+    }
+
+    #[test]
+    fn set_member_stops_when_raw_value_has_no_exact_member_domain() {
+        use std::collections::HashMap;
+
+        // A non-UTF-8 undef value is legal Perl byte data but cannot inhabit
+        // Rust's string-only MemberValue. Leaving the member absent and
+        // continuing would let a later Condition silently observe a made-up
+        // state, so the table ends at this RawConv.
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+        process_binary_data(
+            &UNREPRESENTABLE_MEMBER,
+            Dir::whole(&[0xff, 7], ByteOrder::Big),
+            &mut ctx,
+            &mut out,
+        );
+        assert!(out.is_empty());
+        assert!(!members.contains_key("Bytes"));
+
+        assert_eq!(
+            member_value(&DecodedValue::Undefined(b"NIKN".to_vec())),
+            Some(cond::MemberValue::Str("NIKN".to_string()))
+        );
+        assert_eq!(member_value(&DecodedValue::Float(1.5)), None);
+        assert_eq!(member_value(&DecodedValue::UnsignedRational(1, 2)), None);
+        assert_eq!(member_value(&DecodedValue::SignedRational(1, 2)), None);
+        assert_eq!(
+            member_value(&DecodedValue::Array(vec![DecodedValue::Integer(1)])),
+            None
+        );
+    }
+
+    #[test]
+    fn member_only_conditions_run_before_the_final_bounds_check() {
+        use std::collections::HashMap;
+
+        // ExifTool.pm:9946 calls GetTagInfo before :9957-9964 computes
+        // `$entry`/`$more`. The key is out of range and emits nothing, but
+        // its assignment-as-condition still updates `$$self` first.
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+        process_binary_data(
+            &PREBOUND,
+            Dir::whole(&[0], ByteOrder::Big),
+            &mut ctx,
+            &mut out,
+        );
+        assert!(out.is_empty());
+        assert_eq!(members.get("SawPastEnd"), Some(&cond::MemberValue::Num(1)));
+    }
+
+    #[test]
+    fn value_context_conditions_do_not_run_when_the_retry_is_out_of_range() {
+        use std::collections::HashMap;
+
+        // GetTagInfo returns its defined-false retry sentinel before it has
+        // evaluated any part of a Condition mentioning `$valPt`. The later
+        // entry bound prevents that retry, so even the left SetMember does
+        // not run (ExifTool.pm:9168, 9946-9964).
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+        process_binary_data(
+            &VALUE_CONTEXT_PREBOUND,
+            Dir::whole(&[0], ByteOrder::Big),
+            &mut ctx,
+            &mut out,
+        );
+        assert!(out.is_empty());
+        assert!(!members.contains_key("SawPastEnd"));
+    }
+
+    #[test]
+    fn skipped_and_value_retry_keys_do_not_stop_a_later_negative_key() {
+        // Pinned ExifTool.pm:9917 sorts -1 after 99; :9919's initial
+        // GetTagInfo failure and :9923's value-context retry bound both use
+        // `next`, while only the selected tag's final :9964 check uses
+        // `last`. The one-byte native probe emits FromEnd=7 in both cases.
+        for table in [&NEGATIVE_AFTER_SKIPPED, &NEGATIVE_AFTER_VALUE_RETRY] {
+            let got = run(table, &[7]);
+            assert_eq!(
+                got.iter()
+                    .map(|tag| (tag.name, &tag.value))
+                    .collect::<Vec<_>>(),
+                vec![("FromEnd", &TagValue::Integer(7))]
+            );
+        }
     }
 
     #[test]

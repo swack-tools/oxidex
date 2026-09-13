@@ -17,6 +17,12 @@
 #   MODULE  TABLE  INDEX  BITMASK BIT  LABEL        -- one per BITMASK sub-hash entry (6)
 #   MODULE  TABLE  INDEX  OTHER   PRINTHEX          -- field's PrintConv has OTHER (5)
 #   MODULE  TABLE  INDEX  FORMAT  SPELLING          -- field's raw Format (5)
+#   MODULE  TABLE  INDEX  RAWCONV  1                -- field has RawConv (5)
+#   MODULE  TABLE  INDEX  VALUECONV 1               -- field has ValueConv (5)
+#   MODULE  TABLE  INDEX  CONDITION 1               -- field has Condition (5)
+#   MODULE  TABLE  INDEX  PRINTCONV 1               -- field has PrintConv (5)
+#   MODULE  TABLE  INDEX  UNKNOWN 1                 -- field is Unknown (5)
+#   MODULE  TABLE  INDEX  MASKDECL 1                -- field declares Mask (5)
 #   MODULE  TABLE  ''     TGROUPS G0  G1  G2        -- table's raw GROUPS (7)
 #   MODULE  TABLE  INDEX  GROUPS  G0  G1  G2        -- tag's own Groups (7)
 #   MODULE  TABLE  INDEX  SUBDIR  TAGTABLE  START  BASE  PROCESSPROC  BYTEORDER  VALIDATE
@@ -199,6 +205,18 @@ sub emit_entry {
     # bytes under a correct tag name and passed the whole suite.
     print join("\t", $mod, $sym, $key, 'FORMAT', clean($fmt)), "\n"
         if defined $fmt && !ref $fmt;
+
+    # These are presence facts for the native-minus-generated inventory.  A
+    # completely withheld field cannot carry `Omitted` in Rust, so the
+    # generated omission sidecar names one or more native semantics that made
+    # withholding necessary.  The verifier checks those names against these
+    # rows; a sidecar cannot relabel an ordinary new tag as "unsupported".
+    print join("\t", $mod, $sym, $key, 'RAWCONV', 1), "\n" if defined $e->{RawConv};
+    print join("\t", $mod, $sym, $key, 'VALUECONV', 1), "\n" if defined $e->{ValueConv};
+    print join("\t", $mod, $sym, $key, 'CONDITION', 1), "\n" if defined $e->{Condition};
+    print join("\t", $mod, $sym, $key, 'PRINTCONV', 1), "\n" if defined $e->{PrintConv};
+    print join("\t", $mod, $sym, $key, 'UNKNOWN', 1), "\n" if $e->{Unknown};
+    print join("\t", $mod, $sym, $key, 'MASKDECL', 1), "\n" if defined $e->{Mask};
 
     # Step 26: the tag's OWN Groups overrides, families 0/1/2. Empty column
     # means the tag does not override that family -- which is not the same as

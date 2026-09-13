@@ -33,11 +33,12 @@
 //!   `FixFormat` / `Flags => 'SubIFD'` are live here and inert there
 //!   (`subdir.rs`'s module doc). The two grammars stay two types so neither
 //!   can be walked with the other's semantics by accident;
-//! * a `RawConv` of the one shape the walk can honour as DATA -- the
-//!   data-member capture `$$self{X} = $val` -- is carried as
-//!   [`RawConvEffect::SetMember`] instead of withholding the field, since it
-//!   is what a later [`Cond`] reads. Every other `RawConv` sets
-//!   `omitted.raw_conv` and the field is withheld, as for binary tables.
+//! * closed `RawConv` effects are carried as [`RawConvEffect`]: a data-member
+//!   capture `$$self{X} = $val` is applied for later [`Cond`] evaluation;
+//!   a fully structural value-local conversion proves it is safe to continue
+//!   walking while the current field remains withheld. Every other `RawConv`
+//!   sets `omitted.raw_conv` and stops the binary table, because arbitrary
+//!   Perl could affect later keys.
 //!
 //! Gate A / Gate B are the same two gates as for binary tables: `gate_a` is
 //! computed by `codegen.py` from its refusal counters (empty = every entry
@@ -133,11 +134,16 @@ pub struct IfdTag {
     pub writable: Option<&'static str>,
     pub groups: TagGroups,
     pub flags: IfdFlags,
+    /// A standalone `Condition`, compiled from the same closed grammar as a
+    /// binary-table condition.  `None` with `omitted.condition` set means the
+    /// source condition was refused, while `None` without it means no source
+    /// condition exists.
+    pub condition: Option<Cond>,
     /// Which of ExifTool's per-tag semantics the generator did NOT reproduce.
     /// Any flag set means the entry's decoded value is not what ExifTool
     /// reports and the walk withholds it (AGENTS.md: omit and count).
     pub omitted: Omitted,
-    /// The one `RawConv` shape carried as data instead of refused.
+    /// A closed `RawConv` effect the walk can apply or prove value-local.
     pub raw_conv: Option<RawConvEffect>,
     pub value_conv: Option<ExprId>,
     pub print_conv: PrintConv,
@@ -187,6 +193,14 @@ pub enum RawConvEffect {
     /// is the reader; the walk writes `MemberValue::Num` for a numeric raw
     /// value and `MemberValue::Str` otherwise.
     SetMember { member: &'static str },
+    /// `($val =~ s/^literal-prefix// and $val) ? $val : undef`: a fully
+    /// matched value-local conversion. The source prefix is plain ASCII text
+    /// with an optional beginning anchor and no replacement modifiers. The
+    /// generic binary engine leaves the field withheld because it does not
+    /// yet render the transformed value, while continuing to later keys is
+    /// sound: this expression can affect only FoundTag's local `$val`, never
+    /// `$$self`, offsets, or byte order.
+    ValueLocal,
 }
 
 /// One id whose entry is a Perl arrayref of alternatives.

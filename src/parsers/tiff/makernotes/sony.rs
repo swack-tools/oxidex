@@ -391,7 +391,66 @@ fn parse_sony_makernote_impl(
         af_area_mode_setting: None,
     };
 
-    for entry in &entries {
+    // The generated parent definitions select migrated children. Conditions,
+    // offsets and child table names stay in the native-source transcription.
+    let shared_main = crate::exiftool_tables::find_ifd_table("Sony", "Main");
+    let mut shared_members = HashMap::new();
+    if let Some(model) = model {
+        shared_members.insert(
+            "Model",
+            crate::exiftool_tables::MemberValue::Str(model.to_string()),
+        );
+    }
+    let mut shared_ctx = crate::exiftool_tables::Ctx::new(&mut shared_members);
+    let mut shared_reader =
+        crate::exiftool_tables::ifd_engine::subdirectory_adapter::SubdirectoryReader::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if let Some(table) = shared_main {
+            let mut emitted = Vec::new();
+            let handled = shared_reader.try_process(
+                table,
+                crate::exiftool_tables::IfdDir {
+                    data,
+                    ifd_start,
+                    base: data_base.map(|base| -i64::from(base)),
+                    byte_order: byte_order.to_io_byte_order(),
+                    group1: Some("Sony"),
+                },
+                &crate::exiftool_tables::IfdEntry {
+                    tag_id: entry.tag_id,
+                    field_type: entry.field_type,
+                    count: entry.value_count,
+                    value_offset: entry.value_offset,
+                    value_field_pos: ifd_start + 2 + index * 12 + 8,
+                },
+                entries.len(),
+                &mut shared_ctx,
+                &mut emitted,
+            );
+            if handled {
+                for tag in emitted {
+                    let Some(value) = super::shared::engine_value::engine_value_text(&tag.value)
+                    else {
+                        continue;
+                    };
+                    let value_form = tag
+                        .value_conv
+                        .as_ref()
+                        .and_then(super::shared::engine_value::engine_value_text);
+                    found.push(Found::with_form(
+                        format!("{}:{}", tag.group1, tag.name),
+                        value,
+                        if tag.low_priority {
+                            SUB_DIRECTORY_PRIORITY
+                        } else {
+                            DEFAULT_PRIORITY
+                        },
+                        value_form,
+                    ));
+                }
+                continue;
+            }
+        }
         let Some(value) = ifd.value(entry) else {
             continue;
         };

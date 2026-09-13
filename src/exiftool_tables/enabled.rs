@@ -186,6 +186,10 @@ pub static ENABLED: &[(&str, &str)] = &[
     // Sony::Panorama -- `src/parsers/tiff/makernotes/sony/amount.rs:662`.
     // Corpus carrier: the Sony vendor directory (761 JPEGs).
     ("Sony", "Panorama"),
+    // Sony::Tag202a: candidate shared-reader migration. Native boundary
+    // expectations are in tests/sony_shared_focus.rs. Replace this comment
+    // with the completed per-file gate evidence before landing.
+    ("Sony", "Tag202a"),
     //
     // NOT listed, and why -- these are the decisions, not the leftovers:
     //

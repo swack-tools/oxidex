@@ -144,7 +144,7 @@ class TagLiteral(unittest.TestCase):
             src,
             'IfdTag { id: 0x0203, name: "BWMode", format: None, count: None, '
             'writable: Some("int16u"), groups: TagGroups::NONE, flags: IfdFlags::NONE, '
-            "omitted: Omitted::NONE, raw_conv: None, value_conv: None, "
+            "condition: None, omitted: Omitted::NONE, raw_conv: None, value_conv: None, "
             'print_conv: PrintConv::IntEnum(&[(0, "Off"), (1, "On"), (6, "(none)")]), subdir: None }',
         )
         self.assertEqual(_plain(stats), {"enum_int": 1})
@@ -326,11 +326,16 @@ class TagLiteral(unittest.TestCase):
         self.assertIn("subdirectory: false, print_conv: true }", src)
         self.assertEqual(stats["conv_dropped"], 1)
 
-    def test_condition_on_a_single_tag_is_omitted_unless_resolved(self):
+    def test_condition_on_a_single_tag_is_compiled_or_explicitly_omitted(self):
         tag = {"Name": "T", "Condition": '$$self{Model} =~ /E-M1/'}
         src, _, stats = _emit(tag)
-        self.assertIn("condition: true", src)
+        self.assertIn("condition: Some(Cond::MemberRegex", src)
+        self.assertIn("omitted: Omitted::NONE", src)
+        refused, _, _ = _emit({"Name": "T", "Condition": "unsupported($val)"})
+        self.assertIn("condition: None", refused)
+        self.assertIn("condition: true", refused)
         src, _, _ = _emit(tag, condition_resolved=True)
+        self.assertIn("condition: None", src)
         self.assertIn("omitted: Omitted::NONE", src)
 
     def test_no_name_is_refused(self):

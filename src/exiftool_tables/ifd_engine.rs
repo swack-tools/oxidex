@@ -132,6 +132,9 @@ use super::runtime::{self, DecodedValue, decode_value_of};
 use super::subdir::BaseExpr;
 use super::{Fmt, find_ifd_table, find_table};
 
+#[path = "subdirectory_adapter.rs"]
+pub mod subdirectory_adapter;
+
 // ---------------------------------------------------------------------------
 // The directory
 // ---------------------------------------------------------------------------
@@ -589,9 +592,25 @@ fn resolve(
     ctx: &mut cond::Ctx,
 ) -> Option<Resolved> {
     if let Some(tag) = table.tag(entry.tag_id) {
+        // GetTagInfo evaluates a direct tag's Condition with this entry's
+        // value bytes, format and count. Do not let a parent adapter's
+        // temporary context leak into the child table.
+        let val_pt = &located.bytes[..located.bytes.len().min(128)];
+        let mut entry_ctx = cond::Ctx {
+            members: &mut *ctx.members,
+            val_pt: Some(val_pt),
+            format: Some(located.ty.name),
+            count: Some(i64::from(entry.count)),
+        };
+        if tag
+            .condition
+            .is_some_and(|condition| !condition.eval(&mut entry_ctx))
+        {
+            return None;
+        }
         return Some(Resolved {
             tag,
-            condition_resolved: false,
+            condition_resolved: tag.condition.is_some(),
         });
     }
     let group = table.variant_group(entry.tag_id)?;
@@ -1419,6 +1438,7 @@ mod tests {
             writable: None,
             groups: TagGroups::NONE,
             flags: IfdFlags::NONE,
+            condition: None,
             omitted: Omitted::NONE,
             raw_conv: None,
             value_conv: None,
@@ -2382,6 +2402,45 @@ mod tests {
                 ("Version", TagValue::Integer(1)),
                 ("SettingsV1", TagValue::Integer(77)),
             ]
+        );
+    }
+
+    // A standalone IFD condition is not a variant: Sony::Main's 0x202a
+    // parent edge has this exact shape. It must be evaluated before the
+    // adapter follows SubDirectory, with this entry's bytes rather than a
+    // stale ancestor context.
+    const STARTS_WITH_ONE: Cond = Cond::ValPtRegex {
+        pattern: r"^\x01",
+        negate: false,
+    };
+    static DIRECT_CONDITION_TAGS: &[IfdTag] = &[IfdTag {
+        condition: Some(STARTS_WITH_ONE),
+        ..plain(0x002a, "Child")
+    }];
+    static DIRECT_CONDITION: IfdTable = IfdTable {
+        variants: &[],
+        ..table("DirectCondition", DIRECT_CONDITION_TAGS)
+    };
+
+    #[test]
+    fn a_direct_ifd_condition_uses_its_own_value_bytes() {
+        let order = ByteOrder::Little;
+        let mut members = HashMap::new();
+        let yes = ifd(order, &[int16u_entry(order, 0x002a, 1)], &[]);
+        assert_eq!(
+            values(&run_with(
+                &DIRECT_CONDITION,
+                &yes,
+                order,
+                Some(0),
+                &mut members
+            )),
+            vec![("Child", TagValue::Integer(1))]
+        );
+        let no = ifd(order, &[int16u_entry(order, 0x002a, 2)], &[]);
+        assert!(
+            run_with(&DIRECT_CONDITION, &no, order, Some(0), &mut members).is_empty(),
+            "a false direct Condition drops the parent tag before an adapter could descend"
         );
     }
 

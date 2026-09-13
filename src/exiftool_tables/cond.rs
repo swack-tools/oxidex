@@ -303,6 +303,33 @@ pub enum Cond {
 }
 
 impl Cond {
+    /// Whether `GetTagInfo` needs its value-context retry before this
+    /// condition may be evaluated. ExifTool.pm:9168 returns the defined-false
+    /// sentinel when a Condition mentions `$valPt`, `$format`, or `$count`
+    /// without the optional value arguments; callers must not substitute an
+    /// empty value and evaluate it early because an earlier key's side effect
+    /// and an out-of-range key's control flow are observable.
+    #[must_use]
+    pub const fn needs_value_context(&self) -> bool {
+        match self {
+            Self::ValPtRegex { .. }
+            | Self::FormatEq { .. }
+            | Self::FormatRegex { .. }
+            | Self::CountCmp { .. } => true,
+            Self::And(left, right) | Self::Or(left, right) => {
+                left.needs_value_context() || right.needs_value_context()
+            }
+            Self::SetMember { source, then, .. } => {
+                matches!(source, EffectSource::Count)
+                    || match then {
+                        Some(condition) => condition.needs_value_context(),
+                        None => false,
+                    }
+            }
+            _ => false,
+        }
+    }
+
     /// Evaluate this condition against `ctx`, applying any [`Cond::SetMember`]
     /// side effects along the way -- exactly the side effects `eval
     /// $condition` would have produced in real ExifTool, whether or not the
@@ -614,6 +641,8 @@ mod tests {
             negate: false,
         };
         let dslr_field = super::super::Field {
+            condition: None,
+            raw_conv: None,
             index: 0x16,
             sub: None,
             name: "MemoryCardConfiguration",
@@ -681,6 +710,20 @@ mod tests {
         };
         assert!(cond.eval(&mut Ctx::new(&mut members)));
         assert_eq!(members.get("NewLensData"), Some(&MemberValue::Num(1)));
+    }
+
+    #[test]
+    fn count_assignment_requires_value_context_before_evaluation() {
+        // GetTagInfo's native textual guard recognizes `$count` even when it
+        // occurs only as the source of a state assignment. It must return its
+        // retry sentinel before evaluating this assignment, otherwise an
+        // out-of-range binary key could acquire state that Perl never sets.
+        let cond = Cond::SetMember {
+            member: "EntryCount",
+            source: EffectSource::Count,
+            then: None,
+        };
+        assert!(cond.needs_value_context());
     }
 
     #[test]

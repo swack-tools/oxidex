@@ -1308,6 +1308,8 @@ mod tests {
     fn reversed_endian_and_maskless_fractional_fields_decode() {
         static FIELDS: &[Field] = &[
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 0,
                 sub: None,
                 name: "Reversed",
@@ -1322,6 +1324,8 @@ mod tests {
                 groups: TagGroups::NONE,
             },
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 2,
                 sub: Some(1),
                 name: "BitField",
@@ -1336,6 +1340,8 @@ mod tests {
                 groups: TagGroups::NONE,
             },
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 4,
                 sub: None,
                 name: "ThreeValues",
@@ -1399,6 +1405,8 @@ mod tests {
     fn fractional_entries_sharing_a_word_decode_to_their_own_slices() {
         static FIELDS: &[Field] = &[
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 4,
                 sub: Some(1),
                 name: "Low",
@@ -1416,6 +1424,8 @@ mod tests {
                 groups: TagGroups::NONE,
             },
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 4,
                 sub: Some(2),
                 name: "Middle",
@@ -1433,6 +1443,8 @@ mod tests {
                 groups: TagGroups::NONE,
             },
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 4,
                 sub: Some(3),
                 name: "Top",
@@ -1451,6 +1463,8 @@ mod tests {
             },
             // Same word, no mask: Step 11 reports the whole word, not a slice.
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 4,
                 sub: Some(4),
                 name: "WholeWord",
@@ -1682,6 +1696,8 @@ mod tests {
     #[test]
     fn maskless_fractional_field_with_another_flag_still_refuses() {
         static FIELDS: &[Field] = &[Field {
+            condition: None,
+            raw_conv: None,
             index: 0,
             sub: Some(1),
             name: "GatedWholeWord",
@@ -1758,6 +1774,8 @@ mod tests {
     fn masked_fields_are_reduced_before_print_conv() {
         static FIELDS: &[Field] = &[
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 0,
                 sub: None,
                 name: "Orientation",
@@ -1776,6 +1794,8 @@ mod tests {
             },
             // A high slice: shift is what makes the enum keys mean anything.
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 1,
                 sub: None,
                 name: "Slice",
@@ -1795,6 +1815,8 @@ mod tests {
             // A PrintConv keyed on post-ValueConv values must not be applied
             // to the raw one.
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 2,
                 sub: None,
                 name: "Converted",
@@ -1862,6 +1884,8 @@ mod tests {
     #[test]
     fn raw_access_requires_covering_every_set_flag_at_once() {
         static FIELD: Field = Field {
+            condition: None,
+            raw_conv: None,
             index: 0,
             sub: None,
             name: "DoubleFlagged",
@@ -1954,6 +1978,8 @@ mod tests {
     fn refusal_counts_tally_every_set_flag_independently() {
         static FIELDS: &[Field] = &[
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 0,
                 sub: None,
                 name: "OnlyCondition",
@@ -1975,6 +2001,8 @@ mod tests {
                 groups: TagGroups::NONE,
             },
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 1,
                 sub: None,
                 name: "BothConditionAndValueConv",
@@ -1996,6 +2024,8 @@ mod tests {
                 groups: TagGroups::NONE,
             },
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 2,
                 sub: None,
                 name: "Clean",
@@ -2048,6 +2078,8 @@ mod tests {
     fn offset_unsound_fields_are_withheld_with_no_raw_access_path() {
         static FIELDS: &[Field] = &[
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 0,
                 sub: None,
                 name: "BeforeBound",
@@ -2062,6 +2094,8 @@ mod tests {
                 groups: TagGroups::NONE,
             },
             Field {
+                condition: None,
+                raw_conv: None,
                 index: 5,
                 sub: None,
                 name: "PastBound",
@@ -2108,6 +2142,8 @@ mod tests {
         use std::collections::HashMap;
 
         static DSLR_FIELD: Field = Field {
+            condition: None,
+            raw_conv: None,
             index: 0,
             sub: None,
             name: "MemoryCardConfiguration",
