@@ -130,8 +130,9 @@ class CatalogCaptureTests(unittest.TestCase):
         selected = {side["release"]: side for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
         responses = {catalog_stage.immutable_archive_url(release, side["peeled_commit"]): response(tar_gz(release)) for release, side in selected.items()}
         get = FixtureGet(responses)
-        resolved = catalog_stage.resolve_selected_archives(plan, catalog, get)
-        catalog_stage.verify_source_resolution(resolved, plan, catalog)
+        capture = self.capture()
+        resolved = catalog_stage.resolve_selected_archives(plan, catalog, capture, get)
+        catalog_stage.verify_source_resolution(resolved, plan, catalog, capture)
         self.assertEqual({row["release"] for row in resolved["selected_releases"]}, set(selected))
         self.assertEqual(set(get.calls), set(responses))
         self.assertEqual(resolved["execution"]["native_read"], "unrun")
@@ -143,8 +144,16 @@ class CatalogCaptureTests(unittest.TestCase):
         selected = next(side for pair in plan["pairs"] for side in (pair["old"], pair["new"]))
         get = FixtureGet({catalog_stage.immutable_archive_url(selected["release"], selected["peeled_commit"]): response(b"not-a-tar")})
         with self.assertRaisesRegex(catalog_stage.Refused, "readable tar.gz"):
-            catalog_stage.resolve_selected_archives(plan, catalog, get)
+            catalog_stage.resolve_selected_archives(plan, catalog, self.capture(), get)
         self.assertEqual(len(get.calls), 1)
+
+    def test_archive_resolution_refuses_catalog_not_derived_from_its_capture(self):
+        catalog = self.normalized()
+        catalog["entries"][0]["raw"]["peeled_commit"] = OID_D
+        catalog["catalog_sha256"] = rehearsal.sha256_json({key: value for key, value in catalog.items() if key != "catalog_sha256"})
+        plan = rehearsal.make_plan(self.normalized(), 3, 0, 1, "e" * 40)
+        with self.assertRaisesRegex(catalog_stage.Refused, "differs from its saved source capture"):
+            catalog_stage.resolve_selected_archives(plan, catalog, self.capture(), FixtureGet({}))
 
 
 if __name__ == "__main__":
