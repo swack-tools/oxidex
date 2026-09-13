@@ -234,6 +234,8 @@ class RegexSpellingTests(unittest.TestCase):
         # and Unicode member literals can change those semantics.
         for condition in (
             "$$self{Model} =~ /é/",
+            "$$self{Model} =~ /(?i)EOS/",
+            r"$$self{Model} =~ /(?u)\bEOS\b/",
             "$$self{Model} =~ /(?i:EOS)/",
             "$$self{Model} =~ /(?u:\\bEOS\\b)/",
             r"$$self{Model} =~ /\u00e9/",

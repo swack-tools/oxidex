@@ -241,6 +241,13 @@ def _validate_regex_pattern(pattern, *, ascii_source_only=False):
         or re.search(r"\\(?:u|U|N)|\\x\{", pattern)
     ):
         raise CondCompileError(f"regex {pattern!r} uses an unmodeled Unicode spelling")
+    # `sre_parse` stores scoped flags on a SUBPATTERN node, but consumes a
+    # global `(?i)`/`(?u)` prefix into its parser state before this structural
+    # walk sees it. Native byte-mode evidence covers only Perl's external
+    # top-level `/i`, represented separately in Cond; any inline flag form
+    # therefore stays outside the closed grammar.
+    if re.search(r"\(\?[a-zA-Z-]+(?:[:)])", pattern):
+        raise CondCompileError(f"regex {pattern!r} uses inline flags outside the vetted subset")
     try:
         ast = sre_parse.parse(pattern)
     except re.error as e:
