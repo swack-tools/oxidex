@@ -263,6 +263,27 @@ class NativeSerialProcessorReplay(unittest.TestCase):
         self.assertTrue(reply["read_values"])
         self.assertTrue(all(numeric(item, "value") == 123 for item in reply["read_values"]))
 
+    def test_copied_source_nonbare_read_value_forms_are_refused(self):
+        direct = "my $val = ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);"
+        mutations = {
+            "object-whitespace-arrow": "my $val = $et -> ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);",
+            "package-qualified": "my $val = Image::ExifTool::ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);",
+            "quoted-token": "my $val = 'ReadValue(';",
+        }
+        for name, replacement in mutations.items():
+            with self.subTest(form=name):
+                def mutate(source, replacement=replacement):
+                    self.assertIn(direct, source)
+                    return source.replace(direct, replacement, 1)
+
+                temporary, root = copied_canon_source(mutate)
+                with temporary:
+                    reply, = replay(root, [request(name, "II", words("little", afinfo_words(1)))],
+                                      fallback="fallback")
+                self.assertFalse(reply["ok"])
+                self.assertEqual(reply["error"]["kind"], "read_value_fact")
+                self.assertEqual(reply["error"]["message"], "bare_ReadValue_not_found")
+
     def test_copied_source_package_callback_bypasses_are_rejected(self):
         mutations = {
             "get-tag-info": (

@@ -107,11 +107,12 @@ sub selected_bare_binding {
     return (undef, 'processor_package_unavailable') unless defined $package;
     my $deparse = eval { B::Deparse->new('-p', '-sC')->coderef2text($processor) };
     return (undef, 'processor_deparse_unavailable') unless defined $deparse;
-    # This native-only probe supports the direct package-local ReadValue form.
-    # A qualified call or a more indirect source shape must not be relabelled as
-    # a captured dependency merely because a same-named symbol happens to exist.
+    # This native-only probe supports the exact scalar-assignment form used by
+    # ProcessSerialData. A qualified, object-dispatched, quoted, or indirect
+    # source shape must fail closed rather than be relabelled as the package
+    # binding merely because a same-named symbol happens to exist.
     return (undef, "bare_${symbol}_not_found")
-        unless $deparse =~ /(?<!:)(?<![A-Za-z0-9_])\Q$symbol\E\s*\(/;
+        unless $deparse =~ /\(\s*my\s*\(\s*\$val\s*\)\s*=\s*\Q$symbol\E\s*\(/;
     no strict 'refs';
     my $binding = *{"${package}::${symbol}"}{CODE};
     return (undef, "bare_${symbol}_binding_unavailable") unless ref($binding) eq 'CODE';
