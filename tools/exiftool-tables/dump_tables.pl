@@ -101,8 +101,39 @@ sub source_file_fact {
     return (File::Spec->abs2rel($abs, $lib_abs), sha256_hex($bytes), undef);
 }
 
-sub validate_function_fact {
-    my ($name, $lib_abs) = @_;
+sub unresolved_code_fact {
+    my ($name, $reason) = @_;
+    return {
+        __perl => 'CODE', __opaque => JSON::PP::true, __name => $name,
+        resolved => JSON::PP::false, __deparse => undef,
+        source_file => undef, source_sha256 => undef, reason => $reason,
+    };
+}
+
+sub direct_code_dependencies {
+    my ($body, $owner) = @_;
+    my %calls = map { $_ => 1 } fully_qualified_calls($body);
+    my $package = $owner;
+    $package =~ s/::[A-Za-z_]\w*$//;
+    # B::Deparse leaves same-package calls unqualified. Retain only names
+    # that resolve to an actual CODE glob in that package; Perl builtins and
+    # control keywords therefore do not become invented dependencies.
+    while ($body =~ /(?<![\w:])([A-Za-z_]\w*)\s*\(/g) {
+        my $bare = $1;
+        next if $bare =~ /^(?:if|unless|while|until|for|foreach|return|my|our|state|sub|package|use)$/;
+        my $candidate = "${package}::${bare}";
+        no strict 'refs';
+        $calls{$candidate} = 1 if *{$candidate}{CODE};
+    }
+    return sort keys %calls;
+}
+
+sub code_source_fact {
+    my ($name, $lib_abs, $ancestors, $depth) = @_;
+    $ancestors //= {};
+    $depth //= 0;
+    return unresolved_code_fact($name, 'dependency_depth_exceeded') if $depth > 8;
+    return unresolved_code_fact($name, 'dependency_cycle') if $ancestors->{$name};
     my %fact = (
         __perl  => 'CODE',
         __opaque => JSON::PP::true,
@@ -127,7 +158,19 @@ sub validate_function_fact {
     $fact{source_file} = $source_file;
     $fact{source_sha256} = $source_sha256;
     $fact{resolved} = JSON::PP::true;
+    my %next_ancestors = (%$ancestors, $name => 1);
+    my %dependencies;
+    for my $callee (direct_code_dependencies($body, $fact{__name})) {
+        $dependencies{$callee} = code_source_fact(
+            $callee, $lib_abs, \%next_ancestors, $depth + 1);
+    }
+    $fact{dependencies} = \%dependencies if %dependencies;
     return \%fact;
+}
+
+sub validate_function_fact {
+    my ($name, $lib_abs) = @_;
+    return code_source_fact($name, $lib_abs);
 }
 
 sub collect_subdirectory_validate_function_names {

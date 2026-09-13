@@ -26,13 +26,22 @@ class ValidateFunctionFacts(unittest.TestCase):
         )
         self.module = package / "Fixture.pm"
         self.later = package / "Later.pm"
+        self.reader = package / "Reader.pm"
         self.write_later_module()
-        self.write_module("return $data == $first ? 1 : undef;")
+        self.write_reader_module("return 16;")
+        self.write_module("return Image::ExifTool::Reader::Get16u($data, $offset) == $first ? 1 : undef;")
 
     def write_later_module(self):
         self.later.write_text(textwrap.dedent("""\
             package Image::ExifTool::Later;
             sub Validate { return 1; }
+            1;
+        """), encoding="utf-8")
+
+    def write_reader_module(self, body):
+        self.reader.write_text(textwrap.dedent(f"""\
+            package Image::ExifTool::Reader;
+            sub Get16u {{ {body} }}
             1;
         """), encoding="utf-8")
 
@@ -73,7 +82,7 @@ class ValidateFunctionFacts(unittest.TestCase):
 
     def dump(self):
         result = subprocess.run(
-            ["/usr/bin/perl", str(DUMP), str(self.lib), "Fixture", "Later"],
+            ["/usr/bin/perl", str(DUMP), str(self.lib), "Fixture", "Later", "Reader"],
             check=True, text=True, capture_output=True,
         )
         return json.loads(result.stdout)
@@ -91,6 +100,13 @@ class ValidateFunctionFacts(unittest.TestCase):
         self.assertEqual(
             helper["source_sha256"],
             hashlib.sha256(self.module.read_bytes()).hexdigest(),
+        )
+        dependency = helper["dependencies"]["Image::ExifTool::Reader::Get16u"]
+        self.assertTrue(dependency["resolved"])
+        self.assertEqual(dependency["source_file"], "Image/ExifTool/Reader.pm")
+        self.assertEqual(
+            dependency["source_sha256"],
+            hashlib.sha256(self.reader.read_bytes()).hexdigest(),
         )
 
         # The source alias is preserved as the map key while the fact records
@@ -124,6 +140,20 @@ class ValidateFunctionFacts(unittest.TestCase):
         self.assertTrue(second["resolved"])
         self.assertNotEqual(first["__deparse"], second["__deparse"])
         self.assertNotEqual(first["source_sha256"], second["source_sha256"])
+        self.assertEqual(before["modules"], after["modules"])
+
+    def test_direct_dependency_edit_changes_dependency_fact_only(self):
+        before = self.dump()
+        self.write_reader_module("return 32;")
+        after = self.dump()
+        name = "Image::ExifTool::Fixture::Validate"
+        first, second = (before["subdirectory_validate_functions"][name],
+                         after["subdirectory_validate_functions"][name])
+        self.assertEqual(first["__deparse"], second["__deparse"])
+        self.assertEqual(first["source_sha256"], second["source_sha256"])
+        dependency = "Image::ExifTool::Reader::Get16u"
+        self.assertNotEqual(first["dependencies"][dependency]["source_sha256"],
+                            second["dependencies"][dependency]["source_sha256"])
         self.assertEqual(before["modules"], after["modules"])
 
 
