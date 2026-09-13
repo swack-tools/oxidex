@@ -17,11 +17,27 @@ catalog and per-version results. Missing source, unsupported semantics,
 unexercised behaviors and failed versions remain visible. Native read-only
 fields are explicitly ineligible for writes, not failed writer implementations.
 
+## Newer native behavior takes precedence
+
+An upgrade adopts the newer native release's parsing corrections, new tags,
+type and formatting changes, and writable behavior. Do not preserve an old
+result merely because it once matched an older oracle. Test three relationships:
+
+- Old generated OxiDex against the old native ExifTool.
+- New generated OxiDex against the new native ExifTool.
+- Native old versus native new, to identify intentional upstream changes.
+
+Cross-version equality is not a passing requirement. The new build must match
+the new oracle. If the generator cannot represent a changed rule, record that
+unsupported behavior explicitly and extend the shared machinery. Do not hide it
+by retaining the old tag-specific implementation. A sampled pair passing does
+not certify other releases or behaviors.
+
 ## Work in order, with independent tasks in parallel
 
-1. Finish Canon AFInfo2/AFInfo3 reader retirement through PR #760. Preserve the
-   failed legacy synthetic test, correct its invalid size field with native
-   evidence, run full tests and merge only after the required checks pass.
+1. **Done:** Canon AFInfo2/AFInfo3 reader retirement merged in PR #760 at
+   `4a3eb26c`, with all five required hosted checks passing on `2630ded8`.
+   Preserve the failed legacy fixture, native correction and acceptance record.
 2. Capture one complete source model for both directions. Retain permissions,
    actual writer/checker functions, placement, forward and inverse conversions,
    validation, insertion/deletion and ordering rules. Keep unknown property
@@ -32,6 +48,11 @@ fields are explicitly ineligible for writes, not failed writer implementations.
    placement and write type; use the existing JPEG/TIFF surgical mechanisms.
    Verify insert, update, growth, shrinkage and deletion against native ExifTool
    in both byte orders, preserving unrelated metadata and image/file payload.
+   Keep defined-empty values distinct from deletion. Both EXIF family names
+   and physical IFD names must address the same generated identity; the
+   pre-migration EXIF-qualified deletion silently succeeds without deleting,
+   while TIFF deletion is explicitly unsupported. Preserve these as baseline
+   failures until the complete generated operation is implemented.
    A copied native name/type/placement change must propagate without another
    hand-written rule. Retire the replaced manual lookup after proof.
 4. Expand shared capabilities and migrate eligible read/write families through
@@ -76,3 +97,17 @@ Report the complete catalog population, tested versions/pairs, failures,
 untested releases and unexercised read/write behaviors. Keep corpus attribution,
 read conformance, write conformance and source-rule automation as separate
 measurements. No exact completion date follows from the current partial data.
+
+
+## Implementation checkpoint after the reader merge
+
+The native write-fact sidecar and offline seeded planner are integrated on
+`codex/read-write-upgrade-integration-20260913`. Independent review accepted the
+complete loader-token grammar after rejecting two earlier bypasses. The full
+153-module read projection is unchanged. Planner repair checks exact catalog
+selection, matching-version oracle bindings, selected journal membership and
+untested scope; 17 focused tests and five independent altered-plan checks pass.
+These are source and planning foundations: writer activation, official live
+catalog/source capture, both-version regeneration/builds and real read/write
+comparisons are still required. Combined official regeneration is the next
+integration check. No successful release upgrade is claimed by a saved plan.

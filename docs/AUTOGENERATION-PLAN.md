@@ -99,6 +99,15 @@ binaries against the newer oracle; add a separate non-promoting rehearsal that
 regenerates both releases and checks each against its own native read/write
 behavior. Selection or successful generation alone is not conformance.
 
+The selected newer ExifTool is the authority after upgrading. Its parsing bug
+fixes, added or renamed tags, type changes, formatting and write semantics
+must replace older behavior. Keep three comparisons: old OxiDex versus old
+native, new OxiDex versus new native, and the native old-to-new delta. A change
+in native output is an expected upstream change when the new generated build
+matches it. Cross-version output equality is not required. A new unsupported
+rule is a visible gap requiring shared compiler/runtime work; silently using
+the old tag rule is not an acceptable upgrade.
+
 Once that runner passes its own tests, exercise a randomly selected distinct
 release pair after three relevant merged batches or one week, whichever comes
 first. The existing hourly continuation records this cadence without launching
@@ -114,10 +123,11 @@ been established.
 | --- | --- | --- |
 | Shared table compiler and reader | Already exist; some families use them | We have a foundation to extend instead of building a new interpreter for every camera brand. |
 | Sony focus-table pilot | Merged in PR #746 at `04eaf6e1`, including removal of 17 duplicate entries. Final CI is green at `a1626cb6`; the 4,238-file pair records ten raw-ID fixes and no other per-file changes. | The shared route now replaces the duplicate Sony producer. Remaining source-inventory work is broader than this pilot. |
-| Shared binary strings | Merged in PR #747 at `8f0fdaf4`. It preserves raw bytes in saved state, distinguishes a one-byte default from a remainder string, and carries the bounded CameraInfo repair. | This is a shared capability, not a Canon migration. CameraInfo remains a legacy text-domain adapter, and no Canon manual reader has been removed. The prior full-pair supervisor-status limitation remains recorded. |
+| Shared binary strings | Merged in PR #747 at `8f0fdaf4`. It preserves raw bytes in saved state, distinguishes a one-byte default from a remainder string, and carries the bounded CameraInfo repair. | This is a shared capability, not a Canon migration. CameraInfo remains a legacy text-domain adapter, and that batch removed no Canon manual reader. The subsequent AFInfo2/AFInfo3 retirement is listed separately. The prior full-pair supervisor-status limitation remains recorded. |
 | Keyed-directory schema and compiler | Merged in PR #748 at `ebbe1ece`; all final hosted checks passed at `a422e8de`. | Native parent facts and expression declarations are checked. Shared reporting policy merged in #750; the inactive reader merged in #752 at `634e5616`. No production route is active. |
-| Shared word-directory processor | Merged in PR #754 at `1138a880`; nine tables, 132 rows, 698 Python tests and all five hosted jobs pass. | Four of five unsupported child processors now have generated descriptors. Canon production routing and manual-reader retirement remain unfinished. |
-| Shared serial processor | Foundation merged in #757; #759 at `8887e5d9` expands the eight-table total to 122 emitted alternatives and 10 omissions, with all five hosted checks passing. Canon AFInfo 14/14 and AFInfo2 16/16 are generated and natively replayed. | Real AudioV4 is a validated production caller. Canon's next delivery is complete parent routing and manual AFInfo2 reader retirement; definition readiness alone does not count as that migration. |
+| Shared word-directory processor | Merged in PR #754 at `1138a880`; nine tables, 132 rows, 698 Python tests and all five hosted jobs pass. | Four of five unsupported child processors now have generated descriptors. The separate Canon AFInfo2/AFInfo3 serial migration merged in #760; other word-directory callers remain separate work. |
+| Shared serial processor | Foundation merged in #757; #759 at `8887e5d9` expands the eight-table total to 122 emitted alternatives and 10 omissions, with all five hosted checks passing. Canon AFInfo 14/14 and AFInfo2 16/16 are generated and natively replayed. | Real AudioV4 is a validated production caller. Canon AFInfo2/AFInfo3 now uses the generated route after #760. Old AFInfo geometry and CanonRaw omissions remain unfinished. |
+| Canon AFInfo2/AFInfo3 retirement | Merged in #760 at `4a3eb26c`; all five required hosted checks passed on `2630ded8`. One shared manual arm, eight offsets, two parent IDs and a 20-value enum removed. | Exact native and bounded/full corpus evidence passes. A supported native name change reaches output through regeneration. This does not activate generated writing or establish a new project-wide percentage. |
 | Real AudioV4 retirement | Merged in #758 at `19cb7650`; one manual reader and its 31-slot sequence removed. Full corpus: one Copyright correction, 4,237 other files unchanged. All five hosted checks pass. | Supported source-name changes reach actual output after regeneration with no tag-specific Python/Rust edit. Native occurrence groups, warning output and V3/V5 remain explicit residuals. |
 | Recorded source inventory | Merged in PR #749 at `18a8ef17`; all final hosted checks passed at `72e8e664`. The report accounts for 1,512 table identities and retains 119 tables with no named rows. | This establishes the captured source population. Classifying which rules are generated, manual, unsupported or unclassified remains open; source shape is not automation. |
 | Sony plain generator recovery | PR #745 merged; six tables and 193 rows reproduced | These tables can be rebuilt. This alone does not prove that their behavior is fully automatic. |
