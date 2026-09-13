@@ -200,6 +200,27 @@ sub probe_get16u {
     };
 }
 
+sub normalize_diagnostics {
+    my ($value, $sources) = @_;
+    if (ref($value) eq 'HASH') {
+        for my $key (keys %$value) {
+            if ($key =~ /\A(?:error|warning|restore_error)\z/
+                    && defined($value->{$key}) && !ref($value->{$key})) {
+                # Only diagnostic location suffixes from authenticated loaded
+                # files are portable. Preserve message text, line numbers and
+                # unknown/outside locations, and never alter CODE provenance.
+                for my $raw (sort { length($b) <=> length($a) || $a cmp $b } keys %$sources) {
+                    $value->{$key} =~ s{(?<= at )\Q$raw\E(?= line [0-9]+(?:[.,]|\z))}{$sources->{$raw}}g;
+                }
+            } else {
+                normalize_diagnostics($value->{$key}, $sources);
+            }
+        }
+    } elsif (ref($value) eq 'ARRAY') {
+        normalize_diagnostics($_, $sources) for @$value;
+    }
+}
+
 sub capture_in_process {
     my ($lib_abs) = @_;
     my $initial = Image::ExifTool::GetByteOrder();
@@ -208,7 +229,7 @@ sub capture_in_process {
     my $restore_return = eval { Image::ExifTool::SetByteOrder($initial) };
     my $restore_error = $@ || undef;
     my $override_facts = builtin_override_facts($lib_abs);
-    return {
+    my $snapshot = {
         kind => 'binary_unsigned_reader_contract_v1',
         exiftool_version => $Image::ExifTool::VERSION,
         loaded_functions => {
@@ -229,6 +250,24 @@ sub capture_in_process {
         },
         get16u_probe => probe_get16u(),
     };
+    my %diagnostic_sources;
+    for my $fact (values %{$snapshot->{loaded_functions}}) {
+        next unless $fact->{resolved};
+        no strict 'refs';
+        my $cv = *{$fact->{__name}}{CODE};
+        next unless $cv;
+        my $raw = eval { B::svref_2object($cv)->FILE };
+        next unless defined $raw;
+        my $abs = abs_path($raw);
+        # code_source_fact already authenticated this file under the selected
+        # library; recheck the exact target before using its portable identity.
+        next unless defined($abs) && -f $abs
+            && $abs eq "$lib_abs/$fact->{source_file}";
+        $diagnostic_sources{$raw} = $fact->{source_file};
+        $diagnostic_sources{$abs} = $fact->{source_file};
+    }
+    normalize_diagnostics($snapshot, \%diagnostic_sources);
+    return $snapshot;
 }
 
 sub unresolved_contract {

@@ -3,7 +3,8 @@
 Integration base: `634e5616` on `refactor/tag-machinery`, including the inactive
 reader merged in PR #752. Work branch:
 `codex/source-backed-directory-validation-20260913`. This source checkpoint is
-locally validated; canonical generated artifacts and ledgers remain pending.
+locally validated; canonical generated artifacts and ledgers now regenerate
+through the normal two-tier command with isolated Perl 5.38.2.
 It does not activate Canon routing or remove manual code.
 
 ## What changed
@@ -32,11 +33,14 @@ reject the child. This distinction was found by native probing and corrected.
 | Instrument | Result | Limit |
 | --- | --- | --- |
 | Focused Python test modules listed below | 56 tests pass | Focused source, artifact and native-reader checks. |
-| Complete Python tool suite with the recorded native dump and explicit pinned library | 636 tests pass in 199 seconds | This is the tool suite, not the remaining canonical regeneration or carrier gate. |
+| Complete Python tool suite with the fresh canonical dump and explicit pinned library | 638 tests pass in 194 seconds | This is the tool suite, not carrier or corpus activation proof. |
 | Rust keyed-reader tests | 18 pass, including inline eight-byte validation in both byte orders | The production Canon route remains inactive. |
 | Rust size-check primitive tests | Three pass | Shared operation checks, not carrier coverage. |
 | Exact repository CI lint command | Pass | Broader earlier integration-test lint had 23 existing warnings. |
-| Actual ExifTool 13.59 dump, code generation and independent oracle replay, explicit Perl 5.34.1 | 61 source rows = 57 represented + four explicit omissions; zero missing, stale or mismatched native facts | Local source replay; canonical Perl 5.38.2 regeneration remains required. |
+| Earlier ExifTool 13.59 dump, code generation and independent oracle replay, explicit Perl 5.34.1 | 61 source rows = 57 represented + four explicit omissions; zero missing, stale or mismatched native facts | Earlier source replay; the canonical 5.38.2 result below now confirms it. |
+| Routine committed-table verifier with keyed definitions and the Sony native inventory | Pass, zero keyed native-fact mismatches | Same argument scope as `just verify-tables` and CI, with the explicit pinned library. |
+| Official `regen-all.sh`, explicit Perl 5.38.2 and pinned 13.59 | Both tiers pass in 158 seconds; 607 expressions, 16,789 passing comparisons, zero disagreements, 14 inapplicable probe errors; independent table checks pass | Regenerates 31 declared outputs. Previous tables remain byte-identical; keyed definitions and the dump-authenticating ledger are new/changed. No production activation. |
+| Complete native dump using absolute and relative library locations | Byte-identical JSON, zero structural differences; SHA-256 `efa5246c35ab72b2dcc26c03df44ea1d15fd80d4ef9b713dfad34e7b3300f169` | Diagnostic paths become authenticated library-relative locations; error text, source line and source-file hashes are preserved. |
 | Native unsigned-reader probe | 262,144 numeric cases across both byte orders and two offsets, plus ten boundary cases; zero failures | Complemented by complete supported-body recognition; not every possible caller or offset. |
 | Copied native source: change only `Get16u` from unsigned 16-bit to unsigned 32-bit | All seven fresh checks retain the blocker; all seven stale checks fail independent verification | One real native mutation, plus focused synthetic source/state mutations. |
 
@@ -66,12 +70,14 @@ failures and the corrected reader-test fixture failure are preserved; failed att
 
 ## What remains
 
-1. Regenerate official artifacts and ledgers through
-   `tools/exiftool-tables/regen.sh` with the repository pin and canonical Perl
-   5.38.2 environment, holding the i7 heavy-job lock across every phase. The
-   new source facts deliberately change the dump hash; an old ledger cannot
-   authenticate them. The i7 accepts authentication but currently cannot open
-   a command session. Its live lock, processes and native paths are unverified.
+1. Land the published validation/regeneration branch after its required
+   hosted checks. Local compile, lint, 638 tool tests and routine table
+   verification pass. The new source facts deliberately change
+   the dump hash; the regenerated ledger authenticates them. The isolated
+   local Perl 5.38.2 reproduces the original canonical dump before the capture
+   change and loads Archive::Zip without ambient module-path overrides. The
+   i7 command channel and its live lock/process state remain unverified;
+   no i7 job was started for this regeneration.
 2. Resolve remaining parent/child processing rules. Four edges at `0x1033`
    target a common length-prefixed U16 key/value processor; compile its native
    source into a shared descriptor, including the source model predicate. The
@@ -84,3 +90,12 @@ failures and the corrected reader-test fixture failure are preserved; failed att
    production activation, then retire the replaced manual Make/Model code.
 
 This checkpoint establishes no whole-project automation percentage.
+
+The new keyed artifact is generated, formatted and independently checked by
+`regen.sh`, `just verify-tables` and the CI table-verification command. Compiling
+its module does not add a production caller or put it in either enablement list.
+Evidence for the complete run is in
+`shared-pilot/directory-validation-20260913/canonical-local-r3/`. Attempts r1/r2
+remain recorded as failures: the first dirty-tree guard rejected the handoff,
+and the second run stopped at the lens generator's ambient-PERL5LIB refusal.
+Neither failure is counted as a successful complete regeneration.

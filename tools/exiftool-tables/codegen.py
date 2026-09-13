@@ -4140,8 +4140,8 @@ def main():
         print(f"wrote IFD tables     {args.ifd_out}")
 
     if args.keyed_out:
-        # Kept opt-in until a keyed reader and a reviewed caller exist.  This
-        # file carries source facts and explicit omissions only; it is not a
+        # Normal regeneration always requests this output; focused generator
+        # callers may omit it. It carries source facts and omissions, not a
         # route or an enablement list. Source was already compiled above so
         # the shared ExprId registry cannot depend on this output flag.
         with open(args.keyed_out, "w", encoding="utf-8") as fh:

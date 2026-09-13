@@ -33,6 +33,7 @@ class Artifact:
 ARTIFACTS = (
     Artifact("binary", 1, "codegen", "src/exiftool_tables/binary_tables.rs"),
     Artifact("ifd", 1, "codegen", "src/exiftool_tables/ifd_tables.rs"),
+    Artifact("keyed", 1, "codegen", "src/exiftool_tables/keyed_tables.rs"),
     Artifact("expr-ledger", 1, "verify_exprs", "tools/exiftool-tables/expr_oracle_ledger.json"),
     Artifact("value-ledger", 1, "codegen", "tools/exiftool-tables/value_conv_ledger.json"),
     Artifact("filetypes", 1, "codegen_filetypes", "src/filetype/tables.rs"),
