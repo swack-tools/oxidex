@@ -62,8 +62,14 @@ class VersionRehearsalTests(unittest.TestCase):
         old, new = first["pairs"][0]["old"]["release"], first["pairs"][0]["new"]["release"]
         self.assertLess(vr.release_key(old), vr.release_key(new))
         self.assertNotEqual(old, new)
-        self.assertEqual(first["execution"]["read"], "unrun")
-        self.assertEqual(first["execution"]["write"], "unrun")
+        self.assertEqual(first["execution"]["per_version_read_vs_native"], "unrun")
+        self.assertEqual(first["execution"]["per_version_write_vs_native"], "unrun")
+        self.assertEqual(first["execution"]["native_old_to_native_new_delta"], "unrun")
+        pair = first["pairs"][0]
+        self.assertEqual(pair["native_oracles"]["old"]["native_release_identity"], pair["old"])
+        self.assertEqual(pair["native_oracles"]["new"]["native_release_identity"], pair["new"])
+        self.assertEqual(pair["comparison_contract"]["cross_version_output_equality"], "not_required")
+        self.assertTrue(pair["comparison_contract"]["newer_native_supersedes_older_native"])
 
     def test_same_version_and_ambiguous_identity_are_refused(self):
         catalog = self.normalized()
@@ -86,6 +92,15 @@ class VersionRehearsalTests(unittest.TestCase):
         changed = vr.normalize_catalog(changed_raw)
         with self.assertRaisesRegex(vr.Refused, "catalog identity differs"):
             vr.verify_plan(plan, changed)
+
+    def test_swapped_or_same_native_oracle_is_refused_after_rehash(self):
+        plan = self.plan()
+        pair = plan["pairs"][0]
+        pair["native_oracles"]["old"]["native_release_identity"] = copy.deepcopy(pair["new"])
+        payload = {k: v for k, v in plan.items() if k != "plan_sha256"}
+        plan["plan_sha256"] = vr.sha256_json(payload)
+        with self.assertRaisesRegex(vr.Refused, "old native oracle binding"):
+            vr.verify_plan(plan, self.normalized())
 
     def test_unselected_eligible_release_is_explicitly_untested(self):
         raw = catalog_entries()
