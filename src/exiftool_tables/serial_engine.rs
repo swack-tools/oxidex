@@ -14,7 +14,7 @@ use super::IfdFlags;
 use super::cond::Ctx;
 use super::engine::{self, Emitted};
 use super::runtime::{self, DecodedValue};
-use super::serial_schema::{SerialCount, SerialEntry, SerialTable, SerialTag};
+use super::serial_schema::{SerialCount, SerialEntry, SerialPrintConv, SerialTable, SerialTag};
 
 /// The bounded `dirInfo` values ProcessSerialData receives from its carrier.
 #[derive(Clone, Copy, Debug)]
@@ -148,10 +148,10 @@ pub fn process_serial_directory(
             Some(more) => more,
             None => break,
         };
-        // Version 1 deliberately models only the proven scalar and string
-        // operand family used by the gate-clear Real Audio tables.  An
-        // artifact must not promote another common `Fmt` merely because the
-        // shared low-level decoder happens to know how to read it.
+        // The staged reader models only its source-proven scalar and string
+        // operand family. An artifact must not promote another common `Fmt`
+        // merely because the shared low-level decoder happens to know how to
+        // read it.
         if !serial_format_supported(tag.format.format) {
             result.malformed_layout += 1;
             result.tainted = true;
@@ -267,6 +267,7 @@ const fn serial_format_supported(format: super::Fmt) -> bool {
         format,
         super::Fmt::Int8u
             | super::Fmt::Int16u
+            | super::Fmt::Int16s
             | super::Fmt::Int32u
             | super::Fmt::Str(_)
             | super::Fmt::Undef(_)
@@ -290,12 +291,14 @@ fn count_for(
             serial_index,
             add,
             divisor,
+            trailing_add,
         } => prior_raw
             .get(&serial_index)?
             .as_integer()
             .and_then(|value| usize::try_from(value).ok())?
             .checked_add(add)
-            .and_then(|value| value.checked_div(divisor)),
+            .and_then(|value| value.checked_div(divisor))?
+            .checked_add(trailing_add),
     }
 }
 
@@ -358,7 +361,7 @@ fn emit_selected(
                 runtime::to_exiftool_value(&converted)
             }
         };
-        match runtime::render(tag.print_conv, &converted) {
+        match render_serial(tag.print_conv, &converted) {
             Some(rendered) => (TagValue::String(rendered), Some(unconverted())),
             None => (unconverted(), None),
         }
@@ -380,6 +383,54 @@ fn emit_selected(
     false
 }
 
+/// Render the serial-only conversion arm after ValueConv.  This is kept at
+/// the ProcessSerialData boundary because the native input is its scalar or
+/// space-joined list of words, not a general binary-table BITMASK.
+fn render_serial(conv: SerialPrintConv, value: &DecodedValue) -> Option<String> {
+    match conv {
+        SerialPrintConv::None => None,
+        SerialPrintConv::Shared(conv) => runtime::render(conv, value),
+        SerialPrintConv::DecodeBitsWords { bits_per_word } => {
+            decode_bits_words(value, bits_per_word)
+        }
+    }
+}
+
+/// `Image::ExifTool::DecodeBits($val, undef, $bits)` for the closed serial
+/// no-lookup shape. Signed words are masked to their width before each bit is
+/// inspected: native `-32768` with 16 bits yields `15`, never sign-extended
+/// positions above 15. Native joins this no-lookup branch with `","`.
+fn decode_bits_words(value: &DecodedValue, bits_per_word: u8) -> Option<String> {
+    let bits = u32::from(bits_per_word);
+    if bits == 0 || bits > 63 {
+        return None;
+    }
+    let values: Vec<i64> = match value {
+        DecodedValue::Integer(value) => vec![*value],
+        DecodedValue::Array(values) => values
+            .iter()
+            .map(DecodedValue::as_integer)
+            .collect::<Option<Vec<_>>>()?,
+        _ => return None,
+    };
+    let mask = (1_u64.checked_shl(bits)?).checked_sub(1)?;
+    let mut labels = Vec::new();
+    for (word_index, word) in values.into_iter().enumerate() {
+        let word = (word as u64) & mask;
+        let base = u32::try_from(word_index).ok()?.checked_mul(bits)?;
+        for bit in 0..bits {
+            if word & (1_u64 << bit) != 0 {
+                labels.push(base.checked_add(bit)?.to_string());
+            }
+        }
+    }
+    Some(if labels.is_empty() {
+        "(none)".to_string()
+    } else {
+        labels.join(",")
+    })
+}
+
 fn low_priority(flags: IfdFlags) -> bool {
     flags.priority.or(if flags.avoid { Some(0) } else { None }) == Some(0)
 }
@@ -398,8 +449,9 @@ mod tests {
 
     use super::*;
     use crate::exiftool_tables::{
-        Cond, GateA, IfdFlags, Omitted, PrintConv, RawConvEffect, SerialCount, SerialEntry,
-        SerialFormat, SerialProcessorFacts, SerialTable, SerialTag, TagGroups,
+        Cond, EffectSource, GateA, IfdFlags, Omitted, PrintConv, RawConvEffect, SerialCondition,
+        SerialCount, SerialEntry, SerialFormat, SerialMissingMember, SerialPrintConv,
+        SerialProcessorFacts, SerialTable, SerialTag, TagGroups,
     };
 
     static PROCESSOR: SerialProcessorFacts = SerialProcessorFacts {
@@ -423,7 +475,7 @@ mod tests {
         raw_conv: None,
         omitted: Omitted::NONE,
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static PRIOR: SerialTag = SerialTag {
@@ -437,7 +489,7 @@ mod tests {
         raw_conv: None,
         omitted: Omitted::NONE,
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static UNKNOWN: SerialTag = SerialTag {
@@ -459,7 +511,7 @@ mod tests {
             ..Omitted::NONE
         },
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static MEMBER: SerialTag = SerialTag {
@@ -476,7 +528,7 @@ mod tests {
             ..Omitted::NONE
         },
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static AFTER_MEMBER: SerialTag = SerialTag {
@@ -485,10 +537,13 @@ mod tests {
             format: super::super::Fmt::Int8u,
             count: SerialCount::Fixed { value: 1 },
         },
-        condition: Some(Cond::MemberCmp {
-            member: "Seen",
-            op: super::super::CmpOp::Eq,
-            value: 7,
+        condition: Some(SerialCondition {
+            cond: Cond::MemberCmp {
+                member: "Seen",
+                op: super::super::CmpOp::Eq,
+                value: 7,
+            },
+            missing_member: SerialMissingMember::SharedDefault,
         }),
         flags: IfdFlags::NONE,
         raw_conv: None,
@@ -497,7 +552,7 @@ mod tests {
             ..Omitted::NONE
         },
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static NEVER: SerialTag = SerialTag {
@@ -506,15 +561,18 @@ mod tests {
             format: super::super::Fmt::Int8u,
             count: SerialCount::Fixed { value: 1 },
         },
-        condition: Some(Cond::MemberTruthy {
-            member: "missing",
-            negate: false,
+        condition: Some(SerialCondition {
+            cond: Cond::MemberTruthy {
+                member: "missing",
+                negate: false,
+            },
+            missing_member: SerialMissingMember::SharedDefault,
         }),
         flags: IfdFlags::NONE,
         raw_conv: None,
         omitted: Omitted::NONE,
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static NON_NUMERIC: SerialTag = SerialTag {
@@ -528,7 +586,7 @@ mod tests {
         raw_conv: None,
         omitted: Omitted::NONE,
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static NEEDS_CONTEXT: SerialTag = SerialTag {
@@ -537,15 +595,18 @@ mod tests {
             format: super::super::Fmt::Int8u,
             count: SerialCount::Fixed { value: 1 },
         },
-        condition: Some(Cond::CountCmp {
-            op: super::super::CmpOp::Eq,
-            value: 1,
+        condition: Some(SerialCondition {
+            cond: Cond::CountCmp {
+                op: super::super::CmpOp::Eq,
+                value: 1,
+            },
+            missing_member: SerialMissingMember::SharedDefault,
         }),
         flags: IfdFlags::NONE,
         raw_conv: None,
         omitted: Omitted::NONE,
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static COUNTED_STRING: SerialTag = SerialTag {
@@ -559,7 +620,7 @@ mod tests {
         raw_conv: None,
         omitted: Omitted::NONE,
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static HOOK: SerialTag = SerialTag {
@@ -576,7 +637,7 @@ mod tests {
             ..Omitted::NONE
         },
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static UNSUPPORTED_FORMAT: SerialTag = SerialTag {
@@ -590,7 +651,7 @@ mod tests {
         raw_conv: None,
         omitted: Omitted::NONE,
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
         groups: TagGroups::NONE,
     };
     static REMAINDER: SerialTag = SerialTag {
@@ -604,7 +665,21 @@ mod tests {
         raw_conv: None,
         omitted: Omitted::NONE,
         value_conv: None,
-        print_conv: PrintConv::None,
+        print_conv: SerialPrintConv::None,
+        groups: TagGroups::NONE,
+    };
+    static SIGNED_BITS: SerialTag = SerialTag {
+        name: "SignedBits",
+        format: SerialFormat {
+            format: super::super::Fmt::Int16s,
+            count: SerialCount::Fixed { value: 3 },
+        },
+        condition: None,
+        flags: IfdFlags::NONE,
+        raw_conv: None,
+        omitted: Omitted::NONE,
+        value_conv: None,
+        print_conv: SerialPrintConv::DecodeBitsWords { bits_per_word: 16 },
         groups: TagGroups::NONE,
     };
     static ENTRY_COUNT: [SerialTag; 1] = [PLAIN];
@@ -619,6 +694,7 @@ mod tests {
     static ENTRY_HOOK: [SerialTag; 1] = [HOOK];
     static ENTRY_UNSUPPORTED_FORMAT: [SerialTag; 1] = [UNSUPPORTED_FORMAT];
     static ENTRY_REMAINDER: [SerialTag; 1] = [REMAINDER];
+    static ENTRY_SIGNED_BITS: [SerialTag; 1] = [SIGNED_BITS];
     static TWO_ENTRIES: [SerialEntry; 2] = [
         SerialEntry {
             serial_index: 0,
@@ -694,6 +770,10 @@ mod tests {
     static REMAINDER_ENTRIES: [SerialEntry; 1] = [SerialEntry {
         serial_index: 0,
         alternatives: &ENTRY_REMAINDER,
+    }];
+    static SIGNED_BITS_ENTRIES: [SerialEntry; 1] = [SerialEntry {
+        serial_index: 0,
+        alternatives: &ENTRY_SIGNED_BITS,
     }];
     static TABLE: SerialTable = SerialTable {
         module: "Shared",
@@ -963,5 +1043,119 @@ mod tests {
         let result = walk(table, b"raw\0ignored", &mut sink, &mut members);
         assert_eq!(result.emitted, 1);
         assert_eq!(sink.rows[0].value, TagValue::String("raw".to_owned()));
+    }
+
+    #[test]
+    fn signed_multiword_decode_bits_masks_each_native_word() {
+        let table = SerialTable {
+            entries: &SIGNED_BITS_ENTRIES,
+            ..TABLE
+        };
+        let table: &'static SerialTable = Box::leak(Box::new(table));
+        let mut sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let mut members = HashMap::new();
+        // Little-endian 1, -32768, 3. Native DecodeBits sees a space-joined
+        // signed scalar list, then masks every 16-bit word before indexing.
+        let result = walk(table, &[1, 0, 0, 0x80, 3, 0], &mut sink, &mut members);
+        assert_eq!(result.emitted, 1);
+        assert_eq!(
+            sink.rows[0].value,
+            TagValue::String("0,31,32,33".to_owned())
+        );
+        assert_eq!(
+            decode_bits_words(&DecodedValue::Integer(-1), 16),
+            Some("0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15".to_owned())
+        );
+    }
+
+    #[test]
+    fn trailing_add_runs_after_closed_prior_raw_division() {
+        let tag = SerialTag {
+            format: SerialFormat {
+                format: super::super::Fmt::Int16s,
+                count: SerialCount::FloorDivPriorRaw {
+                    serial_index: 0,
+                    add: 15,
+                    divisor: 16,
+                    trailing_add: 1,
+                },
+            },
+            ..SIGNED_BITS
+        };
+        let mut prior = HashMap::new();
+        prior.insert(0, DecodedValue::Integer(17));
+        assert_eq!(count_for(&tag, &prior, 0), Some(3));
+        prior.insert(0, DecodedValue::Integer(-1));
+        assert_eq!(count_for(&tag, &prior, 0), None);
+    }
+
+    #[test]
+    fn serial_missing_member_policy_is_string_local_and_short_circuits() {
+        static MISSING_TRUE: Cond = Cond::MemberTruthy {
+            member: "AFInfoCount",
+            negate: true,
+        };
+        static WOULD_MUTATE: Cond = Cond::SetMember {
+            member: "Unexpected",
+            source: EffectSource::Const(1),
+            then: None,
+        };
+        let short_circuit = SerialCondition {
+            cond: Cond::Or(&MISSING_TRUE, &WOULD_MUTATE),
+            missing_member: SerialMissingMember::EmptyStringForStringOps,
+        };
+        let missing_regex = SerialCondition {
+            cond: Cond::MemberRegex {
+                member: "Model",
+                pattern: "EOS",
+                ignore_case: false,
+                negate: true,
+            },
+            missing_member: SerialMissingMember::EmptyStringForStringOps,
+        };
+        let missing_empty_eq = SerialCondition {
+            cond: Cond::MemberStrEq {
+                member: "Model",
+                value: "",
+                negate: false,
+            },
+            missing_member: SerialMissingMember::EmptyStringForStringOps,
+        };
+        let missing_nonempty_eq = SerialCondition {
+            cond: Cond::MemberStrEq {
+                member: "Model",
+                value: "EOS",
+                negate: false,
+            },
+            missing_member: SerialMissingMember::EmptyStringForStringOps,
+        };
+        let missing_positive_regex = SerialCondition {
+            cond: Cond::MemberRegex {
+                member: "Model",
+                pattern: "EOS",
+                ignore_case: false,
+                negate: false,
+            },
+            missing_member: SerialMissingMember::EmptyStringForStringOps,
+        };
+        let defined = SerialCondition {
+            cond: Cond::MemberDefined {
+                member: "Model",
+                negate: false,
+            },
+            missing_member: SerialMissingMember::EmptyStringForStringOps,
+        };
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        assert!(short_circuit.eval(&mut ctx));
+        assert!(!ctx.members.contains_key("Unexpected"));
+        assert!(missing_empty_eq.eval(&mut ctx));
+        assert!(!missing_nonempty_eq.eval(&mut ctx));
+        assert!(!missing_positive_regex.eval(&mut ctx));
+        assert!(missing_regex.eval(&mut ctx));
+        assert!(!defined.eval(&mut ctx));
     }
 }

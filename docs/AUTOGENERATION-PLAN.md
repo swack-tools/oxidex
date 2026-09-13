@@ -37,7 +37,8 @@ areas remain unfinished; they cannot disappear from the denominator.
 | Shared binary strings | Merged in PR #747 at `8f0fdaf4`. It preserves raw bytes in saved state, distinguishes a one-byte default from a remainder string, and carries the bounded CameraInfo repair. | This is a shared capability, not a Canon migration. CameraInfo remains a legacy text-domain adapter, and no Canon manual reader has been removed. The prior full-pair supervisor-status limitation remains recorded. |
 | Keyed-directory schema and compiler | Merged in PR #748 at `ebbe1ece`; all final hosted checks passed at `a422e8de`. | Native parent facts and expression declarations are checked. Shared reporting policy merged in #750; the inactive reader merged in #752 at `634e5616`. No production route is active. |
 | Shared word-directory processor | Merged in PR #754 at `1138a880`; nine tables, 132 rows, 698 Python tests and all five hosted jobs pass. | Four of five unsupported child processors now have generated descriptors. Canon production routing and manual-reader retirement remain unfinished. |
-| Shared serial processor | Merged in #757 at `58849bc7`, after #755/#756. Eight tables account for 106 emitted alternatives and 26 omissions; all five hosted checks pass. | The V4 migration replaces its manual 31-slot sequence and passes bounded native output plus source-change execution proof. Full corpus and hosted acceptance remain before counting retirement. |
+| Shared serial processor | Merged in #757 at `58849bc7`, after #755/#756. Eight tables account for 106 emitted alternatives and 26 omissions; all five hosted checks pass. | The shared reader now has a validated production caller in Real AudioV4. Canon table and parent behavior still need completion. |
+| Real AudioV4 retirement | Merged in #758 at `19cb7650`; one manual reader and its 31-slot sequence removed. Full corpus: one Copyright correction, 4,237 other files unchanged. All five hosted checks pass. | Supported source-name changes reach actual output after regeneration with no tag-specific Python/Rust edit. Native occurrence groups, warning output and V3/V5 remain explicit residuals. |
 | Recorded source inventory | Merged in PR #749 at `18a8ef17`; all final hosted checks passed at `72e8e664`. The report accounts for 1,512 table identities and retains 119 tables with no named rows. | This establishes the captured source population. Classifying which rules are generated, manual, unsupported or unclassified remains open; source shape is not automation. |
 | Sony plain generator recovery | PR #745 merged; six tables and 193 rows reproduced | These tables can be rebuilt. This alone does not prove that their behavior is fully automatic. |
 | Sony enciphered recovery | Producer and independent verifier preserved; M4 review found five blockers; not landed | The draft still has a Sony-specific translation layer. Its review remains useful, but it is not the architecture target. |
@@ -116,10 +117,37 @@ native verification, source-driven change tests, and migration review. Each
 owns one checkout and a small deliverable. They run quick checks while writing
 code. The coordinator integrates a reviewed batch before expensive builds.
 
+Start with three Terra workers and one coordinator. Assign useful work before
+adding workers; agents waiting for the same source or build do not accelerate
+delivery.
+
+| Owner | Parallel deliverable | Completion evidence |
+| --- | --- | --- |
+| Implementation worker | One reusable compiler/reader capability | Published source checkpoint and focused checks; no copied tag-specific rule |
+| Native-evidence worker | Independent fixtures and expected results from pinned ExifTool | Recorded source/interpreter, raw outputs, boundary cases and source-change checks |
+| Review worker | Review the checkpoint as soon as it is published | Concrete findings or a scoped acceptance record, with unproved behavior explicit |
+| Coordinator | Integrate accepted work, regenerate, build, compare and publish | One combined validation record and a ready PR; retirement counts after merge |
+
+After an author publishes a checkpoint, that slot can prepare the next
+independent test contract while review and integration finish. Keep at most
+one implementation batch awaiting expensive validation. Do not accumulate
+several unbuilt branches that change the same shared interface.
+
 Use the local Mac for coordination, the M4 for independent CLI workers and
 queued build/test work, and the i7 for Linux and pinned-native validation.
 Every heavy i7 job uses the shared lock. Reuse compatible caches and avoid a
 full build per agent edit. Required final gates still run.
+
+Remote allocation is a plan until host reachability, current ownership and
+queue state are checked. CLI workers can write code and run focused tests
+without starting full builds. One coordinator owns each compatible build
+cache; Linux and macOS artifacts cannot be shared interchangeably.
+
+Measure speed over the next three integrated batches: time from assignment
+to published checkpoint, checkpoint to review, queue wait, build/test time,
+rework and merge time. Also report manual rules removed and source-driven
+behavior proved. Use those measurements to decide whether another worker
+helps; lines of code and agent count are not throughput targets.
 
 Current recovery work is preserved rather than deleted. We have stopped trying
 to reproduce arbitrary historic table numbering and stopped promoting the
@@ -153,7 +181,9 @@ Canonical artifacts and ledgers were regenerated successfully with local Perl
    tables and preserves every refusal. The combined Rust emitter and reader
    merged in #757 after native Real AudioV3/V4 replay and all final hosted
    checks. The V4 carrier passes bounded/native and supported source-change
-   execution proof; complete its corpus and hosted gate, then land retirement.
+   execution proof and merged in #758 after full corpus and hosted acceptance.
+   Complete the [two autofocus definitions](reference/serial-afinfo-plan.md)
+   next, then prove generic parent routing and validators before Canon activation.
    Account for every condition and conversion before reducing the final
    unsupported-child count from one to zero.
 2. Resolve the four omitted parent rows using shared byte handling. An explicit

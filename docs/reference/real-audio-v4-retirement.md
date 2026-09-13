@@ -1,6 +1,7 @@
 # Real AudioV4 manual-sequence retirement
 
-The shared serial capability merged in #757 at `58849bc7`. This next change
+The shared serial capability merged in #757 at `58849bc7`. PR #758 merged
+this retirement as `19cb7650` at 13:15 UTC on September 13, 2026. The change
 uses it in the Real AudioV4 carrier and removes the manually copied 31-slot
 field sequence. It adds no new tag-specific generator or interpreter.
 
@@ -53,8 +54,24 @@ change, not compatibility with an entire new release.
 
 ## Acceptance and retirement accounting
 
-Before landing, require the complete paired 4,238-file census and final hosted
-checks. The paired runner reuses `conformance.py` scoring, authenticates both
+The complete paired 4,238-file census and all five final hosted checks are
+accepted. At final head `4bcda9d9`, canonical Python passes 757 tests with zero
+failures/skips in 643.545 seconds; nextest passes 5,761 tests with 59 intentional
+skips; full Cargo test/doc and explicit native replay pass.
+
+The full pair uses 518,919 native tags and takes 273.168 seconds. Correct rows
+rise 468,086 -> 468,087, VALUE differences fall 421 -> 420, and MISSING 12,240 /
+RENAME 22 / EXTRA 1,560 are unchanged. Only Real.ra Copyright changes; all
+4,237 other files are unchanged. Input hashes are stable and no parse/crash
+failure occurs.
+
+One pre-existing zero-byte FujiFilmISPro.jpg produces native exit 1 and a parsed
+`File is empty` diagnostic. That row remains in the denominator. Both OxiDex
+builds exit 0 with identical meaningful output. The supervisor returns 1 for
+this recorded diagnostic; independent review accepts it separately from new
+failures. All 25,428 raw stdout/stderr files are preserved.
+
+The paired runner reuses `conformance.py` scoring, authenticates both
 binary/build manifests and unchanged scoring/oracle helpers, probes DOCX oracle
 capability, and preserves file hashes, raw outputs, exits and per-file results.
 It caps concurrency at two and persists progress; interrupted or vacuous runs
@@ -62,8 +79,8 @@ cannot be reported as a pass. Record any pre-existing diagnostic exits apart
 from new failures. Exact per-file changes, rather than equal totals alone,
 determine acceptance.
 
-After acceptance and squash merge, count one manual serial reader and its
-31-slot sequence as retired. This is not 31 newly emitted tags: hidden fields
+After acceptance and squash merge, **one manual serial reader and its
+31-slot sequence are retired**. This is not 31 newly emitted tags: hidden fields
 still advance the cursor, and visible output is separately measured. The
 remaining Canon child processor and four parent omissions are separate work.
 

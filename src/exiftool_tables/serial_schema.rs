@@ -62,9 +62,63 @@ pub enum SerialCount {
         serial_index: usize,
         add: usize,
         divisor: usize,
+        /// Literal `+ T` evaluated after native Perl's integer division.
+        /// This is distinct from `add`, which is inside the numerator.
+        trailing_add: usize,
     },
     /// Explicit per-field bare `Format => 'string'`: consume `$size - $pos`.
     RemainingBytes,
+}
+
+/// How an absent `$self` member participates in a compiled serial condition.
+///
+/// `ProcessSerialData` evaluates Conditions through Perl, where an undefined
+/// scalar used by a string regex/equality operation behaves as `""`. This is
+/// deliberately a per-condition contract: it must not manufacture a defined
+/// `MemberValue` for `defined`, numeric, or later unrelated conditions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SerialMissingMember {
+    SharedDefault,
+    EmptyStringForStringOps,
+}
+
+/// A serial Condition plus the source-derived missing-member policy its native
+/// string operators need. The `Cond` grammar and its normal evaluation remain
+/// shared; this wrapper prevents ProcessSerialData's Perl coercion from
+/// changing IFD and binary-table semantics.
+#[derive(Clone, Copy, Debug)]
+pub struct SerialCondition {
+    pub cond: Cond,
+    pub missing_member: SerialMissingMember,
+}
+
+impl SerialCondition {
+    #[must_use]
+    pub const fn needs_value_context(self) -> bool {
+        self.cond.needs_value_context()
+    }
+
+    #[must_use]
+    pub fn eval(self, ctx: &mut super::cond::Ctx) -> bool {
+        match self.missing_member {
+            SerialMissingMember::SharedDefault => self.cond.eval(ctx),
+            SerialMissingMember::EmptyStringForStringOps => {
+                self.cond.eval_with_missing_empty_string(ctx)
+            }
+        }
+    }
+}
+
+/// Serial-only rendering operations accepted from the native processor facts.
+///
+/// `Shared` is the ordinary, typed PrintConv shared with binary/IFD tables.
+/// `DecodeBitsWords` is deliberately separate because native DecodeBits sees
+/// ProcessSerialData's space-joined multiword scalar and has no lookup hash.
+#[derive(Clone, Copy, Debug)]
+pub enum SerialPrintConv {
+    None,
+    Shared(PrintConv),
+    DecodeBitsWords { bits_per_word: u8 },
 }
 
 /// A selected serial row's resolved read operands.
@@ -80,12 +134,12 @@ pub struct SerialTag {
     pub name: &'static str,
     pub format: SerialFormat,
     /// `None` is unconditional only when `omitted.condition` is false.
-    pub condition: Option<Cond>,
+    pub condition: Option<SerialCondition>,
     pub flags: IfdFlags,
     pub raw_conv: Option<RawConvEffect>,
     pub omitted: Omitted,
     pub value_conv: Option<ExprId>,
-    pub print_conv: PrintConv,
+    pub print_conv: SerialPrintConv,
     pub groups: TagGroups,
 }
 

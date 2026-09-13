@@ -341,6 +341,20 @@ impl Cond {
     /// matters to entries that end up losing [`first_match`].
     #[must_use]
     pub fn eval(&self, ctx: &mut Ctx) -> bool {
+        self.eval_inner(ctx, false)
+    }
+
+    /// Evaluate with ProcessSerialData's narrow Perl coercion for an absent
+    /// member used by string equality or regex. This does not insert a member
+    /// into `ctx`: `defined`, numeric comparisons, and later Conditions still
+    /// observe absence. The serial schema carries this policy per source
+    /// Condition, so other readers continue to call [`Self::eval`].
+    #[must_use]
+    pub(crate) fn eval_with_missing_empty_string(&self, ctx: &mut Ctx) -> bool {
+        self.eval_inner(ctx, true)
+    }
+
+    fn eval_inner(&self, ctx: &mut Ctx, missing_empty_string: bool) -> bool {
         match self {
             Cond::Always => true,
             Cond::MemberTruthy { member, negate } => {
@@ -359,6 +373,7 @@ impl Cond {
                 let eq = match ctx.members.get(*member) {
                     Some(MemberValue::Bytes(bytes)) => bytes.as_slice() == value.as_bytes(),
                     Some(MemberValue::Str(s)) => s == value,
+                    None if missing_empty_string => value.is_empty(),
                     _ => false,
                 };
                 eq ^ negate
@@ -374,6 +389,7 @@ impl Cond {
                         regex_match_bytes(pattern, *ignore_case, bytes)
                     }
                     Some(MemberValue::Str(s)) => regex_match_str(pattern, *ignore_case, s),
+                    None if missing_empty_string => regex_match_str(pattern, *ignore_case, ""),
                     _ => false,
                 };
                 matched ^ negate
@@ -410,7 +426,8 @@ impl Cond {
             Cond::Or(left, right) => {
                 // Perl's `||`/`or`: `right` is not evaluated at all when
                 // `left` is true, not even for a `SetMember` side effect.
-                left.eval(ctx) || right.eval(ctx)
+                left.eval_inner(ctx, missing_empty_string)
+                    || right.eval_inner(ctx, missing_empty_string)
             }
             Cond::And(left, right) => {
                 // Both sides always run through `eval` when `left` is true,
@@ -418,7 +435,8 @@ impl Cond {
                 // evaluated at all when `left` is false, same as Perl skips
                 // the right operand entirely rather than evaluating it for
                 // its (unused) side effects.
-                left.eval(ctx) && right.eval(ctx)
+                left.eval_inner(ctx, missing_empty_string)
+                    && right.eval_inner(ctx, missing_empty_string)
             }
             Cond::SetMember {
                 member,
@@ -437,7 +455,7 @@ impl Cond {
                     return false;
                 }
                 match then {
-                    Some(t) => t.eval(ctx),
+                    Some(t) => t.eval_inner(ctx, missing_empty_string),
                     None => true,
                 }
             }

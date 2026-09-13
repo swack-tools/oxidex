@@ -9,6 +9,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -50,7 +51,7 @@ class SerialArtifactVerifier(unittest.TestCase):
         result = self.audit_text(self.source)
         self.assertTrue(result.ok, result.mismatches)
         self.assertEqual((result.expected_tables, result.expected_alternatives), (1, 6))
-        self.assertEqual((result.emitted_tables, result.emitted_alternatives, result.omitted_alternatives), (1, 2, 4))
+        self.assertEqual((result.emitted_tables, result.emitted_alternatives, result.omitted_alternatives), (1, 6, 0))
 
     def test_empty_artifact_cannot_choose_its_own_denominator(self):
         empty = """use super::*;
@@ -101,12 +102,39 @@ pub static OMITTED_SERIAL_NATIVE_TABLES: &[OmittedSerialNativeTable] = &[
             ("count: SerialCount::Fixed { value: 1 }", "count: SerialCount::Fixed { value: 2 }", "name/format/count"),
             ('group1: "Fixture"', 'group1: "Wrong"', "effective groups"),
             ('source_sha256: "' + "a" * 64 + '"', 'source_sha256: "' + "b" * 64 + '"', "processor source identity"),
-            ('name: Some("Signed")', 'name: Some("Wrong")', "omission name"),
+            ('name: "Signed"', 'name: "Wrong"', "name/format/count"),
         )
         for before, after, message in changes:
             with self.subTest(message=message):
                 self.assertIn(before, self.source)
                 self.assert_rejected(self.source.replace(before, after, 1), message)
+
+    @unittest.skipUnless(shutil.which("rustfmt"), "rustfmt is required for generated-artifact formatting coverage")
+    def test_rustfmt_round_trip_preserves_count_audit_and_rejects_stale_operand(self):
+        """The independent parser accepts rustfmt's separator, not a looser count grammar."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "serial_tables.rs"
+            path.write_text(self.source, encoding="utf-8")
+            subprocess.run(
+                ["rustfmt", "--edition", "2024", str(path)],
+                check=True, text=True, capture_output=True, timeout=15,
+            )
+            formatted = path.read_text(encoding="utf-8")
+            self.assertRegex(
+                formatted,
+                r"SerialCount::FloorDivPriorRaw\s*\{[\s\S]*?trailing_add:\s*0,\s*\}",
+            )
+            parsed = audit.parse_artifact(path)
+            baseline = audit.audit(self.document, parsed)
+            self.assertTrue(baseline.ok, baseline.mismatches)
+
+            changed = copy.deepcopy(self.document)
+            changed["modules"]["Fixture"]["tables"]["Serial"]["tags"]["2"]["Format"] = (
+                "int16s[int(($val{0}+31)/32)]"
+            )
+            stale = audit.audit(changed, parsed)
+            self.assertFalse(stale.ok, stale.mismatches)
+            self.assertTrue(any("differ" in problem for problem in stale.mismatches), stale.mismatches)
 
     def test_native_row_mutation_rejects_stale_artifact(self):
         changed = copy.deepcopy(self.document)
@@ -117,6 +145,32 @@ pub static OMITTED_SERIAL_NATIVE_TABLES: &[OmittedSerialNativeTable] = &[
             result = audit.audit(changed, audit.parse_artifact(path))
         self.assertFalse(result.ok)
         self.assertTrue(any("name/format/count" in problem for problem in result.mismatches), result.mismatches)
+
+    def test_condition_raw_effect_and_print_conversion_mutations_reject_stale_artifact(self):
+        changes = (
+            ("condition", "3:0", "Condition", '$self->{Model} ne "EOS"'),
+            ("raw conversion", "0", "RawConv", {"kind": "expr", "expr": "$$self{Other}=$val"}),
+            ("print conversion", "2", "PrintConv", {
+                "kind": "expr", "expr": "Image::ExifTool::DecodeBits($val, undef, 32)",
+            }),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "serial_tables.rs"
+            path.write_text(self.source, encoding="utf-8")
+            parsed = audit.parse_artifact(path)
+            for label, index, key, value in changes:
+                with self.subTest(label=label):
+                    changed = copy.deepcopy(self.document)
+                    tag = changed["modules"]["Fixture"]["tables"]["Serial"]["tags"]
+                    if ":" in index:
+                        raw_index, alternative = index.split(":", 1)
+                        tag[raw_index]["_variants"][int(alternative)][key] = value
+                    else:
+                        tag[index][key] = value
+                    result = audit.audit(changed, parsed)
+                    self.assertFalse(result.ok, result.mismatches)
+                    self.assertTrue(any("differ" in problem or "refused" in problem
+                                        for problem in result.mismatches), result.mismatches)
 
     def test_nested_module_uses_native_first_component_group_default(self):
         document = fixture_document()
@@ -155,16 +209,60 @@ pub static OMITTED_SERIAL_NATIVE_TABLES: &[OmittedSerialNativeTable] = &[
 
 @unittest.skipUnless(PINNED_DUMP, "set OXIDEX_TABLES_JSON to replay the full recorded serial population")
 class RecordedSerialArtifactVerifier(unittest.TestCase):
-    def test_fresh_emitted_artifact_matches_full_recorded_population(self):
-        document = json.loads(Path(PINNED_DUMP).read_text(encoding="utf-8"))
-        source = emitted(document)
+    def _audit_text(self, document, source):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "serial_tables.rs"
             path.write_text(source, encoding="utf-8")
-            result = audit.audit(document, audit.parse_artifact(path))
+            return audit.audit(document, audit.parse_artifact(path))
+
+    def test_fresh_emitted_artifact_matches_full_recorded_population(self):
+        document = json.loads(Path(PINNED_DUMP).read_text(encoding="utf-8"))
+        source = emitted(document)
+        result = self._audit_text(document, source)
         self.assertTrue(result.ok, result.mismatches)
         self.assertEqual((result.expected_tables, result.expected_alternatives), (8, 132))
-        self.assertEqual((result.emitted_tables, result.emitted_alternatives, result.omitted_alternatives), (8, 106, 26))
+        self.assertEqual((result.emitted_tables, result.emitted_alternatives, result.omitted_alternatives), (8, 122, 10))
+
+    def test_afinfo2_source_operand_mutations_regenerate_and_reject_stale_artifact(self):
+        """Fresh source facts adapt; the independent native audit rejects stale Rust.
+
+        Each mutation changes an actual AFInfo2 operand accepted by the
+        compiler.  The test therefore proves more than a generator literal:
+        `verify_serial_directory` reinterprets native source and catches the
+        old artifact without importing the emitter.
+        """
+        document = json.loads(Path(PINNED_DUMP).read_text(encoding="utf-8"))
+        baseline = emitted(document)
+        tag = document["modules"]["Canon"]["tables"]["AFInfo2"]["tags"]
+        mutations = (
+            ("integer enum known value", lambda tags: tags["1"].__setitem__("PrintConv", {
+                "kind": "enum", "directives": None,
+                "map": {**tag["1"]["PrintConv"]["map"], "2": "Changed mode"},
+            })),
+            ("SetMember destination", lambda tags: tags["2"].__setitem__("RawConv", {
+                "kind": "expr", "expr": "$$self{OtherCount} = $val",
+            })),
+            ("trailing count addition", lambda tags: tags["13"]["_variants"][1].__setitem__(
+                "Format", "int16s[int(($val{2}+15)/16)+2]",
+            )),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                changed = copy.deepcopy(document)
+                changed_tag = changed["modules"]["Canon"]["tables"]["AFInfo2"]["tags"]
+                mutate(changed_tag)
+                # The compiler is expected to regenerate a different, still
+                # independently auditable artifact for each supported operand.
+                fresh = emitted(changed)
+                self.assertNotEqual(fresh, baseline)
+                fresh_result = self._audit_text(changed, fresh)
+                self.assertTrue(fresh_result.ok, fresh_result.mismatches)
+                stale_result = self._audit_text(changed, baseline)
+                self.assertFalse(stale_result.ok, stale_result.mismatches)
+                self.assertTrue(
+                    any("differ" in problem for problem in stale_result.mismatches),
+                    stale_result.mismatches,
+                )
 
     def test_cli_rejects_recorded_population_forged_as_descriptor_refusals(self):
         document = json.loads(Path(PINNED_DUMP).read_text(encoding="utf-8"))

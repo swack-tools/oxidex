@@ -23,9 +23,9 @@ import serial_directory_facts as facts
 from serial_processor_grammar import SERIAL_PROCESSOR_V1_TOKENS
 
 
-DESCRIPTOR_VERSION = 1
+DESCRIPTOR_VERSION = 2
 PROCESS_SERIAL_DATA = "ProcessSerialData"
-_RUNTIME_FORMATS = frozenset({"int8u", "int16u", "int32u", "string", "undef", "binary"})
+_RUNTIME_FORMATS = frozenset({"int8u", "int16u", "int16s", "int32u", "string", "undef", "binary"})
 
 
 class SerialDirectoryRefused(ValueError):
@@ -35,9 +35,13 @@ class SerialDirectoryRefused(ValueError):
 _SCALAR_FORMAT = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _SIZED_FORMAT = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)\[(.*)\]$", re.S)
 _PRIOR_VALUE = re.compile(r"^\$val\{([0-9]+)\}$")
-_FLOOR_DIV_PRIOR = re.compile(r"^int\(\(\$val\{([0-9]+)\}\+([0-9]+)\)/([1-9][0-9]*)\)$")
+_FLOOR_DIV_PRIOR = re.compile(
+    r"^int\(\(\$val\{([0-9]+)\}\+([0-9]+)\)/([1-9][0-9]*)\)(?:\+([0-9]+))?$"
+)
 _INTEGER = re.compile(r"^(0|[1-9][0-9]*)$")
 _FQ = re.compile(r"(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*$")
+_PROVEN_UNSIGNED_COUNT_FORMATS = frozenset(("int8u", "int16u", "int32u"))
+_UNPROVED_COUNT_CONTROLLER = "serial_count_controller_unproved_unsigned"
 
 # These tokens occur in the native control path in the order in which their
 # effects matter.  The inventory is deliberately inactive, but it will not
@@ -136,6 +140,7 @@ def _raw_count_operand(text):
             "serial_index": int(match.group(1)),
             "add": int(match.group(2)),
             "divisor": int(match.group(3)),
+            "trailing_add": int(match.group(4) or 0),
         }
     raise SerialDirectoryRefused("serial Format count expression is outside the closed prior-value grammar")
 
@@ -176,29 +181,68 @@ def _condition_operand(condition):
     # Perl feeds undef to =~ as an empty scalar.  Existing Cond::MemberRegex
     # treats a missing member as false, so retain this execution requirement
     # even when the current negative EOS predicate happens to agree.
-    regex_member = bool(re.search(r"\$\$self\{[^}]+\}\s*(?:=~|!~)\s*/", condition))
+    # This policy is deliberately narrower than general Perl coercion.  The
+    # shared condition grammar can execute only its string comparisons and
+    # byte regexes with an absent member as Perl's empty scalar.  `defined`,
+    # numeric predicates, and every other operation continue to see absence.
+    string_member = bool(re.search(
+        r"(?:\$\$self\{[^}]+\}|\$self->\{[^}]+\})\s*"
+        r"(?:(?:=~|!~)\s*/|(?:eq|ne)\s*(?:['\"]))",
+        condition,
+    ))
     return {
         "kind": "shared_cond",
         "source": condition,
         "compiled": compiled,
-        "missing_member": "empty_string" if regex_member else "shared_default",
+        "missing_member": "empty_string_for_string_ops" if string_member else "shared_default",
     }
 
 
 def _conversion_operand(tag):
-    """Record conversions; this checkpoint refuses unimplemented forms visibly."""
+    """Compile only native PrintConv shapes the serial reader executes.
+
+    The descriptor retains source data, not a table identity: a plain
+    integer-keyed enum reuses the shared typed enum renderer, while the one
+    closed no-lookup DecodeBits expression becomes an explicit serial
+    multiword operation. All other conversions remain named refusals.
+    """
     raw = tag.get("PrintConv")
     if raw is None:
         return {"kind": "none"}, None
     if isinstance(raw, dict) and raw.get("kind") == "expr" and isinstance(raw.get("expr"), str):
         expression = raw["expr"]
         if expression == "Image::ExifTool::DecodeBits($val, undef, 16)":
-            return {"kind": "native_expr", "expression": expression}, "serial_decode_bits_words"
+            return {"kind": "decode_bits_words", "bits_per_word": 16}, None
         return {"kind": "native_expr", "expression": expression}, "serial_print_conv_expr"
-    # A later descriptor version may reuse codegen's typed PrintConv result.
-    # This inventory records the literal source rather than pretending a map is
-    # already executable in a serial reader.
+    if isinstance(raw, dict) and raw.get("kind") == "enum":
+        mapping = raw.get("map")
+        directives = raw.get("directives")
+        if directives is not None or not isinstance(mapping, dict):
+            return {"kind": "native_print_conv", "source": copy.deepcopy(raw)}, "serial_print_conv"
+        pairs = []
+        try:
+            for key, value in mapping.items():
+                if not isinstance(key, str) or not isinstance(value, str):
+                    raise ValueError
+                pairs.append((int(key, 0), value))
+        except ValueError:
+            return {"kind": "native_print_conv", "source": copy.deepcopy(raw)}, "serial_print_conv"
+        pairs.sort()
+        if len({key for key, _ in pairs}) != len(pairs):
+            return {"kind": "native_print_conv", "source": copy.deepcopy(raw)}, "serial_print_conv"
+        return {"kind": "shared_int_enum", "map": [[key, value] for key, value in pairs]}, None
     return {"kind": "native_print_conv", "source": copy.deepcopy(raw)}, "serial_print_conv"
+
+
+def _raw_conv_operand(tag):
+    """Compile the existing closed data-member capture and no other RawConv."""
+    raw = tag.get("RawConv")
+    if raw is None:
+        return {"kind": "none"}, None
+    member = codegen.raw_conv_effect(raw)
+    if member is not None:
+        return {"kind": "set_member", "member": member}, None
+    return {"kind": "native_raw_conv", "source": copy.deepcopy(raw)}, "serial_raw_conv"
 
 
 def _flags(tag):
@@ -246,8 +290,9 @@ def _alternative(tag, default_format):
                                     "serial_row_property")
     if refusal is not None:
         reasons.append(refusal)
-    if tag.get("RawConv") is not None:
-        reasons.append("serial_raw_conv")
+    raw_conv, raw_refusal = _raw_conv_operand(tag)
+    if raw_refusal is not None:
+        reasons.append(raw_refusal)
     if tag.get("ValueConv") is not None:
         reasons.append("serial_value_conv")
     if tag.get("SubDirectory") is not None:
@@ -257,6 +302,7 @@ def _alternative(tag, default_format):
         "format": format_operand,
         "condition": condition,
         "conversion": conversion,
+        "raw_conv": raw_conv,
         "groups": copy.deepcopy(tag.get("Groups") or {}),
         "flags": _flags(tag),
         "native": copy.deepcopy(tag),
@@ -285,6 +331,63 @@ def _entry(index, raw, default_format):
                 "native_refusal": str(error),
             })
     return {"serial_index": index, "variant": alternatives is not None, "alternatives": compiled}
+
+
+def _count_controller_index(alternative):
+    """Return the prior raw slot a supported count expression reads."""
+    if not isinstance(alternative, dict):
+        return None
+    operand = alternative.get("format")
+    count = operand.get("count") if isinstance(operand, dict) else None
+    if not isinstance(count, dict):
+        return None
+    if count.get("kind") in {"prior_raw_value", "floor_div_prior_raw_value"}:
+        index = count.get("serial_index")
+        return index if isinstance(index, int) and index >= 0 else None
+    return None
+
+
+def _proven_unsigned_count_controller(entry):
+    """Whether every possible selected controller is a one-element uint."""
+    if not isinstance(entry, dict) or entry.get("refusals"):
+        return False
+    alternatives = entry.get("alternatives")
+    if not isinstance(alternatives, list) or not alternatives:
+        return False
+    for alternative in alternatives:
+        if not isinstance(alternative, dict) or alternative.get("refusals"):
+            return False
+        operand = alternative.get("format")
+        count = operand.get("count") if isinstance(operand, dict) else None
+        if (not isinstance(operand, dict)
+                or operand.get("format") not in _PROVEN_UNSIGNED_COUNT_FORMATS
+                or count != {"kind": "fixed", "value": 1}):
+            return False
+    return True
+
+
+def _apply_count_controller_refusals(entries):
+    """Withhold dynamic counts whose source slot can be signed or non-scalar."""
+    by_index = {entry.get("serial_index"): entry for entry in entries if isinstance(entry, dict)}
+    added = Counter()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        index = entry.get("serial_index")
+        alternatives = entry.get("alternatives")
+        if not isinstance(index, int) or not isinstance(alternatives, list):
+            continue
+        for alternative in alternatives:
+            dependency = _count_controller_index(alternative)
+            if dependency is None:
+                continue
+            controller = by_index.get(dependency)
+            if dependency >= index or not _proven_unsigned_count_controller(controller):
+                reasons = alternative.get("refusals")
+                if isinstance(reasons, list) and _UNPROVED_COUNT_CONTROLLER not in reasons:
+                    reasons.append(_UNPROVED_COUNT_CONTROLLER)
+                    added[_UNPROVED_COUNT_CONTROLLER] += 1
+    return added
 
 
 def _table_meta(meta):
@@ -364,6 +467,7 @@ def compile_serial_inventory(module, table, table_data):
         entries.append(entry)
         expected_index = index + 1
 
+    blocked.update(_apply_count_controller_refusals(entries))
     if not entries:
         blocked["serial_empty_table"] += 1
     descriptor = {
@@ -573,11 +677,14 @@ def _rust_count(count):
     if kind == "prior_raw_value" and isinstance(count.get("serial_index"), int) and count["serial_index"] >= 0:
         return f"SerialCount::PriorRaw {{ serial_index: {count['serial_index']} }}"
     if kind == "floor_div_prior_raw_value":
-        required = ("serial_index", "add", "divisor")
-        if all(isinstance(count.get(name), int) for name in required) and count["serial_index"] >= 0 and count["add"] >= 0 and count["divisor"] > 0:
+        required = ("serial_index", "add", "divisor", "trailing_add")
+        if (all(isinstance(count.get(name), int) for name in required)
+                and count["serial_index"] >= 0 and count["add"] >= 0
+                and count["divisor"] > 0 and count["trailing_add"] >= 0):
             return (
                 "SerialCount::FloorDivPriorRaw { "
-                f"serial_index: {count['serial_index']}, add: {count['add']}, divisor: {count['divisor']} }}"
+                f"serial_index: {count['serial_index']}, add: {count['add']}, "
+                f"divisor: {count['divisor']}, trailing_add: {count['trailing_add']} }}"
             )
     if kind == "remaining_bytes" and set(count) == {"kind"}:
         return "SerialCount::RemainingBytes"
@@ -597,15 +704,40 @@ def _rust_groups(groups):
 
 
 def _rust_condition(condition):
+    """Render a source-derived serial condition and its narrow absent policy."""
     if not isinstance(condition, dict):
         raise SerialDirectoryRefused("serial emitted Condition fact is malformed")
     if condition.get("kind") == "always":
         return "None"
-    if condition.get("kind") == "shared_cond" and condition.get("missing_member") == "shared_default":
+    if condition.get("kind") == "shared_cond":
         compiled = condition.get("compiled")
-        if isinstance(compiled, str) and compiled:
-            return f"Some({compiled})"
+        missing = condition.get("missing_member")
+        if isinstance(compiled, str) and compiled and missing in {"shared_default", "empty_string_for_string_ops"}:
+            variant = (
+                "SerialMissingMember::SharedDefault"
+                if missing == "shared_default"
+                else "SerialMissingMember::EmptyStringForStringOps"
+            )
+            return f"Some(SerialCondition {{ cond: {compiled}, missing_member: {variant} }})"
     raise SerialDirectoryRefused("serial emitted Condition is outside the shared execution contract")
+
+
+def _rust_print_conv(conversion):
+    """Render the closed serial conversion data contract."""
+    if conversion == {"kind": "none"}:
+        return "SerialPrintConv::None"
+    if isinstance(conversion, dict) and conversion.get("kind") == "shared_int_enum":
+        pairs = conversion.get("map")
+        if (isinstance(pairs, list) and all(isinstance(pair, list) and len(pair) == 2
+                                           and isinstance(pair[0], int) and isinstance(pair[1], str)
+                                           for pair in pairs)):
+            ordered = [(pair[0], pair[1]) for pair in pairs]
+            if ordered == sorted(ordered) and len({pair[0] for pair in ordered}) == len(ordered):
+                return "SerialPrintConv::Shared(PrintConv::IntEnum(&[" + codegen._rust_pairs(ordered) + "]))"
+    if (isinstance(conversion, dict) and conversion.get("kind") == "decode_bits_words"
+            and conversion.get("bits_per_word") == 16 and set(conversion) == {"kind", "bits_per_word"}):
+        return "SerialPrintConv::DecodeBitsWords { bits_per_word: 16 }"
+    raise SerialDirectoryRefused("serial emitted PrintConv is outside the closed execution contract")
 
 
 def _alternative_emission_reasons(alternative):
@@ -620,11 +752,7 @@ def _alternative_emission_reasons(alternative):
     reasons = alternative.get("refusals")
     if not isinstance(reasons, list) or any(not isinstance(reason, str) or not reason for reason in reasons):
         return ["serial_row_shape"]
-    out = list(reasons)
-    condition = alternative.get("condition")
-    if isinstance(condition, dict) and condition.get("missing_member") == "empty_string":
-        out.append("serial_condition_missing_member")
-    return sorted(set(out))
+    return sorted(set(reasons))
 
 
 def _gate_src(reasons):
@@ -673,15 +801,21 @@ def _serial_tag_literal(alternative):
     fmt = _rust_fmt(format_operand)
     count = _rust_count(format_operand.get("count") if isinstance(format_operand, dict) else None)
     condition = _rust_condition(alternative.get("condition"))
-    conversion = alternative.get("conversion")
-    if conversion != {"kind": "none"}:
-        raise SerialDirectoryRefused("serial emitted conversion is not modeled")
+    print_conv = _rust_print_conv(alternative.get("conversion"))
+    raw_conv = alternative.get("raw_conv")
+    if raw_conv == {"kind": "none"}:
+        raw_conv_src = "None"
+    elif (isinstance(raw_conv, dict) and raw_conv.get("kind") == "set_member"
+          and isinstance(raw_conv.get("member"), str) and raw_conv["member"]):
+        raw_conv_src = f'Some(RawConvEffect::SetMember {{ member: "{codegen.rust_str(raw_conv["member"])}" }})'
+    else:
+        raise SerialDirectoryRefused("serial emitted RawConv is outside the closed execution contract")
     return (
         "SerialTag { "
         f'name: "{codegen.rust_str(alternative["name"])}", '
         f"format: SerialFormat {{ format: {fmt}, count: {count} }}, condition: {condition}, "
-        f"flags: {_rust_flags(alternative.get('flags'))}, raw_conv: None, omitted: Omitted::NONE, "
-        f"value_conv: None, print_conv: PrintConv::None, groups: {_rust_groups(alternative.get('groups'))} }}"
+        f"flags: {_rust_flags(alternative.get('flags'))}, raw_conv: {raw_conv_src}, omitted: Omitted::NONE, "
+        f"value_conv: None, print_conv: {print_conv}, groups: {_rust_groups(alternative.get('groups'))} }}"
     )
 
 

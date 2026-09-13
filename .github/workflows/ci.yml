@@ -381,9 +381,10 @@ jobs:
           set -euo pipefail
           export OXIDEX_PINNED_EXIFTOOL="$(dirname "$EXIFTOOL")"
           cargo test --all-features --test serial_directory_native \
-            real_audio_serial_tables_replay_pinned_native_callbacks \
-            -- --ignored --exact --nocapture | tee "$RUNNER_TEMP/serial-native-replay.log"
-          grep -F 'test result: ok. 1 passed; 0 failed;' "$RUNNER_TEMP/serial-native-replay.log"
+            -- --ignored --nocapture | tee "$RUNNER_TEMP/serial-native-replay.log"
+          # Require Real Audio and both Canon autofocus replays; an empty or
+          # accidentally narrowed selection must not turn this check green.
+          grep -F 'test result: ok. 3 passed; 0 failed;' "$RUNNER_TEMP/serial-native-replay.log"
       - name: Verify C header is up-to-date
         run: |
           cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
