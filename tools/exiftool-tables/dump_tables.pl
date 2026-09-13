@@ -117,6 +117,8 @@ sub validate_function_fact {
     no strict 'refs';
     my $cv = *{$name}{CODE};
     return { %fact, reason => 'code_ref_unavailable' } unless $cv;
+    my $resolved_name = code_name($cv);
+    $fact{__name} = $resolved_name if defined $resolved_name;
     my $body = deparse($cv);
     return { %fact, reason => 'deparse_unavailable' } unless defined $body;
     $fact{__deparse} = $body;
@@ -128,8 +130,8 @@ sub validate_function_fact {
     return \%fact;
 }
 
-sub collect_subdirectory_validate_functions {
-    my ($value, $facts, $seen, $lib_abs, $depth) = @_;
+sub collect_subdirectory_validate_function_names {
+    my ($value, $names, $seen, $depth) = @_;
     return if !defined $value || $depth > 24;
     my $kind = ref $value;
     return unless $kind eq 'HASH' || $kind eq 'ARRAY';
@@ -139,13 +141,13 @@ sub collect_subdirectory_validate_functions {
         my $subdir = $value->{SubDirectory};
         if (ref($subdir) eq 'HASH') {
             for my $name (fully_qualified_calls($subdir->{Validate})) {
-                $facts->{$name} //= validate_function_fact($name, $lib_abs);
+                $names->{$name} = 1;
             }
         }
-        collect_subdirectory_validate_functions($_, $facts, $seen, $lib_abs, $depth + 1)
+        collect_subdirectory_validate_function_names($_, $names, $seen, $depth + 1)
             for values %$value;
     } else {
-        collect_subdirectory_validate_functions($_, $facts, $seen, $lib_abs, $depth + 1)
+        collect_subdirectory_validate_function_names($_, $names, $seen, $depth + 1)
             for @$value;
     }
 }
@@ -319,7 +321,7 @@ sub dump_tag_entry {
 }
 
 sub dump_module {
-    my ($module, $validate_functions, $lib_abs) = @_;
+    my ($module, $validate_function_names) = @_;
     my $pkg = "Image::ExifTool::$module";
     eval "require $pkg; 1" or do {
         return { module => $module, error => "$@" };
@@ -349,8 +351,8 @@ sub dump_module {
 
         my %tags;
         for my $k (@tagkeys) {
-            collect_subdirectory_validate_functions(
-                $hash->{$k}, $validate_functions, {}, $lib_abs, 0);
+            collect_subdirectory_validate_function_names(
+                $hash->{$k}, $validate_function_names, {}, 0);
             $tags{$k} = dump_tag_entry($hash->{$k});
         }
         my %meta;
@@ -387,6 +389,8 @@ sub dump_module {
         next unless $aref && ref $aref eq 'ARRAY' && @$aref;
         next unless grep { ref $_ } @$aref;
 
+        collect_subdirectory_validate_function_names(
+            $aref, $validate_function_names, {}, 0);
         my @rows = map { dump_tag_entry($_) } @$aref;
         $arrays{$sym} = {
             full_name => "${pkg}::${sym}",
@@ -421,10 +425,11 @@ unless (@modules) {
 }
 
 my %out;
+my %subdirectory_validate_function_names;
 my %subdirectory_validate_functions;
 my ($ok, $failed) = (0, 0);
 for my $m (@modules) {
-    my $r = dump_module($m, \%subdirectory_validate_functions, $EXIFTOOL_LIB_ABS);
+    my $r = dump_module($m, \%subdirectory_validate_function_names);
     if ($r->{error}) {
         $failed++;
         warn "SKIP $m: $r->{error}";
@@ -433,6 +438,13 @@ for my $m (@modules) {
     next unless $r->{table_count} || $r->{array_count};
     $out{$m} = $r;
     $ok++;
+}
+
+# Resolve after every requested module has loaded: a table may name a helper
+# defined by a later module, and later source may replace an earlier CODE ref.
+for my $name (sort keys %subdirectory_validate_function_names) {
+    $subdirectory_validate_functions{$name} = validate_function_fact(
+        $name, $EXIFTOOL_LIB_ABS);
 }
 
 # ->utf8 makes the encoder emit UTF-8 *bytes*.  Without it JSON::PP returns a
