@@ -19,8 +19,8 @@ populations. They are implementation history, not work to restart.
 
 | Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Extend the source inventory and complete the next shared directory capability | Sony Tag202a migration/retirement merged in #746; source inventory and artifact join merged in #749/#751. Directory validation is published through `46f585d1`; canonical regeneration now passes locally with 31 declared outputs. Five child edges remain unsupported. | Classify runtime/manual rules against the recorded inventory; resolve named processor blockers, verify both carriers, then retire the duplicate readers. Details in the [scoreboard](./AUTOGENERATION-PROGRESS.md). |
-| 2 | Continue generated EXIF directory migration | IFD1 and InteropIFD landed; Claude owns ExifIFD E-2 | Preserve occurrence behavior and named-directory routing; measure each activation against its own control |
+| 1 | Extend the source inventory and complete the next shared directory capability | Sony Tag202a migration/retirement merged in #746; source inventory and artifact join merged in #749/#751. Directory validation and nine word tables merged in #753/#754; canonical regeneration and all final gates pass. One child processor and four parent rows remain unsupported. The serial native probe passes eight tests; its compiler and reader remain open. | Classify runtime/manual rules against the recorded inventory; resolve named processor blockers, verify both carriers, then retire the duplicate readers. Details in the [scoreboard](./AUTOGENERATION-PROGRESS.md). |
+| 2 | Continue generated EXIF directory migration | IFD1, InteropIFD and ExifIFD E-2 landed; Claude's handoff reserves E-3, fallback retirement, IFD0 and numeric-coercion work | Refresh Claude's ownership before taking work; preserve occurrence behavior and measure each activation against its own control |
 | 3 | Join producer and upgrade accounting | Source-to-artifact join merged; runtime and manually maintained rule classification remain open | Generated facts, manual rules, unsupported rules and actual execution remain distinct; ordinary source changes need no new tag rules |
 | 4 | Preserve Sony/Nikon producer recovery evidence | Sony plain landed; enciphered/encrypted recovery preserved and unlanded | Recovery is labeled maintenance; no numbering-only reconstruction or duplicate per-vendor interpreter is promoted as the target |
 
@@ -50,8 +50,9 @@ change; this is not Exif::Main activation.
 The earlier IFD1 prerequisite reconciliation and activation are complete
 (`759fa0e9`, `891587c5`); InteropIFD followed at `b4808958`. Canon and Fuji
 generated Main routing also landed, with their tested hand fallbacks retired
-at `e664e063`. Do not restart those preserved branches. Claude owns ExifIFD
-E-2; IFD0 and remaining directory state must retain separate acceptance.
+at `e664e063`. Do not restart those preserved branches. ExifIFD E-2 landed at
+`72eae8a5`; Claude's handoff owns the next EXIF directory work. IFD0 and remaining
+directory state must retain separate acceptance.
 Each landing still needs fresh source, binary, corpus and occurrence-aware
 evidence. Eligibility and generated declarations alone do not establish gain.
 

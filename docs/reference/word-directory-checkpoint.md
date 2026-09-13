@@ -2,7 +2,9 @@
 
 Updated September 13, 2026. Work branch:
 `codex/word-directory-verification-20260913`. Integration base: `72eae8a5`,
-which follows merged directory-validation PR #753 (`1a47cfa3`).
+which follows merged directory-validation PR #753 (`1a47cfa3`). PR #754
+squash-merged as `1138a880` on September 13 at 10:11 UTC, after all five hosted
+jobs passed on final head `443c8458`. Benchmarks were intentionally skipped.
 
 ## Goal and result so far
 
@@ -41,7 +43,7 @@ supported or generated runtime tables.
 | Rust reader and native replay | 25 keyed-reader tests pass; the explicitly selected native/Rust test passes all seven cases using generated tables | Both byte orders, invalid headers, short reads, missing model state, parent dispatch and verbose-directory callbacks are covered. |
 | Rust lint and formatting | Exact CI Clippy command and formatting check pass at `f613820d` | Hosted checks remain a separate merge condition. |
 | Official two-tier regeneration | PASS at `b9c7f206`, 196 seconds, zero declared net changes | Earlier failed attempts are preserved; the later verbose correction changes runtime and tests only. |
-| Full Python suite | Pending serial rerun | A canonical run completed 698 tests with one stale assertion and one test setup error, zero skips. Corrections are under validation. The earlier concurrent Clippy process was not proven to originate from this suite. |
+| Full Python suite | PASS: 698 tests, zero failures, zero skips, 386.649 seconds | An earlier canonical run had one stale assertion and one test setup error; both were corrected. The earlier concurrent Clippy process was not proven to originate from this suite. |
 | Runtime migration and retirement | Not complete | No production Canon route is enabled; no duplicate Canon reader is removed. |
 
 Regeneration uses isolated Perl 5.38.2, Archive::Zip 1.68 and repository-pinned
@@ -63,23 +65,23 @@ Evidence is under the task's `shared-pilot/word-directory-20260913/` directory:
 `canonical-r1/`, `canonical-r2/`, `canonical-r3/`, `canonical-r4/`,
 `rust-native-r1/`, `rust-native-r2/`,
 `definition-verification.json`,
-`definition-verification.log`, `clippy-initial.json` and publication records.
+`definition-verification.log`, `clippy-initial.json`, `full-python-r2/`,
+`merge-preflight.json`, `merge-result.json` and publication records.
 The owned checkout's local `HANDOFF.md` locates this task evidence.
 
 Published checkpoints: definitions and documentation `ff1237ea`, runtime
 validation `90034b1c`, shared-processor compatibility `88e07a47`, combined
 branch `a4dd6af1`, CI enforcement `b9c7f206`, and verbose replay
 `00db6529`. The validated combined source is `f613820d`. These are work-branch
-checkpoints, not merged runtime activation.
+checkpoints, subsequently merged through #754. Production Canon routing is
+still inactive.
 
 ## Next measurable steps
 
-1. Complete the full Python rerun and hosted PR checks, then squash-merge
-   the reviewed checkpoint on a freshly checked integration base.
-2. Keep the explicit native replay gate in CI. It now compares return values,
+1. Keep the explicit native replay gate in CI. It now compares return values,
    warnings, every handler argument and verbose directory events; it rejects
    a successful command that selects zero tests.
-3. Implement the remaining dynamic-length processor and resolve the four
+2. Implement the remaining dynamic-length processor and resolve the four
    omitted parent rows, recording each reduction in unsupported rules.
-4. Verify both real Canon carriers, enable the validated path and remove the
+3. Verify both real Canon carriers, enable the validated path and remove the
    duplicate manual readers. Only then claim runtime migration or retirement.
