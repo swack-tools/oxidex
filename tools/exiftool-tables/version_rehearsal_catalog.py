@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Capture and resolve immutable source identities for version rehearsals.
 
-The capture stage reads only GitHub's official ExifTool tag APIs.  It preserves
+The capture stage reads only GitHub's official ExifTool tag APIs. It preserves
 exact page bodies and digest records, then resolves each numeric tag through
-its ref (and annotated-tag chain when needed) to an immutable commit.  Pair
-selection uses that complete tag/commit population.  Archive bytes are fetched
-and hashed only after a plan selects releases, so pre-existing archive cache
-contents cannot bias selection.
+its ref (and annotated-tag chain when needed) to an immutable commit. Pair
+selection uses that complete tag/commit population. ``resolve-selected``
+fetches and hashes only plan-selected archives, preserving their exact bytes in
+a content-addressed cache. ``materialize-selected`` re-verifies those bytes and
+safely extracts each archive into a new commit-named source directory.
 
 Neither command changes OxiDex, its ExifTool pin, generated files, builds,
 oracles, or promotion state.  A resolved source identity is still not native
@@ -21,8 +22,10 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -34,13 +37,15 @@ from typing import Any, Callable
 import version_rehearsal as rehearsal
 
 CAPTURE_SCHEMA = 1
-RESOLUTION_SCHEMA = 1
+RESOLUTION_SCHEMA = 2
+MATERIALIZATION_SCHEMA = 1
 REPOSITORY = "exiftool/exiftool"
 REPOSITORY_ID = "132751855"
 API_ROOT = "https://api.github.com"
 TAG_PAGE_URL = f"{API_ROOT}/repos/{REPOSITORY}/tags?per_page=100&page=1"
 MAX_TAG_DEPTH = 8
 MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
+ARCHIVE_CACHE_DIRECTORY = "archives"
 LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="?next"?')
 
 
@@ -511,8 +516,76 @@ def _verify_tar_gz(body: bytes) -> None:
         raise Refused("archive bytes are not a readable tar.gz") from exc
 
 
-def resolve_selected_archives(plan: dict[str, Any], catalog: dict[str, Any], capture: dict[str, Any], get: Callable[[str], Response], max_archive_bytes: int = MAX_ARCHIVE_BYTES) -> dict[str, Any]:
-    """Fetch/hash exactly the unique releases selected by an immutable plan."""
+def _archive_cache_key(sha256: str) -> str:
+    if not isinstance(sha256, str) or rehearsal.SHA256_RE.fullmatch(sha256) is None:
+        raise Refused("archive cache key requires a SHA-256 digest")
+    return f"{ARCHIVE_CACHE_DIRECTORY}/{sha256}.tar.gz"
+
+
+def _archive_cache_path(cache_root: Path, cache_key: str) -> Path:
+    expected_prefix = f"{ARCHIVE_CACHE_DIRECTORY}/"
+    if (not isinstance(cache_key, str) or not cache_key.startswith(expected_prefix)
+            or cache_key != _archive_cache_key(cache_key.removeprefix(expected_prefix).removesuffix(".tar.gz"))):
+        raise Refused("archive cache key is malformed")
+    return cache_root / Path(*cache_key.split("/"))
+
+
+def _store_archive(cache_root: Path, body: bytes, archive: dict[str, Any]) -> str:
+    """Persist exact bytes under their digest without trusting a release name."""
+    sha256 = archive.get("sha256")
+    byte_count = archive.get("bytes")
+    if sha256_bytes(body) != sha256 or len(body) != byte_count:
+        raise Refused("archive bytes differ from their resolved identity")
+    cache_key = _archive_cache_key(sha256)
+    path = _archive_cache_path(cache_root, cache_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise Refused("archive cache entry is not a regular file")
+        cached = path.read_bytes()
+        if sha256_bytes(cached) != sha256 or len(cached) != byte_count:
+            raise Refused("archive cache entry differs from resolved identity")
+        return cache_key
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{sha256}.", suffix=".partial", dir=path.parent)
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with temporary.open("wb") as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            cached = path.read_bytes()
+            if path.is_symlink() or sha256_bytes(cached) != sha256 or len(cached) != byte_count:
+                raise Refused("archive cache entry differs from resolved identity")
+        finally:
+            temporary.unlink(missing_ok=True)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise Refused(f"cannot preserve resolved archive bytes: {exc}") from exc
+    return cache_key
+
+
+def _read_cached_archive(cache_root: Path, archive: dict[str, Any]) -> bytes:
+    sha256 = archive.get("sha256")
+    byte_count = archive.get("bytes")
+    cache_key = archive.get("cache_key")
+    if cache_key != _archive_cache_key(sha256):
+        raise Refused("resolved archive cache key differs from digest")
+    path = _archive_cache_path(cache_root, cache_key)
+    if path.is_symlink() or not path.is_file():
+        raise Refused("resolved archive cache entry is unavailable")
+    body = path.read_bytes()
+    if len(body) != byte_count or sha256_bytes(body) != sha256:
+        raise Refused("resolved archive cache bytes differ from manifest")
+    _verify_tar_gz(body)
+    return body
+
+
+def resolve_selected_archives(plan: dict[str, Any], catalog: dict[str, Any], capture: dict[str, Any], get: Callable[[str], Response], archive_cache: Path, max_archive_bytes: int = MAX_ARCHIVE_BYTES) -> dict[str, Any]:
+    """Fetch/hash and durably retain exactly the plan-selected archives."""
     verify_capture_binding(capture, catalog)
     rehearsal.verify_plan(plan, catalog)
     if not isinstance(max_archive_bytes, int) or isinstance(max_archive_bytes, bool) or max_archive_bytes < 1:
@@ -545,10 +618,9 @@ def resolve_selected_archives(plan: dict[str, Any], catalog: dict[str, Any], cap
             _verify_tar_gz(body)
         except Refused as exc:
             raise Refused(f"selected archive {release} cannot be resolved: {exc}") from exc
-        resolved.append({
-            **identity,
-            "archive": {"url": url, "sha256": sha256_bytes(body), "bytes": len(body), "format": "tar.gz"},
-        })
+        archive = {"url": url, "sha256": sha256_bytes(body), "bytes": len(body), "format": "tar.gz"}
+        archive["cache_key"] = _store_archive(archive_cache, body, archive)
+        resolved.append({**identity, "archive": archive})
     payload = {
         "schema": RESOLUTION_SCHEMA,
         "kind": "oxidex_exiftool_selected_source_resolution",
@@ -559,6 +631,162 @@ def resolve_selected_archives(plan: dict[str, Any], catalog: dict[str, Any], cap
         "execution": {"state": "source_identity_resolved_only", "native_read": "unrun", "native_write": "unrun"},
     }
     return {**payload, "resolution_sha256": sha256_json(payload)}
+
+
+def _safe_archive_members(body: bytes) -> list[tuple[tarfile.TarInfo, tuple[str, ...]]]:
+    """Validate a tarball before extracting any member into a source tree."""
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
+            with tarfile.open(fileobj=stream, mode="r:") as archive:
+                members = archive.getmembers()
+    except (OSError, tarfile.TarError, EOFError) as exc:
+        raise Refused("archive bytes are not a readable tar.gz") from exc
+    if not members:
+        raise Refused("archive has no members")
+    roots: set[str] = set()
+    result: list[tuple[tarfile.TarInfo, tuple[str, ...]]] = []
+    destinations: set[tuple[str, ...]] = set()
+    regular_paths: set[tuple[str, ...]] = set()
+    for member in members:
+        name = member.name
+        if not isinstance(name, str) or not name or "\\" in name:
+            raise Refused("archive member has an unsafe path")
+        parts = tuple(name.split("/"))
+        if any(part in {"", ".", ".."} for part in parts):
+            raise Refused("archive member has an unsafe path")
+        if name.startswith("/") or member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
+            raise Refused("archive member type is unsupported")
+        roots.add(parts[0])
+        relative = parts[1:]
+        if not relative:
+            if not member.isdir():
+                raise Refused("archive member is outside its top-level source directory")
+            continue
+        if relative in destinations:
+            raise Refused("archive has duplicate extraction destinations")
+        destinations.add(relative)
+        for parent_index in range(1, len(relative)):
+            if relative[:parent_index] in regular_paths:
+                raise Refused("archive member descends through a regular file")
+        if member.isfile():
+            if any(destination[:len(relative)] == relative for destination in destinations if destination != relative):
+                raise Refused("archive regular file conflicts with a directory")
+            regular_paths.add(relative)
+        result.append((member, relative))
+    if len(roots) != 1:
+        raise Refused("archive must have one top-level source directory")
+    if not result or not any(member.isfile() for member, _ in result):
+        raise Refused("archive source directory has no regular files")
+    return result
+
+
+def _source_directory_name(release: str, peeled_commit: str) -> str:
+    if not isinstance(release, str) or rehearsal.RELEASE_RE.fullmatch(release) is None:
+        raise Refused("source directory requires a numeric release")
+    if not isinstance(peeled_commit, str) or rehearsal.GIT_OID_RE.fullmatch(peeled_commit) is None:
+        raise Refused("source directory requires a commit object id")
+    return f"exiftool-{release}-{peeled_commit}"
+
+
+def _tree_identity(root: Path) -> dict[str, Any]:
+    files: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise Refused("materialized source contains a symbolic link")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise Refused("materialized source contains a non-regular file")
+        relative = path.relative_to(root).as_posix()
+        body = path.read_bytes()
+        files.append({"path": relative, "sha256": sha256_bytes(body), "bytes": len(body)})
+    if not files:
+        raise Refused("materialized source has no regular files")
+    payload = {"files": files}
+    return {**payload, "tree_sha256": sha256_json(payload)}
+
+
+def _extract_archive_to_new_source(body: bytes, destination: Path) -> dict[str, Any]:
+    if destination.exists() or destination.is_symlink():
+        raise Refused("materialized source directory already exists")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", suffix=".partial", dir=destination.parent))
+    try:
+        validated = _safe_archive_members(body)
+        with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
+            with tarfile.open(fileobj=stream, mode="r:") as archive:
+                for original, relative in validated:
+                    member = archive.getmember(original.name)
+                    path = temporary.joinpath(*relative)
+                    if member.isdir():
+                        path.mkdir(parents=True, exist_ok=False)
+                        os.chmod(path, member.mode & 0o777)
+                        continue
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    source = archive.extractfile(member)
+                    if source is None:
+                        raise Refused("archive regular member cannot be read")
+                    with source, path.open("xb") as target:
+                        shutil.copyfileobj(source, target)
+                    os.chmod(path, member.mode & 0o777)
+        identity = _tree_identity(temporary)
+        os.replace(temporary, destination)
+        return identity
+    except (OSError, tarfile.TarError, EOFError) as exc:
+        raise Refused(f"cannot extract selected archive safely: {exc}") from exc
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
+def materialize_selected_sources(
+    plan: dict[str, Any], catalog: dict[str, Any], capture: dict[str, Any], resolution: dict[str, Any],
+    archive_cache: Path, source_root: Path,
+) -> dict[str, Any]:
+    """Extract verified retained archives into new per-version source trees.
+
+    This stage records failures rather than converting an incomplete source
+    population into a success.  It does not build OxiDex or establish a native
+    read/write oracle result.
+    """
+    verify_source_resolution(resolution, plan, catalog, capture)
+    try:
+        source_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise Refused(f"cannot prepare source materialization root: {exc}") from exc
+    selected: list[dict[str, Any]] = []
+    for row in resolution["selected_releases"]:
+        destination_name = _source_directory_name(row["release"], row["peeled_commit"])
+        result = {
+            "release": row["release"], "tag_object": row["tag_object"], "peeled_commit": row["peeled_commit"],
+            "archive": row["archive"], "source_directory": destination_name,
+        }
+        try:
+            body = _read_cached_archive(archive_cache, row["archive"])
+            result.update({"state": "materialized", "tree": _extract_archive_to_new_source(body, source_root / destination_name)})
+        except (Refused, OSError) as exc:
+            result.update({"state": "failed", "failure": str(exc)})
+        selected.append(result)
+    complete = all(row["state"] == "materialized" for row in selected)
+    payload = {
+        "schema": MATERIALIZATION_SCHEMA,
+        "kind": "oxidex_exiftool_selected_source_materialization",
+        "plan_sha256": plan["plan_sha256"],
+        "catalog_sha256": catalog["catalog_sha256"],
+        "capture_sha256": capture["capture_sha256"],
+        "resolution_sha256": resolution["resolution_sha256"],
+        "archive_cache_layout": f"{ARCHIVE_CACHE_DIRECTORY}/<archive-sha256>.tar.gz",
+        "source_directory_naming": "exiftool-<release>-<full-peeled-commit>",
+        "complete": complete,
+        "selected_releases": selected,
+        "execution": {
+            "state": "source_materialization_only",
+            "native_read": "unrun", "native_write": "unrun",
+            "native_old_to_native_new_delta": "unrun",
+            "limit": "materialized source is not a generated build, native oracle, or conformance result",
+        },
+    }
+    return {**payload, "materialization_sha256": sha256_json(payload)}
 
 
 def verify_source_resolution(resolution: dict[str, Any], plan: dict[str, Any], catalog: dict[str, Any], capture: dict[str, Any]) -> None:
@@ -588,6 +816,63 @@ def verify_source_resolution(resolution: dict[str, Any], plan: dict[str, Any], c
                 or not isinstance(archive.get("sha256"), str) or not rehearsal.SHA256_RE.fullmatch(archive["sha256"])
                 or not isinstance(archive.get("bytes"), int) or archive["bytes"] < 1 or archive.get("format") != "tar.gz"):
             raise Refused("source resolution archive identity is malformed")
+        if archive.get("cache_key") != _archive_cache_key(archive["sha256"]):
+            raise Refused("source resolution archive cache key is malformed")
+
+
+def verify_source_materialization(
+    materialization: dict[str, Any], plan: dict[str, Any], catalog: dict[str, Any], capture: dict[str, Any],
+    resolution: dict[str, Any], archive_cache: Path, source_root: Path, *, require_complete: bool = True,
+) -> None:
+    """Verify a materialization record and, for use, its still-intact trees."""
+    verify_source_resolution(resolution, plan, catalog, capture)
+    payload = {key: value for key, value in materialization.items() if key != "materialization_sha256"}
+    if (
+        materialization.get("schema") != MATERIALIZATION_SCHEMA
+        or materialization.get("kind") != "oxidex_exiftool_selected_source_materialization"
+        or materialization.get("plan_sha256") != plan["plan_sha256"]
+        or materialization.get("catalog_sha256") != catalog["catalog_sha256"]
+        or materialization.get("capture_sha256") != capture["capture_sha256"]
+        or materialization.get("resolution_sha256") != resolution["resolution_sha256"]
+        or materialization.get("archive_cache_layout") != f"{ARCHIVE_CACHE_DIRECTORY}/<archive-sha256>.tar.gz"
+        or materialization.get("source_directory_naming") != "exiftool-<release>-<full-peeled-commit>"
+        or materialization.get("materialization_sha256") != sha256_json(payload)
+        or not isinstance(materialization.get("complete"), bool)
+        or not isinstance(materialization.get("selected_releases"), list)
+    ):
+        raise Refused("source materialization identity changed or is malformed")
+    expected = {row["release"]: row for row in resolution["selected_releases"]}
+    rows = materialization["selected_releases"]
+    if len(rows) != len(expected) or {row.get("release") for row in rows if isinstance(row, dict)} != set(expected):
+        raise Refused("source materialization has missing or extra selected releases")
+    all_materialized = True
+    for row in rows:
+        if not isinstance(row, dict) or row.get("release") not in expected:
+            raise Refused("source materialization has an invalid selected release")
+        resolved = expected[row["release"]]
+        if any(row.get(key) != resolved[key] for key in ("release", "tag_object", "peeled_commit", "archive")):
+            raise Refused("source materialization release differs from source resolution")
+        destination = _source_directory_name(row["release"], row["peeled_commit"])
+        if row.get("source_directory") != destination:
+            raise Refused("source materialization directory name differs from release identity")
+        state = row.get("state")
+        if state == "materialized":
+            if not isinstance(row.get("tree"), dict) or "failure" in row:
+                raise Refused("materialized source record is malformed")
+            _read_cached_archive(archive_cache, resolved["archive"])
+            source = source_root / destination
+            if source.is_symlink() or not source.is_dir() or _tree_identity(source) != row["tree"]:
+                raise Refused("materialized source tree differs from manifest")
+        elif state == "failed":
+            all_materialized = False
+            if not isinstance(row.get("failure"), str) or not row["failure"] or "tree" in row:
+                raise Refused("failed source materialization record is malformed")
+        else:
+            raise Refused("source materialization state is unsupported")
+    if materialization["complete"] != all_materialized:
+        raise Refused("source materialization completeness disagrees with release states")
+    if require_complete and not all_materialized:
+        raise Refused("source materialization is incomplete")
 
 
 def _cmd_capture(args: argparse.Namespace) -> int:
@@ -617,10 +902,31 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
     capture = rehearsal.read_json(Path(args.capture))
     catalog = rehearsal.normalize_catalog(rehearsal.read_json(Path(args.catalog)))
     plan = rehearsal.read_json(Path(args.plan))
-    resolution = resolve_selected_archives(plan, catalog, capture, lambda url: http_get(url, args.timeout, args.max_archive_bytes), args.max_archive_bytes)
+    resolution = resolve_selected_archives(
+        plan, catalog, capture, lambda url: http_get(url, args.timeout, args.max_archive_bytes),
+        Path(args.archive_cache), args.max_archive_bytes,
+    )
     atomic_json(output, resolution)
-    print(json.dumps({"resolution": str(output), "resolution_sha256": resolution["resolution_sha256"], "native_read": "unrun", "native_write": "unrun"}, sort_keys=True))
+    print(json.dumps({"resolution": str(output), "resolution_sha256": resolution["resolution_sha256"],
+                      "archive_cache": "preserved", "native_read": "unrun", "native_write": "unrun"}, sort_keys=True))
     return 0
+
+
+def _cmd_materialize(args: argparse.Namespace) -> int:
+    output = Path(args.output)
+    if output.exists():
+        raise Refused(f"materialization output already exists: {output}")
+    capture = rehearsal.read_json(Path(args.capture))
+    catalog = rehearsal.normalize_catalog(rehearsal.read_json(Path(args.catalog)))
+    plan = rehearsal.read_json(Path(args.plan))
+    resolution = rehearsal.read_json(Path(args.resolution))
+    materialization = materialize_selected_sources(
+        plan, catalog, capture, resolution, Path(args.archive_cache), Path(args.source_root)
+    )
+    atomic_json(output, materialization)
+    print(json.dumps({"materialization": str(output), "materialization_sha256": materialization["materialization_sha256"],
+                      "complete": materialization["complete"], "native_read": "unrun", "native_write": "unrun"}, sort_keys=True))
+    return 0 if materialization["complete"] else 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -636,9 +942,19 @@ def main(argv: list[str] | None = None) -> int:
     resolve.add_argument("--catalog", required=True, help="raw capture-derived catalog input")
     resolve.add_argument("--plan", required=True)
     resolve.add_argument("--output", required=True)
+    resolve.add_argument("--archive-cache", required=True, help="durable content-addressed archive cache root")
     resolve.add_argument("--timeout", type=float, default=30.0)
     resolve.add_argument("--max-archive-bytes", type=int, default=MAX_ARCHIVE_BYTES)
     resolve.set_defaults(func=_cmd_resolve)
+    materialize = sub.add_parser("materialize-selected", help="safely extract retained selected archives into new source directories")
+    materialize.add_argument("--capture", required=True)
+    materialize.add_argument("--catalog", required=True)
+    materialize.add_argument("--plan", required=True)
+    materialize.add_argument("--resolution", required=True)
+    materialize.add_argument("--archive-cache", required=True, help="archive cache created by resolve-selected")
+    materialize.add_argument("--source-root", required=True, help="new per-version source directories are created here")
+    materialize.add_argument("--output", required=True)
+    materialize.set_defaults(func=_cmd_materialize)
     args = parser.parse_args(argv)
     try:
         if args.timeout <= 0:
