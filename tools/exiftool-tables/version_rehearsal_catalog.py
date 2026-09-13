@@ -36,6 +36,7 @@ import version_rehearsal as rehearsal
 CAPTURE_SCHEMA = 1
 RESOLUTION_SCHEMA = 1
 REPOSITORY = "exiftool/exiftool"
+REPOSITORY_ID = "132751855"
 API_ROOT = "https://api.github.com"
 TAG_PAGE_URL = f"{API_ROOT}/repos/{REPOSITORY}/tags?per_page=100&page=1"
 MAX_TAG_DEPTH = 8
@@ -86,8 +87,10 @@ def _body_text(body: bytes) -> str:
 
 def _official_api_url(url: str) -> bool:
     parsed = urllib.parse.urlparse(url)
-    return (parsed.scheme == "https" and parsed.netloc == "api.github.com"
-            and parsed.path.startswith(f"/repos/{REPOSITORY}/"))
+    if parsed.scheme != "https" or parsed.netloc != "api.github.com":
+        return False
+    return (parsed.path.startswith(f"/repos/{REPOSITORY}/")
+            or parsed.path.startswith(f"/repositories/{REPOSITORY_ID}/tags"))
 
 
 def _next_url(headers: dict[str, str]) -> str | None:

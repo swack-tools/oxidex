@@ -30,6 +30,10 @@ SELECTOR = "python-random-mt19937-v1"
 RELEASE_RE = re.compile(r"^[0-9]+\.[0-9]+$")
 GIT_OID_RE = re.compile(r"^[0-9a-f]{40,64}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+OFFICIAL_TAG_PAGE_PREFIXES = (
+    "https://api.github.com/repos/exiftool/exiftool/tags",
+    "https://api.github.com/repositories/132751855/tags",
+)
 
 
 class Refused(ValueError):
@@ -111,7 +115,7 @@ def normalize_catalog(raw: dict[str, Any]) -> dict[str, Any]:
     if (not isinstance(source, dict) or source.get("kind") != "official_exiftool_tag_catalog"
             or not isinstance(pages, list) or not pages
             or any(not isinstance(page, dict) or not isinstance(page.get("url"), str)
-                   or not page["url"].startswith("https://api.github.com/repos/exiftool/exiftool/tags")
+                   or not page["url"].startswith(OFFICIAL_TAG_PAGE_PREFIXES)
                    or not isinstance(page.get("sha256"), str) or not SHA256_RE.fullmatch(page["sha256"])
                    for page in pages)
             or not isinstance(raw.get("captured_at"), str)):

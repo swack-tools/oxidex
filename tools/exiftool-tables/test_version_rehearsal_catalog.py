@@ -61,11 +61,11 @@ class FixtureGet:
 
 
 def complete_responses():
-    second = "https://api.github.com/repos/exiftool/exiftool/tags?per_page=100&page=2"
+    second = "https://api.github.com/repositories/132751855/tags?per_page=100&page=2"
     return {
         catalog_stage.TAG_PAGE_URL: response(
             [tag("13.59", OID_C), tag("v13.58", OID_B)],
-            {"Link": f'<{second}>; rel="next", <https://api.github.com/repos/exiftool/exiftool/tags?per_page=100&page=2>; rel="last"'},
+            {"Link": f'<{second}>; rel="next", <https://api.github.com/repositories/132751855/tags?per_page=100&page=2>; rel="last"'},
         ),
         second: response([tag("13.58", OID_B), tag("13.57", OID_A)]),
         catalog_stage._ref_url("13.59"): response({"object": {"type": "tag", "sha": OID_D}}),
@@ -96,7 +96,7 @@ class CatalogCaptureTests(unittest.TestCase):
 
     def test_incomplete_pagination_is_preserved_but_cannot_define_selection_population(self):
         responses = complete_responses()
-        second = "https://api.github.com/repos/exiftool/exiftool/tags?per_page=100&page=2"
+        second = "https://api.github.com/repositories/132751855/tags?per_page=100&page=2"
         responses[second] = catalog_stage.Refused("bounded timeout")
         capture = catalog_stage.capture_tag_catalog(FixtureGet(responses), "2026-09-13T12:00:00Z")
         catalog_stage.verify_capture(capture)
@@ -116,7 +116,7 @@ class CatalogCaptureTests(unittest.TestCase):
 
     def test_duplicate_numeric_tags_survive_capture_and_are_not_silently_selected(self):
         responses = complete_responses()
-        second = "https://api.github.com/repos/exiftool/exiftool/tags?per_page=100&page=2"
+        second = "https://api.github.com/repositories/132751855/tags?per_page=100&page=2"
         responses[second] = response([tag("13.58", OID_B), tag("13.58", OID_B), tag("13.57", OID_A)])
         capture = catalog_stage.capture_tag_catalog(FixtureGet(responses), "2026-09-13T12:00:00Z")
         catalog = rehearsal.normalize_catalog(catalog_stage.raw_catalog_from_capture(capture))
