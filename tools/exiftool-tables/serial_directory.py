@@ -19,6 +19,7 @@ import re
 
 import conds
 import serial_directory_facts as facts
+from serial_processor_grammar import SERIAL_PROCESSOR_V1_TOKENS
 
 
 DESCRIPTOR_VERSION = 1
@@ -69,17 +70,6 @@ _REQUIRED_PROCESSOR_STEPS = (
     ("unknown option restore", ("$et", "->", "Options", "(", "'Unknown'", ",", "$unknown", ")")),
     ("unknown generation cleanup", ("delete", "$et", "->", "{", "'NO_UNKNOWN'", "}")),
 )
-_EXPECTED_METHODS = Counter({"Options": 3, "VerboseDir": 1, "GetTagInfo": 1,
-                             "VerboseInfo": 1, "ProcessDirectory": 1, "FoundTag": 1})
-_EXPECTED_CONTROL_COUNTS = Counter({";": 42, "my": 19, "if": 5, "elsif": 2,
-                                    "else": 1, "for": 1, "return": 1, "last": 4,
-                                    "ReadValue": 1, "GetTagTable": 1, "eval": 1,
-                                    "Image::ExifTool::FormatSize": 1, "defined": 1, "length": 1,
-                                    "substr": 1, "warn": 1})
-_EXPECTED_LOCALS = frozenset({"$et", "$dirInfo", "$tagTablePtr", "@_", "$dataPt",
-    "$offset", "$size", "$base", "$verbose", "$dataPos", "$unknown", "$defaultFormat",
-    "$index", "%val", "$pos", "$tagInfo", "$format", "$count", "$@", "$1", "$2",
-    "$len", "$val", "$subTablePtr", "%dirInfo", "$key", "$$dataPt"})
 _TABLE_MODELED_PROPERTIES = frozenset({"PROCESS_PROC", "FORMAT", "GROUPS", "VARS"})
 _TABLE_DOCUMENTARY_PROPERTIES = frozenset({"NOTES"})
 _ROW_MODELED_PROPERTIES = frozenset({"Name", "Format", "Condition", "PrintConv", "RawConv",
@@ -101,13 +91,6 @@ def _processor_tokens(source):
     return tokens
 
 
-def _contains(tokens, wanted, start=0):
-    for at in range(start, len(tokens) - len(wanted) + 1):
-        if tuple(tokens[at:at + len(wanted)]) == wanted:
-            return at
-    return -1
-
-
 def _processor_contract(processor):
     """Capture ordered native effects without treating this as a runtime parser."""
     try:
@@ -119,31 +102,15 @@ def _processor_contract(processor):
     if not identity["name"].endswith(f"::{PROCESS_SERIAL_DATA}") or _FQ.fullmatch(identity["name"]) is None:
         raise SerialDirectoryRefused("processor identity is not a serial-data processor")
     tokens = _processor_tokens(body)
-    last = -1
-    steps = []
-    for effect, tokens_required in _REQUIRED_PROCESSOR_STEPS:
-        position = _contains(tokens, tokens_required, last + 1)
-        if position < 0:
-            raise SerialDirectoryRefused(f"serial processor lacks ordered {effect}")
-        last = position
-        steps.append(effect)
-    methods = Counter(tokens[i + 1] for i, token in enumerate(tokens[:-1])
-                      if token == "->" and re.fullmatch(r"[A-Za-z_]\w*", tokens[i + 1]))
-    controls = Counter(tokens)
-    locals_seen = {token for token in tokens if token != "$" and token.startswith(("$", "%", "@"))}
-    # Every executable statement is accounted for by a required token sequence,
-    # exact callback/control counts and a closed binder set.  This rejects a
-    # string which merely mentions `Options`, a missing callback, and appended
-    # otherwise-unmodeled Perl statements; it is intentionally not a hash of a
-    # known body, so its accepted semantics are visible below.
-    if methods != _EXPECTED_METHODS or any(controls[name] != count for name, count in _EXPECTED_CONTROL_COUNTS.items()):
-        raise SerialDirectoryRefused("serial processor has an unsupported callback or statement shape")
-    if locals_seen != _EXPECTED_LOCALS:
-        raise SerialDirectoryRefused("serial processor has an unsupported local binding or statement")
-    # The native value is saved before the report/subdirectory branch.  This is
-    # specifically what lets later Format count expressions consume raw values.
-    if _contains(tokens, ("$val", "{", "$index", "}", "=", "$val")) > _contains(tokens, ("$et", "->", "FoundTag", "(")):
-        raise SerialDirectoryRefused("serial processor stores converted/reporting value before raw state")
+    # Require every executable token and its position.  Unlike a source hash,
+    # this grammar deliberately ignores formatting while making the accepted
+    # algorithm reviewable: addresses, read bounds, boolean operators, raw
+    # state assignment and reporting branches are all operands in this stream.
+    # A table may add rows freely; a changed shared processor needs a new
+    # grammar version and native proof before it becomes a supported input.
+    if tuple(tokens) != SERIAL_PROCESSOR_V1_TOKENS:
+        raise SerialDirectoryRefused("serial processor is outside the complete executable grammar")
+    steps = [effect for effect, _ in _REQUIRED_PROCESSOR_STEPS]
     return {
         **identity,
         "source_body_sha256": body_sha,

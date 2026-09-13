@@ -42,7 +42,12 @@ output rendering.
 A descriptor is stale when either the raw table facts or the complete captured
 processor deparse changes. `serial_directory_facts.py` contains only canonical
 fact hashing, so an independent verifier can recompute those identities without
-importing the recognizer.
+importing the recognizer. Acceptance also requires
+`serial_processor_grammar.py`'s complete token grammar for the shared
+`ProcessSerialData` algorithm. It binds every executable operand and operator
+while ignoring only formatting; a processor algorithm change is refused until a
+new grammar version and native proof are added. Table rows are not part of this
+grammar and continue to flow from the captured source facts.
 
 The committed 13.59 recorded-input report
 `serial-layout-inventory-processserialdata.json` contains eight selected tables:

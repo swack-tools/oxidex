@@ -112,7 +112,7 @@ class SerialDescriptorTests(unittest.TestCase):
 
     def test_source_order_and_identity_refuse_malformed_processor(self):
         bad_order = PROCESSOR_BODY.replace("($val{$index} = $val);", "($et->FoundTag($tagInfo, $val));\n    ($val{$index} = $val);")
-        with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "stores|callback or statement"):
+        with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "complete executable grammar"):
             self.compile(table(bad_order))
         unresolved = table()
         unresolved["meta"]["PROCESS_PROC"]["resolved"] = False
@@ -123,13 +123,13 @@ class SerialDescriptorTests(unittest.TestCase):
         with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "library-relative"):
             self.compile(escaped)
         extra_effect = table(PROCESSOR_BODY.replace("($pos += $len);", "$et->Warn('side effect');\n    ($pos += $len);"))
-        with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "callback or statement"):
+        with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "complete executable grammar"):
             self.compile(extra_effect)
         quoted_fake = table(PROCESSOR_BODY.replace(
             "(my($unknown) = $et->Options('Unknown', 1));",
             "(my($unknown) = 1); my($note) = \"Options('Unknown',1)\";",
         ))
-        with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "lacks ordered|callback or statement|local binding"):
+        with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "complete executable grammar"):
             self.compile(quoted_fake)
 
     def test_unmodeled_table_and_row_properties_are_preserved_and_gate_refused(self):
@@ -324,8 +324,26 @@ class CopiedNativeSerialSource(unittest.TestCase):
             "my $unknown = $et->Options(Unknown => 1);",
             "my $unknown = 1; my $note = \"Options('Unknown',1)\";",
         ))
-        with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "lacks ordered|callback or statement|local binding"):
+        with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "complete executable grammar"):
             serial_directory.compile_serial_inventory("Canon", "AFInfo", changed_source)
+
+    def test_source_boundary_and_reporting_operator_mutations_refuse_fresh_generation(self):
+        mutations = (
+            ("for ($index=0; $$tagTablePtr{$index} and $pos <= $size; ++$index) {",
+             "for ($index=0; $$tagTablePtr{$index} and $pos < $size; ++$index) {"),
+            ("my $size = $$dirInfo{DirLen};", "my $size = $$dirInfo{DirStart};"),
+            ("ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);",
+             "ReadValue($dataPt, $pos+$offset, $format, $count, $size+$pos);"),
+            ("$verbose and $et->VerboseDir('SerialData', undef, $size);",
+             "$verbose or $et->VerboseDir('SerialData', undef, $size);"),
+            ("} elsif (not $$tagInfo{Unknown} or $unknown) {",
+             "} elsif (not $$tagInfo{Unknown} and $unknown) {"),
+        )
+        for before, after in mutations:
+            with self.subTest(before=before):
+                changed_source = self.dump(self.copied(before, after))
+                with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "complete executable grammar"):
+                    serial_directory.compile_serial_inventory("Canon", "AFInfo", changed_source)
 
 
 if __name__ == "__main__":
