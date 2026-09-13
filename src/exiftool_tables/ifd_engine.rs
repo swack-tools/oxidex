@@ -128,9 +128,9 @@ use super::cond::{self, MemberValue};
 use super::engine::{self, Dir, Emitted, Guard};
 use super::exprs;
 use super::ifd_schema::{IfdByteOrder, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, RawConvEffect};
-use super::runtime::{self, decode_value_of, DecodedValue};
+use super::runtime::{self, DecodedValue, decode_value_of};
 use super::subdir::BaseExpr;
-use super::{find_ifd_table, find_table, Fmt};
+use super::{Fmt, find_ifd_table, find_table};
 
 #[path = "subdirectory_adapter.rs"]
 pub mod subdirectory_adapter;
@@ -352,11 +352,7 @@ fn accepted_type(code: u16, in_maker_notes: bool, ctx: &cond::Ctx) -> Option<Ent
         || (code == 16
             && in_maker_notes
             && member_bytes(ctx, "Make").is_some_and(|make| make == b"Apple"));
-    if accepted {
-        entry_type(code)
-    } else {
-        None
-    }
+    if accepted { entry_type(code) } else { None }
 }
 
 /// A member's original byte representation where one exists.
