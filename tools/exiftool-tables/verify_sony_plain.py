@@ -2,10 +2,10 @@
 """Independently verify the complete Sony plain Rust declaration projection.
 
 Fresh native Perl hashes are the oracle; no generator or dump is imported.
-PASS covers this finite DSL and its ordered declarations, not the interpreter
-or container walk. The existing CameraSettings3 276/276.1 identity collapse is
-reported explicitly. PrintInt is documentation metadata, checked natively even
-though the general dump does not retain its value.
+PASS covers this finite DSL, its ordered declarations and exact RAW_TAG_IDS
+sidecar, not the interpreter or container walk. Distinct native raw keys remain
+distinct even at equal byte indices. PrintInt is documentation metadata, checked
+natively even though the general dump does not retain its value.
 """
 from __future__ import annotations
 
@@ -26,8 +26,9 @@ sys.path.insert(0, str(ROOT / 'tools'))
 from rust_source import lexical_source  # noqa: E402
 
 NAMES = ('CameraSettings', 'CameraSettings2', 'CameraSettings3', 'FaceInfo1', 'FaceInfo2', 'ShotInfo')
+RAW_KEY = re.compile(r'(0|[1-9][0-9]*)(?:\.([0-9]*[1-9]))?')
 PERL_FACTS = r'''
-use strict; use warnings; use B (); use B::Deparse (); use Cwd qw(abs_path); use JSON::PP;
+use strict; use warnings; use B (); use B::Deparse (); use Cwd qw(abs_path); use JSON::PP; use Config ();
 use Image::ExifTool; use Image::ExifTool::Sony;
 sub copy_fact {
     my ($v)=@_;
@@ -52,7 +53,8 @@ my %tables;
 my %loaded = map {$_=>abs_path($INC{$_})}
     grep {$_ eq 'Image/ExifTool.pm' or m{^Image/ExifTool/}} keys %INC;
 print JSON::PP->new->canonical->utf8->encode({version=>$Image::ExifTool::VERSION,
-    tables=>\%tables, loaded=>\%loaded});
+    tables=>\%tables, loaded=>\%loaded,
+    numeric=>{nvtype=>$Config::Config{nvtype}, nvsize=>0+$Config::Config{nvsize}}});
 '''
 
 
@@ -85,6 +87,8 @@ def native_facts(source, perl):
     doc = json.loads(p.stdout)
     if not isinstance(doc, dict) or doc.get('version') != (ROOT / '.exiftool-version').read_text().strip():
         raise VerificationError('native version does not match repository pin')
+    if doc.get('numeric') != {'nvtype': 'double', 'nvsize': 8}:
+        raise VerificationError('native numeric configuration is not the reviewed binary64 model')
     loaded = doc.get('loaded')
     if not isinstance(loaded, dict) or any(name not in loaded for name in required):
         raise VerificationError('missing loaded-module identities')
@@ -96,7 +100,8 @@ def native_facts(source, perl):
         selected[path] = before[path]
     if any(digest(path) != sha for path, sha in selected.items()):
         raise VerificationError('native source or interpreter changed during probe')
-    doc['identity'] = {'source': str(source), 'perl': str(executable), 'sha256': selected}
+    doc['identity'] = {'source': str(source), 'perl': str(executable), 'sha256': selected,
+                       'numeric': doc['numeric']}
     return doc
 
 
@@ -257,17 +262,23 @@ def rust_facts(text):
             continue
         r.expect('static'); name = r.take(); r.expect(':', '&', '[')
         typ = []
-        while not r.peek(']'):
-            typ.append(r.take())
+        depth = 0
+        while not (r.peek(']') and depth == 0):
+            token = r.take()
+            if token == '[':
+                depth += 1
+            elif token == ']':
+                depth -= 1
+            typ.append(token)
         r.expect(']', '=')
         if name in declarations:
             raise VerificationError('duplicate Rust declaration')
         expected_type = {'M': ['(', '&', 'str', ',', '&', 'str', ')'],
                          'B': ['(', 'u32', ',', '&', 'str', ')'], 'T': ['BinTag']}
-        if name == 'TABLES':
-            wanted = ['BinTable']
+        if name in ('TABLES', 'RAW_TAG_IDS'):
+            wanted = ['BinTable'] if name == 'TABLES' else ['&', '[', '&', 'str', ']']
             if not public:
-                raise VerificationError('TABLES must remain public')
+                raise VerificationError(name + ' must remain public')
         elif isinstance(name, str) and re.fullmatch(r'[MBT][0-9]+', name) and not public:
             wanted = expected_type[name[0]]
         else:
@@ -280,7 +291,10 @@ def rust_facts(text):
     tables = declarations.get('TABLES')
     if not isinstance(tables, list) or len(tables) != len(NAMES):
         raise VerificationError('missing or extra Rust tables')
-    used = {'TABLES'}
+    raw_ids = declarations.get('RAW_TAG_IDS')
+    if not isinstance(raw_ids, list) or len(raw_ids) != len(NAMES):
+        raise VerificationError('missing or extra RAW_TAG_IDS tables')
+    used = {'TABLES', 'RAW_TAG_IDS'}
 
     def resolve(value):
         if isinstance(value, Node):
@@ -295,7 +309,7 @@ def rust_facts(text):
         return value
 
     output = []
-    for expected_name, table in zip(NAMES, tables):
+    for expected_name, table, ids in zip(NAMES, tables, raw_ids):
         if not isinstance(table, tuple) or table[0] != 'BinTable' or set(table[1]) != {'name', 'fmt', 'tags'}:
             raise VerificationError('unreadable BinTable')
         fields = table[1]
@@ -306,13 +320,17 @@ def rust_facts(text):
         rows = resolve(fields['tags'])
         if not isinstance(rows, list) or not rows:
             raise VerificationError('empty Rust tag table')
+        if not isinstance(ids, list) or len(ids) != len(rows):
+            raise VerificationError('RAW_TAG_IDS row alignment differs')
+        for key in ids:
+            raw_key(key)
         checked = []
         row_fields = {'index', 'name', 'cond', 'fmt', 'count', 'mask', 'raw', 'vc', 'pc', 'hook', 'print_hex', 'low_priority', 'subdir'}
         for row in rows:
             if not isinstance(row, tuple) or row[0] != 'BinTag' or set(row[1]) != row_fields:
                 raise VerificationError('unreadable BinTag')
             checked.append({k: resolve(v) for k, v in row[1].items()})
-        output.append({'name': expected_name, 'fmt': fields['fmt'], 'rows': checked})
+        output.append({'name': expected_name, 'fmt': fields['fmt'], 'rows': checked, 'raw_ids': ids})
     if used != set(declarations):
         raise VerificationError('unused or unresolved Rust declarations')
     for name, values in declarations.items():
@@ -352,6 +370,30 @@ def scalar(value):
         raise VerificationError('non-scalar native metadata')
     value.encode('utf-8')
     return value
+
+
+def raw_key(value):
+    if not isinstance(value, str) or not (match := RAW_KEY.fullmatch(value)):
+        raise VerificationError('noncanonical native raw key')
+    integer = uint(match[1], 32)
+    exact = Decimal(value)
+    # ProcessBinaryData uses native numeric comparison and int(index). Refuse
+    # keys for which binary64 would select a different physical integer offset.
+    if int(float(exact)) != integer:
+        raise VerificationError('raw key crosses integer boundary under binary64')
+    return exact
+
+
+def ordered_native_keys(keys):
+    by_float = {}
+    exact = {}
+    for key in keys:
+        exact[key] = raw_key(key)
+        number = float(exact[key])
+        if number in by_float and by_float[number] != key:
+            raise VerificationError('distinct raw keys collide under binary64 comparison')
+        by_float[number] = key
+    return sorted(keys, key=exact.__getitem__)
 
 
 def perl_tokens(text):
@@ -547,7 +589,7 @@ def verify_text(text, native):
     tables, maps, bitmaps = rust_facts(text)
     if not isinstance(native.get('tables'), dict) or set(native['tables']) != set(NAMES):
         raise VerificationError('native table scope differs')
-    count = 0; projections = []; documentation = []
+    count = 0; shared = []; documentation = []
     meta_fields = {'PROCESS_PROC', 'CHECK_PROC', 'WRITE_PROC', 'WRITABLE', 'FIRST_ENTRY', 'FORMAT', 'GROUPS', 'NOTES', 'PRIORITY', 'DATAMEMBER', 'IS_SUBDIR'}
     row_fields = {'Name', 'Condition', 'Format', 'Mask', 'RawConv', 'ValueConv', 'PrintConv', 'SubDirectory', 'DataMember', 'PrintHex',
                   'Notes', 'Description', 'PrintConvInv', 'ValueConvInv', 'PrintConvColumns', 'SeparateTable', 'Writable', 'Groups', 'Shift', 'PrintInt'}
@@ -572,10 +614,7 @@ def verify_text(text, native):
         if not isinstance(fmt, Node) or fmt.args or not fmt.name.startswith('Fmt::') or fmt.name[5:] not in FORMATS or meta.get('FORMAT') != FORMATS[fmt.name[5:]]:
             raise VerificationError('table FORMAT differs')
         rows = []
-        for key in sorted(set(table) - set(meta), key=lambda k: (Decimal(k), k)):
-            if '.' in key and (name, key) != ('CameraSettings3', '276.1'):
-                raise VerificationError('unmodeled fractional native identity ' + name + '/' + key)
-            uint(str(int(Decimal(key))), 32)
+        for key in ordered_native_keys(set(table) - set(meta)):
             variants = table[key] if isinstance(table[key], list) else [table[key]]
             if not variants:
                 raise VerificationError('empty native variants')
@@ -590,20 +629,19 @@ def verify_text(text, native):
                 rows.append((key, row))
         if not rows or len(rows) != len(emitted['rows']):
             raise VerificationError('row population differs ' + name)
+        if emitted['raw_ids'] != [key for key, _ in rows]:
+            raise VerificationError('exact raw key identity or variant repetition differs ' + name)
         if meta.get('DATAMEMBER', []) != sorted({key for key, row in rows if 'DataMember' in row}, key=Decimal):
             raise VerificationError('table DATAMEMBER differs from rows')
         if meta.get('IS_SUBDIR', []) != sorted({key for key, row in rows if 'SubDirectory' in row}, key=Decimal):
             raise VerificationError('table IS_SUBDIR differs from rows')
-        fractional = [key for key, _ in rows if '.' in key]
-        if fractional:
-            pair = [(key, row) for key, row in rows if key in ('276', '276.1')]
-            condition = '$$self{Model} !~ /^DSLR-(A450|A500|A550)$/'
-            if (len(pair) != 2 or [(k, r['Name'], r.get('Format'), r.get('Mask')) for k, r in pair]
-                    != [('276', 'FolderNumber', 'int32u', '16760832'), ('276.1', 'ImageNumber', 'int32u', '16383')]
-                    or any(not same_expression(r.get('Condition'), condition) for _, r in pair)):
-                raise VerificationError('known fractional projection changed')
-            projections.append({'table': name, 'raw_keys': ['276', '276.1'], 'rust_index': 276,
-                                'names': ['FolderNumber', 'ImageNumber'], 'masks': [16760832, 16383], 'condition': condition})
+        by_index = {}
+        for key, _ in rows:
+            keys = by_index.setdefault(int(Decimal(key)), [])
+            if key not in keys:
+                keys.append(key)
+        shared.extend({'table': name, 'index': index, 'raw_keys': keys}
+                      for index, keys in by_index.items() if len(keys) > 1)
         for (key, row), rust in zip(rows, emitted['rows']):
             context = name + '/' + key + '/' + row['Name']
             if uint(rust['index'], 32) != int(Decimal(key)) or rust['name'] != row['Name']:
@@ -647,7 +685,8 @@ def verify_text(text, native):
             count += 1
     return {'instrument': 'verify_sony_plain.py', 'status': 'PASS', 'scope': 'declaration projection; not runtime equivalence',
             'version': native['version'], 'tables': len(tables), 'rows': count, 'maps': maps, 'bitmaps': bitmaps,
-            'raw_key_projection': projections, 'native_documentation_facts': documentation}
+            'raw_tag_id_tables': len(tables), 'raw_tag_id_rows': count, 'shared_byte_indices': shared,
+            'native_documentation_facts': documentation}
 
 
 def main():
