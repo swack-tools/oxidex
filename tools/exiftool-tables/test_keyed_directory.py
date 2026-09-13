@@ -5,6 +5,8 @@ change emitted facts and that unavailable ProcessCanonRaw condition context is
 withheld before a future caller can accidentally invent a retry.
 """
 
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -149,6 +151,32 @@ class IndependentInventory(unittest.TestCase):
         self.assertTrue(omissions.present)
         self.assertEqual(omissions.rows[("Any", "Main", "6155")].reasons, ("condition",))
 
+    def test_rustfmt_preserves_independently_parsed_edge_and_native_facts(self):
+        if shutil.which("rustfmt") is None:
+            self.skipTest("rustfmt unavailable")
+        path = self._artifact({
+            "0x080a": {"Name": "CanonRawMakeModel", "SubDirectory": {
+                "TagTable": "Image::ExifTool::Any::MakeModel",
+            }},
+            "0x1005": {"Name": "Sized", "Format": "int16u[3]"},
+        })
+        before = verify.parse_keyed_rust(path)
+        omissions_before = verify.parse_omitted_keyed_native_rows(path)
+        formatted = path.with_name("keyed_tables_rustfmt.rs")
+        formatted.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        subprocess.run(["rustfmt", "--edition", "2024", str(formatted)], check=True)
+        self.assertEqual(verify.parse_keyed_rust(formatted), before)
+        self.assertEqual(verify.parse_omitted_keyed_native_rows(formatted), omissions_before)
+        malformed = formatted.with_name("keyed_tables_bad_edge.rs")
+        malformed.write_text(
+            formatted.read_text(encoding="utf-8").replace(
+                "KeyedEdge::BoundedValue", "KeyedEdge::Unknown", 1,
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(SystemExit):
+            verify.parse_keyed_rust(malformed)
+
     def test_inventory_rejects_an_unauthenticated_or_stale_omission_once(self):
         path = self._artifact({"0x180b": {"Name": "Unavailable", "Condition": "$count == 6"}})
         generated = verify.parse_keyed_rust(path)
@@ -167,6 +195,29 @@ class IndependentInventory(unittest.TestCase):
         )
         self.assertEqual(bad.missing, ())
         self.assertEqual(len(bad.bad_reasons), 1)
+
+    def test_sized_format_omission_is_authenticated_by_keyed_native_format_rules(self):
+        # ProcessCanonRaw refuses the sized spelling rather than borrowing
+        # ProcessBinaryData's array-format normalization.  This is a real
+        # compiler artifact parsed by the independent verifier, not a
+        # hand-built omission record.
+        path = self._artifact({"0x1005": {"Name": "Sized", "Format": "int16u[3]"}})
+        generated = verify.parse_keyed_rust(path)
+        omissions = verify.parse_omitted_keyed_native_rows(path)
+        key = ("Any", "Main", "4101")
+        source = ({key: "Sized"}, {}, {key: "int16u[3]"}, {}, set(), set(), {},
+                  {}, {("Any", "Main"): ("MakerNotes", "", "")}, {}, {}, {})
+        fresh = verify.keyed_native_inventory(generated, omissions, *source)
+        self.assertEqual(fresh.accounted, 1)
+        self.assertEqual(fresh.bad_reasons, ())
+        # A source change that makes the format executable must not let a
+        # stale `format` sidecar hide the row.
+        changed = list(source)
+        changed[2] = {key: "int16u"}
+        stale = verify.keyed_native_inventory(generated, omissions, *changed)
+        self.assertEqual(stale.missing, ())
+        self.assertEqual(len(stale.bad_reasons), 1)
+        self.assertTrue(any("native facts" in why for _key, why in stale.keyed_fact_mismatches))
 
     def test_saved_parent_target_mutation_rejects_stale_executable_edge(self):
         # Mirrors native-keyed-fixtures/mutation-diffs/parent-target.diff:
