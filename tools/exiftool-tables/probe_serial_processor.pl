@@ -99,6 +99,61 @@ sub code_fact {
     };
 }
 
+sub op_gv_name {
+    my ($op, $processor) = @_;
+    return undef unless (eval { $op->name } // '') eq 'gv';
+    my $gv;
+    if (eval { $op->isa('B::PADOP') }) {
+        # Threaded Perl may place an imported GV in the CV pad. Resolve the
+        # PADOP through this processor's pad values; do not infer it from
+        # source text or an unrelated package symbol.
+        my $padix = eval { $op->padix };
+        return undef unless defined $padix;
+        my $padlist = eval { B::svref_2object($processor)->PADLIST };
+        my $values = eval { $padlist->ARRAYelt(1) };
+        $gv = eval { $values->ARRAYelt($padix) };
+    } else {
+        $gv = eval { $op->gv };
+    }
+    return undef unless eval { $gv->isa('B::GV') };
+    my $stash = eval { $gv->STASH->NAME } // '';
+    my $name = eval { $gv->NAME } // '';
+    return undef unless length $name;
+    return length($stash) ? "$stash\::$name" : $name;
+}
+
+sub same_op {
+    my ($left, $right) = @_;
+    return 0 unless defined($left) && defined($right);
+    return 0 unless eval { $$left } && eval { $$right };
+    return $$left == $$right;
+}
+
+sub direct_scalar_store_after {
+    my ($call, $parents, $call_at) = @_;
+    my $after_call = $call_at + 1;
+    ++$after_call while $after_call <= $#$parents
+        && (eval { $parents->[$after_call]->name } // '') eq 'null';
+    return 1 if $after_call <= $#$parents
+        && (eval { $parents->[$after_call]->name } // '') eq 'padsv_store';
+
+    # In threaded Perl, a pad-backed imported GV retains the direct entersub
+    # shape but emits a sibling lexical destination and an sassign ancestor
+    # instead of padsv_store. Require that exact binary assignment: the call
+    # must be the first child and its only sibling must be a scalar pad.
+    return 0 unless $after_call <= $#$parents
+        && (eval { $parents->[$after_call]->name } // '') eq 'sassign';
+    my $assignment = $parents->[$after_call];
+    my $first = eval { $assignment->first };
+    return 0 unless same_op($first, $call);
+    my $destination = eval { $first->sibling };
+    return 0 unless defined($destination) && eval { $$destination };
+    return 0 unless (eval { $destination->name } // '') eq 'padsv';
+    my $extra = eval { $destination->sibling };
+    return 0 if defined($extra) && eval { $$extra };
+    return 1;
+}
+
 sub has_bare_scalar_callsite {
     my ($processor, $expected) = @_;
     my $root = eval { B::svref_2object($processor)->ROOT };
@@ -107,9 +162,7 @@ sub has_bare_scalar_callsite {
     no warnings qw(redefine once);
     local *B::OP::oxidex_serial_read_value_callsite = sub {
         my ($op) = @_;
-        return unless eval { $op->name } eq 'gv';
-        my $gv = eval { $op->gv };
-        my $name = eval { $gv->STASH->NAME . '::' . $gv->NAME };
+        my $name = op_gv_name($op, $processor);
         return unless defined($name) && $name eq $expected;
         my $parents = B::parents();
         return unless ref($parents) eq 'ARRAY';
@@ -122,9 +175,7 @@ sub has_bare_scalar_callsite {
         # entersub instead of the scalar store.
         my @before_call = $call_at ? (0 .. $call_at - 1) : ();
         return if grep { $names[$_] ne 'null' && $names[$_] ne 'rv2cv' } @before_call;
-        my $after_call = $call_at + 1;
-        ++$after_call while $after_call <= $#names && $names[$after_call] eq 'null';
-        return unless $after_call <= $#names && $names[$after_call] eq 'padsv_store';
+        return unless direct_scalar_store_after($parents->[$call_at], $parents, $call_at);
         # A qualified call that resolves to this same package GV is safe and
         # remains observable through the localized binding. A different GV,
         # method call, quoted text, or an unused binding is refused.
