@@ -518,7 +518,11 @@ fn uuid_box(payload: &[u8], metadata: &mut MetadataMap) {
     let Ok(embedded) = crate::core::operations::parse_tiff_metadata(&reader) else {
         return;
     };
-    for (key, value) in embedded.iter() {
+    // Each winner with its `--no-print-conv` form (`insert_copied_occurrence`),
+    // in file order: every copy lands at EMBEDDED_TIFF_PRIORITY, so the order
+    // is what decides which of two same-named copies (`ExifIFD:FNumber`,
+    // `Canon:FNumber`) a Composite reads (`winners_in_file_order`).
+    for (key, occurrence) in embedded.winners_in_file_order() {
         let bare = key.rsplit(':').next().unwrap_or(key);
         // See the module header's omission #1: without the box's `Base` these
         // would be file offsets short by exactly that base.
@@ -542,9 +546,9 @@ fn uuid_box(payload: &[u8], metadata: &mut MetadataMap) {
         } else {
             EMBEDDED_TIFF_PRIORITY
         };
-        metadata.insert_occurrence(
+        metadata.insert_copied_occurrence(
             key.clone(),
-            value.clone(),
+            occurrence,
             priority,
             &group1,
             Instance::default(),

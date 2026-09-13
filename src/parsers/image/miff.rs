@@ -239,10 +239,13 @@ pub fn parse_miff_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
             {
                 let mut embedded = MetadataMap::new();
                 if parse_embedded_exif_at(tiff_data, 0, &mut embedded) {
-                    for (key, value) in embedded {
+                    // Each winner with its `--no-print-conv` form (an engine
+                    // row stores the printed label as its value), in file
+                    // order (`winners_in_file_order`).
+                    for (key, occurrence) in embedded.winners_in_file_order() {
                         let base_name = key.split_once(':').map_or(key.as_str(), |(_, name)| name);
                         if MIFF_EXIF_TAGS.contains(&base_name) {
-                            metadata.insert(key, value);
+                            metadata.insert_carrying_forms(key.clone(), occurrence);
                         }
                     }
                 }

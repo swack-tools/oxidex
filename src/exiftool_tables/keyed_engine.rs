@@ -470,6 +470,9 @@ fn process_entry<'a>(
         // the tag flags. Only ExifTool's final Avoid default remains here.
         low_priority: effective_priority(tag.flags) == Some(0),
         avoid: tag.flags.avoid,
+        // `Emitted::rational` is for IFD tables only (the binary walk sets
+        // `None` too); a keyed directory never keeps the raw fraction.
+        rational: None,
     });
     result.emitted += 1;
     KeyedEntryAction::Continue

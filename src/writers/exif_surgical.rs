@@ -70,6 +70,62 @@ fn carried_class_reader_keys(entry: &RawEntry) -> Vec<String> {
     keys
 }
 
+/// The key the reader surfaced a surfaced-class entry (IFD0, ExifIFD, GPS)
+/// under, and whether that key is the entry's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReaderKey {
+    /// The entry's own key: diffed, and the entry rewritten when it changes.
+    Owned(String),
+    /// A name the generated `Exif::Main` gives an ExifIFD entry `tag_db` has
+    /// no name for, which `tag_db` gives a DIFFERENT id (or none): the TIFF/EP
+    /// FocalPlaneXResolution 0x920e of a Leica M8/M9 is surfaced as
+    /// `ExifIFD:FocalPlaneXResolution`, the EXIF 2.x 0xa20e's name. The
+    /// entry is not the tag that name writes -- ExifTool writes 0xa20e and
+    /// leaves 0x920e alone -- so it is carried raw; the key, unchanged, is
+    /// not a tag to add, and changed, it is added under its own id.
+    Borrowed(String),
+}
+
+/// The key `original_map` holds for an ExifIFD entry `tag_id` that
+/// `tag_db` has no name for, when the reader surfaced it under the name the
+/// generated `Exif::Main` reports it by (slice E-2: 178 reported ids have no
+/// `tag_db` name; `lookup_tag_name` gives `ExifIFD:0x9210`, the engine row
+/// is `ExifIFD:FocalPlaneResolutionUnit`).
+pub(crate) fn engine_reader_key(tag_id: u16, original_map: &MetadataMap) -> Option<String> {
+    let name = crate::core::exif_dir_engine::exif_main_reported_name(tag_id)?;
+    let key = format!("ExifIFD:{name}");
+    original_map.contains_key(&key).then_some(key)
+}
+
+/// Whether writing `key` writes the tag `tag_id` (`tag_db`'s id for the
+/// name, the one the add path would plant).
+pub(crate) fn key_writes_tag_id(key: &str, tag_id: u16) -> bool {
+    get_tag_descriptor(key).and_then(descriptor_tag_id) == Some(tag_id)
+}
+
+/// The metadata-map key the reader surfaces a surfaced-class entry under:
+/// `lookup_tag_name`'s spelling, except for an ExifIFD entry the reader
+/// surfaced by its engine name ([`engine_reader_key`]), which is the
+/// entry's own only when `tag_db` writes that name to this very id
+/// ([`ReaderKey`]). Without the engine name, an unchanged engine-named row
+/// was taken for a new tag to add, and its printed value failed the add
+/// path's validation; taken as the entry's own, an edit rewrote the
+/// non-writable legacy entry instead of adding the EXIF 2.x tag.
+fn surfaced_reader_key(entry: &RawEntry, original_map: &MetadataMap) -> ReaderKey {
+    let key = lookup_tag_name(entry.tag_id, entry.ifd.prefix());
+    if entry.ifd == IfdKind::ExifIfd
+        && !original_map.contains_key(&key)
+        && let Some(engine_key) = engine_reader_key(entry.tag_id, original_map)
+    {
+        return if key_writes_tag_id(&engine_key, entry.tag_id) {
+            ReaderKey::Owned(engine_key)
+        } else {
+            ReaderKey::Borrowed(engine_key)
+        };
+    }
+    ReaderKey::Owned(key)
+}
+
 /// Which physical IFD an entry belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IfdKind {
@@ -155,14 +211,52 @@ pub struct OutEntry {
 ///
 /// `value` is the effective desired value for the placed entry, or `None` when
 /// the entry is raw-carried from bytes the reader never surfaced (an unsurfaced
-/// IFD class, or a tag with no reader key). `None` never compares equal, so
-/// those collisions are always refused.
+/// IFD class, or a tag with no reader key). `None` never compares equal. A
+/// collision with an unsurfaced-class entry is refused; one with a
+/// surfaced-class entry the reader gave no row (`rowless`) is the caller's
+/// edit of that very entry, which replaces it -- see the Added loop.
 #[derive(Debug, Clone)]
 struct PlacedEntry {
     ifd: IfdKind,
     tag_id: u16,
     key: Option<String>,
     value: Option<TagValue>,
+    /// For an IFD0/ExifIFD/GPS entry carried because the reader surfaced no
+    /// row for it: its slot in its IFD's plan bucket and its stored field
+    /// type, so an explicit edit of its id can replace it in place.
+    rowless: Option<(usize, u16)>,
+}
+
+/// The IFD a group-qualified write key names, for the three IFDs this
+/// writer edits. `EXIF:` names the family, not an IFD, and has none.
+fn key_ifd(key: &str) -> Option<IfdKind> {
+    if key.starts_with("IFD0:") {
+        Some(IfdKind::Ifd0)
+    } else if key.starts_with("ExifIFD:") {
+        Some(IfdKind::ExifIfd)
+    } else if key.starts_with("GPS:") {
+        Some(IfdKind::Gps)
+    } else {
+        None
+    }
+}
+
+/// Whether the caller's request to delete `key` names `entry`, an entry the
+/// reader surfaced no row for (so `key` is not in `original_map`, and its
+/// absence from `desired` alone cannot say it was removed): `key` is
+/// qualified by the entry's own IFD and writes the entry's own id.
+///
+/// Before slice E-2's decisions D-2 and D-3 the reader surfaced such entries
+/// (DJI_XT2.jpg's ExifIFD 0x02bc ApplicationNotes, SamsungGT-B2710.jpg's
+/// 0x9205 MaxApertureValue), so `-ExifIFD:ApplicationNotes=` deleted the
+/// entry, as ExifTool does; without this it would be silently carried.
+pub(crate) fn removal_names_rowless_entry(
+    key: &str,
+    ifd: IfdKind,
+    tag_id: u16,
+    original_map: &MetadataMap,
+) -> bool {
+    key_ifd(key) == Some(ifd) && !original_map.contains_key(key) && key_writes_tag_id(key, tag_id)
 }
 
 /// A fully diffed EXIF write: per-IFD entries plus preserved blobs.
@@ -538,6 +632,19 @@ pub fn plan_exif_write(
     original_map: &MetadataMap,
     desired: &MetadataMap,
 ) -> Result<WritePlan> {
+    plan_exif_write_with_removals(scan, original_map, desired, &[])
+}
+
+/// [`plan_exif_write`], plus the keys the caller asked by name to delete.
+/// A removal of a key the reader surfaced is already told by its absence
+/// from `desired`; `removed` matters only for an entry the reader surfaced
+/// no row for ([`removal_names_rowless_entry`]), which is otherwise carried.
+pub(crate) fn plan_exif_write_with_removals(
+    scan: &ExifScan,
+    original_map: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> Result<WritePlan> {
     let exif_family_keys = |m: &MetadataMap| -> Vec<String> {
         m.iter()
             .map(|(k, _)| k.clone())
@@ -688,7 +795,12 @@ pub fn plan_exif_write(
         if matches!(entry.ifd, IfdKind::Interop | IfdKind::Ifd1) || entry.tag_id == MAKERNOTE {
             continue;
         }
-        let native_key = lookup_tag_name(entry.tag_id, entry.ifd.prefix());
+        // A borrowed name folds nothing: `EXIF:<name>` is the add path's,
+        // as before the engine named the entry.
+        let native_key = match surfaced_reader_key(entry, original_map) {
+            ReaderKey::Owned(key) => key,
+            ReaderKey::Borrowed(_) => lookup_tag_name(entry.tag_id, entry.ifd.prefix()),
+        };
         let Some((_, suffix)) = native_key.split_once(':') else {
             continue;
         };
@@ -718,6 +830,8 @@ pub fn plan_exif_write(
     // Every entry placed into the plan, with the value it stands for, so the
     // Added loop can tell a redundant duplicate from a dropped edit.
     let mut placed: Vec<PlacedEntry> = Vec::new();
+    // Engine names borrowed by a carried entry (`ReaderKey::Borrowed`).
+    let mut borrowed_keys: Vec<String> = Vec::new();
 
     for entry in &scan.entries {
         let bucket = |plan: &mut WritePlan, e: OutEntry| match entry.ifd {
@@ -767,19 +881,49 @@ pub fn plan_exif_write(
                 tag_id: entry.tag_id,
                 key: None,
                 value: None,
+                rowless: None,
             });
             bucket(&mut plan, carry);
             continue;
         }
 
-        let key = lookup_tag_name(entry.tag_id, entry.ifd.prefix());
+        let key = match surfaced_reader_key(entry, original_map) {
+            ReaderKey::Owned(key) => key,
+            ReaderKey::Borrowed(key) => {
+                // Carried raw; an edit to the name goes to the add path.
+                borrowed_keys.push(key);
+                placed.push(PlacedEntry {
+                    ifd: entry.ifd,
+                    tag_id: entry.tag_id,
+                    key: None,
+                    value: None,
+                    rowless: None,
+                });
+                bucket(&mut plan, carry);
+                continue;
+            }
+        };
         let Some(original_value) = original_map.get(&key) else {
-            // Reader didn't surface this entry: never drop what it hides
+            // Reader didn't surface this entry: never drop what it hides --
+            // unless the caller named it for deletion (`removed`), which is
+            // what the key's absence from `desired` meant while it had a row.
+            if removed
+                .iter()
+                .any(|k| removal_names_rowless_entry(k, entry.ifd, entry.tag_id, original_map))
+            {
+                continue;
+            }
+            let slot = match entry.ifd {
+                IfdKind::ExifIfd => plan.exif_ifd.len(),
+                IfdKind::Gps => plan.gps.len(),
+                _ => plan.ifd0.len(),
+            };
             placed.push(PlacedEntry {
                 ifd: entry.ifd,
                 tag_id: entry.tag_id,
                 key: None,
                 value: None,
+                rowless: Some((slot, entry.field_type)),
             });
             bucket(&mut plan, carry);
             continue;
@@ -793,6 +937,7 @@ pub fn plan_exif_write(
             tag_id: entry.tag_id,
             key: Some(key.clone()),
             value: Some(desired_value.clone()),
+            rowless: None,
         });
         if desired_value == original_value {
             bucket(&mut plan, carry);
@@ -887,6 +1032,11 @@ pub fn plan_exif_write(
             )));
         }
         let value = desired.get(&key).unwrap();
+        // A borrowed engine name with its reader value is the carried entry
+        // itself, unchanged: nothing to add.
+        if borrowed_keys.iter().any(|k| *k == key) && original_map.get(&key) == Some(value) {
+            continue;
+        }
         if requires_subifd_write(&key) {
             return Err(ExifToolError::unsupported_format(format!(
                 "Cannot write tag '{}': it requires a SubIFD, which this writer does not create or edit",
@@ -903,17 +1053,6 @@ pub fn plan_exif_write(
         let tag_id = descriptor_tag_id(descriptor).ok_or_else(|| {
             ExifToolError::parse_error(format!("Tag '{}' has no numeric EXIF id", key))
         })?;
-        // A tag being created has no existing entry to take a width from, so
-        // the declared type is the only thing that can tell FLOAT from DOUBLE.
-        let (ft, count, bytes) =
-            tag_value_to_field_for_key(&key, value, declared_ieee_field_type(&key))?;
-        let out = OutEntry {
-            tag_id,
-            field_type: ft,
-            count,
-            value: bytes,
-            native_endian: true,
-        };
         // Route by prefix; "EXIF:" keys land in IFD0 (compat with the old writer).
         // Guard against duplicate tag ids: aliased keys (e.g. "IFD0:Make" and
         // "EXIF:Make") resolve to the same numeric tag id via get_tag_descriptor's
@@ -943,8 +1082,17 @@ pub fn plan_exif_write(
         } else {
             IfdKind::Ifd0
         };
+        //
+        // An entry the reader surfaced no row for (`PlacedEntry::rowless`) is
+        // not a second name: the key is the caller's edit of that very entry,
+        // which it replaces in its slot, serialized with the entry's own field
+        // type -- the changed path's bytes while the reader surfaced it. Slice
+        // E-2's D-2 and D-3 took the rows of DJI_XT2.jpg's 0x02bc
+        // ApplicationNotes and SamsungGT-B2710.jpg's 0x9205 MaxApertureValue
+        // away; refusing here turned `-ExifIFD:ApplicationNotes=abc`, which
+        // wrote as ExifTool writes, into an error.
         let family_alias = key.starts_with("EXIF:");
-        if let Some(dup) = placed.iter().find(|p| {
+        if let Some(dup) = placed.iter_mut().find(|p| {
             p.tag_id == tag_id
                 && (p.ifd == target
                     || (family_alias
@@ -953,21 +1101,62 @@ pub fn plan_exif_write(
             if dup.value.as_ref() == Some(value) {
                 continue; // same value already planned under another spelling
             }
-            return Err(ExifToolError::unsupported_format(format!(
-                "Cannot write tag '{}': it resolves to {} tag 0x{:04X}, which is \
-                 already being written as '{}'. Two names for one tag id cannot \
-                 both be stored; write the tag under a single name.",
-                key,
-                dup.ifd.prefix(),
-                tag_id,
-                dup.key.as_deref().unwrap_or("an entry already in the file"),
-            )));
+            if let Some((slot, field_type)) = dup.rowless {
+                let (ft, count, bytes) = tag_value_to_field_for_key(&key, value, Some(field_type))?;
+                let replaced = OutEntry {
+                    tag_id,
+                    field_type: ft,
+                    count,
+                    value: bytes,
+                    native_endian: true,
+                };
+                match dup.ifd {
+                    IfdKind::ExifIfd => plan.exif_ifd[slot] = replaced,
+                    IfdKind::Gps => plan.gps[slot] = replaced,
+                    _ => plan.ifd0[slot] = replaced,
+                }
+                dup.key = Some(key.clone());
+                dup.value = Some(value.clone());
+                dup.rowless = None;
+                continue;
+            }
+            return Err(ExifToolError::unsupported_format(match &dup.key {
+                Some(placed_key) => format!(
+                    "Cannot write tag '{}': it resolves to {} tag 0x{:04X}, which is \
+                     already being written as '{}'. Two names for one tag id cannot \
+                     both be stored; write the tag under a single name.",
+                    key,
+                    dup.ifd.prefix(),
+                    tag_id,
+                    placed_key,
+                ),
+                None => format!(
+                    "Cannot write tag '{}': it resolves to {} tag 0x{:04X}, an entry \
+                     of a class this writer always carries unedited (MakerNote, \
+                     InteropIFD, IFD1)",
+                    key,
+                    dup.ifd.prefix(),
+                    tag_id,
+                ),
+            }));
         }
+        // A tag being created has no existing entry to take a width from, so
+        // the declared type is the only thing that can tell FLOAT from DOUBLE.
+        let (ft, count, bytes) =
+            tag_value_to_field_for_key(&key, value, declared_ieee_field_type(&key))?;
+        let out = OutEntry {
+            tag_id,
+            field_type: ft,
+            count,
+            value: bytes,
+            native_endian: true,
+        };
         placed.push(PlacedEntry {
             ifd: target,
             tag_id,
             key: Some(key.clone()),
             value: Some(value.clone()),
+            rowless: None,
         });
         match target {
             IfdKind::ExifIfd => plan.exif_ifd.push(out),
@@ -1512,6 +1701,16 @@ impl FileReader for SliceReader<'_> {
 /// preserving everything the caller did not change. Returns an empty Vec
 /// when the EXIF segment should be dropped entirely.
 pub fn rewrite_jpeg_exif(file_bytes: &[u8], desired: &MetadataMap) -> Result<Vec<u8>> {
+    rewrite_jpeg_exif_with_removals(file_bytes, desired, &[])
+}
+
+/// [`rewrite_jpeg_exif`], plus the keys the caller asked by name to delete
+/// ([`plan_exif_write_with_removals`]).
+pub(crate) fn rewrite_jpeg_exif_with_removals(
+    file_bytes: &[u8],
+    desired: &MetadataMap,
+    removed: &[String],
+) -> Result<Vec<u8>> {
     // Locate the original EXIF TIFF slice, if any
     let tiff: Option<Vec<u8>> = {
         let reader = SliceReader(file_bytes);
@@ -1552,7 +1751,7 @@ pub fn rewrite_jpeg_exif(file_bytes: &[u8], desired: &MetadataMap) -> Result<Vec
         ),
     };
 
-    let plan = plan_exif_write(&scan, &original_map, desired)?;
+    let plan = plan_exif_write_with_removals(&scan, &original_map, desired, removed)?;
     let tiff_out = serialize_exif(&plan)?;
     if tiff_out.is_empty() {
         return Ok(Vec::new());
@@ -2337,6 +2536,178 @@ mod tests {
         let mut bad = original.clone();
         bad.insert("IFD0:NoSuchTagName", TagValue::new_string("x"));
         assert!(plan_exif_write(&scan, &original, &bad).is_err());
+    }
+
+    /// A JPEG whose ExifIFD holds the SHORT entries `entries`, its TIFF
+    /// block, and the reader's map of it.
+    fn exif_ifd_shorts_jpeg(entries: &[(u16, u16)]) -> (Vec<u8>, MetadataMap) {
+        // TIFF: IFD0 at 8 (ExifOffset -> 26), ExifIFD at 26.
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend(1u16.to_le_bytes());
+        tiff.extend([0x69, 0x87, 4, 0, 1, 0, 0, 0]);
+        tiff.extend(26u32.to_le_bytes());
+        tiff.extend(0u32.to_le_bytes());
+        tiff.extend((entries.len() as u16).to_le_bytes());
+        for (tag, value) in entries {
+            tiff.extend(tag.to_le_bytes());
+            tiff.extend(3u16.to_le_bytes());
+            tiff.extend(1u32.to_le_bytes());
+            tiff.extend(u32::from(*value).to_le_bytes());
+        }
+        tiff.extend(0u32.to_le_bytes());
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpeg.extend(((tiff.len() + 8) as u16).to_be_bytes());
+        jpeg.extend(b"Exif\0\0");
+        jpeg.extend(&tiff);
+        jpeg.extend([0xff, 0xd9]);
+        let original = crate::core::operations::parse_jpeg_metadata(
+            &SliceReader(&jpeg),
+            &crate::core::ReadOptions::default_full_listing(),
+        )
+        .unwrap();
+        (tiff, original)
+    }
+
+    /// Review finding (E-2, D-2/D-3): an ExifIFD entry the reader surfaces no
+    /// row for is still the entry an explicit edit of its name writes.
+    /// DJI_XT2.jpg's 0x02bc ApplicationNotes (row-less after D-3) and
+    /// SamsungGT-B2710.jpg's 0x9205 MaxApertureValue (withheld after D-2)
+    /// were edited by `-ExifIFD:<name>=` before the slice, as ExifTool edits
+    /// them; the duplicate-id guard took the carried entry for a second name
+    /// and refused. ExposureProgram stands in here: the edit replaces the
+    /// entry in its slot with the plan of the surfaced case, and a deletion by
+    /// name drops it as the key's absence did while it had a row.
+    #[test]
+    fn a_rowless_entry_is_replaced_by_an_edit_and_deleted_by_name() {
+        let (tiff, surfaced) = exif_ifd_shorts_jpeg(&[(0x8822, 2), (0xa001, 1)]);
+        let scan = scan_exif_entries(&tiff).unwrap();
+        assert!(surfaced.contains_key("ExifIFD:ExposureProgram"));
+        let mut rowless = surfaced.clone();
+        rowless.remove("ExifIFD:ExposureProgram");
+
+        let carried = plan_exif_write(&scan, &rowless, &rowless).unwrap();
+        assert_eq!(
+            carried,
+            plan_exif_write(&scan, &surfaced, &surfaced).unwrap()
+        );
+        let edit = |original: &MetadataMap, keys: &[(&str, i64)]| {
+            let mut desired = original.clone();
+            for (key, value) in keys {
+                desired.insert(*key, TagValue::Integer(*value));
+            }
+            plan_exif_write(&scan, original, &desired)
+        };
+        let expected = edit(&surfaced, &[("ExifIFD:ExposureProgram", 3)]).unwrap();
+        assert_eq!(
+            expected
+                .exif_ifd
+                .iter()
+                .map(|e| e.tag_id)
+                .collect::<Vec<_>>(),
+            [0x8822, 0xa001]
+        );
+        assert_eq!(expected.exif_ifd[0].value, 3u16.to_ne_bytes());
+        for keys in [
+            &[("ExifIFD:ExposureProgram", 3)][..],
+            &[("EXIF:ExposureProgram", 3)],
+            &[("ExifIFD:ExposureProgram", 3), ("EXIF:ExposureProgram", 3)],
+        ] {
+            assert_eq!(edit(&rowless, keys).unwrap(), expected, "{keys:?}");
+        }
+        let err = edit(
+            &rowless,
+            &[("ExifIFD:ExposureProgram", 3), ("EXIF:ExposureProgram", 4)],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("already being written as"), "{err}");
+
+        let removed = ["ExifIFD:ExposureProgram".to_string()];
+        let plan = plan_exif_write_with_removals(&scan, &rowless, &rowless, &removed).unwrap();
+        let mut surfaced_removal = surfaced.clone();
+        surfaced_removal.remove("ExifIFD:ExposureProgram");
+        assert_eq!(
+            plan,
+            plan_exif_write(&scan, &surfaced, &surfaced_removal).unwrap()
+        );
+        assert!(plan.exif_ifd.iter().all(|e| e.tag_id != 0x8822));
+        // Only a name qualified by the entry's own IFD deletes it.
+        for other in ["IFD0:ExposureProgram", "EXIF:ExposureProgram"] {
+            let removed = [other.to_string()];
+            assert_eq!(
+                plan_exif_write_with_removals(&scan, &rowless, &rowless, &removed).unwrap(),
+                carried,
+                "{other}"
+            );
+        }
+    }
+
+    /// Slice E-2: the reader names an ExifIFD entry `tag_db` has no name for
+    /// by the generated `Exif::Main` (0x9210, the TIFF/EP
+    /// FocalPlaneResolutionUnit of the Leica M8/M9, is
+    /// `ExifIFD:FocalPlaneResolutionUnit`, no longer `ExifIFD:0x9210`). The
+    /// writer carries the entry when the name is unchanged, instead of taking
+    /// it for a new tag to add -- which failed every write to such a file on
+    /// the printed value's type (`inches` for a SHORT).
+    #[test]
+    fn plan_carries_an_engine_named_exif_ifd_entry() {
+        let (tiff, original) = exif_ifd_shorts_jpeg(&[(0x9210, 2), (0xa001, 1)]);
+        let scan = scan_exif_entries(&tiff).unwrap();
+        assert_eq!(
+            original.get_string("ExifIFD:FocalPlaneResolutionUnit"),
+            Some("inches")
+        );
+        let mut desired = original.clone();
+        desired.insert("IFD0:Artist", TagValue::new_string("A. Person"));
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let carried = plan.exif_ifd.iter().find(|e| e.tag_id == 0x9210).unwrap();
+        assert_eq!(carried.value, [2, 0]);
+        assert!(plan.ifd0.iter().any(|e| e.tag_id == 0x013B));
+        assert!(
+            plan.exif_ifd.iter().all(|e| e.tag_id != 0xa210),
+            "no FocalPlaneResolutionUnit planted under its EXIF 2.x id"
+        );
+    }
+
+    /// Review finding (E-2): the engine's name for a TIFF/EP legacy entry is
+    /// the EXIF 2.x tag's (`tag_db` writes `ExifIFD:FocalPlaneResolutionUnit`
+    /// to 0xa210), so the legacy 0x9210 must not own it. Pinned
+    /// `exiftool-pinned.sh -ExifIFD:FocalPlaneResolutionUnit=3` (and control
+    /// b4808958) keep 0x9210 = 2 and add 0xa210 = 3; a file that already has
+    /// both gets only 0xa210 rewritten.
+    #[test]
+    fn a_legacy_entry_does_not_own_its_engine_name() {
+        let (tiff, original) = exif_ifd_shorts_jpeg(&[(0x9210, 2), (0xa001, 1)]);
+        let scan = scan_exif_entries(&tiff).unwrap();
+        let mut desired = original.clone();
+        desired.insert("ExifIFD:FocalPlaneResolutionUnit", TagValue::Integer(3));
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let legacy = plan.exif_ifd.iter().find(|e| e.tag_id == 0x9210).unwrap();
+        assert_eq!(legacy.value, [2, 0], "the legacy entry is carried");
+        let added = plan.exif_ifd.iter().find(|e| e.tag_id == 0xa210).unwrap();
+        assert_eq!(
+            (added.field_type, added.value.as_slice()),
+            (3, &3u16.to_ne_bytes()[..])
+        );
+
+        let (tiff, original) = exif_ifd_shorts_jpeg(&[(0x9210, 2), (0xa210, 3)]);
+        let scan = scan_exif_entries(&tiff).unwrap();
+        assert_eq!(
+            original.get_string("ExifIFD:FocalPlaneResolutionUnit"),
+            Some("cm")
+        );
+        let mut desired = original.clone();
+        desired.insert("ExifIFD:FocalPlaneResolutionUnit", TagValue::Integer(1));
+        let plan = plan_exif_write(&scan, &original, &desired).unwrap();
+        let legacy = plan.exif_ifd.iter().find(|e| e.tag_id == 0x9210).unwrap();
+        assert_eq!(legacy.value, [2, 0], "the legacy entry is carried");
+        let rewritten: Vec<&OutEntry> = plan
+            .exif_ifd
+            .iter()
+            .filter(|e| e.tag_id == 0xa210)
+            .collect();
+        assert_eq!(rewritten.len(), 1);
+        assert_eq!(rewritten[0].value, 1u16.to_ne_bytes());
     }
 
     /// Loads the real Canon fixture, which has an actual InteropIFD whose

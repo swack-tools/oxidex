@@ -36,6 +36,7 @@
 //! Exif.pm:6504   if ($size > 4) {
 //! Exif.pm:6505       if ($size > 0x7fffffff ...) { Warn; ++$warnCount; next }
 //! Exif.pm:6510       $valuePtr = Get32u($dataPt, $valuePtr);
+//! Exif.pm:6539       $valuePtr < 8 and not $$dirInfo{ZeroOffsetOK} and $suspect = $warnCount;
 //! Exif.pm:6546       $valuePtr -= $dataPos;
 //! Exif.pm:6549       $suspect = $warnCount if $valuePtr < $dirEnd and $valuePtr+$size > $dirStart;
 //! Exif.pm:6551       if ($valuePtr < 0 or $valuePtr+$size > $dataLen) { ... "Bad offset" ... $bad = 1 }
@@ -113,13 +114,35 @@
 //!   is its only reader in the pinned tree; `ProcessExif` never consults
 //!   it) and is ignored by this walk.
 //!
-//! # Where this differs from `table_ifd.rs` on purpose
+//! # Which out-of-line values are "inside the directory"
 //!
-//! The floor (values that start before the end of the directory are
-//! refused) is `table_ifd.rs`'s rule, kept as the design spec asks. ExifTool
-//! refuses a narrower set -- values that OVERLAP the directory
-//! (Exif.pm:6549) -- and reads a value that lies entirely before it. The
-//! difference only withholds, never invents.
+//! ExifTool refuses two kinds of out-of-line value as "Suspicious" --
+//! warned and skipped (Exif.pm:6673-6678): one whose stored offset points
+//! into the 8-byte TIFF header, `$valuePtr < 8 and not
+//! $$dirInfo{ZeroOffsetOK}` (Exif.pm:6539, tested on the offset as stored,
+//! before the `$dataPos` correction), and one that OVERLAPS the directory's
+//! entry array, `$valuePtr < $dirEnd and $valuePtr+$size > $dirStart`
+//! (Exif.pm:6549). Any other value that lies entirely before the directory
+//! is read. [`DirectoryRule::Overlap`] carries both checks for every table
+//! whose `GROUPS{0}` is not `MakerNotes` (`Exif::Main`, walked at IFD1,
+//! ExifIFD and InteropIFD); `ZeroOffsetOK` is set by one caller in the
+//! pinned tree, Samsung.pm:1708 (`ProcessSamsungIFD`, a maker-note
+//! directory), never for an `Exif::Main` directory, so the header check is
+//! unconditional here. Writers that put the ExifIFD after its value block
+//! (SonyILCE-7CM2, OlympusE-M10MarkIV) store 22-30 values before the
+//! directory, past the header, and ExifTool reads every one (construct K-O
+//! of the `exif-ifd` slice spec).
+//!
+//! A `MakerNotes` table keeps `table_ifd.rs`'s floor: a value that starts
+//! anywhere before the end of the directory's next-IFD link is refused.
+//! ExifTool applies the overlap rule there too (`$inMakerNotes` only makes
+//! the warning minor), so the floor withholds a strict superset of what
+//! the overlap rule withholds; it also covers the header check whenever
+//! the directory does not lie before `$base` (an offset below 8 then
+//! starts before the directory), which only `ZeroOffsetOK`'s Samsung
+//! directory breaks. It only ever withholds, never invents, and it is the
+//! hardening the maker-note ports were measured with (Olympus, Canon,
+//! FujiFilm). Widening the overlap rule to them is its own measured change.
 
 use crate::core::TagValue;
 use crate::io::ByteOrder;
@@ -237,9 +260,62 @@ pub fn read_ifd(data: &[u8], ifd_start: usize, order: ByteOrder) -> Option<Vec<I
 /// (Exif.pm:6347-6348 `$dirSize = 2 + 12 * $numEntries; $dirEnd = $dirStart +
 /// $dirSize`, then the 4-byte link ExifTool reads at `$dirEnd`, Exif.pm:6425).
 /// `table_ifd.rs`'s floor: an out-of-line value that starts before it is
-/// refused.
+/// refused ([`DirectoryRule::Floor`]).
 fn directory_floor(ifd_start: usize, entries: usize) -> usize {
-    ifd_start + 2 + 12 * entries + 4
+    directory_end(ifd_start, entries) + 4
+}
+
+/// `$dirEnd` (Exif.pm:6347-6348): the first byte after the entry array.
+fn directory_end(ifd_start: usize, entries: usize) -> usize {
+    ifd_start + 2 + 12 * entries
+}
+
+/// When an out-of-line value is "inside the directory", i.e. refused as
+/// "Suspicious" (Exif.pm:6673-6678: warned, `++$warnCount`, skipped). See
+/// the module doc for why the two rules coexist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectoryRule {
+    /// ExifTool's own rules: refused iff the stored offset points into the
+    /// TIFF header (Exif.pm:6539, `$valuePtr < 8`; no `Exif::Main`
+    /// directory sets `ZeroOffsetOK`) or the value overlaps the entry array
+    /// (Exif.pm:6549, `start < dir_end && start + size > dir_start`). Any
+    /// other value entirely before the directory, or starting at or after
+    /// `$dirEnd` (the next-IFD link included), is read.
+    Overlap { dir_start: usize, dir_end: usize },
+    /// `table_ifd.rs`'s floor ([`directory_floor`]), kept for `MakerNotes`
+    /// tables (decision D-4 of the `exif-ifd` slice spec): refused iff the
+    /// value starts before `$dirEnd + 4`.
+    Floor(usize),
+}
+
+impl DirectoryRule {
+    /// The rule for `table`'s directory at `ifd_start` with `entries`
+    /// entries: [`Self::Floor`] iff the table's family-0 group is
+    /// `MakerNotes` (Exif.pm:6294 `$inMakerNotes`).
+    fn for_table(table: &IfdTable, ifd_start: usize, entries: usize) -> Self {
+        if table.group0 == "MakerNotes" {
+            Self::Floor(directory_floor(ifd_start, entries))
+        } else {
+            Self::Overlap {
+                dir_start: ifd_start,
+                dir_end: directory_end(ifd_start, entries),
+            }
+        }
+    }
+
+    /// Whether the `size` bytes at `start`, whose entry stores the offset
+    /// `stored` (before the `base` correction), are refused.
+    fn refuses(self, stored: u32, start: usize, size: usize) -> bool {
+        match self {
+            Self::Overlap { dir_start, dir_end } => {
+                // Exif.pm:6539: "offset shouldn't point into TIFF header".
+                stored < 8
+                    // Exif.pm:6549: "value shouldn't overlap our directory".
+                    || (start < dir_end && start.saturating_add(size) > dir_start)
+            }
+            Self::Floor(floor) => start < floor,
+        }
+    }
 }
 
 fn get16(data: &[u8], at: usize, order: ByteOrder) -> Option<u16> {
@@ -404,12 +480,12 @@ enum Refusal {
     Silent,
 }
 
-/// Exif.pm:6502-6680 for one entry, with `table_ifd.rs`'s floor.
+/// Exif.pm:6502-6680 for one entry, with the table's [`DirectoryRule`].
 fn locate<'d>(
     dir: &IfdDir<'d>,
     entry: &IfdEntry,
     ty: EntryType,
-    floor: usize,
+    rule: DirectoryRule,
 ) -> Result<Located<'d>, Refusal> {
     // Exif.pm:6502.
     let size = u64::from(entry.count) * (ty.size as u64);
@@ -442,10 +518,12 @@ fn locate<'d>(
     let Ok(start) = usize::try_from(start) else {
         return Err(Refusal::Warned);
     };
-    // table_ifd.rs's floor (the module doc explains how it relates to
-    // Exif.pm:6549's overlap rule): a value inside the directory is
-    // "Suspicious" (Exif.pm:6673-6678) and skipped.
-    if start < floor {
+    // Exif.pm:6539 and 6549 (or, for a MakerNotes table, table_ifd.rs's
+    // floor; the module doc explains both): a value in the TIFF header or
+    // inside the directory is "Suspicious" (Exif.pm:6673-6678) and
+    // skipped. Checked before the bounds, as ExifTool computes `$suspect`
+    // first; either way the entry costs exactly one warning.
+    if rule.refuses(entry.value_offset, start, size) {
         return Err(Refusal::Warned);
     }
     // Exif.pm:6551 `$valuePtr+$size > $dataLen` -- "Bad offset".
@@ -659,13 +737,71 @@ pub fn process_exif(
     ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
 ) {
+    process_exif_decoded(table, dir, ctx, out);
+}
+
+/// What the walk did with one entry of the ROOT directory
+/// ([`process_exif_decoded`]).
+///
+/// A caller that walks the same directory by other means (a hand arm) needs
+/// to tell an absence ExifTool shares from one only this engine makes: the
+/// first must stay an absence, the second may fall back to the other reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryRead {
+    /// `ReadValue` (Exif.pm:6782) produced the entry's value. It has a row
+    /// in `out`, or a conversion rule withheld the tag (a `RawConv` or
+    /// `ValueConv` returning undef, a withheld conversion) -- the engine's
+    /// report either way.
+    Decoded,
+    /// Refused on a rule ExifTool applies to the same bytes, so ExifTool
+    /// reports nothing for the entry either: a type code `ProcessExif`
+    /// rejects (Exif.pm:6463-6478, and every entry after a bad FIRST entry,
+    /// "assume corrupted IFD"), a value it warns about and skips -- an
+    /// offset into the TIFF header (Exif.pm:6539) or an overlap with the
+    /// directory (Exif.pm:6549; both 6673-6678), an offset outside the data (Exif.pm:6551-6552; no `RAF` here, which is
+    /// ExifTool's case for a JPEG APP1 or any in-memory block), an
+    /// impossible size (Exif.pm:6505-6509) --, an entry past the exhausted
+    /// warning budget (Exif.pm:6455-6457), or an excessive count
+    /// (Exif.pm:6763-6773).
+    Refused,
+    /// Not read, for a reason of this engine's own: a value it cannot
+    /// locate without a base, an unmodelled `Format` override, an
+    /// unresolved tag or `Condition`, a value it cannot decode. ExifTool may
+    /// well read it.
+    Unread,
+}
+
+/// What [`process_exif_decoded`] reports about the ROOT directory, beside
+/// the rows themselves.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RootReads {
+    /// What the walk did with each entry, in entry order.
+    pub entries: Vec<EntryRead>,
+    /// `(row, entry)`: for every row the root directory itself emitted, its
+    /// index in `out` and the index of the entry that produced it. Rows a
+    /// `SubDirectory` edge produced are not listed.
+    pub rows: Vec<(usize, usize)>,
+}
+
+/// [`process_exif`], also reporting what the walk did with each entry of
+/// the ROOT directory and which entry each of its rows came from
+/// ([`RootReads`]). `None` when the directory itself was refused
+/// ([`read_ifd`], or the root guard).
+pub fn process_exif_decoded(
+    table: &'static IfdTable,
+    dir: IfdDir<'_>,
+    ctx: &mut cond::Ctx,
+    out: &mut Vec<Emitted>,
+) -> Option<RootReads> {
     let mut guard = Guard::new();
     // ExifTool.pm:9065-9072: `ProcessDirectory` records the root directory's
     // address too, which is what stops a table that points at itself.
     if !guard.admit(ifd_addr(dir.ifd_start), table_key(table), false) {
-        return;
+        return None;
     }
-    walk(table, dir, ctx, &mut guard, out);
+    let mut decoded = RootReads::default();
+    walk(table, dir, ctx, &mut guard, out, Some(&mut decoded))?;
+    Some(decoded)
 }
 
 /// The `$$self{PROCESSED}` key for an IFD walked at `start`.
@@ -693,18 +829,34 @@ fn table_key<T>(table: &'static T) -> usize {
     std::ptr::from_ref(table) as usize
 }
 
+/// One directory. `decoded`, when given, receives the [`RootReads`] of this
+/// directory (see [`process_exif_decoded`]); `None` is returned only when
+/// [`read_ifd`] refuses the directory.
 fn walk(
     table: &'static IfdTable,
     dir: IfdDir<'_>,
     ctx: &mut cond::Ctx,
     guard: &mut Guard,
     out: &mut Vec<Emitted>,
-) {
+    mut decoded: Option<&mut RootReads>,
+) -> Option<()> {
     // Exif.pm:6344-6358.
-    let Some(entries) = read_ifd(dir.data, dir.ifd_start, dir.byte_order) else {
-        return;
+    let entries = read_ifd(dir.data, dir.ifd_start, dir.byte_order)?;
+    if let Some(reads) = decoded.as_deref_mut() {
+        reads.entries.clear();
+        reads.entries.resize(entries.len(), EntryRead::Unread);
+        reads.rows.clear();
+    }
+    // Every entry from `from` on is one ExifTool never reaches.
+    let refuse_rest = |decoded: &mut Option<&mut RootReads>, from: usize| {
+        if let Some(reads) = decoded.as_deref_mut() {
+            for flag in &mut reads.entries[from..] {
+                *flag = EntryRead::Refused;
+            }
+        }
     };
-    let floor = directory_floor(dir.ifd_start, entries.len());
+    // Exif.pm:6539/6549 or the maker-note floor (module doc).
+    let rule = DirectoryRule::for_table(table, dir.ifd_start, entries.len());
     // Exif.pm:6294.
     let in_maker_notes = table.group0 == "MakerNotes";
     // Exif.pm:6446-6447: "make sure that Compression and SubfileType are
@@ -718,7 +870,8 @@ fn walk(
     for (index, entry) in entries.iter().enumerate() {
         // Exif.pm:6455-6457.
         if warn_count > 10 {
-            return;
+            refuse_rest(&mut decoded, index);
+            return Some(());
         }
         // Exif.pm:6463-6478.
         let Some(ty) = accepted_type(entry.field_type, in_maker_notes, ctx) else {
@@ -730,15 +883,22 @@ fn walk(
             // Exif.pm:6474-6477: "assume corrupted IFD if this is our first
             // entry (except Sony ILCE which have an empty first entry)".
             if index == 0 && !model_is_ilce(ctx) {
-                return;
+                refuse_rest(&mut decoded, index);
+                return Some(());
+            }
+            if let Some(reads) = decoded.as_deref_mut() {
+                reads.entries[index] = EntryRead::Refused;
             }
             continue;
         };
         // Exif.pm:6502-6680.
-        let located = match locate(&dir, entry, ty, floor) {
+        let located = match locate(&dir, entry, ty, rule) {
             Ok(located) => located,
             Err(Refusal::Warned) => {
                 warn_count += 1;
+                if let Some(reads) = decoded.as_deref_mut() {
+                    reads.entries[index] = EntryRead::Refused;
+                }
                 continue;
             }
             Err(Refusal::Silent) => continue,
@@ -785,12 +945,21 @@ fn walk(
             && !matches!(plan.kind, Kind::Str | Kind::Undef)
             && !(tag.name == "TransferFunction" && plan.count == 196_608)
         {
+            if let Some(reads) = decoded.as_deref_mut() {
+                reads.entries[index] = EntryRead::Refused;
+            }
             continue;
         }
         // Exif.pm:6782, 6915.
         let Some(raw) = decode_plan(&located, plan, dir.byte_order) else {
             continue;
         };
+        if let Some(reads) = decoded.as_deref_mut() {
+            reads.entries[index] = EntryRead::Decoded;
+        }
+        // ExifTool.pm:6312-6320: `ReadValue` keeps the fraction beside the
+        // number (`TAG_EXTRA{Rational}`, Exif.pm:7185).
+        let fraction = single_rational(&raw);
         // ExifTool.pm:6107-6120: the rational `ReadValue` hands on is already
         // `RoundFloat($n / $d, 10)`, so everything below -- the `RawConv`
         // member, `ValueConv`, `PrintConv`, the unconverted report -- sees
@@ -811,7 +980,8 @@ fn walk(
         if omitted.any() {
             continue;
         }
-        let (value, value_conv) = if tag.flags.binary && tag.value_conv.is_none() {
+        let binary = tag.flags.binary && tag.value_conv.is_none();
+        let (value, value_conv) = if binary {
             // ExifTool.pm:3535-3539: a `Binary` tag with no `ValueConv` gets
             // `\$val`, and the CLI prints the placeholder with `length($$val)`
             // (exiftool:3983-3988). A `ValueConv`, when present, runs
@@ -857,10 +1027,32 @@ fn walk(
             group2: tag.groups.g2.unwrap_or(table.group2),
             name: tag.name,
             value,
-            value_conv,
             low_priority: effective_priority(table, tag) == Some(0),
             avoid: tag.flags.avoid,
+            // Only where `value` is the rational's number unconverted.
+            rational: fraction
+                .filter(|_| !binary && tag.value_conv.is_none() && value_conv.is_none()),
+            value_conv,
         });
+        if let Some(reads) = decoded.as_deref_mut() {
+            reads.rows.push((out.len() - 1, index));
+        }
+    }
+    Some(())
+}
+
+/// The `(numerator, denominator)` of a single rational `ReadValue` result
+/// (either signedness; a zero denominator included, as ExifTool keeps
+/// `"$ratNumer/$ratDenom"` for it too), else `None`.
+fn single_rational(raw: &DecodedValue) -> Option<(i64, i64)> {
+    match *raw {
+        DecodedValue::UnsignedRational(numerator, denominator) => {
+            Some((i64::from(numerator), i64::from(denominator)))
+        }
+        DecodedValue::SignedRational(numerator, denominator) => {
+            Some((i64::from(numerator), i64::from(denominator)))
+        }
+        _ => None,
     }
 }
 
@@ -1328,7 +1520,8 @@ fn descend(
                     continue;
                 }
                 guard.depth += 1;
-                walk(
+                // A refused sub-directory is simply not walked (`None`).
+                let _ = walk(
                     target,
                     IfdDir {
                         data,
@@ -1340,6 +1533,7 @@ fn descend(
                     ctx,
                     guard,
                     out,
+                    None,
                 );
                 guard.depth -= 1;
             }
@@ -1857,9 +2051,10 @@ mod tests {
 
     #[test]
     fn a_value_that_starts_before_the_floor_is_rejected() {
-        // The stored offset points back into the directory itself (at the
-        // second entry's bytes). Exif.pm:6549/6673-6678 calls that
-        // "Suspicious" and skips it; table_ifd.rs's floor refuses anything
+        // A MakerNotes table (the fixture's group 0): the stored offset
+        // points back into the directory itself (at the second entry's
+        // bytes). Exif.pm:6549/6673-6678 calls that "Suspicious" and skips
+        // it; table_ifd.rs's floor, kept for maker notes, refuses anything
         // before `dirEnd + 4`.
         let order = ByteOrder::Big;
         let data = ifd(
@@ -1885,6 +2080,272 @@ mod tests {
         );
     }
 
+    // -- K-O: Exif.pm:6539/6549, ExifTool's rules for non-MakerNotes tables ------
+
+    /// [`STRINGS`]' tags in a table whose family-0 group is `EXIF`, as
+    /// `Exif::Main`'s is: the overlap rule applies, not the floor.
+    static EXIF_STRINGS: IfdTable = IfdTable {
+        group0: "EXIF",
+        ..table("ExifStrings", STRINGS_TAGS)
+    };
+
+    /// `data` with the directory at `ifd_start` (stored offsets are
+    /// buffer-relative: `base: Some(0)`).
+    fn run_at(table: &'static IfdTable, data: &[u8], ifd_start: usize) -> Vec<Emitted> {
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+        process_exif(
+            table,
+            IfdDir {
+                data,
+                ifd_start,
+                base: Some(0),
+                byte_order: ByteOrder::Big,
+                group1: None,
+            },
+            &mut ctx,
+            &mut out,
+        );
+        out
+    }
+
+    /// A TIFF header (`MM\0*`, IFD0 at 16), `HELLO\0\0\0` at 8, then a
+    /// one-entry directory at 16 whose ASCII value points at offset
+    /// `value_at` (count 5).
+    fn value_before_directory(value_at: u32) -> Vec<u8> {
+        let order = ByteOrder::Big;
+        let mut data = b"MM\0*\0\0\0\x10HELLO\0\0\0".to_vec();
+        data.extend(ifd(
+            order,
+            &[entry(order, 0x0001, 2, 5, bytes32(order, value_at))],
+            &[],
+        ));
+        data
+    }
+
+    /// Spec 7.1 test 13 (a) and (c): a value entirely BEFORE the directory,
+    /// past the TIFF header, is read under `Exif::Main`'s rule (ExifTool
+    /// reads it: Exif.pm:6549 refuses an overlap and Exif.pm:6539 an offset
+    /// into the header, and this is neither; SonyILCE-7CM2.jpg's
+    /// ExifIFD stores 30 such values), and still refused under a MakerNotes
+    /// table's floor (D-4).
+    #[test]
+    fn k_o_reads_a_value_before_the_directory_outside_maker_notes_only() {
+        let data = value_before_directory(8);
+        assert_eq!(
+            values(&run_at(&EXIF_STRINGS, &data, 16)),
+            vec![("Text", TagValue::String("HELLO".to_string()))],
+            "Exif::Main-shaped table: read"
+        );
+        assert!(
+            run_at(&STRINGS, &data, 16).is_empty(),
+            "MakerNotes table: the floor still refuses it"
+        );
+        // A value starting at `$dirEnd` -- the next-IFD link -- overlaps
+        // nothing ExifTool checks: read by the overlap rule, refused by the
+        // floor (`$dirEnd + 4`).
+        let order = ByteOrder::Big;
+        let dir_end = directory_end(0, 1);
+        let mut data = ifd(
+            order,
+            &[entry(order, 0x0001, 2, 5, bytes32(order, dir_end as u32))],
+            b"O\0",
+        );
+        data[dir_end..dir_end + 4].copy_from_slice(b"HELL");
+        assert_eq!(
+            values(&run_at(&EXIF_STRINGS, &data, 0)),
+            vec![("Text", TagValue::String("HELLO".to_string()))]
+        );
+        assert!(run_at(&STRINGS, &data, 0).is_empty());
+        // The real tables pick the rules by their own group 0.
+        let exif = find_ifd_table("Exif", "Main").expect("Exif::Main");
+        assert_eq!(
+            DirectoryRule::for_table(exif, 8, 1),
+            DirectoryRule::Overlap {
+                dir_start: 8,
+                dir_end: 22
+            }
+        );
+        let olympus = find_ifd_table("Olympus", "Main").expect("Olympus::Main");
+        assert_eq!(
+            DirectoryRule::for_table(olympus, 8, 1),
+            DirectoryRule::Floor(26)
+        );
+    }
+
+    /// Spec 7.1 test 13 (b): under the overlap rule a value that overlaps
+    /// the entry array -- starting inside it, or starting before the
+    /// directory and running into it -- is "Suspicious" (Exif.pm:6673-6678):
+    /// skipped, and it spends the directory's warning budget (Exif.pm:6455
+    /// aborts once `$warnCount > 10`).
+    #[test]
+    fn k_o_refuses_an_overlap_and_spends_the_warning_budget() {
+        let order = ByteOrder::Big;
+        // Starts before the directory (at 14) and runs 3 bytes into it.
+        let data = value_before_directory(14);
+        assert!(run_at(&EXIF_STRINGS, &data, 16).is_empty(), "runs into it");
+        // Starts inside the entry array (at the second entry, offset 14: past
+        // the TIFF header, so only Exif.pm:6549 refuses it).
+        let data = ifd(
+            order,
+            &[
+                entry(order, 0x0001, 2, 5, bytes32(order, 14)),
+                entry(order, 0x0003, 7, 1, [0x2a, 0, 0, 0]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            values(&run_at(&EXIF_STRINGS, &data, 0)),
+            vec![("OneByte", TagValue::Integer(42))],
+            "inside it: skipped, the next entry still read"
+        );
+        // Ten overlapping entries leave the budget at 10: the eleventh entry
+        // is read. Eleven overlapping entries exhaust it: the walk stops.
+        for (overlaps, read) in [(10usize, true), (11, false)] {
+            let mut entries = vec![entry(order, 0x0001, 2, 5, bytes32(order, 14)); overlaps];
+            entries.push(entry(order, 0x0003, 7, 1, [0x2a, 0, 0, 0]));
+            let data = ifd(order, &entries, &[]);
+            let got = values(&run_at(&EXIF_STRINGS, &data, 0));
+            if read {
+                assert_eq!(got, vec![("OneByte", TagValue::Integer(42))]);
+            } else {
+                assert!(got.is_empty(), "{overlaps} warnings: {got:?}");
+            }
+            // Every refusal here is ExifTool's own ("Suspicious ... offset",
+            // then "Too many warnings"): `Refused`, never `Unread`, so a
+            // caller with another reader for the same entries does not put
+            // back what ExifTool refuses.
+            let mut members = HashMap::new();
+            let mut ctx = cond::Ctx::new(&mut members);
+            let reads = process_exif_decoded(
+                &EXIF_STRINGS,
+                IfdDir {
+                    data: &data,
+                    ifd_start: 0,
+                    base: Some(0),
+                    byte_order: order,
+                    group1: None,
+                },
+                &mut ctx,
+                &mut Vec::new(),
+            )
+            .unwrap()
+            .entries;
+            let mut expected = vec![EntryRead::Refused; overlaps];
+            expected.push(if read {
+                EntryRead::Decoded
+            } else {
+                EntryRead::Refused
+            });
+            assert_eq!(reads, expected, "{overlaps} overlaps");
+        }
+    }
+
+    /// A bad FIRST entry is ExifTool's "assume corrupted IFD" (Exif.pm:
+    /// 6474-6477): the whole directory is `Refused`, entry by entry.
+    #[test]
+    fn a_bad_first_entry_refuses_the_whole_directory() {
+        let order = ByteOrder::Big;
+        let data = ifd(
+            order,
+            &[
+                entry(order, 0x0001, 99, 1, [0, 0, 0, 0]),
+                entry(order, 0x0003, 7, 1, [0x2a, 0, 0, 0]),
+            ],
+            &[],
+        );
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+        let reads = process_exif_decoded(
+            &EXIF_STRINGS,
+            IfdDir {
+                data: &data,
+                ifd_start: 0,
+                base: Some(0),
+                byte_order: order,
+                group1: None,
+            },
+            &mut ctx,
+            &mut out,
+        );
+        assert!(out.is_empty());
+        assert_eq!(
+            reads.map(|reads| reads.entries),
+            Some(vec![EntryRead::Refused, EntryRead::Refused])
+        );
+    }
+
+    /// Exif.pm:6539 (`$valuePtr < 8 and not $$dirInfo{ZeroOffsetOK}`): an
+    /// out-of-line value whose stored offset points into the 8-byte TIFF
+    /// header is "Suspicious" (Exif.pm:6673-6678) even though it lies
+    /// entirely before the directory -- skipped, one warning each. No
+    /// `Exif::Main` directory sets `ZeroOffsetOK` (only Samsung.pm:1708's
+    /// maker-note directory does). Offset 8, the first byte past the header,
+    /// is read. A crafted JPEG whose IFD1 XResolution points at offset 0
+    /// read 346409.125 without this check; pinned ExifTool 13.59 and the
+    /// pre-K-O floor print nothing.
+    #[test]
+    fn k_o_refuses_an_offset_into_the_tiff_header() {
+        let order = ByteOrder::Big;
+        for at in [0u32, 1, 4, 7] {
+            let data = value_before_directory(at);
+            assert!(
+                run_at(&EXIF_STRINGS, &data, 16).is_empty(),
+                "offset {at} is in the TIFF header"
+            );
+            // The MakerNotes floor refuses it too (the directory does not
+            // lie before the base).
+            assert!(run_at(&STRINGS, &data, 16).is_empty(), "offset {at}");
+        }
+        assert_eq!(
+            values(&run_at(&EXIF_STRINGS, &value_before_directory(8), 16)),
+            vec![("Text", TagValue::String("HELLO".to_string()))]
+        );
+        // Each header offset spends the warning budget like an overlap: ten
+        // leave the eleventh entry readable, eleven stop the walk.
+        for (suspicious, read) in [(10usize, true), (11, false)] {
+            let mut entries = vec![entry(order, 0x0001, 2, 5, bytes32(order, 0)); suspicious];
+            entries.push(entry(order, 0x0003, 7, 1, [0x2a, 0, 0, 0]));
+            let mut data = b"MM\0*\0\0\0\x08".to_vec();
+            data.extend(ifd(order, &entries, &[]));
+            let got = values(&run_at(&EXIF_STRINGS, &data, 8));
+            if read {
+                assert_eq!(got, vec![("OneByte", TagValue::Integer(42))]);
+            } else {
+                assert!(got.is_empty(), "{suspicious} warnings: {got:?}");
+            }
+            // ExifTool's own refusal: `Refused`, never `Unread`, so the
+            // ExifIFD caller does not put the hand arm's reading of the
+            // header bytes back (crafted `hdroff0.jpg`: control printed
+            // ExposureTime 346409.1, pinned 13.59 nothing).
+            let mut members = HashMap::new();
+            let mut ctx = cond::Ctx::new(&mut members);
+            let reads = process_exif_decoded(
+                &EXIF_STRINGS,
+                IfdDir {
+                    data: &data,
+                    ifd_start: 8,
+                    base: Some(0),
+                    byte_order: order,
+                    group1: None,
+                },
+                &mut ctx,
+                &mut Vec::new(),
+            )
+            .unwrap()
+            .entries;
+            let mut expected = vec![EntryRead::Refused; suspicious];
+            expected.push(if read {
+                EntryRead::Decoded
+            } else {
+                EntryRead::Refused
+            });
+            assert_eq!(reads, expected, "{suspicious} header offsets");
+        }
+    }
+
     // -- Multi-count values, rationals, utf8 ---------------------------------------
 
     static NUMERIC_TAGS: &[IfdTag] = &[
@@ -1896,6 +2357,67 @@ mod tests {
         plain(0x0006, "Empty"),
     ];
     static NUMERIC: IfdTable = table("Numeric", NUMERIC_TAGS);
+
+    /// `process_exif_decoded`: one [`EntryRead`] per root entry --
+    /// `Decoded` once its value was read (even if nothing is reported for
+    /// it), `Refused` where ExifTool refuses the same entry (a bad type code,
+    /// an offset past the data), `Unread` for the engine's own gaps; `None`
+    /// for a refused directory. And `Emitted::rational` keeps an unconverted
+    /// single rational's fraction.
+    #[test]
+    fn process_exif_decoded_flags_read_entries_and_rows_keep_the_fraction() {
+        let order = ByteOrder::Big;
+        let floor = trailer_at(4) as u32;
+        let data = ifd(
+            order,
+            &[
+                // Read and reported: 3/2 out of line.
+                entry(order, 0x0002, 5, 1, bytes32(order, floor)),
+                // An entry type ProcessExif refuses (not the first entry).
+                entry(order, 0x0001, 99, 1, [0, 0, 0, 0]),
+                // Past the end of `data`.
+                entry(order, 0x0003, 5, 2, bytes32(order, floor + 100)),
+                // Read, but no tag in the table: reported by nobody.
+                entry(order, 0x00ee, 3, 1, [0, 7, 0, 0]),
+            ],
+            &[0, 0, 0, 3, 0, 0, 0, 2],
+        );
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+        let dir = IfdDir {
+            data: &data,
+            ifd_start: 0,
+            base: Some(0),
+            byte_order: order,
+            group1: None,
+        };
+        let decoded = process_exif_decoded(&NUMERIC, dir, &mut ctx, &mut out);
+        let decoded = decoded.expect("an accepted directory");
+        assert_eq!(
+            decoded.entries,
+            [
+                EntryRead::Decoded,
+                EntryRead::Refused,
+                EntryRead::Refused,
+                EntryRead::Unread,
+            ]
+        );
+        assert_eq!(decoded.rows, [(0, 0)], "the one row came from entry 0");
+        assert_eq!(values(&out), vec![("Ratio", TagValue::Float(1.5))]);
+        assert_eq!(out[0].rational, Some((3, 2)));
+        assert_eq!(out[0].value_conv, None);
+        let refused = process_exif_decoded(
+            &NUMERIC,
+            IfdDir {
+                data: &data[..10],
+                ..dir
+            },
+            &mut ctx,
+            &mut Vec::new(),
+        );
+        assert_eq!(refused, None);
+    }
 
     #[test]
     fn a_zero_count_entry_reads_as_the_empty_value() {
