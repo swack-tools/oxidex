@@ -60,13 +60,26 @@ pub trait KeyedEmissionSink {
     /// inactive callers unchanged until a carrier chooses where warnings go.
     fn warn(&mut self, _warning: &'static str) {}
 
+    /// Whether this caller requested native-style directory diagnostics.
+    ///
+    /// The default is deliberately quiet: a generated keyed layout cannot
+    /// enable verbose output until a carrier explicitly asks for it.
+    fn verbose_enabled(&self) -> bool {
+        false
+    }
+
+    /// Mirror ExifTool's `VerboseDir` callback for an invoked word directory.
+    /// `entry_count` is the source expression `size / 2 - 1`, so an odd-size
+    /// directory retains its native fractional diagnostic value.
+    fn verbose_directory(&mut self, _directory: &'static str, _entry_count: f64) {}
+
     fn keyed_enabled(&self, _table: &'static KeyedDirectoryTable) -> bool {
         false
     }
 }
 
 /// Counts withheld keyed-reader work. None of these conditions produces output.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct KeyedWalkResult {
     pub entries_seen: usize,
     pub emitted: usize,
@@ -111,13 +124,25 @@ pub struct WordDirectoryEntry {
 /// selected, converted, or suppressed. This mirrors the independently
 /// captured native callback boundary: return status, warnings, and raw
 /// `HandleTag` operands are observable separately from final output.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WordDirectoryTrace {
     pub module: &'static str,
     pub table: &'static str,
     pub returned: bool,
     pub warnings: Vec<&'static str>,
+    /// Native `VerboseDir` calls made for this processor invocation.
+    pub verbose_directories: Vec<WordDirectoryVerbose>,
     pub entries: Vec<WordDirectoryEntry>,
+}
+
+/// One native-style `VerboseDir` callback from a word-directory processor.
+///
+/// `entry_count` keeps the exact source arithmetic (`size / 2 - 1`) rather
+/// than rounding an odd-sized source buffer to a number of decoded words.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WordDirectoryVerbose {
+    pub directory: &'static str,
+    pub entry_count: f64,
 }
 
 impl KeyedWalkResult {
@@ -280,6 +305,7 @@ fn process_word_directory(
         table: table.table,
         returned: false,
         warnings: Vec::new(),
+        verbose_directories: Vec::new(),
         entries: Vec::new(),
     };
 
@@ -301,6 +327,14 @@ fn process_word_directory(
         result.bad_value += 1;
         result.word_traces.push(trace);
         return result;
+    }
+    if sink.verbose_enabled() {
+        let entry_count = directory_size as f64 / 2.0 - 1.0;
+        sink.verbose_directory(word.verbose_directory, entry_count);
+        trace.verbose_directories.push(WordDirectoryVerbose {
+            directory: word.verbose_directory,
+            entry_count,
+        });
     }
     let mut position = word.pair_start;
     while position < directory_size {
@@ -993,6 +1027,8 @@ mod tests {
     struct Sink {
         rows: Vec<Emitted>,
         warnings: Vec<&'static str>,
+        verbose: bool,
+        verbose_directories: Vec<WordDirectoryVerbose>,
         enabled: bool,
     }
 
@@ -1023,6 +1059,17 @@ mod tests {
 
         fn warn(&mut self, warning: &'static str) {
             self.warnings.push(warning);
+        }
+
+        fn verbose_enabled(&self) -> bool {
+            self.verbose
+        }
+
+        fn verbose_directory(&mut self, directory: &'static str, entry_count: f64) {
+            self.verbose_directories.push(WordDirectoryVerbose {
+                directory,
+                entry_count,
+            });
         }
 
         fn keyed_enabled(&self, _table: &'static KeyedDirectoryTable) -> bool {
@@ -1308,8 +1355,58 @@ mod tests {
             assert_eq!(result.word_traces.len(), 1);
             assert!(result.word_traces[0].returned);
             assert!(result.word_traces[0].warnings.is_empty());
+            assert!(result.word_traces[0].verbose_directories.is_empty());
+            assert!(sink.verbose_directories.is_empty());
             assert_eq!(result.word_traces[0].entries, result.word_entries);
         }
+    }
+
+    #[test]
+    fn word_directory_verbose_projection_is_opt_in_and_keeps_native_size_expression() {
+        static TAGS: [KeyedTag; 1] = [tag(1, "CustomFunction", Some(Fmt::Int8u), Some(1))];
+        static TABLE: KeyedDirectoryTable = word_table(&TAGS, &[]);
+        // Native calls `VerboseDir('CanonCustom', $size / 2 - 1)`. An odd
+        // byte count must stay 1.5 rather than being rounded to decoded pairs.
+        let data = words(ByteOrder::Little, 3, &[0x0102], &[0x34]);
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        let mut verbose = Sink {
+            enabled: true,
+            verbose: true,
+            ..Sink::default()
+        };
+        let result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&data, ByteOrder::Little, scope()),
+            &mut ctx,
+            &mut verbose,
+        );
+        assert_eq!(
+            result.word_traces[0].verbose_directories,
+            vec![WordDirectoryVerbose {
+                directory: "CanonCustom",
+                entry_count: 1.5,
+            }]
+        );
+        assert_eq!(
+            verbose.verbose_directories,
+            result.word_traces[0].verbose_directories
+        );
+
+        let mut quiet_members = HashMap::new();
+        let mut quiet_ctx = Ctx::new(&mut quiet_members);
+        let mut quiet = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let quiet_result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&data, ByteOrder::Little, scope()),
+            &mut quiet_ctx,
+            &mut quiet,
+        );
+        assert!(quiet_result.word_traces[0].verbose_directories.is_empty());
+        assert!(quiet.verbose_directories.is_empty());
     }
 
     #[test]
@@ -1344,6 +1441,7 @@ mod tests {
                 table: "Main",
                 returned: false,
                 warnings: vec!["Invalid CanonCustom data"],
+                verbose_directories: vec![],
                 entries: vec![],
             }]
         );
@@ -1412,6 +1510,15 @@ mod tests {
                 "case": {
                     "name": "mm-normal", "byte_order": "MM", "data_hex": "000601020304",
                     "dir_start": 0, "dir_len": 6, "members": {},
+                },
+            }),
+            serde_json::json!({
+                "protocol": "oxidex.word_processor.v1",
+                "module": "CanonCustom",
+                "table": "FunctionsD30",
+                "case": {
+                    "name": "verbose-normal", "byte_order": "II", "data_hex": "060002010403",
+                    "dir_start": 0, "dir_len": 6, "members": {}, "verbose": true,
                 },
             }),
             serde_json::json!({
@@ -1503,6 +1610,7 @@ mod tests {
             let mut ctx = Ctx::new(&mut members);
             let mut sink = Sink {
                 enabled: true,
+                verbose: request["case"]["verbose"].as_bool().unwrap_or(false),
                 ..Sink::default()
             };
             let result = process_keyed_directory(
@@ -1527,6 +1635,24 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(trace.warnings, native_warnings);
             assert_eq!(sink.warnings, trace.warnings);
+
+            let native_verbose = reply["verbose_dirs"]
+                .as_array()
+                .expect("native VerboseDir array");
+            assert_eq!(trace.verbose_directories.len(), native_verbose.len());
+            assert_eq!(sink.verbose_directories, trace.verbose_directories);
+            for (rust, native) in trace.verbose_directories.iter().zip(native_verbose) {
+                assert_eq!(
+                    rust.directory,
+                    native[0]["string"]
+                        .as_str()
+                        .expect("native verbose directory name")
+                );
+                let native_count = native[1]["numeric"]
+                    .as_f64()
+                    .expect("native verbose directory count");
+                assert_eq!(rust.entry_count, native_count);
+            }
 
             let native_tags = reply["handle_tags"]
                 .as_array()
