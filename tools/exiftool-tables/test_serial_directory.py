@@ -275,7 +275,7 @@ class PinnedSerialInventory(unittest.TestCase):
     def compile(self, source=None):
         return serial_directory.compile_serial_inventory("Canon", "AFInfo", source or self.table)
 
-    def test_pinned_afinfo_captures_full_order_and_only_decodebits_is_source_row_blocker(self):
+    def test_pinned_afinfo_captures_full_order_and_supported_signed_operands(self):
         descriptor = self.compile()
         self.assertEqual([entry["serial_index"] for entry in descriptor["entries"]], list(range(13)))
         self.assertEqual(descriptor["gate_a"]["blocked_by"], [])
