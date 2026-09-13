@@ -43,6 +43,21 @@ class WordRowAudit:
 _NUMERIC_ID = re.compile(r"(?:0|[1-9]\d*)\Z")
 _FLAG_NAMES = ("Unknown", "Binary", "List", "Protected", "Avoid", "Priority")
 
+# These properties affect a selected value, parsing position/format, nested
+# reads, tag eligibility, or read-side presentation.  WordDirectory has no
+# representation for them.  Keep documentation and write-only properties
+# (Description, Notes, Writable, *ConvInv) out of this set.
+# Table properties which are documentation or write-path-only under the
+# current scoped contract. Everything else present in the complete native
+# special-tag map is rejected until a WordDirectory member models it.
+_IGNORED_TABLE_METADATA = frozenset(("NOTES", "WRITABLE", "WRITE_PROC", "CHECK_PROC"))
+
+_UNMODELED_RUNTIME_PROPERTIES = (
+    "Mask", "BitShift", "BitsPerWord", "BitsTotal", "ByteOrder", "DataMember",
+    "Hook", "Base", "Offset", "ChangeBase", "FixFormat", "SubIFD", "RelatedTag",
+    "SeparateTable", "PrintHex", "Require", "Desire", "Inhibit", "Hidden",
+)
+
 
 def _mismatches(mismatches: list[WordRowMismatch], identity: tuple[str, ...], reason: str) -> None:
     mismatches.append(WordRowMismatch(identity, reason))
@@ -174,22 +189,27 @@ def _field_facts(row: dict[str, Any], key: tuple[str, str, str], generated: Any,
     if facts is None or source is None:
         _mismatches(mismatches, key, "generated row lacks parsed facts/source facts")
         return
-    # ProcessCanonCustom supplies HandleTag Format int8u / Count 1.  A word
-    # descriptor may represent that execution default as `Some(Fmt::Int8u)`
-    # while retaining absent per-row source Format/Count as None.  No other
-    # format/count projection is accepted here.
-    for prop, generated_value, source_value, expected_generated, expected_source in (
-        ("Format", _attr(facts, "format", None), _attr(source, "format", None), "Some(Fmt::Int8u)", None),
-        ("Count", _attr(facts, "count", None), _attr(source, "count", None), "None", None),
+    # ProcessCanonCustom supplies HandleTag selection metadata Format int8u /
+    # Count 1.  The native integer value itself is not constrained to eight
+    # bits. A word descriptor keeps absent per-row Format/Count as `None`;
+    # its layout carries the processor-supplied int8u/1 selection metadata.
+    # An explicitly repeated int8u/1 must retain
+    # its raw source facts and use the corresponding typed projection.
+    for prop, generated_value, source_value, absent_generated, explicit_generated, explicit_source in (
+        ("Format", _attr(facts, "format", None), _attr(source, "format", None), "None", "Some(Fmt::Int8u)", "int8u"),
+        ("Count", _attr(facts, "count", None), _attr(source, "count", None), "None", "Some(1)", "1"),
     ):
         present, value, error = _property(row, prop)
         if error:
             _mismatches(mismatches, key, error)
             continue
-        if present:
-            _mismatches(mismatches, key, f"unsupported native {prop}; word descriptor only authenticates HandleTag default")
-        elif generated_value != expected_generated or source_value != expected_source:
-            _mismatches(mismatches, key, f"{prop} does not match authenticated HandleTag default")
+        if not present:
+            if generated_value != absent_generated or source_value is not None:
+                _mismatches(mismatches, key, f"{prop} does not match authenticated HandleTag default")
+            continue
+        text = _scalar(value)
+        if text != explicit_source or generated_value != explicit_generated or source_value != explicit_source:
+            _mismatches(mismatches, key, f"native {prop} is not the exact supported int8u/1 projection")
 
     present, value, error = _property(row, "Condition")
     if error:
@@ -226,6 +246,13 @@ def _field_facts(row: dict[str, Any], key: tuple[str, str, str], generated: Any,
     if flag_error or _attr(source, "flags", None) != flags or _attr(facts, "flags", None) != flags:
         _mismatches(mismatches, key, flag_error or "effective native Flags are not represented exactly")
 
+    for prop in _UNMODELED_RUNTIME_PROPERTIES:
+        present, _value, error = _property(row, prop)
+        if error:
+            _mismatches(mismatches, key, error)
+        elif present:
+            _mismatches(mismatches, key, f"unsupported native {prop} has no WordDirectory representation")
+
     present, value, error = _property(row, "SubDirectory")
     if error:
         _mismatches(mismatches, key, error)
@@ -235,6 +262,10 @@ def _field_facts(row: dict[str, Any], key: tuple[str, str, str], generated: Any,
 
 def audit_word_rows(generated: Any, omissions: Any, inventory: ProcessorInventory, processor_names: Iterable[str]) -> WordRowAudit:
     """Audit one caller-selected word layout against full native row inventory.
+
+    Fresh native records carry a complete typed table metadata map over live
+    ExifTool `%specialTags`; older records remain parseable but are refused by
+    this audit because that coverage is unavailable.
 
     ``generated`` may be the whole ParsedKeyedRust-like object when it exposes
     ``layouts``: only entries with a non-None WordDirectory descriptor belong
@@ -277,9 +308,42 @@ def audit_word_rows(generated: Any, omissions: Any, inventory: ProcessorInventor
     table_groups = _attr(generated, "table_groups", {})
     for table_key in sorted(selected):
         identity = (table_key.module, table_key.table)
-        native_groups, error = _table_groups(inventory.tables[table_key])
+        native_table = inventory.tables[table_key]
+        native_groups, error = _table_groups(native_table)
         if error or table_groups.get(identity) != native_groups:
             _mismatches(mismatches, identity, error or "table Groups differ from native source")
+        # The complete map is driven by ExifTool's live `%specialTags`.
+        # Missing metadata is intentionally a refusal: old inventory records
+        # remain parseable, but cannot certify a future WordDirectory route.
+        metadata = native_table.get("metadata")
+        if not isinstance(metadata, dict):
+            _mismatches(mismatches, identity, "complete native table metadata is unavailable")
+        else:
+            processor_name = inventory.processors[table_key].get("__name")
+            for property_name, property_fact in sorted(metadata.items()):
+                if not isinstance(property_fact, dict) or not isinstance(property_fact.get("present"), bool):
+                    _mismatches(mismatches, identity, f"table {property_name} metadata fact is malformed")
+                    continue
+                if not property_fact["present"]:
+                    continue
+                if property_name == "GROUPS":
+                    continue
+                if property_name == "PROCESS_PROC":
+                    native = property_fact.get("value")
+                    if not isinstance(native, dict) or native.get("kind") != "code" or native.get("name") != processor_name:
+                        _mismatches(mismatches, identity, "table PROCESS_PROC does not match processor provenance")
+                    continue
+                if property_name in _IGNORED_TABLE_METADATA:
+                    continue
+                _mismatches(mismatches, identity, f"unsupported native table metadata {property_name} has no WordDirectory representation")
+        # Keep these legacy top-level copies checked for records generated
+        # before `metadata`; fresh records above see the same properties too.
+        for property_name, label in (("format", "FORMAT"), ("first_entry", "FIRST_ENTRY")):
+            property_fact = native_table.get(property_name)
+            if not isinstance(property_fact, dict) or not isinstance(property_fact.get("present"), bool):
+                _mismatches(mismatches, identity, f"table {label} fact is malformed")
+            elif property_fact["present"]:
+                _mismatches(mismatches, identity, f"unsupported native table {label} has no WordDirectory representation")
 
     fields = _attr(generated, "fields", {})
     generated_ids = {key for key in fields if tuple(key[:2]) in generated_scope}

@@ -40,6 +40,7 @@
 #                                               emitted after all modules load;
 #                                               separate from KEYED scope
 #   NATIVE_PROCESSOR_TABLE MODULE TABLE JSON-FACT -- table identity/properties,
+#                                               complete special-tag metadata,
 #                                               including zero-row tables
 #   NATIVE_PROCESSOR_ROW MODULE TABLE RAW_ID VARIANT JSON-FACT -- one record
 #                                               per plain entry or array alternative;
@@ -633,6 +634,19 @@ sub processor_entry_fact {
     return \%fact;
 }
 
+# Preserve every known ExifTool table-level special tag with explicit
+# presence. This is intentionally driven by ExifTool's own `%specialTags`, not
+# a word/Canon allowlist: a newly introduced read-affecting table property is
+# visible to a verifier even when absent on today's selected tables.
+sub processor_table_metadata {
+    my ($table) = @_;
+    my %metadata;
+    for my $key (sort keys %Image::ExifTool::specialTags) {
+        $metadata{txt($key)} = processor_native_property($table, $key);
+    }
+    return \%metadata;
+}
+
 sub processor_row_records {
     my ($table) = @_;
     my @records;
@@ -916,6 +930,7 @@ for my $key (sort keys %processor_tables) {
         groups => processor_native_property($table, 'GROUPS'),
         format => processor_native_property($table, 'FORMAT'),
         first_entry => processor_native_property($table, 'FIRST_ENTRY'),
+        metadata => processor_table_metadata($table),
         row_record_count => scalar(@rows), named_row_count => $named,
     };
     print join("\t", 'NATIVE_PROCESSOR_TABLE', $mod, $sym,

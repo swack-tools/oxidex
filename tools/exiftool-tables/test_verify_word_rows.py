@@ -3,11 +3,14 @@
 from collections import namedtuple
 import json
 from pathlib import Path
+from types import SimpleNamespace
+import os
 import sys
 import unittest
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
+import verify as keyed_verify  # noqa: E402
 import verify_processor_inventory as processor  # noqa: E402
 import verify_word_rows as rows  # noqa: E402
 
@@ -49,9 +52,16 @@ def row(name, *, enum=None, condition=None, raw_conv=None, flags=None):
             "effective_flags": effective}
 
 
-def table(proc, count, named, *, groups=None):
-    return {"processor": proc, "groups": prop(groups), "format": prop(), "first_entry": prop(),
+def table(proc, count, named, *, groups=None, metadata=True):
+    fact = {"processor": proc, "groups": prop(groups), "format": prop(), "first_entry": prop(),
             "row_record_count": count, "named_row_count": named}
+    if metadata:
+        fact["metadata"] = {
+            "GROUPS": prop(groups),
+            "PROCESS_PROC": prop({"kind": "code", "name": proc["__name"]}),
+            "NOTES": prop(), "WRITABLE": prop(), "WRITE_PROC": prop(), "CHECK_PROC": prop(),
+        }
+    return fact
 
 
 def inventory_text(*, drop_zero=False, mutation=None):
@@ -89,7 +99,7 @@ def generated(*, include_empty=True, extra=False, layouts=True):
     if extra:
         scope.add(("Fixture", "Extra"))
         fields[("Fixture", "Extra", "1")] = "Nope"
-    facts = {key: Fact("Some(Fmt::Int8u)", "None", False, False, False, (None, None, None), None, flags) for key in fields}
+    facts = {key: Fact("None", "None", False, False, False, (None, None, None), None, flags) for key in fields}
     source = {key: Source(None, None, None, (None, None, None), None, flags) for key in fields}
     table_groups = {("Fixture", "Words"): ("MakerNotes", "", ""), ("Fixture", "Empty"): ("", "", "")}
     if extra:
@@ -131,7 +141,7 @@ class WordRowsTests(unittest.TestCase):
         bad_enums = dict(item.enums)
         bad_enums[("Fixture", "Words", "1")] = {"0": "Changed", "1": "On"}
         bad_facts = dict(item.facts)
-        bad_facts[("Fixture", "Words", "1")] = Fact("None", "Some(1)", False, False, False, (None, None, None), None, (False,) * 5 + (None,))
+        bad_facts[("Fixture", "Words", "1")] = Fact("Some(Fmt::Int8u)", "Some(1)", False, False, False, (None, None, None), None, (False,) * 5 + (None,))
         changed = item._replace(fields=bad_names, enums=bad_enums, facts=bad_facts)
         inv = processor.parse_processor_inventory(inventory_text())
         got = rows.audit_word_rows(changed, Omissions(True, {}), inv, {PROCESSOR})
@@ -139,6 +149,19 @@ class WordRowsTests(unittest.TestCase):
         self.assertIn("name differs", reasons)
         self.assertIn("enum differs", reasons)
         self.assertIn("Format does not match", reasons)
+
+    def test_explicit_int8u_and_one_retain_exact_raw_projection(self):
+        def mutate(native_row):
+            native_row["properties"]["Format"] = prop(native("scalar", "int8u"))
+            native_row["properties"]["Count"] = prop(native("scalar", "1"))
+        inv = processor.parse_processor_inventory(inventory_text(mutation=mutate))
+        base = generated()
+        key = ("Fixture", "Words", "1")
+        facts = dict(base.facts)
+        sources = dict(base.source_facts)
+        facts[key] = Fact("Some(Fmt::Int8u)", "Some(1)", False, False, False, (None, None, None), None, (False,) * 5 + (None,))
+        sources[key] = Source("int8u", "1", None, (None, None, None), None, (False,) * 5 + (None,))
+        self.assertTrue(rows.audit_word_rows(base._replace(facts=facts, source_facts=sources), Omissions(True, {}), inv, {PROCESSOR}).ok)
 
     def test_condition_and_effective_flags_must_match_native_facts(self):
         inv = processor.parse_processor_inventory(inventory_text(mutation=lambda r: (
@@ -150,6 +173,24 @@ class WordRowsTests(unittest.TestCase):
         self.assertIn("Condition", reasons)
         self.assertIn("Flags", reasons)
 
+    def test_unmodeled_read_properties_and_table_defaults_fail_closed(self):
+        for property_name in ("Mask", "BitShift", "ByteOrder", "DataMember", "Hook", "Offset", "PrintHex", "Require"):
+            with self.subTest(property_name=property_name):
+                inv = processor.parse_processor_inventory(inventory_text(
+                    mutation=lambda r, name=property_name: r["properties"].__setitem__(name, prop(native("scalar", "1")))
+                ))
+                got = rows.audit_word_rows(generated(), Omissions(True, {}), inv, {PROCESSOR})
+                self.assertTrue(any(f"unsupported native {property_name}" in item.reason for item in got.mismatches))
+        inv = processor.parse_processor_inventory(inventory_text())
+        table_fact = dict(inv.tables)
+        key = processor.ProcessorKey("Fixture", "Words")
+        mutated = dict(table_fact[key])
+        mutated["format"] = prop(native("scalar", "int16u"))
+        table_fact[key] = mutated
+        changed = processor.ProcessorInventory(inv.processors, table_fact, inv.rows)
+        got = rows.audit_word_rows(generated(), Omissions(True, {}), changed, {PROCESSOR})
+        self.assertTrue(any("table FORMAT" in item.reason for item in got.mismatches))
+
     def test_omission_and_unmodeled_conversion_never_pass(self):
         inv = processor.parse_processor_inventory(inventory_text(mutation=lambda r: r["properties"].__setitem__("RawConv", prop(native("scalar", "$val")))))
         omitted = Omissions(True, {("Fixture", "Words", "1"): object()})
@@ -157,6 +198,20 @@ class WordRowsTests(unittest.TestCase):
         reasons = "\n".join(item.reason for item in got.mismatches)
         self.assertIn("unverified word omission", reasons)
         self.assertIn("RawConv", reasons)
+
+    @unittest.skipUnless(os.environ.get("OXIDEX_WORD_KEYED_RUST") and os.environ.get("OXIDEX_PROCESSOR_INVENTORY"),
+                         "set OXIDEX_WORD_KEYED_RUST and OXIDEX_PROCESSOR_INVENTORY to canonical artifacts")
+    def test_canonical_generated_word_artifact_matches_full_native_processor_inventory(self):
+        inventory = processor.parse_processor_inventory(
+            Path(os.environ["OXIDEX_PROCESSOR_INVENTORY"]).read_text(encoding="utf-8")
+        )
+        parsed = keyed_verify.parse_keyed_rust(Path(os.environ["OXIDEX_WORD_KEYED_RUST"]))
+        processor_name = os.environ.get("OXIDEX_WORD_PROCESSOR", "Image::ExifTool::CanonCustom::ProcessCanonCustom")
+        selected = {key for key, fact in inventory.processors.items() if fact.get("__name") == processor_name}
+        generated = SimpleNamespace(**parsed._asdict(), layouts={(key.module, key.table): object() for key in selected})
+        omissions = keyed_verify.parse_omitted_keyed_native_rows(Path(os.environ["OXIDEX_WORD_KEYED_RUST"]))
+        result = rows.audit_word_rows(generated, omissions, inventory, {processor_name})
+        self.assertTrue(result.ok, result.mismatches)
 
     def test_layouts_filter_all_keyed_tables_but_legacy_projection_is_exact(self):
         inv = processor.parse_processor_inventory(inventory_text())
