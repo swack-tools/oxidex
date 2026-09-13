@@ -2,6 +2,7 @@
 import copy
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -63,6 +64,12 @@ def collision_fixture():
     return data
 
 
+def raw_ids(text):
+    body = text.split("pub static RAW_TAG_IDS: &[&[&str]] = &[\n", 1)[1].split("];", 1)[0]
+    return {match[2]: json.loads(match[1]) for match in
+            re.finditer(r"^    &(\[.*\]), // (\w+)$", body, re.MULTILINE)}
+
+
 class SonyPlainGeneratorTests(unittest.TestCase):
     def test_complete_six_table_output_deduplicates_maps_and_orders_keys(self):
         text, counts = generator.render(fixture())
@@ -71,6 +78,9 @@ class SonyPlainGeneratorTests(unittest.TestCase):
         self.assertIn("pub const SHOTINFO: usize = 5;", text)
         self.assertIn("//! Sony plain (unenciphered)", text)
         self.assertTrue(text.endswith("}\n"))
+        self.assertEqual(list(raw_ids(text)), ["CameraSettings", "CameraSettings2", "CameraSettings3",
+                                               "FaceInfo1", "FaceInfo2", "ShotInfo"])
+        self.assertTrue(all(ids == ["1"] for ids in raw_ids(text).values()))
 
     def test_source_data_changes_reach_output(self):
         data = fixture()
@@ -94,6 +104,7 @@ class SonyPlainGeneratorTests(unittest.TestCase):
         text, _ = generator.render(data)
         self.assertLess(text.index('name: "First"'), text.index('name: "Second"'))
         self.assertLess(text.index('index: 2,'), text.index('index: 10,'))
+        self.assertEqual(raw_ids(text)["CameraSettings"], ["1", "2", "2", "10"])
 
     def test_changed_expression_semantics_and_literals_refuse(self):
         mutations = [
@@ -131,7 +142,8 @@ class SonyPlainGeneratorTests(unittest.TestCase):
                     generator.render(data)
 
     def test_malformed_tag_ids_names_and_format_refuse(self):
-        for key in ("1.1", "01", "-1", "4294967296", "1e2", "276.10"):
+        for key in ("1.", "1.0", "01", "-1", "4294967296", "4294967296.1", "1e2", "276.10",
+                    "+1", "NaN", "Infinity", "1.01x", " 1", "1\n", "1.1\n"):
             data = fixture()
             add(data, key, {"Name": "Bad"})
             with self.subTest(key=key), self.assertRaises(generator.Unsupported):
@@ -194,6 +206,7 @@ class SonyPlainGeneratorTests(unittest.TestCase):
         text, counts = generator.render(data)
         self.assertNotIn("UnknownSetting", text)
         self.assertEqual(counts["unknown_omitted"], 1)
+        self.assertEqual(raw_ids(text)["CameraSettings"], ["1"])
         add(data, "20", {"_variants": [{"Name": "UnknownSetting", "Unknown": "1"}, {"Name": "Fallback"}]})
         with self.assertRaisesRegex(generator.Unsupported, "known/Unknown"):
             generator.render(data)
@@ -209,34 +222,87 @@ class SonyPlainGeneratorTests(unittest.TestCase):
             with self.assertRaises(generator.Unsupported):
                 generator.render(data)
 
-    def test_existing_fractional_key_projection_is_reported(self):
+    def test_independent_fractional_keys_preserve_native_identity(self):
         text, counts = generator.render(collision_fixture())
         self.assertEqual(text.count("index: 276,"), 2)
-        self.assertEqual(len(counts["projections"]), 1)
-        self.assertIn("276.1", counts["projections"][0])
+        self.assertNotIn("projections", counts)
+        self.assertEqual(raw_ids(text)["CameraSettings3"], ["1", "276", "276.1"])
         self.assertLess(text.index('name: "FolderNumber"'), text.index('name: "ImageNumber"'))
 
-    def test_changed_fractional_pair_refuses_instead_of_generalizing(self):
-        for key, field, value in [("276.1", "Name", "Other"), ("276.1", "Mask", "255"),
-                                  ("276.1", "Condition", "($$self{Model} =~ /^NEX-/)"),
-                                  ("276.1", "Unknown", "1"), ("276", "Name", "Other"),
-                                  ("276", "Mask", "1023"), ("276", "ValueConv", expr("$val * 100"))]:
-            data = collision_fixture()
-            table(data, "CameraSettings3")["tags"][key][field] = value
-            with self.subTest(key=key, field=field), self.assertRaises(generator.Unsupported):
-                generator.render(data)
+    def test_fractional_keys_do_not_require_a_handwired_sibling_or_name(self):
         data = collision_fixture()
         del table(data, "CameraSettings3")["tags"]["276"]
         table(data, "CameraSettings3")["tag_count"] -= 1
-        with self.assertRaises(generator.Unsupported):
-            generator.render(data)
+        row = table(data, "CameraSettings3")["tags"]["276.1"]
+        row.update(Name="RenamedIndependent", Mask="255")
+        text, _ = generator.render(data)
+        self.assertEqual(raw_ids(text)["CameraSettings3"], ["1", "276.1"])
+        self.assertIn('index: 276, name: "RenamedIndependent"', text)
+        add(data, "12.01", {"Name": "NewFraction"}, "FaceInfo2")
+        text, _ = generator.render(data)
+        self.assertEqual(raw_ids(text)["FaceInfo2"], ["1", "12.01"])
+        add(data, "1.5", {"Name": "HalfIndex"})
+        text, _ = generator.render(data)
+        # CameraSettings is int16u. Native int(1.5) * 2 is byte 2, not 3.
+        self.assertIn('index: 1, name: "HalfIndex"', text)
+        self.assertEqual(raw_ids(text)["CameraSettings"], ["1", "1.5"])
+
+    def test_fractional_sort_uses_exact_decimal_and_keeps_integer_offset(self):
+        data = fixture()
+        # Reverse insertion order, including an index at the u32 boundary.
+        add(data, "4294967295.2", {"Name": "Later"})
+        add(data, "4294967295.1", {"Name": "Earlier"})
+        add(data, "0.01", {"Name": "BeforeFirst"})
+        text, _ = generator.render(data)
+        self.assertEqual(raw_ids(text)["CameraSettings"],
+                         ["0.01", "1", "4294967295.1", "4294967295.2"])
+        self.assertLess(text.index('name: "Earlier"'), text.index('name: "Later"'))
+        self.assertEqual(text.count("index: 4294967295,"), 2)
+        self.assertIn('index: 0, name: "BeforeFirst"', text)
+
+    def test_distinct_ids_that_tie_in_native_numeric_sort_refuse(self):
+        for first, second in [("4294967295.10000000000000001", "4294967295.10000000000000002"),
+                              ("1", "1.00000000000000000001")]:
+            data = fixture()
+            add(data, first, {"Name": "First"})
+            add(data, second, {"Name": "Second"})
+            with self.assertRaisesRegex(generator.Unsupported, "native numeric sort"):
+                generator.render(data)
+
+    def test_fraction_that_rounds_across_native_integer_boundary_refuses(self):
+        for key in ("1.9999999999999999", "4294967295.99999999999999"):
+            data = fixture()
+            add(data, key, {"Name": "RoundedOffset"})
+            with self.assertRaisesRegex(generator.Unsupported, "native integer offset"):
+                generator.render(data)
+
+    def test_fractional_variants_and_unknown_omission_keep_metadata_aligned(self):
+        data = fixture()
+        add(data, "1.1", {"_variants": [
+            {"Name": "First", "Condition": "($$self{Model} =~ /^NEX-/)"}, {"Name": "Second"}]})
+        add(data, "1.2", {"Name": "Independent"})
+        add(data, "1.3", {"_variants": [
+            {"Name": "UnknownFirst", "Unknown": "1"}, {"Name": "UnknownSecond", "Unknown": "1"}]})
+        text, counts = generator.render(data)
+        self.assertEqual(raw_ids(text)["CameraSettings"], ["1", "1.1", "1.1", "1.2"])
+        self.assertEqual(counts["unknown_omitted"], 2)
+        self.assertNotIn("UnknownFirst", text)
+        self.assertEqual(sum(map(len, raw_ids(text).values())), counts["rows"])
+
+    def test_fractional_key_does_not_bypass_semantic_validation(self):
+        for field, value in [("Hook", "$varSize += 1"), ("RawConv", expr("$val + 1")),
+                             ("Condition", "side_effect()"), ("BitShift", "2")]:
+            data = fixture()
+            add(data, "1.1", {"Name": "Fraction", field: value})
+            with self.subTest(field=field), self.assertRaises(generator.Unsupported):
+                generator.render(data)
 
     def test_mask_derives_native_shift_and_rejects_unrepresented_override(self):
         data = fixture()
         add(data, "20", {"Name": "Bits", "Mask": "12", "BitShift": "2"})
         text, counts = generator.render(data)
         self.assertIn("mask: 12", text)
-        self.assertEqual(counts["projections"], [])
+        self.assertNotIn("projections", counts)
         table(data)["tags"]["20"]["BitShift"] = "0"
         with self.assertRaisesRegex(generator.Unsupported, "BitShift"):
             generator.render(data)
@@ -310,8 +376,12 @@ class SonyPlainGeneratorTests(unittest.TestCase):
         bad_semantic = fixture(); table(bad_semantic)["tags"]["1"]["ValueConv"] = expr("$val * 101")
         bad_unicode = fixture(); table(bad_unicode)["tags"]["1"]["Name"] = "\ud800"
         bad_enum = fixture(); table(bad_enum)["tags"]["1"]["PrintConv"] = enum({"1": {"reference": "not a label"}})
+        bad_fraction = fixture(); add(bad_fraction, "276.10", {"Name": "Alias"})
+        bad_order = fixture(); add(bad_order, "1.00000000000000000001", {"Name": "NumericTie"})
+        bad_offset = fixture(); add(bad_offset, "1.9999999999999999", {"Name": "RoundedOffset"})
         for text in ("{malformed", '{"exiftool_version":"13.59","exiftool_version":"13.59"}',
-                     json.dumps(bad_pin), json.dumps(bad_semantic), json.dumps(bad_unicode), json.dumps(bad_enum)):
+                     json.dumps(bad_pin), json.dumps(bad_semantic), json.dumps(bad_unicode), json.dumps(bad_enum),
+                     json.dumps(bad_fraction), json.dumps(bad_order), json.dumps(bad_offset)):
             with self.subTest(text=text[:80]):
                 result, output, sentinel, before, after = self.run_cli(text)
                 self.assertNotEqual(result.returncode, 0)

@@ -5,10 +5,11 @@ This finite translation registry is not a Perl compiler. Unsupported read-time
 fields, expressions and layout changes refuse before opening the output. Names,
 IDs, enum data and variant order come from the loaded tables, never from Rust.
 
-The existing CameraSettings3 projection is deliberately preserved and reported:
-keys 276 and 276.1 become one integer-index alternative group. Recovery does not
-establish runtime parity. The mandatory independent native verifier also checks
-PrintInt (documentation metadata), whose value the dump does not carry.
+RAW_TAG_IDS preserves native key identity alongside each emitted DSL row:
+independent fractional keys remain distinct and true variants repeat one ID.
+The integer index remains the byte-offset index, not the variant-group identity.
+The mandatory independent native verifier also checks PrintInt (documentation
+metadata), whose value the dump does not carry.
 PROCESS_PROC is checked by its registered name;
 changes inside the shared Perl processor remain the engine oracle's contract.
 """
@@ -109,6 +110,29 @@ def flag(value):
     return n
 
 
+def tag_index(key):
+    """Canonical nonnegative decimal key; integer part is the binary index.
+
+    Reject numeric aliases such as 01, 1.0 and 1.10. A fractional component
+    may begin with zero (1.01), but must end in a nonzero digit. Sorting uses
+    Decimal; a separate conservative NV-collision check refuses distinct keys
+    whose native numeric ordering may tie. No rounded key is ever emitted.
+    ProcessBinaryData computes int($index) * $increment + $varSize, truncating
+    before FORMAT multiplication (ExifTool.pm 13.59:9957), including U16 tables.
+    """
+    if not isinstance(key, str):
+        raise Unsupported(f"tag ID must be a string: {key!r}")
+    match = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]*[1-9]))?", key)
+    if not match:
+        raise Unsupported(f"noncanonical tag ID: {key!r}")
+    index = uint(match[1])
+    # A decimal just below an integer may round upward in native NV before
+    # int($index), even when no second key exposes a numeric-sort collision.
+    if int(float(Decimal(key))) != index:
+        raise Unsupported(f"native integer offset may round across a boundary: {key!r}")
+    return index
+
+
 def rust_string(value):
     if not isinstance(value, str):
         raise Unsupported(f"expected string: {value!r}")
@@ -186,7 +210,7 @@ def check_meta(name, table):
 def render(data):
     tables = data["modules"]["Sony"]["tables"]
     maps, bits, map_ids, bit_ids, rendered = [], [], {}, {}, []
-    counts = {"tables": 0, "rows": 0, "unknown_omitted": 0, "projections": [], "dump_boundaries": []}
+    counts = {"tables": 0, "rows": 0, "unknown_omitted": 0, "dump_boundaries": []}
 
     def intern(pairs, all_pairs, ids, prefix):
         if pairs not in ids:
@@ -238,10 +262,17 @@ def render(data):
     for table_number, name in enumerate(TABLES):
         table = tables[name]
         table_fmt, table_low = check_meta(name, table)
-        rows = []
+        rows, raw_ids = [], []
+        numeric_keys = {}
         for key in table["tags"]:
-            if key != "276.1" or name != "CameraSettings3":
-                uint(key)
+            tag_index(key)
+            # Native sorts with $a <=> $b. Python's double is used only as a
+            # refusal guard, never as the sorting key or emitted identity.
+            # This is conservative on Perl builds with wider NV precision.
+            nv = float(Decimal(key))
+            if nv in numeric_keys:
+                raise Unsupported(f"{name}: native numeric sort may tie distinct IDs {numeric_keys[nv]!r} and {key!r}")
+            numeric_keys[nv] = key
         for key, group in sorted(table["tags"].items(), key=lambda item: Decimal(item[0])):
             if not isinstance(group, dict):
                 raise Unsupported(f"{name}[{key}]: malformed group")
@@ -291,19 +322,6 @@ def render(data):
                         raise Unsupported("explicit BitShift differs from runtime mask trailing_zeros")
                     if mask and (count != 1 or fmt == "Fmt::Str"):
                         raise Unsupported("mask on non-scalar numeric Format")
-                    if key == "276.1":
-                        sibling = table["tags"].get("276")
-                        if (len(variants) != 1 or row["Name"] != "ImageNumber" or row.get("Format") != "int32u" or mask != 16383
-                                or row.get("Condition") != "$$self{Model} !~ /^DSLR-(A450|A500|A550)$/"
-                                or pc != "Pc::ZeroPad(4)" or raw != "Raw::None" or vc != "Vc::None"
-                                or flag(row.get("Unknown", 0)) or "SubDirectory" in row or "Priority" in row
-                                or not isinstance(sibling, dict) or sibling.get("Name") != "FolderNumber"
-                                or sibling.get("Format") != "int32u" or uint(sibling.get("Mask")) != 16760832
-                                or sibling.get("Condition") != row["Condition"]
-                                or expression(sibling, "PrintConv") != 'sprintf("%.3d",$val)'
-                                or any(field in sibling for field in ("RawConv", "ValueConv", "SubDirectory", "Priority", "Unknown"))):
-                            raise Unsupported("changed fractional-key projection requires runtime review")
-                        counts["projections"].append("CameraSettings3[276.1] ImageNumber: existing Rust index 276 groups independent native keys 276 and 276.1 as alternatives")
                     sub = "None"
                     if "SubDirectory" in row:
                         sd = row["SubDirectory"]
@@ -318,13 +336,14 @@ def render(data):
                         # unmodeled fields/conversions even on an omitted row.
                         counts["unknown_omitted"] += 1
                         continue
-                    index = uint(key.split('.')[0])
+                    index = tag_index(key)
                     rows.append(f"    BinTag {{ index: {index}, name: {label}, cond: {cond}, fmt: {fmt}, count: {count}, mask: {mask}, raw: {raw}, vc: {vc}, pc: {pc}, hook: Hook::None, print_hex: {str(hexed).lower()}, low_priority: {str(low).lower()}, subdir: {sub} }},")
+                    raw_ids.append(key)
                 except (Unsupported, TypeError, KeyError) as error:
                     raise Unsupported(f"{name}[{key}] {row.get('Name', '?')}: {error}") from error
         if not rows:
             raise Unsupported(f"{name}: no emitted rows")
-        rendered.append((name, table_fmt, rows))
+        rendered.append((name, table_fmt, rows, raw_ids))
         counts["tables"] += 1
         counts["rows"] += len(rows)
 
@@ -346,10 +365,16 @@ def render(data):
         text = ", ".join(f"({k}u32, {rust_string(v)})" for k, v in pairs)
         lines += ["#[rustfmt::skip]", f"static B{i}: &[(u32, &str)] = &[{text}];"]
     lines.append("")
-    for i, (_, _, rows) in enumerate(rendered):
+    for i, (_, _, rows, _) in enumerate(rendered):
         lines += ["#[rustfmt::skip]", f"static T{i}: &[BinTag] = &[", *rows, "];"]
+    lines += ["", "/// Native tag IDs, aligned with each table's emitted rows. True variants",
+              "/// repeat one ID; independent fractional keys retain distinct identities.",
+              "#[rustfmt::skip]", "pub static RAW_TAG_IDS: &[&[&str]] = &["]
+    for name, _, _, raw_ids in rendered:
+        lines.append(f"    &[{', '.join(rust_string(key) for key in raw_ids)}], // {name}")
+    lines.append("];")
     lines += ["", "/// Every table, indexed by the `SubDir`/`Root` table numbers above.", "pub static TABLES: &[BinTable] = &["]
-    for i, (name, fmt, _) in enumerate(rendered):
+    for i, (name, fmt, _, _) in enumerate(rendered):
         lines += ["    BinTable {", f"        name: {rust_string(name)},", f"        fmt: {fmt},", f"        tags: T{i},", "    },"]
     lines += ["];", "", "/// Table numbers, by ExifTool table name.", "#[allow(dead_code)]", "pub mod idx {"]
     lines += [f"    pub const {name.upper()}: usize = {i};" for i, name in enumerate(TABLES)]
