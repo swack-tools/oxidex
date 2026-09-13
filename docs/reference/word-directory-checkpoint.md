@@ -38,8 +38,9 @@ supported or generated runtime tables.
 | Parent CIFF definitions | 61 native rows = 57 represented + 4 explicit omissions; zero native fact discrepancies | Parent still has one unsupported child processor and four omitted rows. |
 | Child-processing refusals | Five before, one after generation | This does not enable a carrier or retire manual code. |
 | Translated expressions | 607 passed; 16,789 matching probes; 14 inapplicable probe inputs | Expression validation is distinct from word-directory execution. |
-| Rust lint | Exact CI Clippy command passed | Native/Rust replay and full reader tests remain pending. |
-| Official two-tier regeneration | Partial; retry pending | First attempt failed on a missing Rust import before writes. Second passed expressions and emitted tables, then refused an unreported processor counter. Both causes are corrected; neither attempt is labeled complete. |
+| Rust reader and native replay | 24 keyed-reader tests pass; the explicitly selected native/Rust test passes all six cases using generated tables | Both byte orders, invalid headers, short reads, missing model state and parent dispatch are covered. Verbose-directory reporting remains a review finding under correction. |
+| Rust lint | Exact CI Clippy command passed | Must remain green after the verbose-reporting correction. |
+| Official two-tier regeneration | Partial; fourth attempt next | Earlier attempts stopped on a missing Rust import, an unreported processor counter, then a legacy Sony selector rejecting enriched processor facts. All three causes are corrected; a complete pass is still required. |
 | Runtime migration and retirement | Not complete | No production Canon route is enabled; no duplicate Canon reader is removed. |
 
 Regeneration uses isolated Perl 5.38.2, Archive::Zip 1.68 and repository-pinned
@@ -58,17 +59,23 @@ and records its return, warnings and handler arguments. Matching a source
 digest alone is deliberately not treated as matching execution.
 
 Evidence is under the task's `shared-pilot/word-directory-20260913/` directory:
-`canonical-r1/`, `canonical-r2/`, `definition-verification.json`,
+`canonical-r1/`, `canonical-r2/`, `canonical-r3/`, `rust-native-r1/`,
+`definition-verification.json`,
 `definition-verification.log`, `clippy-initial.json` and publication records.
 The owned checkout's local `HANDOFF.md` locates this task evidence.
+
+Published checkpoints: definitions and documentation `ff1237ea`, runtime
+validation `90034b1c`, shared-processor compatibility `88e07a47`, combined
+branch `a4dd6af1`. These are pushed work-branch commits, not merged runtime
+activation.
 
 ## Next measurable steps
 
 1. Finish the official two-tier regeneration and publish its exact verdict.
-2. Compare native and Rust behavior using the real generated tables in both
-   byte orders, including invalid headers, missing model state and short reads.
-   Prove that a real generated parent edge reaches the generated child under
-   both activation gates.
+2. Complete verbose-directory reporting and extend native/Rust replay to
+   compare that effect. The quiet-mode replay and real generated parent-edge
+   dispatch checks already pass. CI explicitly runs the native test and
+   rejects a successful command that selects zero tests.
 3. Implement the remaining dynamic-length processor and resolve the four
    omitted parent rows, recording each reduction in unsupported rules.
 4. Verify both real Canon carriers, enable the validated path and remove the

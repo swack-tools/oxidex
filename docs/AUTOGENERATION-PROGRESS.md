@@ -15,17 +15,24 @@ This is definition coverage; production routing remains inactive.
 Four of the parent's five unsupported child processors now have generated
 descriptors. One dynamic-length processor and four omitted parent rows remain.
 No Canon manual reader has been retired and no project-wide percentage has
-been remeasured. The next measurable result is native/Rust execution agreement
-using the actual generated registry, followed by the remaining processor,
+been remeasured. The next measurable result is complete native/Rust execution
+agreement, including verbose reporting, followed by the remaining processor,
 real-carrier verification and removal of duplicate readers.
 
-Clippy passes. All 607 translated expressions passed 16,789 native comparisons;
-14 probe inputs were inapplicable. The official regeneration attempt produced
-the tables but stopped because a new refusal counter lacked a report label.
-That reporting correction is implemented; the complete two-tier rerun and the
-new reader's execution tests remain pending. The
-[checkpoint record](reference/word-directory-checkpoint.md) distinguishes these
-checks and preserves both failed regeneration attempts.
+At published checkpoint `a4dd6af1`, 24 Rust reader tests pass and the explicit
+native/Rust comparison passes all six cases with the real generated tables.
+The generated parent-edge dispatch check also passes. Independent review found
+that verbose-directory reporting still needs to be implemented and compared.
+CI now explicitly selects the native test and rejects a zero-test run.
+
+All 607 translated expressions passed 16,789 native comparisons; 14 probe
+inputs were inapplicable. Official regeneration reached the older Sony
+producer, whose selector rejected enriched processor facts. That compatibility
+fix is pushed as `88e07a47`; the full two-tier rerun remains pending. The
+[checkpoint record](reference/word-directory-checkpoint.md) preserves the three
+failed regeneration attempts and distinguishes definition, runtime and merge
+status. Completed checkpoints are committed and pushed without waiting for the
+whole merge gate.
 
 ## Earlier milestones and evidence
 
