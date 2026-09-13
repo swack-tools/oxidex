@@ -65,8 +65,11 @@ chronological callback trace. The combined checkpoint at `66c430c6` passes **37 
 failures and zero skips**, on both threaded and non-threaded Perl 5.38.2
 against pinned ExifTool 13.59. The full hosted checks then passed for #756.
 
-The shared serial reader and Rust emitter are now combined on
-`codex/shared-serial-integration-20260913`, with pipeline checkpoint `9693ef9e`.
+The shared serial reader and Rust emitter merged in PR #757 as `58849bc7`
+at 12:47 UTC. All five hosted checks passed at `72fbebb1`, including 757
+canonical Python tests with zero failures/skips in 641.913 seconds, 5,756
+nextest tests passing (59 intentionally skipped), the complete Cargo test/doc
+invocation, and the explicitly invoked native serial replay.
 The [runtime checkpoint](reference/serial-runtime-checkpoint.md) records the
 proof and its limits. All eight tables remain accounted for: **106 emitted
 alternatives and 26 explicit omissions**, with zero independent verifier
@@ -86,14 +89,29 @@ local absolute invocation paths. Re-running its producer with the portable
 invocation reproduces the committed ledger exactly. All 607 expressions agree
 on 16,789 applicable comparisons; 14 inputs are inapplicable.
 
-This checkpoint still needs its final hosted gate and merge. No production
-route is enabled; **one unsupported Canon child processor, four omitted parent
-rows and zero Canon manual readers retired** remain the production status.
-The Real AudioV4 retirement draft is separately committed and published at
-`118afac7`. Source review accepts its narrow behavior, but it still needs a
-fresh Rust build, native output comparison, full-corpus pair and upgrade-flow
-proof. Its metadata occurrence API retains the existing group-0/group-2
-limitations; native warning output and V3/V5 activation also remain unfinished.
+That merged checkpoint enabled no production caller. **One unsupported Canon
+child processor, four omitted parent rows and zero Canon manual readers
+retired** remain the Canon status.
+
+The next [Real AudioV4 migration](reference/real-audio-v4-retirement.md) is
+implemented on `codex/real-v4-retirement-integration-20260913`, runtime
+`4f01db97` with additional regression assertions at `d3f51325`. Its generated
+reader replaces the manual 31-slot sequence. All six carrier tests, full
+Clippy and formatting pass. A fresh 19-file native/control/candidate comparison
+has 15 scored cases matching native output and four explicitly retained scope
+or diagnostic cases. Ten files correct existing legacy behavior: UTF-8 repair,
+NUL truncation, or later fields invented after an incomplete string.
+
+A supported source mutation also reaches actual output: changing AudioV4's
+`Title` name to `UpgradeTitle` in a copied pinned source, regenerating and
+compiling with the unchanged carrier, changes exactly that output key. No
+tag-specific Python/Rust rule is edited. This proves that supported change;
+it does not substitute for a real release upgrade or broader semantics.
+
+The full 4,238-file paired comparison and hosted acceptance are required before
+landing and counting the 31-slot retirement. The current occurrence API retains
+its existing native group-0/group-2 limitations; native warning output and
+V3/V5 activation remain unfinished.
 
 The first additional retirement candidate is Real AudioV4's manually specified
 31-entry sequence. It uses the same native serial processor and can prove reuse

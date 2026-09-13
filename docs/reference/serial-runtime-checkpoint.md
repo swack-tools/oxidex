@@ -10,7 +10,11 @@ The base is merged PR #756 (`eb700430`), pinned to ExifTool 13.59. Runtime,
 emitter and independent verifier are integrated at `9693ef9e` on
 `codex/shared-serial-integration-20260913`. The earlier compiled checkpoint
 `ff383b8e` is published. Its Rust source is unchanged by the later verifier and
-pipeline additions. The final checkpoint still needs hosted acceptance.
+pipeline additions. Final head `72fbebb1` passed all five hosted checks and
+merged as `58849bc7` in PR #757 at 12:47 UTC on September 13. Canonical Python
+passed 757 tests with zero failures/skips in 641.913 seconds; nextest passed
+5,756 tests with 59 intentionally skipped. Full Cargo test/doc and explicit
+serial native replay also passed.
 
 Native inventory selects all tables whose processor is `ProcessSerialData`
 before examining generated output. Eight tables contain 130 entries and 132
@@ -95,10 +99,12 @@ No i7 job or daemon change is part of this checkpoint.
 
 ## What remains
 
-- Complete final hosted checks and merge this inactive runtime checkpoint.
+- The inactive runtime checkpoint is merged. Complete acceptance of its first
+  production carrier, described in the [V4 retirement record](real-audio-v4-retirement.md).
 - Validate the separately published AudioV4 carrier draft (`118afac7`) with a
-  fresh candidate/control, real and constructed files, source-change flow and
-  the full corpus, then remove its manual 31-slot sequence.
+  full corpus and hosted checks, then land its manual 31-slot retirement.
+  Fresh bounded candidate/control/native output and supported source-change
+  execution proof now pass.
 - Preserve the carrier's known output-model gaps: native group 0/group 2 are
   not stored by the current occurrence API; header-only native warning output
   is absent; AudioV3/V5 are not activated. Do not call these complete parity.
