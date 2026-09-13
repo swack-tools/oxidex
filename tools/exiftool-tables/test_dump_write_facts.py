@@ -28,10 +28,35 @@ class NativeWriteFacts(unittest.TestCase):
         package = self.lib / "Image/ExifTool"
         package.mkdir(parents=True)
         (self.lib / "Image/ExifTool.pm").write_text(
-            "package Image::ExifTool; our $VERSION = 'fixture'; "
-            "our %specialTags = map { $_ => 1 } "
-            "qw(GROUPS WRITE_PROC CHECK_PROC WRITABLE WRITE_GROUP FORMAT FIRST_ENTRY);\n"
-            """sub DoAutoLoad { my $autoload = shift; my @callInfo = split /::/, $autoload, 0; my $file = 'Image/ExifTool/Write'; return if $callInfo[$#callInfo] eq 'DESTROY'; if (@callInfo == 4) { $file .= "$callInfo[2].pl"; } elsif ($callInfo[-1] eq 'ShiftTime') { $file = 'Image/ExifTool/Shift.pl'; } else { $file .= 'r.pl'; } require $file; no strict 'refs'; return &$autoload(@_); } 1;\n""",
+            textwrap.dedent("""\
+                package Image::ExifTool;
+                use strict;
+                our $VERSION = 'fixture';
+                our %specialTags = map { $_ => 1 }
+                    qw(GROUPS WRITE_PROC CHECK_PROC WRITABLE WRITE_GROUP FORMAT FIRST_ENTRY);
+                sub DoAutoLoad(@) {
+                    my ($autoload) = shift;
+                    my @callInfo = split /::/, $autoload, 0;
+                    my ($file) = 'Image/ExifTool/Write';
+                    ($callInfo[$#callInfo] eq 'DESTROY') and return;
+                    if (@callInfo == 4) {
+                        $file .= "$callInfo[2].pl";
+                    } elsif ($callInfo[-1] eq 'ShiftTime') {
+                        $file = 'Image/ExifTool/Shift.pl';
+                    } else {
+                        $file .= 'r.pl';
+                    }
+                    eval { require $file }
+                        or die("Error while attempting to call $autoload\n$@\n");
+                    unless (defined &$autoload) {
+                        my @caller = caller(0);
+                        die("Undefined subroutine $autoload called at $caller[1] line $caller[2]\n");
+                    }
+                    no strict 'refs';
+                    return &$autoload(@_);
+                }
+                1;
+            """),
             encoding="utf-8",
         )
         self.exif = package / "Exif.pm"
@@ -138,13 +163,21 @@ class NativeWriteFacts(unittest.TestCase):
     def test_mutated_autoload_router_refuses_forced_writer_loading(self):
         core = self.lib / "Image/ExifTool.pm"
         text = core.read_text(encoding="utf-8")
-        core.write_text(text.replace("Image/ExifTool/Write", "Image/ExifTool/Broken", 1), encoding="utf-8")
-        doc = self.dump()
-        router = doc["native_write_autoload"]
-        self.assertFalse(router["supported"])
-        effective = self.sidecar(doc)["effective_write_proc"]["effective"]
-        self.assertFalse(effective["resolved"])
-        self.assertEqual(effective["reason"], "autoload_router_unsupported")
+        for label, changed in {
+            "changed_route": text.replace("Image/ExifTool/Write", "Image/ExifTool/Broken", 1),
+            "injected_route": text.replace(
+                "eval { require $file }", "$file = 'Image/ExifTool/WriteNoSuchWriter.pl';\n                    eval { require $file }"),
+            "early_return": text.replace("eval { require $file }", "return;\n                    eval { require $file }"),
+        }.items():
+            with self.subTest(label=label):
+                core.write_text(changed, encoding="utf-8")
+                doc = self.dump()
+                router = doc["native_write_autoload"]
+                self.assertFalse(router["supported"])
+                effective = self.sidecar(doc)["effective_write_proc"]["effective"]
+                self.assertFalse(effective["resolved"])
+                self.assertEqual(effective["reason"], "autoload_router_unsupported")
+        core.write_text(text, encoding="utf-8")
 
     def test_forward_declarations_capture_loaded_writer_bodies(self):
         doc = self.dump()

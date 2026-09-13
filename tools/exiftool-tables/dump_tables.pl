@@ -546,33 +546,80 @@ sub write_autoload_router_fact {
     return code_ref_fact($cv, 'Image::ExifTool::DoAutoLoad', $lib_abs, undef, undef, 0);
 }
 
+sub write_autoload_router_tokens {
+    my ($body) = @_;
+    return undef unless defined $body;
+    my @tokens;
+    pos($body) = 0;
+    while (pos($body) < length($body)) {
+        if ($body =~ /\G\s+/gc) {
+            next;
+        } elsif ($body =~ /\G((?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'))/gc) {
+            push @tokens, $1;
+        } elsif ($body =~ /\G(\/(?:\\.|[^\/\\])*\/)/gc) {
+            push @tokens, $1;
+        } elsif ($body =~ /\G(\$\#?[A-Za-z_]\w*|\$\@|\@(?:[A-Za-z_]\w*|_))/gc) {
+            push @tokens, $1;
+        } elsif ($body =~ /\G([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)/gc) {
+            push @tokens, $1;
+        } elsif ($body =~ /\G(\d+)/gc) {
+            push @tokens, $1;
+        } elsif ($body =~ /\G(\.=|==)/gc) {
+            push @tokens, $1;
+        } elsif ($body =~ /\G([(){}\[\];,.=&@-])/gc) {
+            push @tokens, $1;
+        } else {
+            return undef;
+        }
+    }
+    return \@tokens;
+}
+
+sub write_autoload_router_expected_tokens {
+    # Full B::Deparse token grammar for the generic native DoAutoLoad route:
+    # DESTROY guard; 4-part, ShiftTime, and Writer file paths; guarded require;
+    # implementation check; and tail call. Whitespace is immaterial, but every
+    # executable token is consumed, so an inserted assignment or early return
+    # is not mistaken for the native dispatcher.
+    my $canonical = <<'END_AUTOLOAD';
+(@) {
+package Image::ExifTool;
+use strict;
+(my($autoload) = (shift()));
+(my @callInfo = split(/::/, $autoload, 0));
+(my($file) = 'Image/ExifTool/Write');
+(($callInfo[$#callInfo] eq 'DESTROY') and (return));
+if ((@callInfo == 4)) {
+($file .= "$callInfo[2].pl");
+} elsif (($callInfo[-1] eq 'ShiftTime')) {
+($file = 'Image/ExifTool/Shift.pl');
+} else {
+($file .= 'r.pl');
+}
+(eval {
+do {
+(require $file)
+}
+} or die(("Error while attempting to call $autoload\n$@\n")));
+unless (defined(&$autoload)) {
+(my(@caller) = caller(0));
+die(("Undefined subroutine $autoload called at $caller[1] line $caller[2]\n"));
+}
+no strict 'refs';
+(return &$autoload(@_));
+}
+END_AUTOLOAD
+    return write_autoload_router_tokens($canonical);
+}
+
 sub write_autoload_router_supported {
     my ($fact) = @_;
     return 0 unless $fact->{resolved} && ($fact->{__name} // '') eq 'Image::ExifTool::DoAutoLoad';
-    my $flat = $fact->{__deparse};
-    return 0 unless defined $flat;
-    $flat =~ s/\s+//g;
-    # Ordered executable fragments from the generic native dispatcher: split
-    # name, reject DESTROY, choose the four-part/ShiftTime/default file, load
-    # it, then tail-call the resolved routine.  Names and file construction are
-    # generic ExifTool mechanism, never table or vendor selection.
-    my @parts = (
-        'split(/::/,$autoload,0)',
-        "'Image/ExifTool/Write'",
-        "\$callInfo[\$#callInfo]eq'DESTROY'",
-        '@callInfo==4',
-        '$file.="$callInfo[2].pl"',
-        "\$callInfo[-1]eq'ShiftTime'",
-        "\$file='Image/ExifTool/Shift.pl'",
-        "\$file.='r.pl'",
-        'require$file',
-        'return&$autoload(@_)',
-    );
-    my $at = -1;
-    for my $part (@parts) {
-        my $next = index($flat, $part, $at + 1);
-        return 0 if $next < 0;
-        $at = $next;
+    my $actual = write_autoload_router_tokens($fact->{__deparse});
+    my $expected = write_autoload_router_expected_tokens();
+    return 0 unless $actual && $expected && @$actual == @$expected;
+    for my $i (0 .. $#$expected) {
+        return 0 unless $actual->[$i] eq $expected->[$i];
     }
     return 1;
 }
