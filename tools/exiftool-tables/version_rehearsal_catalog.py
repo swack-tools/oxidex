@@ -688,6 +688,28 @@ def _source_directory_name(release: str, peeled_commit: str) -> str:
     return f"exiftool-{release}-{peeled_commit}"
 
 
+def _tree_identity_from_files(files: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the canonical regular-file identity used for an archive or tree."""
+    if not files:
+        raise Refused("materialized source has no regular files")
+    if any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("path"), str)
+        or not item["path"]
+        or not isinstance(item.get("sha256"), str)
+        or rehearsal.SHA256_RE.fullmatch(item["sha256"]) is None
+        or not isinstance(item.get("bytes"), int)
+        or item["bytes"] < 0
+        for item in files
+    ):
+        raise Refused("materialized source file identity is malformed")
+    files = sorted(files, key=lambda item: item["path"])
+    if len({item["path"] for item in files}) != len(files):
+        raise Refused("materialized source has duplicate regular files")
+    payload = {"files": files}
+    return {**payload, "tree_sha256": sha256_json(payload)}
+
+
 def _tree_identity(root: Path) -> dict[str, Any]:
     files: list[dict[str, Any]] = []
     for path in sorted(root.rglob("*")):
@@ -700,10 +722,41 @@ def _tree_identity(root: Path) -> dict[str, Any]:
         relative = path.relative_to(root).as_posix()
         body = path.read_bytes()
         files.append({"path": relative, "sha256": sha256_bytes(body), "bytes": len(body)})
-    if not files:
-        raise Refused("materialized source has no regular files")
-    payload = {"files": files}
-    return {**payload, "tree_sha256": sha256_json(payload)}
+    return _tree_identity_from_files(files)
+
+
+def _archive_tree_identity(body: bytes) -> dict[str, Any]:
+    """Derive the expected extracted tree directly from verified archive bytes.
+
+    A saved materialization manifest is evidence, never authority for the
+    extracted source.  This reads exactly the same validated regular members
+    that extraction permits, so a rehashed local tree cannot authenticate
+    different source bytes against the retained archive.
+    """
+    validated = _safe_archive_members(body)
+    files: list[dict[str, Any]] = []
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
+            with tarfile.open(fileobj=stream, mode="r:") as archive:
+                for original, relative in validated:
+                    if original.isdir():
+                        continue
+                    member = archive.getmember(original.name)
+                    source = archive.extractfile(member)
+                    if source is None:
+                        raise Refused("archive regular member cannot be read")
+                    with source:
+                        member_bytes = source.read()
+                    if len(member_bytes) != member.size:
+                        raise Refused("archive regular member size differs from header")
+                    files.append({
+                        "path": "/".join(relative),
+                        "sha256": sha256_bytes(member_bytes),
+                        "bytes": len(member_bytes),
+                    })
+    except (OSError, tarfile.TarError, EOFError) as exc:
+        raise Refused("archive bytes are not a readable tar.gz") from exc
+    return _tree_identity_from_files(files)
 
 
 def _extract_archive_to_new_source(body: bytes, destination: Path) -> dict[str, Any]:
@@ -713,6 +766,7 @@ def _extract_archive_to_new_source(body: bytes, destination: Path) -> dict[str, 
     temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", suffix=".partial", dir=destination.parent))
     try:
         validated = _safe_archive_members(body)
+        expected_identity = _archive_tree_identity(body)
         with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
             with tarfile.open(fileobj=stream, mode="r:") as archive:
                 for original, relative in validated:
@@ -730,6 +784,8 @@ def _extract_archive_to_new_source(body: bytes, destination: Path) -> dict[str, 
                         shutil.copyfileobj(source, target)
                     os.chmod(path, member.mode & 0o777)
         identity = _tree_identity(temporary)
+        if identity != expected_identity:
+            raise Refused("extracted source tree differs from verified archive")
         os.replace(temporary, destination)
         return identity
     except (OSError, tarfile.TarError, EOFError) as exc:
@@ -859,10 +915,13 @@ def verify_source_materialization(
         if state == "materialized":
             if not isinstance(row.get("tree"), dict) or "failure" in row:
                 raise Refused("materialized source record is malformed")
-            _read_cached_archive(archive_cache, resolved["archive"])
+            body = _read_cached_archive(archive_cache, resolved["archive"])
+            expected_tree = _archive_tree_identity(body)
+            if row["tree"] != expected_tree:
+                raise Refused("materialized source manifest differs from verified archive")
             source = source_root / destination
-            if source.is_symlink() or not source.is_dir() or _tree_identity(source) != row["tree"]:
-                raise Refused("materialized source tree differs from manifest")
+            if source.is_symlink() or not source.is_dir() or _tree_identity(source) != expected_tree:
+                raise Refused("materialized source tree differs from verified archive")
         elif state == "failed":
             all_materialized = False
             if not isinstance(row.get("failure"), str) or not row["failure"] or "tree" in row:
@@ -957,7 +1016,7 @@ def main(argv: list[str] | None = None) -> int:
     materialize.set_defaults(func=_cmd_materialize)
     args = parser.parse_args(argv)
     try:
-        if args.timeout <= 0:
+        if hasattr(args, "timeout") and args.timeout <= 0:
             raise Refused("timeout must be positive")
         return args.func(args)
     except Refused as exc:
