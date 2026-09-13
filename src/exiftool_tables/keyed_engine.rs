@@ -67,7 +67,6 @@ pub struct KeyedWalkResult {
     pub malformed_directory: usize,
     pub high_bit_error: usize,
     pub duplicate_directory: usize,
-    pub depth_limit: usize,
     pub initial_context_refusal: usize,
     pub omitted: usize,
     pub bad_value: usize,
@@ -98,28 +97,87 @@ pub fn process_keyed_directory(
         return result;
     }
     let mut visited = Vec::new();
-    walk(table, block, ctx, sink, &mut visited, 0, &mut result);
+    let mut work = vec![KeyedWork::Enter(block)];
+    while let Some(item) = work.pop() {
+        match item {
+            KeyedWork::RestoreDir(old) => {
+                if let Some(old) = old {
+                    ctx.members.insert("DIR_NAME", old);
+                } else {
+                    ctx.members.remove("DIR_NAME");
+                }
+            }
+            KeyedWork::Enter(block) => {
+                let Some(entries) = enter_directory(table, block, &mut visited, &mut result) else {
+                    continue;
+                };
+                work.push(entries);
+            }
+            KeyedWork::Entries {
+                block,
+                directory_offset,
+                count,
+                index,
+            } => {
+                if index == count {
+                    continue;
+                }
+                let entry = directory_offset + 2 + index * 10;
+                let action = process_entry(table, block, entry, ctx, sink, &mut result);
+                match action {
+                    KeyedEntryAction::StopDirectory => {}
+                    KeyedEntryAction::Continue => work.push(KeyedWork::Entries {
+                        block,
+                        directory_offset,
+                        count,
+                        index: index + 1,
+                    }),
+                    KeyedEntryAction::Descend { block: child, name } => {
+                        // Preserve native depth-first order and scope the
+                        // child DIR_NAME without consuming the call stack.
+                        work.push(KeyedWork::Entries {
+                            block,
+                            directory_offset,
+                            count,
+                            index: index + 1,
+                        });
+                        let old = ctx.members.insert("DIR_NAME", MemberValue::Str(name));
+                        work.push(KeyedWork::RestoreDir(old));
+                        work.push(KeyedWork::Enter(child));
+                    }
+                }
+            }
+        }
+    }
     result
 }
 
-const MAX_KEYED_DEPTH: u32 = 8;
+enum KeyedWork<'a> {
+    Enter(KeyedBlock<'a>),
+    Entries {
+        block: KeyedBlock<'a>,
+        directory_offset: usize,
+        count: usize,
+        index: usize,
+    },
+    RestoreDir(Option<MemberValue>),
+}
 
-fn walk(
+enum KeyedEntryAction<'a> {
+    Continue,
+    StopDirectory,
+    Descend { block: KeyedBlock<'a>, name: String },
+}
+
+fn enter_directory<'a>(
     table: &'static KeyedDirectoryTable,
-    block: KeyedBlock<'_>,
-    ctx: &mut Ctx,
-    sink: &mut dyn KeyedEmissionSink,
+    block: KeyedBlock<'a>,
     visited: &mut Vec<(usize, usize)>,
-    depth: u32,
     result: &mut KeyedWalkResult,
-) {
-    if depth >= MAX_KEYED_DEPTH {
-        result.depth_limit += 1;
-        return;
-    }
+) -> Option<KeyedWork<'a>> {
     if !matches!(table.layout, KeyedLayout::Ciff10) {
         result.malformed_directory += 1;
-        return;
+        return None;
     }
     let Some(directory_offset) = u32_at(
         block.data,
@@ -128,23 +186,21 @@ fn walk(
     )
     .and_then(|offset| usize::try_from(offset).ok()) else {
         result.malformed_directory += 1;
-        return;
+        return None;
     };
     let Some(address) = (block.data.as_ptr() as usize).checked_add(directory_offset) else {
         result.malformed_directory += 1;
-        return;
+        return None;
     };
     let table_id = table as *const KeyedDirectoryTable as usize;
     if visited.contains(&(table_id, address)) {
         result.duplicate_directory += 1;
-        return;
+        return None;
     }
-    visited.push((table_id, address));
-
     let Some(count) = u16_at(block.data, directory_offset, block.byte_order).map(usize::from)
     else {
         result.malformed_directory += 1;
-        return;
+        return None;
     };
     let Some(entries_end) = directory_offset.checked_add(2).and_then(|start| {
         count
@@ -152,194 +208,202 @@ fn walk(
             .and_then(|bytes| start.checked_add(bytes))
     }) else {
         result.malformed_directory += 1;
-        return;
+        return None;
     };
     if entries_end > block.data.len() {
         result.malformed_directory += 1;
-        return;
+        return None;
+    }
+    visited.push((table_id, address));
+    Some(KeyedWork::Entries {
+        block,
+        directory_offset,
+        count,
+        index: 0,
+    })
+}
+
+fn process_entry<'a>(
+    table: &'static KeyedDirectoryTable,
+    block: KeyedBlock<'a>,
+    entry: usize,
+    ctx: &mut Ctx,
+    sink: &mut dyn KeyedEmissionSink,
+    result: &mut KeyedWalkResult,
+) -> KeyedEntryAction<'a> {
+    let raw_tag = u16_at(block.data, entry, block.byte_order).expect("checked entry bounds");
+    if raw_tag & 0x8000 != 0 {
+        result.high_bit_error += 1;
+        return KeyedEntryAction::StopDirectory;
+    }
+    result.entries_seen += 1;
+    let raw_id = raw_tag & 0x3fff;
+    let entry_type = (raw_tag >> 8) & 0x38;
+    let inline = raw_tag & 0x4000 != 0;
+    let payload = &block.data[entry + 2..entry + 10];
+    let (value_offset, value_size) = if inline {
+        (entry + 2, 8usize)
+    } else {
+        let Some(size) =
+            u32_at(payload, 0, block.byte_order).and_then(|value| usize::try_from(value).ok())
+        else {
+            result.bad_value += 1;
+            return KeyedEntryAction::Continue;
+        };
+        let Some(offset) =
+            u32_at(payload, 4, block.byte_order).and_then(|value| usize::try_from(value).ok())
+        else {
+            result.bad_value += 1;
+            return KeyedEntryAction::Continue;
+        };
+        (offset, size)
+    };
+
+    let resolved = resolve_tag(table, raw_id, ctx, result);
+    // CIFF type controls same-parent recursion, including unknown keys.
+    if !inline && matches!(entry_type, 0x28 | 0x30) {
+        let Some(child) = bounded_block(block, value_offset, value_size) else {
+            result.bad_value += 1;
+            return KeyedEntryAction::Continue;
+        };
+        let name = resolved.map_or_else(
+            || format!("CanonRaw_0x{raw_id:04x}"),
+            |selected| selected.tag.name.to_owned(),
+        );
+        return KeyedEntryAction::Descend { block: child, name };
     }
 
-    for index in 0..count {
-        let entry = directory_offset + 2 + index * 10;
-        let raw_tag = u16_at(block.data, entry, block.byte_order).expect("checked entry bounds");
-        if raw_tag & 0x8000 != 0 {
-            result.high_bit_error += 1;
-            return;
-        }
-        result.entries_seen += 1;
-        let raw_id = raw_tag & 0x3fff;
-        let entry_type = (raw_tag >> 8) & 0x38;
-        let inline = raw_tag & 0x4000 != 0;
-        let payload = &block.data[entry + 2..entry + 10];
-        let (value_offset, value_size) = if inline {
-            (entry + 2, 8usize)
-        } else {
-            let Some(size) =
-                u32_at(payload, 0, block.byte_order).and_then(|value| usize::try_from(value).ok())
-            else {
-                result.bad_value += 1;
-                continue;
-            };
-            let Some(offset) =
-                u32_at(payload, 4, block.byte_order).and_then(|value| usize::try_from(value).ok())
-            else {
-                result.bad_value += 1;
-                continue;
-            };
-            (offset, size)
-        };
-
-        let resolved = resolve_tag(table, raw_id, ctx, result);
-        // CIFF type controls same-parent recursion, including unknown keys.
-        if !inline && matches!(entry_type, 0x28 | 0x30) {
-            let Some(child) = bounded_block(block, value_offset, value_size) else {
-                result.bad_value += 1;
-                continue;
-            };
-            let name = resolved.map_or_else(
-                || format!("CanonRaw_0x{raw_id:04x}"),
-                |selected| selected.tag.name.to_owned(),
-            );
-            with_dir_name(ctx, name, |ctx| {
-                walk(table, child, ctx, sink, visited, depth + 1, result);
-            });
-            continue;
-        }
-
-        let Some(resolved) = resolved else {
-            continue;
-        };
-        let tag = resolved.tag;
-        // A refused Condition or Hook can change whether this row exists or
-        // how its bytes are located.  Do not decode it.  The other omitted
-        // flags are handled after RawConv: FoundTag stores modeled member
-        // state before deciding whether a value is reportable.
-        if (tag.omitted.condition && !resolved.condition_resolved) || tag.omitted.hook {
-            result.omitted += 1;
-            continue;
-        }
-        if let Some(edge) = tag.edge {
-            match edge {
-                KeyedEdge::SameTableDirectory => {
+    let Some(resolved) = resolved else {
+        return KeyedEntryAction::Continue;
+    };
+    let tag = resolved.tag;
+    // A refused Condition or Hook can change whether this row exists or how
+    // its bytes are located. The other omitted flags are handled after
+    // RawConv: FoundTag stores modeled member state before reportability.
+    if (tag.omitted.condition && !resolved.condition_resolved) || tag.omitted.hook {
+        result.omitted += 1;
+        return KeyedEntryAction::Continue;
+    }
+    if let Some(edge) = tag.edge {
+        match edge {
+            KeyedEdge::SameTableDirectory => result.unwalked_edge += 1,
+            KeyedEdge::BoundedValue {
+                module,
+                table: target,
+                start,
+                unwalked,
+            } => {
+                if !matches!(start, super::KeyedStart::Zero) || !unwalked.is_empty() {
                     result.unwalked_edge += 1;
+                    return KeyedEntryAction::Continue;
                 }
-                KeyedEdge::BoundedValue {
-                    module,
-                    table: target,
-                    start,
-                    unwalked,
-                } => {
-                    if !matches!(start, super::KeyedStart::Zero) || !unwalked.is_empty() {
-                        result.unwalked_edge += 1;
-                        continue;
-                    }
-                    let Some(child) = bounded_block(block, value_offset, value_size) else {
-                        result.bad_value += 1;
-                        continue;
-                    };
-                    let Some(target_table) = find_table(module, target) else {
-                        result.unavailable_target += 1;
-                        continue;
-                    };
-                    if !super::is_enabled(target_table) {
-                        result.gate_b_blocked += 1;
-                        continue;
-                    }
-                    let mut rows = Vec::new();
-                    with_dir_name(ctx, tag.name.to_owned(), |ctx| {
-                        engine::process_binary_data(
-                            target_table,
-                            engine::Dir::whole(child.data, child.byte_order),
-                            ctx,
-                            &mut rows,
-                        );
-                    });
-                    for row in rows {
-                        sink.emit(re_scope(row, child.scope));
-                        result.emitted += 1;
-                    }
-                }
-            }
-            continue;
-        }
-
-        if value_size > block.max_scalar_bytes {
-            result.large_scalar += 1;
-            continue;
-        }
-        let Some(value_end) = value_offset.checked_add(value_size) else {
-            result.bad_value += 1;
-            continue;
-        };
-        let Some(value) = block.data.get(value_offset..value_end) else {
-            result.bad_value += 1;
-            continue;
-        };
-        let format = tag.format.unwrap_or_else(|| default_format(entry_type));
-        let count = native_count(tag, format, value_size, inline);
-        let Some(raw) = engine::read_value(
-            value,
-            0,
-            format,
-            count,
-            i64::try_from(value_size).unwrap_or(i64::MAX),
-            block.byte_order,
-        ) else {
-            result.bad_value += 1;
-            continue;
-        };
-        let mut omitted = tag.omitted;
-        if resolved.condition_resolved {
-            omitted.condition = false;
-        }
-        match tag.raw_conv {
-            Some(super::RawConvEffect::SetMember { member }) => {
-                let Some(member_value) = engine::member_value(&raw) else {
-                    result.omitted += 1;
-                    // An unrepresentable state value could change every
-                    // following source Condition.  Match the binary engine's
-                    // fail-closed tail behavior rather than leave stale state.
-                    return;
+                let Some(child) = bounded_block(block, value_offset, value_size) else {
+                    result.bad_value += 1;
+                    return KeyedEntryAction::Continue;
                 };
-                ctx.members.insert(member, member_value);
-                omitted.raw_conv = false;
+                let Some(target_table) = find_table(module, target) else {
+                    result.unavailable_target += 1;
+                    return KeyedEntryAction::Continue;
+                };
+                if !super::is_enabled(target_table) {
+                    result.gate_b_blocked += 1;
+                    return KeyedEntryAction::Continue;
+                }
+                let mut rows = Vec::new();
+                with_dir_name(ctx, tag.name.to_owned(), |ctx| {
+                    engine::process_binary_data(
+                        target_table,
+                        engine::Dir::whole(child.data, child.byte_order),
+                        ctx,
+                        &mut rows,
+                    );
+                });
+                for row in rows {
+                    sink.emit(re_scope(row, child.scope));
+                    result.emitted += 1;
+                }
             }
-            Some(super::RawConvEffect::ValueLocal) | None => {}
         }
-        if omitted.raw_conv && tag.raw_conv.is_none() {
-            result.omitted += 1;
-            // The source RawConv is unknown and may mutate shared state.
-            return;
-        }
-        if omitted.any() {
-            result.omitted += 1;
-            continue;
-        }
-        let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
-            result.omitted += 1;
-            continue;
-        };
-        let (value, value_conv) = match runtime::render(tag.print_conv, &converted) {
-            Some(rendered) => (
-                TagValue::String(rendered),
-                Some(runtime::to_exiftool_value(&converted)),
-            ),
-            None => (runtime::to_exiftool_value(&converted), None),
-        };
-        sink.emit(Emitted {
-            module: table.module,
-            table: table.table,
-            group0: tag.groups.g0.unwrap_or(block.scope.group0),
-            group1: tag.groups.g1.unwrap_or(block.scope.group1),
-            group2: tag.groups.g2.unwrap_or(block.scope.group2),
-            name: tag.name,
-            value,
-            value_conv,
-            low_priority: false,
-            avoid: false,
-        });
-        result.emitted += 1;
+        return KeyedEntryAction::Continue;
     }
+
+    if value_size > block.max_scalar_bytes {
+        result.large_scalar += 1;
+        return KeyedEntryAction::Continue;
+    }
+    let Some(value_end) = value_offset.checked_add(value_size) else {
+        result.bad_value += 1;
+        return KeyedEntryAction::Continue;
+    };
+    let Some(value) = block.data.get(value_offset..value_end) else {
+        result.bad_value += 1;
+        return KeyedEntryAction::Continue;
+    };
+    let format = tag.format.unwrap_or_else(|| default_format(entry_type));
+    let count = native_count(tag, format, value_size, inline);
+    let Some(raw) = engine::read_value(
+        value,
+        0,
+        format,
+        count,
+        i64::try_from(value_size).unwrap_or(i64::MAX),
+        block.byte_order,
+    ) else {
+        result.bad_value += 1;
+        return KeyedEntryAction::Continue;
+    };
+    let mut omitted = tag.omitted;
+    if resolved.condition_resolved {
+        omitted.condition = false;
+    }
+    match tag.raw_conv {
+        Some(super::RawConvEffect::SetMember { member }) => {
+            let Some(member_value) = engine::member_value(&raw) else {
+                result.omitted += 1;
+                // An unrepresentable state value could change every following
+                // source Condition. Stop this directory rather than leave
+                // stale state for its later siblings.
+                return KeyedEntryAction::StopDirectory;
+            };
+            ctx.members.insert(member, member_value);
+            omitted.raw_conv = false;
+        }
+        Some(super::RawConvEffect::ValueLocal) | None => {}
+    }
+    if omitted.raw_conv && tag.raw_conv.is_none() {
+        result.omitted += 1;
+        // An unmodeled RawConv may mutate state shared by later entries.
+        return KeyedEntryAction::StopDirectory;
+    }
+    if omitted.any() {
+        result.omitted += 1;
+        return KeyedEntryAction::Continue;
+    }
+    let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
+        result.omitted += 1;
+        return KeyedEntryAction::Continue;
+    };
+    let (value, value_conv) = match runtime::render(tag.print_conv, &converted) {
+        Some(rendered) => (
+            TagValue::String(rendered),
+            Some(runtime::to_exiftool_value(&converted)),
+        ),
+        None => (runtime::to_exiftool_value(&converted), None),
+    };
+    sink.emit(Emitted {
+        module: table.module,
+        table: table.table,
+        group0: tag.groups.g0.unwrap_or(block.scope.group0),
+        group1: tag.groups.g1.unwrap_or(block.scope.group1),
+        group2: tag.groups.g2.unwrap_or(block.scope.group2),
+        name: tag.name,
+        value,
+        value_conv,
+        low_priority: false,
+        avoid: false,
+    });
+    result.emitted += 1;
+    KeyedEntryAction::Continue
 }
 
 #[derive(Clone, Copy)]
@@ -736,6 +800,57 @@ mod tests {
                 TagValue::String("child-description".into())
             );
         }
+    }
+
+    #[test]
+    fn native_nine_directory_fixture_reaches_the_leaf_without_a_depth_cap() {
+        // Pinned ExifTool 13.59 reports CanonFileDescription "nine-deep" from
+        // this copied CIFF fixture. The nine directory offsets are distinct.
+        static CHILD: KeyedTag = KeyedTag {
+            condition: Some(Cond::MemberStrEq {
+                member: "DIR_NAME",
+                value: "ImageDescription",
+                negate: false,
+            }),
+            ..tag(
+                0x0805,
+                "CanonFileDescription",
+                Some(Fmt::RemainderString),
+                None,
+            )
+        };
+        static TAGS: [KeyedTag; 2] = [
+            KeyedTag {
+                edge: Some(KeyedEdge::SameTableDirectory),
+                ..tag(0x2804, "ImageDescription", None, None)
+            },
+            CHILD,
+        ];
+        static TABLE: KeyedDirectoryTable = table(&TAGS);
+        let carrier =
+            include_bytes!("../../tests/fixtures/keyed_reader/nine-distinct-directories.crw");
+        let (sink, result) = walk_test(&TABLE, &carrier[14..], ByteOrder::Little);
+        assert_eq!(result.duplicate_directory, 0);
+        assert_eq!(result.emitted, 1);
+        assert_eq!(sink.rows[0].name, "CanonFileDescription");
+        assert_eq!(sink.rows[0].value, TagValue::String("nine-deep".into()));
+    }
+
+    #[test]
+    fn iterative_walk_handles_a_deep_acyclic_directory_chain() {
+        // This is deliberately much deeper than the native nine-directory
+        // control. The explicit work stack must not become a Rust call stack.
+        static TAGS: [KeyedTag; 1] = [tag(1, "Leaf", Some(Fmt::Int8u), None)];
+        static TABLE: KeyedDirectoryTable = table(&TAGS);
+        let mut data = ciff(ByteOrder::Little, &[(0x4001, vec![7])]);
+        for _ in 0..256 {
+            data = ciff(ByteOrder::Little, &[(0x2804, data)]);
+        }
+        let (sink, result) = walk_test(&TABLE, &data, ByteOrder::Little);
+        assert_eq!(result.duplicate_directory, 0);
+        assert_eq!(result.emitted, 1);
+        assert_eq!(sink.rows[0].name, "Leaf");
+        assert_eq!(sink.rows[0].value, TagValue::Integer(7));
     }
 
     #[test]
