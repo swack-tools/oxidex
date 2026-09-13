@@ -31,6 +31,10 @@
 #   KEYED MODULE TABLE  INDEX  <property> ...        -- keyed-row facts, with
 #                                                    -- the same property spellings as
 #                                                    -- the binary rows above
+#   KEYED MODULE TABLE  ''     TGROUPS G0 G1 G2       -- raw table groups (8)
+#   KEYED MODULE TABLE  INDEX  COUNT N                -- raw Count (6)
+#   KEYED MODULE TABLE  INDEX  GROUPS G0 G1 G2        -- raw tag groups (8)
+#   KEYED MODULE TABLE  INDEX  SUBDIR TAGTABLE START VALIDATE PROCESSPROC (9)
 #
 # The trailing empty column on HOOK/VARFMT lines is not decorative: it is
 # what keeps them from colliding with a NAME line on column count (both
@@ -281,14 +285,27 @@ sub emit_keyed_entry {
     my $fmt = $e->{Format};
     print join("\t", 'KEYED', $mod, $sym, $key, 'FORMAT', clean($fmt)), "\n"
         if defined $fmt && !ref $fmt;
+    print join("\t", 'KEYED', $mod, $sym, $key, 'COUNT', clean($e->{Count})), "\n"
+        if defined $e->{Count} && !ref $e->{Count};
     print join("\t", 'KEYED', $mod, $sym, $key, 'RAWCONV', 1), "\n" if defined $e->{RawConv};
     print join("\t", 'KEYED', $mod, $sym, $key, 'VALUECONV', 1), "\n" if defined $e->{ValueConv};
-    print join("\t", 'KEYED', $mod, $sym, $key, 'CONDITION', 1), "\n" if defined $e->{Condition};
+    print join("\t", 'KEYED', $mod, $sym, $key, 'CONDITION', clean($e->{Condition})), "\n" if defined $e->{Condition} && !ref $e->{Condition};
     print join("\t", 'KEYED', $mod, $sym, $key, 'PRINTCONV', 1), "\n" if defined $e->{PrintConv};
     print join("\t", 'KEYED', $mod, $sym, $key, 'UNKNOWN', 1), "\n" if $e->{Unknown};
     print join("\t", 'KEYED', $mod, $sym, $key, 'MASKDECL', 1), "\n" if defined $e->{Mask};
+    my $groups = $e->{Groups};
+    if (ref $groups eq 'HASH') {
+        print join("\t", 'KEYED', $mod, $sym, $key, 'GROUPS',
+            map { defined $groups->{$_} && !ref $groups->{$_} ? clean($groups->{$_}) : '' } (0, 1, 2)
+        ), "\n";
+    }
     if (defined $e->{SubDirectory} && ref $e->{SubDirectory} eq 'HASH') {
-        print join("\t", 'KEYED', $mod, $sym, $key, 'SUBDIR', 1), "\n";
+        my $sd = $e->{SubDirectory};
+        my $text = sub { defined $_[0] && !ref $_[0] ? clean($_[0]) : '' };
+        print join("\t", 'KEYED', $mod, $sym, $key, 'SUBDIR',
+            $text->($sd->{TagTable}), $text->($sd->{Start}),
+            defined($sd->{Validate}) ? '1' : '', defined($sd->{ProcessProc}) ? '1' : '',
+        ), "\n";
     }
     my $pc = $e->{PrintConv};
     if (ref $pc eq 'HASH') {
@@ -536,6 +553,11 @@ for my $mod (grep { !$skip{$_} } @mods) {
         next unless $has_format || $is_bin || $is_ifd || $is_keyed;
 
         if ($is_keyed) {
+            my $g = $t->{GROUPS};
+            my @graw = ref $g eq 'HASH'
+                ? map { defined $g->{$_} && !ref $g->{$_} ? clean($g->{$_}) : '' } (0, 1, 2)
+                : ('', '', '');
+            print join("\t", 'KEYED', $mod, $sym, '', 'TGROUPS', @graw), "\n";
             for my $k (sort keys %$t) {
                 next if $k !~ /^\d+$/;
                 my $e = $t->{$k};
