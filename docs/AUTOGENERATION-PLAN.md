@@ -19,10 +19,14 @@ reading numbers, evaluating expressions and decrypting blocks. Tag-specific
 knowledge must come from the pinned ExifTool source. **Moving a hard-coded tag
 rule into a generator or a shared helper does not count as automating it.**
 
-The target is tag-specific reading and writing behavior of pinned ExifTool
-13.59 across its formats. Native read-only tags have no required write path;
-native writable tags need a separately verified one. The 4,238-file read
-corpus is a test population, not a way to exclude unexercised behavior.
+The target is tag-specific reading and writing behavior derived from ExifTool's
+Perl source across its formats and upstream releases. The current working pin
+is 13.59; it does not limit the requested version scope. Every generated build
+must conform to the native release it came from. Native read-only tags have no
+required write path; native writable tags need a separately verified one. The
+4,238-file read corpus is a test population, not a way to exclude unexercised
+behavior or untested versions. The [read/write and version execution plan](reference/read-write-version-plan.md)
+records the expanded finish line, first writer pilot and periodic release tests.
 
 The current implementation batches primarily migrate reading. Completing those
 batches does not establish generated write support. Shared source definitions
@@ -85,6 +89,24 @@ The JPEG matrix is a useful starting instrument. Its committed report is dated
 August 12; it is not a refreshed measurement of this candidate or all formats.
 Native read-only tags are explicitly ineligible for writing, not implementation
 gaps. No current generated-writing percentage has been established.
+
+## Version upgrades and periodic tests
+
+Use the same compiler and shared readers/writers to regenerate for each selected
+native release. Keep an immutable upstream release catalog, reproducible random
+seeds and a per-version result ledger. The existing bump promotion compares both
+binaries against the newer oracle; add a separate non-promoting rehearsal that
+regenerates both releases and checks each against its own native read/write
+behavior. Selection or successful generation alone is not conformance.
+
+Once that runner passes its own tests, exercise a randomly selected distinct
+release pair after three relevant merged batches or one week, whichever comes
+first. The existing hourly continuation records this cadence without launching
+a heavy test on every wake-up. Persist failures, manual interventions,
+unsupported/untested releases and unexercised behavior. Replay known failures
+alongside new selections. Random samples discover gaps; they cannot certify
+all ExifTool versions. No full read/write, all-version completion estimate has
+been established.
 
 ## Where we are now
 

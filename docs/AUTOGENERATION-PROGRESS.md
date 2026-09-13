@@ -24,6 +24,26 @@ and missing shared-schema facts. No generated-writing percentage or full
 read/write delivery estimate exists yet. The earlier 97.3% reading conformance
 and route-disabled measurements say nothing about write support.
 
+The ready retirement PR is #760. Its first hosted test run found an old
+synthetic AFInfo2 record with a zero size field and positive output assertions.
+Pinned native complete-carrier replay proved those assertions invalid.
+The repair at `78fb7921` keeps a rejection case and supplies the correct size
+for the positive case. The full local Cargo unit/integration/doc invocation
+passes: 5,993 passes, zero failures, 124 ignored, 150.641 seconds. The required
+hosted checks are being rerun; do not count this as a merged retirement yet.
+
+The write audits now identify the first vertical pilot as Exif::Main
+HostComputer `0x013c`, whose read behavior has no omitted conversion. They
+also identify lost placement/inverse/delete/create source facts and unresolved
+writer/checker implementation binding as prerequisites. A dedicated native
+write-fact capture is in implementation; no generated writer has been enabled.
+The existing bump tool is a promotion comparison against the newer oracle,
+not per-version native proof. Seeded release-plan/journal primitives and an
+independent native write contract are being prepared in parallel. The
+[version plan](reference/read-write-version-plan.md) accounts for both
+read/write execution and all requested release scope without promoting random
+samples to exhaustive evidence.
+
 ### Latest merged checkpoint
 
 Latest combined Canon definitions: **AFInfo 14/14 and AFInfo2 16/16**, both

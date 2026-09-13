@@ -162,3 +162,15 @@ volatile key; it does not ignore any tag-value discrepancy. This proves the
 selected supported name change, not arbitrary Perl translation or a release
 upgrade. Evidence is under the batch's `source-upgrade-proof/` and the preserved
 native `BATCH/source-upgrade-proof/native-proof/` subdirectory.
+
+PR #760 opened ready at `d6111d24`. Its first hosted Build & Test job failed
+`test_parse_af_info2_array`: the old constructed record declared AFInfoSize=0
+but expected child values. Native complete-carrier replay confirms rejection
+at zero and all seven original asserted values at the correct 382-byte size.
+Commit `78fb7921` retains explicit zero-size rejection assertions and repairs
+the positive fixture; production code is unchanged. Formatting and Clippy
+pass. The full local `cargo test --all-features --no-fail-fast` invocation
+passes in 150.641 seconds: 5,993 passes across unit/integration/doc summaries,
+zero failures and 124 ignored tests. The attempted local nextest invocation
+could not run because that executable is not installed; its failed attempt is
+retained. Hosted nextest and all required checks must pass on the final head.
