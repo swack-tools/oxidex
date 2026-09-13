@@ -1,14 +1,17 @@
 """Native-only JSONL replay checks for selected serial PROCESS_PROC callbacks.
 
 The helper executes the native table-owned processor and observes only its
-object callbacks. It does not import a compiler or fabricate ReadValue events.
+object callbacks plus its authenticated package-local ReadValue binding. It
+does not import a compiler or fabricate data-read events.
 """
 
 import json
 import os
 from pathlib import Path
+import shutil
 import struct
 import subprocess
+import tempfile
 import unittest
 
 
@@ -62,8 +65,10 @@ def request(name, order, payload, *, members=None, unknown=False, verbose=True):
     }
 
 
-def replay(root, requests):
+def replay(root, requests, *, fallback=None):
     command = [PERL, str(PROBE), "--lib", "lib"]
+    if fallback is not None:
+        command.extend(["--fallback-lib", fallback])
     payload = "".join(json.dumps(item, separators=(",", ":")) + "\n" for item in requests)
     result = subprocess.run(
         command,
@@ -88,6 +93,20 @@ def names(records):
 
 def numeric(record, key):
     return record[key]["numeric"]
+
+
+def copied_canon_source(mutate):
+    """Copy only the selected module; use the pinned tree as explicit fallback."""
+    temporary = tempfile.TemporaryDirectory()
+    root = Path(temporary.name)
+    copied = root / "lib" / "Image" / "ExifTool"
+    copied.mkdir(parents=True)
+    source = Path(PINNED) / "lib" / "Image" / "ExifTool" / "Canon.pm"
+    target = copied / "Canon.pm"
+    shutil.copyfile(source, target)
+    target.write_text(mutate(target.read_text()))
+    (root / "fallback").symlink_to(Path(PINNED) / "lib", target_is_directory=True)
+    return temporary, root
 
 
 @unittest.skipUnless(PINNED and PERL, "set OXIDEX_PINNED_EXIFTOOL and EXIFTOOL_PERL for canonical native replay")
@@ -115,7 +134,13 @@ class NativeSerialProcessorReplay(unittest.TestCase):
         self.assertRegex(process["source_sha256"], r"^[0-9a-f]{64}$")
         self.assertRegex(process["source_body_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(reply["observability"]["read_value"],
-                         "unobserved: ProcessSerialData calls package ReadValue directly")
+                         "observed via selected processor package bare binding")
+        read_value = reply["selection"]["read_value"]
+        self.assertTrue(read_value["resolved"])
+        self.assertEqual(read_value["binding_package"], "Image::ExifTool::Canon")
+        self.assertEqual(read_value["binding_symbol"], "ReadValue")
+        self.assertRegex(read_value["source_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(read_value["source_body_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(reply["observability"]["dynamic_count_eval"],
                          "unobserved: Perl eval occurs inside ProcessSerialData before verbose callback")
         self.assertEqual(reply["option_state"]["unknown_before"], reply["option_state"]["unknown_after"])
@@ -140,6 +165,7 @@ class NativeSerialProcessorReplay(unittest.TestCase):
                 self.assertEqual(numeric(verbose[8]["named_arguments"], "Size"), 2)
                 self.assertEqual(numeric(verbose[8]["named_arguments"], "Value"), -7)
                 self.assertEqual(numeric(verbose[9]["named_arguments"], "Value"), 9)
+                self.assertEqual([numeric(item, "value") for item in reply["read_values"][:3]], [1, 1, 1000])
                 self.assertEqual(reply["verbose_dirs"][0][0]["string"], "SerialData")
                 self.assertEqual(reply["verbose_dirs"][0][2]["numeric"], len(source) * 2)
 
@@ -212,6 +238,56 @@ class NativeSerialProcessorReplay(unittest.TestCase):
         self.assertEqual(reply["verbose_info"], [])
         self.assertEqual(reply["found_tags"], [])
         self.assertEqual(reply["warnings"], [])
+        self.assertEqual(reply["read_values"], [])
+
+    def test_copied_source_rebinding_read_value_changes_provenance_and_observed_values(self):
+        def rebind(source):
+            marker = "use Image::ExifTool::Exif;\n"
+            self.assertIn(marker, source)
+            return source.replace(marker, marker + "*ReadValue = sub ($$$;$$$) { return 123; };\n", 1)
+
+        baseline, = replay(PINNED, [request("baseline-read-value", "II", words("little", afinfo_words(1)))])
+        temporary, root = copied_canon_source(rebind)
+        with temporary:
+            reply, = replay(root, [request("rebound-read-value", "II", words("little", afinfo_words(1)))],
+                              fallback="fallback")
+        self.assertTrue(reply["ok"], reply)
+        read_value = reply["selection"]["read_value"]
+        self.assertEqual(read_value["binding_package"], "Image::ExifTool::Canon")
+        self.assertEqual(read_value["binding_symbol"], "ReadValue")
+        self.assertEqual(read_value["source_file"], "Image/ExifTool/Canon.pm")
+        self.assertNotEqual(
+            read_value["source_body_sha256"],
+            baseline["selection"]["read_value"]["source_body_sha256"],
+        )
+        self.assertTrue(reply["read_values"])
+        self.assertTrue(all(numeric(item, "value") == 123 for item in reply["read_values"]))
+
+    def test_copied_source_package_callback_bypasses_are_rejected(self):
+        mutations = {
+            "get-tag-info": (
+                "$et->GetTagInfo($tagTablePtr, $index)",
+                "Image::ExifTool::GetTagInfo($et, $tagTablePtr, $index)",
+                "unexpected package-qualified GetTagInfo callback",
+            ),
+            "verbose-info": (
+                "$et->VerboseInfo($index, $tagInfo,",
+                "Image::ExifTool::VerboseInfo($et, $index, $tagInfo,",
+                "unexpected package-qualified VerboseInfo callback",
+            ),
+        }
+        for name, (before, after, expected) in mutations.items():
+            with self.subTest(callback=name):
+                def mutate(source, before=before, after=after):
+                    self.assertIn(before, source)
+                    return source.replace(before, after, 1)
+
+                temporary, root = copied_canon_source(mutate)
+                with temporary:
+                    reply, = replay(root, [request(name, "II", words("little", afinfo_words(1)))],
+                                      fallback="fallback")
+                self.assertFalse(reply["ok"])
+                self.assertIn(expected, reply["error"])
 
 
 if __name__ == "__main__":
