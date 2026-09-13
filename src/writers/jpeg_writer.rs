@@ -189,6 +189,65 @@ fn is_exif_segment(segment: &Segment) -> bool {
     segment.is_app1() && segment.data.starts_with(EXIF_IDENTIFIER)
 }
 
+/// Inactive carrier adapter for already resolved raw IFD edits. Requires one
+/// existing EXIF block; choosing defaults for a new block belongs to the
+/// source-derived writer contract. Copy all bytes outside that block verbatim.
+pub(crate) fn apply_raw_exif_edits(
+    reader: &dyn FileReader,
+    edits: &[crate::writers::tiff_surgical::entry_edits::ScopedEntryEdit],
+) -> Result<Vec<u8>> {
+    let segments = parse_segments(reader)?;
+    let end_index = segments
+        .iter()
+        .position(|seg| matches!(seg.marker, SOS_MARKER | EOI_MARKER))
+        .ok_or_else(|| ExifToolError::parse_error("Incomplete JPEG header"))?;
+    let head = &segments[..=end_index];
+    if head.iter().enumerate().any(|(index, seg)| {
+        if index == 0 {
+            seg.marker != SOI_MARKER
+        } else {
+            // Length-bearing JPEG header markers occupy C0..FE. Restart
+            // markers belong to scan data, and SOI may occur only once.
+            !(0xffc0..=0xfffe).contains(&seg.marker)
+                || (RST0_MARKER..=SOI_MARKER).contains(&seg.marker)
+        }
+    }) {
+        return Err(ExifToolError::parse_error("Invalid JPEG header marker"));
+    }
+    let mut exif = head.iter().filter(|seg| is_exif_segment(seg));
+    let block = exif.next().ok_or_else(|| {
+        ExifToolError::unsupported_format("Raw JPEG edits require an existing EXIF block")
+    })?;
+    if exif.next().is_some() {
+        return Err(ExifToolError::parse_error(
+            "Ambiguous multiple JPEG EXIF blocks",
+        ));
+    }
+    let tiff = crate::writers::tiff_surgical::entry_edits::apply_entry_edits(
+        &block.data[EXIF_IDENTIFIER.len()..],
+        edits,
+    )?;
+    let length = tiff
+        .len()
+        .checked_add(EXIF_IDENTIFIER.len() + 2)
+        .and_then(|len| u16::try_from(len).ok())
+        .ok_or_else(|| ExifToolError::parse_error("Edited EXIF exceeds JPEG APP1 size limit"))?;
+    let bytes = reader.read(0, reader.size() as usize)?;
+    let start = usize::try_from(block.offset)
+        .map_err(|_| ExifToolError::parse_error("JPEG segment offset exceeds address space"))?;
+    let end = start
+        .checked_add(4 + block.data.len())
+        .filter(|end| *end <= bytes.len())
+        .ok_or_else(|| ExifToolError::parse_error("Truncated JPEG EXIF segment"))?;
+    let mut out = bytes[..start].to_vec();
+    out.extend_from_slice(&APP1_MARKER.to_be_bytes());
+    out.extend_from_slice(&length.to_be_bytes());
+    out.extend_from_slice(EXIF_IDENTIFIER);
+    out.extend_from_slice(&tiff);
+    out.extend_from_slice(&bytes[end..]);
+    Ok(out)
+}
+
 /// Reconstructs a complete JPEG file with modified EXIF segment.
 ///
 /// This function iterates through all original segments and:
@@ -388,6 +447,98 @@ mod tests {
         data.extend_from_slice(&[0xFF, 0xD9]);
 
         data
+    }
+
+    #[test]
+    fn raw_scoped_jpeg_replacement_preserves_non_exif_bytes() {
+        use crate::writers::exif_surgical::IfdKind;
+        use crate::writers::tiff_surgical::entry_edits::{EntryMutation, ScopedEntryEdit};
+        let mut file = vec![0xff, 0xd8];
+        write_segment(&mut file, 0xffe0, b"JFIF\0prefix").unwrap();
+        write_segment(
+            &mut file,
+            APP1_MARKER,
+            b"http://ns.adobe.com/xap/1.0/\0keep",
+        )
+        .unwrap();
+        let prefix_len = file.len();
+        let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0".to_vec();
+        exif.extend_from_slice(&[0; 6]); // Complete empty IFD0.
+        write_segment(&mut file, APP1_MARKER, &exif).unwrap();
+        let tail_start = file.len();
+        write_segment(&mut file, SOS_MARKER, b"scan header").unwrap();
+        file.extend_from_slice(b"\x12\xff\0\x34\xff\xd9trailer");
+        let edit = ScopedEntryEdit {
+            ifd: IfdKind::Ifd0,
+            tag_id: 0x013c,
+            mutation: EntryMutation::Set {
+                field_type: 2,
+                count: 6,
+                bytes: b"Alpha\0".to_vec(),
+            },
+        };
+        let out = apply_raw_exif_edits(&TestReader::new(file.clone()), std::slice::from_ref(&edit))
+            .unwrap();
+        assert_eq!(&out[..prefix_len], &file[..prefix_len]);
+        assert!(out.ends_with(&file[tail_start..]));
+        assert_eq!(
+            apply_raw_exif_edits(&TestReader::new(out.clone()), &[edit]).unwrap(),
+            out
+        );
+        let deleted = apply_raw_exif_edits(
+            &TestReader::new(out),
+            &[ScopedEntryEdit {
+                ifd: IfdKind::Ifd0,
+                tag_id: 0x013c,
+                mutation: EntryMutation::Delete,
+            }],
+        )
+        .unwrap();
+        assert_eq!(&deleted[..prefix_len], &file[..prefix_len]);
+        assert!(deleted.ends_with(&file[tail_start..]));
+    }
+
+    #[test]
+    fn raw_scoped_jpeg_refuses_ambiguous_incomplete_and_oversized_exif() {
+        use crate::writers::exif_surgical::IfdKind;
+        use crate::writers::tiff_surgical::entry_edits::{EntryMutation, ScopedEntryEdit};
+        let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0".to_vec();
+        exif.extend_from_slice(&[0; 6]);
+        for marker in [0xff00, 0xffff, SOI_MARKER, RST0_MARKER] {
+            let mut malformed = vec![0xff, 0xd8];
+            write_segment(&mut malformed, marker, b"bad prefix").unwrap();
+            write_segment(&mut malformed, APP1_MARKER, &exif).unwrap();
+            malformed.extend_from_slice(&[0xff, 0xd9]);
+            assert!(
+                apply_raw_exif_edits(&TestReader::new(malformed), &[]).is_err(),
+                "must reject pre-scan marker {marker:#06x}"
+            );
+        }
+        let mut file = vec![0xff, 0xd8];
+        write_segment(&mut file, APP1_MARKER, &exif).unwrap();
+        let mut incomplete = file.clone();
+        incomplete.extend_from_slice(&[0xff, 0xe2, 0, 10, 0]);
+        assert!(apply_raw_exif_edits(&TestReader::new(incomplete), &[]).is_err());
+        let mut duplicate = file.clone();
+        write_segment(&mut duplicate, APP1_MARKER, &exif).unwrap();
+        duplicate.extend_from_slice(&[0xff, 0xd9]);
+        assert!(apply_raw_exif_edits(&TestReader::new(duplicate), &[]).is_err());
+        assert!(apply_raw_exif_edits(&TestReader::new(create_jpeg_without_exif()), &[]).is_err());
+        file.extend_from_slice(&[0xff, 0xd9]);
+        let err = apply_raw_exif_edits(
+            &TestReader::new(file),
+            &[ScopedEntryEdit {
+                ifd: IfdKind::Ifd0,
+                tag_id: 0x013c,
+                mutation: EntryMutation::Set {
+                    field_type: 2,
+                    count: 65_530,
+                    bytes: vec![0; 65_530],
+                },
+            }],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("APP1 size limit"));
     }
 
     #[test]
