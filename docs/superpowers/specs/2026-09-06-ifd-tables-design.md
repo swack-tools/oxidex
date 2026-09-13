@@ -57,8 +57,8 @@ RawConvs. The Olympus tree (949 MISSING / 187 files) is entirely IFD-style and h
   - `subdir`: `SubDirectory` -> `IfdSubdirEdge`: `TagTable` split into module/table
     (`ifd_subdir_refused_tagtable` when odd; absent -> the enclosing table, emitted unwalked:
     v1.1 below); `Start` absent -> `IfdStart::ValuePtr(0)`,
-    `'$valuePtr'` / `'$valuePtr + n'` / `'$valuePtr - n'` -> `ValuePtr(±n)`, `'$val'` / `'$val
-    + n'` -> `Val(±n)`, anything else -> `ifd_subdir_refused_start`; `Base` through the existing
+    `'$valuePtr'` / `'$valuePtr + n'` / `'$valuePtr - n'` -> `ValuePtr(±n)`,
+    `'$val'` / `'$val + n'` -> `Val(±n)`, anything else -> `ifd_subdir_refused_start`; `Base` through the existing
     `BaseExpr` compiler (refused -> `ifd_subdir_refused_base`); `ByteOrder` `LittleEndian`/`II`
     -> `Little`, `BigEndian`/`MM` -> `Big`, `Unknown` -> `Unknown`, absent -> `Inherit`, other
     -> `ifd_subdir_refused_byteorder`; `FixFormat => 'ifd'` -> `sub_ifd: true, fix_format:
