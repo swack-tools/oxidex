@@ -1,5 +1,9 @@
 # Remaining automation work
 
+Start with the [plain-English autogeneration plan](./AUTOGENERATION-PLAN.md).
+It owns the current priorities and measurable finish line; this backlog
+retains supporting acceptance criteria and historical context.
+
 **Original audit: 2026-09-10 at `c7f5dd81`, ExifTool 13.59.** The current queue
 reflects the verified PR #737–#740 landings through
 [`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837).
@@ -161,7 +165,13 @@ and a complete tier-2 run showing no output drift. Its native packed-word
 probe confirms a separate reader defect: integer-offset grouping omits
 `ImageNumber` from raw key 276.1. Recover the producer with that limitation
 explicit, then repair grouping with independently checked raw IDs and runtime
-regressions. Sony enciphered and Nikon encrypted remain larger jobs.
+regressions. That [raw-ID repair](./reference/sony-raw-id-runtime.md) now passes
+the synthetic carrier and Sony module checks. The full local 4,238-file pair
+gains ten correct `ImageNumber` rows with no other changed per-file residuals.
+The final combined shared-pilot Linux gate remains pending; its two corpus
+runs must retain per-file JSON. See the [scoreboard](./AUTOGENERATION-PROGRESS.md)
+for the exact candidate and evidence scope. Sony enciphered and Nikon encrypted
+remain larger jobs.
 
 Reconstruct the next missing Sony/Nikon generator or extend a shared expression rule
 when it removes demonstrated release work or unblocks useful runtime behavior.

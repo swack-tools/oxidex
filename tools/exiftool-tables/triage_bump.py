@@ -303,11 +303,18 @@ def classify_tag_field(module, table, tag_name, field, old_tag, new_tag, table_i
         return Delta(bucket, module, table, tag_name, field, kind, note)
 
     if field == "Condition":
+        if not table_is_binary:
+            return Delta(HAND, module, table, tag_name, field, kind,
+                         "condition on a table outside the shared binary emitter; "
+                         "processor support must be established")
+        if new_v is None or conds.compile_cond(new_v) is not None:
+            return Delta(AUTO, module, table, tag_name, field, kind,
+                         "standalone Condition compiles through the shared binary "
+                         "condition compiler; field eligibility and runtime activation "
+                         "are not measured by this property check")
         return Delta(COND, module, table, tag_name, field, kind,
-                     "standalone Condition on a non-variant tag -- conds.py/Step 23 "
-                     "only compiles a Condition found inside a _variants array's "
-                     "alternatives, so a lone Condition here is omitted unconditionally, "
-                     "not just until some later step lands")
+                     "standalone Condition is outside the shared compiler's grammar: "
+                     + _cond_failure_reason(new_v))
 
     if field == "Hook":
         return Delta(HAND, module, table, tag_name, field, kind,

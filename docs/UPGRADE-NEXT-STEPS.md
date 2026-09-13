@@ -1,5 +1,8 @@
 # ExifTool upgrade execution plan
 
+The [plain-English autogeneration plan](./AUTOGENERATION-PLAN.md) owns the goals,
+work order and progress measures. This file retains technical execution detail.
+
 Started 2026-09-10 from `0683cb11447adef3945f19da5d6917c88aea2f7d`,
 the tested artifact-manifest branch. ExifTool remains pinned to **13.59**.
 This file records the current implementation sequence; the
@@ -16,9 +19,10 @@ populations. They are implementation history, not work to restart.
 
 | Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Continue generated EXIF directory migration | IFD1 and InteropIFD landed; Claude owns ExifIFD E-2 | Preserve the verified CODE-ref key/domain gate, occurrence behavior and named-directory routing; measure each activation against its own control |
-| 2 | Correct classifier/producer accounting exposed by the release rehearsal | Queued | Existing Garmin runtime is recognized, standing debt is separated, repeated field changes are joined by cause, and emitted/activated/observed states remain distinct |
-| 3 | Broaden walk checks and reconstruct useful missing producers | Nikon settings landed; Sony plain producer and native verification implemented, landing checks in progress | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
+| 1 | Establish the starting rule inventory and migrate Sony Tag202a through shared machinery | Published at `5bd15e00`, including removal of 17 duplicate declarations; local lint/workspace/Python/build checks pass; final Linux/corpus gate pending | Native-source change tests, shared execution, exact retired/remaining custom rules, and no unexplained per-file regression; details in the [scoreboard](./AUTOGENERATION-PROGRESS.md) |
+| 2 | Continue generated EXIF directory migration | IFD1 and InteropIFD landed; Claude owns ExifIFD E-2 | Preserve occurrence behavior and named-directory routing; measure each activation against its own control |
+| 3 | Join producer and upgrade accounting | Queued alongside the pilot | Generated facts, manual rules, unsupported rules and actual execution remain distinct; ordinary source changes need no new tag rules |
+| 4 | Preserve Sony/Nikon producer recovery evidence | Sony plain landed; enciphered/encrypted recovery preserved and unlanded | Recovery is labeled maintenance; no numbering-only reconstruction or duplicate per-vendor interpreter is promoted as the target |
 
 The [13.55-to-13.59 retrospective rehearsal](./reference/bump-reports/13.55-to-13.59.md)
 passed on 2026-09-11 at `4fb705da` in **611.006 seconds**, with zero source-edit
@@ -68,17 +72,100 @@ Work from freshly fetched `e664e063` is recorded in the
 [Sony recovery report](./reference/sony-plain-generator-recovery.md). First
 milestone reproduces the existing six tables and 193 rows exactly, adds
 independent native declaration verification, and puts the output under the
-shared transaction. The complete tier-2 run passes with zero output drift.
-Next fix raw-key identity separately: a production-module probe confirms that
-keys `CameraSettings3[276]` and `[276.1]` are treated as alternatives and
-`ImageNumber` is omitted. `FolderNumber` already decodes correctly. The runtime
-repair must emit both fields and preserve actual conditional alternatives.
+shared transaction. PR [#745](https://github.com/swack-tools/oxidex/pull/745)
+landed as `7e928390` after all required hosted checks passed. The complete
+tier-2 run passes with zero output drift.
+The [raw-key identity repair](./reference/sony-raw-id-runtime.md) is now
+implemented separately: generated exact IDs distinguish
+`CameraSettings3[276]` and `[276.1]`, restoring `ImageNumber` while preserving
+actual conditional alternatives. Both fields match native ExifTool in six
+synthetic TIFF carriers; all 68 Sony tests and the complete all-features
+workspace suite pass. The complete local 4,238-file comparison gains ten correct
+`ImageNumber` rows with no other changed per-file residuals. The corrected Linux
+stages and corpus totals also pass, but that pair omitted per-file JSON. The
+final combined pilot gate will preserve both JSONs before landing; see the
+[scoreboard](./AUTOGENERATION-PROGRESS.md) for current validation scope.
 Sony enciphered and Nikon encrypted remain larger producer recoveries.
 
 The earlier paired censuses established the 7.63% result at `79101d7d`; that
 is historical evidence, not the current percentage. Later routing migrations
 need their own attribution. Heavy i7 work must acquire
 `flock /tmp/i7-heavy.lock`; process-name checks are not a reservation.
+
+### Direction correction: reduce custom tag logic
+
+On 2026-09-12 the maintainer challenged the growing amount of handwritten
+wiring behind the generated files. Producer recovery improves reproducibility,
+but a new per-vendor expression dictionary still requires manual maintenance.
+It must be recorded as recovered generation, not completion of automatic tag
+behavior. The target remains native tag knowledge and behavior compiled through
+shared machinery, with deliberate unsupported semantics visible.
+
+The unlanded Sony enciphered draft illustrates the duplication. A direct probe
+of `exprs.compile_any` and `translate_or_compile_any` recognizes 35 of its 53
+explicit raw/value/print expression mappings in the existing shared compiler:
+5 of 20 RawConv, 12 of 15 ValueConv and 18 of 18 PrintConv mappings. These are
+expression-recognition counts, not verified input domains, runtime activation
+or observed output coverage. Four additional hook mappings and executable
+callback contracts remain separate. Do not add those dictionaries as the
+permanent architecture when the shared compiler can own the behavior.
+
+A pre-pilot scan of the genuine pinned dump with `codegen.is_binary_table` and
+the same shared expression recognizer found 235 RawConv declarations across
+19 modules. The pilot now models closed saved-value effects and proves one
+value-local form safe for later fields, while unsupported behavior remains
+withheld. The earlier population identifies a broader shared
+capability to assess: execute verified pure RawConv expressions in the common
+conversion pipeline, preserving suppression, input domains, conversion order
+and state rules. It is a candidate population, not a promise of 235 new rows.
+Stateful callbacks and byte transforms need their own explicit support.
+
+The next implementation must extend the shared compiler/runtime and migrate a
+real native table or family through it. Acceptance requires source-driven tag
+name, enum, offset and supported new-row changes to flow through regeneration
+without new Python/Rust tag rules; native behavior and per-file regression
+checks must pass. Count removed or superseded custom handling as well as new
+coverage. Keep container framing and byte transforms as shared mechanisms.
+
+The Sony enciphered recovery branch, independent verifier and unfinished
+pipeline integration are preserved for reference. Nikon recovery now uses
+stable deterministic ordering and semantic map/reference comparison; it must
+not add a handwritten numbering manifest to reproduce incidental historic
+Rust identifiers. Neither recovery is landed or credited as shared-runtime
+migration. Existing useful bug repairs continue through their current gates.
+
+### Parallel implementation with batched builds
+
+Use GPT-5.6 Terra workers for independent generator and verifier scopes. Each
+worker owns one branch and checkout, plus a bounded deliverable. Reuse finished
+worktrees after preserving their handoffs. The current pilot uses independent
+integration review and Linux validation, while the next capability's native
+fixtures can be prepared without a Rust build. See the scoreboard for current
+ownership and deliverables. A completed implementation still needs independent
+review and integration before it counts as landed.
+
+During authoring, run syntax checks, focused Python tests, native Perl fact
+checks and byte comparisons. Do not run a Cargo build for each generator edit
+or worker. Prove both directions of the upgrade contract: supported native
+name, offset and enum changes regenerate without editing the producer;
+unsupported semantics and changed executable bodies refuse before replacing
+output. A hash that freezes the entire source table is not an upgradeable
+producer. Recovering byte-identical Rust needs no new runtime attribution claim.
+
+The coordinator combines reviewed changes into a small batch, then runs one
+required build/test sequence per target platform. Keep Cargo features, profiles
+and toolchains consistent to reuse build caches; retain source and binary
+identities. Batch related changes without growing an unreviewed backlog or
+skipping required CI. Existing green checks need repetition only after relevant
+changes or when the final integration gate requires them.
+
+Use the local Mac for code coordination and quick checks, the M4 for queued
+compilation/tests, and the i7 for Linux and pinned-native validation. Codex CLI
+workers may run on either remote host in their own checkouts; they follow the
+same code-only authoring rule. Acquire the i7 shared lock for every heavy job.
+Check host workloads and available space before dispatch, cap concurrency,
+and verify the oracle's version and capabilities before assigning corpus work.
+Host availability and exact in-flight commands belong in the current handoff.
 
 ### Operational preservation on 2026-09-11
 

@@ -170,10 +170,6 @@ pub static ROOTS: &[Root] = &[
     root(0x2010, RootCond::ModelRe(false, r"^(DSC-(RX0|RX1RM2|RX10M2|RX10M3|RX100M4|RX100M5|HX80|HX90V?|WX500)|ILCE-(6300|6500|7RM2|7SM2)|ILCA-99M2)\b"), idx::TAG2010H),
     root(0x2010, RootCond::ModelRe(false, r"^(ILCE-(6100A?|6400A?|6600|7C|7M3|7RM3A?|7RM4A?|9|9M2)|DSC-(RX10M4|RX100M6|RX100M5A|RX100M7A?|HX95|HX99|RX0M2)|ZV-(1[AF]?|1M2|E10))\b"), idx::TAG2010I),
 
-    // 0x202a -- listed here for the dispatch, but its table is a plain
-    // ProcessBinaryData: Tag202a uses %binaryDataAttrs, not ProcessEnciphered.
-    Root { enciphered: false, ..root(0x202a, RootCond::ValPt(false, &[(0, &[0x01])]), idx::TAG202A) },
-
     root(0x900b, RootCond::ValPt(false, &[(0, &[0xae])]), idx::TAG900B),
 
     // 0x9050 -- ByteOrder is forced little-endian whatever the MakerNote uses.

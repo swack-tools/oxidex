@@ -50,7 +50,8 @@ pub mod subdir;
 
 pub use binary_tables::{
     ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, ExprValue, Field, Fmt, GateA,
-    HookCond, HookDelta, HookEffect, Mask, Omitted, OtherId, PrintConv, TagGroups, VarFmt, VarKind,
+    HookCond, HookDelta, HookEffect, Mask, OMITTED_NATIVE_FIELDS, Omitted, OmittedNativeField,
+    OtherId, PrintConv, TagGroups, VarFmt, VarKind,
 };
 pub use cond::{
     CmpOp, Cond, Ctx, EffectSource, MemberValue, VariantGroup, first_match, first_match_ifd,

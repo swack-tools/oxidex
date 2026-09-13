@@ -3453,51 +3453,49 @@
 
 #define TAG2010I 13
 
-#define TAG202A 14
+#define TAG900B 14
 
-#define TAG900B 15
+#define TAG9050A 15
 
-#define TAG9050A 16
+#define TAG9050B 16
 
-#define TAG9050B 17
+#define TAG9050C 17
 
-#define TAG9050C 18
+#define TAG9050D 18
 
-#define TAG9050D 19
+#define TAG9400A 19
 
-#define TAG9400A 20
+#define TAG9400B 20
 
-#define TAG9400B 21
+#define TAG9400C 21
 
-#define TAG9400C 22
+#define TAG9401 22
 
-#define TAG9401 23
+#define TAG9402 23
 
-#define TAG9402 24
+#define TAG9403 24
 
-#define TAG9403 25
+#define TAG9404A 25
 
-#define TAG9404A 26
+#define TAG9404B 26
 
-#define TAG9404B 27
+#define TAG9404C 27
 
-#define TAG9404C 28
+#define TAG9405A 28
 
-#define TAG9405A 29
+#define TAG9405B 29
 
-#define TAG9405B 30
+#define TAG9406 30
 
-#define TAG9406 31
+#define TAG9406B 31
 
-#define TAG9406B 32
+#define TAG940A 32
 
-#define TAG940A 33
+#define TAG940C 33
 
-#define TAG940C 34
+#define TAG940E 34
 
-#define TAG940E 35
-
-#define TAG9416 36
+#define TAG9416 35
 
 #define CAMERASETTINGS 0
 

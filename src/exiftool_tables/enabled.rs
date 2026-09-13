@@ -186,6 +186,16 @@ pub static ENABLED: &[(&str, &str)] = &[
     // Sony::Panorama -- `src/parsers/tiff/makernotes/sony/amount.rs:662`.
     // Corpus carrier: the Sony vendor directory (761 JPEGs).
     ("Sony", "Panorama"),
+    // Sony::Tag202a: replaces the custom root and 17 duplicate declarations.
+    // Native inventory: 17/17 entries. tests/sony_shared_focus.rs covers real
+    // and boundary values. Final conformance.py pair on pinned ExifTool 13.59,
+    // 4,238 files, control 7e928390 versus candidate 92dac917:
+    // matched 468,002 -> 468,012; MISSING 12,268 -> 12,258; VALUE 477,
+    // EXTRA 1,562 and renames 22 unchanged. The only per-file changes are
+    // ten ImageNumber fixes from the accompanying raw-ID repair; no new
+    // MISSING, VALUE or EXTRA. The earlier pilot-only pair was unchanged.
+    // Full identities and per-file evidence: docs/reference/sony-shared-pilot-gate.json.
+    ("Sony", "Tag202a"),
     //
     // NOT listed, and why -- these are the decisions, not the leftovers:
     //

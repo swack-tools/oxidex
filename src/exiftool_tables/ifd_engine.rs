@@ -132,6 +132,9 @@ use super::runtime::{self, DecodedValue, decode_value_of};
 use super::subdir::BaseExpr;
 use super::{Fmt, find_ifd_table, find_table};
 
+#[path = "subdirectory_adapter.rs"]
+pub mod subdirectory_adapter;
+
 // ---------------------------------------------------------------------------
 // The directory
 // ---------------------------------------------------------------------------
@@ -589,9 +592,25 @@ fn resolve(
     ctx: &mut cond::Ctx,
 ) -> Option<Resolved> {
     if let Some(tag) = table.tag(entry.tag_id) {
+        // GetTagInfo evaluates a direct tag's Condition with this entry's
+        // value bytes, format and count. Do not let a parent adapter's
+        // temporary context leak into the child table.
+        let val_pt = &located.bytes[..located.bytes.len().min(128)];
+        let mut entry_ctx = cond::Ctx {
+            members: &mut *ctx.members,
+            val_pt: Some(val_pt),
+            format: Some(located.ty.name),
+            count: Some(i64::from(entry.count)),
+        };
+        if tag
+            .condition
+            .is_some_and(|condition| !condition.eval(&mut entry_ctx))
+        {
+            return None;
+        }
         return Some(Resolved {
             tag,
-            condition_resolved: false,
+            condition_resolved: tag.condition.is_some(),
         });
     }
     let group = table.variant_group(entry.tag_id)?;
@@ -1359,7 +1378,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::exiftool_tables::cond::{CmpOp, Cond};
+    use crate::exiftool_tables::cond::{CmpOp, Cond, EffectSource};
     use crate::exiftool_tables::ifd_schema::IfdVariantGroup;
     use crate::exiftool_tables::{ExprId, GateA, IfdFlags, Omitted, PrintConv, TagGroups};
 
@@ -1419,6 +1438,7 @@ mod tests {
             writable: None,
             groups: TagGroups::NONE,
             flags: IfdFlags::NONE,
+            condition: None,
             omitted: Omitted::NONE,
             raw_conv: None,
             value_conv: None,
@@ -2383,6 +2403,227 @@ mod tests {
                 ("SettingsV1", TagValue::Integer(77)),
             ]
         );
+    }
+
+    // A standalone IFD condition is not a variant: Sony::Main's 0x202a
+    // parent edge has this exact shape. It must be evaluated before the
+    // adapter follows SubDirectory, with this entry's bytes rather than a
+    // stale ancestor context.
+    const STARTS_WITH_ONE: Cond = Cond::ValPtRegex {
+        pattern: r"^\x01",
+        negate: false,
+    };
+    static DIRECT_CONDITION_TAGS: &[IfdTag] = &[IfdTag {
+        condition: Some(STARTS_WITH_ONE),
+        ..plain(0x002a, "Child")
+    }];
+    static DIRECT_CONDITION: IfdTable = IfdTable {
+        variants: &[],
+        ..table("DirectCondition", DIRECT_CONDITION_TAGS)
+    };
+
+    #[test]
+    fn a_direct_ifd_condition_uses_its_own_value_bytes() {
+        let order = ByteOrder::Little;
+        let mut members = HashMap::new();
+        let yes = ifd(order, &[int16u_entry(order, 0x002a, 1)], &[]);
+        assert_eq!(
+            values(&run_with(
+                &DIRECT_CONDITION,
+                &yes,
+                order,
+                Some(0),
+                &mut members
+            )),
+            vec![("Child", TagValue::Integer(1))]
+        );
+        let no = ifd(order, &[int16u_entry(order, 0x002a, 2)], &[]);
+        assert!(
+            run_with(&DIRECT_CONDITION, &no, order, Some(0), &mut members).is_empty(),
+            "a false direct Condition drops the parent tag before an adapter could descend"
+        );
+    }
+
+    // FujiFilm.pm:709-714 and Olympus.pm:809-822 supply direct (not
+    // `_variants`) member conditions. `process_exif` must use the caller's
+    // file-level state for both string predicate forms; a missing or wrong
+    // member is a false condition, not permission to report the tag.
+    const GENERAL_IMAGING_MAKE: Cond = Cond::MemberRegex {
+        member: "Make",
+        pattern: "^GENERAL IMAGING",
+        ignore_case: false,
+        negate: false,
+    };
+    const ERF_TIFF_TYPE: Cond = Cond::MemberStrEq {
+        member: "TIFF_TYPE",
+        value: "ERF",
+        negate: false,
+    };
+    static DIRECT_MEMBER_CONDITION_TAGS: &[IfdTag] = &[
+        IfdTag {
+            condition: Some(GENERAL_IMAGING_MAKE),
+            ..plain(0x002b, "MakeScoped")
+        },
+        IfdTag {
+            condition: Some(ERF_TIFF_TYPE),
+            ..plain(0x002c, "TypeScoped")
+        },
+    ];
+    static DIRECT_MEMBER_CONDITIONS: IfdTable = IfdTable {
+        variants: &[],
+        ..table("DirectMemberConditions", DIRECT_MEMBER_CONDITION_TAGS)
+    };
+
+    #[test]
+    fn direct_ifd_member_conditions_use_the_supplied_file_state() {
+        let order = ByteOrder::Little;
+        let data = ifd(
+            order,
+            &[
+                int16u_entry(order, 0x002b, 1),
+                int16u_entry(order, 0x002c, 2),
+            ],
+            &[],
+        );
+        for (make, tiff_type, expected) in [
+            (
+                Some("GENERAL IMAGING CO."),
+                Some("TIFF"),
+                vec![("MakeScoped", TagValue::Integer(1))],
+            ),
+            (
+                Some("FUJIFILM"),
+                Some("ERF"),
+                vec![("TypeScoped", TagValue::Integer(2))],
+            ),
+            (Some("FUJIFILM"), Some("TIFF"), vec![]),
+            (None, None, vec![]),
+        ] {
+            let mut members = HashMap::new();
+            if let Some(make) = make {
+                members.insert("Make", MemberValue::Str(make.to_string()));
+            }
+            if let Some(tiff_type) = tiff_type {
+                members.insert("TIFF_TYPE", MemberValue::Str(tiff_type.to_string()));
+            }
+            assert_eq!(
+                values(&run_with(
+                    &DIRECT_MEMBER_CONDITIONS,
+                    &data,
+                    order,
+                    Some(0),
+                    &mut members,
+                )),
+                expected,
+                "Make={make:?}, TIFF_TYPE={tiff_type:?}"
+            );
+        }
+    }
+
+    // Canon.pm:1598-1604 (pinned 13.59) uses a direct condition on
+    // CanonAFInfo, `$$self{AFInfoCount} = $count`, immediately before its
+    // SubDirectory. Canon.pm:6484-6489 then reads AFInfoCount when choosing
+    // a child layout. Keep the state write and the descent in one test: a
+    // direct condition that is evaluated after descent, or not at all, would
+    // make the child take its fallback branch.
+    const SET_AF_INFO_COUNT: Cond = Cond::SetMember {
+        member: "AFInfoCount",
+        source: EffectSource::Count,
+        then: None,
+    };
+    const AF_INFO_COUNT_IS_TWO: Cond = Cond::MemberCmp {
+        member: "AFInfoCount",
+        op: CmpOp::Eq,
+        value: 2,
+    };
+    static AF_COUNT_CHILD_GROUPS: &[IfdVariantGroup] = &[IfdVariantGroup {
+        id: 0x0002,
+        alternatives: &[
+            (AF_INFO_COUNT_IS_TWO, plain(0x0002, "CountTwo")),
+            (Cond::Always, plain(0x0002, "CountOther")),
+        ],
+    }];
+    static AF_COUNT_CHILD: IfdTable = IfdTable {
+        variants: AF_COUNT_CHILD_GROUPS,
+        ..table("AFCountChild", &[])
+    };
+    static AF_COUNT_PARENT_TAGS: &[IfdTag] = &[IfdTag {
+        condition: Some(SET_AF_INFO_COUNT),
+        omitted: Omitted {
+            value_conv: false,
+            raw_conv: false,
+            condition: false,
+            hook: false,
+            subdirectory: true,
+            print_conv: false,
+        },
+        subdir: Some(IfdSubdirEdge {
+            start: IfdStart::Val(0),
+            sub_ifd: true,
+            max_subdirs: Some(1),
+            ..edge("AFCountChild")
+        }),
+        ..plain(0x0012, "CanonAFInfo")
+    }];
+    static AF_COUNT_PARENT: IfdTable = table("AFCountParent", AF_COUNT_PARENT_TAGS);
+
+    #[test]
+    fn a_direct_condition_stores_count_before_a_child_variant_is_selected() {
+        let order = ByteOrder::Little;
+        let _registered = Registered::new(&[&AF_COUNT_CHILD]);
+        let child = ifd(order, &[int16u_entry(order, 0x0002, 7)], &[]);
+
+        // A count of two needs two out-of-line int32u pointer values. The
+        // child is the first (MaxSubdirs limits the native loop to it), so
+        // the direct condition must store this entry's count before descent.
+        let pointers_at = trailer_at(1) as u32;
+        let child_at = pointers_at + 8;
+        let mut two_trailer = Vec::new();
+        two_trailer.extend_from_slice(&bytes32(order, child_at));
+        two_trailer.extend_from_slice(&bytes32(order, 0));
+        two_trailer.extend_from_slice(&child);
+        let two = ifd(
+            order,
+            &[entry(order, 0x0012, 4, 2, bytes32(order, pointers_at))],
+            &two_trailer,
+        );
+        let mut members = HashMap::new();
+        assert_eq!(
+            values(&run_with(
+                &AF_COUNT_PARENT,
+                &two,
+                order,
+                Some(0),
+                &mut members,
+            )),
+            vec![("CountTwo", TagValue::Integer(7))],
+            "the direct Condition writes AFInfoCount before the child resolves"
+        );
+        assert_eq!(members.get("AFInfoCount"), Some(&MemberValue::Num(2)));
+
+        // The negative control is deliberately a valid single-pointer entry,
+        // not a malformed count: it must select the fallback child layout.
+        // A stale/late count write, or a constant instead of `$count`, cannot
+        // satisfy both this and the two-pointer case.
+        let child_at = trailer_at(1) as u32;
+        let one = ifd(
+            order,
+            &[entry(order, 0x0012, 4, 1, bytes32(order, child_at))],
+            &child,
+        );
+        let mut members = HashMap::new();
+        assert_eq!(
+            values(&run_with(
+                &AF_COUNT_PARENT,
+                &one,
+                order,
+                Some(0),
+                &mut members,
+            )),
+            vec![("CountOther", TagValue::Integer(7))],
+            "a count of one reaches the same child but selects its fallback"
+        );
+        assert_eq!(members.get("AFInfoCount"), Some(&MemberValue::Num(1)));
     }
 
     // -- Flags and omissions -----------------------------------------------------

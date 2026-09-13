@@ -123,17 +123,26 @@ class DiffTagVariantsIntegrationTests(unittest.TestCase):
         self.assertEqual(len(deltas), 1)
         self.assertEqual(deltas[0].bucket, triage_bump.HAND)
 
-    def test_standalone_condition_field_is_still_cond_not_auto(self):
-        # A bare Condition on a non-variant (single-entry) tag is untouched
-        # by Step 23 -- conds.py only ever sees Conditions inside a
-        # _variants array's alternatives.
+    def test_supported_standalone_condition_is_auto_with_property_scope(self):
         old_tag = {"Name": "X", "Format": "int16u", "Condition": "$$self{Model} =~ /^A/"}
         new_tag = {"Name": "X", "Format": "int16u", "Condition": "$$self{Model} =~ /^B/"}
         deltas = list(triage_bump.diff_tag("Sony", "Tag9050d", "10", old_tag, new_tag, True))
 
         self.assertEqual(len(deltas), 1)
-        self.assertEqual(deltas[0].bucket, triage_bump.COND)
+        self.assertEqual(deltas[0].bucket, triage_bump.AUTO)
         self.assertIn("standalone Condition", deltas[0].note)
+        self.assertIn("runtime activation", deltas[0].note)
+
+    def test_unsupported_standalone_condition_and_custom_processor_stay_open(self):
+        tag = {"Name": "X", "Format": "int16u", "Condition": '$$self{Model} lt "A"'}
+        delta = triage_bump.classify_tag_field(
+            "Audit", "Main", "10", "Condition", None, tag, True, "added")
+        self.assertEqual(delta.bucket, triage_bump.COND)
+        self.assertIn("grammar", delta.note)
+        tag["Condition"] = '$$self{Model} eq "A"'
+        delta = triage_bump.classify_tag_field(
+            "Audit", "Main", "10", "Condition", None, tag, False, "added")
+        self.assertEqual(delta.bucket, triage_bump.HAND)
 
 
 class GeneratorLessDerivationTests(unittest.TestCase):

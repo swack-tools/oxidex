@@ -947,9 +947,10 @@ def gen_field_literal(
     silently diverge from a non-variant tag's at the same offset for no
     ExifTool-side reason.
 
-    Always returns a `(field_src, updated_var_sound_until)` pair -- `field_src`
-    is `None` on refusal (the various `stats` counters record why, same keys
-    the single-field path has always used), but `updated_var_sound_until`
+    Always returns a `(field_src, updated_var_sound_until, refusal_reason)`
+    triple. `field_src` is `None` on refusal and `refusal_reason` is the
+    precise branch that declined it, so the generated omission sidecar need
+    not guess later from a second classifier. `updated_var_sound_until`
     must still propagate even then: a refused `var_*` field is exactly what
     *establishes* the hazard boundary in the first place (see the `var_`
     branch below), so a caller that discarded the pair on refusal would lose
@@ -966,10 +967,10 @@ def gen_field_literal(
     name = tag.get("Name")
     if not isinstance(name, str) or not name:
         stats["tag_no_name"] += 1
-        return None, var_sound_until
+        return None, var_sound_until, "raw_id"
     if tag.get("Unknown"):
         stats["tag_unknown_skipped"] += 1
-        return None, var_sound_until
+        return None, var_sound_until, "unknown"
 
     # A per-field Format overrides the table FORMAT. `count` is the number
     # of repetitions of that format (ExifTool's `format[N]` array syntax);
@@ -992,7 +993,7 @@ def gen_field_literal(
                 count = n
             else:
                 stats["tag_fmt_unsupported"] += 1
-                return None, var_sound_until
+                return None, var_sound_until, "format"
         elif f in SCALAR_FORMATS:
             fmt_expr = f"Some(Fmt::{SCALAR_FORMATS[f][0]})"
         elif f in PER_FIELD_FORMATS:
@@ -1015,7 +1016,7 @@ def gen_field_literal(
                 # width needs a Perl eval of the count expression.
                 stats["tag_var_unmodeled"] += 1
                 stats["tag_fmt_unsupported"] += 1
-                return None, var_sound_until
+                return None, var_sound_until, "format"
             # Modeled as data, NOT decoded: the field is emitted carrying its
             # own spelling so a caller can see exactly which variable-width
             # rule applies, and `super::runtime::decode_field` refuses to read
@@ -1028,13 +1029,13 @@ def gen_field_literal(
         else:
             # Expression-sized or otherwise non-mechanical format.
             stats["tag_fmt_unsupported"] += 1
-            return None, var_sound_until
+            return None, var_sound_until, "format"
 
     mask = mask_for(tag, stats)
     if mask is None:
         # A Mask this schema cannot express means the field's value is not
         # the word at that offset. Omit it rather than report the word.
-        return None, var_sound_until
+        return None, var_sound_until, "mask"
 
     format_name = f if isinstance(f, str) else default_format
     input_domain = value_domain(format_name, count)
@@ -1051,6 +1052,28 @@ def gen_field_literal(
         stats["tag_fractional_masked" if mask != "None" else "tag_fractional_bare"] += 1
     if record_offset_hazard and var_sound_until is not None and idx > var_sound_until:
         stats["tag_offset_unsound"] += 1
+    # A standalone Condition uses the same closed grammar as a `_variants`
+    # alternative. It intentionally leaves `omitted.condition` set: the
+    # legacy stateless decode API does not evaluate it. The shared engine
+    # clears a local copy only after evaluating it at this native key.
+    condition_src = "None"
+    if tag.get("Condition") is not None:
+        compiled_condition = conds.compile_cond(tag.get("Condition"))
+        if compiled_condition is not None:
+            condition_src = f"Some({compiled_condition})"
+
+    # `SetMember` is data, not a license for legacy decoders to emit this
+    # field. Keep `omitted.raw_conv` set; engine.rs clears it only after
+    # applying the state change at FoundTag's native point in the walk.
+    member = raw_conv_effect(tag.get("RawConv"))
+    if member is not None:
+        raw_conv_src = f'Some(RawConvEffect::SetMember {{ member: "{rust_str(member)}" }})'
+    elif raw_conv_value_local(tag.get("RawConv")):
+        # The engine still leaves `omitted.raw_conv` set and withholds this
+        # field, but knows no state/offset dependency reaches the next key.
+        raw_conv_src = "Some(RawConvEffect::ValueLocal)"
+    else:
+        raw_conv_src = "None"
     sub_s = "None" if sub is None else f"Some({sub})"
     subdir_src = compile_subdir(tag.get("SubDirectory"), stats)
     hook_src = compile_hook_field(tag.get("Hook"), stats)
@@ -1058,11 +1081,12 @@ def gen_field_literal(
     field_src = (
         f'Field {{ index: {idx}, sub: {sub_s}, name: "{rust_str(name)}", '
         f"format: {fmt_expr}, count: {count}, mask: {mask}, "
+        f"condition: {condition_src}, raw_conv: {raw_conv_src}, "
         f"omitted: {omitted_for(tag, stats, condition_resolved, value_conv_modeled, pc_refused)}, "
         f"value_conv: {vc}, print_conv: {pc}, "
         f"subdir: {subdir_src}, hook: {hook_src}, groups: {groups_src} }}"
     )
-    return field_src, var_sound_until
+    return field_src, var_sound_until, None
 
 
 def compile_groups_field(src, stats):
@@ -1151,7 +1175,10 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format,
     `expr_compiled` bump for an alternative that never actually shipped)
     in the coverage report.
 
-    Returns `(group_src, updated_var_sound_until)` or `None`.
+    Returns `(group_src, updated_var_sound_until, refusal_reason)`. For an
+    atomic group refusal the reason is the exact first branch that made the
+    group unsafe; the sidecar carries it for every alternative because none
+    may be emitted without changing ExifTool's first-match semantics.
     """
     variants = tag["_variants"]
     trial_stats = Counter()
@@ -1174,12 +1201,12 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format,
             # binary-table population -- refuse rather than guess at a shape
             # nothing exercises or verifies.
             stats["tag_variant_cond_unsupported"] += 1
-            return None
+            return None, var_sound_until, "condition"
         cond_src = conds.compile_cond(v.get("Condition"))
         if cond_src is None:
             stats["tag_variant_cond_unsupported"] += 1
-            return None
-        field_src, local_var_sound_until = gen_field_literal(
+            return None, var_sound_until, "condition"
+        field_src, local_var_sound_until, reason = gen_field_literal(
             v,
             idx,
             sub,
@@ -1192,7 +1219,7 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format,
         )
         if field_src is None:
             stats["tag_variant_field_unsupported"] += 1
-            return None
+            return None, local_var_sound_until, reason
         alt_srcs.append(f"({cond_src}, {field_src})")
 
     _merge_stats(stats, trial_stats)
@@ -1206,7 +1233,7 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format,
     sub_s = "None" if sub is None else f"Some({sub})"
     alts_body = ", ".join(alt_srcs)
     group_src = f"VariantGroup {{ index: {idx}, sub: {sub_s}, alternatives: &[{alts_body}] }}"
-    return group_src, local_var_sound_until
+    return group_src, local_var_sound_until, None
 
 
 # Step 28 Gate A -- static soundness, computable at codegen time with no
@@ -1383,7 +1410,7 @@ def gate_a_for(table_stats, offset_hazard):
     return (not reasons), reasons
 
 
-def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs):
+def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs, omitted_native):
     """Emit one `BinaryTable` literal, or `None` if the table is not one.
 
     Step 28: every counter this table's fields touch is tallied into a LOCAL
@@ -1454,6 +1481,10 @@ def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs):
     for key, tag in sorted(tbl["tags"].items(), key=lambda kv: parse_index(kv[0])[0] or 0):
         idx, sub = parse_index(key)
         if idx is None:
+            # Table metadata (for example H264's PRINT_CONV) shares the
+            # dumped `tags` object but is not a ProcessBinaryData row. Count
+            # it for the larger source census; do not manufacture a native
+            # field omission whose raw id can never name a field.
             stats["tag_bad_index"] += 1
             continue
         if "_variants" in tag:
@@ -1465,22 +1496,26 @@ def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs):
             # `Condition` and per-field shape allow it; refused (and counted
             # by exactly one of the `tag_variant_*_unsupported` reasons)
             # atomically otherwise -- see `compile_variant_group`.
-            built = compile_variant_group(
+            group_src, var_sound_until, refusal_reason = compile_variant_group(
                 tag, idx, sub, stats, var_sound_until, fmt_name, verified_exprs
             )
-            if built is None:
+            if group_src is None:
                 stats["tag_variant_skipped"] += 1
+                for n, alternative in enumerate(tag.get("_variants", ())):
+                    omitted_native.append(
+                        (mod_name, tbl_name, f"{key}#{n}", True, alternative, refusal_reason)
+                    )
                 continue
-            group_src, var_sound_until = built
             if var_sound_until is not None and idx > var_sound_until:
                 var_sound_hit = True
             variant_rows.append(f"    {group_src},")
             continue
 
-        field_src, var_sound_until = gen_field_literal(
+        field_src, var_sound_until, refusal_reason = gen_field_literal(
             tag, idx, sub, stats, var_sound_until, fmt_name, verified_exprs
         )
         if field_src is None:
+            omitted_native.append((mod_name, tbl_name, str(key), False, tag, refusal_reason))
             continue
         if var_sound_until is not None and idx > var_sound_until:
             var_sound_hit = True
@@ -1847,19 +1882,38 @@ def ifd_value_domain(spelling, count, count_known):
     return "num" if count is None or count == 1 else "list"
 
 
-# `$$self{X} = $val`, optionally terminated: the one RawConv shape the walk
-# carries as DATA (`RawConvEffect::SetMember`) rather than refusing. ExifTool
-# returns the assignment's value, i.e. `$val`, so the tag is still reported;
-# what changes is that a later `Condition` can read the member. Anything with
-# more in it -- `$val =~ s/\\s+$//; $$self{Make} = $val` (Exif::Main's Make/
-# Model/Software: a substitution first), `$$self{TrackTypes}{$val} = 1; ...`
-# -- is refused as a whole, because reproducing half of a RawConv is exactly
-# the approximation AGENTS.md forbids. `$self->{X}` is Perl's arrow spelling
-# of the same dereference (Olympus.pm's CameraType, PanasonicRaw's Make/Model:
+# `$$self{X} = $val`, optionally terminated: the stateful RawConv shape the
+# walk carries as DATA (`RawConvEffect::SetMember`) rather than refusing.
+# ExifTool returns the assignment's value, i.e. `$val`, so the tag is still
+# reported; what changes is that a later `Condition` can read the member.
+# Anything with more in it -- `$val =~ s/\\s+$//; $$self{Make} = $val`
+# (Exif::Main's Make/Model/Software), `$$self{TrackTypes}{$val} = 1; ...` --
+# is opaque as a whole, because reproducing half of a RawConv is exactly the
+# approximation AGENTS.md forbids. `$self->{X}` is Perl's arrow spelling of
+# the same dereference (Olympus.pm's CameraType, PanasonicRaw's Make/Model:
 # 3 of the 13 stores in 13.59) and is the same member reference `conds.py`'s
 # `_MEMBER` grammar reads, so it compiles to the same effect.
 _RAW_CONV_SET_MEMBER_RE = re.compile(
     r"^\s*(?:\$\$self\{(\w+)\}|\$self->\{(\w+)\})\s*=\s*\$val\s*;?\s*$"
+)
+
+# A closed value-local RawConv form:
+#
+#     ($val =~ s/^literal-prefix// and $val) ? $val : undef
+#
+# The literal source is an optional beginning anchor followed by at least one
+# ASCII letter, digit, space, underscore, or hyphen; the empty replacement
+# has no modifiers. This is not a general substitution compiler. The complete
+# expression is structurally closed: its only variable is the FoundTag-local
+# `$val`, its only side effect rewrites that local scalar, and its conditional
+# returns either that same scalar or `undef`. It cannot interpolate, write
+# `$$self`, call a helper, inspect a global, run regex code, or affect a later
+# table key. The current walker still withholds the tag because it does not
+# render this conversion, but it may safely continue to independent later
+# fields.
+_RAW_CONV_VALUE_LOCAL_LITERAL_PREFIX_RE = re.compile(
+    r"^\s*\(\s*\$val\s*=~\s*s/(?:\^)?[A-Za-z0-9 _-]+//\s+and\s+\$val\s*\)\s*"
+    r"\?\s*\$val\s*:\s*undef\s*;?\s*$"
 )
 
 
@@ -1869,6 +1923,40 @@ def raw_conv_effect(raw_conv):
         return None
     m = _RAW_CONV_SET_MEMBER_RE.match(raw_conv.get("expr") or "")
     return (m.group(1) or m.group(2)) if m else None
+
+
+def raw_conv_value_local(raw_conv):
+    """Whether a RawConv has the one proven value-local shape above.
+
+    `False` is deliberately the default even for an expression without an
+    obvious `$self`: arbitrary Perl can still call helpers or mutate globals.
+    Only this complete structural match is proof that continuing the binary
+    walk cannot expose wrong state or offsets.
+    """
+    return (
+        isinstance(raw_conv, dict)
+        and raw_conv.get("kind") == "expr"
+        and isinstance(raw_conv.get("expr"), str)
+        and _RAW_CONV_VALUE_LOCAL_LITERAL_PREFIX_RE.match(raw_conv["expr"]) is not None
+    )
+
+
+def omitted_native_reasons(refusal_reason):
+    """One exact generator branch for an absent native row.
+
+    The earlier implementation reclassified the tag after rejection. That
+    drifted from the code that actually declined it: a field rejected as
+    `Unknown` could acquire a spurious `format` reason, and every atomic
+    variant group acquired a bogus `raw_id`. The caller now threads the
+    refusing branch here. The verifier still authenticates this compact claim
+    against the live native table, so neither side trusts the other.
+    """
+    if refusal_reason not in {
+        "unknown", "format", "mask", "raw_conv", "value_conv", "condition",
+        "print_conv", "hook", "subdirectory", "raw_id",
+    }:
+        raise AssertionError(f"unrecognised native omission reason: {refusal_reason!r}")
+    return (refusal_reason,)
 
 
 # Presence of any of these means the tag's value is an offset (or the length
@@ -2371,8 +2459,20 @@ def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
     if tag.get("SubDirectory") is not None:
         subdir_src = compile_ifd_subdir(tag, stats, ctx, enclosing)
 
+    # All IFD reads use the shared engine. A compiling standalone Condition
+    # is executable schema data, so the engine may clear its omission only
+    # after it evaluates the condition. Variant alternatives already carry
+    # their condition in the group and pass `condition_resolved=True`.
+    condition_src = "None"
+    condition_modeled = False
+    if not condition_resolved and tag.get("Condition") is not None:
+        compiled_condition = conds.compile_cond(tag.get("Condition"))
+        if compiled_condition is not None:
+            condition_src = f"Some({compiled_condition})"
+            condition_modeled = True
     omitted_src = ifd_omitted_for(
-        tag, stats, condition_resolved, value_conv_modeled, pc_refused, member is not None
+        tag, stats, condition_resolved or condition_modeled, value_conv_modeled, pc_refused,
+        member is not None
     )
     count_src = "None" if count is None else f"Some({count})"
     writable_src = "None" if writable is None else f'Some("{rust_str(writable)}")'
@@ -2380,6 +2480,7 @@ def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
         f'IfdTag {{ id: {tag_id:#06x}, name: "{rust_str(name)}", format: {fmt_src}, '
         f"count: {count_src}, writable: {writable_src}, "
         f"groups: {compile_groups_field(tag.get('Groups'), stats)}, flags: {flags_src}, "
+        f"condition: {condition_src}, "
         f"omitted: {omitted_src}, raw_conv: {raw_conv_src}, value_conv: {vc_src}, "
         f"print_conv: {pc_src}, subdir: {subdir_src} }}"
     )
@@ -2901,6 +3002,8 @@ __VERSION_BLOCK__
 // nondeterminism `codegen.py`'s own module doc warns against elsewhere.
 #[allow(unused_imports)]
 use super::cond::{CmpOp, Cond, EffectSource, VariantGroup};
+#[allow(unused_imports)]
+use super::ifd_schema::RawConvEffect;
 // Step 27: same "imported unconditionally" reasoning as EffectSource above --
 // which of these a given generation run actually constructs depends on which
 // SubDirectory Start/Base shapes the pinned tree happens to carry (today:
@@ -2910,6 +3013,21 @@ use super::cond::{CmpOp, Cond, EffectSource, VariantGroup};
 // generator-output nondeterminism the comment above already rules out.
 #[allow(unused_imports)]
 use super::subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
+
+/// A native ProcessBinaryData row that codegen deliberately could not emit.
+/// `raw_id` is the original key, or `<key>#<alternative-index>` for a native
+/// `_variants` array. Reasons name only observable native properties so an
+/// independent inventory can authenticate the omission without importing the
+/// generator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OmittedNativeField {
+    pub module: &'static str,
+    pub table: &'static str,
+    pub raw_id: &'static str,
+    pub variant: bool,
+    pub name: Option<&'static str>,
+    pub reasons: &'static [&'static str],
+}
 
 /// A binary-table field format.
 ///
@@ -3281,6 +3399,13 @@ pub struct Field {
     pub count: usize,
     /// Present when the field is a slice of the word at `index`.
     pub mask: Option<Mask>,
+    /// Compiled native selection rule. `omitted.condition` remains set until
+    /// the shared engine has evaluated this rule at the field's key.
+    pub condition: Option<Cond>,
+    /// Compiled native state effect. Stateless readers must continue to
+    /// honor `omitted.raw_conv`; the shared engine clears its local flag only
+    /// after applying the effect.
+    pub raw_conv: Option<RawConvEffect>,
     /// What ExifTool does to this field that the transcription does not.
     pub omitted: Omitted,
     /// Oracle-approved `ValueConv`, applied after mask and before PrintConv.
@@ -3800,6 +3925,7 @@ def main():
     stats["hook_refusal_reasons"] = Counter()
     chunks = []
     index_rows = []
+    omitted_native = []
 
     mods = doc["modules"]
     names = args.modules or sorted(mods)
@@ -3809,7 +3935,8 @@ def main():
             continue
         for tbl_name in sorted(mod["tables"]):
             out = gen_table(
-                mod_name, tbl_name, mod["tables"][tbl_name], stats, verified_exprs
+                mod_name, tbl_name, mod["tables"][tbl_name], stats, verified_exprs,
+                omitted_native,
             )
             if out:
                 chunks.append(out)
@@ -3847,6 +3974,25 @@ def main():
         + "\n".join(index_rows)
         + "\n];\n"
     )
+    omission_rows = []
+    for module, table, raw_id, variant, tag, refusal_reason in sorted(
+        omitted_native, key=lambda row: row[:4]
+    ):
+        name = tag.get("Name") if isinstance(tag, dict) and isinstance(tag.get("Name"), str) else None
+        name_src = "None" if name is None else f'Some("{rust_str(name)}")'
+        reasons = omitted_native_reasons(refusal_reason)
+        reasons_src = "&[" + ", ".join(f'"{reason}"' for reason in reasons) + "]"
+        omission_rows.append(
+            f'    OmittedNativeField {{ module: "{rust_str(module)}", table: "{rust_str(table)}", '
+            f'raw_id: "{rust_str(raw_id)}", variant: {str(variant).lower()}, '
+            f'name: {name_src}, reasons: {reasons_src} }},'
+        )
+    omissions = (
+        "\n/// Native binary-table rows deliberately omitted by this generation.\n"
+        "pub static OMITTED_NATIVE_FIELDS: &[OmittedNativeField] = &[\n"
+        + "\n".join(omission_rows)
+        + "\n];\n"
+    )
 
     # Stamp the release these tables came from. ExifTool renames fields and
     # inserts enum values between releases, so verifying against a different
@@ -3869,6 +4015,7 @@ def main():
         fh.write(gen_expr_enum(used))
         fh.write(joined)
         fh.write(index)
+        fh.write(omissions)
 
     if args.ifd_out:
         ifd_index = (

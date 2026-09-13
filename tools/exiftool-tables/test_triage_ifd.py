@@ -112,9 +112,13 @@ class IfdUpgradeTriage(unittest.TestCase):
                 self.assertEqual({d.bucket for d in changes({
                     "Name": "X", "Format": "int16u", field: conv})}, {bucket})
 
-    def test_standalone_condition_is_cond(self):
+    def test_supported_standalone_condition_is_auto(self):
         self.assertEqual({d.bucket for d in changes({
-            "Name": "X", "Condition": '$$self{Model} eq "A"'})}, {"COND"})
+            "Name": "X", "Condition": '$$self{Model} eq "A"'})}, {"AUTO"})
+
+    def test_unsupported_standalone_condition_remains_cond(self):
+        self.assertEqual({d.bucket for d in changes({
+            "Name": "X", "Condition": '$$self{Model} lt "A"'})}, {"COND"})
 
     def test_hook_is_hand(self):
         self.assertEqual({d.bucket for d in changes({

@@ -56,6 +56,38 @@ and Nikon `encrypted_tables.rs`. Sony main-extra, Sony plain, Minolta A100 and
 Nikon settings now have producers. `regen-all.sh` names the remaining
 limits; generated once does not mean automatically refreshable.
 
+The shared Sony focus-table migration removes the 17 `Tag202a` declarations
+from the legacy enciphered artifact. `table_ownership.json` records table
+ownership without copying tag rules. `retire_binary_tables.py` performs the
+mechanical removal and checks the remaining table indices; it is not a
+recovered native producer for the other legacy tables. Its identity ledger
+preserves the original input/output hashes and index range. Supported native
+changes to the shared table continue through the normal shared generator.
+
+After a future accepted producer rebuilds the legacy artifact, apply the
+ownership transform from the repository root:
+
+```sh
+python3 tools/exiftool-tables/retire_binary_tables.py \
+  --manifest tools/exiftool-tables/table_ownership.json \
+  --source src/parsers/tiff/makernotes/sony/enciphered_tables.rs \
+  --input src/parsers/tiff/makernotes/sony/enciphered_tables.rs \
+  --output src/parsers/tiff/makernotes/sony/enciphered_tables.rs \
+  --shared-tables src/exiftool_tables/binary_tables.rs \
+  --enabled-tables src/exiftool_tables/enabled.rs \
+  --consumer-root src \
+  --identity-out tools/exiftool-tables/table_ownership_identity.json
+```
+
+An already recorded in-place replay verifies the current route and references
+without changing the artifact or ledger. A separate output path receives the
+verified bytes. A regenerated retired root handle refuses rather than silently
+restoring duplicate handling. The consumer scan recognizes documented literal
+Rust forms; aliases, macros and general data flow require review. Native
+inventory and runtime comparisons remain the proof of equivalent behavior.
+The transform is not yet an automatically invoked `regen-all.sh` producer;
+the remaining legacy producer is still unaccepted.
+
 Nikon settings is checked against freshly loaded Perl by
 `verify_nikon_settings.py` after regeneration. Its 197 rows and 131 maps are
 unchanged. The custom handwritten processor remains; the verifier checks
@@ -66,9 +98,10 @@ Sony plain uses `gen_sony_plain_tables.py` with the selected fresh dump, then
 `verify_sony_plain.py --input <output> --exiftool-dir <source> --perl <interpreter>`
 checks its six tables, 193 rows, 72 maps and one bitmap against live Perl.
 The native verifier parses the whole Rust DSL independently of the producer.
-It reports the existing raw-key 276/276.1 reader collision explicitly; unchanged
-declarations do not establish runtime parity. See its recovery report for
-the demonstrated missing field and the separate runtime repair requirements.
+It requires the generated `RAW_TAG_IDS` array and checks exact native ID order
+and variant repetition. Shared byte offsets are reported separately from tag
+identity. See the [runtime repair report](../../docs/reference/sony-raw-id-runtime.md)
+for the restored field, bounded validation and remaining real-file acceptance.
 
 ## Generated-output inventory and write checks
 
@@ -231,6 +264,24 @@ Keep these checks separate:
   tables from static artifacts. Its lookup scan is not observed runtime execution.
 - Engine/carrier tests and `conformance.py` compare actual behavior. A finite
   probe suite does not prove equivalence for every possible input.
+
+## Running the Python checks with native table data
+
+The `test_codegen_ifd.WholeDump` checks require a real `dump_tables.pl` result.
+An ordinary discovery run can skip the entire class if no dump is available;
+that result does not validate the complete native table generation. Supply the
+recorded dump explicitly when checking schema or generator changes:
+
+```bash
+OXIDEX_TABLES_JSON=../scratch/tables-13.59.json \
+  python3 -m unittest discover -s tools/exiftool-tables -p 'test_*.py' -v
+```
+
+Use a real path to your recorded dump in place of this example. The dump must
+match the pinned release, and conversion-ledger checks additionally require
+its digest to match `expr_oracle_ledger.json`. Read the skipped-test messages:
+a version match alone does not establish that the ledger checks ran. Keep the
+dump digest and executed/skipped counts with the validation record.
 
 ## Where to spend effort
 

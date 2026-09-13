@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Check generated Rust against ExifTool, by parsing the Rust back out.
 
-The property tested is SOUNDNESS, not completeness:
+The property tested is SOUNDNESS.  Its optional native-inventory stage also
+checks completeness for each generated binary table:
 
     every field, every enum entry and every mask present in the generated Rust
     must match ExifTool exactly, and the release it was transcribed from must be
@@ -26,6 +27,12 @@ design.md` section 4), run after the binary stage from the same oracle
 output and folded into the same exit status. It is skipped, with a message,
 when that file does not exist on the tree -- the binary verification above is
 unaffected either way. `parse_ifd_rust` / `verify_ifd` are the two halves.
+
+The native inventory is deliberately opt-in while older generated artifacts
+lack an omission sidecar.  Once enabled it is strict: every native row in a
+table the artifact declares must either be represented by a generated Field or
+by one exact, source-driven `OmittedNativeField` record.  The record's reason
+is re-derived from the live Perl hash here; it is not a trusted codegen claim.
 """
 
 import argparse
@@ -75,6 +82,9 @@ TABLE_RE = re.compile(
     r'default_format:\s*Fmt::\w+,\s*'
     r'offsets_sound_until:\s*(?P<sound_until>None|Some\(-?\d+\)),',
 )
+# The legacy spelling remains readable until the shared-table schema lands.
+# `FIELD_V2_RE` below is selected per artifact once every Field carries the
+# new native `condition`/`raw_conv` members.
 FIELD_RE = re.compile(
     r'Field\s*\{\s*'
     r'index:\s*(?P<index>-?\d+),\s*'
@@ -119,7 +129,47 @@ FIELD_RE = re.compile(
     r'print_conv:\s*',
     re.S,
 )
+FIELD_V2_RE = re.compile(
+    r'Field\s*\{\s*'
+    r'index:\s*(?P<index>-?\d+),\s*'
+    r'sub:\s*(?P<sub>None|Some\(\d+\)),\s*'
+    r'name:\s*"(?P<name>(?:[^"\\]|\\.)*)",\s*'
+    r'format:\s*(?P<fmt>None'
+    r'|Some\(Fmt::\w+(?:\(\d+\))?\)'
+    r'|Some\(\s*Fmt::Var\(\s*VarFmt\s*\{\s*spelling:\s*"(?P<var_spelling>[^"]*)",\s*'
+    r'kind:\s*VarKind::(?P<var_kind>\w+),?\s*\}\s*,?\s*\)\s*,?\s*\)),\s*'
+    r'count:\s*(?P<count>\d+),\s*'
+    r'mask:\s*(?:None'
+    r'|Some\(\s*Mask\s*\{\s*bits:\s*(?P<mask_bits>0[xX][0-9a-fA-F_]+|\d+),\s*'
+    r'shift:\s*(?P<mask_shift>\d+),?\s*\}\s*,?\s*\)),\s*'
+    r'condition:\s*',
+    re.S,
+)
+_RAW_CONV_LABEL_RE = re.compile(r'\s*,\s*raw_conv:\s*')
+_OMITTED_LABEL_RE = re.compile(
+    r'\s*,\s*omitted:\s*(?P<omitted>Omitted::NONE|Omitted\s*\{[^{}]*\})\s*,\s*value_conv:\s*',
+    re.S,
+)
+_PRINT_CONV_LABEL_RE = re.compile(r'\s*,\s*print_conv:\s*')
 FIELD_COUNT_RE = re.compile(r'Field\s*\{\s*index:')
+# A generated omission is a fact about an upstream row which has no `Field`
+# literal at all.  Keep it separate from `Omitted`: the latter describes
+# semantics withheld *on an emitted field*, and therefore cannot account for
+# a native key that is absent from `fields:`/`variants:` entirely.
+OMITTED_NATIVE_FIELDS_RE = re.compile(
+    r'pub\s+static\s+OMITTED_NATIVE_FIELDS\s*:\s*&\[\s*OmittedNativeField\s*\]\s*=\s*&\[',
+    re.S,
+)
+OMITTED_NATIVE_FIELD_RE = re.compile(
+    r'OmittedNativeField\s*\{\s*'
+    r'module:\s*"(?P<module>(?:[^"\\]|\\.)*)",\s*'
+    r'table:\s*"(?P<table>(?:[^"\\]|\\.)*)",\s*'
+    r'raw_id:\s*"(?P<raw_id>(?:[^"\\]|\\.)*)",\s*'
+    r'variant:\s*(?P<variant>true|false),\s*'
+    r'name:\s*(?P<name>None|Some\(\s*"(?:[^"\\]|\\.)*"\s*\)),\s*'
+    r'reasons:\s*&\[',
+    re.S,
+)
 # Step 23: a table's `variants: &[VariantGroup { index: N, sub: S,
 # alternatives: &[(Cond, Field), ...] }, ...]` holds `Field` literals too --
 # ExifTool's `_variants` alternatives, several of which share one `index`/
@@ -471,6 +521,7 @@ def _some_str(text):
 def _parse_one_field(
     src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges,
     bitmasks, other_ids, print_hexes, pc_refused, pc_kinds, formats, tag_groups,
+    v2_schema=False,
 ):
     """Populate `fields`/`enums`/`masks`/`hooks`/`subdirs`/`subdir_edges`/
     `bitmasks`/`other_ids`/`print_hexes`/`formats`/`tag_groups` from one
@@ -495,7 +546,28 @@ def _parse_one_field(
     if bits is not None:
         masks[k] = (int(bits, 0), int(f.group("mask_shift")))
 
-    omitted = f.group("omitted")
+    if v2_schema:
+        # The shared schema puts two arbitrary-nesting values before the old
+        # fixed-width tail.  Span them rather than widening the regex: a
+        # permissive pattern could cross into the next Field and turn an
+        # out-of-date parser into a false clean inventory.
+        condition_end = _value_span(src, f.end())
+        raw_label = _RAW_CONV_LABEL_RE.match(src, condition_end)
+        if raw_label is None:
+            raise SystemExit(f"{k}: no `raw_conv:` after condition -- verifier is out of date")
+        raw_end = _value_span(src, raw_label.end())
+        omitted_label = _OMITTED_LABEL_RE.match(src, raw_end)
+        if omitted_label is None:
+            raise SystemExit(f"{k}: no `omitted:`/`value_conv:` after raw_conv -- verifier is out of date")
+        omitted = omitted_label.group("omitted")
+        value_end = _value_span(src, omitted_label.end())
+        print_label = _PRINT_CONV_LABEL_RE.match(src, value_end)
+        if print_label is None:
+            raise SystemExit(f"{k}: no `print_conv:` after value_conv -- verifier is out of date")
+        pc_start = print_label.end()
+    else:
+        omitted = f.group("omitted")
+        pc_start = f.end()
     if "hook: true" in omitted:
         hooks.add(k)
     if "subdirectory: true" in omitted:
@@ -507,7 +579,6 @@ def _parse_one_field(
     # the pattern's own comment): `_value_span` from the match's end finds
     # where that value ends, the literal `, subdir:` must follow immediately,
     # and a second `_value_span` from there finds the subdir value.
-    pc_start = f.end()
     pc_end = _value_span(src, pc_start)
     pc = src[pc_start:pc_end].strip()
 
@@ -669,6 +740,12 @@ def parse_rust(path):
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
 
+    # V2 makes the native condition and RawConv explicit on every Field.  Do
+    # not silently mix readers: if a partially-regenerated artifact contains
+    # one old literal, the Field-count assertion below fails loudly.
+    v2_schema = FIELD_V2_RE.search(src) is not None
+    field_re = FIELD_V2_RE if v2_schema else FIELD_RE
+
     fields, enums, masks = {}, defaultdict(dict), {}
     hooks, subdirs = set(), set()
     # Step 28's `Omitted.print_conv`: the fields the generator refused a
@@ -707,7 +784,7 @@ def parse_rust(path):
         if fm:
             f_start, f_end = _bracket_span(src, fm.end() - 1)
             expected_plain += len(FIELD_COUNT_RE.findall(src, f_start, f_end))
-            for f in FIELD_RE.finditer(src, f_start, f_end):
+            for f in field_re.finditer(src, f_start, f_end):
                 sub = f.group("sub")
                 idx = f.group("index")
                 # Sub-indexed bit-fields share a byte offset; the oracle keys
@@ -717,6 +794,7 @@ def parse_rust(path):
                 _parse_one_field(
                     src, f, (mod, tbl, key), fields, enums, masks, hooks, subdirs, subdir_edges,
                     bitmasks, other_ids, print_hexes, pc_refused, pc_kinds, formats, tag_groups,
+                    v2_schema,
                 )
 
         # `variants: &[VariantGroup { index, sub, alternatives: &[(Cond,
@@ -734,12 +812,13 @@ def parse_rust(path):
                 base_key = idx if sub == "None" else f"{idx}.{sub[5:-1]}"
                 a_start, a_end = _bracket_span(src, gm.end() - 1)
                 expected_variant += len(FIELD_COUNT_RE.findall(src, a_start, a_end))
-                for pos, f in enumerate(FIELD_RE.finditer(src, a_start, a_end)):
+                for pos, f in enumerate(field_re.finditer(src, a_start, a_end)):
                     k = (mod, tbl, f"{base_key}#{pos}")
                     variant_keys.add(k)
                     _parse_one_field(
                         src, f, k, fields, enums, masks, hooks, subdirs, subdir_edges,
                         bitmasks, other_ids, print_hexes, pc_refused, pc_kinds, formats, tag_groups,
+                        v2_schema,
                     )
 
     # Every Field in the file must have been parsed -- separately for each
@@ -763,6 +842,67 @@ def parse_rust(path):
         fields, enums, masks, hooks, subdirs, subdir_edges, sound_until, variant_keys,
         bitmasks, other_ids, print_hexes, pc_refused, pc_kinds, formats, table_groups, tag_groups,
     )
+
+
+class NativeOmission(NamedTuple):
+    """One generated acknowledgement of a native row withheld completely."""
+
+    name: str | None
+    variant: bool
+    reasons: tuple[str, ...]
+
+
+class ParsedNativeOmissions(NamedTuple):
+    """`present` distinguishes a new empty sidecar from an old artifact."""
+
+    present: bool
+    rows: dict
+
+
+def parse_omitted_native_fields(path):
+    """Read `OMITTED_NATIVE_FIELDS` from generated Rust without codegen.py.
+
+    The parser owns the schema boundary deliberately: accepting an unfamiliar
+    omission literal would turn an out-of-date verifier into a clean pass.
+    Duplicate raw keys are refused here rather than counted twice in the
+    inventory below.
+    """
+    src = Path(path).read_text(encoding="utf-8")
+    marker = OMITTED_NATIVE_FIELDS_RE.search(src)
+    if marker is None:
+        return ParsedNativeOmissions(False, {})
+    start, end = _bracket_span(src, marker.end() - 1)
+    body = src[start:end]
+    expected = len(re.findall(r"OmittedNativeField\s*\{", body))
+    rows = {}
+    for m in OMITTED_NATIVE_FIELD_RE.finditer(body):
+        reasons_start, reasons_end = _bracket_span(src, start + m.end() - 1)
+        reasons_body = src[reasons_start:reasons_end]
+        reason_literals = re.findall(r'"((?:[^"\\]|\\.)*)"', reasons_body)
+        # A list of strings is the whole grammar.  Any other token makes a
+        # generated reason non-auditable, so fail closed instead of guessing.
+        if ",".join(f'"{x}"' for x in reason_literals) != re.sub(r"\s+", "", reasons_body).rstrip(","):
+            raise SystemExit(
+                "OmittedNativeField reasons must be a literal string list -- "
+                "the verifier is out of date; fix it before trusting a PASS"
+            )
+        reasons = tuple(unescape(x) for x in reason_literals)
+        if not reasons or len(set(reasons)) != len(reasons):
+            raise SystemExit("OmittedNativeField must carry distinct non-empty reasons")
+        raw_name = m.group("name")
+        name = None if raw_name == "None" else unescape(
+            re.search(r'"((?:[^"\\]|\\.)*)"', raw_name).group(1)
+        )
+        key = (unescape(m.group("module")), unescape(m.group("table")), unescape(m.group("raw_id")))
+        if key in rows:
+            raise SystemExit(f"duplicate OmittedNativeField for {key}; one missing rule must be named once")
+        rows[key] = NativeOmission(name, m.group("variant") == "true", reasons)
+    if len(rows) != expected:
+        raise SystemExit(
+            f"parsed {len(rows)} OmittedNativeField rows but sidecar contains {expected} -- "
+            "the verifier is out of date; fix it before trusting a PASS"
+        )
+    return ParsedNativeOmissions(True, rows)
 
 
 def run_oracle(lib, oracle_pl):
@@ -804,6 +944,10 @@ def parse_binary_oracle(out):
     # field, and cross-checks that decision against what actually landed in
     # the generated Rust.
     subdir_facts = {}
+    # Native presence facts used only to authenticate field-level omission
+    # sidecars.  They are deliberately facts about the Perl table rather than
+    # guesses about which codegen branch should have accepted it.
+    native_properties = defaultdict(set)
     for line in out.splitlines():
         p = line.split("\t")
         # Slice I-1: IFD rows carry a leading kind column and are read by
@@ -843,6 +987,9 @@ def parse_binary_oracle(out):
             pcrefs[(p[0], p[1], p[2])] = p[4]
         elif len(p) == 5 and p[3] == "FORMAT":
             rawfmts[(p[0], p[1], p[2])] = p[4]
+        elif len(p) == 5 and p[3] in {"RAWCONV", "VALUECONV", "CONDITION", "PRINTCONV", "UNKNOWN", "MASKDECL"}:
+            marker = "mask_declared" if p[3] == "MASKDECL" else p[3].lower()
+            native_properties[(p[0], p[1], p[2])].add(marker)
         elif len(p) == 7 and p[3] == "TGROUPS":
             tblgroups[(p[0], p[1])] = (p[4], p[5], p[6])
         elif len(p) == 7 and p[3] == "GROUPS":
@@ -850,7 +997,214 @@ def parse_binary_oracle(out):
     return (
         names, enums, masks, hooks, subdirs, subdir_facts, varfmts,
         bitmasks, other_present, other_print_hex, pcrefs,
-        rawfmts, tblgroups, taggroups,
+        rawfmts, tblgroups, taggroups, native_properties,
+    )
+
+
+_NATIVE_RAW_ID_RE = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))?(?:#[0-9]+)?$")
+_OMISSION_REASONS = {
+    "unknown", "format", "mask", "raw_conv", "value_conv", "condition",
+    "print_conv", "hook", "subdirectory", "raw_id",
+}
+
+
+class NativeInventory(NamedTuple):
+    """Complete, non-overlapping accounting of native rows in generated tables."""
+
+    native_rows: int
+    generated_rows: int
+    omissions: int
+    accounted: int
+    missing: tuple
+    stale: tuple
+    overlaps: tuple
+    generated_name_mismatches: tuple
+    name_mismatches: tuple
+    variant_mismatches: tuple
+    bad_reasons: tuple
+    missing_enum_entries: tuple
+    missing_enum_other_entries: tuple
+
+
+def _omission_reason_matches_native(key, reason, rawfmts, masks, hooks, subdirs, properties):
+    """Whether one sidecar reason is a property of the live native field.
+
+    This intentionally does not ask codegen.py whether it *would* refuse a
+    row.  It only establishes that the claimed obstacle exists in the Perl
+    hash.  A fresh ordinary row therefore cannot be hidden by attaching an
+    arbitrary generated omission record to it.
+    """
+    if reason == "format":
+        spelling = rawfmts.get(key)
+        return spelling is not None and expected_fmt_literal(spelling) is None
+    if reason == "mask":
+        # A normal nonzero mask is already representable in the shared Mask
+        # schema.  Only a declared mask that this independent native reader
+        # could not materialise can justify withholding an entire row.
+        return "mask_declared" in properties.get(key, set()) and key not in masks
+    if reason == "hook":
+        return key in hooks
+    if reason == "subdirectory":
+        return key in subdirs
+    if reason == "raw_id":
+        return _NATIVE_RAW_ID_RE.fullmatch(key[2]) is None
+    return reason in properties.get(key, set())
+
+
+def native_inventory(
+    generated, omissions, or_names, or_enums, or_rawfmts, or_masks, or_hooks,
+    or_subdirs, or_properties, or_other_present=(),
+):
+    """Account for every native row in the binary tables this artifact emits.
+
+    Tables absent from the generated artifact are deliberately out of scope:
+    treating every ExifTool binary table as missing would make the migration
+    pilot fail for unrelated, deliberately-unemitted families.  Within a
+    declared table, a row is exactly one of generated, an explicit omission,
+    or an unclassified residual.  This is why `missing` subtracts *all*
+    declared omission keys even if an omission is stale or malformed: one
+    broken declaration produces one named failure, never two counts for one
+    native rule.
+    """
+    table_scope = set(generated.table_groups)
+    native = {k: v for k, v in or_names.items() if k[:2] in table_scope}
+    generated_keys = set(generated.fields)
+    # The generator records a sidecar row even when every row in a table was
+    # refused and no BinaryTable literal exists. That is useful accounting,
+    # but this verifier's scope is deliberately the tables the artifact can
+    # actually route. Do not turn an unrelated all-refused table into a
+    # spurious stale omission for a pilot.
+    declared = {k: v for k, v in omissions.rows.items() if k[:2] in table_scope}
+
+    def authentic_reason(key, reason):
+        if _omission_reason_matches_native(
+            key, reason, or_rawfmts, or_masks, or_hooks, or_subdirs, or_properties
+        ):
+            return True
+        # A variant group is atomic: a condition or unsupported field on one
+        # alternative refuses every alternative, since dropping the loser can
+        # change ExifTool's first-match result. The sidecar therefore carries
+        # the actual group cause on each `key#N`; authenticate it against a
+        # sibling rather than inventing a per-alternative `raw_id` excuse.
+        if "#" not in key[2]:
+            return False
+        prefix = key[2].split("#", 1)[0] + "#"
+        return any(
+            _omission_reason_matches_native(
+                sibling, reason, or_rawfmts, or_masks, or_hooks, or_subdirs, or_properties
+            )
+            for sibling in native
+            if sibling[:2] == key[:2] and sibling[2].startswith(prefix)
+        )
+
+    stale, overlaps, generated_name_mismatches, name_mismatches, variant_mismatches, bad_reasons = [], [], [], [], [], []
+    for k in sorted(set(native) & generated_keys):
+        if generated.fields[k] != native[k]:
+            generated_name_mismatches.append((k, generated.fields[k], native[k]))
+    for k, omission in declared.items():
+        if k in generated_keys:
+            overlaps.append(k)
+            continue
+        native_name = native.get(k)
+        if native_name is None:
+            stale.append(k)
+            continue
+        if omission.name != native_name:
+            name_mismatches.append((k, omission.name, native_name))
+        if omission.variant != ("#" in k[2]):
+            variant_mismatches.append((k, omission.variant))
+        invalid = [
+            reason for reason in omission.reasons
+            if reason not in _OMISSION_REASONS
+            or not authentic_reason(k, reason)
+        ]
+        if invalid:
+            bad_reasons.append((k, tuple(invalid)))
+
+    missing = tuple(sorted(set(native) - generated_keys - set(declared)))
+
+    # Existing `Omitted.print_conv` is the explicit acknowledgement for an
+    # emitted field whose native conversion could not be represented.  For
+    # every other emitted field, enum entries are symmetric too: a native
+    # map entry that appears after a source update must not disappear behind
+    # the old generated subset.
+    missing_enum_entries = []
+    missing_enum_other_entries = []
+    for k in sorted(set(native) & generated_keys):
+        if k in generated.pc_refused:
+            continue
+        got = {norm_key(key) for key in generated.enums.get(k, {})}
+        for enum_key in or_enums.get(k, {}):
+            if norm_key(enum_key) not in got:
+                row = (k, norm_key(enum_key))
+                missing_enum_entries.append(row)
+                if k in or_other_present:
+                    missing_enum_other_entries.append(row)
+
+    accepted_omissions = [
+        k for k, omission in declared.items()
+        if k in native and k not in generated_keys
+        and omission.name == native[k]
+        and omission.variant == ("#" in k[2])
+        and not any(
+            reason not in _OMISSION_REASONS
+            or not authentic_reason(k, reason)
+            for reason in omission.reasons
+        )
+    ]
+    accounted = len(set(native) & generated_keys) + len(accepted_omissions)
+    return NativeInventory(
+        len(native), len(set(native) & generated_keys), len(declared), accounted,
+        missing, tuple(stale), tuple(overlaps), tuple(generated_name_mismatches),
+        tuple(name_mismatches), tuple(variant_mismatches),
+        tuple(bad_reasons),
+        tuple(missing_enum_entries),
+        tuple(missing_enum_other_entries),
+    )
+
+
+def restrict_native_inventory(generated, selectors):
+    """Limit strict completeness accounting to explicit ``MODULE:TABLE``s.
+
+    The normal soundness checks still cover every generated table.  A staged
+    completeness gate needs a smaller independent scope while unrelated
+    producer omissions are being classified, so this only narrows the
+    native-minus-generated inventory and rejects a misspelled selector.
+    """
+    if not selectors:
+        return generated
+    scope = set()
+    for selector in selectors:
+        module, sep, table = selector.partition(":")
+        if not sep or not module or not table:
+            raise SystemExit(
+                f"invalid --native-inventory-table {selector!r}; use MODULE:TABLE"
+            )
+        key = (module, table)
+        if key not in generated.table_groups:
+            raise SystemExit(f"native inventory selector {selector!r} is not a generated binary table")
+        scope.add(key)
+
+    def belongs(key):
+        return key[:2] in scope
+
+    return generated._replace(
+        fields={k: v for k, v in generated.fields.items() if belongs(k)},
+        enums=defaultdict(dict, {k: v for k, v in generated.enums.items() if belongs(k)}),
+        masks={k: v for k, v in generated.masks.items() if belongs(k)},
+        hooks={k for k in generated.hooks if belongs(k)},
+        subdirs={k for k in generated.subdirs if belongs(k)},
+        subdir_edges={k: v for k, v in generated.subdir_edges.items() if belongs(k)},
+        sound_until={k: v for k, v in generated.sound_until.items() if k in scope},
+        variant_keys={k for k in generated.variant_keys if belongs(k)},
+        bitmasks=defaultdict(dict, {k: v for k, v in generated.bitmasks.items() if belongs(k)}),
+        other_ids={k for k in generated.other_ids if belongs(k)},
+        print_hexes={k: v for k, v in generated.print_hexes.items() if belongs(k)},
+        pc_refused={k for k in generated.pc_refused if belongs(k)},
+        pc_kinds={k: v for k, v in generated.pc_kinds.items() if belongs(k)},
+        formats={k: v for k, v in generated.formats.items() if belongs(k)},
+        table_groups={k: v for k, v in generated.table_groups.items() if k in scope},
+        tag_groups={k: v for k, v in generated.tag_groups.items() if belongs(k)},
     )
 
 
@@ -1021,7 +1375,7 @@ IFD_TABLE_RE = re.compile(
     re.S,
 )
 IFD_TABLE_DECL_RE = re.compile(r'pub static \w+: IfdTable = IfdTable \{')
-IFD_TAG_RE = re.compile(
+IFD_TAG_V2_RE = re.compile(
     r'IfdTag\s*\{\s*'
     r'id:\s*(?P<id>0x[0-9a-fA-F]+|\d+),\s*'
     r'name:\s*"(?P<name>(?:[^"\\]|\\.)*)",\s*'
@@ -1035,12 +1389,29 @@ IFD_TAG_RE = re.compile(
     r'writable:\s*(?P<writable>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
     r'groups:\s*(?P<groups>TagGroups::NONE|TagGroups\s*\{[^{}]*\}),\s*'
     r'flags:\s*(?P<flags>IfdFlags::NONE|IfdFlags\s*\{[^{}]*\}),\s*'
+    # Conditions have nested enum payloads, so their span is found below. It
+    # must be an explicit schema member: treating it as arbitrary text would
+    # let a generated condition shift all later fields undetected.
+    r'condition:\s*',
+    re.S,
+)
+# Before shared conditions became executable data, `IfdTag` carried the old
+# fixed tail directly after `flags`. Keep the reader backward-compatible so
+# verifier fixtures and pre-regeneration artifacts fail only on facts, never
+# because their schema predates this additive member.
+IFD_TAG_RE = re.compile(
+    r'IfdTag\s*\{\s*'
+    r'id:\s*(?P<id>0x[0-9a-fA-F]+|\d+),\s*'
+    r'name:\s*"(?P<name>(?:[^"\\]|\\.)*)",\s*'
+    r'format:\s*(?P<fmt>None|Some\(Fmt::\w+(?:\(\d+\))?\)),\s*'
+    r'count:\s*(?P<count>None|Some\(\d+\)),\s*'
+    r'writable:\s*(?P<writable>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+    r'groups:\s*(?P<groups>TagGroups::NONE|TagGroups\s*\{[^{}]*\}),\s*'
+    r'flags:\s*(?P<flags>IfdFlags::NONE|IfdFlags\s*\{[^{}]*\}),\s*'
     r'omitted:\s*(?P<omitted>Omitted::NONE|Omitted\s*\{[^{}]*\}),\s*'
     r'raw_conv:\s*(?P<raw_conv>None|Some\(\s*RawConvEffect::SetMember\s*\{\s*'
     r'member:\s*"(?P<member>(?:[^"\\]|\\.)*)",?\s*\}\s*,?\s*\)),\s*'
     r'value_conv:\s*(?:None|Some\(\s*ExprId::\w+\s*,?\s*\)),\s*'
-    # `print_conv:` and `subdir:` values are located by `_value_span`, as
-    # for a binary `Field` (their nesting is unbounded).
     r'print_conv:\s*',
     re.S,
 )
@@ -1058,6 +1429,17 @@ _IFD_FLAGS_RE = re.compile(
     r'avoid:\s*(?P<avoid>true|false),\s*priority:\s*(?P<priority>None|Some\(-?\d+\)),?\s*\}$'
 )
 _OMITTED_MEMBERS = ("value_conv", "raw_conv", "condition", "hook", "subdirectory", "print_conv")
+_IFD_OMITTED_LABEL_RE = re.compile(
+    r'\s*,\s*omitted:\s*(?P<omitted>Omitted::NONE|Omitted\s*\{[^{}]*\})\s*,\s*raw_conv:\s*',
+    re.S,
+)
+_IFD_VALUE_CONV_LABEL_RE = re.compile(r'\s*,\s*value_conv:\s*')
+_IFD_PRINT_CONV_LABEL_RE = re.compile(r'\s*,\s*print_conv:\s*')
+_IFD_RAW_CONV_RE = re.compile(
+    r'None|Some\(\s*RawConvEffect::SetMember\s*\{\s*'
+    r'member:\s*"(?P<member>(?:[^"\\]|\\.)*)",?\s*\}\s*,?\s*\)',
+    re.S,
+)
 _IFD_SUBDIR_EDGE_RE = re.compile(
     r'^Some\(\s*IfdSubdirEdge\s*\{\s*'
     r'module:\s*"(?P<module>[^"]*)"\s*,\s*'
@@ -1187,7 +1569,40 @@ class ParsedIfd(NamedTuple):
     structure: list
 
 
-def _parse_one_ifd_tag(src, f, k, out):
+def _parse_one_ifd_tag(src, f, k, out, v2_schema):
+    if v2_schema:
+        condition_start = f.end()
+        condition_end = _value_span(src, condition_start)
+        omitted = _IFD_OMITTED_LABEL_RE.match(src, condition_end)
+        if not omitted:
+            raise SystemExit(
+                f"{k}: no `, omitted:` immediately after the condition value "
+                f"{src[condition_start:condition_end].strip()!r} {_OUT_OF_DATE}"
+            )
+        raw_conv_start = omitted.end()
+        raw_conv_end = _value_span(src, raw_conv_start)
+        raw_conv = _IFD_RAW_CONV_RE.fullmatch(src[raw_conv_start:raw_conv_end].strip())
+        if raw_conv is None:
+            raise SystemExit(
+                f"{k}: unrecognised raw_conv value {src[raw_conv_start:raw_conv_end].strip()!r} "
+                f"{_OUT_OF_DATE}"
+            )
+        value_conv = _IFD_VALUE_CONV_LABEL_RE.match(src, raw_conv_end)
+        if not value_conv:
+            raise SystemExit(f"{k}: no `, value_conv:` after raw_conv {_OUT_OF_DATE}")
+        value_conv_end = _value_span(src, value_conv.end())
+        print_conv = _IFD_PRINT_CONV_LABEL_RE.match(src, value_conv_end)
+        if not print_conv:
+            raise SystemExit(f"{k}: no `, print_conv:` after value_conv {_OUT_OF_DATE}")
+        omitted_text = omitted.group("omitted")
+        raw_member = raw_conv.group("member")
+        pc_start = print_conv.end()
+        has_condition = src[condition_start:condition_end].strip() != "None"
+    else:
+        omitted_text = f.group("omitted")
+        raw_member = f.group("member")
+        pc_start = f.end()
+        has_condition = False
     tag = {
         "id": int(f.group("id"), 0),
         "name": unescape(f.group("name")),
@@ -1196,10 +1611,10 @@ def _parse_one_ifd_tag(src, f, k, out):
         "writable": _some_str_opt(f.group("writable")),
         "groups": _parse_tag_groups_value(f.group("groups"), k),
         "flags": _parse_ifd_flags(f.group("flags"), k),
-        "omitted": _parse_omitted(f.group("omitted"), k),
-        "raw_conv": unescape(f.group("member")) if f.group("member") is not None else None,
+        "condition": has_condition,
+        "omitted": _parse_omitted(omitted_text, k),
+        "raw_conv": unescape(raw_member) if raw_member is not None else None,
     }
-    pc_start = f.end()
     pc_end = _value_span(src, pc_start)
     sm = _SUBDIR_LABEL_RE.match(src, pc_end)
     if not sm:
@@ -1231,6 +1646,8 @@ def parse_ifd_rust(path):
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
     out = ParsedIfd({}, {}, set(), defaultdict(dict), {}, {}, {}, {}, [], [])
+    v2_schema = IFD_TAG_V2_RE.search(src) is not None
+    tag_re = IFD_TAG_V2_RE if v2_schema else IFD_TAG_RE
 
     heads = list(IFD_TABLE_RE.finditer(src))
     declared = len(IFD_TABLE_DECL_RE.findall(src))
@@ -1260,13 +1677,13 @@ def parse_ifd_rust(path):
         t_start, t_end = _bracket_span(src, tm.end() - 1)
         expected_plain += len(IFD_TAG_COUNT_RE.findall(src, t_start, t_end))
         ids = []
-        for f in IFD_TAG_RE.finditer(src, t_start, t_end):
+        for f in tag_re.finditer(src, t_start, t_end):
             # The generator spells ids `0x%04x`; the oracle keys rows by the
             # decimal Perl key. Normalise so the two meet.
             k = (mod, tbl, str(int(f.group("id"), 0)))
             if k in out.tags:
                 out.structure.append(f"{k}: duplicate id in `tags`")
-            _parse_one_ifd_tag(src, f, k, out)
+            _parse_one_ifd_tag(src, f, k, out, v2_schema)
             ids.append(int(f.group("id"), 0))
 
         vm = IFD_VARIANTS_MARKER_RE.search(src, t_end, end)
@@ -1280,10 +1697,10 @@ def parse_ifd_rust(path):
             vids.append(gid)
             a_s, a_e = _bracket_span(src, gm.end() - 1)
             expected_variant += len(IFD_TAG_COUNT_RE.findall(src, a_s, a_e))
-            for pos, f in enumerate(IFD_TAG_RE.finditer(src, a_s, a_e)):
+            for pos, f in enumerate(tag_re.finditer(src, a_s, a_e)):
                 k = (mod, tbl, f"{gid}#{pos}")
                 out.variant_keys.add(k)
-                _parse_one_ifd_tag(src, f, k, out)
+                _parse_one_ifd_tag(src, f, k, out, v2_schema)
                 if int(f.group("id"), 0) != gid:
                     out.structure.append(
                         f"{k}: alternative carries id {f.group('id')} inside group id {gid}"
@@ -1715,12 +2132,18 @@ def verify_ifd(gen, orc, show=10):
                 tally.hit()
             else:
                 tally.miss((k, f"omitted.{member}", om[member], present))
-        # A plain entry's Condition is Perl the walk cannot run (withheld);
-        # an alternative's Condition is the compiled `Cond` that selected
-        # it, so the flag must be clear there (the spec's atomic refusal
-        # otherwise drops the whole group).
-        want_cond = False if is_variant else k in orc.conditions
-        if om["condition"] == want_cond:
+        # A direct Condition is now executable data. A compiled condition
+        # clears the omission flag just as a variant group's selector does;
+        # an absent generated condition must still retain the native refusal.
+        # The verifier deliberately checks the presence relationship rather
+        # than reusing codegen's grammar to decide which Perl expression is
+        # representable.
+        has_native_cond = k in orc.conditions
+        has_generated_cond = tag["condition"]
+        want_cond = False if (is_variant or has_generated_cond) else has_native_cond
+        if has_generated_cond and not has_native_cond:
+            t_cond.miss((k, "condition", True, False))
+        elif om["condition"] == want_cond:
             t_cond.hit()
         else:
             t_cond.miss((k, "omitted.condition", om["condition"], want_cond))
@@ -1907,6 +2330,16 @@ def main():
     ap.add_argument("--oracle", default="oracle.pl")
     ap.add_argument("--show", type=int, default=10)
     ap.add_argument(
+        "--native-inventory", action="store_true",
+        help="require the generated OmittedNativeField sidecar and account for every "
+            "native row in each generated binary table",
+    )
+    ap.add_argument(
+        "--native-inventory-table", action="append", default=[], metavar="MODULE:TABLE",
+        help="limit strict native inventory to a generated binary table; repeat while "
+             "completeness gates are being activated incrementally",
+    )
+    ap.add_argument(
         "--ifd-generated", default=None,
         help="slice I-1's src/exiftool_tables/ifd_tables.rs (default: the file of that "
              "name beside GENERATED_RS); the IFD stage is skipped, with a message, when "
@@ -1950,8 +2383,14 @@ def main():
     (
         or_names, or_enums, or_masks, or_hooks, or_subdirs, or_subdir_facts, or_varfmts,
         or_bitmasks, or_other_present, or_other_print_hex, or_pcrefs,
-        or_rawfmts, or_tblgroups, or_taggroups,
+        or_rawfmts, or_tblgroups, or_taggroups, or_properties,
     ) = parse_binary_oracle(oracle_out)
+    native_omissions = parse_omitted_native_fields(args.generated_rs)
+    if args.native_inventory and not native_omissions.present:
+        sys.exit(
+            "native inventory requested but generated Rust has no OMITTED_NATIVE_FIELDS sidecar; "
+            "regenerate it before trusting a PASS"
+        )
 
     if not gen_fields:
         sys.exit("parsed 0 fields from generated Rust -- verifier is broken, "
@@ -2228,6 +2667,22 @@ def main():
         if k in or_rawfmts and expected_fmt_literal(or_rawfmts[k]) is None
     ]
 
+    inventory = None
+    if args.native_inventory:
+        inventory_generated = restrict_native_inventory(
+            ParsedRust(
+                gen_fields, gen_enums, gen_masks, gen_hooks, gen_subdirs, gen_subdir_edges,
+                gen_sound_until, gen_variant_keys, gen_bitmasks, gen_other_ids, gen_print_hexes,
+                gen_pc_refused, gen_pc_kinds, gen_formats, gen_table_groups, gen_tag_groups,
+            ),
+            args.native_inventory_table,
+        )
+        inventory = native_inventory(
+            inventory_generated,
+            native_omissions, or_names, or_enums, or_rawfmts, or_masks, or_hooks,
+            or_subdirs, or_properties, or_other_present,
+        )
+
 
     # Step 27: does `codegen.py`'s SubdirEdge compiler (`subdirs.py`) agree
     # with an INDEPENDENT re-derivation (`expected_subdir_edge`, built from
@@ -2354,6 +2809,23 @@ def main():
     print(f"  match          {fmt_ok}")
     print(f"  MISMATCH       {fmt_bad}")
     print(f"  unsupported format emitted anyway {len(unsupported_emitted)}")
+    if inventory is None:
+        print("native field inventory: SKIPPED (pass --native-inventory once generated sidecars exist)")
+    else:
+        print("native field inventory")
+        print(f"  native rows      {inventory.native_rows}")
+        print(f"  generated rows  {inventory.generated_rows}")
+        print(f"  declared omissions {inventory.omissions}")
+        print(f"  accounted once  {inventory.accounted}")
+        print(f"  UNCLASSIFIED native rows {len(inventory.missing)}")
+        print(f"  stale omissions {len(inventory.stale)}")
+        print(f"  duplicate-coverage omissions {len(inventory.overlaps)}")
+        print(f"  generated name mismatches {len(inventory.generated_name_mismatches)}")
+        print(f"  omission name mismatches {len(inventory.name_mismatches)}")
+        print(f"  omission variant mismatches {len(inventory.variant_mismatches)}")
+        print(f"  unauthenticated omission reasons {len(inventory.bad_reasons)}")
+        print(f"  native enum entries missing from generated rows {len(inventory.missing_enum_entries)}")
+        print(f"    of which native OTHER partial conversions {len(inventory.missing_enum_other_entries)}")
 
     for k, got, want in bad_examples:
         print(f"  name  {k}: generated {got!r} != exiftool {want!r}")
@@ -2394,6 +2866,23 @@ def main():
     for k, raw, got in unsupported_emitted[:args.show]:
         print(f"  format  {k}: Format {raw!r} is outside the schema but was "
               f"emitted as {got!r} -- it must be refused, not approximated")
+    if inventory is not None:
+        for k in inventory.missing[:args.show]:
+            print(f"  UNCLASSIFIED native field {k}: no generated Field or explicit omission")
+        for k in inventory.stale[:args.show]:
+            print(f"  stale omission {k}: no matching native field")
+        for k in inventory.overlaps[:args.show]:
+            print(f"  duplicate coverage {k}: both generated and declared omitted")
+        for k, got, want in inventory.generated_name_mismatches[:args.show]:
+            print(f"  generated name {k}: generated {got!r} != native {want!r}")
+        for k, got, want in inventory.name_mismatches[:args.show]:
+            print(f"  omission name {k}: generated {got!r} != native {want!r}")
+        for k, got in inventory.variant_mismatches[:args.show]:
+            print(f"  omission variant {k}: generated {got!r} != native {('#' in k[2])!r}")
+        for k, reasons in inventory.bad_reasons[:args.show]:
+            print(f"  omission reason {k}: not authenticated by native field: {', '.join(reasons)}")
+        for k, enum_key in inventory.missing_enum_entries[:args.show]:
+            print(f"  native enum {k} key {enum_key!r}: missing from generated PrintConv")
 
     # Slice I-1: the IFD stage, from the same oracle run. Skipped -- never
     # silently passed -- when the generated file is not on this tree.
@@ -2423,6 +2912,14 @@ def main():
         + fmt_bad + len(unsupported_emitted) + group_bad + tag_group_bad
         + ifd_failed
     )
+    if inventory is not None:
+        failed += (
+            len(inventory.missing) + len(inventory.stale) + len(inventory.overlaps)
+            + len(inventory.generated_name_mismatches)
+            + len(inventory.name_mismatches) + len(inventory.variant_mismatches)
+            + len(inventory.bad_reasons)
+            + len(inventory.missing_enum_entries)
+        )
     print("\nRESULT:", "PASS" if failed == 0 else f"FAIL ({failed} discrepancies)")
     sys.exit(1 if failed else 0)
 

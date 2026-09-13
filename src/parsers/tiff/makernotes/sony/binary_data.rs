@@ -86,7 +86,6 @@ pub enum Dm {
     FacesDetected,
     FlashFired,
     LensMount,
-    Locations,
     MetaVersion,
     TagB042,
     TagVersion,
@@ -1114,12 +1113,65 @@ pub fn process(
     ctx: &mut Ctx,
     out: &mut Vec<Found>,
 ) {
-    process_depth(tables, table, data, order, ctx, out, 0)
+    process_depth(tables, None, table, data, order, ctx, out, 0)
+}
+
+/// A raw-ID sidecar must contain one ID for every row of every table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RawTagIdError {
+    TableCount {
+        tables: usize,
+        ids: usize,
+    },
+    RowCount {
+        table: usize,
+        tags: usize,
+        ids: usize,
+    },
+}
+
+/// Walks tables whose generated sidecar preserves ExifTool's original tag IDs.
+///
+/// Distinct IDs may share an integer byte index (for example, `276` and
+/// `276.1`). Only adjacent rows with the same raw ID are Condition variants;
+/// `BinTag::index` still determines the byte offset. The generator must retain
+/// native ID order and repeat an ID for each of its variants.
+///
+/// The entire sidecar, including tables reached recursively, is checked before
+/// either `ctx` or `out` changes. A shape error never falls back to integer-ID
+/// grouping. Callers without a generated sidecar retain [`process`] behavior.
+pub fn process_with_ids(
+    tables: &'static [BinTable],
+    raw_ids: &[&[&str]],
+    table: usize,
+    data: &[u8],
+    order: ByteOrder,
+    ctx: &mut Ctx,
+    out: &mut Vec<Found>,
+) -> Result<(), RawTagIdError> {
+    if tables.len() != raw_ids.len() {
+        return Err(RawTagIdError::TableCount {
+            tables: tables.len(),
+            ids: raw_ids.len(),
+        });
+    }
+    for (table, (definition, ids)) in tables.iter().zip(raw_ids).enumerate() {
+        if definition.tags.len() != ids.len() {
+            return Err(RawTagIdError::RowCount {
+                table,
+                tags: definition.tags.len(),
+                ids: ids.len(),
+            });
+        }
+    }
+    process_depth(tables, Some(raw_ids), table, data, order, ctx, out, 0);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn process_depth(
     tables: &'static [BinTable],
+    raw_ids: Option<&[&[&str]]>,
     table: usize,
     data: &[u8],
     order: ByteOrder,
@@ -1135,6 +1187,7 @@ fn process_depth(
     let Some(tbl) = tables.get(table) else {
         return;
     };
+    let table_ids = raw_ids.map(|ids| ids[table]);
     let size = data.len();
     let increment = tbl.fmt.size();
     let mut var_size: i64 = 0;
@@ -1144,14 +1197,16 @@ fn process_depth(
         // first variant that holds, and to nothing at all when none does.
         let id = tbl.tags[index].index;
         let mut end = index;
-        while end < tbl.tags.len() && tbl.tags[end].index == id {
+        while end < tbl.tags.len()
+            && table_ids.map_or(tbl.tags[end].index == id, |ids| ids[end] == ids[index])
+        {
             end += 1;
         }
         let chosen = tbl.tags[index..end].iter().find(|t| ctx.holds(&t.cond));
         index = end;
         let Some(tag) = chosen else { continue };
 
-        let entry = id as i64 * increment as i64 + var_size;
+        let entry = tag.index as i64 * increment as i64 + var_size;
         if entry < 0 {
             continue;
         }
@@ -1185,7 +1240,7 @@ fn process_depth(
                 more
             };
             let bytes = &data[entry..entry + len];
-            process_depth(tables, sub, bytes, order, ctx, out, depth + 1);
+            process_depth(tables, raw_ids, sub, bytes, order, ctx, out, depth + 1);
             continue;
         }
 
@@ -1225,6 +1280,251 @@ fn process_depth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const fn raw_id_tag(index: u32, name: &'static str) -> BinTag {
+        BinTag {
+            index,
+            name,
+            cond: Cond::Always,
+            fmt: Fmt::Default,
+            count: 1,
+            mask: 0,
+            raw: Raw::None,
+            vc: Vc::None,
+            pc: Pc::None,
+            hook: Hook::None,
+            print_hex: false,
+            low_priority: false,
+            subdir: None,
+        }
+    }
+
+    fn names_and_values(found: &[Found]) -> Vec<(&str, &str)> {
+        found
+            .iter()
+            .map(|tag| (tag.name, tag.value.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn raw_ids_distinguish_packed_fields_without_changing_offsets() {
+        static TABLES: &[BinTable] = &[BinTable {
+            name: "Packed",
+            fmt: Fmt::U8,
+            tags: &[
+                BinTag {
+                    fmt: Fmt::U32,
+                    mask: 0x00ff_c000,
+                    pc: Pc::ZeroPad(3),
+                    ..raw_id_tag(276, "FolderNumber")
+                },
+                BinTag {
+                    fmt: Fmt::U32,
+                    mask: 0x0000_3fff,
+                    pc: Pc::ZeroPad(4),
+                    ..raw_id_tag(276, "ImageNumber")
+                },
+            ],
+        }];
+        let word = (123u32 << 14) | 45;
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let mut bytes = [0; 280];
+            bytes[276..].copy_from_slice(&match order {
+                ByteOrder::LittleEndian => word.to_le_bytes(),
+                ByteOrder::BigEndian => word.to_be_bytes(),
+            });
+            let mut ctx = Ctx::default();
+            let mut found = Vec::new();
+            process_with_ids(
+                TABLES,
+                &[&["276", "276.1"]],
+                0,
+                &bytes,
+                order,
+                &mut ctx,
+                &mut found,
+            )
+            .unwrap();
+            assert_eq!(
+                names_and_values(&found),
+                [("FolderNumber", "123"), ("ImageNumber", "0045")]
+            );
+            assert_eq!(found[1].value_form.as_deref(), Some("45"));
+
+            // The legacy entry point still treats one integer index as a group.
+            found.clear();
+            process(TABLES, 0, &bytes, order, &mut ctx, &mut found);
+            assert_eq!(names_and_values(&found), [("FolderNumber", "123")]);
+        }
+    }
+
+    #[test]
+    fn raw_ids_keep_first_matching_variant_and_omit_unmatched_groups() {
+        static TABLES: &[BinTable] = &[BinTable {
+            name: "Variants",
+            fmt: Fmt::U8,
+            tags: &[
+                BinTag {
+                    cond: Cond::DmCmp(Dm::LensMount, NumCmp::Eq, 1.0),
+                    ..raw_id_tag(0, "First")
+                },
+                BinTag {
+                    cond: Cond::DmTruthy(Dm::LensMount),
+                    ..raw_id_tag(0, "Second")
+                },
+            ],
+        }];
+        for (member, expected) in [(1.0, Some("First")), (2.0, Some("Second")), (0.0, None)] {
+            let mut ctx = Ctx::default();
+            ctx.set(Dm::LensMount, Scalar::Num(member));
+            let mut found = Vec::new();
+            process_with_ids(
+                TABLES,
+                &[&["0", "0"]],
+                0,
+                &[7],
+                ByteOrder::LittleEndian,
+                &mut ctx,
+                &mut found,
+            )
+            .unwrap();
+            let expected: Vec<_> = expected.into_iter().map(|name| (name, "7")).collect();
+            assert_eq!(names_and_values(&found), expected);
+        }
+    }
+
+    #[test]
+    fn raw_ids_do_not_fall_through_after_a_matching_variant_suppresses_output() {
+        static TABLES: &[BinTable] = &[BinTable {
+            name: "SuppressedVariant",
+            fmt: Fmt::U8,
+            tags: &[
+                BinTag {
+                    raw: Raw::NonZero,
+                    ..raw_id_tag(0, "First")
+                },
+                raw_id_tag(0, "Second"),
+            ],
+        }];
+        let mut found = Vec::new();
+        process_with_ids(
+            TABLES,
+            &[&["0", "0"]],
+            0,
+            &[0],
+            ByteOrder::LittleEndian,
+            &mut Ctx::default(),
+            &mut found,
+        )
+        .unwrap();
+        assert!(found.is_empty());
+    }
+
+    static RAW_ID_NESTED_TABLES: &[BinTable] = &[
+        BinTable {
+            name: "Parent",
+            fmt: Fmt::U8,
+            tags: &[
+                BinTag {
+                    raw: Raw::StoreThenUndef(Dm::LensMount),
+                    ..raw_id_tag(0, "Carrier")
+                },
+                BinTag {
+                    subdir: Some(1),
+                    ..raw_id_tag(1, "Child")
+                },
+            ],
+        },
+        BinTable {
+            name: "Child",
+            fmt: Fmt::U8,
+            tags: &[
+                BinTag {
+                    mask: 0x0f,
+                    ..raw_id_tag(0, "Low")
+                },
+                BinTag {
+                    mask: 0xf0,
+                    ..raw_id_tag(0, "High")
+                },
+            ],
+        },
+    ];
+
+    #[test]
+    fn raw_ids_propagate_to_nested_tables() {
+        let mut ctx = Ctx::default();
+        let mut found = Vec::new();
+        process_with_ids(
+            RAW_ID_NESTED_TABLES,
+            &[&["0", "1"], &["0", "0.1"]],
+            0,
+            &[7, 0xa5],
+            ByteOrder::LittleEndian,
+            &mut ctx,
+            &mut found,
+        )
+        .unwrap();
+        assert_eq!(names_and_values(&found), [("Low", "5"), ("High", "10")]);
+        assert_eq!(ctx.member(Dm::LensMount), Some(&Scalar::Num(7.0)));
+    }
+
+    #[test]
+    fn raw_ids_reject_misaligned_tables_before_context_or_output_changes() {
+        let cases: &[(&[&[&str]], RawTagIdError)] = &[
+            (
+                &[&["0", "1"]],
+                RawTagIdError::TableCount { tables: 2, ids: 1 },
+            ),
+            (
+                &[&["0", "1"], &["0"]],
+                RawTagIdError::RowCount {
+                    table: 1,
+                    tags: 2,
+                    ids: 1,
+                },
+            ),
+            (
+                &[&["0", "1"], &["0", "0.1", "1"]],
+                RawTagIdError::RowCount {
+                    table: 1,
+                    tags: 2,
+                    ids: 3,
+                },
+            ),
+        ];
+        for (ids, error) in cases {
+            let mut ctx = Ctx::new(Some("Existing model"), Some("Existing software"));
+            ctx.set(Dm::LensMount, Scalar::Num(42.0));
+            ctx.double_cipher = true;
+            let original_members = ctx.members.clone();
+            let mut found = vec![Found {
+                name: "Existing",
+                value: "display".to_string(),
+                low_priority: true,
+                value_form: Some("raw".to_string()),
+            }];
+            assert_eq!(
+                process_with_ids(
+                    RAW_ID_NESTED_TABLES,
+                    ids,
+                    0,
+                    &[7, 0xa5],
+                    ByteOrder::LittleEndian,
+                    &mut ctx,
+                    &mut found
+                ),
+                Err(*error)
+            );
+            assert_eq!(ctx.members, original_members);
+            assert_eq!(ctx.model, "Existing model");
+            assert_eq!(ctx.software, "Existing software");
+            assert!(ctx.double_cipher);
+            assert_eq!(names_and_values(&found), [("Existing", "display")]);
+            assert!(found[0].low_priority);
+            assert_eq!(found[0].value_form.as_deref(), Some("raw"));
+        }
+    }
 
     #[test]
     fn perl_stringification_matches_perl() {

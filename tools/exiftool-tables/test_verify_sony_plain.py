@@ -13,6 +13,7 @@ SCRIPT = HERE / 'verify_sony_plain.py'
 PIN = (HERE.parents[1] / '.exiftool-version').read_text().strip()
 PERL = shutil.which('/usr/bin/perl') or shutil.which('perl')
 NAMES = ['CameraSettings', 'CameraSettings2', 'CameraSettings3', 'FaceInfo1', 'FaceInfo2', 'ShotInfo']
+RAW_IDS = [['0', '1'], ['0'], ['276', '276.1', '1015'], ['0'], ['0'], ['2', '72']]
 PERL_ROWS = [
     '''0 => {Name=>'Choice', PrintConv=>{0=>'Off',1=>'On', BITMASK=>{0=>'Bit'}}},
        1 => {Name=>'ExposureTime',ValueConv=>'$val ? 2 ** (6 - $val/8) : 0',PrintConv=>'$val ? Image::ExifTool::Exif::PrintExposureTime($val) : "Bulb"'},''',
@@ -68,6 +69,9 @@ static B0: &[(u32, &str)] = &[(0u32, "Bit")];
     for i, name in enumerate(NAMES):
         fmt = ['U16', 'U16', 'U8', 'Default', 'Default', 'Default'][i]
         text += f'BinTable {{ name: "{name}", fmt: Fmt::{fmt}, tags: T{i} }},\n'
+    text += '];\n#[rustfmt::skip]\npub static RAW_TAG_IDS: &[&[&str]] = &[\n'
+    for ids in RAW_IDS:
+        text += '&[' + ', '.join(json.dumps(key) for key in ids) + '],\n'
     text += '];\n#[allow(dead_code)]\npub mod idx {\n'
     for i, name in enumerate(NAMES):
         text += f'pub const {name.upper()}: usize = {i};\n'
@@ -91,9 +95,9 @@ class SonyPlainVerifierTests(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items() if not k.startswith('PERL')}
         self.env['PYTHONDONTWRITEBYTECODE'] = '1'
 
-    def cli(self, good=False):
+    def cli(self, good=False, perl=PERL):
         original = self.rust.read_bytes()
-        p = subprocess.run([sys.executable, str(SCRIPT), '--exiftool-dir', str(self.source), '--perl', PERL,
+        p = subprocess.run([sys.executable, str(SCRIPT), '--exiftool-dir', str(self.source), '--perl', perl,
                             '--input', str(self.rust)], env=self.env, capture_output=True, text=True, timeout=20)
         self.assertEqual(self.rust.read_bytes(), original)
         self.assertEqual(p.stdout.splitlines()[:1], ['=== instrument: verify_sony_plain.py ==='], p.stderr)
@@ -103,11 +107,13 @@ class SonyPlainVerifierTests(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0, p.stdout)
         self.assertIn('Sony plain verification refused:', p.stderr)
 
-    def test_complete_projection_and_explicit_raw_key_limit(self):
+    def test_complete_projection_and_exact_raw_key_identity(self):
         report = self.cli(True)
         self.assertEqual(report['rows'], 10)
         self.assertEqual(report['tables'], 6)
-        self.assertEqual(report['raw_key_projection'][0]['raw_keys'], ['276', '276.1'])
+        self.assertEqual(report['raw_tag_id_rows'], 10)
+        self.assertEqual(report['raw_tag_id_tables'], 6)
+        self.assertEqual(report['shared_byte_indices'][0]['raw_keys'], ['276', '276.1'])
 
     def test_changed_rust_facts_fail(self):
         for old, new in [('"On"', '"Wrong"'), ('0u32', '1u32'), ('mask: 16383', 'mask: 1023'),
@@ -170,6 +176,22 @@ class SonyPlainVerifierTests(unittest.TestCase):
         self.pm.write_text(perl_fixture())
         self.core.write_text(self.core.read_text().replace(PIN, '0')); self.cli()
 
+    def test_native_numeric_configuration_is_bound_to_binary64(self):
+        self.assertEqual(self.cli(True)['identity']['numeric'], {'nvtype': 'double', 'nvsize': 8})
+        wrapper = self.base / 'perl-with-different-nv-report'
+        wrapper.write_text(f'''#!{sys.executable}
+import json, subprocess, sys
+p = subprocess.run([{PERL!r}, *sys.argv[1:]], capture_output=True, text=True)
+if p.returncode:
+    sys.stderr.write(p.stderr)
+    raise SystemExit(p.returncode)
+doc = json.loads(p.stdout)
+doc['numeric'] = {{'nvtype': 'long double', 'nvsize': 16}}
+print(json.dumps(doc))
+''')
+        wrapper.chmod(0o755)
+        self.cli(perl=str(wrapper))
+
     def test_literal_whitespace_is_preserved(self):
         self.pm.write_text(perl_fixture().replace("0=>'Off'", "0=>'Off  // literal'"))
         self.rust.write_text(rust_fixture().replace('"Off"', '"Off  // literal"'))
@@ -187,6 +209,49 @@ class SonyPlainVerifierTests(unittest.TestCase):
         self.cli(True)
         self.pm.unlink()
         self.cli()
+
+    def test_raw_id_sidecar_is_required_complete_and_exact(self):
+        source = rust_fixture()
+        start = source.index('#[rustfmt::skip]\npub static RAW_TAG_IDS')
+        end = source.index('#[allow(dead_code)]', start)
+        for changed in [source[:start]+source[end:],
+                        source.replace('&["276", "276.1", "1015"]', '&["276", "276", "1015"]'),
+                        source.replace('&["276", "276.1", "1015"]', '&["276.1", "276", "1015"]'),
+                        source.replace('&["276", "276.1", "1015"]', '&["276", "276.1"]'),
+                        source.replace('&["276", "276.1", "1015"]', '&["276", "276.1", "1015", "1016"]'),
+                        source.replace('&["0", "1"]', '&["00", "1"]')]:
+            self.rust.write_text(changed); self.cli()
+
+    def test_repeated_ids_are_true_variants_and_distinct_fractional_ids_are_preserved(self):
+        original = PERL_ROWS[4].removeprefix('0 => ').removesuffix(',')
+        first = original.replace("Name=>'OtherFace'", "Name=>'OtherFace',Condition=>'$$self{Model} =~ /^NEX-/'")
+        self.pm.write_text(perl_fixture().replace(PERL_ROWS[4], f'0 => [{first},{original}],'))
+        row = RUST_ROWS[4]
+        first_rust = row.replace('cond: Cond::Always', 'cond: Cond::ModelRe(false, r"^NEX-")')
+        text = rust_fixture().replace(row, first_rust+'\n'+row)
+        # Only FaceInfo2's sidecar gains a repeated ID; neighbouring arrays are unchanged.
+        text = text.replace('&["0"],\n&["0"],\n&["2", "72"]', '&["0"],\n&["0", "0"],\n&["2", "72"]')
+        self.rust.write_text(text); self.cli(True)
+        self.rust.write_text(text.replace('&["0", "0"]', '&["0", "0.1"]')); self.cli()
+        # Equal byte offsets with distinct canonical IDs are not conditional alternatives.
+        self.pm.write_text(perl_fixture().replace(PERL_ROWS[4], f"'0.11' => {original}, '0.2' => {original},"))
+        text = rust_fixture().replace(row, row+'\n'+row).replace('&["0"],\n&["0"],\n&["2", "72"]', '&["0"],\n&["0.11", "0.2"],\n&["2", "72"]')
+        self.rust.write_text(text); self.cli(True)
+
+    def test_noncanonical_and_binary64_colliding_native_ids_refuse(self):
+        original = PERL_ROWS[4].removeprefix('0 => ').removesuffix(',')
+        row = RUST_ROWS[4].replace('index: 0', 'index: 1')
+        keys = ['1.00000000000000001', '1.00000000000000002']
+        self.pm.write_text(perl_fixture().replace(PERL_ROWS[4], ','.join(f"'{key}' => {original}" for key in keys)+','))
+        text = rust_fixture().replace(RUST_ROWS[4], row+'\n'+row)
+        text = text.replace('&["0"],\n&["0"],\n&["2", "72"]', '&["0"],\n&["'+keys[0]+'", "'+keys[1]+'"],\n&["2", "72"]')
+        self.rust.write_text(text); self.cli()
+        for key in ('0.10', '00.1', '1e0', '-1', '1.9999999999999999'):
+            self.pm.write_text(perl_fixture().replace(PERL_ROWS[4], f"'{key}' => {original},"))
+            text = rust_fixture().replace('&["0"],\n&["0"],\n&["2", "72"]', '&["0"],\n&["'+key+'"],\n&["2", "72"]')
+            if key == '1.9999999999999999':
+                text = text.replace(RUST_ROWS[4], RUST_ROWS[4].replace('index: 0', 'index: 1'))
+            self.rust.write_text(text); self.cli()
 
 
 if __name__ == '__main__':
