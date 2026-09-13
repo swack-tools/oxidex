@@ -31,7 +31,10 @@ use super::camera_info_tables::{
 use crate::core::formatters::exif_print_conv::print_exposure_time;
 use crate::core::formatters::perl_number as format_perl_number;
 use crate::exiftool_tables::engine::{self, Cursor, Step};
-use crate::exiftool_tables::{Fmt as TableFmt, runtime::DecodedValue};
+use crate::exiftool_tables::{
+    Fmt as TableFmt,
+    runtime::{self, DecodedValue},
+};
 use crate::io::ByteOrder as IoByteOrder;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
@@ -307,6 +310,14 @@ fn read_value(data: &[u8], at: usize, fmt: Fmt, more: usize, byte_order: ByteOrd
     let more = i64::try_from(more).ok()?;
     match engine::read_value(data, at, shared_fmt(fmt), 1, more, order)? {
         DecodedValue::Integer(n) => Some(Val::Int(n)),
+        // CameraInfo remains a legacy text-domain conversion layer. The
+        // shared reader keeps `string` values as raw bytes for common-engine
+        // RawConv and Conditions; this older adapter still consumes `Val::Str`.
+        // Project with ExifTool's FixUTF8 rule to preserve that adapter contract
+        // rather than dropping every fixed string after `StringBytes` was added.
+        // Its later state processing is not a proof of byte-exact semantics and
+        // remains retirement debt for shared-engine migration.
+        DecodedValue::StringBytes(bytes) => runtime::fix_utf8(&bytes).map(Val::Str),
         DecodedValue::String(s) => Some(Val::Str(s)),
         DecodedValue::Undefined(b) => Some(Val::Bytes(b)),
         // CameraInfo declares no float, rational or array field, so the
@@ -830,6 +841,21 @@ fn convert_unix_time(seconds: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn camera_info_projects_shared_raw_strings_at_its_text_boundary() {
+        use super::{ByteOrder, Fmt, Val, read_value};
+
+        // CameraInfo owns its legacy ValueConv/PrintConv layer, so values
+        // crossing from the shared reader must remain available as text.  A
+        // fixed string first stops at NUL, then only this output boundary
+        // applies ExifTool's FixUTF8 repair.
+        let ascii = read_value(b"1.2.3\0tail", 0, Fmt::Str(8), 8, ByteOrder::LittleEndian);
+        assert!(matches!(ascii, Some(Val::Str(ref value)) if value == "1.2.3"));
+
+        let invalid = read_value(b"\xe9EOS\0tail", 0, Fmt::Str(8), 8, ByteOrder::LittleEndian);
+        assert!(matches!(invalid, Some(Val::Str(ref value)) if value == "?EOS"));
+    }
+
     /// `%Canon::CameraInfo*` ValueConvs are exponentials -- `CanonFNumber` is
     /// `exp(($val-8)/16*log(2))` -- so their results almost never terminate
     /// within six decimals. ExifTool prints them by interpolating the scalar,
