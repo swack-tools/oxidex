@@ -266,20 +266,26 @@ class NativeSerialProcessorReplay(unittest.TestCase):
     def test_copied_source_nonbare_read_value_forms_are_refused(self):
         direct = "my $val = ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);"
         mutations = {
-            "object-whitespace-arrow": "my $val = $et -> ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);",
-            "package-qualified": "my $val = Image::ExifTool::ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);",
-            "full-shape-quoted-token": "my $val = 4; my $note = '(my ($val) = ReadValue(' ;",
-            "multiline-quoted-token": (
+            "object-whitespace-arrow": ("", "my $val = $et -> ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);"),
+            "different-binding-qualified": ("", "my $val = Image::ExifTool::ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);"),
+            "full-shape-quoted-token": ("", "my $val = 4; my $note = '(my ($val) = ReadValue(' ;"),
+            "multiline-quoted-token": ("", (
                 "my $val = 4;\n"
                 "        my $note = <<'OXIDEX_READ_VALUE_NOTE';\n"
                 "(my ($val) = ReadValue(\n"
                 "OXIDEX_READ_VALUE_NOTE\n"
-            ),
+            )),
+            "coderef-argument": ("sub OxiDexForeign { return 4; }\n", "my $val = OxiDexForeign(\\&ReadValue);"),
+            "nested-call": ("sub OxiDexForeign { return $_[0]; }\n", "my $val = OxiDexForeign(ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos));"),
         }
-        for name, replacement in mutations.items():
+        for name, (prefix, replacement) in mutations.items():
             with self.subTest(form=name):
-                def mutate(source, replacement=replacement):
+                def mutate(source, prefix=prefix, replacement=replacement):
                     self.assertIn(direct, source)
+                    if prefix:
+                        marker = "use Image::ExifTool::Exif;\n"
+                        self.assertIn(marker, source)
+                        source = source.replace(marker, marker + prefix, 1)
                     return source.replace(direct, replacement, 1)
 
                 temporary, root = copied_canon_source(mutate)
@@ -289,6 +295,21 @@ class NativeSerialProcessorReplay(unittest.TestCase):
                 self.assertFalse(reply["ok"])
                 self.assertEqual(reply["error"]["kind"], "read_value_fact")
                 self.assertEqual(reply["error"]["message"], "bare_ReadValue_callsite_unavailable")
+
+        def qualify_same_binding(source):
+            self.assertIn(direct, source)
+            return source.replace(
+                direct,
+                "my $val = Image::ExifTool::Canon::ReadValue($dataPt, $pos+$offset, $format, $count, $size-$pos);",
+                1,
+            )
+
+        temporary, root = copied_canon_source(qualify_same_binding)
+        with temporary:
+            reply, = replay(root, [request("same-binding-qualified", "II", words("little", afinfo_words(1)))],
+                              fallback="fallback")
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(reply["read_values"])
 
     def test_copied_source_package_callback_bypasses_are_rejected(self):
         mutations = {
