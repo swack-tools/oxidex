@@ -1,5 +1,9 @@
 # Remaining automation work
 
+Start with the [plain-English autogeneration plan](./AUTOGENERATION-PLAN.md).
+It owns the current priorities and measurable finish line; this backlog
+retains supporting acceptance criteria and historical context.
+
 **Original audit: 2026-09-10 at `c7f5dd81`, ExifTool 13.59.** The current queue
 reflects the verified PR #737–#740 landings through
 [`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837).

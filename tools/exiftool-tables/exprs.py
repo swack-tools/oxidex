@@ -1,25 +1,18 @@
 #!/usr/bin/env python3
-"""Registry of hand-verified Perl-expression -> Rust translations.
+"""Shared Perl-expression recognition and compilation for generated tables.
 
-This file is the safety boundary of the whole generator.  ExifTool conversions
-are arbitrary Perl; most are trivial arithmetic, but a handful do real work.
-The rule enforced here is absolute:
+`TRANSLATIONS` holds audited exact expression translations. `compile_any`
+also parses a closed expression grammar and returns its input domain, Rust
+result type and implementation; `translate_or_compile_any` combines both.
+Unsupported syntax returns no translation. Callers must still verify the
+expression against the pinned native oracle and respect its input domain
+before emitting it. Recognition alone does not establish runtime support.
 
-    An expression is translated only if it appears in TRANSLATIONS by exact
-    (whitespace-normalised) match.  Anything else is UNSUPPORTED, and an
-    unsupported conversion means the tag is emitted WITHOUT that conversion, or
-    skipped entirely -- never approximated.
-
-The reason for the strictness is that the failure mode is silent.  A wrong
-`PrintConv` does not crash; it prints a confident, plausible, wrong number
-under a genuine ExifTool tag name, into an archival pipeline, and nothing
-downstream can tell.  A missing tag is loud and recoverable.  So the generator
-is built to under-claim.
-
-Adding a translation is cheap and permanent: one entry here fixes every tag
-that shares the expression, forever, across all 146 modules.  That is the
-compounding this project needs -- contrast one model call fixing one tag once.
-The analyzer prints expressions ranked by usage; work the top of that list.
+Extend shared language semantics when possible so one implementation serves
+all matching native declarations. A per-vendor copy of an existing translation
+creates another maintenance obligation without expanding compiler support.
+Stateful behavior, unsupported callbacks and conversion-order dependencies
+remain explicit caller/runtime contracts; never approximate them.
 """
 
 import re

@@ -1,5 +1,9 @@
 # Tag machinery: completed work and useful next steps
 
+For current goals and measurable next steps, use the
+[plain-English autogeneration plan](./AUTOGENERATION-PLAN.md).
+The measurements below retain their stated historical scope.
+
 **Integration baseline measured below:** `refactor/tag-machinery` at
 [`4fb705da`](https://github.com/swack-tools/oxidex/commit/4fb705da43ec97c4c8d1786617021984e3a943e7),
 after PR #737–#740 and the #741 status documentation landing. ExifTool remains pinned to **13.59**.
@@ -13,7 +17,7 @@ defect list and branch observations remain labeled below. The subsequent
 [producer integration](#pending-producer-wiring) are now landed. The current
 queue supersedes the original audit's integration tasks.
 
-Start here to decide what to work on. Use the
+Use the plain-English plan above to decide what to work on. Use the
 [implementation backlog](./AUTOMATION-AND-TESTER-PLAN.md) for acceptance criteria,
 [Transcription](./TRANSCRIPTION.md) for the method, and
 `tools/exiftool-tables/README.md` for commands. Older plans are design records;

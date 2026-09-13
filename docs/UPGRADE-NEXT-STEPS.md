@@ -1,5 +1,8 @@
 # ExifTool upgrade execution plan
 
+The [plain-English autogeneration plan](./AUTOGENERATION-PLAN.md) owns the goals,
+work order and progress measures. This file retains technical execution detail.
+
 Started 2026-09-10 from `0683cb11447adef3945f19da5d6917c88aea2f7d`,
 the tested artifact-manifest branch. ExifTool remains pinned to **13.59**.
 This file records the current implementation sequence; the
@@ -16,9 +19,10 @@ populations. They are implementation history, not work to restart.
 
 | Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Continue generated EXIF directory migration | IFD1 and InteropIFD landed; Claude owns ExifIFD E-2 | Preserve the verified CODE-ref key/domain gate, occurrence behavior and named-directory routing; measure each activation against its own control |
-| 2 | Correct classifier/producer accounting exposed by the release rehearsal | Queued | Existing Garmin runtime is recognized, standing debt is separated, repeated field changes are joined by cause, and emitted/activated/observed states remain distinct |
-| 3 | Broaden walk checks and reconstruct useful missing producers | Nikon settings and Sony plain landed; Sony enciphered and Nikon encrypted recovery in progress | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
+| 1 | Establish the starting rule inventory and migrate Sony Tag202a through shared machinery | Implementation next; 17-entry candidate identified | Native-source change tests, shared execution, exact retired/remaining custom rules, and no unexplained per-file regression |
+| 2 | Continue generated EXIF directory migration | IFD1 and InteropIFD landed; Claude owns ExifIFD E-2 | Preserve occurrence behavior and named-directory routing; measure each activation against its own control |
+| 3 | Join producer and upgrade accounting | Queued alongside the pilot | Generated facts, manual rules, unsupported rules and actual execution remain distinct; ordinary source changes need no new tag rules |
+| 4 | Preserve Sony/Nikon producer recovery evidence | Sony plain landed; enciphered/encrypted recovery preserved and unlanded | Recovery is labeled maintenance; no numbering-only reconstruction or duplicate per-vendor interpreter is promoted as the target |
 
 The [13.55-to-13.59 retrospective rehearsal](./reference/bump-reports/13.55-to-13.59.md)
 passed on 2026-09-11 at `4fb705da` in **611.006 seconds**, with zero source-edit
@@ -85,13 +89,53 @@ is historical evidence, not the current percentage. Later routing migrations
 need their own attribution. Heavy i7 work must acquire
 `flock /tmp/i7-heavy.lock`; process-name checks are not a reservation.
 
+### Direction correction: reduce custom tag logic
+
+On 2026-09-12 the maintainer challenged the growing amount of handwritten
+wiring behind the generated files. Producer recovery improves reproducibility,
+but a new per-vendor expression dictionary still requires manual maintenance.
+It must be recorded as recovered generation, not completion of automatic tag
+behavior. The target remains native tag knowledge and behavior compiled through
+shared machinery, with deliberate unsupported semantics visible.
+
+The unlanded Sony enciphered draft illustrates the duplication. A direct probe
+of `exprs.compile_any` and `translate_or_compile_any` recognizes 35 of its 53
+explicit raw/value/print expression mappings in the existing shared compiler:
+5 of 20 RawConv, 12 of 15 ValueConv and 18 of 18 PrintConv mappings. These are
+expression-recognition counts, not verified input domains, runtime activation
+or observed output coverage. Four additional hook mappings and executable
+callback contracts remain separate. Do not add those dictionaries as the
+permanent architecture when the shared compiler can own the behavior.
+
+A scan of the genuine pinned dump with `codegen.is_binary_table` and the same
+shared expression recognizer finds 235 RawConv declarations across 19 modules.
+The binary generator currently marks RawConv omitted. This identifies a shared
+capability to assess: execute verified pure RawConv expressions in the common
+conversion pipeline, preserving suppression, input domains, conversion order
+and state rules. It is a candidate population, not a promise of 235 new rows.
+Stateful callbacks and byte transforms need their own explicit support.
+
+The next implementation must extend the shared compiler/runtime and migrate a
+real native table or family through it. Acceptance requires source-driven tag
+name, enum, offset and supported new-row changes to flow through regeneration
+without new Python/Rust tag rules; native behavior and per-file regression
+checks must pass. Count removed or superseded custom handling as well as new
+coverage. Keep container framing and byte transforms as shared mechanisms.
+
+The Sony enciphered recovery branch, independent verifier and unfinished
+pipeline integration are preserved for reference. Nikon recovery now uses
+stable deterministic ordering and semantic map/reference comparison; it must
+not add a handwritten numbering manifest to reproduce incidental historic
+Rust identifiers. Neither recovery is landed or credited as shared-runtime
+migration. Existing useful bug repairs continue through their current gates.
+
 ### Parallel implementation with batched builds
 
 Use GPT-5.6 Terra workers for independent generator and verifier scopes. Each
 worker owns one branch and checkout, plus a bounded deliverable. Reuse finished
-worktrees after preserving their handoffs. Current parallel scopes are Sony
-enciphered generation, its independent native verifier, and Nikon encrypted
-generation. A completed implementation still needs independent review and
+worktrees after preserving their handoffs. Current parallel scopes are shared Sony migration analysis, independent
+review of the preserved Sony producer, and deterministic Nikon generation
+with explicit handwritten residuals. A completed implementation still needs independent review and
 integration before it counts as landed.
 
 During authoring, run syntax checks, focused Python tests, native Perl fact
