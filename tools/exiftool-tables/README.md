@@ -265,6 +265,24 @@ Keep these checks separate:
 - Engine/carrier tests and `conformance.py` compare actual behavior. A finite
   probe suite does not prove equivalence for every possible input.
 
+## Running the Python checks with native table data
+
+The `test_codegen_ifd.WholeDump` checks require a real `dump_tables.pl` result.
+An ordinary discovery run can skip the entire class if no dump is available;
+that result does not validate the complete native table generation. Supply the
+recorded dump explicitly when checking schema or generator changes:
+
+```bash
+OXIDEX_TABLES_JSON=../scratch/tables-13.59.json \
+  python3 -m unittest discover -s tools/exiftool-tables -p 'test_*.py' -v
+```
+
+Use a real path to your recorded dump in place of this example. The dump must
+match the pinned release, and conversion-ledger checks additionally require
+its digest to match `expr_oracle_ledger.json`. Read the skipped-test messages:
+a version match alone does not establish that the ledger checks ran. Keep the
+dump digest and executed/skipped counts with the validation record.
+
 ## Where to spend effort
 
 Use the [remaining-work backlog](../../docs/AUTOMATION-AND-TESTER-PLAN.md).
