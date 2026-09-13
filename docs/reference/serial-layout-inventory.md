@@ -49,7 +49,9 @@ The committed 13.59 recorded-input report
 130 native entries and 132 native alternatives. Eight tables produce descriptor
 records, 115 alternatives clear the descriptor's row gate, 17 retain named
 refusals, four tables have no row-level Gate A blocker, and no selected table is
-empty. `Real::AudioV3` is the non-AFInfo control: it uses the same resolved
+empty. `Real::MediaProps` also retains its native `PRIORITY => 0` as the named
+table-level blocker `serial_table_priority`; this checkpoint does not discard
+collision/reporting policy. `Real::AudioV3` is the non-AFInfo control: it uses the same resolved
 processor and has 12 source rows with no row-level refusal. This describes
 source facts; it does not prove a Rust reader, parent dispatch, or carrier
 route.
