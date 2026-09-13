@@ -34,7 +34,8 @@ areas remain unfinished; they cannot disappear from the denominator.
 | --- | --- | --- |
 | Shared table compiler and reader | Already exist; some families use them | We have a foundation to extend instead of building a new interpreter for every camera brand. |
 | Sony focus-table pilot | Merged in PR #746 at `04eaf6e1`, including removal of 17 duplicate entries. Final CI is green at `a1626cb6`; the 4,238-file pair records ten raw-ID fixes and no other per-file changes. | The shared route now replaces the duplicate Sony producer. Remaining source-inventory work is broader than this pilot. |
-| Shared binary strings | Repair published at `019dd530`: focused CameraInfo tests and Clippy pass. The repaired 4,238-file candidate removes the earlier 55 missing-row regression; it adds one native-correct Panasonic value and changes no MISSING, EXTRA or RENAME rows. | This adds raw-byte state and native remainder lengths. CameraInfo remains a legacy text-domain adapter, and no Canon manual reader has been removed. Both full-pair supervisor exit statuses are unavailable despite complete validated artifacts. |
+| Shared binary strings | Merged in PR #747 at `8f0fdaf4`. It preserves raw bytes in saved state, distinguishes a one-byte default from a remainder string, and carries the bounded CameraInfo repair. | This is a shared capability, not a Canon migration. CameraInfo remains a legacy text-domain adapter, and no Canon manual reader has been removed. The prior full-pair supervisor-status limitation remains recorded. |
+| Keyed-directory schema and compiler | Validated on the schema work branch at `74418ceb`: 580 Python table-tool tests pass, and a full recorded-dump replay now declares every keyed expression in the shared enum. | This preserves native parent facts and makes stale generated source fail inventory checks. It has no reader, route, enablement, or runtime-validation claim. A reader is separate pending native validation. |
 | Sony plain generator recovery | PR #745 merged; six tables and 193 rows reproduced | These tables can be rebuilt. This alone does not prove that their behavior is fully automatic. |
 | Sony enciphered recovery | Producer and independent verifier preserved; M4 review found five blockers; not landed | The draft still has a Sony-specific translation layer. Its review remains useful, but it is not the architecture target. |
 | Nikon encrypted recovery | Producer committed on a work branch; not landed or independently accepted | It reproduces the meaning of 2,317 existing rows with deterministic ordering. It is recovery work, not removal of the custom runtime. |
@@ -106,10 +107,14 @@ correctness fixes continue through their current gates.
 
 ## The next checkpoint
 
-Review and merge the **shared binary string capability**. Preserve its first
-full-pair regression, the bounded repair proof, and the artifact-only caveat for
-both full-pair supervisor exit statuses. The Sony pilot is already merged; its
-failed gate attempts and corrections remain below as historical evidence.
+The **shared binary string capability** is merged in PR #747 at `8f0fdaf4`.
+Keep its first full-pair regression, bounded repair proof, and the
+full-pair supervisor-status limitation as historical evidence. The Sony pilot
+is already merged; its failed gate attempts and corrections remain below.
+
+The keyed-directory schema/compiler checkpoint is validated but not merged or
+active. Its reader is a separate worktree awaiting native validation, so it
+does not change current Canon output.
 
 The next migration uses the common string capability in both standalone Canon
 raw files and Canon metadata embedded in JPEG. It has three distinct outcomes:
