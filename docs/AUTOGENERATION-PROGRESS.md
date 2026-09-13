@@ -31,8 +31,8 @@ record the source and selector identities. Runtime and maintenance
 classification still need to be joined to this population.
 
 Shared keyed reporting policy merged in PR #750 at `5fb979d8` after all
-required hosted checks passed on `50d01be4`. The source-to-artifact join is
-published as ready PR #751 at `dd8d89b3`; its 1,512-identity report preserves
+required hosted checks passed on `50d01be4`. The source-to-artifact join merged in PR #751 at `35487962`, after all
+required checks passed on `dd8d89b3`; its 1,512-identity report preserves
 the separate historical artifact snapshot `18a8ef17`. It still does not
 classify runtime producers or manually maintained rules.
 

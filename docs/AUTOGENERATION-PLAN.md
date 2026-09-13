@@ -123,9 +123,9 @@ that dependency proof and canonical regeneration before enabling the checks.
 None of these checkpoints removes a Canon manual reader by itself.
 
 The source inventory merged in PR #749 preserves every captured table identity,
-including unclassified shapes. Ready PR #751 joins all 1,512 identities to an
-immutable generated-artifact snapshot. After its checks and merge, extend that
-join to runtime producers and manual rules. Keep unknown classifications
+including unclassified shapes. PR #751 merged at `35487962` and joins all 1,512 identities to an
+immutable generated-artifact snapshot. Extend that join to runtime producers
+and manual rules. Keep unknown classifications
 visible instead of treating artifact presence as completed generation.
 
 The next migration uses the common string capability in both standalone Canon
