@@ -82,6 +82,29 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(conds.compile_cond(None), "Cond::Always")
         self.assertEqual(conds.compile_cond("   "), "Cond::Always")
 
+    def test_binary_retry_context_is_distinguished_from_ifd_context(self):
+        # ProcessExif binds these values, but ProcessBinaryData's GetTagInfo
+        # retry sees only raw `$valPt` before the field format/count exist.
+        self.assertTrue(conds.needs_process_binary_data_retry_context('$format eq "int16u"'))
+        self.assertTrue(conds.needs_process_binary_data_retry_context("$count == 6"))
+        self.assertTrue(
+            conds.needs_process_binary_data_retry_context("$$self{Count} = $count")
+        )
+        self.assertTrue(
+            conds.needs_process_binary_data_retry_context(
+                "($$self{Seen} = 1) and $count == 6"
+            )
+        )
+        self.assertTrue(
+            conds.needs_process_binary_data_retry_context(
+                '($$self{Seen} = 1) and $format eq "string"'
+            )
+        )
+        self.assertFalse(
+            conds.needs_process_binary_data_retry_context('$$self{Label} eq "$count"')
+        )
+        self.assertFalse(conds.needs_process_binary_data_retry_context("$$self{Model} =~ /EOS/"))
+
 
 class DisjunctionTests(unittest.TestCase):
     def test_olympus_focusinfo_0x1500(self):

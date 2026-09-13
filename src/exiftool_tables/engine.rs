@@ -218,6 +218,10 @@ pub fn read_value(
     // element -- see the doc comment.
     let (elem_len, elem_count, blob) = match format {
         Fmt::Str(n) | Fmt::Undef(n) => (1usize, (n as usize).checked_mul(count)?, true),
+        // ProcessBinaryData assigns `$count = $more` for a bare per-field
+        // `Format => 'string'` before ReadValue. This is not `Fmt::Str(0)`,
+        // whose zero has IFD entry-length semantics.
+        Fmt::RemainderString => (1usize, more, true),
         other => (usize::try_from(other.size()).ok()?, count, false),
     };
     if elem_len == 0 {
@@ -239,9 +243,12 @@ pub fn read_value(
     if blob {
         // ExifTool.pm:6309-6311: one value spanning every byte.
         return Some(match format {
-            Fmt::Str(_) => {
+            Fmt::Str(_) | Fmt::RemainderString => {
                 let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
-                DecodedValue::String(String::from_utf8_lossy(&bytes[..end]).into_owned())
+                // RawConv receives this byte scalar before FoundTag's output
+                // path runs FixUTF8 (ExifTool.pm:9484-9505). Keep it byte
+                // exact so a later member regex observes native state.
+                DecodedValue::StringBytes(bytes[..end].to_vec())
             }
             _ => DecodedValue::Undefined(bytes.to_vec()),
         });
@@ -712,6 +719,7 @@ fn visit_order(table: &'static BinaryTable) -> Vec<(i64, Candidate)> {
 fn member_value(raw: &DecodedValue) -> Option<cond::MemberValue> {
     match raw {
         DecodedValue::Integer(n) => Some(cond::MemberValue::Num(*n)),
+        DecodedValue::StringBytes(bytes) => Some(cond::MemberValue::Bytes(bytes.clone())),
         DecodedValue::String(value) => Some(cond::MemberValue::Str(value.clone())),
         DecodedValue::Undefined(bytes) => String::from_utf8(bytes.clone())
             .ok()
@@ -957,7 +965,7 @@ mod tests {
         let data = *b"ABCDE";
         assert_eq!(
             read_value(&data, 0, Fmt::Str(8), 1, 5, ByteOrder::Big),
-            Some(DecodedValue::String("ABCDE".to_string()))
+            Some(DecodedValue::StringBytes(b"ABCDE".to_vec()))
         );
     }
 
@@ -969,7 +977,29 @@ mod tests {
         let data = *b"AB \0XY\0\0";
         assert_eq!(
             read_value(&data, 0, Fmt::Str(8), 1, 8, ByteOrder::Big),
-            Some(DecodedValue::String("AB ".to_string()))
+            Some(DecodedValue::StringBytes(b"AB ".to_vec()))
+        );
+    }
+
+    #[test]
+    fn a_bare_string_uses_the_remainder_but_repairs_only_when_reported() {
+        // ProcessBinaryData changes only an explicit field `Format =>
+        // 'string'` to `$count = $more` (ExifTool.pm:9962-9975). The raw
+        // member value stops at NUL and retains the invalid byte; FixUTF8 is
+        // deferred until the tag becomes public output.
+        let data = *b"EOS\xe9\0trailing";
+        let raw = read_value(
+            &data,
+            0,
+            Fmt::RemainderString,
+            1,
+            data.len() as i64,
+            ByteOrder::Big,
+        );
+        assert_eq!(raw, Some(DecodedValue::StringBytes(b"EOS\xe9".to_vec())));
+        assert_eq!(
+            raw.as_ref().map(super::super::runtime::to_tag_value),
+            Some(TagValue::String("EOS?".to_string()))
         );
     }
 
@@ -1397,16 +1427,22 @@ mod tests {
         fields: UNRESOLVED_SUBDIR_FIELDS,
         ..STATE
     };
-    static UNREPRESENTABLE_MEMBER_FIELDS: &[Field] = &[
+    const MODEL_IS_EOS: cond::Cond = cond::Cond::MemberRegex {
+        member: "Model",
+        pattern: "EOS",
+        ignore_case: false,
+        negate: false,
+    };
+    static BYTE_MEMBER_FIELDS: &[Field] = &[
         Field {
             index: 0,
             sub: None,
-            name: "ByteMember",
-            format: Some(Fmt::Undef(1)),
+            name: "Model",
+            format: Some(Fmt::Str(4)),
             count: 1,
             mask: None,
             condition: None,
-            raw_conv: Some(RawConvEffect::SetMember { member: "Bytes" }),
+            raw_conv: Some(RawConvEffect::SetMember { member: "Model" }),
             omitted: Omitted {
                 raw_conv: true,
                 ..Omitted::NONE
@@ -1420,13 +1456,16 @@ mod tests {
         Field {
             index: 1,
             sub: None,
-            name: "AfterBytes",
+            name: "SerialNumber",
             format: None,
             count: 1,
             mask: None,
-            condition: None,
+            condition: Some(MODEL_IS_EOS),
             raw_conv: None,
-            omitted: Omitted::NONE,
+            omitted: Omitted {
+                condition: true,
+                ..Omitted::NONE
+            },
             value_conv: None,
             print_conv: PrintConv::None,
             subdir: None,
@@ -1434,9 +1473,9 @@ mod tests {
             groups: TagGroups::NONE,
         },
     ];
-    static UNREPRESENTABLE_MEMBER: BinaryTable = BinaryTable {
-        table: "UnrepresentableMember",
-        fields: UNREPRESENTABLE_MEMBER_FIELDS,
+    static BYTE_MEMBER: BinaryTable = BinaryTable {
+        table: "ByteMember",
+        fields: BYTE_MEMBER_FIELDS,
         ..STATE
     };
     const SET_BEFORE_BOUND: cond::Cond = cond::Cond::SetMember {
@@ -1730,24 +1769,37 @@ mod tests {
     }
 
     #[test]
-    fn set_member_stops_when_raw_value_has_no_exact_member_domain() {
+    fn set_member_preserves_raw_string_bytes_for_later_conditions() {
         use std::collections::HashMap;
 
-        // A non-UTF-8 undef value is legal Perl byte data but cannot inhabit
-        // Rust's string-only MemberValue. Leaving the member absent and
-        // continuing would let a later Condition silently observe a made-up
-        // state, so the table ends at this RawConv.
+        // CanonRaw::MakeModel's Model RawConv writes its byte string before
+        // CanonRaw's later `/EOS/` branch runs. The byte after EOS is
+        // deliberately invalid UTF-8: native Perl preserves it in `$$self`
+        // and still takes the branch, while output repair happens later.
         let mut members = HashMap::new();
         let mut ctx = cond::Ctx::new(&mut members);
         let mut out = Vec::new();
         process_binary_data(
-            &UNREPRESENTABLE_MEMBER,
-            Dir::whole(&[0xff, 7], ByteOrder::Big),
+            &BYTE_MEMBER,
+            Dir::whole(b"EOS\xe9\0\0", ByteOrder::Big),
             &mut ctx,
             &mut out,
         );
-        assert!(out.is_empty());
-        assert!(!members.contains_key("Bytes"));
+        assert_eq!(
+            members.get("Model"),
+            Some(&cond::MemberValue::Bytes(b"EOS\xe9".to_vec()))
+        );
+        assert_eq!(
+            out.iter()
+                .find(|tag| tag.name == "Model")
+                .map(|tag| &tag.value),
+            Some(&TagValue::String("EOS?".to_string())),
+            "FixUTF8 belongs to the reported TagValue, after RawConv state"
+        );
+        assert!(
+            out.iter().any(|tag| tag.name == "SerialNumber"),
+            "the later byte-regex condition must see raw pre-FixUTF8 state"
+        );
 
         assert_eq!(
             member_value(&DecodedValue::Undefined(b"NIKN".to_vec())),

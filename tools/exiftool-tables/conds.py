@@ -29,8 +29,9 @@ cluster in the residue):
   7. `$$self{Member} & 0xNN`               -> MemberBitAnd  (7th, maintainer add)
 
 Plus `$format`/`$count` comparisons (a named eighth bucket in the census,
-1.5% of uses) as MemberCmp's un-membered siblings (FormatEq/CountCmp), and
-the ExifTool assignment-as-condition idiom (`($$self{Member} = EXPR) and
+1.5% of uses) as MemberCmp's un-membered siblings (FormatEq/CountCmp) for
+ProcessExif callers; ProcessBinaryData keeps them omitted because its retry
+binds neither value. The ExifTool assignment-as-condition idiom (`($$self{Member} = EXPR) and
 ...`, `$$self{Member} = 1`) as SetMember -- see `src/exiftool_tables/cond.rs`
 module doc for the ExifTool.pm citation on why that idiom needs its own
 shape rather than folding into a comparison.
@@ -139,6 +140,9 @@ _RE_COUNT_ATOM = re.compile(r"^\$count\s*(==|!=|>=|<=|>|<)\s*(-?\d+)$")
 # idiom (Canon.pm:1312, Pentax.pm:4343, Sony.pm:902).
 _RE_SETMEMBER = re.compile(rf"^\(\s*{_MEMBER}\s*=\s*(\$count|-?\d+)\s*\)$")
 _RE_SETMEMBER_BARE = re.compile(rf"^{_MEMBER}\s*=\s*(\$count|-?\d+)$")
+_RE_SETMEMBER_WITH_TAIL = re.compile(
+    rf"^\(\s*{_MEMBER}\s*=\s*(\$count|-?\d+)\s*\)(?:\s+and\s+(.*))?$"
+)
 
 _CMP_OP = {"==": "Eq", "!=": "Ne", ">=": "Ge", "<=": "Le", ">": "Gt", "<": "Lt"}
 
@@ -366,7 +370,7 @@ def _compile_setmember(text):
     caller tries other shapes next)."""
     # `(...) and <rest>`: split once on the top-level ' and ' that follows a
     # balanced-paren assignment.
-    m = re.match(rf"^\(\s*{_MEMBER}\s*=\s*(\$count|-?\d+)\s*\)(?:\s+and\s+(.*))?$", text.strip())
+    m = _RE_SETMEMBER_WITH_TAIL.match(text.strip())
     if m:
         member = _member_name(text)
         source_text = m.group(3)
@@ -763,3 +767,40 @@ def compile_cond(condition):
     if not isinstance(condition, str) or not condition.strip():
         return "Cond::Always"
     return compile_cond_atoms_conjunction(condition)
+
+
+def needs_process_binary_data_retry_context(condition):
+    """Whether a compiled Condition reads `$format` or `$count` in
+    `ProcessBinaryData`'s GetTagInfo retry.
+
+    That retry passes only a capped raw `$valPt`; it does *not* bind the
+    later-resolved field format or count (ExifTool.pm:9929-9943). The same
+    grammar is also used by ProcessExif, where those values are meaningful,
+    so this is deliberately a caller-side eligibility check rather than a
+    global grammar refusal.
+    """
+    if condition is None or not isinstance(condition, str) or not condition.strip():
+        return False
+    try:
+        text = _collapse_ws_outside_literals(condition.strip())
+        set_member = _RE_SETMEMBER_WITH_TAIL.match(text)
+        if set_member is not None:
+            source_text, tail = set_member.group(3), set_member.group(4)
+            return source_text == "$count" or (
+                tail is not None and needs_process_binary_data_retry_context(tail)
+            )
+        set_member = _RE_SETMEMBER_BARE.match(text)
+        if set_member is not None:
+            return set_member.group(3) == "$count"
+        tokens = _tokenize(text)
+    except CondCompileError:
+        return False
+    return any(
+        kind == "atom"
+        and (
+            _RE_FORMAT_ATOM.match(atom)
+            or _RE_FORMAT_REGEX.match(atom)
+            or _RE_COUNT_ATOM.match(atom)
+        )
+        for kind, atom in tokens
+    )

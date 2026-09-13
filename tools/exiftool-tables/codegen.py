@@ -83,6 +83,30 @@ SCALAR_FORMATS = {
     "extended": ("Extended", 10),
 }
 
+# A table-level `FORMAT => 'string'` still has ExifTool's ordinary one-byte
+# stride (%formatSize: `string => 1`).  It is deliberately separate from a
+# per-field bare `Format => 'string'`: ProcessBinaryData gives the latter the
+# rest of the record (`$count = $more`), while the former remains one element
+# unless the field itself overrides it.  `Fmt::Str(1)` models only the former.
+BINARY_DEFAULT_FORMATS = {
+    **SCALAR_FORMATS,
+    "string": ("Str(1)", 1),
+}
+
+
+def compile_binary_condition(condition):
+    """Compile only the ProcessBinaryData subset with a native retry context.
+
+    ExifTool's retry for a binary Condition supplies raw `$valPt` only. Its
+    `$format` and `$count` remain undef until after selection, so a Condition
+    that reads either must remain omitted even though the shared IFD grammar
+    can model it when ProcessExif supplies both values.
+    """
+    compiled = conds.compile_cond(condition)
+    if compiled is None or conds.needs_process_binary_data_retry_context(condition):
+        return None
+    return compiled
+
 # `pstring` is a scalar in the sense that matters here -- it never shifts a
 # later field's offset -- but it is NOT in %formatSize and so must never reach
 # the table-FORMAT path: ExifTool.pm:9894-9898 warns and falls back to int8u
@@ -994,6 +1018,11 @@ def gen_field_literal(
             else:
                 stats["tag_fmt_unsupported"] += 1
                 return None, var_sound_until, "format"
+        elif f == "string":
+            # This is ProcessBinaryData's special bare-field rule, not the
+            # IFD `Fmt::Str(0)` convention. ExifTool.pm:9970 sets `$count`
+            # to `$more`, so this one field consumes the record remainder.
+            fmt_expr = "Some(Fmt::RemainderString)"
         elif f in SCALAR_FORMATS:
             fmt_expr = f"Some(Fmt::{SCALAR_FORMATS[f][0]})"
         elif f in PER_FIELD_FORMATS:
@@ -1058,7 +1087,7 @@ def gen_field_literal(
     # clears a local copy only after evaluating it at this native key.
     condition_src = "None"
     if tag.get("Condition") is not None:
-        compiled_condition = conds.compile_cond(tag.get("Condition"))
+        compiled_condition = compile_binary_condition(tag.get("Condition"))
         if compiled_condition is not None:
             condition_src = f"Some({compiled_condition})"
 
@@ -1202,7 +1231,7 @@ def compile_variant_group(tag, idx, sub, stats, var_sound_until, default_format,
             # nothing exercises or verifies.
             stats["tag_variant_cond_unsupported"] += 1
             return None, var_sound_until, "condition"
-        cond_src = conds.compile_cond(v.get("Condition"))
+        cond_src = compile_binary_condition(v.get("Condition"))
         if cond_src is None:
             stats["tag_variant_cond_unsupported"] += 1
             return None, var_sound_until, "condition"
@@ -1440,7 +1469,7 @@ def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs, omitted_native):
     if not isinstance(fmt_name, str):
         # ExifTool's ProcessBinaryData does `$$tagTablePtr{FORMAT} || 'int8u'`.
         fmt_name = "int8u"
-    default_fmt = SCALAR_FORMATS.get(fmt_name)
+    default_fmt = BINARY_DEFAULT_FORMATS.get(fmt_name)
     if not default_fmt:
         stats["table_bad_format"] += 1
         return None
@@ -3081,6 +3110,12 @@ pub enum Fmt {
     Str(u32),
     /// `undef[N]`: N raw bytes.
     Undef(u32),
+    /// A binary-table field with bare `Format => 'string'`. ProcessBinaryData
+    /// sets its count to the remaining record bytes before ReadValue, then
+    /// truncates the resulting byte string at the first NUL
+    /// (ExifTool.pm:9970, 6307-6311). This is intentionally distinct from
+    /// `Str(0)`, which IFD code uses for an entry-supplied byte length.
+    RemainderString,
     /// Step 26: a `var_*` format -- a field whose width depends on the bytes
     /// themselves, carrying the rule that governs it.
     ///
@@ -3247,6 +3282,9 @@ impl Fmt {
             Fmt::Double | Fmt::Int64u | Fmt::Int64s | Fmt::Rational64u | Fmt::Rational64s => 8,
             Fmt::Extended => 10,
             Fmt::Str(n) | Fmt::Undef(n) => n,
+            // `%formatSize` gives `string` width one. The dynamic count is
+            // applied by ProcessBinaryData's bare-field branch, not here.
+            Fmt::RemainderString => 1,
             // A `var_*` field HAS no static width -- that is the entire
             // property that makes it one. 0 is not a width here, it is the
             // absence of one, and every caller that could act on it refuses
