@@ -14,8 +14,10 @@ unavailable and explicitly retained as that validation limitation.
 
 The keyed-directory schema/compiler merged in PR #748 at `ebbe1ece`, after all
 final hosted checks passed at `a422e8de`. The separate reader is published at
-`40fd8c24`; focused tests cover full directory counts, deep nesting, native
-group projection and refusing parent decisions after unsafe child state. No
+`94effe69`; focused tests cover full directory counts, deep nesting, native
+group projection, legacy continuation after child failure and directory-state
+restoration when a checked walk stops. Independent review found no remaining
+blocking defect in those two corrections. No
 production Canon route is active and neither manual Make/Model reader has
 been removed.
 
@@ -27,6 +29,28 @@ shapes. These categories describe source structure, not manual or generated
 behavior. The [replay instructions](reference/source-processor-inventory-13.59.md)
 record the source and selector identities. Runtime and maintenance
 classification still need to be joined to this population.
+
+Shared keyed reporting policy merged in PR #750 at `5fb979d8` after all
+required hosted checks passed on `50d01be4`. The source-to-artifact join is
+published as ready PR #751 at `dd8d89b3`; its 1,512-identity report preserves
+the separate historical artifact snapshot `18a8ef17`. It still does not
+classify runtime producers or manually maintained rules.
+
+The next compiler checkpoint captures native validation helper source and
+turns seven CanonRaw call sites into shared size-comparison operands. Local
+source/oracle replay accounts for 61 rows (57 represented, four explicit
+omissions) with zero source-fact discrepancies. **All seven validation edges
+remain blocked.** Independent review changed only native `Get16u` and proved
+that authenticating the outer helper alone misses a behavior change. The
+compiler and independent verifier now require an explicit
+`validate_reader_contract` blocker until that dependency is validated.
+
+This checkpoint passes 39 focused Python checks, three Rust primitive tests
+and the repository's exact CI lint command. A broader lint attempt with tests
+and warnings denied failed on 23 existing integration-test warnings; that
+failure is retained. No canonical dump/ledger refresh, production activation,
+corpus gain or manual Canon retirement is claimed. See the
+[checkpoint and remaining checks](reference/directory-validation-checkpoint.md).
 
 ## What the pilot must prove
 

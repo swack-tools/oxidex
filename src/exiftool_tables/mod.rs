@@ -48,6 +48,7 @@ pub mod ifd_tables;
 pub mod keyed_schema;
 pub mod runtime;
 pub mod subdir;
+pub mod validation;
 
 pub use binary_tables::{
     ALL_BINARY_TABLES, BinaryTable, EXIFTOOL_VERSION, ExprId, ExprValue, Field, Fmt, GateA,
@@ -77,6 +78,7 @@ pub use runtime::{
     unknown_fallback,
 };
 pub use subdir::{BaseExpr, ByteOrderRule, Start, StartExpr, SubdirEdge};
+pub use validation::{SizeExpectation, U16SizeCheck};
 
 /// Look up a generated table by ExifTool module and table name,
 /// e.g. `("Canon", "CameraSettings")`.

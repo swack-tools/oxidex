@@ -11,6 +11,7 @@ import re
 import codegen
 import conds
 import subdirs
+import directory_validation
 
 
 PROCESS_CANON_RAW = "Image::ExifTool::CanonRaw::ProcessCanonRaw"
@@ -135,6 +136,7 @@ class Context:
     def __init__(self, doc):
         self.processors = {}
         self.table_meta = {}
+        self.validation_helpers = doc.get("subdirectory_validate_functions", {})
         for module, mod in doc.get("modules", {}).items():
             for table, value in mod.get("tables", {}).items():
                 self.processors[(module, table)] = processor_name(value.get("meta"))
@@ -152,7 +154,7 @@ def _edge(tag, raw_id, ctx, stats):
         return "None"
     if not isinstance(sd, dict):
         stats["keyed_subdirectory"] += 1
-        return 'Some(KeyedEdge::BoundedValue { module: "", table: "", start: KeyedStart::Zero, unwalked: &["subdirectory"] })'
+        return 'Some(KeyedEdge::BoundedValue { module: "", table: "", start: KeyedStart::Zero, validation: None, unwalked: &["subdirectory"] })'
 
     # ProcessCanonRaw recurses before ordinary SubDirectory handling when the
     # entry type is 0x28/0x30 and the value is not inline. `{}` only supplies
@@ -161,21 +163,30 @@ def _edge(tag, raw_id, ctx, stats):
         if _same_table_directory(tag, raw_id):
             return "Some(KeyedEdge::SameTableDirectory)"
         stats["keyed_subdirectory"] += 1
-        return 'Some(KeyedEdge::BoundedValue { module: "", table: "", start: KeyedStart::Zero, unwalked: &["tag_table"] })'
+        return 'Some(KeyedEdge::BoundedValue { module: "", table: "", start: KeyedStart::Zero, validation: None, unwalked: &["tag_table"] })'
 
     try:
         module, table = subdirs.parse_tag_table(sd.get("TagTable"))
     except subdirs.SubdirCompileError:
         stats["keyed_subdirectory"] += 1
-        return 'Some(KeyedEdge::BoundedValue { module: "", table: "", start: KeyedStart::Zero, unwalked: &["tag_table"] })'
+        return 'Some(KeyedEdge::BoundedValue { module: "", table: "", start: KeyedStart::Zero, validation: None, unwalked: &["tag_table"] })'
 
     reasons = []
     # CanonRaw.pm applies Start only when truthy. The first reader supports
     # exactly the native default zero; a declared zero remains that default.
     if codegen.perl_truthy(sd.get("Start")):
         reasons.append("start")
+    validation = "None"
     if sd.get("Validate") is not None:
-        reasons.append("validate")
+        try:
+            validation = directory_validation.compile_validation(sd["Validate"], ctx.validation_helpers).rust(codegen.rust_str)
+            # Recording the outer helper is insufficient to prove the native
+            # reader it calls. Keep this edge inactive until Get16u and its
+            # unpacking dependencies have an independently verified contract.
+            # In particular, changing Get16u can leave Canon::Validate intact.
+            reasons.append("validate_reader_contract")
+        except directory_validation.ValidationRefused:
+            reasons.append("validate")
     if sd.get("ProcessProc") is not None:
         reasons.append("process_proc")
     if not ctx.target_supported(module, table):
@@ -186,7 +197,7 @@ def _edge(tag, raw_id, ctx, stats):
     return (
         "Some(KeyedEdge::BoundedValue { "
         f'module: "{codegen.rust_str(module)}", table: "{codegen.rust_str(table)}", '
-        f"start: KeyedStart::Zero, unwalked: &[{body}] }})"
+        f"start: KeyedStart::Zero, validation: {validation}, unwalked: &[{body}] }})"
     )
 
 

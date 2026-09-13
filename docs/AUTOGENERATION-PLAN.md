@@ -35,7 +35,7 @@ areas remain unfinished; they cannot disappear from the denominator.
 | Shared table compiler and reader | Already exist; some families use them | We have a foundation to extend instead of building a new interpreter for every camera brand. |
 | Sony focus-table pilot | Merged in PR #746 at `04eaf6e1`, including removal of 17 duplicate entries. Final CI is green at `a1626cb6`; the 4,238-file pair records ten raw-ID fixes and no other per-file changes. | The shared route now replaces the duplicate Sony producer. Remaining source-inventory work is broader than this pilot. |
 | Shared binary strings | Merged in PR #747 at `8f0fdaf4`. It preserves raw bytes in saved state, distinguishes a one-byte default from a remainder string, and carries the bounded CameraInfo repair. | This is a shared capability, not a Canon migration. CameraInfo remains a legacy text-domain adapter, and no Canon manual reader has been removed. The prior full-pair supervisor-status limitation remains recorded. |
-| Keyed-directory schema and compiler | Merged in PR #748 at `ebbe1ece`; all final hosted checks passed at `a422e8de`. | Native parent facts and expression declarations are checked. The separate reader is published at `40fd8c24`, with focused checks, but no production route is active. |
+| Keyed-directory schema and compiler | Merged in PR #748 at `ebbe1ece`; all final hosted checks passed at `a422e8de`. | Native parent facts and expression declarations are checked. Shared reporting policy merged in #750; the reader is published in ready PR #752 at `94effe69`. No production route is active. |
 | Recorded source inventory | Merged in PR #749 at `18a8ef17`; all final hosted checks passed at `72e8e664`. The report accounts for 1,512 table identities and retains 119 tables with no named rows. | This establishes the captured source population. Classifying which rules are generated, manual, unsupported or unclassified remains open; source shape is not automation. |
 | Sony plain generator recovery | PR #745 merged; six tables and 193 rows reproduced | These tables can be rebuilt. This alone does not prove that their behavior is fully automatic. |
 | Sony enciphered recovery | Producer and independent verifier preserved; M4 review found five blockers; not landed | The draft still has a Sony-specific translation layer. Its review remains useful, but it is not the architecture target. |
@@ -113,17 +113,20 @@ Keep its first full-pair regression, bounded repair proof, and the
 full-pair supervisor-status limitation as historical evidence. The Sony pilot
 is already merged; its failed gate attempts and corrections remain below.
 
-The keyed-directory schema/compiler is merged in PR #748. Its separate reader
-is published at `40fd8c24` with checks for directory counts, deep nesting,
-source-defined groups and unsafe child-state propagation. It has no production
-caller. The next compiler change preserves shared reporting flags and known
-alternatives beside an unknown fallback. Neither change removes a Canon
-manual reader by itself.
+The keyed-directory schema/compiler and shared reporting policy are merged in
+PRs #748 and #750. The separate reader is published at `94effe69`, including
+reviewed fixes for legacy parent continuation and directory-state restoration.
+It has no production caller. The next compiler checkpoint records seven native
+validation calls as common size comparisons, while keeping their edges blocked
+until the native numeric-reader dependency is independently validated. Complete
+that dependency proof and canonical regeneration before enabling the checks.
+None of these checkpoints removes a Canon manual reader by itself.
 
 The source inventory merged in PR #749 preserves every captured table identity,
-including unclassified shapes. The next inventory deliverable joins those
-identities to generated acceptance, runtime producers and manual rules. Keep
-unknown classifications visible instead of treating them as generated.
+including unclassified shapes. Ready PR #751 joins all 1,512 identities to an
+immutable generated-artifact snapshot. After its checks and merge, extend that
+join to runtime producers and manual rules. Keep unknown classifications
+visible instead of treating artifact presence as completed generation.
 
 The next migration uses the common string capability in both standalone Canon
 raw files and Canon metadata embedded in JPEG. It has three distinct outcomes:

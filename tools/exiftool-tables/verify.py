@@ -52,6 +52,7 @@ PIN_FILE = REPO_ROOT / ".exiftool-version"
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import exiftool_oracle  # noqa: E402 -- capability-aware perl selection
 import instrument  # noqa: E402 -- git/instrument identity header
+import verify_directory_validation
 
 # The perl this verifier runs `oracle.pl` and the ExifTool-version probe
 # under. Resolved once, by capability (not a bare "perl" off PATH -- see
@@ -1118,13 +1119,14 @@ def _parse_keyed_tag(src, match, key, fields, enums, pc_refused, facts, source_f
         em = re.fullmatch(
             r'Some\(KeyedEdge::BoundedValue\s*\{\s*module:\s*"((?:[^"\\]|\\.)*)",\s*'
             r'table:\s*"((?:[^"\\]|\\.)*)",\s*start:\s*KeyedStart::Zero,\s*'
+            r'validation:\s*(?P<validation>None|Some\(U16SizeCheck\s*\{.*?\}\s*,?\)),\s*'
             r'unwalked:\s*&\[(?P<unwalked>[^\]]*)\]\s*,?\s*\}\s*,?\)', edge_src, re.S,
         )
         if em is None:
             raise SystemExit("unrecognised keyed edge value")
         edge = ("bounded", unescape(em.group(1)), unescape(em.group(2)), tuple(
             unescape(value) for value in re.findall(r'"((?:[^"\\]|\\.)*)"', em.group("unwalked"))
-        ))
+        ), verify_directory_validation.parse_rust(em.group("validation"), unescape))
     facts[key] = KeyedFact(
         match.group("format"), match.group("count"), match.group("condition") != "None",
         match.group("raw_conv") != "None", match.group("value_conv") != "None", groups, edge,
@@ -1224,6 +1226,7 @@ def parse_keyed_oracle(out):
     hooks, subdirs, masks, properties = set(), set(), {}, defaultdict(set)
     table_groups, tag_groups, subdir_facts = {}, {}, {}
     flags = {}
+    validations = {}
     for line in out.splitlines():
         p = line.split("\t")
         if len(p) < 5 or p[0] != "KEYED":
@@ -1254,6 +1257,10 @@ def parse_keyed_oracle(out):
             subdir_facts[key] = {
                 "tagtable": p[5], "start": p[6], "validate": p[7] == "1", "processproc": p[8] == "1",
             }
+        elif marker == "VALIDATION" and len(p) == 9:
+            if key in validations:
+                raise SystemExit(f"duplicate native keyed validation facts for {key}")
+            validations[key] = tuple(p[5:9])
         elif marker == "MASKDECL":
             properties[key].add("mask_declared")
         elif marker == "CONDITION" and len(p) == 6:
@@ -1263,6 +1270,10 @@ def parse_keyed_oracle(out):
             properties[key].add(marker.lower())
     if set(flags) != set(names):
         raise SystemExit("keyed oracle must report flags for every named source row")
+    for key, validation in validations.items():
+        if key not in subdir_facts or not subdir_facts[key]["validate"]:
+            raise SystemExit(f"native keyed validation lacks its declared edge: {key}")
+        subdir_facts[key]["validation"] = validation
     return names, enums, rawfmts, masks, hooks, subdirs, properties, counts, table_groups, tag_groups, subdir_facts, conditions, flags
 
 
@@ -1703,8 +1714,17 @@ def keyed_native_inventory(generated, omissions, or_names, or_enums, or_rawfmts,
         required = set()
         if _keyed_truthy(native_edge["start"]):
             required.add("start")
-        if native_edge["validate"]:
+        compiled_validation = got.edge[4]
+        if native_edge["validate"] and compiled_validation is None:
             required.add("validate")
+        elif compiled_validation is not None:
+            # The captured outer helper does not authenticate its transitive
+            # native numeric reader. Until that contract is verified, the
+            # compiled operands must never make this edge executable.
+            required.add("validate_reader_contract")
+            problem = verify_directory_validation.mismatch(compiled_validation, native_edge.get("validation"))
+            if problem:
+                keyed_fact_mismatches.append((key, problem))
         if native_edge["processproc"]:
             required.add("process_proc")
         missing_edge_facts = required - set(got.edge[3])
