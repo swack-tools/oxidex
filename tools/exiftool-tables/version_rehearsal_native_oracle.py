@@ -5,7 +5,7 @@ Not an OxiDex comparison: all native commands use an explicit Perl, materialized
 lib and program, and mutations operate only on disposable fixture copies.
 """
 from __future__ import annotations
-import hashlib, os, re, shutil, subprocess, tempfile
+import hashlib, json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 from typing import Any, Callable
 import version_rehearsal as rehearsal
@@ -92,3 +92,39 @@ def write_probe_report(path:Path,report:dict[str,Any])->None:
  payload={k:v for k,v in report.items() if k!='probe_sha256'}
  if report.get('probe_sha256')!=catalog_stage.sha256_json(payload): raise Refused('native capability report identity is malformed')
  rehearsal.atomic_json(path,report)
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI for one selected materialized release; never builds or compares OxiDex."""
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--capture', required=True)
+    parser.add_argument('--catalog', required=True)
+    parser.add_argument('--plan', required=True)
+    parser.add_argument('--resolution', required=True)
+    parser.add_argument('--materialization', required=True)
+    parser.add_argument('--archive-cache', required=True)
+    parser.add_argument('--source-root', required=True)
+    parser.add_argument('--release', required=True)
+    parser.add_argument('--perl', required=True)
+    parser.add_argument('--cases', required=True, help='JSON array of constrained capability cases')
+    parser.add_argument('--output', required=True)
+    args = parser.parse_args(argv)
+    try:
+        cases = json.loads(Path(args.cases).read_text(encoding='utf-8'))
+        if not isinstance(cases, list):
+            raise Refused('case manifest must be a JSON array')
+        report = probe_materialized_native(
+            rehearsal.read_json(Path(args.materialization)), rehearsal.read_json(Path(args.plan)),
+            rehearsal.read_json(Path(args.catalog)), rehearsal.read_json(Path(args.capture)),
+            rehearsal.read_json(Path(args.resolution)), Path(args.archive_cache), Path(args.source_root),
+            args.release, args.perl, cases,
+        )
+        write_probe_report(Path(args.output), report)
+        print(json.dumps({'output': args.output, 'probe_sha256': report['probe_sha256'], 'state': report['state']}, sort_keys=True))
+        return 0 if report['state'] == 'ready' else 2
+    except (Refused, catalog_stage.Refused, rehearsal.Refused, OSError, json.JSONDecodeError) as exc:
+        print(f'native readiness refused: {exc}', file=sys.stderr)
+        return 2
+
+if __name__ == '__main__':
+    raise SystemExit(main())
