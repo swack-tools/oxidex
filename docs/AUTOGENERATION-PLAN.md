@@ -37,7 +37,7 @@ areas remain unfinished; they cannot disappear from the denominator.
 | Shared binary strings | Merged in PR #747 at `8f0fdaf4`. It preserves raw bytes in saved state, distinguishes a one-byte default from a remainder string, and carries the bounded CameraInfo repair. | This is a shared capability, not a Canon migration. CameraInfo remains a legacy text-domain adapter, and no Canon manual reader has been removed. The prior full-pair supervisor-status limitation remains recorded. |
 | Keyed-directory schema and compiler | Merged in PR #748 at `ebbe1ece`; all final hosted checks passed at `a422e8de`. | Native parent facts and expression declarations are checked. Shared reporting policy merged in #750; the inactive reader merged in #752 at `634e5616`. No production route is active. |
 | Shared word-directory processor | Merged in PR #754 at `1138a880`; nine tables, 132 rows, 698 Python tests and all five hosted jobs pass. | Four of five unsupported child processors now have generated descriptors. Canon production routing and manual-reader retirement remain unfinished. |
-| Dynamic serial-processor validation | Implemented and independently reviewed at `f313e38a`; eight native tests pass again on integration checkpoint `c5bc4c9f`. | The probe observes native behavior needed to validate the next compiler and reader. It generates no tag rules and clears no production blocker by itself. |
+| Dynamic serial-processor validation | Merged in PR #755 at `93d19e24`; all five hosted checks pass, including 706 native Python tests. | The probe validates native reads and callbacks. The next reviewed source inventory accounts for eight tables and 132 alternatives; shared Rust execution and manual-reader retirement still need proof. |
 | Recorded source inventory | Merged in PR #749 at `18a8ef17`; all final hosted checks passed at `72e8e664`. The report accounts for 1,512 table identities and retains 119 tables with no named rows. | This establishes the captured source population. Classifying which rules are generated, manual, unsupported or unclassified remains open; source shape is not automation. |
 | Sony plain generator recovery | PR #745 merged; six tables and 193 rows reproduced | These tables can be rebuilt. This alone does not prove that their behavior is fully automatic. |
 | Sony enciphered recovery | Producer and independent verifier preserved; M4 review found five blockers; not landed | The draft still has a Sony-specific translation layer. Its review remains useful, but it is not the architecture target. |
@@ -149,7 +149,9 @@ Canonical artifacts and ledgers were regenerated successfully with local Perl
 
 1. Compile sequential fields and lengths that depend on earlier raw values from
    the native serial processor. The [native probe](reference/serial-processor-checkpoint.md)
-   is validated; the descriptor and shared reader remain to be implemented.
+   is merged in #755. The reviewed JSON inventory captures all eight selected
+   tables and preserves every refusal. A shared Rust emitter and reader are
+   staged separately; combined compilation and native replay remain open.
    Account for every condition and conversion before reducing the final
    unsupported-child count from one to zero.
 2. Resolve the four omitted parent rows using shared byte handling. An explicit
@@ -160,6 +162,13 @@ Canonical artifacts and ledgers were regenerated successfully with local Perl
 3. Prove real CRW and JPEG carrier behavior, enable the verified generated
    route, and remove the duplicate manual readers. Report those removals and
    the per-file comparison separately from generated definitions.
+
+Use Real AudioV4 as the first additional retirement test for the same serial
+capability: replace its manual 31-entry sequence only after native/Rust output,
+groups, real fixtures, source-change propagation and corpus comparisons pass.
+Real AudioV3 supplies a second native-table control; adding its support is new
+coverage, not removal of existing manual code. Track this separately from the
+Canon parent omissions so neither task hides the other's unfinished work.
 
 Neither camera names nor parent tag IDs belong in the new shared execution
 mechanisms. No remote host availability is assumed: refresh reachability and

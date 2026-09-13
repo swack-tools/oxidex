@@ -99,6 +99,41 @@ sub code_fact {
     };
 }
 
+sub module_fact {
+    my ($module) = @_;
+    (my $path = $module) =~ s!::!/!g;
+    $path .= '.pm';
+    my $loaded = $INC{$path};
+    my $absolute = defined($loaded) ? abs_path($loaded) : undef;
+    my $root = defined($absolute) ? source_root_for($absolute) : undef;
+    return { resolved => JSON::PP::false, requested => $module,
+             reason => 'module_source_outside_selected_libs' }
+        unless defined($root) && -f $absolute;
+    open(my $fh, '<:raw', $absolute)
+        or return { resolved => JSON::PP::false, requested => $module,
+                    reason => 'module_source_unreadable' };
+    local $/;
+    my $bytes = <$fh>;
+    close($fh);
+    return {
+        resolved => JSON::PP::true,
+        requested => $module,
+        source_root => $root->{label},
+        source_file => File::Spec->abs2rel($absolute, $root->{absolute}),
+        source_sha256 => sha256_hex($bytes),
+    };
+}
+
+sub groups_fact {
+    my ($groups) = @_;
+    return { defined => JSON::PP::false } unless ref($groups) eq 'HASH';
+    my %out;
+    for my $key (sort keys %$groups) {
+        $out{"$key"} = scalar_fact($groups->{$key});
+    }
+    return { defined => JSON::PP::true, values => \%out };
+}
+
 sub op_gv_name {
     my ($op, $processor) = @_;
     return undef unless (eval { $op->name } // '') eq 'gv';
@@ -224,6 +259,8 @@ sub tag_info_fact {
     for my $key (qw(Name Format Unknown)) {
         $fact{lc $key} = scalar_fact($info->{$key}) if exists $info->{$key};
     }
+    $fact{raw_id} = scalar_fact($info->{TagID}) if exists $info->{TagID};
+    $fact{groups} = groups_fact($info->{Groups}) if exists $info->{Groups};
     # Conditions may be CODE/string/ref and are not interpreted by this probe.
     $fact{condition_kind} = ref($info->{Condition}) || 'scalar'
         if exists $info->{Condition};
@@ -358,12 +395,22 @@ sub load_selected_table {
     (my $path = $module) =~ s!::!/!g;
     my $loaded = eval { require "$path.pm"; 1 };
     return (undef, "module_load_failed:$@") unless $loaded;
-    no strict 'refs';
-    my $table_ref = *{"${module}::${table}"}{HASH};
+    my $module_fact = module_fact($module);
+    return (undef, $module_fact->{reason}) unless $module_fact->{resolved};
+    my $table_ref = eval { Image::ExifTool::GetTagTable("${module}::${table}") };
     return (undef, 'table_unavailable') unless ref($table_ref) eq 'HASH';
     my $process = $table_ref->{PROCESS_PROC};
     return (undef, 'process_proc_unavailable') unless ref($process) eq 'CODE';
-    return ({ table_ref => $table_ref, process => $process }, undef);
+    return ({
+        table_ref => $table_ref,
+        process => $process,
+        table_fact => {
+            requested => "${module}::${table}",
+            resolution => 'native_get_tag_table',
+            module => $module_fact,
+            groups => groups_fact($table_ref->{GROUPS}),
+        },
+    }, undef);
 }
 
 sub valid_case {
@@ -473,7 +520,7 @@ sub process_request {
     return {
         protocol => 'oxidex.serial_processor.v1', ok => $error ? JSON::PP::false : JSON::PP::true,
         request => { module => $module, table => $request->{table}, case => $request->{case}{name} },
-        selection => { process => $process_fact, read_value => $read_value_fact },
+        selection => { table => $selected->{table_fact}, process => $process_fact, read_value => $read_value_fact },
         byte_order => {
             before => $before, requested => $request->{case}{byte_order}, active => $active_order,
             restored => eval { Image::ExifTool::GetByteOrder() }, restore_error => $restore_error || undef,
@@ -494,7 +541,7 @@ sub process_request {
         },
         observability => {
             get_tag_info => 'observed via object callback',
-            found_tag => 'observed via object callback',
+            found_tag => 'observed via object callback; does not prove final ExifTool key/group reporting',
             verbose_info => 'observed only when native Options(Verbose) is true',
             read_value => 'observed via selected processor package bare binding',
             dynamic_count_eval => 'unobserved: Perl eval occurs inside ProcessSerialData before verbose callback',

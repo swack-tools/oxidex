@@ -47,11 +47,59 @@ def afinfo_words(point_count, *, serial_11=3, serial_12=4, unknown_words=None):
     return values
 
 
-def request(name, order, payload, *, members=None, unknown=False, verbose=True):
+def real_v3_payload(byte_order, *, title=b"Hi!", artist=b"Me", copyright=b"C", comment=b"Yo"):
+    """AudioV3 carrier bytes in its native serial row order."""
+    prefix = "<" if byte_order == "II" else ">"
+    return b"".join((
+        struct.pack(prefix + "H", 2),             # Channels
+        struct.pack(prefix + "3H", 0, 0, 0),       # Unknown[3]
+        struct.pack(prefix + "H", 120),            # BytesPerMinute
+        struct.pack(prefix + "I", 1000),           # AudioBytes
+        bytes((len(title),)), title,
+        bytes((len(artist),)), artist,
+        bytes((len(copyright),)), copyright,
+        bytes((len(comment),)), comment,
+    ))
+
+
+def real_v4_payload(byte_order, *, title=b"Title", artist=b"Artist", copyright=b"C", comment=b"Hi"):
+    """AudioV4 carrier bytes through the four native length-prefixed strings."""
+    prefix = "<" if byte_order == "II" else ">"
+    return b"".join((
+        b"RA4!",                                  # FourCC1, undef[4]
+        struct.pack(prefix + "I", 1000),           # AudioFileSize
+        struct.pack(prefix + "H", 2),              # Version2 (default int16u)
+        struct.pack(prefix + "I", 32),             # HeaderSize
+        struct.pack(prefix + "H", 7),              # CodecFlavorID
+        struct.pack(prefix + "I", 512),            # CodedFrameSize
+        struct.pack(prefix + "I", 9000),           # AudioBytes
+        struct.pack(prefix + "I", 1200),           # BytesPerMinute
+        struct.pack(prefix + "I", 0),              # Unknown
+        struct.pack(prefix + "H", 1),              # SubPacketH
+        struct.pack(prefix + "H", 256),            # AudioFrameSize (shorthand)
+        struct.pack(prefix + "H", 64),             # SubPacketSize
+        struct.pack(prefix + "H", 0),              # Unknown
+        struct.pack(prefix + "H", 44100),          # SampleRate (shorthand)
+        struct.pack(prefix + "H", 0),              # Unknown
+        struct.pack(prefix + "H", 16),             # BitsPerSample (shorthand)
+        struct.pack(prefix + "H", 2),              # Channels (shorthand)
+        bytes((4,)), b"CO2!",                      # FourCC2Len / FourCC2
+        bytes((4,)), b"CO3!",                      # FourCC3Len / FourCC3
+        bytes((0,)),                                # Unknown
+        struct.pack(prefix + "H", 0),              # Unknown
+        bytes((len(title),)), title,
+        bytes((len(artist),)), artist,
+        bytes((len(copyright),)), copyright,
+        bytes((len(comment),)), comment,
+    ))
+
+
+def request(name, order, payload, *, members=None, unknown=False, verbose=True,
+            module="Canon", table="AFInfo"):
     return {
         "protocol": "oxidex.serial_processor.v1",
-        "module": "Canon",
-        "table": "AFInfo",
+        "module": module,
+        "table": table,
         "case": {
             "name": name,
             "byte_order": order,
@@ -109,6 +157,20 @@ def copied_canon_source(mutate):
     return temporary, root
 
 
+def copied_real_source(mutate):
+    """Copy only Real.pm so the selected table must bind to the primary lib."""
+    temporary = tempfile.TemporaryDirectory()
+    root = Path(temporary.name)
+    copied = root / "lib" / "Image" / "ExifTool"
+    copied.mkdir(parents=True)
+    source = Path(PINNED) / "lib" / "Image" / "ExifTool" / "Real.pm"
+    target = copied / "Real.pm"
+    shutil.copyfile(source, target)
+    target.write_text(mutate(target.read_text()))
+    (root / "fallback").symlink_to(Path(PINNED) / "lib", target_is_directory=True)
+    return temporary, root
+
+
 @unittest.skipUnless(PINNED and PERL, "set OXIDEX_PINNED_EXIFTOOL and EXIFTOOL_PERL for canonical native replay")
 class NativeSerialProcessorReplay(unittest.TestCase):
     @classmethod
@@ -124,6 +186,8 @@ class NativeSerialProcessorReplay(unittest.TestCase):
     def assert_common(self, reply):
         self.assertTrue(reply["ok"], reply)
         self.assertEqual(reply["returned"]["numeric"], 1)
+        self.assertEqual(reply["warnings"], [])
+        self.assertEqual(reply["perl_warnings"], [])
         self.assertEqual(reply["byte_order"]["active"], reply["byte_order"]["requested"])
         self.assertEqual(reply["byte_order"]["restored"], reply["byte_order"]["before"])
         self.assertIsNone(reply["byte_order"]["restore_error"])
@@ -336,6 +400,172 @@ class NativeSerialProcessorReplay(unittest.TestCase):
                                       fallback="fallback")
                 self.assertFalse(reply["ok"])
                 self.assertIn(expected, reply["error"])
+
+
+@unittest.skipUnless(PINNED and PERL, "set OXIDEX_PINNED_EXIFTOOL and EXIFTOOL_PERL for canonical native replay")
+class RealSerialProcessorReplay(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        version = subprocess.check_output([PERL, "-e", "print $^V"], text=True).strip()
+        if version != CANONICAL_PERL:
+            raise AssertionError(
+                f"serial replay requires canonical Perl {CANONICAL_PERL}, got {version}"
+            )
+        if not (Path(PINNED) / "lib" / "Image" / "ExifTool" / "Real.pm").is_file():
+            raise AssertionError("selected pinned source does not contain Real.pm")
+
+    def assert_selected_real(self, reply, table, group1):
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["returned"]["numeric"], 1)
+        self.assertEqual(reply["warnings"], [])
+        self.assertEqual(reply["perl_warnings"], [])
+        self.assertEqual(reply["byte_order"]["active"], reply["byte_order"]["requested"])
+        self.assertEqual(reply["byte_order"]["restored"], reply["byte_order"]["before"])
+        self.assertIsNone(reply["byte_order"]["restore_error"])
+        selected = reply["selection"]
+        self.assertEqual(selected["table"]["requested"], f"Image::ExifTool::Real::{table}")
+        self.assertEqual(selected["table"]["resolution"], "native_get_tag_table")
+        self.assertTrue(selected["table"]["module"]["resolved"])
+        self.assertEqual(selected["table"]["module"]["source_root"], "lib")
+        self.assertEqual(selected["table"]["module"]["source_file"], "Image/ExifTool/Real.pm")
+        self.assertRegex(selected["table"]["module"]["source_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(selected["table"]["groups"]["values"], {
+            "0": {"defined": True, "string": "Real"},
+            "1": {"defined": True, "string": group1},
+            "2": {"defined": True, "string": "Audio"},
+        })
+        process = selected["process"]
+        self.assertEqual(process["name"], "Image::ExifTool::Canon::ProcessSerialData")
+        self.assertEqual(process["source_file"], "Image/ExifTool/Canon.pm")
+        read_value = selected["read_value"]
+        self.assertEqual(read_value["binding_package"], "Image::ExifTool::Canon")
+        self.assertEqual(read_value["binding_symbol"], "ReadValue")
+        self.assertTrue(all(item["table_reference"] == "selected_table"
+                            for item in reply["get_tag_info"]))
+        self.assertEqual(reply["option_state"]["unknown_before"], reply["option_state"]["unknown_after"])
+        self.assertFalse(reply["option_state"]["no_unknown_after"]["defined"])
+        self.assertEqual(reply["observability"]["found_tag"],
+                         "observed via object callback; does not prove final ExifTool key/group reporting")
+
+    def test_real_audiov3_both_orders_preserve_native_dynamic_strings(self):
+        replies = replay(PINNED, [
+            request(f"audiov3-{order}", order, real_v3_payload(order), module="Real", table="AudioV3")
+            for order in ("II", "MM")
+        ])
+        for reply in replies:
+            with self.subTest(case=reply["request"]["case"]):
+                self.assert_selected_real(reply, "AudioV3", "Real-RA3")
+                self.assertEqual(
+                    [numeric(item, "index") for item in reply["get_tag_info"]], list(range(12))
+                )
+                self.assertEqual(
+                    [(item["tag_info"]["raw_id"]["numeric"], item["tag_info"]["name"]["string"],
+                      item["value"]["string"])
+                     for item in reply["found_tags"]],
+                    [(0, "Channels", "2"), (2, "BytesPerMinute", "120"),
+                     (3, "AudioBytes", "1000"), (5, "Title", "Hi!"),
+                     (7, "Artist", "Me"), (9, "Copyright", "C"), (11, "Comment", "Yo")],
+                )
+                self.assertEqual(reply["get_tag_info"][7]["result"]["groups"]["values"], {
+                    "2": {"defined": True, "string": "Author"},
+                })
+                self.assertEqual(
+                    [(item["format"]["string"], item["count"]["numeric"], item["value"]["string"])
+                     for item in reply["read_values"][-8:]],
+                    [("int8u", 1, "3"), ("string", 3, "Hi!"),
+                     ("int8u", 1, "2"), ("string", 2, "Me"),
+                     ("int8u", 1, "1"), ("string", 1, "C"),
+                     ("int8u", 1, "2"), ("string", 2, "Yo")],
+                )
+                self.assertEqual(reply["method_calls"][:4], [
+                    {"method": "Options", "mode": "get", "argument": "Verbose"},
+                    {"method": "Options", "mode": "set", "argument": "Unknown",
+                     "before": {"defined": True, "numeric": 0, "string": "0"},
+                     "after": {"defined": True, "numeric": 1, "string": "1"}},
+                    {"method": "VerboseDir"}, {"method": "GetTagInfo"},
+                ])
+
+    def test_real_audiov3_unknown_zero_and_truncated_dynamic_string_cases(self):
+        normal = real_v3_payload("II")
+        zero = real_v3_payload("II", title=b"", artist=b"", copyright=b"", comment=b"")
+        # Retain TitleLen=3 but omit the title payload; native stops before a
+        # string ReadValue rather than fabricating an empty string callback.
+        truncated = normal[:15]
+        hidden, visible, zero_reply, truncated_reply = replay(PINNED, [
+            request("audiov3-hidden", "II", normal, module="Real", table="AudioV3"),
+            request("audiov3-visible", "II", normal, unknown=True, module="Real", table="AudioV3"),
+            request("audiov3-zero", "II", zero, module="Real", table="AudioV3"),
+            request("audiov3-truncated", "II", truncated, module="Real", table="AudioV3"),
+        ])
+        for reply in (hidden, visible, zero_reply, truncated_reply):
+            self.assert_selected_real(reply, "AudioV3", "Real-RA3")
+        self.assertNotIn("Unknown", names(hidden["found_tags"]))
+        self.assertIn("Unknown", names(visible["found_tags"]))
+        self.assertEqual([numeric(item, "count") for item in zero_reply["read_values"]
+                          if item["format"].get("string") == "string"], [0, 0, 0, 0])
+        self.assertEqual([numeric(item, "index") for item in truncated_reply["get_tag_info"]], list(range(6)))
+        self.assertEqual([numeric(item, "index") for item in truncated_reply["verbose_info"]], list(range(5)))
+        self.assertFalse(any(item["format"].get("string") == "string"
+                             for item in truncated_reply["read_values"]))
+
+    def test_real_audiov4_native_table_selection_resolves_shorthand_rows(self):
+        replies = replay(PINNED, [
+            request(f"audiov4-{order}", order, real_v4_payload(order), module="Real", table="AudioV4")
+            for order in ("II", "MM")
+        ])
+        for reply in replies:
+            with self.subTest(case=reply["request"]["case"]):
+                self.assert_selected_real(reply, "AudioV4", "Real-RA4")
+                rows = {numeric(item, "index"): item["result"] for item in reply["get_tag_info"]}
+                self.assertEqual(
+                    [(index, rows[index]["name"]["string"], rows[index]["raw_id"]["numeric"])
+                     for index in (10, 13, 15, 16)],
+                    [(10, "AudioFrameSize", 10), (13, "SampleRate", 13),
+                     (15, "BitsPerSample", 15), (16, "Channels", 16)],
+                )
+                found = {item["tag_info"]["name"]["string"]: item["value"]["string"]
+                         for item in reply["found_tags"]}
+                self.assertEqual({key: found[key] for key in (
+                    "AudioBytes", "BytesPerMinute", "AudioFrameSize", "SampleRate",
+                    "BitsPerSample", "Channels", "Title", "Artist", "Copyright", "Comment",
+                )}, {
+                    "AudioBytes": "9000", "BytesPerMinute": "1200", "AudioFrameSize": "256",
+                    "SampleRate": "44100", "BitsPerSample": "16", "Channels": "2",
+                    "Title": "Title", "Artist": "Artist", "Copyright": "C", "Comment": "Hi",
+                })
+                self.assertEqual(rows[26]["groups"]["values"], {
+                    "2": {"defined": True, "string": "Author"},
+                })
+                self.assertEqual([
+                    (numeric(item, "index"), item["named_arguments"]["Format"]["string"],
+                     numeric(item["named_arguments"], "Count"), numeric(item["named_arguments"], "Size"))
+                    for item in reply["verbose_info"] if numeric(item, "index") in (10, 13, 16, 24)
+                ], [(10, "int16u", 1, 2), (13, "int16u", 1, 2),
+                    (16, "int16u", 1, 2), (24, "string", 5, 5)])
+
+    def test_copied_real_table_is_primary_while_shared_processor_is_fallback(self):
+        baseline, = replay(PINNED, [
+            request("audiov3-baseline", "II", real_v3_payload("II"), module="Real", table="AudioV3")
+        ])
+
+        def rename(source):
+            before = "Name => 'BytesPerMinute'"
+            self.assertIn(before, source)
+            return source.replace(before, "Name => 'OxiDexBytesPerMinute'", 1)
+
+        temporary, root = copied_real_source(rename)
+        with temporary:
+            reply, = replay(root, [
+                request("audiov3-copied-real", "II", real_v3_payload("II"), module="Real", table="AudioV3")
+            ], fallback="fallback")
+        self.assert_selected_real(reply, "AudioV3", "Real-RA3")
+        self.assertNotEqual(reply["selection"]["table"]["module"]["source_sha256"],
+                            baseline["selection"]["table"]["module"]["source_sha256"])
+        self.assertEqual(reply["selection"]["process"]["source_root"], "fallback_lib")
+        self.assertEqual(reply["selection"]["read_value"]["source_root"], "fallback_lib")
+        self.assertIn("OxiDexBytesPerMinute", names(reply["found_tags"]))
+
+
 
 
 if __name__ == "__main__":
