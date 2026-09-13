@@ -806,6 +806,30 @@ mod document_name_tests {
 /// - MakerNote data specific to camera manufacturers
 /// - InteroperabilityIFDPointer (0xA005) pointing to the Interoperability sub-IFD
 ///
+/// # Producers (slice E-2)
+///
+/// ExifTool walks this directory as `%Image::ExifTool::Exif::Main` under
+/// DirName `ExifIFD`. When the generated table is in force (the
+/// `("Exif", "Main")` line of `enabled_ifd.rs` plus Gate A), every id it
+/// reports comes from one engine walk ([`exif_dir_engine::walk`]) of the
+/// TIFF block, replayed as `ExifIFD:<name>` at its entry's position in the
+/// hand walk below, so every row keeps the `order` slot the hand walk gave
+/// it. The hand arm stays the producer of the complement -- every id the
+/// table does not report: the 0x927c MakerNote row and its dispatch, the
+/// `omitted` (withheld-conversion) ids, the offset class, `Unknown` and
+/// untranscribed ids -- plus [`EXIF_IFD_HAND_KEPT`]; `SubDirectory` edge ids
+/// report nothing when [`EXIF_IFD_SILENCE_EDGES`] is set (0xa005 stays the
+/// hand's pointer). An engine-reported entry whose absence is the engine's
+/// own (`DirEngineRows::undecoded`: a refusal ExifTool does not make) falls
+/// back to its hand arm; one ExifTool refuses too (an overlapping or
+/// out-of-block value, an entry past the warning budget) or whose value the
+/// engine read and whose conversion withheld the tag stays absent. Engine rows
+/// are recorded at the hand arm's [`SHIM_DEFAULT_PRIORITY`], and the
+/// yield-to-IFD0 rule applies to them with the hand arm's predicate. With
+/// the table off, the hand arm runs alone exactly as before the slice (the
+/// E-1/E-2 fallback; E-D deletes it). The three passes keep their order:
+/// every ExifIFD row, then the MakerNote(s), then the InteropIFD.
+///
 /// # Arguments
 ///
 /// * `reader` - File reader providing access to the file
@@ -817,7 +841,8 @@ mod document_name_tests {
 /// * `tiff_len` - Length of the enclosing TIFF block as measured from `reader`
 ///   offset 0. This is ExifTool's `$dataLen`: the EXIF APP1 payload for a
 ///   JPEG, the file for a standalone TIFF. It bounds how far a MakerNote
-///   decoder may resolve its own value offsets -- see [`makernote_context`].
+///   decoder may resolve its own value offsets -- see [`makernote_context`]
+///   -- and it is the block the engine walks.
 /// * `metadata` - MetadataMap to populate
 pub fn parse_exif_subifd(
     reader: &dyn FileReader,
@@ -825,6 +850,87 @@ pub fn parse_exif_subifd(
     byte_order: ByteOrder,
     tiff_base: u64,
     tiff_len: u64,
+    metadata: &mut MetadataMap,
+) {
+    // Slice E-2. The lookup is spelled with literal arguments because
+    // `tools/exiftool-tables/reachability.py` counts literal call sites;
+    // `enabled()` re-checks Gate A and the allowlist at runtime.
+    let table = find_ifd_table("Exif", "Main").filter(|table| table.enabled());
+    parse_exif_directory(
+        reader, offset, byte_order, tiff_base, tiff_len, table, metadata,
+    );
+}
+
+/// Engine-reported ExifIFD ids the hand arm keeps producing for now, one
+/// landing at a time (`DirEngineRows::keep_hand`).
+///
+/// Decision D-2 of slice E-2 moved 0x9202 ApertureValue and 0x9205
+/// MaxApertureValue to the engine: where their `ValueConv` (`2**($val/2)`)
+/// meets a value Perl would numify but the generated runtime cannot (`undef`
+/// from a 0/0 rational, the two-count `2.971 1`, `inf` from a zero
+/// denominator), the engine withholds the tag -- an absent tag instead of the
+/// hand arm's wrong `undef` / `2.971 1` / `inf` (ExifTool prints `1.0` /
+/// `2.8` / `Inf`); construct K-N turns those into matches. A value whose
+/// `2**($val/2)` overflows keeps the hand arm's `Inf` (`exif_dir_engine`'s
+/// non-finite rule).
+///
+/// 0x9400 AmbientTemperature (`PrintConv => '"$val C"'`, Exif.pm:2532-2538)
+/// stays with its hand arm until the generator can tell a raw `$val` from a
+/// computed number: `GetRational64s` returns `RoundFloat($n/$d, 10)`, a
+/// STRING, and for a signed 0/-1 that string is `-0` (C's `%.10g` keeps the
+/// sign), which `"$val C"` interpolates verbatim -- `-0 C`, as pinned
+/// ExifTool prints it for OlympusOM-1.jpg and four other OM bodies. The
+/// compiled expression receives the number and prints it with `perl_num`,
+/// Perl's default stringification, which is `0` for a negative-zero NV
+/// (Perl's own `print -1e-300*1e-300` prints `0`); making `perl_num` print
+/// `-0` would break every computed zero instead. The hand arm prints the
+/// rational's sign (`exiftool_compat` rule 16b), so it keeps the row: the
+/// engine made 5 matched corpus rows VALUE (review finding, E-2). Sorted.
+const EXIF_IFD_HAND_KEPT: &[u16] = &[0x9400];
+
+/// Whether `SubDirectory` edge ids (other than the 0xa005 pointer) report
+/// nothing in the ExifIFD, as in ExifTool (Exif.pm:7103-7104: a
+/// sub-directory tag is processed, never reported unless requested by name
+/// or with the `MakerNotes` option). Decision D-3 of slice E-2, its own
+/// commit: before it the hand arm reported them (DJI_XT2.jpg's 0x02bc
+/// ApplicationNotes, an XMP edge, was a census EXTRA).
+///
+/// Accepted loss, by name only: ExifTool DOES report an edge tag requested
+/// by name (Exif.pm:7104 `next unless $doMaker or
+/// $$et{REQ_TAG_LOOKUP}{lc($tagStr)} ...` -- pinned `-j -ApplicationNotes`
+/// on DJI_XT2.jpg prints its `(Binary data 1035 bytes, ...)`), and before
+/// D-3 so did oxidex (`-ExifIFD:ApplicationNotes`). A silenced edge has no
+/// row, so that request now returns nothing: the default listing (the
+/// census) gains, a by-name request of one of the 27 edge ids loses -- and
+/// with it a by-name copy, `-TagsFromFile DJI_XT2.jpg
+/// -ExifIFD:ApplicationNotes`, which control and ExifTool make. A
+/// by-name-only row needs the request to reach this walk (`ReadOptions`
+/// does not), a later change. Writes to the file itself are unaffected: the
+/// surgical writers still edit or delete an entry the reader surfaces no row
+/// for. Revert this commit alone to restore the rows.
+const EXIF_IFD_SILENCE_EDGES: bool = true;
+
+/// The key an engine-produced ExifIFD row is recorded under: ExifTool's
+/// family 1, as the hand arm (`lookup_tag_name(id, "ExifIFD")`) keys it.
+fn exif_ifd_key(name: &str) -> String {
+    format!("ExifIFD:{name}")
+}
+
+/// The hand arm's yield, for engine rows: an ExifIFD row is dropped when
+/// IFD0 already holds the name (see the hand arm). E-3 retires the rule.
+fn exif_ifd_keep(name: &str, metadata: &MetadataMap) -> bool {
+    metadata.get(&format!("IFD0:{name}")).is_none()
+}
+
+/// [`parse_exif_subifd`] with the table decision made: `table` is the
+/// enabled `Exif::Main`, or `None` for the hand arm alone.
+fn parse_exif_directory(
+    reader: &dyn FileReader,
+    offset: u64,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    tiff_len: u64,
+    table: Option<&'static IfdTable>,
     metadata: &mut MetadataMap,
 ) {
     if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
@@ -844,6 +950,43 @@ pub fn parse_exif_subifd(
         let make = trimmed_data_member(metadata, "IFD0:Make");
         let model = trimmed_data_member(metadata, "IFD0:Model");
 
+        // The engine reads the TIFF block as one slice (ExifTool's `DataPt`,
+        // offsets from its byte 0); the hand arm reads `reader`. `None` = the
+        // hand arm alone, unchanged. Its `Make`/`Model` members are the same
+        // trimmed IFD0 rows.
+        let mut engine = table
+            .and_then(|table| {
+                let len = usize::try_from(tiff_len.min(reader.size())).ok()?;
+                Some((table, reader.read(0, len).ok()?))
+            })
+            .map(|(table, tiff)| {
+                debug_assert!(
+                    match (
+                        usize::try_from(offset)
+                            .ok()
+                            .and_then(|start| tiff.get(start..start.checked_add(2)?)),
+                        reader.read(offset, 2).ok(),
+                    ) {
+                        (Some(slice), Some(read)) => slice == read,
+                        _ => true,
+                    },
+                    "ExifIFD at {offset}: the TIFF slice and reader address different bytes"
+                );
+                // At the hand arm's priority, not the table's (`Priority =>
+                // 0` for WhiteBalance 0xa403 and X/YResolution/ResolutionUnit,
+                // `Avoid` for Rating): see `DirEngineRows::at_priority`.
+                // ExifTool's 0 is right against a MakerNotes WhiteBalance,
+                // but oxidex records JFIF at 1 where ExifTool's JFIF priority
+                // is -1 (ExifTool.pm:2218-2233), so a 0 would lose to a JFIF
+                // copy that ExifTool ranks below it (slice E-1's finding).
+                exif_dir_engine::walk(table, tiff, offset, byte_order, "ExifIFD", metadata)
+                    .at_priority(SHIM_DEFAULT_PRIORITY)
+                    .keep_hand(EXIF_IFD_HAND_KEPT)
+                    // The typed value the hand arm stored, for the writers
+                    // that serialize it (see `with_stored_forms`).
+                    .with_stored_forms()
+            });
+
         // First pass: convert tags and capture special pointers
         for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
             // Convert Cow<[u8]> to &[u8] for processing
@@ -862,6 +1005,40 @@ pub fn parse_exif_subifd(
                 interop_ifd_offset = Some(iop_offset as u64);
                 // Don't add the pointer tag to metadata - we'll parse the sub-IFD instead
                 continue;
+            }
+
+            // Slice E-2: an engine-reported id replays its buffered row here,
+            // at this entry's position (dropped, but consumed, when IFD0
+            // holds the name: the yield below). An engine-reported id whose
+            // absence is the engine's own falls through to the hand arm, the
+            // pre-engine reader; one ExifTool refuses too, or one the engine
+            // read and withheld, stays absent. A
+            // silenced edge reports nothing; every other id is the residual:
+            // today's hand arm, unchanged.
+            // The hand row's priority: 1 as ever, except a residual row
+            // beside the engine carries its tag's own `Priority => 0` /
+            // `Avoid` (ExifTool.pm:9469-9473), so a withheld 0xfe4e
+            // WhiteBalance cannot displace the engine's 0xa403 twin under
+            // the one `ExifIFD:WhiteBalance` key (FoundTag keeps the first
+            // of two priority-0 copies).
+            let mut priority = SHIM_DEFAULT_PRIORITY;
+            if let Some(engine) = engine.as_mut() {
+                let silence = EXIF_IFD_SILENCE_EDGES && *tag_id != INTEROPERABILITY_IFD_POINTER;
+                match engine.owner(*tag_id, silence) {
+                    exif_dir_engine::Owner::Engine => {
+                        if engine.replay(*tag_id, metadata, exif_ifd_key, exif_ifd_keep)
+                            || !engine.undecoded(*tag_id)
+                        {
+                            continue;
+                        }
+                    }
+                    exif_dir_engine::Owner::Silent => continue,
+                    exif_dir_engine::Owner::Hand => {
+                        if exif_dir_engine::tag_priority_is_zero(engine.table(), *tag_id) {
+                            priority = 0;
+                        }
+                    }
+                }
             }
 
             // Exif::Main's RawConv-undef entries (Exif.pm 13.59:3849-3873)
@@ -887,6 +1064,7 @@ pub fn parse_exif_subifd(
             // OffsetSchema; keeping both raw keys makes the family-normalized
             // output nondeterministically clobber one value with the other.
             // Match the precedence already applied to IFD1 and InteropIFD.
+            // (The engine rows get the same predicate, `exif_ifd_keep`.)
             if metadata.get(&format!("IFD0:{base_name}")).is_some() {
                 continue;
             }
@@ -909,7 +1087,14 @@ pub fn parse_exif_subifd(
             } else {
                 raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
             };
-            metadata.insert(tag_name, tag_value);
+            metadata.insert_occurrence(tag_name, tag_value, priority, "", Instance::default());
+        }
+
+        // Engine rows whose entry the hand walk never reached (`parse_ifd`
+        // drops a malformed entry `read_ifd` may accept), still before the
+        // MakerNote pass.
+        if let Some(engine) = engine {
+            engine.drain(metadata, exif_ifd_key, exif_ifd_keep);
         }
 
         // Second pass: parse the MakerNote found in the EXIF IFD. The decoder
@@ -1047,9 +1232,9 @@ fn interop_keep(name: &str, metadata: &MetadataMap) -> bool {
 /// ([`exif_dir_engine::walk`]), replayed at its entry's position in the hand
 /// walk below; [`INTEROP_RESIDUAL_IDS`] stay with their hand arms, and every
 /// other id produces nothing, as the hand arm dropped every id it did not
-/// name. An engine-reported entry the engine refused (no row: the floor
-/// refuses a value stored before the directory, which ExifTool reads, or a
-/// directory `read_ifd` refuses) keeps its hand arm for that entry. Engine
+/// name. An engine-reported entry the engine refused (no row: a value it
+/// cannot locate inside the TIFF block, or a directory `read_ifd` refuses)
+/// keeps its hand arm for that entry. Engine
 /// rows are recorded at the hand arms' priority ([`SHIM_DEFAULT_PRIORITY`];
 /// `DirEngineRows::at_priority`). With the table off, the hand arms run
 /// alone exactly as before the slice (the E-1/E-2 fallback; E-D deletes it).
@@ -1150,10 +1335,10 @@ fn parse_interop_directory(
             // An engine-reported id replays its row here; any other id
             // produces nothing, as the hand arm dropped every id it did not
             // name (the `_` arm below). An engine-reported id with no row --
-            // the engine refused the value (its floor refuses a value stored
-            // before the directory, which ExifTool reads: Exif.pm:6549 is
-            // an overlap rule, K-O in E-2) or the whole directory -- falls
-            // through to its hand arm, the pre-engine producer.
+            // the engine refused the value (one it cannot locate inside the
+            // TIFF block; before K-O also one stored before the directory)
+            // or the whole directory -- falls through to its hand arm, the
+            // pre-engine producer.
             if engine.owner(*tag_id, false) != exif_dir_engine::Owner::Engine
                 || engine.replay(*tag_id, metadata, interop_key, interop_keep)
             {
@@ -3998,6 +4183,587 @@ mod exif_subifd_tests {
             Some(0)
         );
     }
+
+    // -----------------------------------------------------------------
+    // Slice E-2: the ExifIFD through the generated `Exif::Main`.
+    // Expectations marked "ORA" are the pinned 13.59 oracle's output for
+    // the same bytes behind IFD0 -> ExifOffset in a crafted JPEG
+    // (`exiftool-pinned.sh -j [-a] [-n] -G1 -ExifIFD:all`, both probes
+    // asserted in-session).
+    // -----------------------------------------------------------------
+
+    const ASCII: u16 = 2;
+    const RATIONAL: u16 = 5;
+    const UNDEFINED: u16 = 7;
+
+    /// A little-endian TIFF block whose one IFD (the ExifIFD under test)
+    /// sits at 8, entries `(tag, type, count, value field)`, then `tail`
+    /// at [`tail_at`]`(entries.len())`.
+    fn exif_block(entries: &[(u16, u16, u32, u32)], tail: &[u8]) -> Vec<u8> {
+        let mut data = b"II\x2a\0\x08\0\0\0".to_vec();
+        data.extend((entries.len() as u16).to_le_bytes());
+        for (tag, field_type, count, value) in entries {
+            data.extend(tag.to_le_bytes());
+            data.extend(field_type.to_le_bytes());
+            data.extend(count.to_le_bytes());
+            data.extend(value.to_le_bytes());
+        }
+        data.extend(0u32.to_le_bytes());
+        data.extend_from_slice(tail);
+        data
+    }
+
+    fn tail_at(entries: usize) -> u32 {
+        (8 + 2 + 12 * entries + 4) as u32
+    }
+
+    fn rational(numerator: u32, denominator: u32) -> Vec<u8> {
+        [numerator.to_le_bytes(), denominator.to_le_bytes()].concat()
+    }
+
+    fn exif_main() -> Option<&'static IfdTable> {
+        let table = find_ifd_table("Exif", "Main").filter(|table| table.enabled());
+        assert!(
+            table.is_some(),
+            "Exif::Main must be on the Gate B allowlist"
+        );
+        table
+    }
+
+    /// `parse_exif_directory` over `data`'s IFD at 8, the whole block as
+    /// the engine's slice unless `tiff_len` narrows it, after `seed`.
+    fn walk_exif(
+        data: &[u8],
+        tiff_len: Option<u64>,
+        table: Option<&'static IfdTable>,
+        seed: &[(&str, TagValue)],
+    ) -> MetadataMap {
+        let reader = TestReader::new(data.to_vec());
+        let mut metadata = MetadataMap::new();
+        for (key, value) in seed {
+            metadata.insert(*key, value.clone());
+        }
+        parse_exif_directory(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            0,
+            tiff_len.unwrap_or(data.len() as u64),
+            table,
+            &mut metadata,
+        );
+        metadata
+    }
+
+    /// Engine-reported ids replay under `ExifIFD:<name>` with ExifTool's
+    /// printed value and its `-n` form (ORA for t/images Canon.jpg's values:
+    /// ExposureTime `4` / `-n` 4, ColorSpace `sRGB` / 1, FocalPlaneXResolution
+    /// 3443.946188); a residual id keeps its hand arm.
+    #[test]
+    fn engine_rows_replay_with_exiftools_values_and_n_forms() {
+        let at = tail_at(5);
+        let data = exif_block(
+            &[
+                (0x829a, RATIONAL, 1, at),
+                (0x9000, UNDEFINED, 4, u32::from_le_bytes(*b"0221")),
+                (0xa001, SHORT, 1, 1),
+                (0xa20e, RATIONAL, 1, at + 8),
+                (0xa210, SHORT, 1, 2),
+            ],
+            &[rational(1, 80), rational(3_072_000, 892)].concat(),
+        );
+        let metadata = walk_exif(&data, None, exif_main(), &[]);
+        let n = metadata.without_print_conv();
+        assert_eq!(metadata.get_string("ExifIFD:ExposureTime"), Some("1/80"));
+        assert_eq!(
+            n.get("ExifIFD:ExposureTime"),
+            Some(&TagValue::Float(0.0125))
+        );
+        assert_eq!(metadata.get_string("ExifIFD:ColorSpace"), Some("sRGB"));
+        assert_eq!(n.get("ExifIFD:ColorSpace"), Some(&TagValue::Integer(1)));
+        assert_eq!(
+            metadata.get_string("ExifIFD:FocalPlaneResolutionUnit"),
+            Some("inches")
+        );
+        // An unconverted rational prints its RoundFloat number and keeps its
+        // fraction as the `-n` form -- what Canon's sensor-size Composite
+        // reads (`TAG_EXTRA{Rational}`).
+        assert_eq!(
+            metadata.get("ExifIFD:FocalPlaneXResolution"),
+            Some(&TagValue::Float(3443.946188))
+        );
+        assert_eq!(
+            n.get("ExifIFD:FocalPlaneXResolution"),
+            Some(&TagValue::new_rational(3_072_000, 892))
+        );
+        // Residual (`omitted.raw_conv`): the hand arm, byte-identical to the
+        // engine-off walk.
+        let hand = walk_exif(&data, None, None, &[]);
+        assert_eq!(
+            metadata.get("ExifIFD:ExifVersion"),
+            hand.get("ExifIFD:ExifVersion")
+        );
+        assert!(metadata.get("ExifIFD:ExifVersion").is_some());
+        let keys: Vec<&str> = metadata.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.iter().all(|k| k.starts_with("ExifIFD:")), "{keys:?}");
+    }
+
+    /// Leica M8/M8.2/M9/M Monochrom write FocalPlaneX/YResolution and
+    /// FocalPlaneResolutionUnit under their TIFF/EP ids 0x920e-0x9210,
+    /// which the hand name table never named (`ExifIFD:0x920E`, hidden).
+    /// ORA LeicaM9.jpg: 3700 / 3689 / `inches`.
+    #[test]
+    fn legacy_focal_plane_ids_are_named_by_the_engine() {
+        let at = tail_at(3);
+        let data = exif_block(
+            &[
+                (0x920e, RATIONAL, 1, at),
+                (0x920f, RATIONAL, 1, at + 8),
+                (0x9210, SHORT, 1, 2),
+            ],
+            &[rational(3700, 1), rational(3689, 1)].concat(),
+        );
+        let metadata = walk_exif(&data, None, exif_main(), &[]);
+        assert_eq!(
+            metadata.get("ExifIFD:FocalPlaneXResolution"),
+            Some(&TagValue::Integer(3700))
+        );
+        assert_eq!(
+            metadata.get("ExifIFD:FocalPlaneYResolution"),
+            Some(&TagValue::Integer(3689))
+        );
+        assert_eq!(
+            metadata.get_string("ExifIFD:FocalPlaneResolutionUnit"),
+            Some("inches")
+        );
+        assert!(metadata.get("ExifIFD:0x920E").is_none());
+        let hand = walk_exif(&data, None, None, &[]);
+        assert!(hand.get("ExifIFD:FocalPlaneXResolution").is_none());
+        assert!(hand.get("ExifIFD:0x920E").is_some());
+    }
+
+    /// Spec 7.1 test 7, the same-name pairs, which land under one key.
+    /// (b) Two engine ids, unsorted: 0xa20e = 300 then 0x920e = 400 -- ORA
+    /// `-j` prints the later, 400. (a) The engine's 0xa403 WhiteBalance
+    /// (Priority 0) and the withheld 0xfe4e (`Avoid`, so priority 0 too)
+    /// after it: FoundTag keeps the first of two priority-0 copies, and ORA
+    /// `-j` prints 0xa403's `Manual` (`-a` shows both, `Custom` second).
+    /// The residual row carries its tag's priority 0 and cannot displace the
+    /// engine row; the hand arm alone (engine off) printed `Custom`.
+    #[test]
+    fn same_name_pairs_keep_exiftools_winner() {
+        let at = tail_at(2);
+        let data = exif_block(
+            &[(0xa20e, RATIONAL, 1, at), (0x920e, RATIONAL, 1, at + 8)],
+            &[rational(300, 1), rational(400, 1)].concat(),
+        );
+        let metadata = walk_exif(&data, None, exif_main(), &[]);
+        assert_eq!(
+            metadata.get("ExifIFD:FocalPlaneXResolution"),
+            Some(&TagValue::Integer(400))
+        );
+        assert_eq!(
+            metadata
+                .occurrences_for("ExifIFD:FocalPlaneXResolution")
+                .len(),
+            2,
+            "both copies kept (the -a view)"
+        );
+
+        let data = exif_block(
+            &[(0xa403, SHORT, 1, 1), (0xfe4e, ASCII, 7, at)],
+            b"Custom\0",
+        );
+        let metadata = walk_exif(&data, None, exif_main(), &[]);
+        assert_eq!(metadata.get_string("ExifIFD:WhiteBalance"), Some("Manual"));
+        let occurrences = metadata.occurrences_for("ExifIFD:WhiteBalance");
+        assert_eq!(occurrences.len(), 2);
+        assert_eq!(occurrences[0].priority, SHIM_DEFAULT_PRIORITY, "engine");
+        assert_eq!(occurrences[1].priority, 0, "residual 0xfe4e: Avoid");
+        let hand = walk_exif(&data, None, None, &[]);
+        assert_eq!(hand.get_string("ExifIFD:WhiteBalance"), Some("Custom"));
+    }
+
+    /// Spec 0.5: the yield-to-IFD0 rule is kept for engine rows, with the
+    /// hand arm's predicate (E-3 retires it).
+    #[test]
+    fn engine_rows_yield_to_an_ifd0_twin() {
+        let data = exif_block(&[(0x011a, RATIONAL, 1, tail_at(1))], &rational(72, 1));
+        let seeded = walk_exif(
+            &data,
+            None,
+            exif_main(),
+            &[("IFD0:XResolution", TagValue::new_rational(300, 1))],
+        );
+        assert!(seeded.get("ExifIFD:XResolution").is_none());
+        let alone = walk_exif(&data, None, exif_main(), &[]);
+        assert_eq!(
+            alone.get("ExifIFD:XResolution"),
+            Some(&TagValue::Integer(72))
+        );
+    }
+
+    /// Review finding (E-2): an entry ExifTool refuses reports nothing --
+    /// the hand arm, which reads the same bytes by other means, must not put
+    /// it back. A value past the TIFF block the engine walks (the JPEG APP1
+    /// payload: ExifTool's "Bad offset for ExifIFD ...", Exif.pm:6551-6552,
+    /// pinned on the crafted `pastpayload.jpg` in `tests/exif_ifd_table.rs`)
+    /// is absent, though the hand reader reaches it and the hand arm alone
+    /// (engine off) still reports it; the inline ColorSpace beside it is the
+    /// engine's.
+    #[test]
+    fn a_value_exiftool_refuses_stays_absent() {
+        let at = tail_at(2);
+        let data = exif_block(
+            &[(0x829a, RATIONAL, 1, at), (0xa001, SHORT, 1, 1)],
+            &rational(1, 80),
+        );
+        let engine = walk_exif(&data, Some(u64::from(at)), exif_main(), &[]);
+        let hand = walk_exif(&data, None, None, &[]);
+        assert!(engine.get("ExifIFD:ExposureTime").is_none());
+        assert!(hand.get("ExifIFD:ExposureTime").is_some());
+        assert_eq!(engine.get_string("ExifIFD:ColorSpace"), Some("sRGB"));
+
+        // An out-of-line value overlapping the entry array: "Suspicious
+        // ExifIFD offset" (Exif.pm:6549), nothing reported.
+        let data = exif_block(&[(0x829a, RATIONAL, 1, 12)], &[]);
+        assert!(
+            walk_exif(&data, None, exif_main(), &[])
+                .get("ExifIFD:ExposureTime")
+                .is_none()
+        );
+        assert!(
+            walk_exif(&data, None, None, &[])
+                .get("ExifIFD:ExposureTime")
+                .is_some()
+        );
+
+        // An offset into the TIFF header (Exif.pm:6539, also "Suspicious
+        // ExifIFD offset"; the recheck's crafted `hdroff0.jpg`: pinned 13.59
+        // prints no ExposureTime, control printed the hand arm's reading of
+        // the header bytes, 346409.1): nothing reported.
+        for at in [0, 4] {
+            let data = exif_block(&[(0x829a, RATIONAL, 1, at)], &[]);
+            assert!(
+                walk_exif(&data, None, exif_main(), &[])
+                    .get("ExifIFD:ExposureTime")
+                    .is_none(),
+                "offset {at}"
+            );
+            assert!(
+                walk_exif(&data, None, None, &[])
+                    .get("ExifIFD:ExposureTime")
+                    .is_some(),
+                "offset {at}: the hand arm alone reads the header"
+            );
+        }
+    }
+
+    /// The fallback stays for the engine's own refusals: a directory of 513
+    /// entries is beyond `read_ifd`'s `MAX_IFD_ENTRIES`, a bound ExifTool
+    /// does not have, so every entry keeps its hand arm.
+    #[test]
+    fn a_directory_only_the_engine_refuses_keeps_its_hand_arms() {
+        let entries = vec![(0xa001, SHORT, 1, 1); 513];
+        let data = exif_block(&entries, &[]);
+        let engine = walk_exif(&data, None, exif_main(), &[]);
+        let hand = walk_exif(&data, None, None, &[]);
+        assert!(engine.get("ExifIFD:ColorSpace").is_some());
+        assert_eq!(
+            engine.get("ExifIFD:ColorSpace"),
+            hand.get("ExifIFD:ColorSpace")
+        );
+    }
+
+    /// [`EXIF_IFD_HAND_KEPT`]: sorted, engine-reported (else it would be
+    /// residual anyway), and each id the only declarer of its name, so
+    /// `keep_hand` drops no other id's row.
+    #[test]
+    fn exif_ifd_hand_kept_ids_are_engine_reported_and_uniquely_named() {
+        use crate::exiftool_tables::ifd_tables::IFD_EXIF_MAIN;
+        assert!(EXIF_IFD_HAND_KEPT.windows(2).all(|w| w[0] < w[1]));
+        for &id in EXIF_IFD_HAND_KEPT {
+            assert!(
+                crate::exiftool_tables::engine_reports(&IFD_EXIF_MAIN, id),
+                "{id:#06x}"
+            );
+            let name = IFD_EXIF_MAIN.tag(id).expect("plain tag").name;
+            let declarers: Vec<u16> = IFD_EXIF_MAIN
+                .tags
+                .iter()
+                .filter(|t| t.name == name)
+                .map(|t| t.id)
+                .chain(
+                    IFD_EXIF_MAIN
+                        .variants
+                        .iter()
+                        .filter(|g| g.alternatives.iter().any(|(_, t)| t.name == name))
+                        .map(|g| g.id),
+                )
+                .collect();
+            assert_eq!(declarers, [id], "{name}");
+        }
+    }
+
+    /// Decision D-2: ApertureValue and MaxApertureValue are the engine's.
+    /// A readable APEX value prints ExifTool's `2**($val/2)` f-number with
+    /// its ValueConv number as the `-n` form (ORA t/images Canon.jpg:
+    /// ApertureValue `14.0` / `-n` 14.0000278113061); a value the ValueConv
+    /// cannot numify -- a 0/0 rational, or the two-count `2.971 1` of
+    /// SamsungGT-B2710.jpg -- was read and withheld, so it stays absent
+    /// rather than falling back to the hand arm's `undef` / `2.971 1`
+    /// (ExifTool numifies both: `1.0`, `2.8`; construct K-N).
+    #[test]
+    fn aperture_values_are_the_engines_and_an_unnumifiable_one_is_absent() {
+        let at = tail_at(2);
+        let data = exif_block(
+            &[(0x9202, RATIONAL, 1, at), (0x9205, RATIONAL, 1, at + 8)],
+            &[rational(5, 1), rational(0, 0)].concat(),
+        );
+        let engine = walk_exif(&data, None, exif_main(), &[]);
+        assert_eq!(engine.get_string("ExifIFD:ApertureValue"), Some("5.7"));
+        match engine.without_print_conv().get("ExifIFD:ApertureValue") {
+            Some(TagValue::Float(f)) => assert!((f - 2f64.powf(2.5)).abs() < 1e-12, "{f}"),
+            other => panic!("-n ApertureValue: {other:?}"),
+        }
+        assert!(engine.get("ExifIFD:MaxApertureValue").is_none());
+        let hand = walk_exif(&data, None, None, &[]);
+        assert!(
+            hand.get("ExifIFD:MaxApertureValue").is_some(),
+            "the hand's undef"
+        );
+
+        let data = exif_block(
+            &[(0x9205, RATIONAL, 2, tail_at(1))],
+            &[rational(2971, 1000), rational(1, 1)].concat(),
+        );
+        assert!(
+            walk_exif(&data, None, exif_main(), &[])
+                .get("ExifIFD:MaxApertureValue")
+                .is_none()
+        );
+
+        // Review finding (E-2, D-2): `2**($val/2)` of 2147483648/1
+        // (CanonEOS20Da.jpg's ApertureValue) overflows; pinned ExifTool
+        // prints `Inf` (crafted `ap_inf.jpg`, `-j -G1 -a -ExifIFD:all`), the
+        // compiled `sprintf("%.1f")` printed Rust's `inf`. The engine drops
+        // the row as its own absence and the hand arm prints `Inf`, as
+        // before D-2. A zero denominator's `inf` input (7/0) is the D-2
+        // class: withheld, absent (ORA `Inf`, the hand arm's `inf`).
+        let data = exif_block(
+            &[(0x9202, RATIONAL, 1, at), (0x9205, RATIONAL, 1, at + 8)],
+            &[rational(2_147_483_648, 1), rational(7, 0)].concat(),
+        );
+        let engine = walk_exif(&data, None, exif_main(), &[]);
+        let hand = walk_exif(&data, None, None, &[]);
+        let aperture = engine
+            .get("ExifIFD:ApertureValue")
+            .expect("the hand arm's row");
+        assert_eq!(Some(aperture), hand.get("ExifIFD:ApertureValue"));
+        assert_eq!(
+            crate::core::exiftool_compat::format_tag_value("ExifIFD:ApertureValue", aperture)
+                .as_string(),
+            Some("Inf")
+        );
+        assert!(engine.get("ExifIFD:MaxApertureValue").is_none());
+    }
+
+    /// Review finding (E-2): AmbientTemperature as a signed 0/-1 -- the
+    /// bytes OlympusOM-1.jpg stores (`exiftool-pinned.sh -v3`: `-0 (0/-1)`)
+    /// -- prints ORA `-0 C` (`-j -G1 -a`, crafted `negzero.jpg`; the same
+    /// on the five OM bodies of the census). The engine's `"$val C"` printed
+    /// `0 C` (see [`EXIF_IFD_HAND_KEPT`]); the hand arm prints the sign, so
+    /// it keeps the row, and a nonzero value is the same either way.
+    #[test]
+    fn ambient_temperature_keeps_its_hand_arm_and_the_sign_of_zero() {
+        const SRATIONAL: u16 = 10;
+        let at = tail_at(1);
+        let negative_zero = [0u32.to_le_bytes(), u32::MAX.to_le_bytes()].concat();
+        let data = exif_block(&[(0x9400, SRATIONAL, 1, at)], &negative_zero);
+        let engine = walk_exif(&data, None, exif_main(), &[]);
+        assert_eq!(
+            crate::core::exiftool_compat::format_tag_value(
+                "ExifIFD:AmbientTemperature",
+                engine.get("ExifIFD:AmbientTemperature").expect("reported"),
+            ),
+            TagValue::String("-0 C".to_string())
+        );
+        assert_eq!(
+            engine.occurrences_for("ExifIFD:AmbientTemperature").len(),
+            1
+        );
+        let hand = walk_exif(&data, None, None, &[]);
+        assert_eq!(
+            engine.get("ExifIFD:AmbientTemperature"),
+            hand.get("ExifIFD:AmbientTemperature")
+        );
+
+        let warm = [43i32.to_le_bytes(), 2i32.to_le_bytes()].concat();
+        let data = exif_block(&[(0x9400, SRATIONAL, 1, at)], &warm);
+        let engine = walk_exif(&data, None, exif_main(), &[]);
+        assert_eq!(
+            crate::core::exiftool_compat::format_tag_value(
+                "ExifIFD:AmbientTemperature",
+                engine.get("ExifIFD:AmbientTemperature").expect("reported"),
+            ),
+            TagValue::String("21.5 C".to_string())
+        );
+    }
+
+    /// Decision D-3: a `SubDirectory` edge id in the ExifIFD reports nothing
+    /// (Exif.pm:7103-7104), as pinned ExifTool's `-a -G1` over the census
+    /// shows for DJI_XT2.jpg's 0x02bc ApplicationNotes; the hand arm alone
+    /// (engine off) still reports it. The 0xa005 pointer stays the hand's
+    /// (spec 0.4): a well-formed one is followed, not reported.
+    ///
+    /// This pins the accepted by-name loss too (review finding, E-2; see
+    /// [`EXIF_IFD_SILENCE_EDGES`]): the map has no edge row at all, so
+    /// `-ExifIFD:ApplicationNotes` finds nothing where pinned ExifTool's
+    /// `-ApplicationNotes` reports the tag. A change that restores by-name
+    /// rows turns this red on purpose.
+    #[test]
+    fn edge_ids_report_nothing() {
+        let data = exif_block(&[(0x02bc, UNDEFINED, 8, tail_at(1))], b"<x:xmp/>");
+        let engine = walk_exif(&data, None, exif_main(), &[]);
+        assert!(engine.get("ExifIFD:ApplicationNotes").is_none());
+        assert!(engine.is_empty(), "{:?}", engine.keys().collect::<Vec<_>>());
+        let hand = walk_exif(&data, None, None, &[]);
+        assert!(hand.get("ExifIFD:ApplicationNotes").is_some());
+        // An 0x8825 GPSInfo edge misplaced in an ExifIFD: silent too.
+        let data = exif_block(&[(0x8825, 4, 1, 0)], &[]);
+        assert!(walk_exif(&data, None, exif_main(), &[]).is_empty());
+    }
+
+    /// The TIFF block of a JPEG's first `Exif\0\0` APP1 segment.
+    fn tiff_block_of(jpeg: &[u8]) -> Option<Vec<u8>> {
+        let mut at = 2;
+        while at + 4 <= jpeg.len() {
+            let marker = jpeg[at + 1];
+            let len = usize::from(u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]));
+            let body = jpeg.get(at + 4..at + 2 + len)?;
+            if marker == 0xe1 && body.starts_with(b"Exif\0\0") {
+                return Some(body[6..].to_vec());
+            }
+            at += 2 + len;
+        }
+        None
+    }
+
+    /// Spec 7.1 test 9, the replay invariant: on t/images Canon.jpg the
+    /// ExifIFD/InteropIFD rows go into the map at the same `order` slots,
+    /// under the same keys, with the engine on and off.
+    #[test]
+    fn replay_keeps_the_hand_walks_order_on_canon_jpg() {
+        let Ok(jpeg) = std::fs::read("/tmp/oxidex-exiftool-cache/exiftool/t/images/Canon.jpg")
+        else {
+            eprintln!("skipping: t/images/Canon.jpg is not on this machine");
+            return;
+        };
+        let tiff = tiff_block_of(&jpeg).expect("Canon.jpg has an Exif APP1");
+        let reader = TestReader::new(tiff.clone());
+        let ifd0 = u64::from(u32::from_le_bytes(tiff[4..8].try_into().unwrap()));
+        let exif_offset = parse_ifd(&reader, ifd0, ByteOrder::LittleEndian)
+            .expect("IFD0")
+            .into_iter()
+            .find(|(id, ..)| *id == 0x8769)
+            .map(|(_, _, _, bytes)| u64::from(read_u32(&bytes, ByteOrder::LittleEndian)))
+            .expect("ExifOffset");
+        let sequence = |table: Option<&'static IfdTable>| {
+            let mut metadata = MetadataMap::new();
+            parse_exif_directory(
+                &reader,
+                exif_offset,
+                ByteOrder::LittleEndian,
+                0,
+                tiff.len() as u64,
+                table,
+                &mut metadata,
+            );
+            let mut rows: Vec<(u32, String)> = metadata
+                .all_occurrences()
+                .filter(|(key, _)| key.starts_with("ExifIFD:") || key.starts_with("InteropIFD:"))
+                .map(|(key, occurrence)| (occurrence.order, key))
+                .collect();
+            rows.sort();
+            rows
+        };
+        let engine = sequence(exif_main());
+        let hand = sequence(None);
+        assert!(engine.len() >= 30, "{engine:?}");
+        assert_eq!(engine, hand);
+    }
+
+    /// Review finding (E-2): an engine row's map value is ExifTool's printed
+    /// one (`MeteringMode` `Average`), so the writers that rebuild or copy a
+    /// tag without the original bytes (the PNG `eXIf` rebuild,
+    /// `copy_metadata`) wrote labels: `Average` as ASCII, `Padding`'s
+    /// placeholder text. Each ExifIFD engine row now carries the value its
+    /// entry stores, typed exactly as the hand arm stored it -- on t/images
+    /// Canon.jpg, key by key, the hand arm's own value (the writers then
+    /// serialize what they did before the engine: pinned by the PNG round
+    /// trip in `tests/exif_ifd_table.rs`) -- and an `undef` run keeps its
+    /// bytes behind the placeholder.
+    #[test]
+    fn engine_rows_carry_the_hand_arms_stored_value() {
+        let Ok(jpeg) = std::fs::read("/tmp/oxidex-exiftool-cache/exiftool/t/images/Canon.jpg")
+        else {
+            eprintln!("skipping: t/images/Canon.jpg is not on this machine");
+            return;
+        };
+        let tiff = tiff_block_of(&jpeg).expect("Canon.jpg has an Exif APP1");
+        let reader = TestReader::new(tiff.clone());
+        let ifd0 = u64::from(u32::from_le_bytes(tiff[4..8].try_into().unwrap()));
+        let exif_offset = parse_ifd(&reader, ifd0, ByteOrder::LittleEndian)
+            .expect("IFD0")
+            .into_iter()
+            .find(|(id, ..)| *id == 0x8769)
+            .map(|(_, _, _, bytes)| u64::from(read_u32(&bytes, ByteOrder::LittleEndian)))
+            .expect("ExifOffset");
+        let walk = |table: Option<&'static IfdTable>| {
+            let mut metadata = MetadataMap::new();
+            parse_exif_directory(
+                &reader,
+                exif_offset,
+                ByteOrder::LittleEndian,
+                0,
+                tiff.len() as u64,
+                table,
+                &mut metadata,
+            );
+            metadata
+        };
+        let engine = walk(exif_main());
+        let hand = walk(None);
+        let mut compared = 0;
+        for (key, occurrence) in engine.winner_occurrences() {
+            if !key.starts_with("ExifIFD:") || occurrence.value.is_none() {
+                continue;
+            }
+            let stored = occurrence
+                .stored
+                .as_ref()
+                .unwrap_or_else(|| panic!("{key}"));
+            if let Some(hand_value) = hand.get(key) {
+                assert_eq!(stored, hand_value, "{key}");
+                compared += 1;
+            }
+        }
+        assert!(compared >= 20, "{compared} engine rows compared");
+        assert_eq!(engine.get_string("ExifIFD:MeteringMode"), Some("Average"));
+
+        let data = exif_block(&[(0xa40b, UNDEFINED, 4, 0x0403_0201)], &[]);
+        let engine = walk_exif(&data, None, exif_main(), &[]);
+        let occurrence = engine
+            .winner_occurrences()
+            .find(|(key, _)| key.as_str() == "ExifIFD:DeviceSettingDescription")
+            .map(|(_, occurrence)| occurrence)
+            .expect("reported");
+        assert_eq!(
+            occurrence.raw,
+            TagValue::String("(Binary data 4 bytes, use -b option to extract)".to_string())
+        );
+        assert_eq!(occurrence.stored, Some(TagValue::Binary(vec![1, 2, 3, 4])));
+    }
 }
 
 #[cfg(test)]
@@ -4820,6 +5586,54 @@ mod ifd1_tests {
         );
     }
 
+    /// K-O (E-2 commit 1) keeps Exif.pm:6539: an IFD1 value whose stored
+    /// offset points into the 8-byte TIFF header is "Suspicious" and skipped
+    /// (`$valuePtr < 8`; no `Exif::Main` directory sets `ZeroOffsetOK`),
+    /// although it lies before the directory, where the overlap rule alone
+    /// would read it. The recheck's crafted `hdroff0.jpg` / `hdroff4.jpg`
+    /// (IFD1 XResolution at offset 0 / 4): pinned 13.59 `-G1 -a -EXIF:all`
+    /// prints `[IFD1] YResolution 96`, no XResolution, and the warning
+    /// "Suspicious IFD1 offset for XResolution"; without the check the engine
+    /// read the header bytes `II*\0` / `8` as XResolution 346409.125.
+    #[test]
+    fn an_ifd1_value_in_the_tiff_header_is_refused() {
+        let mut data = build_two_ifd_tiff(
+            &[],
+            &[
+                (TAG_X_RESOLUTION, RATIONAL, 1, rational(72, 1)),
+                (TAG_Y_RESOLUTION, RATIONAL, 1, rational(96, 1)),
+            ],
+        );
+        // IFD0 (no entries) at 8, IFD1 at 14: XResolution's value field is
+        // at 14 + 2 + 8.
+        assert_eq!(&data[24..28], &44u32.to_le_bytes(), "the layout");
+        for at in [0u32, 4] {
+            data[24..28].copy_from_slice(&at.to_le_bytes());
+            let reader = TestReader::new(data.clone());
+            let mut metadata = MetadataMap::new();
+            parse_ifd1(
+                &reader,
+                &data,
+                8,
+                0,
+                ByteOrder::LittleEndian,
+                0,
+                true,
+                &mut metadata,
+            );
+            assert!(
+                metadata.get("IFD1:XResolution").is_none(),
+                "offset {at}: {:?}",
+                metadata.get("IFD1:XResolution")
+            );
+            assert_eq!(
+                metadata.get("IFD1:YResolution"),
+                Some(&TagValue::Integer(96)),
+                "offset {at}: the next entry is still read"
+            );
+        }
+    }
+
     /// `--no-print-conv` (ExifTool `-n`) shows the engine's pre-PrintConv
     /// value, not the printed label: pinned 13.59 `-n -G1 -j` on
     /// AppleQT-200.jpg prints `"IFD1:ResolutionUnit": 2`,
@@ -5092,6 +5906,7 @@ mod ifd1_tests {
             value_conv: None,
             low_priority: false,
             avoid: false,
+            rational: None,
         };
         assert!(is_ifd1_exif_main_row(&row("Exif", "Main", "IFD1")));
         assert!(!is_ifd1_exif_main_row(&row("Exif", "Main", "ExifIFD")));
@@ -5731,15 +6546,19 @@ mod interop_tests {
     }
 
     /// Review finding (E-1, rev-exactness `crafted/before.*`,
-    /// `crafted2/idx8_before.*`): out-of-line values stored BEFORE the
-    /// Interop directory. ExifTool reads them (Exif.pm:6549 refuses only an
-    /// overlap; pinned 13.59 prints `[InteropIFD] XResolution 72`,
-    /// `YResolution 96`, and `-n` InteropIndex `ASCIIR98` with no warning);
-    /// the engine's floor refuses them, so those entries keep their hand
-    /// arms -- byte-identical to the engine-off fallback -- instead of
-    /// vanishing. The inline ResolutionUnit is still the engine's.
+    /// `crafted2/idx8_before.*`), resolved by K-O (E-2 commit 1): out-of-line
+    /// values stored BEFORE the Interop directory, past the TIFF header.
+    /// ExifTool reads them (Exif.pm:6549 refuses an overlap, Exif.pm:6539 an
+    /// offset below 8; these are neither); until K-O the engine's
+    /// `table_ifd.rs` floor refused them and these entries fell back to
+    /// their hand arms. Now the engine reads them itself, and every row is
+    /// the pinned 13.59 oracle's (the same bytes behind IFD0 -> ExifIFD
+    /// 0xa005 in a crafted JPEG, `exiftool-pinned.sh -G1 -a -s [-n]
+    /// -InteropIFD:all`: `Unknown (ASCIIR98)` / `-n` `ASCIIR98`, XResolution
+    /// 72, YResolution 96, ResolutionUnit `inches` / `-n` 2, no warning
+    /// but the JPEG's own "Missing JPEG SOS").
     #[test]
-    fn a_value_stored_before_the_directory_keeps_its_hand_arm() {
+    fn a_value_stored_before_the_directory_is_the_engines() {
         assert!(engine_is_on());
         // header(8) | XRes 72/1 @8 | YRes 96/1 @16 | "ASCIIR98" @24 | IFD @32
         let mut data = b"II\x2a\0\x20\0\0\0".to_vec();
@@ -5762,47 +6581,33 @@ mod interop_tests {
             data.extend(value.to_le_bytes());
         }
         data.extend(0u32.to_le_bytes());
-        let parse = |table: Option<&'static IfdTable>| {
-            let tiff_len = data.len() as u64;
-            let reader = TestReader::new(data.clone());
-            let mut metadata = MetadataMap::new();
-            parse_interop_directory(
-                &reader,
-                32,
-                ByteOrder::LittleEndian,
-                0,
-                tiff_len,
-                table,
-                &mut metadata,
-            );
-            metadata
-        };
-        let engine = parse(find_ifd_table("Exif", "Main"));
-        let hand = parse(None);
+        let tiff_len = data.len() as u64;
+        let reader = TestReader::new(data.clone());
+        let mut engine = MetadataMap::new();
+        parse_interop_directory(
+            &reader,
+            32,
+            ByteOrder::LittleEndian,
+            0,
+            tiff_len,
+            find_ifd_table("Exif", "Main"),
+            &mut engine,
+        );
         let index_key = format!("{INTEROP_DCF_GROUP}:InteropIndex");
-        for key in [
-            index_key.as_str(),
-            "InteropIFD:XResolution",
-            "InteropIFD:YResolution",
-        ] {
-            assert!(engine.get(key).is_some(), "{key} lost with the engine on");
-            assert_eq!(engine.get(key), hand.get(key), "{key}: not the hand arm");
-        }
-        assert_eq!(
-            engine.get("InteropIFD:XResolution"),
-            Some(&TagValue::new_rational(72, 1))
-        );
-        assert_eq!(
-            engine.get("InteropIFD:YResolution"),
-            Some(&TagValue::new_rational(96, 1))
-        );
-        assert_eq!(engine.get_string(&index_key), Some("ASCIIR98"));
+        assert_eq!(engine.get_string(&index_key), Some("Unknown (ASCIIR98)"));
         assert_eq!(
             engine.without_print_conv().get_string(&index_key),
             Some("ASCIIR98"),
             "the oracle's -n form"
         );
-        // Inline, so the engine's: its `-n` form is the stored code.
+        assert_eq!(
+            engine.get("InteropIFD:XResolution"),
+            Some(&TagValue::Integer(72))
+        );
+        assert_eq!(
+            engine.get("InteropIFD:YResolution"),
+            Some(&TagValue::Integer(96))
+        );
         assert_eq!(
             engine.get_string("InteropIFD:ResolutionUnit"),
             Some("inches")
@@ -5810,6 +6615,46 @@ mod interop_tests {
         assert_eq!(
             engine.without_print_conv().get("InteropIFD:ResolutionUnit"),
             Some(&TagValue::Integer(2))
+        );
+    }
+
+    /// The fallback the floor needed still stands for the refusals that
+    /// remain: a value the engine cannot locate at all -- here one stored
+    /// past the end of the TIFF block the engine walks, which the hand
+    /// reader reaches -- keeps its hand arm instead of vanishing.
+    #[test]
+    fn a_value_the_engine_cannot_locate_keeps_its_hand_arm() {
+        assert!(engine_is_on());
+        let x_offset = tail_offset_for(2) as u32;
+        let (data, _) = build_interop(
+            &[
+                (TAG_X_RESOLUTION, RATIONAL, 1, x_offset),
+                (TAG_RESOLUTION_UNIT, SHORT, 1, 2),
+            ],
+            &[72u32.to_le_bytes(), 1u32.to_le_bytes()].concat(),
+        );
+        // The engine's slice stops short of the rational; the reader does not.
+        let tiff_len = u64::from(x_offset);
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_interop_directory(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            0,
+            tiff_len,
+            find_ifd_table("Exif", "Main"),
+            &mut metadata,
+        );
+        assert_eq!(
+            metadata.get("InteropIFD:XResolution"),
+            Some(&TagValue::new_rational(72, 1)),
+            "the hand arm's value"
+        );
+        assert_eq!(
+            metadata.get_string("InteropIFD:ResolutionUnit"),
+            Some("inches"),
+            "inline: still the engine's"
         );
     }
 

@@ -3,8 +3,8 @@
 //! as a complete `ProcessExif` walk; this adapter adds no tag knowledge.
 
 use super::{
-    Emitted, Guard, IfdDir, IfdEntry, IfdTable, IfdTag, accepted_type, cond, descend,
-    directory_floor, find_table, locate, resolve,
+    DirectoryRule, Emitted, Guard, IfdDir, IfdEntry, IfdTable, IfdTag, accepted_type, cond,
+    descend, find_table, locate, resolve,
 };
 
 /// One parent directory's shared subdirectory reader. Keep it alive across
@@ -62,8 +62,12 @@ impl SubdirectoryReader {
         let Some(ty) = accepted_type(entry.field_type, table.group0 == "MakerNotes", ctx) else {
             return true;
         };
-        let Ok(located) = locate(&dir, entry, ty, directory_floor(dir.ifd_start, entry_count))
-        else {
+        let Ok(located) = locate(
+            &dir,
+            entry,
+            ty,
+            DirectoryRule::for_table(table, dir.ifd_start, entry_count),
+        ) else {
             return true;
         };
         let Some(resolved) = resolve(table, entry, &located, ctx) else {

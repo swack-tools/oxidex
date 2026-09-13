@@ -37,10 +37,10 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
-use crate::writers::jpeg_writer::write_exif_to_jpeg;
+use crate::writers::jpeg_writer::write_exif_to_jpeg_with_removals;
 use crate::writers::pdf_writer::write_pdf_file;
 use crate::writers::png_writer::{write_png_metadata, write_png_metadata_with_baseline};
-use crate::writers::tiff_surgical::rewrite_tiff_file;
+use crate::writers::tiff_surgical::rewrite_tiff_file_with_removals;
 use std::path::Path;
 
 // ============================================================================
@@ -925,6 +925,19 @@ fn record_diagnostics(metadata: &mut MetadataMap, diagnostics: &[Diagnostic]) {
 ///
 /// Tags not in the registry are skipped during validation (allows custom tags).
 pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
+    write_metadata_with_removals(path, metadata, &[])
+}
+
+/// [`write_metadata`], plus the keys the caller asked by name to delete. The
+/// surgical EXIF writers need them for an entry the reader surfaced no row
+/// for, whose key a `-TAG=` could not take out of the map (see
+/// `exif_surgical::removal_names_rowless_entry`); every other writer judges
+/// removals by the map alone.
+fn write_metadata_with_removals(
+    path: &Path,
+    metadata: &MetadataMap,
+    removed: &[String],
+) -> Result<()> {
     let reader = MMapReader::new(path)?;
     let format = detect_format(&reader)?;
 
@@ -944,7 +957,7 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
     if is_surgical_tiff_target(format, &reader) {
         let file_bytes = reader.read(0, reader.size() as usize)?;
         let original = baseline.unwrap_or_default();
-        let out = rewrite_tiff_file(file_bytes, &original, metadata)?;
+        let out = rewrite_tiff_file_with_removals(file_bytes, &original, metadata, removed)?;
         write_atomic(path, &out)?;
         return Ok(());
     }
@@ -952,7 +965,7 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
     match format {
         FileFormat::JPEG => {
             // Use JPEG writer to serialize metadata
-            let serialized_bytes = write_exif_to_jpeg(&reader, metadata)?;
+            let serialized_bytes = write_exif_to_jpeg_with_removals(&reader, metadata, removed)?;
             write_atomic(path, &serialized_bytes)?;
         }
         FileFormat::PNG => {
@@ -1174,10 +1187,13 @@ pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()> {
     let mut metadata = read_metadata(path)?;
 
     // Step 2: Remove the tag (if it exists)
-    metadata.remove(canonical_write_tag_name(tag_name));
+    let key = canonical_write_tag_name(tag_name);
+    metadata.remove(key);
 
-    // Step 3: Write metadata back to file
-    write_metadata(path, &metadata)?;
+    // Step 3: Write metadata back to file. The key goes along: an EXIF entry
+    // the reader surfaces no row for has no key to take out of the map, yet
+    // `-ExifIFD:ApplicationNotes=` still names it for deletion.
+    write_metadata_with_removals(path, &metadata, &[key.to_string()])?;
 
     Ok(())
 }
@@ -1282,15 +1298,22 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
     let mut dest_metadata = read_metadata(dest)?;
 
     // Step 3: Filter and merge source tags into destination metadata
-    // Use into_iter() to consume source_metadata and avoid cloning when possible
-    for (tag_name, tag_value) in source_metadata {
+    for (tag_name, occurrence) in source_metadata.winner_occurrences() {
         // Check if this tag should be copied (if filter is specified)
-        let should_copy = tags.is_none_or(|filter| filter.contains(&tag_name));
+        let should_copy = tags.is_none_or(|filter| filter.contains(tag_name));
 
         if should_copy {
+            // The value as the source file stores it where the producer keeps
+            // one beside its printed value (the ExifIFD engine rows: the
+            // SHORT behind `ColorSpace` `sRGB`, the bytes behind `Padding`'s
+            // placeholder, `TagOccurrence::stored`); the writer serializes
+            // stored forms, never printed ones.
+            let value = occurrence
+                .stored
+                .clone()
+                .unwrap_or_else(|| occurrence.raw.clone());
             // Insert tag into destination (merges with existing, preserving others)
-            // No clone needed since we own the data from into_iter()
-            dest_metadata.insert(tag_name, tag_value);
+            dest_metadata.insert(tag_name.clone(), value);
         }
     }
 

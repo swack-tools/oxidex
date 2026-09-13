@@ -63,7 +63,10 @@ pub use cond::{
 pub use enabled::{ENABLED, is_enabled};
 pub use enabled_ifd::ENABLED_IFD;
 pub use engine::{Cursor, Dir, Emitted, Step, process_binary_data, read_value};
-pub use ifd_engine::{IfdDir, IfdEntry, process_exif, read_ifd};
+pub use ifd_engine::{
+    EntryRead, IfdDir, IfdEntry, MAX_IFD_ENTRIES, RootReads, process_exif, process_exif_decoded,
+    read_ifd,
+};
 pub use ifd_schema::{
     IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
     RawConvEffect,
