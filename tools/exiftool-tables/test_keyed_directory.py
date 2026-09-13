@@ -98,6 +98,33 @@ class Selection(unittest.TestCase):
         # The Ciff parent stays visible, with its target plainly unwalked.
         self.assertIn('"target_processor"', source)
 
+    def test_word_target_with_gate_a_refusal_remains_explicitly_unwalked(self):
+        for name, mutation in (
+            ("value metadata", lambda tag: tag.update(Format="int16u")),
+            ("subdirectory", lambda tag: tag.update(SubDirectory={"TagTable": "Image::ExifTool::Any::Other"})),
+        ):
+            native = word_doc()
+            mutation(native["modules"]["Any"]["tables"]["Word"]["tags"]["1"])
+            source, stats = keyed_directory.generate(native)
+            parent = source.split("KEYED_ANY_WORD", 1)[0]
+            word = source.split("KEYED_ANY_WORD", 1)[1].split("\npub static ", 1)[0]
+            with self.subTest(name=name):
+                self.assertIn('"target_gate_a"', parent)
+                self.assertNotIn('"target_processor"', parent)
+                self.assertIn('gate_a: GateA { blocked_by: &[', word)
+                self.assertGreater(stats["keyed_edge_unwalked"], 0)
+
+    def test_existing_binary_target_remains_supported_alongside_word_layouts(self):
+        source, stats = keyed_directory.generate(doc({
+            "0x1001": {"Name": "MakeModel", "SubDirectory": {
+                "TagTable": "Image::ExifTool::Any::MakeModel",
+            }},
+        }))
+        parent = source.split("KEYED_ANY_MAIN", 1)[1].split("\npub static ", 1)[0]
+        self.assertIn('table: "MakeModel"', parent)
+        self.assertNotIn('"target_processor"', parent)
+        self.assertFalse(stats["keyed_edge_unwalked"])
+
 
 @unittest.skipUnless(PINNED, "set OXIDEX_PINNED_EXIFTOOL for native word-table generation")
 class PinnedWordTableGeneration(unittest.TestCase):

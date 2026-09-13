@@ -16,6 +16,7 @@ import word_directory
 
 
 PROCESS_CANON_RAW = "Image::ExifTool::CanonRaw::ProcessCanonRaw"
+PROCESS_BINARY_DATA = "Image::ExifTool::ProcessBinaryData"
 _RAW_ID = re.compile(r"^(?:0|[1-9][0-9]*|0x[0-9a-fA-F]+)$")
 
 
@@ -156,6 +157,7 @@ class Context:
         self.reader_contracts = doc.get("native_reader_contracts", {})
         self.layouts = {}
         self.word_processor_refusals = set()
+        self.word_target_ready = set()
         for module, mod in doc.get("modules", {}).items():
             for table, value in mod.get("tables", {}).items():
                 meta = value.get("meta") or {}
@@ -169,8 +171,35 @@ class Context:
                 elif word_directory.is_candidate(meta.get("PROCESS_PROC")):
                     self.word_processor_refusals.add(key)
 
-    def target_supported(self, module, table):
-        return (module, table) in self.layouts
+    def assess_word_target_gates(self, doc, verified_exprs, source_modules):
+        """Mark only emitted word targets whose own Gate A has no blockers.
+
+        A parent edge cannot be described as walkable just because its child
+        processor body compiled: a row-level refusal in that child remains a
+        source-visible blocker. Word rows refuse subdirectories, so this
+        isolated prepass has no recursive target dependency or output effect.
+        """
+        for module in source_modules:
+            for table, data in sorted(doc.get("modules", {}).get(module, {}).get("tables", {}).items()):
+                layout = self.layouts.get((module, table))
+                if layout is None or layout[0] != "word":
+                    continue
+                trial, omitted = _stats(), []
+                if gen_table(module, table, data, trial, verified_exprs, self, omitted) is None:
+                    continue
+                if not any(key.startswith("keyed_") and value for key, value in trial.items()):
+                    self.word_target_ready.add((module, table))
+
+    def target_status(self, module, table):
+        # Existing keyed parent edges may still target a generated flat binary
+        # table.  A staged word layout adds a second source-authenticated
+        # target shape; it must not withdraw the established binary path.
+        layout = self.layouts.get((module, table))
+        if layout is not None:
+            if layout[0] != "word" or (module, table) in self.word_target_ready:
+                return "ready"
+            return "gate_a"
+        return "ready" if self.processors.get((module, table)) == PROCESS_BINARY_DATA else "processor"
 
 
 def _edge(tag, raw_id, ctx, stats):
@@ -212,8 +241,9 @@ def _edge(tag, raw_id, ctx, stats):
             reasons.append("validate")
     if sd.get("ProcessProc") is not None:
         reasons.append("process_proc")
-    if not ctx.target_supported(module, table):
-        reasons.append("target_processor")
+    target_status = ctx.target_status(module, table)
+    if target_status != "ready":
+        reasons.append("target_gate_a" if target_status == "gate_a" else "target_processor")
     if reasons:
         stats["keyed_edge_unwalked"] += 1
     body = ", ".join(f'"{reason}"' for reason in reasons)
@@ -435,8 +465,9 @@ def generate(doc, verified_exprs=None, modules=None):
     Matching the binary/IFD module scope keeps that enum deterministic across
     output flags and prevents a keyed-only expression from dangling.
     """
-    ctx, stats, omissions, chunks = Context(doc), _stats(), [], []
     source_modules = sorted(doc.get("modules", {})) if modules is None else modules
+    ctx, stats, omissions, chunks = Context(doc), _stats(), [], []
+    ctx.assess_word_target_gates(doc, verified_exprs, source_modules)
     for module in source_modules:
         mod = doc.get("modules", {}).get(module)
         if mod is None:

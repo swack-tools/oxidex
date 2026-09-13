@@ -191,6 +191,13 @@ class ClosedGrammar(unittest.TestCase):
         self.assertIn("value_mask: 511", staged)
         self.assertIn("value_format: Fmt::Int8u", staged)
 
+    def test_refuses_fractional_or_negative_handler_index(self):
+        for before, after in (("- 1", "- 2"), ("/ 2", "/ 3")):
+            changed = copy.deepcopy(self.processor)
+            changed["__deparse"] = changed["__deparse"].replace(before, after, 1)
+            with self.subTest(after=after), self.assertRaises(word_directory.WordDirectoryRefused):
+                self.compile(changed)
+
     def test_deparse_fact_is_raw_and_independent_of_recognition_tokens(self):
         body = self.processor["__deparse"]
         self.assertEqual(word_directory_facts.deparse_sha256(body),
@@ -271,6 +278,7 @@ class PinnedNative(unittest.TestCase):
             ("key shift", "$val >> 8", "$val >> 7", "changed"),
             ("value mask", "$val & 0xff", "$val & 0x7f", "changed"),
             ("wide numeric value mask", "$val & 0xff", "$val & 0x1ff", "changed"),
+            ("negative handler index", "$pos/2-1", "$pos/2-2", "refused"),
             ("dynamic regex", "$$et{Model}=~/\\bD60\\b/", "$$et{Model}=~/$size/", "refused"),
             ("value format", "Format => 'int8u'", "Format => 'int16u'", "refused"),
         ]

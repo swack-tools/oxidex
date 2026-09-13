@@ -347,6 +347,13 @@ def compile_word_directory(processor, reader_contracts):
         # Its Format/Count/Size describe the native handler call; they must not
         # cause a future reader to truncate or re-decode that scalar as bytes.
         raise WordDirectoryRefused("processor handler value metadata is outside the shared scalar contract")
+    # `HandleTag` accepts Perl numeric Index values. The staged reader records
+    # the authenticated handler index as a non-negative integer, so reject a
+    # body change that would make the first index fractional or negative
+    # instead of silently flooring/underflowing it in Rust.
+    if (pair_start % index_divisor != 0 or pair_stride % index_divisor != 0
+            or pair_start // index_divisor < index_bias):
+        raise WordDirectoryRefused("processor index is outside the shared non-negative integer contract")
     return LengthPrefixedU16Pairs(
         pair_start, pair_stride, key_shift, value_mask, header_adjustment,
         model_condition, True, True, True, index_divisor, index_bias, value_format, value_count,
