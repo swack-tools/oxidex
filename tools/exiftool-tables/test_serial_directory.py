@@ -4,6 +4,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import subprocess
 import unittest
 
 import serial_directory
@@ -58,6 +59,30 @@ def table(process=PROCESSOR_BODY):
 class SerialDescriptorTests(unittest.TestCase):
     def compile(self, document=None):
         return serial_directory.compile_serial_inventory("Fixture", "Serial", document or table())
+
+    @unittest.skipUnless(os.environ.get("EXIFTOOL_PERL"), "set EXIFTOOL_PERL for native flag truth")
+    def test_reporting_flags_match_native_perl_scalar_truth(self):
+        values = [None, False, True, 0, 1, -1, 0.0, 0.5, "", "0", "00", "0.0", "1", "false"]
+        native = subprocess.run(
+            [os.environ["EXIFTOOL_PERL"], "-MJSON::PP", "-e",
+             "local $/; my $v=decode_json(<STDIN>); "
+             "print encode_json([map { $_ ? JSON::PP::true() : JSON::PP::false() } @$v]);"],
+            input=json.dumps(values), text=True, capture_output=True, check=True, timeout=15,
+        )
+        self.assertEqual(native.stderr, "")
+        for value, expected in zip(values, json.loads(native.stdout), strict=True):
+            for source, output in (("Unknown", "unknown"), ("Binary", "binary"), ("List", "list")):
+                with self.subTest(source=source, value=value):
+                    document = table()
+                    document["tags"]["0"][source] = value
+                    alternative = self.compile(document)["entries"][0]["alternatives"][0]
+                    self.assertEqual(alternative["flags"][output], expected)
+        for source in ("Unknown", "Binary", "List"):
+            document = table()
+            document["tags"]["0"][source] = {"__perl": "CODE"}
+            alternative = self.compile(document)["entries"][0]["alternatives"][0]
+            self.assertEqual(alternative["refusals"], ["serial_row_shape"])
+            self.assertIn("not a literal scalar", alternative["native_refusal"])
 
     def test_descriptor_captures_order_raw_count_domain_and_refusal(self):
         descriptor = self.compile()

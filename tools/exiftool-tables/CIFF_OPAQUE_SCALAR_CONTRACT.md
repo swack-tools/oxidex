@@ -8,7 +8,8 @@ The probe resolves `CanonRaw::Main` and invokes that table's live
 `PROCESS_PROC` CODE reference against constructed CIFF10 blocks under both byte
 orders. It authenticates that selected processor and `ValidateImage`
 source/body facts, exposes the selected native row facts, and records one
-chronological trace of `FoundTag`, warnings, and `ImageDataHash` calls. It uses
+chronological trace of `FoundTag` and `ImageDataHash` calls. Warnings are
+recorded separately. It uses
 `File::RandomAccess` over the same complete block passed to the native
 processor, so an external pointer is an absolute offset from the block start.
 

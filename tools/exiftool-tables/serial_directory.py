@@ -200,10 +200,20 @@ def _conversion_operand(tag):
 
 
 def _flags(tag):
+    def native_truth(name):
+        value = tag.get(name)
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return value not in ("", "0")
+        if isinstance(value, (bool, int, float)):
+            return value != 0
+        raise SerialDirectoryRefused(f"serial {name} flag is not a literal scalar")
+
     return {
-        "unknown": bool(tag.get("Unknown")),
-        "binary": bool(tag.get("Binary")),
-        "list": bool(tag.get("List")),
+        "unknown": native_truth("Unknown"),
+        "binary": native_truth("Binary"),
+        "list": native_truth("List"),
     }
 
 
