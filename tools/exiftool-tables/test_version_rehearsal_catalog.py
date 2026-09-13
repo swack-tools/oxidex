@@ -137,6 +137,22 @@ class CatalogCaptureTests(unittest.TestCase):
                 with self.assertRaisesRegex(catalog_stage.Refused, "incomplete pagination"):
                     catalog_stage.raw_catalog_from_capture(capture)
 
+    def test_capture_refuses_multiple_next_relations_before_fetching_any_target(self):
+        page_two = "https://api.github.com/repositories/132751855/tags?per_page=100&page=2"
+        page_four = "https://api.github.com/repositories/132751855/tags?per_page=100&page=4"
+        responses = complete_responses()
+        responses[catalog_stage.TAG_PAGE_URL] = response(
+            [tag("13.59", OID_C)],
+            {"Link": f'<{page_two}>; rel="next", <{page_four}>; rel="next"'},
+        )
+        get = FixtureGet(responses)
+        capture = catalog_stage.capture_tag_catalog(get, "2026-09-13T12:00:00Z")
+        self.assertFalse(capture["complete"])
+        self.assertEqual(capture["failures"][0]["kind"], "page_malformed")
+        self.assertEqual(get.calls, [catalog_stage.TAG_PAGE_URL])
+        with self.assertRaisesRegex(catalog_stage.Refused, "incomplete pagination"):
+            catalog_stage.raw_catalog_from_capture(capture)
+
     def test_rehashed_capture_cannot_skip_a_page_in_replay_validation(self):
         capture = self.capture()
         skipped = "https://api.github.com/repositories/132751855/tags?per_page=100&page=4"
@@ -147,6 +163,18 @@ class CatalogCaptureTests(unittest.TestCase):
             {key: value for key, value in capture.items() if key != "capture_sha256"}
         )
         with self.assertRaisesRegex(catalog_stage.Refused, "does not advance exactly one page"):
+            catalog_stage.verify_capture(capture)
+
+    def test_rehashed_capture_cannot_hide_a_second_next_relation(self):
+        capture = self.capture()
+        page_two = "https://api.github.com/repositories/132751855/tags?per_page=100&page=2"
+        page_four = "https://api.github.com/repositories/132751855/tags?per_page=100&page=4"
+        capture["pages"][0]["link_header"] = f'<{page_two}>; rel="next", <{page_four}>; rel="next"'
+        capture["pages"][0]["next_url"] = page_two
+        capture["capture_sha256"] = catalog_stage.sha256_json(
+            {key: value for key, value in capture.items() if key != "capture_sha256"}
+        )
+        with self.assertRaisesRegex(catalog_stage.Refused, "multiple rel=next"):
             catalog_stage.verify_capture(capture)
 
     def test_moved_ref_is_preserved_and_blocks_population(self):
