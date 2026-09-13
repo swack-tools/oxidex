@@ -517,10 +517,10 @@ mod tests {
         print_conv: PrintConv::None,
         groups: TagGroups::NONE,
     };
-    static NEGATIVE: SerialTag = SerialTag {
-        name: "NegativeCount",
+    static NON_NUMERIC: SerialTag = SerialTag {
+        name: "NonNumericCount",
         format: SerialFormat {
-            format: super::super::Fmt::Int8s,
+            format: super::super::Fmt::Str(1),
             count: SerialCount::Fixed { value: 1 },
         },
         condition: None,
@@ -582,7 +582,7 @@ mod tests {
     static UNSUPPORTED_FORMAT: SerialTag = SerialTag {
         name: "UnprovenFormat",
         format: SerialFormat {
-            format: super::super::Fmt::Float,
+            format: super::super::Fmt::Int8s,
             count: SerialCount::Fixed { value: 1 },
         },
         condition: None,
@@ -613,7 +613,7 @@ mod tests {
     static ENTRY_MEMBER: [SerialTag; 1] = [MEMBER];
     static ENTRY_AFTER_MEMBER: [SerialTag; 1] = [AFTER_MEMBER];
     static ENTRY_NEVER: [SerialTag; 1] = [NEVER];
-    static ENTRY_NEGATIVE: [SerialTag; 1] = [NEGATIVE];
+    static ENTRY_NON_NUMERIC: [SerialTag; 1] = [NON_NUMERIC];
     static ENTRY_NEEDS_CONTEXT: [SerialTag; 1] = [NEEDS_CONTEXT];
     static ENTRY_COUNTED_STRING: [SerialTag; 1] = [COUNTED_STRING];
     static ENTRY_HOOK: [SerialTag; 1] = [HOOK];
@@ -659,10 +659,10 @@ mod tests {
             alternatives: &ENTRY_COUNT,
         },
     ];
-    static NEGATIVE_ENTRIES: [SerialEntry; 2] = [
+    static NON_NUMERIC_ENTRIES: [SerialEntry; 2] = [
         SerialEntry {
             serial_index: 0,
-            alternatives: &ENTRY_NEGATIVE,
+            alternatives: &ENTRY_NON_NUMERIC,
         },
         SerialEntry {
             serial_index: 1,
@@ -839,9 +839,9 @@ mod tests {
     }
 
     #[test]
-    fn negative_prior_raw_count_is_refused_without_coercion() {
+    fn nonnumeric_prior_raw_count_is_refused_without_coercion() {
         let table = SerialTable {
-            entries: &NEGATIVE_ENTRIES,
+            entries: &NON_NUMERIC_ENTRIES,
             ..TABLE
         };
         let table: &'static SerialTable = Box::leak(Box::new(table));
@@ -850,12 +850,11 @@ mod tests {
             ..Sink::default()
         };
         let mut members = HashMap::new();
-        let result = walk(table, &[0xff, 0, 0], &mut sink, &mut members);
+        let result = walk(table, b"x\0\0", &mut sink, &mut members);
         assert_eq!(result.unavailable_prior_raw, 1);
         assert!(result.tainted);
         assert_eq!(sink.rows.len(), 1);
-        assert_eq!(sink.rows[0].name, "NegativeCount");
-        assert_eq!(sink.rows[0].value, TagValue::Integer(-1));
+        assert_eq!(sink.rows[0].name, "NonNumericCount");
     }
 
     #[test]
@@ -914,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn unproven_format_taints_instead_of_reusing_the_general_decoder() {
+    fn signed_format_is_refused_before_it_can_supply_a_dynamic_count() {
         let table = SerialTable {
             entries: &UNSUPPORTED_FORMAT_ENTRIES,
             ..TABLE
