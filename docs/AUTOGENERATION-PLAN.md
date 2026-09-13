@@ -33,6 +33,7 @@ areas remain unfinished; they cannot disappear from the denominator.
 | Work | Verified state | What it means |
 | --- | --- | --- |
 | Shared table compiler and reader | Already exist; some families use them | We have a foundation to extend instead of building a new interpreter for every camera brand. |
+| Sony focus-table pilot | Committed and pushed at `1a63822e`; complete paired corpus has zero changed per-file discrepancy records; workspace correction and duplicate retirement remain | The shared path preserves current output across all 4,238 files. It is not yet a merged migration. |
 | Sony plain generator recovery | PR #745 merged; six tables and 193 rows reproduced | These tables can be rebuilt. This alone does not prove that their behavior is fully automatic. |
 | Sony enciphered recovery | Producer and independent verifier preserved; M4 review found five blockers; not landed | The draft still has a Sony-specific translation layer. Its review remains useful, but it is not the architecture target. |
 | Nikon encrypted recovery | Producer committed on a work branch; not landed or independently accepted | It reproduces the meaning of 2,317 existing rows with deterministic ordering. It is recovery work, not removal of the custom runtime. |
@@ -80,6 +81,10 @@ The report will say **planned, implemented, validated or merged** for each
 item, with a commit and evidence. It will include the next deliverable and any
 blocker. Generated line counts, agent activity, table existence and passing
 syntax checks are not substitutes for these outcomes.
+
+Commit and push reviewable work-branch checkpoints as they are ready, with
+unfinished checks visible. Publishing a checkpoint does not have to wait for
+the complete merge gate. Merging still requires the relevant completed checks.
 
 ## How the machines and agents will work
 

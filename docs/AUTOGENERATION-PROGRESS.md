@@ -3,6 +3,9 @@
 This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
 The current milestone is one complete Sony focus-table migration. It is
 implemented in a work branch and is being validated; it has not landed.
+The committed pilot is published on `codex/sony-shared-table-migration-20260912`
+at `1a63822e`. Its complete corpus comparison now passes. Follow-up test and
+retirement changes have their own review and validation status below.
 
 ## What the pilot must prove
 
@@ -32,9 +35,26 @@ records. A separate exact key/value comparison checks all 228 focus rows
 (142 real-file rows and 86 boundary rows). Candidate runtime source hashes
 were recorded and remained unchanged during the comparison.
 
+The complete paired `conformance.py` run now covers all 4,238 files on the same
+pinned oracle and unchanged corpus. At `1a63822e` versus `e1191be6`, both sides
+have 468,012 matched rows, 12,258 missing, 477 wrong-value, 1,562 extra and 22
+renames. **Zero per-file discrepancy records changed.** The control took 394
+seconds and the candidate took 455 seconds; these are validation timings,
+not a performance benchmark.
+
+The complete workspace test command first failed on two stale test inventories:
+Fuji's `GEImageSize` and Olympus's `SensorArea`/`BlackLevel` now have generated
+conditions, so they no longer belong in the list of conditions the generator
+cannot represent. The correction preserves the inventory assertions and adds
+positive/negative condition tests, including a saved count used by a child
+table. Its combined lint/workspace rerun is pending. This correction does not
+claim new parser coverage: current callers still do not pass `Make` and
+`TIFF_TYPE` where those three tags need them.
+
 ## What is still open
 
-- Run the complete workspace gate and full-corpus candidate/control comparison.
+- Finish the corrected workspace gate. The full-corpus comparison passes for
+  the published pilot; changes to runtime behavior still need their own check.
 - Remove the retained custom declarations through a trustworthy generation
   path. Their recovered Sony-specific producer still has unresolved review
   findings, so it is not an accepted dependency for this migration.
@@ -50,12 +70,21 @@ These are source-inventory findings, not a count of missing runtime tags or an
 overall automation percentage. All-refused tables and other processors remain
 outside this check, so it does not yet satisfy the whole-project inventory goal.
 
+A boundary audit of the recorded native dump identifies 29 explicitly declared
+binary tables outside the emitted-table inventory. Replaying the actual
+generator classifies 50 row omissions and two refused table formats containing
+17 named rows; 18 of the 29 tables have no named rows. This is a discovery and
+producer-refusal record, not an independent whole-source completeness verdict.
+The remaining causes include native Unknown flags, unsupported string layouts
+and firmware-version comparisons. These give the next shared-capability work
+concrete source identities without another vendor-specific translator.
+
 Review caught an overbroad stop rule that would lose an ID3 Genre value after
 an unsupported conversion. The candidate now proves when a conversion affects
 only its own value, allowing later independent fields to continue. The proof
 accepts source-provided literal prefixes; it has no ID3 tag-name exception.
-Focused and shared-engine tests pass after the correction; the full-corpus
-comparison remains required.
+Focused and shared-engine tests pass after the correction, and the complete
+corpus comparison confirms no changed discrepancy records.
 
 The older Sony raw-ID correctness repair is separate. Its local full-corpus
 comparison gained ten correct rows with no other changed residuals. Its first
@@ -63,9 +92,11 @@ i7 gate failed while compiling a supporting command. A fresh focused rebuild
 passes. The workspace check exposed a build-setting collision already
 documented in the repository; the gate omitted the prescribed test setting.
 The corrected i7 workspace invocation passed: 5,564 tests, 68 skipped, 871
-seconds including compilation. The remaining gate stages are being run
-separately. The original failed gate remains recorded, and the shared gate
-script has not been changed.
+seconds including compilation. The corrected doctest, table verification and
+JPEG matrix stages also pass. The exact-base control build is complete and
+the paired Linux corpus run remains in progress under the shared lock. The
+original failed gate remains recorded, and the shared gate script has not
+been changed.
 
 Update this scoreboard after each validation or landing milestone. Do not
 replace an unfinished check with a count of generated lines or active agents.
