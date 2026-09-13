@@ -41,7 +41,7 @@ supported or generated runtime tables.
 | Rust reader and native replay | 25 keyed-reader tests pass; the explicitly selected native/Rust test passes all seven cases using generated tables | Both byte orders, invalid headers, short reads, missing model state, parent dispatch and verbose-directory callbacks are covered. |
 | Rust lint and formatting | Exact CI Clippy command and formatting check pass at `f613820d` | Hosted checks remain a separate merge condition. |
 | Official two-tier regeneration | PASS at `b9c7f206`, 196 seconds, zero declared net changes | Earlier failed attempts are preserved; the later verbose correction changes runtime and tests only. |
-| Full Python suite | Pending serial rerun | An earlier attempt used a wrong native source-root setting and was stopped after a test started Clippy outside its assigned build scope. No full-suite pass is claimed. |
+| Full Python suite | Pending serial rerun | A canonical run completed 698 tests with one stale assertion and one test setup error, zero skips. Corrections are under validation. The earlier concurrent Clippy process was not proven to originate from this suite. |
 | Runtime migration and retirement | Not complete | No production Canon route is enabled; no duplicate Canon reader is removed. |
 
 Regeneration uses isolated Perl 5.38.2, Archive::Zip 1.68 and repository-pinned

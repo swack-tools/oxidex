@@ -28,10 +28,12 @@ test and rejects a zero-test run. Clippy and formatting pass.
 Official two-tier regeneration passes at `b9c7f206` in 196 seconds and
 reproduces every declared artifact with zero net changes. All 607 translated
 expressions pass 16,789 native comparisons; 14 probe inputs are inapplicable.
-The earlier three failed regeneration attempts remain recorded. The full
-Python suite is being rerun serially after a wrong source-root setting and
-an unexpected compiler invocation in the first attempt; no full-suite pass
-is claimed. Hosted PR checks and merge remain pending.
+The earlier three failed regeneration attempts remain recorded. The canonical full
+Python suite ran 698 tests with one stale assertion and one test setup error,
+zero skips. Those tests are being corrected, and CI now receives the inputs
+needed to run native tests it previously skipped. The earlier Clippy process
+was concurrent; there is no evidence the suite launched it. New hosted checks
+and merge remain pending.
 
 The [checkpoint record](reference/word-directory-checkpoint.md) separates
 these checks and publication states. Completed checkpoints are committed and
