@@ -56,6 +56,10 @@ impl<'a> KeyedBlock<'a> {
 pub trait KeyedEmissionSink {
     fn emit(&mut self, row: Emitted);
 
+    /// Surface a source-declared reader warning. The default keeps existing
+    /// inactive callers unchanged until a carrier chooses where warnings go.
+    fn warn(&mut self, _warning: &'static str) {}
+
     fn keyed_enabled(&self, _table: &'static KeyedDirectoryTable) -> bool {
         false
     }
@@ -85,6 +89,10 @@ pub struct KeyedWalkResult {
     /// `Index` is not a metadata value, but preserving it here proves the
     /// source handler contract without adding a public output field.
     pub word_entries: Vec<WordDirectoryEntry>,
+    /// One record for each source-described word processor actually invoked.
+    /// Gate A/Gate B skips produce no trace, which distinguishes them from a
+    /// native processor that returned false after warning.
+    pub word_traces: Vec<WordDirectoryTrace>,
 }
 
 /// The parameter record supplied to native `HandleTag` for a source-described
@@ -97,6 +105,19 @@ pub struct WordDirectoryEntry {
     pub format: Fmt,
     pub count: usize,
     pub size: usize,
+}
+
+/// One source-described word processor invocation, before metadata rows are
+/// selected, converted, or suppressed. This mirrors the independently
+/// captured native callback boundary: return status, warnings, and raw
+/// `HandleTag` operands are observable separately from final output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WordDirectoryTrace {
+    pub module: &'static str,
+    pub table: &'static str,
+    pub returned: bool,
+    pub warnings: Vec<&'static str>,
+    pub entries: Vec<WordDirectoryEntry>,
 }
 
 impl KeyedWalkResult {
@@ -116,6 +137,7 @@ impl KeyedWalkResult {
         self.unavailable_target += child.unavailable_target;
         self.validation_rejected += child.validation_rejected;
         self.word_entries.extend(child.word_entries);
+        self.word_traces.extend(child.word_traces);
     }
 }
 
@@ -253,6 +275,14 @@ fn process_word_directory(
         return result;
     }
 
+    let mut trace = WordDirectoryTrace {
+        module: table.module,
+        table: table.table,
+        returned: false,
+        warnings: Vec::new(),
+        entries: Vec::new(),
+    };
+
     let header = u16_or_zero(block.data, 0, block.byte_order);
     let directory_size = block.data.len();
     if usize::from(header) != directory_size {
@@ -260,12 +290,16 @@ fn process_word_directory(
         let adjusted = usize::from(header).checked_add(word.header_adjustment);
         if !model_matches || adjusted != Some(directory_size) {
             result.bad_value += 1;
+            sink.warn(word.invalid_warning);
+            trace.warnings.push(word.invalid_warning);
+            result.word_traces.push(trace);
             return result;
         }
     }
 
     if word.pair_stride == 0 || word.index_divisor == 0 || word.key_shift >= u16::BITS as usize {
         result.bad_value += 1;
+        result.word_traces.push(trace);
         return result;
     }
     let mut position = word.pair_start;
@@ -274,7 +308,8 @@ fn process_word_directory(
         let raw_id = packed >> word.key_shift;
         let Some(mask) = u16::try_from(word.value_mask).ok() else {
             result.bad_value += 1;
-            break;
+            result.word_traces.push(trace);
+            return result;
         };
         let value = packed & mask;
         let Some(index) = position
@@ -282,16 +317,19 @@ fn process_word_directory(
             .and_then(|value| value.checked_sub(word.index_bias))
         else {
             result.bad_value += 1;
-            break;
+            result.word_traces.push(trace);
+            return result;
         };
-        result.word_entries.push(WordDirectoryEntry {
+        let entry = WordDirectoryEntry {
             raw_id,
             value: i64::from(value),
             index,
             format: word.value_format,
             count: word.value_count,
             size: word.value_size,
-        });
+        };
+        result.word_entries.push(entry);
+        trace.entries.push(entry);
         result.entries_seen += 1;
 
         let resolved = with_word_selection_context(word, ctx, |ctx| {
@@ -302,6 +340,7 @@ fn process_word_directory(
                 // The authenticated population has no word-table child
                 // subdirectories. Do not infer an edge from a tag name.
                 result.unwalked_edge += 1;
+                result.word_traces.push(trace);
                 return result;
             }
             // HandleTag receives the processor's numeric `$val` directly.
@@ -312,16 +351,20 @@ fn process_word_directory(
                 emit_resolved_scalar(table, block.scope, resolved, raw, ctx, sink, &mut result),
                 ScalarAction::Tainted
             ) {
+                result.word_traces.push(trace);
                 return result;
             }
         }
 
         let Some(next) = position.checked_add(word.pair_stride) else {
             result.bad_value += 1;
-            break;
+            result.word_traces.push(trace);
+            return result;
         };
         position = next;
     }
+    trace.returned = true;
+    result.word_traces.push(trace);
     result
 }
 
@@ -947,12 +990,17 @@ mod tests {
     #[derive(Default)]
     struct Sink {
         rows: Vec<Emitted>,
+        warnings: Vec<&'static str>,
         enabled: bool,
     }
 
     impl KeyedEmissionSink for Sink {
         fn emit(&mut self, row: Emitted) {
             self.rows.push(row);
+        }
+
+        fn warn(&mut self, warning: &'static str) {
+            self.warnings.push(warning);
         }
 
         fn keyed_enabled(&self, _table: &'static KeyedDirectoryTable) -> bool {
@@ -1161,7 +1209,83 @@ mod tests {
             assert_eq!(sink.rows.len(), 1);
             assert_eq!(sink.rows[0].name, "CustomFunction");
             assert_eq!(sink.rows[0].value, TagValue::Integer(511));
+            assert_eq!(result.word_traces.len(), 1);
+            assert!(result.word_traces[0].returned);
+            assert!(result.word_traces[0].warnings.is_empty());
+            assert_eq!(result.word_traces[0].entries, result.word_entries);
         }
+    }
+
+    #[test]
+    fn word_trace_distinguishes_native_rejection_from_gated_or_empty_processing() {
+        static TAGS: [KeyedTag; 1] = [tag(1, "CustomFunction", Some(Fmt::Int8u), Some(1))];
+        static TABLE: KeyedDirectoryTable = word_table(&TAGS, &[]);
+
+        // A source processor was invoked and rejected the header. Its warning
+        // and false return are visible separately from generic counters.
+        let rejected = words(ByteOrder::Big, 4, &[0x0102, 0x0304], &[]);
+        let mut rejected_members = HashMap::from([(
+            "Model",
+            MemberValue::Str("does-not-match-empty-fixture".into()),
+        )]);
+        let mut rejected_ctx = Ctx::new(&mut rejected_members);
+        let mut rejected_sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let rejected_result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&rejected, ByteOrder::Big, scope()),
+            &mut rejected_ctx,
+            &mut rejected_sink,
+        );
+        assert_eq!(rejected_result.bad_value, 1);
+        assert_eq!(rejected_sink.warnings, vec!["Invalid CanonCustom data"]);
+        assert_eq!(
+            rejected_result.word_traces,
+            vec![WordDirectoryTrace {
+                module: "Test",
+                table: "Main",
+                returned: false,
+                warnings: vec!["Invalid CanonCustom data"],
+                entries: vec![],
+            }]
+        );
+
+        // A zero-byte directory is a successful native invocation with no
+        // HandleTag calls; it is not the same result as rejection.
+        let mut empty_members = HashMap::new();
+        let mut empty_ctx = Ctx::new(&mut empty_members);
+        let mut empty_sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let empty_result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&[], ByteOrder::Big, scope()),
+            &mut empty_ctx,
+            &mut empty_sink,
+        );
+        assert_eq!(empty_result.word_traces.len(), 1);
+        assert!(empty_result.word_traces[0].returned);
+        assert!(empty_result.word_traces[0].warnings.is_empty());
+        assert!(empty_result.word_traces[0].entries.is_empty());
+        assert!(empty_sink.warnings.is_empty());
+
+        // Gate B never invokes the source processor, so it deliberately has
+        // no native-style return or warning trace.
+        let mut gated_members = HashMap::new();
+        let mut gated_ctx = Ctx::new(&mut gated_members);
+        let mut gated_sink = Sink::default();
+        let gated_result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&[], ByteOrder::Big, scope()),
+            &mut gated_ctx,
+            &mut gated_sink,
+        );
+        assert_eq!(gated_result.gate_b_blocked, 1);
+        assert!(gated_result.word_traces.is_empty());
+        assert!(gated_sink.warnings.is_empty());
     }
 
     #[test]
