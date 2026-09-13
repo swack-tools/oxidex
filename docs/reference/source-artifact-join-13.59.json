@@ -94,7 +94,7 @@
     "Gate A is recorded only where a generated table literal exposes GateA; unavailable is not a refusal reason.",
     "The recorded dump is not a whole-source module-discovery or dispatch inventory."
   ],
-  "runner_sha256": "a306404c7d8701a1da8e25e7caac6d2da5bf8ac794248134012e17999ab917ae",
+  "runner_sha256": "f57a89eaddd235559ea354b4fe5970aa09030d1d6e1ceab867f69d2d92c1306f",
   "scope": "one recorded dump plus immutable generated artifact shapes; not generated acceptance, runtime reachability, manual maintenance, output parity, or an automation percentage",
   "selector_snapshot": {
     "archive": "selector-snapshot.tar",

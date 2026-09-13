@@ -33,7 +33,7 @@ ARTIFACT_PATHS = {
 ARTIFACT_TYPES = {
     "binary": ("BinaryTable", "ALL_BINARY_TABLES", "OmittedNativeField"),
     "ifd": ("IfdTable", "ALL_IFD_TABLES", None),
-    "keyed": ("KeyedDirectoryTable", "ALL_KEYED_DIRECTORY_TABLES", "OmittedKeyedNativeRow"),
+    "keyed": ("KeyedDirectoryTable", "ALL_KEYED_TABLES", "OmittedKeyedNativeRow"),
 }
 
 
@@ -46,16 +46,41 @@ def git(repo: Path, *args: str) -> str:
 
 
 def git_blob_or_none(repo: Path, commit: str, path: str) -> bytes | None:
-    object_name = f"{commit}:{path}"
-    probe = subprocess.run(
-        ["git", "-C", str(repo), "cat-file", "-e", object_name],
-        text=True,
+    """Read one commit-pinned blob; only an absent tree path is optional.
+
+    ``cat-file -e`` returns the same non-zero status for an absent path and a
+    missing/corrupt object.  Inspect the already-validated commit's tree first
+    so an optional keyed artifact cannot hide a repository failure.
+    """
+    listing = subprocess.run(
+        ["git", "-C", str(repo), "ls-tree", "-z", commit, "--", path],
         capture_output=True,
         check=False,
     )
-    if probe.returncode:
+    if listing.returncode:
+        detail = listing.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"cannot inspect artifact path {path!r} at {commit}: {detail}")
+    entries = [entry for entry in listing.stdout.split(b"\0") if entry]
+    if not entries:
         return None
-    return subprocess.check_output(["git", "-C", str(repo), "show", object_name])
+    if len(entries) != 1:
+        raise RuntimeError(f"artifact path {path!r} at {commit} resolves to {len(entries)} tree entries")
+    try:
+        metadata, listed_path = entries[0].split(b"\t", 1)
+        mode, object_type, object_id = metadata.decode("ascii").split(" ", 2)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise RuntimeError(f"malformed Git tree entry for artifact path {path!r}") from exc
+    if listed_path.decode("utf-8", "replace") != path or mode != "100644" or object_type != "blob":
+        raise RuntimeError(f"artifact path {path!r} is not one regular blob at {commit}")
+    blob = subprocess.run(
+        ["git", "-C", str(repo), "cat-file", "blob", object_id],
+        capture_output=True,
+        check=False,
+    )
+    if blob.returncode:
+        detail = blob.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"cannot read artifact blob {object_id} for {path!r}: {detail}")
+    return blob.stdout
 
 
 def brace_span(text: str, start: int, opening: str, closing: str) -> tuple[int, int]:
@@ -165,7 +190,18 @@ def parse_tables(text: str, kind: str) -> tuple[dict[tuple[str, str], dict[str, 
     if registry_marker is None:
         raise ValueError(f"{kind} artifact lacks {registry}")
     start, end = brace_span(text, registry_marker.end() - 1, "[", "]")
-    listed = re.findall(r"&(\w+)", text[start + 1:end - 1])
+    registry_body = text[start + 1:end - 1]
+    listed = []
+    pos = 0
+    entry = re.compile(r"\s*&(?P<ident>\w+)(?:\s*,|(?=\s*$))")
+    while pos < len(registry_body):
+        match = entry.match(registry_body, pos)
+        if match is None:
+            if registry_body[pos:].strip() == "":
+                break
+            raise ValueError(f"{kind} registry has unrecognised syntax: {registry_body[pos:].strip()!r}")
+        listed.append(match.group("ident"))
+        pos = match.end()
     if len(listed) != len(set(listed)):
         raise ValueError(f"{kind} registry lists a table more than once")
     unknown = sorted(set(listed) - set(identifiers))

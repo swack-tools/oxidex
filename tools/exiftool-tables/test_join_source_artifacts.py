@@ -8,6 +8,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import join_source_artifacts as join
+import keyed_directory
+
+
+PROC = {"__perl": "CODE", "__name": "Image::ExifTool::CanonRaw::ProcessCanonRaw"}
+
+
+def keyed_doc(tags):
+    return {"modules": {"Any": {"tables": {
+        "Main": {"meta": {"PROCESS_PROC": PROC, "GROUPS": {"0": "MakerNotes"}}, "tags": tags},
+    }}}}
 
 
 def artifact(kind, *, module="Any", table="Main", gate='&[]', rows="", registry=True):
@@ -36,6 +46,20 @@ class ArtifactParserTests(unittest.TestCase):
         self.assertEqual(row["gate_a_blocked_by"], [["format", 2]])
         self.assertEqual(row["emitted_row_literals"], 0)
 
+    def test_parses_the_real_keyed_generator_registry_name_and_entry_shape(self):
+        generated, _stats = keyed_directory.generate(keyed_doc({
+            "0x1001": {"Name": "Value", "Format": "int16u"},
+        }))
+        tables, accounting = join.parse_tables(generated, "keyed")
+        self.assertEqual(set(tables), {("Any", "Main")})
+        self.assertEqual(accounting, {"table_definitions": 1, "registry_entries": 1})
+        self.assertTrue(tables[("Any", "Main")]["registry_listed"])
+
+    def test_rejects_leftover_registry_syntax_instead_of_partial_accounting(self):
+        source = artifact("binary").replace("&BINARY_ANY_MAIN];", "&BINARY_ANY_MAIN, UNKNOWN];")
+        with self.assertRaisesRegex(ValueError, "unrecognised syntax"):
+            join.parse_tables(source, "binary")
+
     def test_rejects_a_static_missing_from_its_closed_registry(self):
         source = artifact("ifd", registry=False)
         with self.assertRaisesRegex(ValueError, "lacks ALL_IFD_TABLES"):
@@ -55,6 +79,23 @@ class ArtifactParserTests(unittest.TestCase):
         bad = source.replace('table: "Main"', 'no_table: "Main"')
         with self.assertRaisesRegex(ValueError, "parsed 0"):
             join.parse_sidecar_tables(bad, "binary")
+
+
+class GitBlobTests(unittest.TestCase):
+    def test_only_a_missing_tree_path_is_optional(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Join Test"], check=True)
+            (repo / "present.rs").write_bytes(b"artifact")
+            subprocess.run(["git", "-C", str(repo), "add", "present.rs"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
+            commit = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            self.assertEqual(join.git_blob_or_none(repo, commit, "present.rs"), b"artifact")
+            self.assertIsNone(join.git_blob_or_none(repo, commit, "missing.rs"))
+            with self.assertRaisesRegex(RuntimeError, "cannot inspect artifact path"):
+                join.git_blob_or_none(repo, "not-a-commit", "missing.rs")
 
 
 class JoinConservationTests(unittest.TestCase):
