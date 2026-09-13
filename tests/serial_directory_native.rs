@@ -697,6 +697,42 @@ fn canon_afinfo_generated_tables_replay_pinned_native_contract() {
         assert_source_groups(table, &reply);
     }
 
+    // This is deliberately a separate MM case: 17 points only reads two
+    // focus words, while the native three-word scalar list proves that each
+    // signed word is masked independently before its 16-bit index offset.
+    let points_three_words = vec![0_u16; 33];
+    let mm_three_words = afinfo(
+        Order::Mm,
+        33,
+        &points_three_words,
+        &points_three_words,
+        &[1, 0x8000, 3],
+        &[3, 4],
+    );
+    let mm_three_words_case = ReplayCase {
+        module: "Canon",
+        table: "AFInfo",
+        name: "afinfo-mm-three-word-decode-bits",
+        order: Order::Mm,
+        data: &mm_three_words,
+        dir_start: 0,
+        dir_len: mm_three_words.len(),
+        unknown: false,
+        members: &[],
+    };
+    let mm_three_words_reply = native_replay(&native, &mm_three_words_case);
+    let (mm_three_words_rows, mm_three_words_result, _) =
+        rust_replay(table("Canon", "AFInfo"), &mm_three_words_case);
+    assert!(!mm_three_words_result.tainted, "{mm_three_words_result:?}");
+    assert_eq!(
+        native_read(&mm_three_words_reply, 10),
+        ("int16s", 148, 3, "1 -32768 3")
+    );
+    assert_eq!(
+        emitted_value(&mm_three_words_rows, "AFPointsInFocus"),
+        "0,31,32,33"
+    );
+
     let zero = afinfo(Order::Ii, 0, &[], &[], &[], &[1, 3]);
     let zero_case = ReplayCase {
         module: "Canon",
@@ -905,6 +941,7 @@ fn canon_afinfo2_generated_table_replays_state_enum_and_trailing_count() {
         (0..=14).collect::<Vec<_>>()
     );
     assert_eq!(eos_result.no_matching_alternative, 1);
-    assert_eq!(emitted_value(&eos_rows, "AFPointsSelected"), "0");
+    assert_eq!(native_read(&eos_reply, 13), ("int16s", 26, 1, "101"));
+    assert_eq!(emitted_value(&eos_rows, "AFPointsSelected"), "0,2,5,6");
     assert!(!eos_rows.iter().any(|row| row.name == "PrimaryAFPoint"));
 }
