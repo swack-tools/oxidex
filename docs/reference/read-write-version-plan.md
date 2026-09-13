@@ -119,8 +119,13 @@ The official release capture is integrated through `4c584dd8`. The saved capture
 contains four pages and 388 numeric release tags with resolved commit identities.
 Review found skipped-page and duplicate-next-link acceptance; both repairs and
 failed probes are retained. Selection and immutable source identity are now
-implemented. Archive materialization, both-version regeneration/builds, native
-old-to-new comparison and real read/write comparisons remain unfinished.
+implemented in this branch. A separately reviewed materializer at `05729f1b`
+has downloaded, extracted and verified both selected source archives. The first
+persisted random pair is **11.78 to 12.64**, selected once from the complete
+388-entry catalog. Both report the expected version under canonical Perl 5.38.2.
+This proves source identity only. Both-version regeneration/builds, native
+capability checks, old-to-new comparison and real read/write comparisons remain
+unfinished. The materializer is not integrated in this foundation branch.
 
 The inactive raw TIFF editing primitive is integrated through `059f56d1`.
 It accepts resolved directory/tag/type/value operations and deletion without a
@@ -134,5 +139,14 @@ an untracked handoff changed during the run. Tier-1 oracle checks completed;
 tier 2 and the full Python suite did not run. Preserve that failed attempt, and
 freeze all workspace files, including handoff notes, for the retry. The recorded
 expression ledger changed only its native dump identity after write-fact capture.
-Combined validation remains pending. No successful release upgrade is claimed
-by a saved plan or by the 388-entry catalog.
+The frozen retry at `16432502` passed on September 13 at 17:12:18 UTC:
+all 32 artifacts regenerated with zero changes (236.627 seconds), the native
+processor oracle passed, all 831 Python tests passed with zero skips
+(528.143 seconds), and `cargo test --workspace --all-features` passed 6,022
+tests with 124 ignored (136.323 seconds). Formatting, full Clippy and diff
+checks also passed. The 124 ignored tests are not counted as exercised.
+Evidence relative to the continuation evidence root is
+`shared-pilot/write-upgrade-integration-20260913/retry-16432502/validation-state.json`
+and its stage logs. This is local foundation validation; hosted review and
+landing remain pending. No successful release upgrade is claimed by a saved
+plan, a verified archive, or the 388-entry catalog.

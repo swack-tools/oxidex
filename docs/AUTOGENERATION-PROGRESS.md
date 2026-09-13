@@ -31,7 +31,7 @@ scalar class, beginning with HostComputer `0x013c`. Source capture and upgrade
 planning are integrated work-branch checkpoints, not activated writing. Review
 found flattened scalar references and a loader recognizer that accepted changed
 executable behavior. Repairs at `04a694e3` passed independent mutation review
-and are integrated as `468a114b`; combined regeneration remains to be checked.
+and are integrated as `468a114b`; combined regeneration now passes at `16432502`.
 Full canonical capture proves
 that the serialized read projection for all 153 modules is unchanged; this is
 not proof about every live binding after writer loading.
@@ -54,8 +54,11 @@ seeded planner records this contract but has no executable rehearsal stages
 yet. Review found plan/journal validation gaps; the repair at `44cf6135`
 passed 17 focused tests and five independent altered-plan checks, and is
 integrated as `21eed548`. Official catalog capture now records four pages and 388 numeric release tags
-with immutable commit identities. Archive materialization and execution remain
-unfinished. The
+with immutable commit identities. The separately reviewed materializer
+`05729f1b` downloaded and verified the first persisted random pair, **11.78 to
+12.64**. Their native version checks pass; native capability checks, generated
+builds and read/write comparisons remain unfinished. Source identity is not
+upgrade conformance. The
 [version plan](reference/read-write-version-plan.md) separates these unfinished
 stages and never treats random samples as proof of all releases.
 
@@ -70,8 +73,12 @@ input are the next writer requirements.
 
 The combined regeneration attempt completed tier-1 oracle checks and then
 failed its workspace guard because the untracked handoff was edited. Preserve
-the failed result; it is not a passing full regeneration. The retry must freeze
-all workspace files and complete tier 2 plus the full Python suite.
+the failed result. The frozen retry at `16432502` passed all 32-artifact
+regeneration with zero changes (236.627 seconds), native processor checks,
+831 Python tests with zero skips (528.143 seconds), and 6,022 Rust tests with
+zero failures and 124 ignored (136.323 seconds). Formatting, full Clippy and
+diff checks also passed. The ignored tests are unexercised. This foundation
+awaits hosted review and landing; no new production writer is enabled.
 
 ### Previous merged definitions checkpoint
 

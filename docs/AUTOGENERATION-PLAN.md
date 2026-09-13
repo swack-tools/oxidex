@@ -100,7 +100,7 @@ regenerates both releases and checks each against its own native read/write
 behavior. Selection or successful generation alone is not conformance.
 
 The selected newer ExifTool is the authority after upgrading. Its parsing bug
-fixes, added or renamed tags, type changes, formatting and write semantics
+fixes, added/removed/renamed tags, type changes, formatting and write semantics
 must replace older behavior. Keep three comparisons: old OxiDex versus old
 native, new OxiDex versus new native, and the native old-to-new delta. A change
 in native output is an expected upstream change when the new generated build
