@@ -4,9 +4,11 @@ This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
 The current milestone is one complete Sony focus-table migration. It is
 implemented in a work branch and is being validated; it has not landed.
 The committed pilot is published on `codex/sony-shared-table-migration-20260912`
-at `5bd15e00`, including the retirement of the duplicate declarations. The
-complete corpus comparison at `1a63822e` passes. Follow-up test and retirement
-changes have their own review and validation status below.
+in ready-for-review PR #746. Hosted CI passes at `c3d0acd7`. Linux code checks
+and the final paired corpus comparison pass at `92dac917`, which has identical
+runtime and Rust test inputs. Final evidence and mandatory native inventory
+checks are being published before merge. The earlier complete comparison at
+`1a63822e` and the final retirement checks have separate evidence below.
 
 ## What the pilot must prove
 
@@ -18,11 +20,11 @@ The duplicated Sony handling must then be removed.
 | Measure | Starting point | Current evidence | Done when |
 | --- | --- | --- | --- |
 | Native table entries | 17; the shared generator already knew their layout, while a custom Sony reader supplied the output | Independent native inventory finds 17 native and 17 generated entries, with zero discrepancies for this table. | All are independently accounted for and their runtime behavior is verified. |
-| Stored-value and selection rules | One stored value; 16 dependent conditions; one parent selection condition | Exact CI lint and the complete Rust workspace command pass after correcting the stale test inventories. The Python tool suite passes with the recorded native dump explicitly supplied: 555 tests, zero skips. | Native comparisons and the combined Rust checks pass. Retirement still requires its final corpus and Linux checks. |
+| Stored-value and selection rules | One stored value; 16 dependent conditions; one parent selection condition | Local and Linux Rust checks pass after correcting stale test inventories. The Python tool suite passes with the recorded native dump explicitly supplied: 555 tests, zero skips. | Native comparisons, combined Rust checks and final corpus checks pass. These checks are complete. |
 | Real-file coverage | 41 files; 142 native rows | Exact native focus values match. Paired full-output comparison results are identical per file. Four files with the same tag name from other tables were excluded. | Candidate and control are compared per file, with no unexplained changes. This scoped check passes. |
 | Boundary coverage | 14 complete TIFF carriers | Library and CLI reproduce the native expectations for both byte orders, zero/one/fifteen points, short records and a rejected signature. | The candidate reproduces those results through both the library and CLI. This check passes. |
-| Automatic upstream changes | No complete pilot proof at the start | Actual native dump, regeneration and independent artifact checking pass for rename, enum, offset and new-row changes. Each stale artifact is rejected. | All four change types pass this chain; broader upgrade behavior is measured separately. |
-| Duplicate custom handling | One Sony root rule and 17 custom table declarations | The candidate removes the root rule, all 17 declarations and their unused saved-value slot. A mechanical removal tool reproduces the exact artifact and records its source identity. The final removal passes lint, workspace tests and a build; its corpus check is pending. | The replaced handling is removed in a verified, merged change. |
+| Automatic upstream changes | No complete pilot proof at the start | Actual native dump, regeneration and independent artifact checking pass for rename, enum, offset and new-row changes. Each stale artifact is rejected. | All four change types pass the artifact chain. Runtime/carrier checks use the unchanged native pilot; executing each mutated artifact and broader upgrade behavior remain separate work. |
+| Duplicate custom handling | One Sony root rule and 17 custom table declarations | The candidate removes the root rule, all 17 declarations and their unused saved-value slot. A mechanical removal tool reproduces the exact artifact and records its source identity. Final local/Linux code checks and the corpus pair pass. | The replaced handling is removed in a verified, merged change. Merge remains. |
 | Merged pilot progress | Zero | Work remains on an isolated branch. | Review and required gates pass, then the migration is merged. |
 
 The source is pinned ExifTool 13.59. Native measurements use its explicit Perl
@@ -69,10 +71,9 @@ Independent review accepted the removal. Replaying it from the original
 exactly. In-place replay leaves source and ledger bytes and modification times
 unchanged. The retirement's own lint, complete workspace and build checks pass;
 the workspace took 244 seconds. All 19 retirement checks pass. The initial
-Python tool suite passed 549 tests with one skipped class. The final
-corpus comparison and Linux pilot gate remain pending. Earlier corpus results
-above describe the pilot before this removal and are not substituted for its
-final check.
+Python tool suite passed 549 tests with one skipped class. Earlier corpus
+results above describe the pilot before this removal; the final pair is
+recorded separately below.
 
 The final Linux gate at `5bd15e00` passed staleness and formatting, then stopped
 at the generated C-header check before tests and corpus comparison. Removing
@@ -81,8 +82,7 @@ the custom table also removes its exposed `TAG202A` macro and renumbers the
 `cbindgen 0.29.2`; `just cbindgen-check` now passes locally. Review confirms
 that the macro values match the Rust indices and no C function signature or
 layout changed. External callers using these exposed indices must use the
-updated definitions. The original failed gate remains recorded; the corrected
-candidate still needs the downstream Linux checks.
+updated definitions. The original failed gate remains recorded.
 
 Hosted table verification then found a stale `BWMode` expected declaration:
 the test literal omitted the schema's new `condition: None` field. The initial
@@ -91,10 +91,65 @@ After correcting that expectation and explicitly supplying the recorded native
 dump matching the expression ledger, all 555 Python tests pass with zero skips
 in 195 seconds. This correction changes no runtime code or generated table.
 
+The corrected Linux gate at `92dac917` passes staleness, formatting, header,
+lint, release build, workspace tests, doctests, native table verification and
+all JPEG matrix stages. Its private runner then stopped while misreading the
+matrix's generated-document changes. The failure and diff were preserved;
+only those documents were restored and the exact source was rechecked. The
+unfinished paired census resumed under the shared lock, saving both JSON
+reports. Its control completed in 501 seconds and candidate in 504 seconds.
+The shared gate script was not changed. Hosted CI and docs also pass at
+`c3d0acd7`; that follow-up changes only the Python expectation and documents.
+
+The final `conformance.py` pair compares `92dac917` against integration
+`7e928390`, pinned ExifTool 13.59 and all 4,238 files. Matches rise from
+468,002 to 468,012; missing rows fall from 12,268 to 12,258. Wrong-value rows
+remain 477, extra rows 1,562 and renames 22. The only per-file changes are ten
+`ImageNumber` fixes from the raw-ID repair. No missing, value or extra
+regressions were added. [The committed gate record](reference/sony-shared-pilot-gate.json)
+contains the identities and individual changes. This is correctness evidence,
+not a measurement of the overall generated share.
+
+PR review also found that the strict native inventory was only run manually.
+Both `just verify-tables` and hosted table verification now require it for
+`Sony:Tag202a`, so an unaccounted native row cannot pass the normal gate merely
+because the older generated rows still match. Other tables' known completeness
+debts remain visible; this follow-up does not claim they pass.
+
+## Next common capability
+
+Shared string support is committed and pushed through `a93f1e4d`. It distinguishes
+a table's one-byte default from a field that reads the remaining record,
+preserves raw bytes in saved state, and repairs invalid text only at output.
+Independent native cases cover CanonRaw MakeModel and EXE DebugRSDS. Native
+review also found and corrected AIFF enum fallback and Kodak whitespace-trim
+behavior. The local workspace run passes 5,916 tests including doctests, with
+117 ignored; lint and the C-header check pass. The final formatting check and
+all 563 Python tool tests pass. Independent native inventory checks for
+CanonRaw MakeModel, EXE DebugRSDS and Kodak Type7 pass with zero mismatches.
+The full paired corpus comparison remains to be completed.
+
+A later boundary probe found that global inline Unicode regex flags bypassed
+the compiler's refusal for scoped flags. Native Perl and the Rust byte matcher
+gave different answers for the same raw bytes. The compiler now refuses those
+forms, with regression checks. No condition in the recorded native dump uses
+them, and regeneration leaves the binary, IFD and value artifacts unchanged.
+The earlier scoped review did not cover this case; its correction and evidence
+are recorded separately.
+
+No new parser caller or table has been enabled by this capability, and neither
+manual Canon Make/Model decoder has been removed. The source inventory finds
+eight explicit remainder-string fields in eight declared tables. Five real
+CIFF carriers include a big-endian JPEG that the current manual reader misses.
+These findings guide the next migration; they are not an automation percentage.
+The migration must also generate parent routing and preserve file-order state,
+not stop at replacing the two child string decoders. Seven parent validation
+edges and the other manual Canon child producers remain separate work.
+
 ## What is still open
 
-- Complete the integrated pilot's Linux gate with a paired corpus comparison
-  that saves per-file detail, then finish merge review. The separate
+- Publish the final evidence and required native-inventory invocation, finish
+  their hosted checks, then merge the integrated pilot. The separate
   Sony-specific recovery draft still has unresolved findings and is not a
   dependency of the mechanical retirement.
 - Complete the wider inventory of manual, generated, unsupported and
@@ -137,7 +192,7 @@ JPEG matrix stages also pass. The paired Linux corpus run is complete: all
 missing rows fell from 12,268 to 12,258, with other aggregate columns unchanged.
 This Linux pair did not save per-file JSON, so it cannot prove that regressions
 were absent. Its missing evidence is recorded explicitly. The final combined
-pilot gate will save both control and candidate JSON and compare the signed
+pilot gate now saves both control and candidate JSON and compares the signed
 per-file discrepancies; repeating the older raw-ID branch pair is unnecessary.
 The original failed gate remains recorded, and the shared gate script has not
 been changed.
