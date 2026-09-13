@@ -1,0 +1,111 @@
+{
+  "artifact_snapshot": {
+    "artifacts": {
+      "binary": {
+        "path": "src/exiftool_tables/binary_tables.rs",
+        "registry_entries": 624,
+        "sha256": "076f64ff7d6318d21268d61347fd3806adc3928581877fbe3443e61395cccc82",
+        "sidecar_omitted_rows": 1278,
+        "state": "present",
+        "table_definitions": 624
+      },
+      "ifd": {
+        "path": "src/exiftool_tables/ifd_tables.rs",
+        "registry_entries": 496,
+        "sha256": "0420a8db4b110d4bd73428910a138e17df204980f9ee8364ee0b54bf171f1c04",
+        "sidecar_omitted_rows": 0,
+        "state": "present",
+        "table_definitions": 496
+      },
+      "keyed": {
+        "path": "src/exiftool_tables/keyed_tables.rs",
+        "state": "absent_at_commit"
+      }
+    },
+    "commit": "18a8ef172e2744b6511f883945846f135c12ad62"
+  },
+  "conservation": {
+    "artifact_accounting": {
+      "binary": {
+        "definitions_absent": 27,
+        "definitions_absent_without_sidecar": 19,
+        "definitions_present": 624,
+        "emitted_row_literals": 7002,
+        "gate_a_refused_tables": 129,
+        "sidecar_omitted_rows": 1278,
+        "sidecar_only_tables": 8,
+        "source_selected_tables": 651
+      },
+      "ifd": {
+        "definitions_present": 496,
+        "emitted_row_literals": 6117,
+        "gate_a_refused_tables": 228,
+        "sidecar_omitted_rows": 0,
+        "source_selected_tables": 496,
+        "zero_emitted_definitions": 218
+      },
+      "keyed": {
+        "definitions_absent": 1,
+        "definitions_absent_without_sidecar": 1,
+        "source_selected_tables": 1
+      }
+    },
+    "gate_a_blocker_counts": {
+      "binary": {
+        "expr_unsupported": 70,
+        "offsets_sound_until": 7,
+        "other_unregistered": 49,
+        "subdir_refused_processproc": 4,
+        "tag_bad_index": 4,
+        "tag_fmt_unsupported": 65,
+        "tag_var_format": 15,
+        "tag_variant_cond_unsupported": 2,
+        "tag_variant_field_unsupported": 4,
+        "tag_variant_skipped": 6
+      },
+      "ifd": {
+        "ifd_format_unsupported": 274,
+        "ifd_subdir_refused_start": 1,
+        "ifd_subdir_refused_unmodeled_key": 1,
+        "ifd_tag_id_unrepresentable": 10926,
+        "tag_no_name": 3,
+        "tag_variant_cond_unsupported": 18,
+        "tag_variant_field_unsupported": 5,
+        "tag_variant_skipped": 23
+      }
+    },
+    "joined_table_records": 1512,
+    "selection_table_counts": {
+      "binary": 651,
+      "ifd": 496,
+      "keyed": 1,
+      "other_unclassified": 364
+    },
+    "source_table_records": 1512
+  },
+  "dump": {
+    "exiftool_version": "13.59",
+    "sha256": "193cf4e91326f53c7bdfd674cb10da0937c8bcdb4c0285ad4f507fd9f96a8fb8",
+    "table_records": 1512
+  },
+  "gaps": [
+    "Artifact presence is not runtime reachability, manual maintenance, output parity, or an automation percentage.",
+    "A keyed schema without a committed keyed generated artifact is recorded as absent_at_commit.",
+    "Gate A is recorded only where a generated table literal exposes GateA; unavailable is not a refusal reason.",
+    "The recorded dump is not a whole-source module-discovery or dispatch inventory."
+  ],
+  "runner_sha256": "a306404c7d8701a1da8e25e7caac6d2da5bf8ac794248134012e17999ab917ae",
+  "scope": "one recorded dump plus immutable generated artifact shapes; not generated acceptance, runtime reachability, manual maintenance, output parity, or an automation percentage",
+  "selector_snapshot": {
+    "archive": "selector-snapshot.tar",
+    "archive_sha256": "d8f5c4f547eb232ea7b5da6e9455904bab7253a0eb6297fdb0f8a8a1a45af560",
+    "commit": "18a8ef172e2744b6511f883945846f135c12ad62",
+    "key_files": {
+      "codegen.py": "022c7b35d0728eda06a691344e89595f6b804446d8272dfe73b3cc9fc1ed2355",
+      "conds.py": "3ac8adfae601cdc3824186fad77575a4ab6b2c77a78e7cb9178a31950b9f7c0c",
+      "keyed_directory.py": "37db0f579f4ae31b7cbc5fcd239fac49a3540a8d8093e32261e36ab6f7a622ed",
+      "subdirs.py": "99a784df8a8a8debecaf77cab8ec3a97e11c9616b857a627a8616c8f77c6835c"
+    },
+    "tools_directory": "selector-snapshot/tools/exiftool-tables"
+  }
+}
