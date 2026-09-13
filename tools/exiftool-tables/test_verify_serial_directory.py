@@ -9,6 +9,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -107,6 +108,33 @@ pub static OMITTED_SERIAL_NATIVE_TABLES: &[OmittedSerialNativeTable] = &[
             with self.subTest(message=message):
                 self.assertIn(before, self.source)
                 self.assert_rejected(self.source.replace(before, after, 1), message)
+
+    @unittest.skipUnless(shutil.which("rustfmt"), "rustfmt is required for generated-artifact formatting coverage")
+    def test_rustfmt_round_trip_preserves_count_audit_and_rejects_stale_operand(self):
+        """The independent parser accepts rustfmt's separator, not a looser count grammar."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "serial_tables.rs"
+            path.write_text(self.source, encoding="utf-8")
+            subprocess.run(
+                ["rustfmt", "--edition", "2024", str(path)],
+                check=True, text=True, capture_output=True, timeout=15,
+            )
+            formatted = path.read_text(encoding="utf-8")
+            self.assertRegex(
+                formatted,
+                r"SerialCount::FloorDivPriorRaw\s*\{[\s\S]*?trailing_add:\s*0,\s*\}",
+            )
+            parsed = audit.parse_artifact(path)
+            baseline = audit.audit(self.document, parsed)
+            self.assertTrue(baseline.ok, baseline.mismatches)
+
+            changed = copy.deepcopy(self.document)
+            changed["modules"]["Fixture"]["tables"]["Serial"]["tags"]["2"]["Format"] = (
+                "int16s[int(($val{0}+31)/32)]"
+            )
+            stale = audit.audit(changed, parsed)
+            self.assertFalse(stale.ok, stale.mismatches)
+            self.assertTrue(any("differ" in problem for problem in stale.mismatches), stale.mismatches)
 
     def test_native_row_mutation_rejects_stale_artifact(self):
         changed = copy.deepcopy(self.document)

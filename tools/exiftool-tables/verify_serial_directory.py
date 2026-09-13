@@ -245,7 +245,7 @@ def _count(value: str) -> tuple[Any, ...]:
     if match := re.fullmatch(r"SerialCount::PriorRaw\{serial_index:(\d+)\}", text):
         return ("prior", int(match.group(1)))
     if match := re.fullmatch(
-            r"SerialCount::FloorDivPriorRaw\{serial_index:(\d+),add:(\d+),divisor:(\d+),trailing_add:(\d+)\}", text):
+            r"SerialCount::FloorDivPriorRaw\{serial_index:(\d+),add:(\d+),divisor:(\d+),trailing_add:(\d+),?\}", text):
         return ("floor", int(match.group(1)), int(match.group(2)), int(match.group(3)), int(match.group(4)))
     if text == "SerialCount::RemainingBytes":
         return ("remaining",)
