@@ -4,8 +4,8 @@
 //! reader or caller yet: an emitted table is data for inventory/review, never
 //! an activation request.
 
-use super::{Cond, ExprId, Fmt, GateA, Omitted, PrintConv, TagGroups};
 use super::ifd_schema::RawConvEffect;
+use super::{Cond, ExprId, Fmt, GateA, Omitted, PrintConv, TagGroups};
 
 #[derive(Clone, Copy, Debug)]
 pub enum KeyedLayout {
@@ -41,6 +41,9 @@ pub struct KeyedTag {
     pub print_conv: PrintConv,
     pub groups: TagGroups,
     pub edge: Option<KeyedEdge>,
+    /// Verbatim native properties retained for independent source inventory.
+    /// A future reader uses the typed members above, never this audit record.
+    pub native: KeyedNativeFacts,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -78,5 +81,23 @@ pub struct OmittedKeyedNativeRow {
     pub raw_id: &'static str,
     pub variant: bool,
     pub name: Option<&'static str>,
+    pub native: KeyedNativeFacts,
     pub reasons: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct KeyedNativeFacts {
+    pub format: Option<&'static str>,
+    pub count: Option<&'static str>,
+    pub condition: Option<&'static str>,
+    pub groups: TagGroups,
+    pub subdir: Option<KeyedNativeSubdir>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct KeyedNativeSubdir {
+    pub tag_table: Option<&'static str>,
+    pub start: Option<&'static str>,
+    pub validate: bool,
+    pub process_proc: bool,
 }

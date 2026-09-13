@@ -58,7 +58,7 @@ def _type_default(raw_id):
 
 
 def _field_format(tag, default, stats):
-    """Return `(Rust Option<Fmt>, source spelling, static element count)`.
+    """Return `(Rust Option<Fmt>, source spelling)`.
 
     The keyed reader derives an absent Format from the raw entry type, so it
     remains `None` in generated data.  Explicit formats reuse codegen's closed
@@ -66,29 +66,29 @@ def _field_format(tag, default, stats):
     """
     f = tag.get("Format")
     if f is None:
-        return "None", default, None
+        return "None", default
     if not isinstance(f, str):
         stats["keyed_format"] += 1
-        return None, None, None
+        return None, None
     m = codegen.SIZED_RE.match(f)
     if m:
         base, count = m.group(1), int(m.group(2))
         if base == "string":
-            return f"Some(Fmt::Str({count}))", f, 1
+            return f"Some(Fmt::Str({count}))", f
         if base == "undef":
-            return f"Some(Fmt::Undef({count}))", f, 1
+            return f"Some(Fmt::Undef({count}))", f
         if base in codegen.SCALAR_FORMATS:
-            return f"Some(Fmt::{codegen.SCALAR_FORMATS[base][0]})", base, count
+            return f"Some(Fmt::{codegen.SCALAR_FORMATS[base][0]})", base
         stats["keyed_format"] += 1
-        return None, None, None
+        return None, None
     if f == "string":
-        return "Some(Fmt::RemainderString)", f, 1
+        return "Some(Fmt::RemainderString)", f
     if f in codegen.SCALAR_FORMATS:
-        return f"Some(Fmt::{codegen.SCALAR_FORMATS[f][0]})", f, 1
+        return f"Some(Fmt::{codegen.SCALAR_FORMATS[f][0]})", f
     if f in codegen.PER_FIELD_FORMATS:
-        return f"Some(Fmt::{codegen.PER_FIELD_FORMATS[f]})", f, 1
+        return f"Some(Fmt::{codegen.PER_FIELD_FORMATS[f]})", f
     stats["keyed_format"] += 1
-    return None, None, None
+    return None, None
 
 
 def _same_table_directory(tag, raw_id):
@@ -106,21 +106,28 @@ def _same_table_directory(tag, raw_id):
     )
 
 
-def _count(tag, from_format, stats):
-    if from_format is not None:
-        return f"Some({from_format})"
+def _count(tag, stats):
+    """Preserve the raw Count contract for a future ProcessCanonRaw reader.
+
+    CanonRaw.pm starts from `tagInfo->{Count}`.  An inline normal value only
+    gets the special count-one default when Count is *undefined*; zero stays
+    false and is later derived from the entry's byte size.  A scalar Format
+    never silently changes either source fact into `Some(1)`.
+    """
     raw = tag.get("Count")
     if raw is None:
-        return "None"
+        return "None", 1
     try:
         count = int(str(raw), 0)
-    except ValueError:
+    except (TypeError, ValueError):
         stats["keyed_count"] += 1
-        return "None"
+        return None, None
     if count < 0:
         stats["keyed_count"] += 1
-        return "None"
-    return f"Some({count})"
+        return None, None
+    # Count zero remains visible.  The future reader will use Perl's false
+    # count path to derive it from byte size, rather than mistake it for one.
+    return f"Some({count})", count or 1
 
 
 class Context:
@@ -189,6 +196,32 @@ def _raw_conv(tag):
     return "None"
 
 
+def _native_facts(tag):
+    """Verbatim source facts retained beside executable keyed schema fields.
+
+    They authenticate omission rows and detect source-condition changes that
+    cannot be reconstructed from a compiled `Cond`.  The reader must use the
+    typed fields, not this audit copy.
+    """
+    option = lambda value: "None" if not isinstance(value, str) else f'Some("{codegen.rust_str(value)}")'
+    groups = codegen.compile_groups_field(tag.get("Groups"), _stats())
+    sd = tag.get("SubDirectory")
+    if isinstance(sd, dict):
+        subdir = (
+            "Some(KeyedNativeSubdir { "
+            f"tag_table: {option(sd.get('TagTable'))}, start: {option(sd.get('Start'))}, "
+            f"validate: {str(sd.get('Validate') is not None).lower()}, "
+            f"process_proc: {str(sd.get('ProcessProc') is not None).lower()} }})"
+        )
+    else:
+        subdir = "None"
+    return (
+        "KeyedNativeFacts { "
+        f"format: {option(tag.get('Format'))}, count: {option(str(tag['Count']) if tag.get('Count') is not None else None)}, "
+        f"condition: {option(tag.get('Condition'))}, groups: {groups}, subdir: {subdir} }}"
+    )
+
+
 def _tag_literal(tag, raw_id, stats, verified_exprs, ctx):
     name = tag.get("Name")
     if not isinstance(name, str) or not name:
@@ -215,14 +248,15 @@ def _tag_literal(tag, raw_id, stats, verified_exprs, ctx):
     if default is None:
         stats["keyed_raw_id"] += 1
         return None, "raw_id"
-    fmt_src, format_name, count_from_format = _field_format(tag, default, stats)
+    fmt_src, format_name = _field_format(tag, default, stats)
     if fmt_src is None:
         return None, "format"
-    count_src = _count(tag, count_from_format, stats)
+    count_src, count_for_domain = _count(tag, stats)
+    if count_src is None:
+        return None, "count"
     mask = codegen.mask_for(tag, stats)
     if mask is None:
         return None, "mask"
-    count_for_domain = count_from_format or 1
     domain = codegen.value_domain(format_name, count_for_domain)
     value_conv, modeled_value = codegen.value_conv_for(tag, stats, domain, verified_exprs)
     print_conv, refused_print = codegen.conv_for(
@@ -236,7 +270,7 @@ def _tag_literal(tag, raw_id, stats, verified_exprs, ctx):
         f"omitted: {codegen.omitted_for(tag, stats, False, modeled_value, refused_print)}, "
         f"value_conv: {value_conv}, print_conv: {print_conv}, "
         f"groups: {codegen.compile_groups_field(tag.get('Groups'), stats)}, "
-        f"edge: {_edge(tag, raw_id, ctx, stats)} }}",
+        f"edge: {_edge(tag, raw_id, ctx, stats)}, native: {_native_facts(tag)} }}",
         None,
     )
 
@@ -316,7 +350,9 @@ def generate(doc, verified_exprs=None):
         name_src = "None" if name is None else f'Some("{codegen.rust_str(name)}")'
         rows.append(
             f'    OmittedKeyedNativeRow {{ module: "{codegen.rust_str(module)}", table: "{codegen.rust_str(table)}", '
-            f'raw_id: "{codegen.rust_str(raw)}", variant: {str(variant).lower()}, name: {name_src}, reasons: &["{reason}"] }},'
+            f'raw_id: "{codegen.rust_str(raw)}", variant: {str(variant).lower()}, name: {name_src}, '
+            f'native: {_native_facts(tag) if isinstance(tag, dict) else "KeyedNativeFacts { format: None, count: None, condition: None, groups: TagGroups::NONE, subdir: None }"}, '
+            f'reasons: &["{reason}"] }},'
         )
     index = ["    &" + re.search(r"KEYED_[A-Z0-9_]+", chunk).group(0) + "," for chunk in chunks]
     prelude = "//! Generated keyed-directory facts; no reader is activated by this file.\nuse super::*;\n"

@@ -66,8 +66,8 @@ pub use ifd_schema::{
     RawConvEffect,
 };
 pub use keyed_schema::{
-    KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedStart, KeyedTag, KeyedVariantGroup,
-    OmittedKeyedNativeRow,
+    KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedNativeFacts, KeyedNativeSubdir,
+    KeyedStart, KeyedTag, KeyedVariantGroup, OmittedKeyedNativeRow,
 };
 pub use ifd_tables::{ALL_IFD_TABLES, IFD_EXIFTOOL_VERSION};
 pub use runtime::{
