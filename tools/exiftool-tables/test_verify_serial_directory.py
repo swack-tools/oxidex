@@ -181,16 +181,60 @@ pub static OMITTED_SERIAL_NATIVE_TABLES: &[OmittedSerialNativeTable] = &[
 
 @unittest.skipUnless(PINNED_DUMP, "set OXIDEX_TABLES_JSON to replay the full recorded serial population")
 class RecordedSerialArtifactVerifier(unittest.TestCase):
-    def test_fresh_emitted_artifact_matches_full_recorded_population(self):
-        document = json.loads(Path(PINNED_DUMP).read_text(encoding="utf-8"))
-        source = emitted(document)
+    def _audit_text(self, document, source):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "serial_tables.rs"
             path.write_text(source, encoding="utf-8")
-            result = audit.audit(document, audit.parse_artifact(path))
+            return audit.audit(document, audit.parse_artifact(path))
+
+    def test_fresh_emitted_artifact_matches_full_recorded_population(self):
+        document = json.loads(Path(PINNED_DUMP).read_text(encoding="utf-8"))
+        source = emitted(document)
+        result = self._audit_text(document, source)
         self.assertTrue(result.ok, result.mismatches)
         self.assertEqual((result.expected_tables, result.expected_alternatives), (8, 132))
         self.assertEqual((result.emitted_tables, result.emitted_alternatives, result.omitted_alternatives), (8, 122, 10))
+
+    def test_afinfo2_source_operand_mutations_regenerate_and_reject_stale_artifact(self):
+        """Fresh source facts adapt; the independent native audit rejects stale Rust.
+
+        Each mutation changes an actual AFInfo2 operand accepted by the
+        compiler.  The test therefore proves more than a generator literal:
+        `verify_serial_directory` reinterprets native source and catches the
+        old artifact without importing the emitter.
+        """
+        document = json.loads(Path(PINNED_DUMP).read_text(encoding="utf-8"))
+        baseline = emitted(document)
+        tag = document["modules"]["Canon"]["tables"]["AFInfo2"]["tags"]
+        mutations = (
+            ("integer enum known value", lambda tags: tags["1"].__setitem__("PrintConv", {
+                "kind": "enum", "directives": None,
+                "map": {**tag["1"]["PrintConv"]["map"], "2": "Changed mode"},
+            })),
+            ("SetMember destination", lambda tags: tags["2"].__setitem__("RawConv", {
+                "kind": "expr", "expr": "$$self{OtherCount} = $val",
+            })),
+            ("trailing count addition", lambda tags: tags["13"]["_variants"][1].__setitem__(
+                "Format", "int16s[int(($val{2}+15)/16)+2]",
+            )),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                changed = copy.deepcopy(document)
+                changed_tag = changed["modules"]["Canon"]["tables"]["AFInfo2"]["tags"]
+                mutate(changed_tag)
+                # The compiler is expected to regenerate a different, still
+                # independently auditable artifact for each supported operand.
+                fresh = emitted(changed)
+                self.assertNotEqual(fresh, baseline)
+                fresh_result = self._audit_text(changed, fresh)
+                self.assertTrue(fresh_result.ok, fresh_result.mismatches)
+                stale_result = self._audit_text(changed, baseline)
+                self.assertFalse(stale_result.ok, stale_result.mismatches)
+                self.assertTrue(
+                    any("differ" in problem for problem in stale_result.mismatches),
+                    stale_result.mismatches,
+                )
 
     def test_cli_rejects_recorded_population_forged_as_descriptor_refusals(self):
         document = json.loads(Path(PINNED_DUMP).read_text(encoding="utf-8"))
