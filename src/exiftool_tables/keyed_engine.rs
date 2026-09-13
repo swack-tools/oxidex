@@ -126,6 +126,13 @@ pub fn process_keyed_directory(
                 let entry = directory_offset + 2 + index * 10;
                 let action = process_entry(table, block, entry, ctx, sink, &mut result);
                 match action {
+                    KeyedEntryAction::Tainted => {
+                        // A child may have reached an unmodeled state-changing
+                        // operation. Its members survive ProcessDirectory, so
+                        // no pending parent frame may evaluate another
+                        // condition against fabricated state.
+                        work.clear();
+                    }
                     KeyedEntryAction::StopDirectory => {}
                     KeyedEntryAction::Continue => work.push(KeyedWork::Entries {
                         block,
@@ -167,6 +174,7 @@ enum KeyedWork<'a> {
 enum KeyedEntryAction<'a> {
     Continue,
     StopDirectory,
+    Tainted,
     Descend { block: KeyedBlock<'a>, name: String },
 }
 
@@ -296,29 +304,32 @@ fn process_entry<'a>(
             } => {
                 if !matches!(start, super::KeyedStart::Zero) || !unwalked.is_empty() {
                     result.unwalked_edge += 1;
-                    return KeyedEntryAction::Continue;
+                    return KeyedEntryAction::Tainted;
                 }
                 let Some(child) = bounded_block(block, value_offset, value_size) else {
                     result.bad_value += 1;
-                    return KeyedEntryAction::Continue;
+                    return KeyedEntryAction::Tainted;
                 };
                 let Some(target_table) = find_table(module, target) else {
                     result.unavailable_target += 1;
-                    return KeyedEntryAction::Continue;
+                    return KeyedEntryAction::Tainted;
                 };
                 if !super::is_enabled(target_table) {
                     result.gate_b_blocked += 1;
-                    return KeyedEntryAction::Continue;
+                    return KeyedEntryAction::Tainted;
                 }
                 let mut rows = Vec::new();
-                with_dir_name(ctx, tag.name.to_owned(), |ctx| {
-                    engine::process_binary_data(
+                let outcome = with_dir_name(ctx, tag.name.to_owned(), |ctx| {
+                    engine::process_binary_data_checked(
                         target_table,
                         engine::Dir::whole(child.data, child.byte_order),
                         ctx,
                         &mut rows,
-                    );
+                    )
                 });
+                if outcome == engine::BinaryWalkOutcome::Tainted {
+                    return KeyedEntryAction::Tainted;
+                }
                 for row in rows {
                     sink.emit(re_scope(row, child.scope));
                     result.emitted += 1;
@@ -364,7 +375,7 @@ fn process_entry<'a>(
                 // An unrepresentable state value could change every following
                 // source Condition. Stop this directory rather than leave
                 // stale state for its later siblings.
-                return KeyedEntryAction::StopDirectory;
+                return KeyedEntryAction::Tainted;
             };
             ctx.members.insert(member, member_value);
             omitted.raw_conv = false;
@@ -374,7 +385,7 @@ fn process_entry<'a>(
     if omitted.raw_conv && tag.raw_conv.is_none() {
         result.omitted += 1;
         // An unmodeled RawConv may mutate state shared by later entries.
-        return KeyedEntryAction::StopDirectory;
+        return KeyedEntryAction::Tainted;
     }
     if omitted.any() {
         result.omitted += 1;
@@ -491,14 +502,15 @@ fn bounded_block(parent: KeyedBlock<'_>, offset: usize, size: usize) -> Option<K
     Some(KeyedBlock { data, ..parent })
 }
 
-fn with_dir_name(ctx: &mut Ctx, value: String, f: impl FnOnce(&mut Ctx)) {
+fn with_dir_name<T>(ctx: &mut Ctx, value: String, f: impl FnOnce(&mut Ctx) -> T) -> T {
     let old = ctx.members.insert("DIR_NAME", MemberValue::Str(value));
-    f(ctx);
+    let result = f(ctx);
     if let Some(old) = old {
         ctx.members.insert("DIR_NAME", old);
     } else {
         ctx.members.remove("DIR_NAME");
     }
+    result
 }
 
 fn re_scope(row: Emitted, scope: KeyedScope) -> Emitted {
@@ -1051,6 +1063,33 @@ mod tests {
         let (sink, result) = walk_test(&TABLE, &data, ByteOrder::Little);
         assert_eq!(result.emitted, 1);
         assert_eq!(sink.rows[0].value, TagValue::Integer(9));
+    }
+
+    #[test]
+    fn tainted_child_stops_pending_parent_entries() {
+        // An unsupported stateful child cannot be contained by restoring
+        // DIR_NAME: ProcessDirectory preserves arbitrary member state. The
+        // parent Serial-like row must not run after a tainted child.
+        static STATE: KeyedTag = KeyedTag {
+            raw_conv: Some(RawConvEffect::SetMember { member: "Model" }),
+            omitted: Omitted {
+                raw_conv: true,
+                ..Omitted::NONE
+            },
+            ..tag(0x1801, "State", Some(Fmt::Float), None)
+        };
+        static LATER: KeyedTag = tag(2, "Later", Some(Fmt::Int8u), None);
+        static TAGS: [KeyedTag; 2] = [STATE, LATER];
+        static TABLE: KeyedDirectoryTable = table(&TAGS);
+        let child = ciff(
+            ByteOrder::Little,
+            &[(0x1801, 1.5f32.to_le_bytes().to_vec())],
+        );
+        let parent = ciff(ByteOrder::Little, &[(0x2804, child), (0x4002, vec![7])]);
+        let (sink, result) = walk_test(&TABLE, &parent, ByteOrder::Little);
+        assert!(sink.rows.is_empty());
+        assert_eq!(result.emitted, 0);
+        assert_eq!(result.omitted, 1);
     }
 
     #[test]

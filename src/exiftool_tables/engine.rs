@@ -427,8 +427,27 @@ pub fn process_binary_data(
     ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
 ) {
+    let _ = process_binary_data_checked(table, dir, ctx, out);
+}
+
+/// Process a binary table and expose whether an unmodeled stateful operation
+/// made its remaining sibling work unsafe. Existing callers retain the legacy
+/// output-only API above; keyed callers need this outcome to stop their own
+/// pending parent entries as ExifTool's shared object state requires.
+pub(crate) fn process_binary_data_checked(
+    table: &'static BinaryTable,
+    dir: Dir<'_>,
+    ctx: &mut cond::Ctx,
+    out: &mut Vec<Emitted>,
+) -> BinaryWalkOutcome {
     let mut guard = Guard::new();
-    walk(table, dir, ctx, &mut guard, out);
+    walk(table, dir, ctx, &mut guard, out)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BinaryWalkOutcome {
+    Complete,
+    Tainted,
 }
 
 /// One raw table candidate, kept unresolved until the walk reaches its native
@@ -471,11 +490,11 @@ pub(super) fn walk(
     ctx: &mut cond::Ctx,
     guard: &mut Guard,
     out: &mut Vec<Emitted>,
-) {
+) -> BinaryWalkOutcome {
     let size = dir.size();
     let increment = i64::from(table.default_format.size());
     if increment <= 0 {
-        return;
+        return BinaryWalkOutcome::Complete;
     }
     let cursor = Cursor::new(size, increment);
 
@@ -538,7 +557,7 @@ pub(super) fn walk(
             || (field.omitted.raw_conv && field.raw_conv.is_none())
             || (field.omitted.subdirectory && field.subdir.is_none())
         {
-            return;
+            return BinaryWalkOutcome::Tainted;
         }
 
         // D1 (Step 10): past this bound `index * increment` is a nominal
@@ -567,7 +586,11 @@ pub(super) fn walk(
 
         // ExifTool.pm:10102 -- a SubDirectory field is a pointer, never a value.
         if let Some(edge) = &field.subdir {
-            descend(table, field, edge, &raw, &dir, at, more, ctx, guard, out);
+            if descend(table, field, edge, &raw, &dir, at, more, ctx, guard, out)
+                == BinaryWalkOutcome::Tainted
+            {
+                return BinaryWalkOutcome::Tainted;
+            }
             continue;
         }
 
@@ -582,7 +605,7 @@ pub(super) fn walk(
                     // a domain this closed MemberValue model cannot preserve,
                     // the safe answer is to stop this table before later
                     // fields can observe a fabricated or absent value.
-                    return;
+                    return BinaryWalkOutcome::Tainted;
                 };
                 // FoundTag runs RawConv before it considers whether to report
                 // a tag. The assignment returns `$val`, so clearing this
@@ -631,6 +654,7 @@ pub(super) fn walk(
             avoid: false,
         });
     }
+    BinaryWalkOutcome::Complete
 }
 
 /// One `GetTagInfo` lookup. `value_context` is absent for the native first
@@ -752,18 +776,18 @@ fn descend(
     ctx: &mut cond::Ctx,
     guard: &mut Guard,
     out: &mut Vec<Emitted>,
-) {
+) -> BinaryWalkOutcome {
     let Some(target) = find_table(edge.module, edge.table) else {
         // Not a defect in the edge: many targets (`IPTC::Main`,
         // `LNK::LinkInfo`'s neighbours) are not ProcessBinaryData tables this
         // crate transcribed a layout for. See subdir.rs.
-        return;
+        return BinaryWalkOutcome::Complete;
     };
     if !target.enabled() {
         // Opt-in (Step 28 D1): an edge never enables its target. Walking into
         // a table that has not passed both gates would enable it by the back
         // door, with no allowlist line to review or revert.
-        return;
+        return BinaryWalkOutcome::Complete;
     }
     let dir_start = i64::try_from(dir.dir_start).unwrap_or(i64::MAX);
     let data_len = i64::try_from(dir.data.len()).unwrap_or(i64::MAX);
@@ -798,12 +822,12 @@ fn descend(
             // the empty string are false.
             let val = raw.as_integer().unwrap_or(0);
             if val == 0 {
-                return;
+                return BinaryWalkOutcome::Complete;
             }
             let start = expr.eval(val, dir_start);
             // ExifTool.pm:10131.
             if start < dir_start || start > data_len {
-                return;
+                return BinaryWalkOutcome::Complete;
             }
             // ExifTool.pm:10132-10133: DirLen is not modeled by this schema,
             // so the `unless` arm is the only one reachable.
@@ -812,19 +836,19 @@ fn descend(
         }
     };
     let Ok(start) = usize::try_from(start) else {
-        return;
+        return BinaryWalkOutcome::Complete;
     };
     let Ok(len) = usize::try_from(len) else {
-        return;
+        return BinaryWalkOutcome::Complete;
     };
 
     // ExifTool.pm:9066 -- `$addr = DirStart + DataPos + Base`.
     let addr = i64::try_from(start).unwrap_or(i64::MAX) + dir.data_pos + subdir_base;
     if !guard.admit(addr, std::ptr::from_ref(target) as usize, not_dup) {
-        return;
+        return BinaryWalkOutcome::Complete;
     }
     guard.depth += 1;
-    walk(
+    let outcome = walk(
         target,
         Dir {
             data: dir.data,
@@ -839,6 +863,7 @@ fn descend(
         out,
     );
     guard.depth -= 1;
+    outcome
 }
 
 #[cfg(test)]
@@ -1784,6 +1809,8 @@ mod tests {
 
     #[test]
     fn unmodeled_raw_conv_and_subdirectory_are_tail_barriers() {
+        use std::collections::HashMap;
+
         // An unmodeled RawConv can write `$$self` through FoundTag
         // (ExifTool.pm:10159-10169). An unmodeled SubDirectory may write the
         // same shared state while it processes the child (10102-10151).
@@ -1793,6 +1820,20 @@ mod tests {
             assert!(
                 run(table, &[1, 7]).is_empty(),
                 "{} must not reach its second field",
+                table.table
+            );
+            let mut members = HashMap::new();
+            let mut ctx = cond::Ctx::new(&mut members);
+            let mut out = Vec::new();
+            assert_eq!(
+                process_binary_data_checked(
+                    table,
+                    Dir::whole(&[1, 7], ByteOrder::Big),
+                    &mut ctx,
+                    &mut out,
+                ),
+                BinaryWalkOutcome::Tainted,
+                "{} must expose its unsafe tail to a keyed parent",
                 table.table
             );
         }
