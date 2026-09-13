@@ -1,175 +1,91 @@
 #!/usr/bin/env python3
-"""Probe one materialized ExifTool release without grading OxiDex.
+"""Readiness probes for one verified historical ExifTool source tree.
 
-This is the native-oracle capability/identity stage for a future version
-rehearsal runner.  It does not regenerate, build, compare, or promote.  Every
-native invocation has an explicit Perl, ``-I<materialized-lib>``, and program
-path; it never resolves a bare ``exiftool``.
+Not an OxiDex comparison: all native commands use an explicit Perl, materialized
+lib and program, and mutations operate only on disposable fixture copies.
 """
 from __future__ import annotations
-
-import hashlib
-import json
-import os
+import hashlib, os, re, shutil, subprocess, tempfile
 from pathlib import Path
-import shutil
-import subprocess
-import tempfile
 from typing import Any, Callable
-
 import version_rehearsal as rehearsal
 import version_rehearsal_catalog as catalog_stage
-
-SCHEMA = 1
-KIND = "oxidex_exiftool_version_rehearsal_native_capability"
-
-
-class Refused(ValueError):
-    pass
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _regular(path: Path, label: str) -> Path:
-    path = path.resolve()
-    if path.is_symlink() or not path.is_file():
-        raise Refused(f"{label} must be an existing regular file")
-    return path
-
-
-def _argv_strings(value: Any, label: str) -> list[str]:
-    if not isinstance(value, list) or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in value):
-        raise Refused(f"{label} arguments must be nonempty strings")
-    # Fixture paths are supplied only by this module after a private copy.  A
-    # case must not smuggle a second input or write outside its disposable copy.
-    if any(Path(arg).is_absolute() for arg in value):
-        raise Refused(f"{label} arguments must not contain filesystem paths")
-    return value
-
-
-def _case(case: Any) -> dict[str, Any]:
-    if not isinstance(case, dict) or not isinstance(case.get("name"), str) or not case["name"]:
-        raise Refused("capability case requires a nonempty name")
-    fixture = case.get("fixture")
-    if not isinstance(fixture, (str, Path)):
-        raise Refused(f"{case['name']}: fixture is required")
-    result = {"name": case["name"], "fixture": Path(fixture)}
-    for phase in ("read", "write"):
-        spec = case.get(phase)
-        if not isinstance(spec, dict) or spec.get("expectation") not in {"success", "native_unsupported"}:
-            raise Refused(f"{case['name']}: {phase} requires success or native_unsupported expectation")
-        result[phase] = {"args": _argv_strings(spec.get("args"), f"{case['name']} {phase}"), "expectation": spec["expectation"]}
-    return result
-
-
-def _run(argv: list[str], run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
-    completed = run(argv, capture_output=True, text=True, errors="replace")
-    stdout, stderr = completed.stdout or "", completed.stderr or ""
-    return {
-        "command": argv,
-        "exit": completed.returncode,
-        "stdout": stdout,
-        "stderr": stderr,
-        "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
-        "stderr_sha256": hashlib.sha256(stderr.encode()).hexdigest(),
-    }
-
-
-def _capability(perl: Path, run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
-    # Share the existing oracle's deliberately meaningful module requirement,
-    # but do not call resolve(): this stage grades a selected historical tree,
-    # not this checkout's current pin.
-    required = ("Archive::Zip",)
-    modules = []
-    for module in required:
-        result = _run([str(perl), f"-M{module}", "-e", "1"], run)
-        modules.append({"module": module, **result})
-    return {"required_modules": list(required), "modules": modules,
-            "available": all(row["exit"] == 0 for row in modules)}
-
-
-def write_probe_report(path: Path, report: dict[str, Any]) -> None:
-    """Persist one immutable probe result; never overwrite a prior attempt."""
-    if path.exists() or path.is_symlink():
-        raise Refused("native capability output already exists")
-    payload = {key: value for key, value in report.items() if key != "probe_sha256"}
-    if report.get("probe_sha256") != catalog_stage.sha256_json(payload):
-        raise Refused("native capability report identity is malformed")
-    rehearsal.atomic_json(path, report)
-
-
-def probe_materialized_native(
-    materialization: dict[str, Any], plan: dict[str, Any], catalog: dict[str, Any], capture: dict[str, Any],
-    resolution: dict[str, Any], archive_cache: Path, source_root: Path, release: str, perl: str | Path,
-    cases: list[dict[str, Any]], *, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-) -> dict[str, Any]:
-    """Return immutable invocation evidence for one selected native source.
-
-    The caller supplies deliberately small read/write capability cases.  Write
-    probes operate only on a temporary copy of each fixture.  A native format
-    that the caller declares unsupported is a valid observed result; a missing
-    Perl capability is distinct and leaves every capability case failed.
-    """
-    catalog_stage.verify_source_materialization(
-        materialization, plan, catalog, capture, resolution, archive_cache, source_root
-    )
-    if not isinstance(release, str):
-        raise Refused("release must be a selected release string")
-    row = next((item for item in materialization["selected_releases"] if item["release"] == release), None)
-    if row is None:
-        raise Refused("native capability release is not materialized by this plan")
-    expected_version = release
-    source = (source_root / row["source_directory"]).resolve()
-    if source.is_symlink() or not source.is_dir():
-        raise Refused("verified materialized source directory is unavailable")
-    perl_path = _regular(Path(perl), "Perl interpreter")
-    program = _regular(source / "exiftool", "materialized ExifTool program")
-    lib = (source / "lib").resolve()
-    if lib.is_symlink() or not lib.is_dir():
-        raise Refused("materialized ExifTool lib directory is unavailable")
-    parsed_cases = [_case(case) for case in cases]
-    if not parsed_cases or len({case["name"] for case in parsed_cases}) != len(parsed_cases):
-        raise Refused("at least one uniquely named capability case is required")
-    prefix = [str(perl_path), f"-I{lib}", str(program)]
-    version = _run([*prefix, "-ver"], run)
-    capability = _capability(perl_path, run)
-    identity = {
-        "release": release, "expected_version": expected_version,
-        "materialization_sha256": materialization["materialization_sha256"],
-        "source_directory": row["source_directory"], "source_tree_sha256": row["tree"]["tree_sha256"],
-        "perl": {"path": str(perl_path), "sha256": _sha256(perl_path)},
-        "lib": {"path": str(lib)},
-        "program": {"path": str(program), "sha256": _sha256(program)},
-    }
-    state = "ready" if version["exit"] == 0 and version["stdout"].strip() == expected_version and capability["available"] else "failed"
-    report_cases: list[dict[str, Any]] = []
-    if state == "ready":
-      with tempfile.TemporaryDirectory(prefix="oxidex-native-capability-") as work:
-          workspace = Path(work)
-          for case in parsed_cases:
-              fixture = _regular(case["fixture"], f"{case['name']} fixture")
-              private = workspace / f"{case['name']}-{fixture.name}"
-              shutil.copyfile(fixture, private)
-              record: dict[str, Any] = {"name": case["name"], "fixture": {"path": str(fixture.resolve()), "sha256": _sha256(fixture), "bytes": fixture.stat().st_size}, "disposable_copy_sha256_before": _sha256(private)}
-              for phase in ("read", "write"):
-                  invocation = _run([*prefix, *case[phase]["args"], str(private)], run)
-                  observed = "success" if invocation["exit"] == 0 else "failed"
-                  if case[phase]["expectation"] == "native_unsupported" and invocation["exit"] == 0:
-                      observed = "native_unsupported"
-                  invocation.update({"expectation": case[phase]["expectation"], "observed": observed})
-                  record[phase] = invocation
-                  if observed == "failed":
-                      state = "failed"
-              record["disposable_copy_sha256_after"] = _sha256(private)
-              report_cases.append(record)
-    payload = {"schema": SCHEMA, "kind": KIND, "identity": identity, "version": version,
-               "perl_capability": capability, "cases": report_cases,
-               "state": state,
-               "execution": {"native_read": "probed" if state == "ready" else "failed", "native_write": "probed" if state == "ready" else "failed", "conformance": "unrun", "limit": "capability evidence is not OxiDex/native conformance"}}
-    return {**payload, "probe_sha256": catalog_stage.sha256_json(payload)}
+SCHEMA=2; KIND="oxidex_exiftool_version_rehearsal_native_capability"; TIMEOUT=20
+TAG=re.compile(r"^[A-Za-z][A-Za-z0-9:]*$"); NAME=re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+class Refused(ValueError): pass
+def _sha(p:Path)->str:
+ h=hashlib.sha256();
+ with p.open('rb') as f:
+  for b in iter(lambda:f.read(1048576),b''): h.update(b)
+ return h.hexdigest()
+def _regular(p:Path,label:str)->Path:
+ p=p.resolve()
+ if p.is_symlink() or not p.is_file(): raise Refused(f"{label} must be an existing regular file")
+ return p
+def _query(v:Any,label:str)->str:
+ if not isinstance(v,str) or TAG.fullmatch(v) is None: raise Refused(f"{label} must be a tag name")
+ return v
+def _case(v:Any)->dict[str,Any]:
+ if not isinstance(v,dict) or not isinstance(v.get('name'),str) or NAME.fullmatch(v['name']) is None: raise Refused('case name is unsafe')
+ if not isinstance(v.get('fixture'),(str,Path)): raise Refused(f"{v['name']}: fixture is required")
+ r=v.get('read'); w=v.get('write')
+ if not isinstance(r,dict) or r.get('expectation') not in {'value','native_unsupported'}: raise Refused(f"{v['name']}: read expectation is unsupported")
+ q=_query(r.get('query'),f"{v['name']} read query")
+ if r['expectation']=='value' and not isinstance(r.get('value'),str): raise Refused(f"{v['name']}: read value required")
+ if not isinstance(w,dict) or w.get('operation') not in {'set','delete'}: raise Refused(f"{v['name']}: write operation must be set or delete")
+ tag=_query(w.get('tag'),f"{v['name']} write tag")
+ if w['operation']=='set':
+  if not isinstance(w.get('value'),str): raise Refused(f"{v['name']}: set value required")
+  if '\0' in w['value']: raise Refused(f"{v['name']}: NUL write requires a separate binary writer contract")
+ expected=w.get('readback')
+ if expected is not None and not isinstance(expected,str): raise Refused(f"{v['name']}: readback must be string or null")
+ return {'name':v['name'],'fixture':Path(v['fixture']),'read':{'query':q,**r},'write':{'tag':tag,**w}}
+def _env()->dict[str,str]:
+ e=dict(os.environ)
+ for k in ('PERL5LIB','PERL5OPT','PERL_MM_OPT','PERL_MB_OPT','PERL_LOCAL_LIB_ROOT'): e.pop(k,None)
+ return e
+def _run(argv:list[str],run:Callable[...,subprocess.CompletedProcess[str]])->dict[str,Any]:
+ try:
+  x=run(argv,capture_output=True,text=True,errors='replace',timeout=TIMEOUT,env=_env())
+  out,err=x.stdout or '',x.stderr or ''
+  state='ok' if x.returncode==0 else 'exit_failed'
+  return {'command':argv,'exit':x.returncode,'stdout':out,'stderr':err,'stdout_sha256':hashlib.sha256(out.encode()).hexdigest(),'stderr_sha256':hashlib.sha256(err.encode()).hexdigest(),'state':state}
+ except subprocess.TimeoutExpired as e: return {'command':argv,'exit':None,'stdout':'','stderr':str(e),'state':'timeout'}
+ except OSError as e: return {'command':argv,'exit':None,'stdout':'','stderr':str(e),'state':'spawn_failed'}
+def _capability(perl:Path,run):
+ rows=[]
+ for m in ('Archive::Zip',): rows.append({'module':m,**_run([str(perl),f'-M{m}','-e','1'],run)})
+ return {'required_modules':['Archive::Zip'],'modules':rows,'available':all(x['state']=='ok' for x in rows)}
+def _read(prefix,tag,target,run): return _run([*prefix,'-s','-s','-s',f'-{tag}',str(target)],run)
+def _matches(record,expect,value=None):
+ if record['state']!='ok': return False
+ got=record['stdout'].rstrip('\n')
+ return (got=='' if expect=='native_unsupported' else got==value)
+def probe_materialized_native(materialization,plan,catalog,capture,resolution,archive_cache,source_root,release,perl,cases,*,run=subprocess.run):
+ catalog_stage.verify_source_materialization(materialization,plan,catalog,capture,resolution,archive_cache,source_root)
+ row=next((x for x in materialization['selected_releases'] if x['release']==release),None)
+ if row is None: raise Refused('native capability release is not materialized by this plan')
+ source=(Path(source_root)/row['source_directory']).resolve(); pp=_regular(Path(perl),'Perl interpreter'); prog=_regular(source/'exiftool','materialized ExifTool program'); lib=(source/'lib').resolve()
+ if lib.is_symlink() or not lib.is_dir(): raise Refused('materialized ExifTool lib directory is unavailable')
+ parsed=[_case(x) for x in cases]
+ if not parsed or len({x['name'] for x in parsed})!=len(parsed): raise Refused('at least one uniquely named capability case is required')
+ prefix=[str(pp),f'-I{lib}',str(prog)]; version=_run([*prefix,'-ver'],run); cap=_capability(pp,run)
+ identity={'release':release,'expected_version':release,'materialization_sha256':materialization['materialization_sha256'],'source_directory':row['source_directory'],'source_tree_sha256':row['tree']['tree_sha256'],'perl':{'path':str(pp),'sha256':_sha(pp)},'lib':{'path':str(lib)},'program':{'path':str(prog),'sha256':_sha(prog)}}
+ ready=version['state']=='ok' and version['stdout'].strip()==release and cap['available']; records=[]
+ if ready:
+  with tempfile.TemporaryDirectory(prefix='oxidex-native-capability-') as tmp:
+   for case in parsed:
+    f=_regular(case['fixture'],f"{case['name']} fixture"); private=Path(tmp)/(hashlib.sha256(case['name'].encode()).hexdigest()+f.suffix); shutil.copyfile(f,private)
+    rec={'name':case['name'],'fixture':{'sha256':_sha(f),'bytes':f.stat().st_size},'copy_sha256_before':_sha(private)}
+    initial=_read(prefix,case['read']['query'],private,run); rec['read']=initial; read_ok=_matches(initial,case['read']['expectation'],case['read'].get('value'))
+    op=case['write']; arg=f"-{op['tag']}=" if op['operation']=='delete' else f"-{op['tag']}={op['value']}"; write=_run([*prefix,'-overwrite_original',arg,str(private)],run); rec['write']=write
+    readback=_read(prefix,op['tag'],private,run); rec['readback']=readback; write_ok=write['state']=='ok' and _matches(readback,'value',op.get('readback')) if op.get('readback') is not None else write['state']=='ok' and readback['state']=='ok'
+    rec['state']='ready' if read_ok and write_ok else 'failed'; rec['copy_sha256_after']=_sha(private); records.append(rec)
+ state='ready' if ready and all(x['state']=='ready' for x in records) else 'failed'
+ payload={'schema':SCHEMA,'kind':KIND,'identity':identity,'version':version,'perl_capability':cap,'cases':records,'state':state,'execution':{'native_read':'probed' if records else 'failed','native_write':'probed' if records else 'failed','conformance':'unrun','limit':'matching-native readiness only; not OxiDex/native conformance'}}
+ return {**payload,'probe_sha256':catalog_stage.sha256_json(payload)}
+def write_probe_report(path:Path,report:dict[str,Any])->None:
+ if path.exists() or path.is_symlink(): raise Refused('native capability output already exists')
+ payload={k:v for k,v in report.items() if k!='probe_sha256'}
+ if report.get('probe_sha256')!=catalog_stage.sha256_json(payload): raise Refused('native capability report identity is malformed')
+ rehearsal.atomic_json(path,report)
