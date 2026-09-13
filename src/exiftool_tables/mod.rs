@@ -74,7 +74,7 @@ pub use ifd_schema::{
 pub use ifd_tables::{ALL_IFD_TABLES, IFD_EXIFTOOL_VERSION};
 pub use keyed_engine::{
     KeyedBlock, KeyedEmissionSink, KeyedScope, KeyedWalkResult, WordDirectoryEntry,
-    process_keyed_directory,
+    WordDirectoryTrace, process_keyed_directory,
 };
 pub use keyed_schema::{
     KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedNativeFacts, KeyedNativeSubdir, KeyedStart,
