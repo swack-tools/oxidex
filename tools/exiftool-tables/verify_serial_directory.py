@@ -24,7 +24,7 @@ import serial_directory_facts as facts
 
 
 PROCESSOR_SUFFIX = "::ProcessSerialData"
-RUNTIME_FORMATS = frozenset(("int8u", "int16u", "int32u", "string", "undef", "binary"))
+RUNTIME_FORMATS = frozenset(("int8u", "int16u", "int16s", "int32u", "string", "undef", "binary"))
 ROW_MODELED = frozenset(("Name", "Format", "Condition", "PrintConv", "RawConv", "ValueConv", "SubDirectory", "Groups", "Unknown", "Binary", "List"))
 ROW_DOCUMENTARY = frozenset(("Notes", "_shorthand"))
 TABLE_MODELED = frozenset(("PROCESS_PROC", "FORMAT", "GROUPS", "VARS"))
@@ -94,7 +94,9 @@ _INTEGER = re.compile(r"(?:0|[1-9][0-9]*)\Z")
 _SIZED = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)\[(.*)\]$", re.S)
 _SCALAR = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _PRIOR = re.compile(r"^\$val\{([0-9]+)\}$")
-_FLOOR = re.compile(r"^int\(\(\$val\{([0-9]+)\}\+([0-9]+)\)/([1-9][0-9]*)\)$")
+_FLOOR = re.compile(
+    r"^int\(\(\$val\{([0-9]+)\}\+([0-9]+)\)/([1-9][0-9]*)\)(?:\+([0-9]+))?$"
+)
 _MEMBER_REGEX = re.compile(r"^\$\$self\{([^}]+)\}\s*(=~|!~)\s*/((?:\\.|[^/\\])*)/([a-z]*)$", re.S)
 _MEMBER_STRING = re.compile(r"^\$\$self\{([^}]+)\}\s*(eq|ne)\s*'((?:\\.|[^'\\])*)'$", re.S)
 _MEMBER_ARROW_STRING = re.compile(r'^\$self->\{([^}]+)\}\s*(eq|ne)\s*"((?:\\.|[^"\\])*)"$', re.S)
@@ -228,7 +230,7 @@ def _array(value: str, what: str) -> list[str]:
 def _fmt(value: str) -> str:
     text = re.sub(r"\s+", "", value)
     mapping = {
-        "Fmt::Int8u": "int8u", "Fmt::Int16u": "int16u", "Fmt::Int32u": "int32u",
+        "Fmt::Int8u": "int8u", "Fmt::Int16u": "int16u", "Fmt::Int16s": "int16s", "Fmt::Int32u": "int32u",
         "Fmt::Str(1)": "string", "Fmt::Undef(1)": "undef", "Fmt::RemainderString": "string",
     }
     if text not in mapping:
@@ -242,18 +244,39 @@ def _count(value: str) -> tuple[Any, ...]:
         return ("fixed", int(match.group(1)))
     if match := re.fullmatch(r"SerialCount::PriorRaw\{serial_index:(\d+)\}", text):
         return ("prior", int(match.group(1)))
-    if match := re.fullmatch(r"SerialCount::FloorDivPriorRaw\{serial_index:(\d+),add:(\d+),divisor:(\d+)\}", text):
-        return ("floor", int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    if match := re.fullmatch(
+            r"SerialCount::FloorDivPriorRaw\{serial_index:(\d+),add:(\d+),divisor:(\d+),trailing_add:(\d+)\}", text):
+        return ("floor", int(match.group(1)), int(match.group(2)), int(match.group(3)), int(match.group(4)))
     if text == "SerialCount::RemainingBytes":
         return ("remaining",)
     _fail("unknown serial count literal")
 
 
-def _condition(value: str) -> Any:
+def _expr_items(body: str, what: str) -> list[str]:
+    """Split positional Rust call arguments with the artifact tokenizer."""
+    values: list[str] = []
+    at = 0
+    while at < len(body):
+        end = _span(body, at, {","})
+        value = body[at:end].strip()
+        if value:
+            values.append(value)
+        at = end + 1
+    if not values:
+        _fail(f"{what} has no arguments")
+    return values
+
+
+def _rust_cond(value: str) -> Any:
     text = value.strip()
-    if text == "None":
-        return None
-    match = re.fullmatch(r"Some\(\s*Cond::MemberRegex\s*\{(.*)\}\s*\)", text, re.S)
+    for kind in ("And", "Or"):
+        prefix = f"Cond::{kind}("
+        if text.startswith(prefix) and text.endswith(")"):
+            values = _expr_items(text[len(prefix):-1], f"Cond::{kind}")
+            if len(values) != 2 or not all(item.startswith("&") for item in values):
+                _fail(f"Cond::{kind} is malformed")
+            return (kind.lower(), _rust_cond(values[0][1:]), _rust_cond(values[1][1:]))
+    match = re.fullmatch(r"Cond::MemberRegex\s*\{(.*)\}", text, re.S)
     if match:
         fields = _split_members(match.group(1), "Cond::MemberRegex")
         if set(fields) != {"member", "pattern", "ignore_case", "negate"}:
@@ -262,13 +285,96 @@ def _condition(value: str) -> Any:
             _fail("serial MemberRegex boolean is invalid")
         return ("regex", _string(fields["member"]), _string(fields["pattern"]),
                 fields["ignore_case"] == "true", fields["negate"] == "true")
-    match = re.fullmatch(r"Some\(\s*Cond::MemberStrEq\s*\{(.*)\}\s*\)", text, re.S)
+    match = re.fullmatch(r"Cond::MemberStrEq\s*\{(.*)\}", text, re.S)
     if match:
         fields = _split_members(match.group(1), "Cond::MemberStrEq")
         if set(fields) != {"member", "value", "negate"} or fields["negate"] not in {"true", "false"}:
             _fail("serial MemberStrEq schema drift")
         return ("string", _string(fields["member"]), _string(fields["value"]), fields["negate"] == "true")
+    match = re.fullmatch(r"Cond::MemberTruthy\s*\{(.*)\}", text, re.S)
+    if match:
+        fields = _split_members(match.group(1), "Cond::MemberTruthy")
+        if set(fields) != {"member", "negate"} or fields["negate"] not in {"true", "false"}:
+            _fail("serial MemberTruthy schema drift")
+        return ("truthy", _string(fields["member"]), fields["negate"] == "true")
+    match = re.fullmatch(r"Cond::MemberCmp\s*\{(.*)\}", text, re.S)
+    if match:
+        fields = _split_members(match.group(1), "Cond::MemberCmp")
+        if set(fields) != {"member", "op", "value"}:
+            _fail("serial MemberCmp schema drift")
+        op = fields["op"].strip().removeprefix("CmpOp::")
+        if op not in {"Eq", "Ne", "Lt", "Le", "Gt", "Ge"} or not re.fullmatch(r"-?(?:0|[1-9][0-9]*)", fields["value"].strip()):
+            _fail("serial MemberCmp operands are invalid")
+        return ("cmp", _string(fields["member"]), op, int(fields["value"]))
+    match = re.fullmatch(r"Cond::MemberDefined\s*\{(.*)\}", text, re.S)
+    if match:
+        fields = _split_members(match.group(1), "Cond::MemberDefined")
+        if set(fields) != {"member", "negate"} or fields["negate"] not in {"true", "false"}:
+            _fail("serial MemberDefined schema drift")
+        return ("defined", _string(fields["member"]), fields["negate"] == "true")
     _fail("unknown serial condition literal")
+
+
+def _condition(value: str) -> Any:
+    text = value.strip()
+    if text == "None":
+        return None
+    match = re.fullmatch(r"Some\(\s*(SerialCondition\s*\{.*\})\s*\)", text, re.S)
+    if match is None:
+        _fail("expected SerialCondition literal")
+    fields = _struct(match.group(1), "SerialCondition", {"cond", "missing_member"})
+    missing = fields["missing_member"].strip()
+    policies = {
+        "SerialMissingMember::SharedDefault": "shared_default",
+        "SerialMissingMember::EmptyStringForStringOps": "empty_string_for_string_ops",
+    }
+    if missing not in policies:
+        _fail("serial missing-member policy is invalid")
+    return (_rust_cond(fields["cond"]), policies[missing])
+
+
+def _raw_conv(value: str) -> str | None:
+    text = value.strip()
+    if text == "None":
+        return None
+    match = re.fullmatch(r"Some\(\s*RawConvEffect::SetMember\s*\{(.*)\}\s*\)", text, re.S)
+    if match is None:
+        _fail("unknown serial RawConv literal")
+    fields = _split_members(match.group(1), "RawConvEffect::SetMember")
+    if set(fields) != {"member"}:
+        _fail("serial RawConv schema drift")
+    return _string(fields["member"])
+
+
+def _int_enum(value: str) -> tuple[tuple[int, str], ...]:
+    match = re.fullmatch(r"PrintConv::IntEnum\s*\(\s*(&\[.*\])\s*\)", value.strip(), re.S)
+    if match is None:
+        _fail("expected serial IntEnum literal")
+    pairs = []
+    for item in _array(match.group(1), "serial IntEnum"):
+        pair = re.fullmatch(r"\(\s*(-?(?:0|[1-9][0-9]*))\s*,\s*(\"(?:[^\"\\]|\\.)*\")\s*\)", item, re.S)
+        if pair is None:
+            _fail("serial IntEnum member is invalid")
+        pairs.append((int(pair.group(1)), _string(pair.group(2))))
+    if pairs != sorted(pairs) or len({key for key, _ in pairs}) != len(pairs):
+        _fail("serial IntEnum members are not sorted/unique")
+    return tuple(pairs)
+
+
+def _print_conv(value: str) -> tuple[Any, ...]:
+    text = value.strip()
+    if text == "SerialPrintConv::None":
+        return ("none",)
+    match = re.fullmatch(r"SerialPrintConv::Shared\s*\((.*)\)", text, re.S)
+    if match:
+        return ("int_enum", _int_enum(match.group(1)))
+    match = re.fullmatch(r"SerialPrintConv::DecodeBitsWords\s*\{(.*)\}", text, re.S)
+    if match:
+        fields = _split_members(match.group(1), "SerialPrintConv::DecodeBitsWords")
+        if set(fields) != {"bits_per_word"} or fields["bits_per_word"].strip() != "16":
+            _fail("serial DecodeBitsWords operand is unsupported")
+        return ("decode_bits_words", 16)
+    _fail("unknown serial PrintConv literal")
 
 
 def _flags(value: str) -> tuple[bool, bool, bool]:
@@ -324,13 +430,14 @@ def _gate(value: str) -> tuple[tuple[str, int], ...]:
 
 def _tag(value: str) -> dict[str, Any]:
     fields = _struct(value, "SerialTag", {"name", "format", "condition", "flags", "raw_conv", "omitted", "value_conv", "print_conv", "groups"})
-    if fields["raw_conv"].strip() != "None" or fields["omitted"].strip() != "Omitted::NONE" or fields["value_conv"].strip() != "None" or fields["print_conv"].strip() != "PrintConv::None":
-        _fail("serial artifact uses an unverified conversion/omission projection")
+    if fields["omitted"].strip() != "Omitted::NONE" or fields["value_conv"].strip() != "None":
+        _fail("serial artifact uses an unverified omission/value-conversion projection")
     format_fields = _struct(fields["format"], "SerialFormat", {"format", "count"})
     return {
         "name": _string(fields["name"]), "format": _fmt(format_fields["format"]),
         "count": _count(format_fields["count"]), "condition": _condition(fields["condition"]),
-        "flags": _flags(fields["flags"]), "groups": _groups(fields["groups"]),
+        "flags": _flags(fields["flags"]), "raw_conv": _raw_conv(fields["raw_conv"]),
+        "print_conv": _print_conv(fields["print_conv"]), "groups": _groups(fields["groups"]),
     }
 
 
@@ -468,7 +575,7 @@ def _native_format(tag: dict[str, Any], default: str) -> tuple[str, tuple[Any, .
         if prior := _PRIOR.fullmatch(count):
             return fmt, ("prior", int(prior.group(1)))
         if floor := _FLOOR.fullmatch(count):
-            return fmt, ("floor", int(floor.group(1)), int(floor.group(2)), int(floor.group(3)))
+            return fmt, ("floor", int(floor.group(1)), int(floor.group(2)), int(floor.group(3)), int(floor.group(4) or 0))
         _fail("serial native Format count is outside verifier grammar")
     if value == "string":
         return value, ("remaining",)
@@ -477,33 +584,189 @@ def _native_format(tag: dict[str, Any], default: str) -> tuple[str, tuple[Any, .
     return value, ("fixed", 1)
 
 
-def _native_condition(value: Any) -> tuple[Any, bool]:
-    if value is None:
-        return None, False
-    if not isinstance(value, str) or not value.strip():
+def _condition_text(text: str) -> str:
+    """Normalize native condition whitespace without changing literals."""
+    out, at, quoted, escaped = [], 0, None, False
+    pending_space = False
+    while at < len(text):
+        char = text[at]
+        if quoted is not None:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quoted:
+                quoted = None
+            at += 1
+            continue
+        if char in {"'", '"', "/"}:
+            if pending_space and out and out[-1] != " ":
+                out.append(" ")
+            pending_space = False
+            out.append(char)
+            quoted = char
+        elif char.isspace():
+            pending_space = True
+        else:
+            if pending_space and out and out[-1] != " ":
+                out.append(" ")
+            pending_space = False
+            out.append(char)
+        at += 1
+    if quoted is not None:
+        _fail("serial native Condition has an unterminated literal")
+    return "".join(out).strip()
+
+
+def _outer_parentheses(text: str) -> str:
+    while text.startswith("(") and text.endswith(")"):
+        depth, quoted, escaped, enclosing = 0, None, False, True
+        for at, char in enumerate(text):
+            if quoted is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quoted:
+                    quoted = None
+                continue
+            if char in {"'", '"', "/"}:
+                quoted = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and at != len(text) - 1:
+                    enclosing = False
+                    break
+                if depth < 0:
+                    _fail("serial native Condition parentheses are unbalanced")
+        if depth != 0:
+            _fail("serial native Condition parentheses are unbalanced")
+        if not enclosing:
+            break
+        text = text[1:-1].strip()
+    return text
+
+
+def _split_top_level(text: str, word: str) -> list[str]:
+    """Split one Perl boolean keyword outside literals/parentheses."""
+    values, start, depth, quoted, escaped, at = [], 0, 0, None, False, 0
+    while at < len(text):
+        char = text[at]
+        if quoted is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quoted:
+                quoted = None
+            at += 1
+            continue
+        if char in {"'", '"', "/"}:
+            quoted = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                _fail("serial native Condition parentheses are unbalanced")
+        elif depth == 0 and text.startswith(word, at):
+            before = text[at - 1] if at else " "
+            after = text[at + len(word)] if at + len(word) < len(text) else " "
+            if before.isspace() and after.isspace():
+                values.append(text[start:at].strip())
+                start = at + len(word)
+                at = start
+                continue
+        at += 1
+    if depth != 0 or quoted is not None:
         _fail("serial native Condition is malformed")
-    text = value.strip()
+    values.append(text[start:].strip())
+    return values
+
+
+def _native_cond_ast(text: str) -> Any:
+    text = _outer_parentheses(text)
+    # Perl's `or` is lower precedence than `and`; each split is right-nested,
+    # exactly as the closed Cond emitter represents a source chain.
+    for word, kind in (("or", "or"), ("and", "and")):
+        parts = _split_top_level(text, word)
+        if len(parts) > 1:
+            left = _native_cond_ast(parts[0])
+            right = _native_cond_ast(f" {word} ".join(parts[1:]))
+            return (kind, left, right)
+    if match := re.fullmatch(r"not\s+\$\$self\{([^}]+)\}", text):
+        return ("truthy", match.group(1), True)
     if match := _MEMBER_REGEX.fullmatch(text):
         member, op, pattern, flags = match.groups()
         if set(flags) - {"i"}:
             _fail("serial native Condition regex flags are unsupported")
-        return ("regex", member, pattern, "i" in flags, op == "!~"), True
+        return ("regex", member, pattern, "i" in flags, op == "!~")
     if match := _MEMBER_STRING.fullmatch(text):
         member, op, string = match.groups()
-        # Perl single-quoted strings in the accepted subset only escape quote
-        # and backslash; preserve other backslashes literally.
-        string = string.replace("\\'", "'").replace("\\\\", "\\")
-        return ("string", member, string, op == "ne"), False
+        return ("string", member, string.replace("\\'", "'").replace("\\\\", "\\"), op == "ne")
     if match := _MEMBER_ARROW_STRING.fullmatch(text):
         member, op, string = match.groups()
-        return ("string", member, string, op == "ne"), False
-    # The staged artifact withholds every member-regex condition because the
-    # shared Cond evaluator treats absent members differently from Perl's
-    # empty-string regex subject.  For such rows we only need to authenticate
-    # that native fact and its named refusal, including compound expressions.
-    if re.search(r"\$\$self\{[^}]+\}\s*(?:=~|!~)\s*/", text):
-        return None, True
+        return ("string", member, string, op == "ne")
+    if match := re.fullmatch(r"\$\$self\{([^}]+)\}\s*(==|!=|>=|<=|>|<)\s*(-?(?:0|[1-9][0-9]*))", text):
+        member, op, value = match.groups()
+        names = {"==": "Eq", "!=": "Ne", "<": "Lt", "<=": "Le", ">": "Gt", ">=": "Ge"}
+        return ("cmp", member, names[op], int(value))
+    if match := re.fullmatch(r"defined\s*\(?\s*\$\$self\{([^}]+)\}\s*\)?", text):
+        return ("defined", match.group(1), False)
     _fail("serial native Condition is outside verifier grammar")
+
+
+def _native_condition(value: Any) -> tuple[Any, str]:
+    if value is None:
+        return None, "shared_default"
+    if not isinstance(value, str) or not value.strip():
+        _fail("serial native Condition is malformed")
+    text = _condition_text(value)
+    ast = _native_cond_ast(text)
+    missing = ("empty_string_for_string_ops"
+               if re.search(r"(?:\$\$self\{[^}]+\}|\$self->\{[^}]+\})\s*(?:=~|!~|eq|ne)\s*", text)
+               else "shared_default")
+    return ast, missing
+
+
+def _native_print_conv(value: Any) -> tuple[tuple[Any, ...], str | None]:
+    if value is None:
+        return ("none",), None
+    if isinstance(value, dict) and value.get("kind") == "expr" and isinstance(value.get("expr"), str):
+        if value["expr"] == "Image::ExifTool::DecodeBits($val, undef, 16)":
+            return ("decode_bits_words", 16), None
+        return ("none",), "serial_print_conv_expr"
+    if isinstance(value, dict) and value.get("kind") == "enum":
+        mapping = value.get("map")
+        if value.get("directives") is not None or not isinstance(mapping, dict):
+            return ("none",), "serial_print_conv"
+        pairs = []
+        try:
+            for key, label in mapping.items():
+                if not isinstance(key, str) or not isinstance(label, str):
+                    raise ValueError
+                pairs.append((int(key, 0), label))
+        except ValueError:
+            return ("none",), "serial_print_conv"
+        pairs.sort()
+        if len({key for key, _ in pairs}) != len(pairs):
+            return ("none",), "serial_print_conv"
+        return ("int_enum", tuple(pairs)), None
+    return ("none",), "serial_print_conv"
+
+
+def _native_raw_conv(value: Any) -> tuple[str | None, str | None]:
+    if value is None:
+        return None, None
+    expression = value.get("expr") if isinstance(value, dict) and value.get("kind") == "expr" else None
+    if isinstance(expression, str):
+        match = re.fullmatch(r"\s*(?:\$\$self\{(\w+)\}|\$self->\{(\w+)\})\s*=\s*\$val\s*;?\s*", expression)
+        if match:
+            return match.group(1) or match.group(2), None
+    return None, "serial_raw_conv"
 
 
 def _native_reasons(tag: Any, default: str) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
@@ -512,7 +775,7 @@ def _native_reasons(tag: Any, default: str) -> tuple[dict[str, Any] | None, tupl
     reasons: list[str] = []
     try:
         fmt, count = _native_format(tag, default)
-        condition, missing_empty = _native_condition(tag.get("Condition"))
+        condition, missing_member = _native_condition(tag.get("Condition"))
     except SerialVerificationError:
         # The emitter sees no descriptor format after a source-row shape
         # refusal, and therefore independently withholds the artifact shape
@@ -521,16 +784,12 @@ def _native_reasons(tag: Any, default: str) -> tuple[dict[str, Any] | None, tupl
         return None, ("serial_emitter_format", "serial_row_shape")
     if fmt not in RUNTIME_FORMATS:
         reasons.append("serial_emitter_format")
-    if missing_empty:
-        reasons.append("serial_condition_missing_member")
-    raw_print = tag.get("PrintConv")
-    if raw_print is not None:
-        if isinstance(raw_print, dict) and raw_print.get("kind") == "expr" and isinstance(raw_print.get("expr"), str):
-            reasons.append("serial_decode_bits_words" if raw_print["expr"] == "Image::ExifTool::DecodeBits($val, undef, 16)" else "serial_print_conv_expr")
-        else:
-            reasons.append("serial_print_conv")
-    if tag.get("RawConv") is not None:
-        reasons.append("serial_raw_conv")
+    print_conv, print_reason = _native_print_conv(tag.get("PrintConv"))
+    if print_reason is not None:
+        reasons.append(print_reason)
+    raw_conv, raw_reason = _native_raw_conv(tag.get("RawConv"))
+    if raw_reason is not None:
+        reasons.append(raw_reason)
     if tag.get("ValueConv") is not None:
         reasons.append("serial_value_conv")
     if tag.get("SubDirectory") is not None:
@@ -538,8 +797,10 @@ def _native_reasons(tag: Any, default: str) -> tuple[dict[str, Any] | None, tupl
     for name in sorted(tag):
         if name not in ROW_MODELED and name not in ROW_DOCUMENTARY:
             reasons.append(f"serial_row_property_{name}")
-    expected = {"name": tag["Name"], "format": fmt, "count": count, "condition": condition,
+    expected = {"name": tag["Name"], "format": fmt, "count": count,
+                "condition": (condition, missing_member) if condition is not None else None,
                 "flags": tuple(_native_truth(tag.get(name)) for name in ("Unknown", "Binary", "List")),
+                "raw_conv": raw_conv, "print_conv": print_conv,
                 "groups": _native_row_groups(tag.get("Groups"))}
     return expected, tuple(sorted(set(reasons)))
 
@@ -669,7 +930,7 @@ def audit(document: dict[str, Any], artifact: Artifact) -> Audit:
                 mismatches.append(f"{native_key}: supported native alternative is absent")
                 continue
             if emitted_row != expected:
-                mismatches.append(f"{native_key}: emitted name/format/count/condition/flags/groups differ from native source")
+                mismatches.append(f"{native_key}: emitted name/format/count/condition/flags/conversions/groups differ from native source")
             # A one-alternative native `_variants` array is not distinguishable
             # from a direct scalar entry in the current SerialEntry schema.
             # Do not silently certify that source-identity change until the

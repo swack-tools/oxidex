@@ -94,8 +94,8 @@ pub use serial_engine::{
     SerialDir, SerialEmissionSink, SerialWalkResult, process_serial_directory,
 };
 pub use serial_schema::{
-    OmittedSerialNativeRow, OmittedSerialNativeTable, SerialCount, SerialEntry, SerialFormat,
-    SerialProcessorFacts, SerialTable, SerialTag,
+    OmittedSerialNativeRow, OmittedSerialNativeTable, SerialCondition, SerialCount, SerialEntry,
+    SerialFormat, SerialMissingMember, SerialPrintConv, SerialProcessorFacts, SerialTable, SerialTag,
 };
 pub use serial_tables::{
     ALL_SERIAL_TABLES, OMITTED_SERIAL_NATIVE_ROWS, OMITTED_SERIAL_NATIVE_TABLES,
