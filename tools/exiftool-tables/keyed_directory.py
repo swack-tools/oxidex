@@ -12,6 +12,7 @@ import codegen
 import conds
 import subdirs
 import directory_validation
+import word_directory
 
 
 PROCESS_CANON_RAW = "Image::ExifTool::CanonRaw::ProcessCanonRaw"
@@ -38,6 +39,21 @@ def processor_name(meta):
 def is_keyed_directory_table(meta):
     """A known keyed-process family, selected by native processor identity."""
     return processor_name(meta) == PROCESS_CANON_RAW
+
+
+def _word_layout(meta, reader_contracts):
+    """Return a generated layout only when the complete native body proves it.
+
+    There is intentionally no processor-name, module, table, or tag-ID rule
+    here.  A future captured body with this exact source shape takes the same
+    path; absent or malformed provenance remains outside emitted tables.
+    """
+    process = (meta or {}).get("PROCESS_PROC")
+    try:
+        descriptor = word_directory.compile_word_directory(process, reader_contracts)
+    except word_directory.WordDirectoryRefused:
+        return None
+    return "word", f"KeyedLayout::LengthPrefixedU16Pairs({descriptor.rust(codegen.rust_str)})"
 
 
 def parse_raw_id(raw):
@@ -138,15 +154,23 @@ class Context:
         self.table_meta = {}
         self.validation_helpers = doc.get("subdirectory_validate_functions", {})
         self.reader_contracts = doc.get("native_reader_contracts", {})
+        self.layouts = {}
+        self.word_processor_refusals = set()
         for module, mod in doc.get("modules", {}).items():
             for table, value in mod.get("tables", {}).items():
-                self.processors[(module, table)] = processor_name(value.get("meta"))
-                self.table_meta[(module, table)] = value.get("meta") or {}
+                meta = value.get("meta") or {}
+                key = (module, table)
+                self.processors[key] = processor_name(meta)
+                self.table_meta[key] = meta
+                if is_keyed_directory_table(meta):
+                    self.layouts[key] = ("ciff", "KeyedLayout::Ciff10")
+                elif (word := _word_layout(meta, self.reader_contracts)) is not None:
+                    self.layouts[key] = word
+                elif word_directory.is_candidate(meta.get("PROCESS_PROC")):
+                    self.word_processor_refusals.add(key)
 
     def target_supported(self, module, table):
-        return self.processors.get((module, table)) in {
-            "Image::ExifTool::ProcessBinaryData", PROCESS_CANON_RAW
-        }
+        return (module, table) in self.layouts
 
 
 def _edge(tag, raw_id, ctx, stats):
@@ -275,7 +299,7 @@ def _native_facts(tag, table_meta=None):
     )
 
 
-def _tag_literal(tag, raw_id, stats, verified_exprs, ctx, table_meta):
+def _tag_literal(tag, raw_id, stats, verified_exprs, ctx, table_meta, layout):
     name = tag.get("Name")
     if not isinstance(name, str) or not name:
         stats["keyed_name"] += 1
@@ -288,7 +312,8 @@ def _tag_literal(tag, raw_id, stats, verified_exprs, ctx, table_meta):
             stats["keyed_condition"] += 1
             return None, "condition"
         condition_src = f"Some({condition_src})"
-    default = _type_default(raw_id)
+    kind, _layout_src = layout
+    default = _type_default(raw_id) if kind == "ciff" else "int8u"
     if default is None and _same_table_directory(tag, raw_id):
         # A directory entry has no scalar format.  `format: None` tells the
         # future reader to apply the raw keyed type rule before trying a
@@ -304,6 +329,16 @@ def _tag_literal(tag, raw_id, stats, verified_exprs, ctx, table_meta):
     count_src, count_for_domain = _count(tag, stats)
     if count_src is None:
         return None, "count"
+    # A word-directory processor supplies the exact HandleTag value shape.
+    # A source row may repeat it, but cannot silently override its already
+    # authenticated format/count/size operands.
+    if kind == "word" and ((tag.get("Format") is not None and format_name != "int8u")
+                           or (tag.get("Count") is not None and count_src != "Some(1)")):
+        stats["keyed_word_value_shape"] += 1
+        return None, "format" if format_name != "int8u" else "count"
+    if kind == "word" and tag.get("SubDirectory") is not None:
+        stats["keyed_word_subdirectory"] += 1
+        return None, "subdirectory"
     # ProcessCanonRaw calls ReadValue then FoundTag directly; it never
     # applies ProcessBinaryData's Mask/BitShift transformation.
     domain = codegen.value_domain(format_name, count_for_domain)
@@ -319,7 +354,7 @@ def _tag_literal(tag, raw_id, stats, verified_exprs, ctx, table_meta):
         f"omitted: {codegen.omitted_for(tag, stats, False, modeled_value, refused_print)}, "
         f"value_conv: {value_conv}, print_conv: {print_conv}, "
         f"groups: {codegen.compile_groups_field(tag.get('Groups'), stats)}, "
-        f"edge: {_edge(tag, raw_id, ctx, stats)}, native: {_native_facts(tag, table_meta)} }}",
+        f"edge: {_edge(tag, raw_id, ctx, stats) if kind == 'ciff' else 'None'}, native: {_native_facts(tag, table_meta)} }}",
         None,
     )
 
@@ -330,7 +365,10 @@ def _record_omission(omissions, module, table, raw, variant, tag, reason):
 
 def gen_table(module, table, data, run_stats, verified_exprs, ctx, omissions):
     """Compile one keyed table. Variants are all-or-nothing per raw id."""
-    if not is_keyed_directory_table((data.get("meta") or {})):
+    layout = ctx.layouts.get((module, table))
+    if layout is None:
+        if (module, table) in ctx.word_processor_refusals:
+            run_stats["keyed_word_processor"] += 1
         return None
     stats = _stats()
     table_meta = data.get("meta") or {}
@@ -350,7 +388,7 @@ def gen_table(module, table, data, run_stats, verified_exprs, ctx, omissions):
                 if not isinstance(alt, dict) or "_variants" in alt:
                     reason = "condition"
                     break
-                src, reason = _tag_literal(alt, raw_id, trial, verified_exprs, ctx, table_meta)
+                src, reason = _tag_literal(alt, raw_id, trial, verified_exprs, ctx, table_meta, layout)
                 if src is None:
                     break
                 cond = conds.compile_cond(alt.get("Condition"))
@@ -367,7 +405,7 @@ def gen_table(module, table, data, run_stats, verified_exprs, ctx, omissions):
             stats["keyed_row_shape"] += 1
             continue
         tag = _expanded_tag(tag)
-        src, reason = _tag_literal(tag, raw_id, stats, verified_exprs, ctx, table_meta)
+        src, reason = _tag_literal(tag, raw_id, stats, verified_exprs, ctx, table_meta, layout)
         if src is None:
             _record_omission(omissions, module, table, raw, False, tag, reason)
         else:
@@ -384,7 +422,7 @@ def gen_table(module, table, data, run_stats, verified_exprs, ctx, omissions):
         "KeyedDirectoryTable { "
         f'module: "{codegen.rust_str(module)}", table: "{codegen.rust_str(table)}", '
         f'group0: "{codegen.rust_str(group(0, module))}", group1: "{codegen.rust_str(group(1, ""))}", '
-        f'group2: "{codegen.rust_str(group(2, "Other"))}", layout: KeyedLayout::Ciff10, '
+        f'group2: "{codegen.rust_str(group(2, "Other"))}", layout: {layout[1]}, '
         f"gate_a: GateA {{ blocked_by: {gate} }}, tags: &[{', '.join(tags)}], variants: &[{', '.join(variants)}] }};\n"
     )
 

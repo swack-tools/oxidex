@@ -10,6 +10,7 @@ import unittest
 
 import native_reader_contract
 import word_directory
+import word_directory_facts
 from test_native_reader_contract import snapshot
 
 
@@ -148,10 +149,12 @@ class ClosedGrammar(unittest.TestCase):
         self.assertTrue(compiled.missing_model_as_empty)
         self.assertTrue(compiled.short_u16_as_zero)
         self.assertEqual(compiled.reader_contract_sha256, native_reader_contract.fingerprint(self.reader))
+        self.assertEqual(compiled.source_body_sha256,
+                         word_directory_facts.deparse_sha256(self.processor["__deparse"]))
         staged = compiled.rust(lambda value: value.replace('"', '\\"'))
         self.assertIn("key_shift: 8", staged)
         self.assertIn("value_mask: 255", staged)
-        self.assertIn("value_format: \"int8u\"", staged)
+        self.assertIn("value_format: Fmt::Int8u", staged)
 
     def test_refuses_missing_or_rebound_package_binding(self):
         missing = copy.deepcopy(self.processor)
@@ -177,6 +180,23 @@ class ClosedGrammar(unittest.TestCase):
         escaped = copy.deepcopy(self.processor)
         escaped["__deparse"] = escaped["__deparse"].replace("/\\bWORD\\b/", "/\\$size/", 1)
         self.assertIsNotNone(self.compile(escaped))
+
+    def test_u16_mask_remains_a_numeric_handler_value(self):
+        changed = copy.deepcopy(self.processor)
+        changed["__deparse"] = changed["__deparse"].replace("& 255", "& 511", 1)
+        compiled = self.compile(changed)
+        self.assertEqual(compiled.value_mask, 511)
+        # `Fmt::Int8u` is native HandleTag metadata, not a decoder request.
+        staged = compiled.rust(lambda value: value)
+        self.assertIn("value_mask: 511", staged)
+        self.assertIn("value_format: Fmt::Int8u", staged)
+
+    def test_deparse_fact_is_raw_and_independent_of_recognition_tokens(self):
+        body = self.processor["__deparse"]
+        self.assertEqual(word_directory_facts.deparse_sha256(body),
+                         word_directory_facts.deparse_sha256(str(body)))
+        with self.assertRaises(word_directory_facts.WordDirectoryFactRefused):
+            word_directory_facts.deparse_sha256(None)
 
     def test_diagnostic_literals_are_decoded_and_dynamic_or_perl_only_forms_refuse(self):
         escaped = copy.deepcopy(self.processor)
@@ -250,6 +270,7 @@ class PinnedNative(unittest.TestCase):
             ("model predicate", "\\bD60\\b", "\\bD61\\b", "changed"),
             ("key shift", "$val >> 8", "$val >> 7", "changed"),
             ("value mask", "$val & 0xff", "$val & 0x7f", "changed"),
+            ("wide numeric value mask", "$val & 0xff", "$val & 0x1ff", "changed"),
             ("dynamic regex", "$$et{Model}=~/\\bD60\\b/", "$$et{Model}=~/$size/", "refused"),
             ("value format", "Format => 'int8u'", "Format => 'int16u'", "refused"),
         ]
@@ -259,6 +280,9 @@ class PinnedNative(unittest.TestCase):
                 if expectation == "changed":
                     fresh = self.compile(changed)
                     self.assertNotEqual(fresh.fingerprint(), baseline.fingerprint())
+                    if label == "wide numeric value mask":
+                        self.assertEqual(fresh.value_mask, 511)
+                        self.assertIn("value_mask: 511", fresh.rust(lambda value: value))
                     self.assertEqual(word_directory.stale_reason(baseline, changed, {"unsigned16": self.reader}),
                                      "native processor operands or provenance differ")
                 else:

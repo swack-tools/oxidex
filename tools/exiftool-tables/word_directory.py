@@ -4,8 +4,8 @@ This is deliberately a source recognizer, not a route selector.  A capture
 caller supplies one resolved Perl CODE fact and the independently authenticated
 unsigned-reader state.  The recognizer accepts precisely one complete control
 flow: a header-size check with one member-regex exception, followed by a
-fixed-stride u16 word loop whose high bits select a key and low bits are the
-one-byte value passed to ``HandleTag``.  Any extra statement, alias, or
+fixed-stride u16 word loop whose high bits select a key and masked low bits
+are the numeric value passed to ``HandleTag``.  Any extra statement, alias, or
 unmodeled handler operand refuses.
 
 The returned descriptor is a staged generated operand.  No Rust reader or
@@ -21,6 +21,7 @@ import re
 import conds
 import native_reader_contract
 import native_reader_facts
+import word_directory_facts
 
 
 class WordDirectoryRefused(ValueError):
@@ -177,6 +178,23 @@ def _condition(regex):
     return value
 
 
+def is_candidate(processor):
+    """Whether an unauthenticated CODE body has the shared processor cues.
+
+    This never permits generation.  It lets the generator name a missing or
+    malformed source/provenance capture as a processor blocker instead of
+    silently treating a structurally relevant table as outside the inventory.
+    """
+    body = processor.get("__deparse") if isinstance(processor, dict) else None
+    if not isinstance(body, str):
+        return False
+    try:
+        tokens = set(_tokens(body))
+    except WordDirectoryRefused:
+        return False
+    return {"Get16u", "HandleTag", "'DataPt'", "'DirStart'", "'DirLen'"}.issubset(tokens)
+
+
 @dataclass(frozen=True)
 class LengthPrefixedU16Pairs:
     """Generated operands plus the native evaluation rules a reader must keep.
@@ -212,8 +230,12 @@ class LengthPrefixedU16Pairs:
 
     def rust(self, escape):
         """Return a staged literal for the future shared schema, not activation."""
+        formats = {"int8u": "Fmt::Int8u"}
+        value_format = formats.get(self.value_format)
+        if value_format is None:  # guarded by the closed body recognizer
+            raise WordDirectoryRefused("word-directory format has no shared Rust spelling")
         return (
-            "Some(WordDirectory::LengthPrefixedU16Pairs { "
+            "WordDirectory { "
             f"pair_start: {self.pair_start}, pair_stride: {self.pair_stride}, "
             f"key_shift: {self.key_shift}, value_mask: {self.value_mask}, "
             f"header_adjustment: {self.header_adjustment}, "
@@ -221,11 +243,11 @@ class LengthPrefixedU16Pairs:
             f"missing_model_as_empty: {str(self.missing_model_as_empty).lower()}, "
             f"short_u16_as_zero: {str(self.short_u16_as_zero).lower()}, "
             f"index_divisor: {self.index_divisor}, index_bias: {self.index_bias}, "
-            f'value_format: "{escape(self.value_format)}", value_count: {self.value_count}, value_size: {self.value_size}, '
+            f"value_format: {value_format}, value_count: {self.value_count}, value_size: {self.value_size}, "
             f'invalid_warning: "{escape(self.invalid_warning)}", verbose_directory: "{escape(self.verbose_directory)}", '
             f'source_file: "{escape(self.source_file)}", source_sha256: "{self.source_sha256}", '
             f'source_body_sha256: "{self.source_body_sha256}", reader_contract_sha256: "{self.reader_contract_sha256}" '
-            "})"
+            "}"
         )
 
 
@@ -320,14 +342,16 @@ def compile_word_directory(processor, reader_contracts):
             or index_name != "Index" or format_name != "Format" or count_name != "Count" or size_name != "Size"):
         raise WordDirectoryRefused("processor loop and handler operands disagree")
     if (pair_start == 0 or pair_stride == 0 or header_adjustment == 0
-            or value_format != "int8u" or value_count != 1 or value_size != 1
-            or value_mask > 0xff):
-        raise WordDirectoryRefused("processor value semantics are outside the shared u16-byte descriptor")
+            or value_format != "int8u" or value_count != 1 or value_size != 1):
+        # HandleTag receives the already-defined numeric result of this mask.
+        # Its Format/Count/Size describe the native handler call; they must not
+        # cause a future reader to truncate or re-decode that scalar as bytes.
+        raise WordDirectoryRefused("processor handler value metadata is outside the shared scalar contract")
     return LengthPrefixedU16Pairs(
         pair_start, pair_stride, key_shift, value_mask, header_adjustment,
         model_condition, True, True, True, index_divisor, index_bias, value_format, value_count,
         value_size, warning, verbose_directory, file, sha,
-        hashlib.sha256(json.dumps(body.tokens, separators=(",", ":")).encode()).hexdigest(),
+        word_directory_facts.deparse_sha256(body_source),
         reader_sha,
     )
 
