@@ -126,10 +126,12 @@ def _page_coordinates(url: str) -> tuple[int, int]:
 
 def _next_url(headers: dict[str, str]) -> str | None:
     link = next((value for key, value in headers.items() if key.lower() == "link"), "")
-    match = LINK_NEXT_RE.search(link)
-    if match is None:
+    matches = LINK_NEXT_RE.findall(link)
+    if not matches:
         return None
-    url = match.group(1)
+    if len(matches) != 1:
+        raise Refused("pagination link has multiple rel=next relations")
+    url = matches[0]
     _page_coordinates(url)
     return url
 
