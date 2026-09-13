@@ -5,7 +5,7 @@
 //! an activation request.
 
 use super::ifd_schema::RawConvEffect;
-use super::{Cond, ExprId, Fmt, GateA, IfdFlags, Omitted, PrintConv, TagGroups};
+use super::{Cond, ExprId, Fmt, GateA, IfdFlags, Omitted, PrintConv, TagGroups, U16SizeCheck};
 
 #[derive(Clone, Copy, Debug)]
 pub enum KeyedLayout {
@@ -70,6 +70,11 @@ pub enum KeyedEdge {
         module: &'static str,
         table: &'static str,
         start: KeyedStart,
+        /// A native false result skips only this child. Unavailable source
+        /// remains an explicit `validate` blocker in `unwalked` instead.
+        // Captured validation operands remain inactive while the native
+        // reader contract is listed in `unwalked`.
+        validation: Option<U16SizeCheck>,
         unwalked: &'static [&'static str],
     },
 }

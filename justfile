@@ -1306,9 +1306,10 @@ verify-tables version="":
 
     # Migrated tables also require native-to-generated completeness, so an
     # upstream row addition cannot pass merely because old rows still match.
-    # Keep this scope in sync with the Verify Generated Tables CI job.
+    # Include inactive keyed definitions and keep this scope in sync with CI.
     python3 tools/exiftool-tables/verify.py "$GENERATED" "$LIB" \
         --oracle tools/exiftool-tables/oracle.pl \
+        --keyed-generated src/exiftool_tables/keyed_tables.rs \
         --native-inventory --native-inventory-table Sony:Tag202a
     # Step 27's structure check above proves an edge was transcribed. This
     # live-Perl oracle proves its generated Start/Base arithmetic evaluates

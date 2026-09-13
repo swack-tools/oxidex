@@ -68,6 +68,7 @@ else:
         output(flag('--ledger-out'),'expr-ledger')
     elif name=='codegen.py':
         dump(args[0]);output(flag('-o'),'binary');output(flag('--ifd-out'),'ifd')
+        output(flag('--keyed-out'),'keyed')
         output(flag('--value-conv-ledger-out'),'value-ledger')
     elif name in ('codegen_filetypes.py','codegen_fits.py','gen_sony_main_extra_tables.py','gen_minolta_a100_tables.py','gen_nikon_settings_tables.py','gen_sony_plain_tables.py'):
         dump(args[0]);output(flag('-o'),name)
@@ -83,7 +84,10 @@ else:
     elif name=='generate_tables.py':
         assert pathlib.Path(args[0]).resolve()==lib/'Image/ExifTool/Charset'
         for item in artifacts.select(producer='generate_charsets'): output(root/item.path,item.key)
-    elif name=='verify.py': assert pathlib.Path(args[1]).resolve()==lib
+    elif name=='verify.py':
+        assert pathlib.Path(args[1]).resolve()==lib
+        assert flag('--keyed-generated')==root/next(a.path for a in artifacts.select() if a.key=='keyed')
+        assert flag('--keyed-generated').read_text()=='generated explicit-A keyed\n'
     elif name in ('gen_geotiff_printconv.py','gen_dicom_dict.py'):
         assert flag('--exiftool-dir')==lib.parent
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])

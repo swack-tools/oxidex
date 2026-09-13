@@ -25,6 +25,14 @@ use strict;
 use warnings;
 use JSON::PP;
 use Encode qw(decode);
+use Digest::SHA qw(sha256_hex);
+use Cwd qw(abs_path);
+use File::Spec ();
+use File::Basename qw(dirname);
+use FindBin;
+use lib $FindBin::Bin;
+use OxiDex::NativeReaderContract ();
+use Scalar::Util qw(refaddr);
 use B ();
 
 # Resolve a code ref to its fully-qualified sub name.
@@ -63,6 +71,134 @@ sub deparse {
     return defined $text ? to_text($text) : undef;
 }
 
+# `SubDirectory.Validate` is normally a Perl expression string.  A fully
+# qualified call in that string names a helper whose body controls whether the
+# child is entered, so its name alone is not useful to a downstream compiler.
+# Record the loaded CODE ref and the exact selected-library source file here.
+# This is source evidence only: consumers must still recognise the body and
+# call arguments conservatively, and must refuse `resolved => false` facts.
+sub fully_qualified_calls {
+    my ($expr) = @_;
+    return () unless defined $expr && !ref $expr;
+    my %seen;
+    # This deliberately identifies calls, not arbitrary package tokens.  It
+    # does not parse or evaluate the enclosing Perl expression.
+    while ($expr =~ /(?<![\w:])((?:[A-Za-z_]\w*::)+[A-Za-z_]\w*)\s*\(/g) {
+        $seen{$1} = 1;
+    }
+    return sort keys %seen;
+}
+
+sub source_file_fact {
+    my ($cv, $lib_abs) = @_;
+    my $file = eval { B::svref_2object($cv)->FILE };
+    return (undef, undef, 'source_file_unavailable') unless defined $file && length $file;
+    my $abs = abs_path($file);
+    return (undef, undef, 'source_file_unreadable') unless defined $abs && -f $abs;
+    my $prefix = $lib_abs . '/';
+    return (undef, undef, 'source_outside_selected_lib')
+        unless index($abs, $prefix) == 0;
+    open(my $fh, '<:raw', $abs) or return (undef, undef, 'source_file_unreadable');
+    local $/;
+    my $bytes = <$fh>;
+    close($fh) or return (undef, undef, 'source_file_unreadable');
+    return (File::Spec->abs2rel($abs, $lib_abs), sha256_hex($bytes), undef);
+}
+
+sub unresolved_code_fact {
+    my ($name, $reason) = @_;
+    return {
+        __perl => 'CODE', __opaque => JSON::PP::true, __name => $name,
+        resolved => JSON::PP::false, __deparse => undef,
+        source_file => undef, source_sha256 => undef, reason => $reason,
+    };
+}
+
+sub direct_code_dependencies {
+    my ($body, $owner) = @_;
+    my %calls = map { $_ => 1 } fully_qualified_calls($body);
+    my $package = $owner;
+    $package =~ s/::[A-Za-z_]\w*$//;
+    # B::Deparse leaves same-package calls unqualified. Retain only names
+    # that resolve to an actual CODE glob in that package; Perl builtins and
+    # control keywords therefore do not become invented dependencies.
+    while ($body =~ /(?<![\w:])([A-Za-z_]\w*)\s*\(/g) {
+        my $bare = $1;
+        next if $bare =~ /^(?:if|unless|while|until|for|foreach|return|my|our|state|sub|package|use)$/;
+        my $candidate = "${package}::${bare}";
+        no strict 'refs';
+        $calls{$candidate} = 1 if *{$candidate}{CODE};
+    }
+    return sort keys %calls;
+}
+
+sub code_source_fact {
+    my ($name, $lib_abs, $ancestors, $depth) = @_;
+    $ancestors //= {};
+    $depth //= 0;
+    return unresolved_code_fact($name, 'dependency_depth_exceeded') if $depth > 8;
+    return unresolved_code_fact($name, 'dependency_cycle') if $ancestors->{$name};
+    my %fact = (
+        __perl  => 'CODE',
+        __opaque => JSON::PP::true,
+        __name  => $name,
+        resolved => JSON::PP::false,
+        __deparse => undef,
+        source_file => undef,
+        source_sha256 => undef,
+    );
+    return { %fact, reason => 'invalid_fully_qualified_name' }
+        unless $name =~ /^(?:[A-Za-z_]\w*::)+[A-Za-z_]\w*$/;
+    no strict 'refs';
+    my $cv = *{$name}{CODE};
+    return { %fact, reason => 'code_ref_unavailable' } unless $cv;
+    my $resolved_name = code_name($cv);
+    $fact{__name} = $resolved_name if defined $resolved_name;
+    my $body = deparse($cv);
+    return { %fact, reason => 'deparse_unavailable' } unless defined $body;
+    $fact{__deparse} = $body;
+    my ($source_file, $source_sha256, $source_error) = source_file_fact($cv, $lib_abs);
+    return { %fact, reason => $source_error } if defined $source_error;
+    $fact{source_file} = $source_file;
+    $fact{source_sha256} = $source_sha256;
+    $fact{resolved} = JSON::PP::true;
+    my %next_ancestors = (%$ancestors, $name => 1);
+    my %dependencies;
+    for my $callee (direct_code_dependencies($body, $fact{__name})) {
+        $dependencies{$callee} = code_source_fact(
+            $callee, $lib_abs, \%next_ancestors, $depth + 1);
+    }
+    $fact{dependencies} = \%dependencies if %dependencies;
+    return \%fact;
+}
+
+sub validate_function_fact {
+    my ($name, $lib_abs) = @_;
+    return code_source_fact($name, $lib_abs);
+}
+
+sub collect_subdirectory_validate_function_names {
+    my ($value, $names, $seen, $depth) = @_;
+    return if !defined $value || $depth > 24;
+    my $kind = ref $value;
+    return unless $kind eq 'HASH' || $kind eq 'ARRAY';
+    my $id = refaddr($value);
+    return if defined $id && $seen->{$id}++;
+    if ($kind eq 'HASH') {
+        my $subdir = $value->{SubDirectory};
+        if (ref($subdir) eq 'HASH') {
+            for my $name (fully_qualified_calls($subdir->{Validate})) {
+                $names->{$name} = 1;
+            }
+        }
+        collect_subdirectory_validate_function_names($_, $names, $seen, $depth + 1)
+            for values %$value;
+    } else {
+        collect_subdirectory_validate_function_names($_, $names, $seen, $depth + 1)
+            for @$value;
+    }
+}
+
 # ExifTool's sources are a mix of ASCII, UTF-8 and Latin-1 (copyright signs in
 # Notes, accented names in manufacturer tables).  Perl hands us bytes; JSON must
 # be valid UTF-8.  Decode as UTF-8 where that succeeds and fall back to
@@ -77,6 +213,8 @@ sub to_text {
 
 my $EXIFTOOL_LIB = shift @ARGV or die "usage: $0 <exiftool-lib-dir> [module...]\n";
 unshift @INC, $EXIFTOOL_LIB;
+
+my $EXIFTOOL_LIB_ABS = abs_path($EXIFTOOL_LIB) or die "invalid exiftool lib: $EXIFTOOL_LIB\n";
 
 require Image::ExifTool;
 
@@ -230,7 +368,7 @@ sub dump_tag_entry {
 }
 
 sub dump_module {
-    my ($module) = @_;
+    my ($module, $validate_function_names) = @_;
     my $pkg = "Image::ExifTool::$module";
     eval "require $pkg; 1" or do {
         return { module => $module, error => "$@" };
@@ -260,6 +398,8 @@ sub dump_module {
 
         my %tags;
         for my $k (@tagkeys) {
+            collect_subdirectory_validate_function_names(
+                $hash->{$k}, $validate_function_names, {}, 0);
             $tags{$k} = dump_tag_entry($hash->{$k});
         }
         my %meta;
@@ -296,6 +436,8 @@ sub dump_module {
         next unless $aref && ref $aref eq 'ARRAY' && @$aref;
         next unless grep { ref $_ } @$aref;
 
+        collect_subdirectory_validate_function_names(
+            $aref, $validate_function_names, {}, 0);
         my @rows = map { dump_tag_entry($_) } @$aref;
         $arrays{$sym} = {
             full_name => "${pkg}::${sym}",
@@ -330,9 +472,11 @@ unless (@modules) {
 }
 
 my %out;
+my %subdirectory_validate_function_names;
+my %subdirectory_validate_functions;
 my ($ok, $failed) = (0, 0);
 for my $m (@modules) {
-    my $r = dump_module($m);
+    my $r = dump_module($m, \%subdirectory_validate_function_names);
     if ($r->{error}) {
         $failed++;
         warn "SKIP $m: $r->{error}";
@@ -342,6 +486,22 @@ for my $m (@modules) {
     $out{$m} = $r;
     $ok++;
 }
+
+# Resolve after every requested module has loaded: a table may name a helper
+# defined by a later module, and later source may replace an earlier CODE ref.
+for my $name (sort keys %subdirectory_validate_function_names) {
+    $subdirectory_validate_functions{$name} = validate_function_fact(
+        $name, $EXIFTOOL_LIB_ABS);
+}
+
+# The child captures byte-order state without changing this table-walking
+# process. These facts prove that the final loaded CODE refs are the same ones
+# the child observed; a later module override makes the contract unresolved.
+my $unsigned_reader_contract = OxiDex::NativeReaderContract::finalise_loaded_contract(
+    OxiDex::NativeReaderContract::capture_isolated_contract(
+        $^X, File::Spec->catfile(dirname(abs_path($0) // $0),
+            'dump_binary_reader_contract.pl'), $EXIFTOOL_LIB),
+    $EXIFTOOL_LIB_ABS);
 
 # ->utf8 makes the encoder emit UTF-8 *bytes*.  Without it JSON::PP returns a
 # character string and print() downgrades anything under U+0100 to a raw
@@ -353,4 +513,6 @@ print $json->encode({
     modules_ok       => $ok,
     modules_failed   => $failed,
     modules          => \%out,
+    subdirectory_validate_functions => \%subdirectory_validate_functions,
+    native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
 });

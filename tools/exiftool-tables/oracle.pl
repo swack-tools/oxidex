@@ -116,6 +116,12 @@ use strict;
 use warnings;
 use Encode qw(decode);
 use B ();
+use Cwd qw(abs_path);
+use Digest::SHA qw(sha256_hex);
+use FindBin;
+use lib $FindBin::Bin;
+use JSON::PP ();
+use OxiDex::NativeReaderContract ();
 
 my $LIB = shift @ARGV or die "usage: $0 <exiftool-lib-dir>\n";
 unshift @INC, $LIB;
@@ -131,6 +137,28 @@ sub txt {
 }
 
 sub clean { my $s = txt($_[0]); $s =~ s/[\t\n\r]+/ /g; return $s }
+
+# Source-file provenance comes from the live callee CODE ref, not the dump
+# or generated audit record. A changed helper invalidates a stale artifact
+# even when its owning module's tag tables did not change.
+sub keyed_validation_source {
+    my ($expression) = @_;
+    return ('', '', '') unless defined $expression && !ref $expression;
+    return ('', '', '') unless $expression =~ /^\s*((?:[A-Za-z_]\w*::)+[A-Za-z_]\w*)\s*\(/;
+    my $callee = $1;
+    no strict 'refs';
+    my $cv = *{$callee}{CODE};
+    return ($callee, '', '') unless $cv;
+    my $file = eval { B::svref_2object($cv)->FILE };
+    my $root = abs_path($LIB);
+    my $path = defined $file ? abs_path($file) : undef;
+    return ($callee, '', '') unless defined $path && defined $root && index($path, "$root/") == 0;
+    open(my $fh, '<:raw', $path) or return ($callee, '', '');
+    local $/;
+    my $bytes = <$fh>;
+    close($fh) or return ($callee, '', '');
+    return ($callee, substr($path, length($root) + 1), sha256_hex($bytes));
+}
 
 # Emit every row for one tag-info entry `$e` at `$key`. Shared between a
 # plain (scalar-keyed) entry and one alternative of a Step 23 `_variants`
@@ -322,6 +350,10 @@ sub emit_keyed_entry {
             $text->($sd->{TagTable}), $text->($sd->{Start}),
             defined($sd->{Validate}) ? '1' : '', defined($sd->{ProcessProc}) ? '1' : '',
         ), "\n";
+        if (defined $sd->{Validate} && !ref $sd->{Validate}) {
+            print join("\t", 'KEYED', $mod, $sym, $key, 'VALIDATION',
+                clean($sd->{Validate}), keyed_validation_source($sd->{Validate})), "\n";
+        }
     }
     my $pc = $e->{PrintConv};
     if (ref $pc eq 'HASH') {
@@ -629,3 +661,12 @@ for my $mod (grep { !$skip{$_} } @mods) {
         emit_ifd_table($mod, $sym, $t) if $is_ifd;
     }
 }
+
+# Run the primitive oracle in isolation, then authenticate its refs against
+# the modules this oracle actually loaded. The snapshot records native reads
+# and state transitions; no compiler body recognizer participates here.
+my $reader_contract = OxiDex::NativeReaderContract::finalise_loaded_contract(
+    OxiDex::NativeReaderContract::capture_isolated_contract(
+        $^X, "$FindBin::Bin/dump_binary_reader_contract.pl", $LIB), abs_path($LIB));
+print join("\t", 'NATIVE_READER_CONTRACT', 'unsigned16',
+    JSON::PP->new->canonical->encode($reader_contract)), "\n";

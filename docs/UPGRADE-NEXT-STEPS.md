@@ -19,9 +19,9 @@ populations. They are implementation history, not work to restart.
 
 | Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Establish the starting rule inventory and migrate Sony Tag202a through shared machinery | Published at `5bd15e00`, including removal of 17 duplicate declarations; local lint/workspace/Python/build checks pass; final Linux/corpus gate pending | Native-source change tests, shared execution, exact retired/remaining custom rules, and no unexplained per-file regression; details in the [scoreboard](./AUTOGENERATION-PROGRESS.md) |
+| 1 | Extend the source inventory and complete the next shared directory capability | Sony Tag202a migration/retirement merged in #746; source inventory and artifact join merged in #749/#751. Directory validation is published through `46f585d1`; canonical regeneration now passes locally with 31 declared outputs. Five child edges remain unsupported. | Classify runtime/manual rules against the recorded inventory; resolve named processor blockers, verify both carriers, then retire the duplicate readers. Details in the [scoreboard](./AUTOGENERATION-PROGRESS.md). |
 | 2 | Continue generated EXIF directory migration | IFD1 and InteropIFD landed; Claude owns ExifIFD E-2 | Preserve occurrence behavior and named-directory routing; measure each activation against its own control |
-| 3 | Join producer and upgrade accounting | Queued alongside the pilot | Generated facts, manual rules, unsupported rules and actual execution remain distinct; ordinary source changes need no new tag rules |
+| 3 | Join producer and upgrade accounting | Source-to-artifact join merged; runtime and manually maintained rule classification remain open | Generated facts, manual rules, unsupported rules and actual execution remain distinct; ordinary source changes need no new tag rules |
 | 4 | Preserve Sony/Nikon producer recovery evidence | Sony plain landed; enciphered/encrypted recovery preserved and unlanded | Recovery is labeled maintenance; no numbering-only reconstruction or duplicate per-vendor interpreter is promoted as the target |
 
 The [13.55-to-13.59 retrospective rehearsal](./reference/bump-reports/13.55-to-13.59.md)

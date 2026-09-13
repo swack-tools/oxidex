@@ -13,9 +13,12 @@ artifact-complete, while both full-pair supervisor exit statuses remain
 unavailable and explicitly retained as that validation limitation.
 
 The keyed-directory schema/compiler merged in PR #748 at `ebbe1ece`, after all
-final hosted checks passed at `a422e8de`. The separate reader is published at
-`40fd8c24`; focused tests cover full directory counts, deep nesting, native
-group projection and refusing parent decisions after unsafe child state. No
+final hosted checks passed at `a422e8de`. The separate reader merged in PR #752
+at `634e5616` on September 13, 06:30 UTC, after all required checks passed on
+`ad6d8562` against `35487962`. Focused tests cover full directory counts, deep nesting, native
+group projection, legacy continuation after child failure and directory-state
+restoration when a checked walk stops. Independent review found no remaining
+blocking defect in those two corrections. No
 production Canon route is active and neither manual Make/Model reader has
 been removed.
 
@@ -27,6 +30,52 @@ shapes. These categories describe source structure, not manual or generated
 behavior. The [replay instructions](reference/source-processor-inventory-13.59.md)
 record the source and selector identities. Runtime and maintenance
 classification still need to be joined to this population.
+
+Shared keyed reporting policy merged in PR #750 at `5fb979d8` after all
+required hosted checks passed on `50d01be4`. The source-to-artifact join merged in PR #751 at `35487962`, after all
+required checks passed on `dd8d89b3`; its 1,512-identity report preserves
+the separate historical artifact snapshot `18a8ef17`. It still does not
+classify runtime producers or manually maintained rules.
+
+The work-branch compiler checkpoint captures native validation helper source
+and turns seven CanonRaw call sites into shared size-comparison operands.
+Independent numeric-reader source and byte-order checks now clear all seven
+validation-proof blockers in local replay. **Five child edges still have
+unsupported processing rules; the parent route remains inactive.** Local
+source/oracle replay accounts for 61 rows (57 represented, four explicit
+omissions) with zero source-fact discrepancies. It checks 262,144 native numeric
+reads and ten boundary cases. Changing only native `Get16u` from a 16-bit to a
+32-bit read blocks all seven newly generated checks and rejects all seven
+stale artifact checks.
+
+The complete Python tool suite passes 638 tests in 194 seconds. Focused Python
+checks, 18 Rust reader tests, three Rust primitive tests and the repository's
+exact CI lint command also pass. The
+[checkpoint](reference/directory-validation-checkpoint.md) records the current
+Python count and scope. Native probing also corrected a boundary bug: a short
+read at the buffer end coerces to zero, whereas starting beyond the buffer
+rejects the child. Earlier failed attempts remain recorded.
+
+Canonical regeneration now passes locally using isolated Perl 5.38.2 and
+pinned ExifTool 13.59. The official two-tier command completed in 158 seconds;
+all prior table artifacts remain byte-identical. The new keyed definitions
+are the 31st declared output, and the refreshed expression ledger authenticates
+the new native-source dump. All 607 expressions passed, with 16,789 comparisons,
+zero disagreements and 14 inapplicable probe errors. The independent keyed
+inventory accounts for 61 source rows, including four explicit omissions.
+
+The full native dump is byte-identical for absolute and relative library
+locations after diagnostic paths were made portable. Source-file hashes and
+error text/line numbers remain intact. The local interpreter also reproduced
+the historical canonical dump exactly before the capture change.
+
+Published source checkpoints are `51e4d864` and `46f585d1`; the reviewed next
+word-directory compiler is published separately at `6a993607`. Regeneration
+and routine committed-artifact verification are part of this follow-up. These
+are work-branch checkpoints, not merged production activation. Five child
+edges and other parent omissions still block the Canon route; no corpus gain
+or manual Canon retirement is claimed. The i7 command channel remains
+unverified; this regeneration did not use or claim its shared lock.
 
 ## What the pilot must prove
 
