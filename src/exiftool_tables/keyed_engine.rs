@@ -11,7 +11,9 @@ use crate::io::ByteOrder;
 use super::cond::{Ctx, MemberValue};
 use super::engine::{self, Emitted};
 use super::runtime;
-use super::{Fmt, IfdFlags, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, find_table};
+use super::{
+    Fmt, IfdFlags, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, find_table,
+};
 
 /// Carrier projection applied after generated tag/table group resolution.
 ///
@@ -74,6 +76,9 @@ pub struct KeyedWalkResult {
     pub large_scalar: usize,
     pub unwalked_edge: usize,
     pub unavailable_target: usize,
+    /// A source-authenticated child Validate returned false. Native skips only
+    /// that child and continues the enclosing keyed directory.
+    pub validation_rejected: usize,
 }
 
 /// Read one keyed directory and same-table CIFF subdirectories.
@@ -254,12 +259,15 @@ fn process_entry<'a>(
     let entry_type = (raw_tag >> 8) & 0x38;
     let inline = raw_tag & 0x4000 != 0;
     let payload = &block.data[entry + 2..entry + 10];
-    let (value_offset, value_size) = if inline {
-        (entry + 2, 8usize)
+    let (value_offset, value_size, declared_size) = if inline {
+        // ProcessCanonRaw overwrites `$size` with the eight inline bytes.
+        (entry + 2, 8usize, 8u32)
     } else {
-        let Some(size) =
-            u32_at(payload, 0, block.byte_order).and_then(|value| usize::try_from(value).ok())
-        else {
+        let Some(declared_size) = u32_at(payload, 0, block.byte_order) else {
+            result.bad_value += 1;
+            return KeyedEntryAction::Continue;
+        };
+        let Some(size) = usize::try_from(declared_size).ok() else {
             result.bad_value += 1;
             return KeyedEntryAction::Continue;
         };
@@ -269,7 +277,7 @@ fn process_entry<'a>(
             result.bad_value += 1;
             return KeyedEntryAction::Continue;
         };
-        (offset, size)
+        (offset, size, declared_size)
     };
 
     let resolved = resolve_tag(table, raw_id, ctx, result);
@@ -316,6 +324,7 @@ fn process_entry<'a>(
                 module,
                 table: target,
                 start,
+                validation,
                 unwalked,
             } => {
                 if !matches!(start, super::KeyedStart::Zero) || !unwalked.is_empty() {
@@ -326,6 +335,18 @@ fn process_entry<'a>(
                     result.bad_value += 1;
                     return KeyedEntryAction::Tainted;
                 };
+                // CanonRaw evaluates Start first, then calls Validate against
+                // the complete `$value` buffer and the declared CIFF size.
+                // Do not slice at Start before this check: Get16u receives
+                // `$dirData,$subdirStart+offset`, not a post-Start view.
+                // A false Validate warns and skips only this child; it never
+                // opens ProcessDirectory or changes parent state.
+                if validation.is_some_and(|check| {
+                    !check.matches(child.data, 0, declared_size, child.byte_order)
+                }) {
+                    result.validation_rejected += 1;
+                    return KeyedEntryAction::Continue;
+                }
                 let Some(target_table) = find_table(module, target) else {
                     result.unavailable_target += 1;
                     return KeyedEntryAction::Tainted;
@@ -598,7 +619,7 @@ mod tests {
     use super::*;
     use crate::exiftool_tables::{
         Cond, GateA, IfdFlags, KeyedNativeFacts, KeyedStart, KeyedVariantGroup, Omitted, PrintConv,
-        RawConvEffect, TagGroups,
+        RawConvEffect, SizeExpectation, TagGroups, U16SizeCheck,
     };
 
     const FACTS: KeyedNativeFacts = KeyedNativeFacts {
@@ -1026,6 +1047,7 @@ mod tests {
                 module: "CanonRaw",
                 table: "MakeModel",
                 start: KeyedStart::Zero,
+                validation: None,
                 unwalked: &["Validate"],
             }),
             ..tag(0x1001, "Edge", None, None)
@@ -1042,6 +1064,66 @@ mod tests {
         let (edge_sink, edge_result) = walk_test(&UNWALKED_TABLE, &edge_data, ByteOrder::Little);
         assert!(edge_sink.rows.is_empty());
         assert_eq!(edge_result.unwalked_edge, 1);
+    }
+
+    #[test]
+    fn false_bounded_value_validation_skips_only_the_child_before_target_lookup() {
+        static VALIDATION: U16SizeCheck = U16SizeCheck {
+            offset: 0,
+            expected: &[SizeExpectation::Relative(0)],
+            expression: "Test::Validate($dirData,$subdirStart,$size)",
+            callee: "Test::Validate",
+            source_file: "test.pm",
+            source_sha256: "test",
+            // Supplied by the pending source-reader contract schema. A test
+            // fixture has no external reader provenance.
+            reader_contract_sha256: None,
+        };
+        static CHILD: KeyedTag = KeyedTag {
+            edge: Some(KeyedEdge::BoundedValue {
+                module: "Unavailable",
+                table: "MustNotBeLookedUp",
+                start: KeyedStart::Zero,
+                validation: Some(VALIDATION),
+                unwalked: &[],
+            }),
+            ..tag(1, "Child", None, None)
+        };
+        static LATER: KeyedTag = tag(2, "Later", Some(Fmt::Int8u), None);
+        static TAGS: [KeyedTag; 2] = [CHILD, LATER];
+        static TABLE: KeyedDirectoryTable = table(&TAGS);
+
+        // The child declares six bytes, but its first u16 is five: native
+        // Validate is false. The missing target is deliberately irrelevant;
+        // the later parent row proves false validation continued normally.
+        let data = ciff(
+            ByteOrder::Big,
+            &[(0x1001, vec![0, 5, 0, 0, 0, 0]), (0x4002, vec![7])],
+        );
+        let mut members = HashMap::new();
+        members.insert("DIR_NAME", MemberValue::Str("Parent".into()));
+        let mut ctx = Ctx::new(&mut members);
+        let mut sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&data, ByteOrder::Big, scope()),
+            &mut ctx,
+            &mut sink,
+        );
+        assert_eq!(result.validation_rejected, 1);
+        assert_eq!(result.unavailable_target, 0);
+        assert_eq!(result.gate_b_blocked, 0);
+        assert_eq!(
+            sink.rows.iter().map(|row| row.name).collect::<Vec<_>>(),
+            vec!["Later"]
+        );
+        assert_eq!(
+            members.get("DIR_NAME"),
+            Some(&MemberValue::Str("Parent".into()))
+        );
     }
 
     #[test]
