@@ -79,7 +79,7 @@ def probe_materialized_native(materialization,plan,catalog,capture,resolution,ar
     rec={'name':case['name'],'fixture':{'sha256':_sha(f),'bytes':f.stat().st_size},'copy_sha256_before':_sha(private)}
     initial=_read(prefix,case['read']['query'],private,run); rec['read']=initial; read_ok=_matches(initial,case['read']['expectation'],case['read'].get('value'))
     op=case['write']; arg=f"-{op['tag']}=" if op['operation']=='delete' else f"-{op['tag']}={op['value']}"; write=_run([*prefix,'-overwrite_original',arg,str(private)],run); rec['write']=write
-    readback=_read(prefix,op['tag'],private,run); rec['readback']=readback; write_ok=write['state']=='ok' and _matches(readback,'value',op.get('readback')) if op.get('readback') is not None else write['state']=='ok' and readback['state']=='ok'
+    readback=_read(prefix,op['tag'],private,run); rec['readback']=readback; write_ok=write['state']=='ok' and (_matches(readback,'value',op['readback']) if op.get('readback') is not None else _matches(readback,'native_unsupported'))
     rec['state']='ready' if read_ok and write_ok else 'failed'; rec['copy_sha256_after']=_sha(private); records.append(rec)
  state='ready' if ready and all(x['state']=='ready' for x in records) else 'failed'
  payload={'schema':SCHEMA,'kind':KIND,'identity':identity,'version':version,'perl_capability':cap,'cases':records,'state':state,'execution':{'native_read':'probed' if records else 'failed','native_write':'probed' if records else 'failed','conformance':'unrun','limit':'matching-native readiness only; not OxiDex/native conformance'}}
