@@ -70,12 +70,14 @@ pub use ifd_schema::{
 };
 pub use ifd_tables::{ALL_IFD_TABLES, IFD_EXIFTOOL_VERSION};
 pub use keyed_engine::{
-    KeyedBlock, KeyedEmissionSink, KeyedScope, KeyedWalkResult, process_keyed_directory,
+    KeyedBlock, KeyedEmissionSink, KeyedScope, KeyedWalkResult, WordDirectoryEntry,
+    process_keyed_directory,
 };
 pub use keyed_schema::{
     KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedNativeFacts, KeyedNativeSubdir, KeyedStart,
-    KeyedTag, KeyedVariantGroup, OmittedKeyedNativeRow,
+    KeyedTag, KeyedVariantGroup, OmittedKeyedNativeRow, WordDirectory,
 };
+pub use keyed_tables::{ALL_KEYED_TABLES, OMITTED_KEYED_NATIVE_ROWS};
 pub use runtime::{
     Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
     RefusalCounts, TableDecode, all_fractional_census, apply_value_conv, decode_binary_table,
@@ -90,6 +92,17 @@ pub use validation::{SizeExpectation, U16SizeCheck};
 #[must_use]
 pub fn find_table(module: &str, table: &str) -> Option<&'static BinaryTable> {
     ALL_BINARY_TABLES
+        .iter()
+        .copied()
+        .find(|t| t.module == module && t.table == table)
+}
+
+/// Look up a generated source-described keyed table. Presence in this index
+/// does not activate it; a carrier must still request a keyed walk and pass
+/// its Gate B policy through [`KeyedEmissionSink`].
+#[must_use]
+pub fn find_keyed_table(module: &str, table: &str) -> Option<&'static KeyedDirectoryTable> {
+    ALL_KEYED_TABLES
         .iter()
         .copied()
         .find(|t| t.module == module && t.table == table)
