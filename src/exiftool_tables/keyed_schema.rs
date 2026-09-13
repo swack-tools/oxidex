@@ -11,6 +11,43 @@ use super::{Cond, ExprId, Fmt, GateA, IfdFlags, Omitted, PrintConv, TagGroups, U
 pub enum KeyedLayout {
     /// Canon CIFF's ten-byte directory entries.  The carrier supplies II/MM.
     Ciff10,
+    /// Canon's source-authenticated length-prefixed u16 custom-function
+    /// directory. The carrier supplies the bounded directory bytes and II/MM.
+    LengthPrefixedU16Pairs(WordDirectory),
+}
+
+/// Native operands for one fixed-stride directory whose u16 words contain a
+/// table key in their high bits and a source-selected masked integer value.
+///
+/// This is generated only after the compiler has authenticated the complete
+/// native processor body and its `Get16u` binding. It remains a layout fact;
+/// a caller must still pass Gate B through [`crate::exiftool_tables::KeyedEmissionSink`].
+#[derive(Clone, Copy, Debug)]
+pub struct WordDirectory {
+    pub pair_start: usize,
+    pub pair_stride: usize,
+    pub key_shift: usize,
+    pub value_mask: usize,
+    pub header_adjustment: usize,
+    pub model_condition: Cond,
+    pub exact_length_first: bool,
+    pub missing_model_as_empty: bool,
+    pub short_u16_as_zero: bool,
+    pub index_divisor: usize,
+    pub index_bias: usize,
+    /// The explicit `HandleTag` selection shape, rather than a CIFF type
+    /// default. This does not re-read or narrow the processor-supplied
+    /// integer: native `HandleTag` receives `$val` before it uses these
+    /// operands to select tag information.
+    pub value_format: Fmt,
+    pub value_count: usize,
+    pub value_size: usize,
+    pub invalid_warning: &'static str,
+    pub verbose_directory: &'static str,
+    pub source_file: &'static str,
+    pub source_sha256: &'static str,
+    pub source_body_sha256: &'static str,
+    pub reader_contract_sha256: &'static str,
 }
 
 #[derive(Clone, Copy, Debug)]
