@@ -177,13 +177,24 @@ def _table_fact(value: Any, where: str, processor: dict[str, Any]) -> None:
     if not isinstance(value, dict):
         _fail(f"{where} must be an object")
     required = {"processor", "groups", "format", "first_entry", "row_record_count", "named_row_count"}
-    if set(value) != required:
+    allowed = required | {"metadata"}
+    if not required <= set(value) or set(value) - allowed:
         _fail(f"{where} has unexpected or missing fields")
     _code_fact(value["processor"], f"{where} processor")
     if value["processor"] != processor:
         _fail(f"{where} processor fact differs from NATIVE_PROCESSOR")
     for name in ("groups", "format", "first_entry"):
         _property(value[name], f"{where} {name}")
+    # Older saved inventories predate complete table metadata; keep those
+    # parseable so consumers can report the coverage gap. Fresh oracle facts
+    # carry every live `%specialTags` key as an explicit typed property.
+    if "metadata" in value:
+        metadata = value["metadata"]
+        if not isinstance(metadata, dict) or not metadata:
+            _fail(f"{where} metadata must be a non-empty object")
+        for name, property_value in metadata.items():
+            _text(name, f"{where} metadata name")
+            _property(property_value, f"{where} metadata {name}")
     for name in ("row_record_count", "named_row_count"):
         if not isinstance(value[name], int) or isinstance(value[name], bool) or value[name] < 0:
             _fail(f"{where} {name} must be a non-negative integer")

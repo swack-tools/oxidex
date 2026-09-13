@@ -106,6 +106,10 @@ class OracleProcessorFacts(unittest.TestCase):
         self.assertEqual(main["named_row_count"], 2)
         self.assertTrue(main["groups"]["present"])
         self.assertEqual(main["format"]["value"], {"kind": "scalar", "value": "int8u"})
+        self.assertEqual(set(main["metadata"]), {"PROCESS_PROC", "GROUPS", "FORMAT", "FIRST_ENTRY"})
+        self.assertTrue(main["metadata"]["PROCESS_PROC"]["present"])
+        self.assertTrue(main["metadata"]["FORMAT"]["present"])
+        self.assertFalse(main["metadata"]["FIRST_ENTRY"]["present"])
         self.assertEqual(tables[("Fixture", "Empty")]["row_record_count"], 0)
         self.assertEqual(tables[("Fixture", "Empty")]["named_row_count"], 0)
 
