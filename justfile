@@ -1310,6 +1310,7 @@ verify-tables version="":
     python3 tools/exiftool-tables/verify.py "$GENERATED" "$LIB" \
         --oracle tools/exiftool-tables/oracle.pl \
         --keyed-generated src/exiftool_tables/keyed_tables.rs \
+        --word-processor Image::ExifTool::CanonCustom::ProcessCanonCustom \
         --native-inventory --native-inventory-table Sony:Tag202a
     # Step 27's structure check above proves an edge was transcribed. This
     # live-Perl oracle proves its generated Start/Base arithmetic evaluates

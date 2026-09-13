@@ -1,6 +1,34 @@
 # Autogeneration progress
 
 This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
+
+## Current word-processor checkpoint — September 13
+
+PR #753 merged as `1a47cfa3`; the current work also includes the newer
+integration base `72eae8a5`. The shared word processor now generates nine
+native tables containing 132 rows, including the empty fallback table.
+The independent definition verifier reports **132 native / 132 generated,
+zero row discrepancies and zero source-binding discrepancies**. Scope comes
+from the native processor inventory, so deleting every generated table fails.
+This is definition coverage; production routing remains inactive.
+
+Four of the parent's five unsupported child processors now have generated
+descriptors. One dynamic-length processor and four omitted parent rows remain.
+No Canon manual reader has been retired and no project-wide percentage has
+been remeasured. The next measurable result is native/Rust execution agreement
+using the actual generated registry, followed by the remaining processor,
+real-carrier verification and removal of duplicate readers.
+
+Clippy passes. All 607 translated expressions passed 16,789 native comparisons;
+14 probe inputs were inapplicable. The official regeneration attempt produced
+the tables but stopped because a new refusal counter lacked a report label.
+That reporting correction is implemented; the complete two-tier rerun and the
+new reader's execution tests remain pending. The
+[checkpoint record](reference/word-directory-checkpoint.md) distinguishes these
+checks and preserves both failed regeneration attempts.
+
+## Earlier milestones and evidence
+
 The Sony focus-table pilot merged in PR #746 at `04eaf6e1`; final CI is green
 at `a1626cb6`. It removed 17 duplicate declarations and brought the ten
 raw-ID fixes into the shared route. Its earlier comparisons, failed gate

@@ -482,6 +482,7 @@ jobs:
             "$EXIFTOOL_SOURCE/lib" \
             --oracle tools/exiftool-tables/oracle.pl \
             --keyed-generated src/exiftool_tables/keyed_tables.rs \
+            --word-processor Image::ExifTool::CanonCustom::ProcessCanonCustom \
             --native-inventory --native-inventory-table Sony:Tag202a
           # verify.py independently checks which edges should be present;
           # this runs their actual Start/Base arithmetic against the pinned

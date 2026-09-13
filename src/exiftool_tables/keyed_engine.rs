@@ -12,7 +12,7 @@ use super::cond::{Ctx, MemberValue};
 use super::engine::{self, Emitted};
 use super::runtime;
 use super::{
-    Fmt, IfdFlags, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, WordDirectory,
+    Cond, Fmt, IfdFlags, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, WordDirectory,
     find_keyed_table, find_table,
 };
 
