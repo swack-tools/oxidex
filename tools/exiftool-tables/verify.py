@@ -195,6 +195,7 @@ KEYED_TAG_RE = re.compile(
     r'name:\s*"(?P<name>(?:[^"\\]|\\.)*)",\s*'
     r'format:\s*(?P<format>None|Some\(Fmt::\w+(?:\(\d+\))?\)),\s*'
     r'count:\s*(?P<count>None|Some\(\d+\)),\s*'
+    r'flags:\s*(?P<flags>IfdFlags::NONE|IfdFlags\s*\{[^{}]*\}),\s*'
     r'condition:\s*(?P<condition>.*?),\s*'
     r'raw_conv:\s*(?P<raw_conv>.*?),\s*'
     r'omitted:\s*(?:Omitted::NONE|Omitted\s*\{[^{}]*\}),\s*'
@@ -966,6 +967,7 @@ class KeyedFact(NamedTuple):
     value_conv: bool
     groups: tuple
     edge: tuple | None
+    flags: tuple
 
 
 class KeyedSourceFacts(NamedTuple):
@@ -974,6 +976,7 @@ class KeyedSourceFacts(NamedTuple):
     condition: str | None
     groups: tuple
     subdir: tuple | None
+    flags: tuple
 
 
 class ParsedKeyedRust(NamedTuple):
@@ -1014,7 +1017,8 @@ def _parse_keyed_source_facts(text):
         r'KeyedNativeFacts\s*\{\s*format:\s*(?P<format>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
         r'count:\s*(?P<count>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
         r'condition:\s*(?P<condition>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
-        r'groups:\s*(?P<groups>.*?),\s*subdir:\s*(?P<subdir>None|Some\(KeyedNativeSubdir\s*\{.*\}\))\s*,?\s*\}',
+        r'groups:\s*(?P<groups>.*?),\s*subdir:\s*(?P<subdir>None|Some\(KeyedNativeSubdir\s*\{.*\}\)),\s*'
+        r'flags:\s*(?P<flags>IfdFlags::NONE|IfdFlags\s*\{[^{}]*\})\s*,?\s*\}',
         text, re.S,
     )
     if m is None:
@@ -1044,7 +1048,8 @@ def _parse_keyed_source_facts(text):
             raise SystemExit("unrecognised KeyedNativeFacts subdir")
         subdir = (_option_string(sm.group(1)), _option_string(sm.group(2)), sm.group(3) == "true", sm.group(4) == "true")
     return KeyedSourceFacts(_option_string(m.group("format")), _option_string(m.group("count")),
-                            _option_string(m.group("condition")), groups, subdir)
+                            _option_string(m.group("condition")), groups, subdir,
+                            _parse_ifd_flags(m.group("flags"), "keyed native facts"))
 
 
 def _parse_keyed_tag(src, match, key, fields, enums, pc_refused, facts, source_facts):
@@ -1123,6 +1128,7 @@ def _parse_keyed_tag(src, match, key, fields, enums, pc_refused, facts, source_f
     facts[key] = KeyedFact(
         match.group("format"), match.group("count"), match.group("condition") != "None",
         match.group("raw_conv") != "None", match.group("value_conv") != "None", groups, edge,
+        _parse_ifd_flags(match.group("flags"), key),
     )
     native_marker = re.compile(r"\s*,\s*native:\s*").search(src, edge_end)
     if native_marker is None:
@@ -1217,6 +1223,7 @@ def parse_keyed_oracle(out):
     names, enums, rawfmts, counts, conditions = {}, defaultdict(dict), {}, {}, {}
     hooks, subdirs, masks, properties = set(), set(), {}, defaultdict(set)
     table_groups, tag_groups, subdir_facts = {}, {}, {}
+    flags = {}
     for line in out.splitlines():
         p = line.split("\t")
         if len(p) < 5 or p[0] != "KEYED":
@@ -1234,6 +1241,12 @@ def parse_keyed_oracle(out):
             rawfmts[key] = p[5]
         elif marker == "COUNT" and len(p) == 6:
             counts[key] = p[5]
+        elif marker == "FLAGS" and len(p) == 11:
+            if key in flags or any(value not in {"0", "1"} for value in p[5:10]):
+                raise SystemExit(f"duplicate or malformed keyed flag facts for {key}")
+            if p[10] != "-" and re.fullmatch(r"[+-]?\d+", p[10]) is None:
+                raise SystemExit(f"unreadable keyed native Priority for {key}")
+            flags[key] = tuple(value == "1" for value in p[5:10]) + (None if p[10] == "-" else int(p[10]),)
         elif marker == "GROUPS" and len(p) == 8:
             tag_groups[key] = (p[5], p[6], p[7])
         elif marker == "SUBDIR" and len(p) == 9:
@@ -1248,7 +1261,9 @@ def parse_keyed_oracle(out):
             conditions[key] = p[5]
         elif marker in {"RAWCONV", "VALUECONV", "PRINTCONV", "UNKNOWN"}:
             properties[key].add(marker.lower())
-    return names, enums, rawfmts, masks, hooks, subdirs, properties, counts, table_groups, tag_groups, subdir_facts, conditions
+    if set(flags) != set(names):
+        raise SystemExit("keyed oracle must report flags for every named source row")
+    return names, enums, rawfmts, masks, hooks, subdirs, properties, counts, table_groups, tag_groups, subdir_facts, conditions, flags
 
 
 def run_oracle(lib, oracle_pl):
@@ -1538,7 +1553,8 @@ def _keyed_truthy(value):
 
 def keyed_native_inventory(generated, omissions, or_names, or_enums, or_rawfmts,
                            or_masks, or_hooks, or_subdirs, or_properties,
-                           or_counts, or_table_groups, or_tag_groups, or_subdir_facts, or_conditions):
+                           or_counts, or_table_groups, or_tag_groups, or_subdir_facts, or_conditions,
+                           or_flags=None):
     """Native-minus-generated accounting for the opt-in keyed schema.
 
     This has the same exact-one accounting as `native_inventory`, but its
@@ -1550,6 +1566,10 @@ def keyed_native_inventory(generated, omissions, or_names, or_enums, or_rawfmts,
     # that source, never only from generated statics: deleting a table must
     # become missing rows, not a native=0 false pass.
     table_scope = set(or_table_groups)
+    # Explicitly supplied facts come from the mandatory oracle FLAGS rows.
+    # The default retains the small synthetic callers' all-default policy.
+    or_flags = or_flags if or_flags is not None else {}
+    default_flags = (False, False, False, False, False, None)
     native = {k: v for k, v in or_names.items() if k[:2] in table_scope}
     generated_keys = set(generated.fields)
     declared = {k: v for k, v in omissions.rows.items() if k[:2] in table_scope}
@@ -1627,6 +1647,7 @@ def keyed_native_inventory(generated, omissions, or_names, or_enums, or_rawfmts,
         return KeyedSourceFacts(
             or_rawfmts.get(key), or_counts.get(key), or_conditions.get(key),
             tuple(value or None for value in or_tag_groups.get(key, ("", "", ""))), subdir,
+            or_flags.get(key, default_flags),
         )
     for key in sorted(set(native) & generated_keys):
         got = generated.facts.get(key)
@@ -1640,6 +1661,8 @@ def keyed_native_inventory(generated, omissions, or_names, or_enums, or_rawfmts,
         want_count = "None" if raw_count is None else f"Some({raw_count})"
         if got.count != want_count:
             keyed_fact_mismatches.append((key, f"count {got.count!r} != native {want_count!r}"))
+        if got.flags != or_flags.get(key, default_flags):
+            keyed_fact_mismatches.append((key, f"reporting flags {got.flags!r} != native {or_flags.get(key, default_flags)!r}"))
         # Conditions must have a compiled executable guard, while an opaque
         # RawConv/ValueConv is deliberately represented by `Omitted` rather
         # than a false executable effect.  The retained native facts below

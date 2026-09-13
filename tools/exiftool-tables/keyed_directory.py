@@ -134,9 +134,11 @@ def _count(tag, stats):
 class Context:
     def __init__(self, doc):
         self.processors = {}
+        self.table_meta = {}
         for module, mod in doc.get("modules", {}).items():
             for table, value in mod.get("tables", {}).items():
                 self.processors[(module, table)] = processor_name(value.get("meta"))
+                self.table_meta[(module, table)] = value.get("meta") or {}
 
     def target_supported(self, module, table):
         return self.processors.get((module, table)) in {
@@ -197,12 +199,51 @@ def _raw_conv(tag):
     return "None"
 
 
-def _native_facts(tag):
-    """Verbatim source facts retained beside executable keyed schema fields.
+def _reporting_flags(tag, table_meta):
+    """Reuse the shared flag representation, after native flag expansion.
+
+    Unknown is report policy, not a missing schema row. Keeping it lets a
+    first-match variant group preserve its known alternatives and fallback.
+    """
+    priority = tag.get("Priority")
+    if priority is None:
+        priority = table_meta.get("PRIORITY")
+    if priority is not None:
+        if isinstance(priority, (dict, list, bool)) or re.fullmatch(r"[+-]?\d+", str(priority).strip()) is None:
+            raise ValueError(f"unrepresentable keyed Priority: {priority!r}")
+        priority = int(str(priority).strip())
+        if not -(1 << 63) <= priority < (1 << 63):
+            raise ValueError("keyed Priority is outside the shared signed domain")
+    avoid = table_meta.get("AVOID")
+    if avoid is None:
+        avoid = tag.get("Avoid")
+    return codegen.ifd_flags_literal(
+        codegen.perl_truthy(tag.get("Unknown")),
+        codegen.perl_truthy(tag.get("Binary")),
+        codegen.perl_truthy(tag.get("List")),
+        codegen.perl_truthy(tag.get("Protected")),
+        codegen.perl_truthy(avoid), priority,
+    )
+
+
+def _expanded_tag(tag):
+    # SetupTagTable calls ExpandFlags only when Flags is Perl-truthy.
+    if not codegen.perl_truthy(tag.get("Flags")):
+        return tag
+    stats = _stats()
+    expanded = codegen.expand_flags(tag, stats)
+    if stats["ifd_flags_unreadable"]:
+        raise ValueError("unreadable keyed Flags; refusing an incomplete reporting policy")
+    return expanded
+
+
+def _native_facts(tag, table_meta=None):
+    """Expanded source facts retained beside executable keyed schema fields.
 
     They authenticate omission rows and detect source-condition changes that
     cannot be reconstructed from a compiled `Cond`.  The reader must use the
-    typed fields, not this audit copy.
+    typed fields, not this audit copy. Reporting policy includes native table
+    precedence; callers expand Flags exactly once before entering here.
     """
     option = lambda value: "None" if not isinstance(value, str) else f'Some("{codegen.rust_str(value)}")'
     groups = codegen.compile_groups_field(tag.get("Groups"), _stats())
@@ -219,18 +260,16 @@ def _native_facts(tag):
     return (
         "KeyedNativeFacts { "
         f"format: {option(tag.get('Format'))}, count: {option(str(tag['Count']) if tag.get('Count') is not None else None)}, "
-        f"condition: {option(tag.get('Condition'))}, groups: {groups}, subdir: {subdir} }}"
+        f"condition: {option(tag.get('Condition'))}, groups: {groups}, subdir: {subdir}, "
+        f"flags: {_reporting_flags(tag, table_meta or {})} }}"
     )
 
 
-def _tag_literal(tag, raw_id, stats, verified_exprs, ctx):
+def _tag_literal(tag, raw_id, stats, verified_exprs, ctx, table_meta):
     name = tag.get("Name")
     if not isinstance(name, str) or not name:
         stats["keyed_name"] += 1
         return None, "raw_id"
-    if codegen.perl_truthy(tag.get("Unknown")):
-        stats["keyed_unknown"] += 1
-        return None, "unknown"
     condition = tag.get("Condition")
     condition_src = "None"
     if condition is not None:
@@ -255,9 +294,8 @@ def _tag_literal(tag, raw_id, stats, verified_exprs, ctx):
     count_src, count_for_domain = _count(tag, stats)
     if count_src is None:
         return None, "count"
-    mask = codegen.mask_for(tag, stats)
-    if mask is None:
-        return None, "mask"
+    # ProcessCanonRaw calls ReadValue then FoundTag directly; it never
+    # applies ProcessBinaryData's Mask/BitShift transformation.
     domain = codegen.value_domain(format_name, count_for_domain)
     value_conv, modeled_value = codegen.value_conv_for(tag, stats, domain, verified_exprs)
     print_conv, refused_print = codegen.conv_for(
@@ -266,12 +304,12 @@ def _tag_literal(tag, raw_id, stats, verified_exprs, ctx):
     return (
         "KeyedTag { "
         f'raw_id: {raw_id:#06x}, name: "{codegen.rust_str(name)}", '
-        f"format: {fmt_src}, count: {count_src}, condition: {condition_src}, "
+        f"format: {fmt_src}, count: {count_src}, flags: {_reporting_flags(tag, table_meta)}, condition: {condition_src}, "
         f"raw_conv: {_raw_conv(tag)}, "
         f"omitted: {codegen.omitted_for(tag, stats, False, modeled_value, refused_print)}, "
         f"value_conv: {value_conv}, print_conv: {print_conv}, "
         f"groups: {codegen.compile_groups_field(tag.get('Groups'), stats)}, "
-        f"edge: {_edge(tag, raw_id, ctx, stats)}, native: {_native_facts(tag)} }}",
+        f"edge: {_edge(tag, raw_id, ctx, stats)}, native: {_native_facts(tag, table_meta)} }}",
         None,
     )
 
@@ -285,6 +323,7 @@ def gen_table(module, table, data, run_stats, verified_exprs, ctx, omissions):
     if not is_keyed_directory_table((data.get("meta") or {})):
         return None
     stats = _stats()
+    table_meta = data.get("meta") or {}
     tags, variants = [], []
     for raw, tag in sorted(data.get("tags", {}).items()):
         raw_id = parse_raw_id(raw)
@@ -295,18 +334,20 @@ def gen_table(module, table, data, run_stats, verified_exprs, ctx, omissions):
             trial = _stats()
             alternatives = []
             reason = None
-            for alt in tag.get("_variants", ()):
+            source_alts = [_expanded_tag(alt) if isinstance(alt, dict) else alt
+                           for alt in tag.get("_variants", ())]
+            for alt in source_alts:
                 if not isinstance(alt, dict) or "_variants" in alt:
                     reason = "condition"
                     break
-                src, reason = _tag_literal(alt, raw_id, trial, verified_exprs, ctx)
+                src, reason = _tag_literal(alt, raw_id, trial, verified_exprs, ctx, table_meta)
                 if src is None:
                     break
                 cond = conds.compile_cond(alt.get("Condition"))
                 alternatives.append(f"({cond}, {src})")
             if reason is not None:
                 stats["keyed_variant"] += 1
-                for n, alt in enumerate(tag.get("_variants", ())):
+                for n, alt in enumerate(source_alts):
                     _record_omission(omissions, module, table, f"{raw}#{n}", True, alt, reason)
                 continue
             codegen._merge_stats(stats, trial)
@@ -315,7 +356,8 @@ def gen_table(module, table, data, run_stats, verified_exprs, ctx, omissions):
         if not isinstance(tag, dict):
             stats["keyed_row_shape"] += 1
             continue
-        src, reason = _tag_literal(tag, raw_id, stats, verified_exprs, ctx)
+        tag = _expanded_tag(tag)
+        src, reason = _tag_literal(tag, raw_id, stats, verified_exprs, ctx, table_meta)
         if src is None:
             _record_omission(omissions, module, table, raw, False, tag, reason)
         else:
@@ -362,7 +404,7 @@ def generate(doc, verified_exprs=None, modules=None):
         rows.append(
             f'    OmittedKeyedNativeRow {{ module: "{codegen.rust_str(module)}", table: "{codegen.rust_str(table)}", '
             f'raw_id: "{codegen.rust_str(raw)}", variant: {str(variant).lower()}, name: {name_src}, '
-            f'native: {_native_facts(tag) if isinstance(tag, dict) else "KeyedNativeFacts { format: None, count: None, condition: None, groups: TagGroups::NONE, subdir: None }"}, '
+            f'native: {_native_facts(tag, ctx.table_meta[(module, table)]) if isinstance(tag, dict) else "KeyedNativeFacts { format: None, count: None, condition: None, groups: TagGroups::NONE, subdir: None, flags: IfdFlags::NONE }"}, '
             f'reasons: &["{reason}"] }},'
         )
     index = ["    &" + re.search(r"KEYED_[A-Z0-9_]+", chunk).group(0) + "," for chunk in chunks]

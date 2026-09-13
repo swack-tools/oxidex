@@ -12,9 +12,21 @@ adapter; the merged repair restores them. The repaired candidate is
 artifact-complete, while both full-pair supervisor exit statuses remain
 unavailable and explicitly retained as that validation limitation.
 
-The keyed-directory schema/compiler checkpoint is validated at `74418ceb`, not
-merged or active. It has no reader, route, or runtime claim; reader work is in
-a separate worktree pending native validation.
+The keyed-directory schema/compiler merged in PR #748 at `ebbe1ece`, after all
+final hosted checks passed at `a422e8de`. The separate reader is published at
+`40fd8c24`; focused tests cover full directory counts, deep nesting, native
+group projection and refusing parent decisions after unsafe child state. No
+production Canon route is active and neither manual Make/Model reader has
+been removed.
+
+The recorded source inventory merged in PR #749 at `18a8ef17`. Its immutable
+selector replay accounts for 1,512 table identities, 34,283 alternatives,
+32,043 named alternatives and 119 tables with no named alternatives. It
+classifies 651 binary shapes, 496 IFD candidates, one keyed shape and 364 other
+shapes. These categories describe source structure, not manual or generated
+behavior. The [replay instructions](reference/source-processor-inventory-13.59.md)
+record the source and selector identities. Runtime and maintenance
+classification still need to be joined to this population.
 
 ## What the pilot must prove
 
@@ -162,7 +174,8 @@ edges and the other manual Canon child producers remain separate work.
 
 ## Keyed-directory schema validation record
 
-This unmerged, schema-only checkpoint uses recorded ExifTool 13.59 Perl 5.38
+This schema-only checkpoint, subsequently merged in PR #748, uses recorded
+ExifTool 13.59 Perl 5.38
 source-dump SHA-256 `193cf4e91326f53c7bdfd674cb10da0937c8bcdb4c0285ad4f507fd9f96a8fb8`.
 The full replay at `74418ceb` produced binary source SHA-256
 `a8972dde5dc012ea7db27849fc02c52f68f9820dc8191c020fa40bb5adf26d97` and keyed
@@ -182,9 +195,11 @@ compiler and inventory evidence only: no keyed reader or Canon route is active.
 - Complete the wider inventory of manual, generated, unsupported and
   unclassified source rules, then refresh generated-route attribution on one
   recorded source revision.
-- Merge the keyed-directory schema/compiler checkpoint only after review. Its
-  reader remains a separate native-validation task; do not call the schema an
-  active Canon route or a manual-decoder retirement.
+- Integrate and validate the published keyed reader with shared reporting
+  policy. Seven source validation edges, an unsupported child processor,
+  undefined-format handling and three opaque-value rows still block parent
+  activation. Preserve these blockers; a clean MakeModel child edge does not
+  make the parent complete.
 - Keep the next manual retirement unchanged: generate and execute Canon parent
   routing in both standalone CRW and embedded JPEG CIFF, then retire the two
   Make/Model child decoders only after native and runtime evidence agree.

@@ -33,6 +33,7 @@
 #                                                    -- the binary rows above
 #   KEYED MODULE TABLE  ''     TGROUPS G0 G1 G2       -- raw table groups (8)
 #   KEYED MODULE TABLE  INDEX  COUNT N                -- raw Count (6)
+#   KEYED MODULE TABLE  INDEX  FLAGS U B L P A PRIORITY -- shared reporting policy (11)
 #   KEYED MODULE TABLE  INDEX  GROUPS G0 G1 G2        -- raw tag groups (8)
 #   KEYED MODULE TABLE  INDEX  SUBDIR TAGTABLE START VALIDATE PROCESSPROC (9)
 #
@@ -276,10 +277,25 @@ sub emit_entry {
 # first keyed slice inventories source facts only; it does not execute a
 # caller or a CIFF reader.
 sub emit_keyed_entry {
-    my ($mod, $sym, $key, $e) = @_;
+    my ($mod, $sym, $key, $e, $table) = @_;
+    # SetupTagTable expands once, before selection or output. Flags may
+    # override any source property, including Name, Condition and Format.
+    my $x = ref $e eq 'HASH' ? expanded_flags($e) : {};
+    $e = { %$e, %$x } if ref $e eq 'HASH';
     my $name = ref $e eq 'HASH' ? $e->{Name} : $e;
     return unless defined $name && !ref $name;
     print join("\t", 'KEYED', $mod, $sym, $key, 'NAME', clean($name)), "\n";
+    # Expand flags independently from the generator, using the same native
+    # source facts already used by the IFD oracle below. Table AVOID wins
+    # over per-tag Avoid; per-tag Priority wins over table PRIORITY.
+    my $policy = ref $e eq 'HASH' ? $e : {};
+    my $avoid = defined $table->{AVOID} ? $table->{AVOID} : flag_fact($policy, $x, 'Avoid');
+    my $priority = flag_fact($policy, $x, 'Priority');
+    $priority = $table->{PRIORITY} unless defined $priority;
+    print join("\t", 'KEYED', $mod, $sym, $key, 'FLAGS',
+        (map { flag_fact($policy, $x, $_) ? 1 : 0 } qw(Unknown Binary List Protected)),
+        ($avoid ? 1 : 0), dash_text($priority),
+    ), "\n";
     return unless ref $e eq 'HASH';
 
     my $fmt = $e->{Format};
@@ -291,7 +307,7 @@ sub emit_keyed_entry {
     print join("\t", 'KEYED', $mod, $sym, $key, 'VALUECONV', 1), "\n" if defined $e->{ValueConv};
     print join("\t", 'KEYED', $mod, $sym, $key, 'CONDITION', clean($e->{Condition})), "\n" if defined $e->{Condition} && !ref $e->{Condition};
     print join("\t", 'KEYED', $mod, $sym, $key, 'PRINTCONV', 1), "\n" if defined $e->{PrintConv};
-    print join("\t", 'KEYED', $mod, $sym, $key, 'UNKNOWN', 1), "\n" if $e->{Unknown};
+    print join("\t", 'KEYED', $mod, $sym, $key, 'UNKNOWN', 1), "\n" if flag_fact($e, $x, 'Unknown');
     print join("\t", 'KEYED', $mod, $sym, $key, 'MASKDECL', 1), "\n" if defined $e->{Mask};
     my $groups = $e->{Groups};
     if (ref $groups eq 'HASH') {
@@ -564,11 +580,11 @@ for my $mod (grep { !$skip{$_} } @mods) {
                 if (ref $e eq 'ARRAY') {
                     my $i = 0;
                     for my $alt (@$e) {
-                        emit_keyed_entry($mod, $sym, "$k#$i", $alt);
+                        emit_keyed_entry($mod, $sym, "$k#$i", $alt, $t);
                         $i++;
                     }
                 } else {
-                    emit_keyed_entry($mod, $sym, $k, $e);
+                    emit_keyed_entry($mod, $sym, $k, $e, $t);
                 }
             }
         }

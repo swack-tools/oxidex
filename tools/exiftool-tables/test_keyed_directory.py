@@ -67,6 +67,96 @@ class InitialContext(unittest.TestCase):
 
 
 class SourceDrivenFacts(unittest.TestCase):
+    def test_unknown_fallback_preserves_known_alternatives_and_source_order(self):
+        source, stats = keyed_directory.generate(doc({
+            "0x180b": {"_variants": [
+                {"Name": "SerialNumber", "Condition": "$$self{Model} =~ /EOS D30\\b/"},
+                {"Name": "SerialNumber", "Condition": "$$self{Model} =~ /EOS/"},
+                {"Name": "UnknownNumber", "Flags": "Unknown"},
+            ]},
+        }))
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "keyed.rs"
+            path.write_text(source)
+            parsed = verify.parse_keyed_rust(path)
+            keys = [("Any", "Main", f"6155#{n}") for n in range(3)]
+            self.assertEqual([parsed.fields[k] for k in keys],
+                             ["SerialNumber", "SerialNumber", "UnknownNumber"])
+            self.assertEqual([parsed.facts[k].flags[0] for k in keys], [False, False, True])
+            self.assertEqual(verify.parse_omitted_keyed_native_rows(path).rows, {})
+        self.assertFalse(stats["keyed_variant"])
+
+    def test_flags_reuse_shared_policy_and_table_precedence(self):
+        native = doc({
+            "0x1001": {"Name": "A", "Unknown": 1, "Flags": {"Unknown": 0, "Binary": 1, "Priority": -2}},
+            "0x1002": {"Name": "B", "Flags": ["List", "Protected", "Avoid"]},
+        })
+        native["modules"]["Any"]["tables"]["Main"]["meta"].update(AVOID=0, PRIORITY=3)
+        source, _ = keyed_directory.generate(native)
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "keyed.rs"
+            path.write_text(source)
+            parsed = verify.parse_keyed_rust(path)
+            self.assertEqual(parsed.facts[("Any", "Main", "4097")].flags,
+                             (False, True, False, False, False, -2))
+            self.assertEqual(parsed.facts[("Any", "Main", "4098")].flags,
+                             (False, False, True, True, False, 3))
+
+    def test_invalid_reporting_policy_refuses_generation(self):
+        for extra in ({"Flags": [7]}, {"Priority": "many"}, {"Priority": 1 << 63}):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                keyed_directory.generate(doc({"0x1001": {"Name": "Mode", **extra}}))
+
+    def test_falsy_flags_do_not_expand(self):
+        tag = {"Name": "Mode", "Unknown": 1}
+        plain, _ = keyed_directory.generate(doc({"0x1001": tag}))
+        for flags in (None, "", "0", 0, False):
+            with self.subTest(flags=flags):
+                source, _ = keyed_directory.generate(doc({"0x1001": {**tag, "Flags": flags}}))
+                self.assertEqual(source, plain)
+
+    def test_flags_expand_once_before_variant_selection_and_omission_facts(self):
+        condition = "$$self{Model} =~ /EOS/"
+        changed = {
+            "Name": "OldName", "Condition": "$$self{Model} =~ /D30/",
+            "Flags": {"Name": "ExpandedName", "Condition": condition,
+                      "Format": "int16u", "Count": 2,
+                      "Flags": {"Name": "MustNotExpandTwice"}},
+        }
+        source, _ = keyed_directory.generate(doc({"0x180b": {"_variants": [changed]}}))
+        self.assertIn(f"({conds.compile_cond(condition)}, KeyedTag", source)
+        self.assertNotIn("OldName", source)
+        self.assertNotIn("MustNotExpandTwice", source)
+        self.assertIn('name: "ExpandedName"', source)
+        refused = dict(changed)
+        refused["Flags"] = {**changed["Flags"], "Format": "int16u[2]"}
+        omitted, _ = keyed_directory.generate(doc({"0x180b": {"_variants": [refused]}}))
+        self.assertIn('name: Some("ExpandedName")', omitted)
+        self.assertNotIn("OldName", omitted)
+        self.assertNotIn("MustNotExpandTwice", omitted)
+
+    def test_defined_zero_priority_and_undefined_fallback(self):
+        native = doc({
+            "0x1001": {"Name": "Zero", "Priority": 0},
+            "0x1002": {"Name": "Fallback", "Priority": None},
+        })
+        native["modules"]["Any"]["tables"]["Main"]["meta"]["PRIORITY"] = -1
+        source, _ = keyed_directory.generate(native)
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "keyed.rs"
+            path.write_text(source)
+            parsed = verify.parse_keyed_rust(path)
+            self.assertEqual(parsed.facts[("Any", "Main", "4097")].flags[-1], 0)
+            self.assertEqual(parsed.facts[("Any", "Main", "4098")].flags[-1], -1)
+
+    def test_native_keyed_processor_ignores_binary_processor_masks(self):
+        # ProcessCanonRaw has no mask operation between ReadValue and FoundTag.
+        # A copied native-source fixture confirms inline 3 stays 3 with Mask=1.
+        plain, _ = keyed_directory.generate(doc({"0x100a": {"Name": "Mode"}}))
+        for mask in (1, "not-a-binary-mask"):
+            masked, _ = keyed_directory.generate(doc({"0x100a": {"Name": "Mode", "Mask": mask}}))
+            self.assertEqual(masked, plain)
+
     def test_count_preserves_undefined_zero_and_explicit_scalar_source_count(self):
         src, stats = keyed_directory.generate(doc({
             "0x1001": {"Name": "Implicit"},
@@ -245,6 +335,28 @@ class IndependentInventory(unittest.TestCase):
         )
         self.assertEqual(bad.missing, ())
         self.assertEqual(len(bad.bad_reasons), 1)
+
+    def test_native_flags_are_mandatory_and_reject_executable_or_source_drift(self):
+        path = self._artifact({"0x1001": {"Name": "Mode", "Flags": ["Binary", "Unknown"]}})
+        native = "\n".join([
+            "KEYED\tAny\tMain\t\tTGROUPS\tMakerNotes\t\t",
+            "KEYED\tAny\tMain\t4097\tNAME\tMode",
+            "KEYED\tAny\tMain\t4097\tFLAGS\t1\t1\t0\t0\t0\t-",
+            "KEYED\tAny\tMain\t4097\tUNKNOWN\t1",
+        ])
+        source = verify.parse_keyed_oracle(native)
+        def inventory(artifact, oracle=source):
+            return verify.keyed_native_inventory(
+                verify.parse_keyed_rust(artifact), verify.parse_omitted_keyed_native_rows(artifact), *oracle
+            )
+        self.assertEqual(inventory(path).keyed_fact_mismatches, ())
+        drift = path.with_name("flags-drift.rs")
+        drift.write_text(path.read_text().replace("unknown: true", "unknown: false", 1))
+        self.assertTrue(any("reporting flags" in why for _, why in inventory(drift).keyed_fact_mismatches))
+        mutated = verify.parse_keyed_oracle(native.replace("FLAGS\t1\t1", "FLAGS\t0\t1"))
+        self.assertTrue(inventory(path, mutated).keyed_fact_mismatches)
+        with self.assertRaises(SystemExit):
+            verify.parse_keyed_oracle("\n".join(line for line in native.splitlines() if "\tFLAGS\t" not in line))
 
     def test_sized_format_omission_is_authenticated_by_keyed_native_format_rules(self):
         # ProcessCanonRaw refuses the sized spelling rather than borrowing
