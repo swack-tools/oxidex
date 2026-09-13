@@ -18,7 +18,7 @@ populations. They are implementation history, not work to restart.
 | --- | --- | --- | --- |
 | 1 | Continue generated EXIF directory migration | IFD1 and InteropIFD landed; Claude owns ExifIFD E-2 | Preserve the verified CODE-ref key/domain gate, occurrence behavior and named-directory routing; measure each activation against its own control |
 | 2 | Correct classifier/producer accounting exposed by the release rehearsal | Queued | Existing Garmin runtime is recognized, standing debt is separated, repeated field changes are joined by cause, and emitted/activated/observed states remain distinct |
-| 3 | Broaden walk checks and reconstruct useful missing producers | Nikon settings landed; Sony plain producer and native verification implemented, landing checks in progress | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
+| 3 | Broaden walk checks and reconstruct useful missing producers | Nikon settings and Sony plain landed; Sony enciphered and Nikon encrypted recovery in progress | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
 
 The [13.55-to-13.59 retrospective rehearsal](./reference/bump-reports/13.55-to-13.59.md)
 passed on 2026-09-11 at `4fb705da` in **611.006 seconds**, with zero source-edit
@@ -68,19 +68,54 @@ Work from freshly fetched `e664e063` is recorded in the
 [Sony recovery report](./reference/sony-plain-generator-recovery.md). First
 milestone reproduces the existing six tables and 193 rows exactly, adds
 independent native declaration verification, and puts the output under the
-shared transaction. The complete tier-2 run passes with zero output drift.
+shared transaction. PR [#745](https://github.com/swack-tools/oxidex/pull/745)
+landed as `7e928390` after all required hosted checks passed. The complete
+tier-2 run passes with zero output drift.
 The [raw-key identity repair](./reference/sony-raw-id-runtime.md) is now
 implemented separately: generated exact IDs distinguish
 `CameraSettings3[276]` and `[276.1]`, restoring `ImageNumber` while preserving
 actual conditional alternatives. Both fields match native ExifTool in six
-synthetic TIFF carriers and all 68 Sony tests pass. Complete the workspace
-and real-file/runtime gates before landing or claiming a corpus gain.
+synthetic TIFF carriers; all 68 Sony tests and the complete all-features
+workspace suite pass. Complete the real-file/runtime gates before landing or
+claiming a corpus gain.
 Sony enciphered and Nikon encrypted remain larger producer recoveries.
 
 The earlier paired censuses established the 7.63% result at `79101d7d`; that
 is historical evidence, not the current percentage. Later routing migrations
 need their own attribution. Heavy i7 work must acquire
 `flock /tmp/i7-heavy.lock`; process-name checks are not a reservation.
+
+### Parallel implementation with batched builds
+
+Use GPT-5.6 Terra workers for independent generator and verifier scopes. Each
+worker owns one branch and checkout, plus a bounded deliverable. Reuse finished
+worktrees after preserving their handoffs. Current parallel scopes are Sony
+enciphered generation, its independent native verifier, and Nikon encrypted
+generation. A completed implementation still needs independent review and
+integration before it counts as landed.
+
+During authoring, run syntax checks, focused Python tests, native Perl fact
+checks and byte comparisons. Do not run a Cargo build for each generator edit
+or worker. Prove both directions of the upgrade contract: supported native
+name, offset and enum changes regenerate without editing the producer;
+unsupported semantics and changed executable bodies refuse before replacing
+output. A hash that freezes the entire source table is not an upgradeable
+producer. Recovering byte-identical Rust needs no new runtime attribution claim.
+
+The coordinator combines reviewed changes into a small batch, then runs one
+required build/test sequence per target platform. Keep Cargo features, profiles
+and toolchains consistent to reuse build caches; retain source and binary
+identities. Batch related changes without growing an unreviewed backlog or
+skipping required CI. Existing green checks need repetition only after relevant
+changes or when the final integration gate requires them.
+
+Use the local Mac for code coordination and quick checks, the M4 for queued
+compilation/tests, and the i7 for Linux and pinned-native validation. Codex CLI
+workers may run on either remote host in their own checkouts; they follow the
+same code-only authoring rule. Acquire the i7 shared lock for every heavy job.
+Check host workloads and available space before dispatch, cap concurrency,
+and verify the oracle's version and capabilities before assigning corpus work.
+Host availability and exact in-flight commands belong in the current handoff.
 
 ### Operational preservation on 2026-09-11
 
