@@ -269,7 +269,8 @@ class ParseFailsLoudly(unittest.TestCase):
         new = (
             'dir_name: Some("KodakIFD"),\n                validate: true,\n'
             '                validation: Some(U16SizeCheck { offset: 0, expected: &[SizeExpectation::Relative(0)], '
-            'expression: "Validate($dirData,$subdirStart,$size)", callee: "Validate", '
+            'expression: "Image::ExifTool::Canon::Validate($dirData,$subdirStart,$size)", '
+            'callee: "Image::ExifTool::Canon::Validate", '
             'source_file: "Image/ExifTool/Canon.pm", source_sha256: "' + "a" * 64 + '", '
             'reader_contract_sha256: Some("' + "b" * 64 + '") }),\n'
             '                processor: IfdSubdirProcessor::Serial,\n                unwalked: None,'
@@ -285,10 +286,49 @@ class ParseFailsLoudly(unittest.TestCase):
         edge = parsed.tags[("Exif", "Main", "33424")]["subdir"]
         self.assertEqual(edge["processor"], "Serial")
         self.assertTrue(edge["validate"])
-        self.assertIn("U16SizeCheck", edge["validation"])
+        self.assertEqual(edge["validation"][:4], (
+            0, (("Relative", 0),),
+            "Image::ExifTool::Canon::Validate($dirData,$subdirStart,$size)",
+            "Image::ExifTool::Canon::Validate",
+        ))
 
         with self.assertRaisesRegex(SystemExit, "serial subdir schema is missing"):
             _parse_text(src)
+
+    def test_serial_validation_requires_native_operands_and_reader_contract(self):
+        src = SAMPLE.read_text(encoding="utf-8")
+        src = src.replace("RawConvEffect,", "RawConvEffect, IfdSubdirProcessor, U16SizeCheck, SizeExpectation,", 1)
+        old = 'dir_name: Some("KodakIFD"),\n                validate: false,\n                unwalked: None,'
+        new = (
+            'dir_name: Some("KodakIFD"),\n                validate: true,\n'
+            '                validation: Some(U16SizeCheck { offset: 0, expected: &[SizeExpectation::Relative(0)], '
+            'expression: "Image::ExifTool::Canon::Validate($dirData,$subdirStart,$size)", '
+            'callee: "Image::ExifTool::Canon::Validate", source_file: "Image/ExifTool/Canon.pm", '
+            'source_sha256: "' + "a" * 64 + '", reader_contract_sha256: None }),\n'
+            '                processor: IfdSubdirProcessor::Serial,\n                unwalked: None,'
+        )
+        serial_src = src.replace(old, new)
+        serial_src = re.sub(
+            r'(validate: false,\n)(\s*)unwalked:',
+            r'\1\2validation: None,\n\2processor: IfdSubdirProcessor::Native,\n\2unwalked:',
+            serial_src,
+        )
+        oracle = ORACLE.replace(
+            "IFD\tExif\tMain\t33424\tSUBDIR\tImage::ExifTool::Kodak::IFD\t$val\t-\t-\t-\t0\t-\t1\t1\tKodakIFD",
+            "IFD\tExif\tMain\t33424\tSUBDIR\tImage::ExifTool::Kodak::IFD\t$val\t-\t-\t-\t1\t-\t1\t1\tKodakIFD",
+        ) + (
+            "IFD\tExif\tMain\t33424\tVALIDATION\t"
+            "Image::ExifTool::Canon::Validate($dirData,$subdirStart,$size)\t"
+            "Image::ExifTool::Canon::Validate\tImage/ExifTool/Canon.pm\t" + "a" * 64 + "\n"
+        )
+        failed, report = _run(_parse_text(serial_src), oracle)
+        self.assertGreater(failed, 0, report)
+        self.assertIn("validation_reader_contract", report)
+
+        changed = _parse_text(serial_src.replace("Relative(0)", "Relative(1)", 1))
+        failed, report = _run(changed, oracle)
+        self.assertGreater(failed, 0, report)
+        self.assertIn("validation:compiled validation operands or helper source differ from native", report)
 
     def test_rustfmt_wrapped_unwalked_reason_parses(self):
         # The committed regen wraps a long reason over three lines (ProfileIFD,

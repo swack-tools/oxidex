@@ -105,6 +105,8 @@
 #                                                               Condition (6)
 #   IFD MODULE TABLE KEY  SUBDIR    TAGTABLE START BASE PROCESSPROC BYTEORDER VALIDATE
 #                                   FIXFORMAT SUBIFD MAXSUBDIRS DIRNAME       (15)
+#   IFD MODULE TABLE KEY  VALIDATION EXPRESSION CALLEE SOURCE_FILE SOURCE_SHA256 (9)
+#                                   -- scalar SubDirectory Validate provenance
 #
 # KEY is the integer tag id as ExifTool keys it, or `"$k#$i"` for the i-th
 # alternative of a `_variants` arrayref (same convention as the binary rows).
@@ -745,6 +747,10 @@ sub emit_ifd_entry {
             || (defined $fix && !ref $fix && $fix eq 'ifd')) ? 1 : 0;
         print join("\t", @p, 'SUBDIR', $tagtable, $start, $base, $proc, $bo, $validate,
                    dash_text($fix), $subifd, $max, $dir), "\n";
+        if (ref $sd eq 'HASH' && defined $sd->{Validate} && !ref $sd->{Validate}) {
+            print join("\t", @p, 'VALIDATION', clean($sd->{Validate}),
+                       keyed_validation_source($sd->{Validate})), "\n";
+        }
     }
 
     my $pc = $e->{PrintConv};

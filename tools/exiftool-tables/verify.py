@@ -2246,8 +2246,9 @@ def _parse_ifd_subdir_value(text, k, require_serial_schema=False):
         "max_subdirs": _some_int(tm.group("max_subdirs")),
         "dir_name": _some_str_opt(tm.group("dir_name")),
         "validate": tm.group("validate") == "true",
-        "validation": (None if tm.group("validation") is None
-                       else re.sub(r"\s+", "", tm.group("validation"))),
+        "validation": verify_directory_validation.parse_rust(
+            tm.group("validation") or "None", unescape
+        ),
         "processor": tm.group("processor") or "Native",
         "unwalked": _some_str_opt(tm.group("unwalked")),
     }
@@ -2491,6 +2492,8 @@ class IfdOracle(NamedTuple):
     hooks: set
     conditions: set
     subdirs: dict
+    validations: dict
+    reader_contracts: dict
     # `PCEXPR` rows: keys whose ExifTool PrintConv is a scalar expression.
     pcexprs: set
 
@@ -2501,9 +2504,17 @@ def parse_ifd_oracle(out):
     a SystemExit: the oracle and the verifier move in lockstep, and a row
     silently ignored is a fact silently unverified."""
     o = IfdOracle({}, {}, {}, {}, {}, defaultdict(dict), defaultdict(dict), set(), {}, {},
-                  {}, {}, {}, set(), set(), {}, set())
+                  {}, {}, {}, set(), set(), {}, {}, {}, set())
     for line in out.splitlines():
         p = line.split("\t")
+        if len(p) == 3 and p[0] == "NATIVE_READER_CONTRACT":
+            if p[1] in o.reader_contracts:
+                raise SystemExit(f"duplicate native reader contract {p[1]!r}")
+            try:
+                o.reader_contracts[p[1]] = json.loads(p[2])
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"invalid native reader contract {p[1]!r}: {exc}") from exc
+            continue
         if p[0] != "IFD":
             continue
         n, kind = len(p), p[4] if len(p) > 4 else ""
@@ -2549,6 +2560,10 @@ def parse_ifd_oracle(out):
                 "byteorder": p[9], "validate": p[10] == "1", "fixformat": p[11],
                 "subifd": p[12] == "1", "maxsubdirs": p[13], "dirname": p[14],
             }
+        elif kind == "VALIDATION" and n == 9:
+            if k in o.validations:
+                raise SystemExit(f"duplicate IFD validation facts for {k}")
+            o.validations[k] = tuple(p[5:9])
         else:
             raise SystemExit(
                 f"unrecognised IFD oracle row {line!r} -- oracle.pl and verify.py "
@@ -2955,8 +2970,32 @@ def verify_ifd(gen, orc, show=10):
                         diffs.append("base")
                     if (edge["unwalked"] is not None) != want["unwalked"]:
                         diffs.append("unwalked")
+                    compiled_validation = edge["validation"]
+                    native_validation = orc.validations.get(k)
+                    if compiled_validation is not None:
+                        if not edge["validate"]:
+                            diffs.append("validation_without_validate")
+                        problem = verify_directory_validation.mismatch(
+                            compiled_validation, native_validation
+                        )
+                        if problem:
+                            diffs.append(f"validation:{problem}")
+                        reader_sha = compiled_validation[6]
+                        if reader_sha is None:
+                            diffs.append("validation_reader_contract")
+                        else:
+                            problem = verify_native_reader.mismatch(
+                                reader_sha, orc.reader_contracts.get("unsigned16")
+                            )
+                            if problem:
+                                diffs.append(f"validation_reader:{problem}")
+                    elif edge["processor"] == "Serial" and edge["validate"]:
+                        # A serial descent cannot reinterpret an opaque Perl
+                        # Validate. A missing compiled primitive must keep the
+                        # edge unwalked, never become an executable route.
+                        diffs.append("serial_validate_without_authenticated_primitive")
                     if diffs:
-                        t_edge.miss((k, {f: edge[f] for f in diffs},
+                        t_edge.miss((k, {f: edge.get(f) for f in diffs},
                                      {f: want.get(f, want.get("base_present")) for f in diffs}))
                     else:
                         t_edge.hit()

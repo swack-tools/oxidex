@@ -1774,6 +1774,13 @@ fn descend(
                 // producer. Commit the child rows only after the whole
                 // directory is known clean.
                 let mut serial_rows = Vec::new();
+                // `process_serial_directory` may set members before reaching
+                // a later refusal. Its caller must not then enter the legacy
+                // producer with a prefix of state that native never proved
+                // this shared route could execute. Parent selection effects
+                // (for example AFInfo3's condition assignment) happened
+                // before this snapshot and are intentionally retained.
+                let members_before = ctx.members.clone();
                 guard.depth += 1;
                 let mut sink = IfdSerialSink {
                     out: &mut serial_rows,
@@ -1793,6 +1800,9 @@ fn descend(
                 );
                 guard.depth -= 1;
                 serial_outcome = finish_serial_child(out, serial_rows, &result);
+                if serial_outcome == SerialSubdirRead::Fallback {
+                    *ctx.members = members_before;
+                }
             }
         }
     }
