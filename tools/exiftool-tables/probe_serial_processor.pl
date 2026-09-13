@@ -113,11 +113,22 @@ sub has_bare_scalar_callsite {
         return unless defined($name) && $name eq $expected;
         my $parents = B::parents();
         return unless ref($parents) eq 'ARRAY';
-        my %ancestor = map { (eval { $_->name } // '') => 1 } @$parents;
-        # The B 5.38.2 tree proves an executable direct CV call whose result is
-        # stored in a scalar. This deliberately excludes method_named calls,
-        # package-qualified GVs, quoted text, and an uncalled symbol binding.
-        $found = 1 if $ancestor{entersub} && $ancestor{padsv_store};
+        my @names = map { eval { $_->name } // '' } @$parents;
+        my ($call_at) = grep { $names[$_] eq 'entersub' } 0 .. $#names;
+        return unless defined $call_at;
+        # The target GV must be the callable operand of its *nearest* entersub:
+        # B 5.38.2 permits only null/rv2cv wrappers on that path. A coderef
+        # argument adds srefgen, and a nested ReadValue result reaches another
+        # entersub instead of the scalar store.
+        my @before_call = $call_at ? (0 .. $call_at - 1) : ();
+        return if grep { $names[$_] ne 'null' && $names[$_] ne 'rv2cv' } @before_call;
+        my $after_call = $call_at + 1;
+        ++$after_call while $after_call <= $#names && $names[$after_call] eq 'null';
+        return unless $after_call <= $#names && $names[$after_call] eq 'padsv_store';
+        # A qualified call that resolves to this same package GV is safe and
+        # remains observable through the localized binding. A different GV,
+        # method call, quoted text, or an unused binding is refused.
+        $found = 1;
     };
     my $walked = eval { B::walkoptree_slow($root, 'oxidex_serial_read_value_callsite'); 1 };
     return 0 unless $walked;
@@ -135,8 +146,8 @@ sub selected_bare_binding {
     return (undef, "bare_${symbol}_binding_unavailable") unless ref($binding) eq 'CODE';
     # This native-only probe is intentionally version-scoped to canonical
     # Perl 5.38.2. Its optree must contain the direct scalar entersub that
-    # targets this exact package binding. A qualified, object-dispatched,
-    # quoted, or indirect source shape fails closed.
+    # targets this exact package binding. A different-GV qualified call,
+    # object dispatch, quoted source shape, or indirect call fails closed.
     return (undef, "bare_${symbol}_callsite_unavailable")
         unless has_bare_scalar_callsite($processor, "${package}::${symbol}");
     my $fact = code_fact($binding, "${package}::${symbol}");
