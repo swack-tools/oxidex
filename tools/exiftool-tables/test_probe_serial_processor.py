@@ -157,6 +157,20 @@ def copied_canon_source(mutate):
     return temporary, root
 
 
+def copied_real_source(mutate):
+    """Copy only Real.pm so the selected table must bind to the primary lib."""
+    temporary = tempfile.TemporaryDirectory()
+    root = Path(temporary.name)
+    copied = root / "lib" / "Image" / "ExifTool"
+    copied.mkdir(parents=True)
+    source = Path(PINNED) / "lib" / "Image" / "ExifTool" / "Real.pm"
+    target = copied / "Real.pm"
+    shutil.copyfile(source, target)
+    target.write_text(mutate(target.read_text()))
+    (root / "fallback").symlink_to(Path(PINNED) / "lib", target_is_directory=True)
+    return temporary, root
+
+
 @unittest.skipUnless(PINNED and PERL, "set OXIDEX_PINNED_EXIFTOOL and EXIFTOOL_PERL for canonical native replay")
 class NativeSerialProcessorReplay(unittest.TestCase):
     @classmethod
@@ -411,7 +425,10 @@ class RealSerialProcessorReplay(unittest.TestCase):
         selected = reply["selection"]
         self.assertEqual(selected["table"]["requested"], f"Image::ExifTool::Real::{table}")
         self.assertEqual(selected["table"]["resolution"], "native_get_tag_table")
+        self.assertTrue(selected["table"]["module"]["resolved"])
+        self.assertEqual(selected["table"]["module"]["source_root"], "lib")
         self.assertEqual(selected["table"]["module"]["source_file"], "Image/ExifTool/Real.pm")
+        self.assertRegex(selected["table"]["module"]["source_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(selected["table"]["groups"]["values"], {
             "0": {"defined": True, "string": "Real"},
             "1": {"defined": True, "string": group1},
@@ -525,6 +542,28 @@ class RealSerialProcessorReplay(unittest.TestCase):
                     for item in reply["verbose_info"] if numeric(item, "index") in (10, 13, 16, 24)
                 ], [(10, "int16u", 1, 2), (13, "int16u", 1, 2),
                     (16, "int16u", 1, 2), (24, "string", 5, 5)])
+
+    def test_copied_real_table_is_primary_while_shared_processor_is_fallback(self):
+        baseline, = replay(PINNED, [
+            request("audiov3-baseline", "II", real_v3_payload("II"), module="Real", table="AudioV3")
+        ])
+
+        def rename(source):
+            before = "Name => 'BytesPerMinute'"
+            self.assertIn(before, source)
+            return source.replace(before, "Name => 'OxiDexBytesPerMinute'", 1)
+
+        temporary, root = copied_real_source(rename)
+        with temporary:
+            reply, = replay(root, [
+                request("audiov3-copied-real", "II", real_v3_payload("II"), module="Real", table="AudioV3")
+            ], fallback="fallback")
+        self.assert_selected_real(reply, "AudioV3", "Real-RA3")
+        self.assertNotEqual(reply["selection"]["table"]["module"]["source_sha256"],
+                            baseline["selection"]["table"]["module"]["source_sha256"])
+        self.assertEqual(reply["selection"]["process"]["source_root"], "fallback_lib")
+        self.assertEqual(reply["selection"]["read_value"]["source_root"], "fallback_lib")
+        self.assertIn("OxiDexBytesPerMinute", names(reply["found_tags"]))
 
 
 
