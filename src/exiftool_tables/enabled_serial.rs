@@ -15,10 +15,18 @@ pub static ENABLED_SERIAL: &[(&str, &str)] = &[("Canon", "AFInfo2")];
 /// Gate B plus the generated table's Gate A.
 #[must_use]
 pub fn is_enabled(table: &SerialTable) -> bool {
-    table.gate_a.passes()
-        && ENABLED_SERIAL
-            .binary_search_by(|(module, name)| (*module, *name).cmp(&(table.module, table.table)))
-            .is_ok()
+    table.gate_a.passes() && owns(table.module, table.table)
+}
+
+/// The migration decision is independent of current source representability.
+/// A later refused definition must not reactivate a retired manual producer.
+#[must_use]
+pub fn owns(module: &str, table: &str) -> bool {
+    ENABLED_SERIAL
+        .binary_search_by(|(candidate_module, name)| {
+            (*candidate_module, *name).cmp(&(module, table))
+        })
+        .is_ok()
 }
 
 #[cfg(test)]

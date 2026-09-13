@@ -2395,6 +2395,7 @@ def compile_ifd_subdir(tag, stats, ctx, enclosing=None):
 
     validate = sd.get("Validate") is not None
     validation_src = "None"
+    serial_validation_refused = False
     if validate:
         # The existing IFD/binary paths deliberately retain their historical
         # refusal. Only a source-selected serial target may opt into the
@@ -2406,6 +2407,9 @@ def compile_ifd_subdir(tag, stats, ctx, enclosing=None):
             # ($val, $dirData, $subdirStart, $size)` (Exif.pm:7082) is Perl
             # over directory bytes.
             stats["ifd_subdir_refused_validate"] += 1
+            if target_kind == "serial":
+                serial_validation_refused = True
+                unwalked.append("serial Validate lacks authenticated primitive")
         else:
             validation_src = compiled.rust(rust_str)
             stats["ifd_subdir_validate_compiled"] += 1
@@ -2440,7 +2444,7 @@ def compile_ifd_subdir(tag, stats, ctx, enclosing=None):
         f"fix_format: {fix_src}, sub_ifd: {'true' if sub_ifd else 'false'}, "
         f"max_subdirs: {max_src}, dir_name: {dir_src}, "
         f"validate: {'true' if validate else 'false'}, validation: {validation_src}, "
-        f"processor: IfdSubdirProcessor::{'Serial' if target_kind == 'serial' else 'Native'}, "
+        f"processor: IfdSubdirProcessor::{'Serial' if target_kind == 'serial' and not serial_validation_refused else 'Native'}, "
         f"unwalked: {unwalked_src} }})"
     )
 

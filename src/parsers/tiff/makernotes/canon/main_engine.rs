@@ -71,8 +71,9 @@
 //! CameraInfo*, ColorData). [`is_canon_main_row`] drops every ordinary child
 //! row. A source-authenticated serial edge is the narrow exception: the IFD
 //! engine returns its rows with the parent entry index, and this buffer replays
-//! them there while preserving a hand fallback for unavailable or tainted
-//! execution. Other newly enabled targets still turn the fence test red.
+//! them there. Enabled serial routes have sole ownership: unsupported child
+//! execution is an explicit refusal, never a return to a retired manual
+//! producer. Other newly enabled targets still turn the fence test red.
 
 use std::collections::HashMap;
 
@@ -208,9 +209,9 @@ impl MainEngineRows {
     }
 
     /// Replay every child row generated for this parent entry. `Handled`
-    /// consumes the parent hand arm even if native produced no rows; `Fallback`
-    /// leaves that arm available because the shared route was not authenticated
-    /// or became tainted.
+    /// consumes the parent entry even if native produced no rows. `Refused`
+    /// also owns the entry but publishes no speculative output. `Fallback`
+    /// is reserved for a table whose ownership has not been migrated.
     pub(super) fn replay_serial(
         &mut self,
         entry: usize,

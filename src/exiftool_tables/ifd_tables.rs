@@ -2201,8 +2201,8 @@ pub static IFD_CANON_MAIN: IfdTable = IfdTable {
                 dir_name: None,
                 validate: true,
                 validation: None,
-                processor: IfdSubdirProcessor::Serial,
-                unwalked: None,
+                processor: IfdSubdirProcessor::Native,
+                unwalked: Some("serial Validate lacks authenticated primitive"),
             }),
         },
         IfdTag {

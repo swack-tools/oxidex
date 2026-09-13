@@ -70,7 +70,31 @@ the complete migration and its gates.
 
 ## Current state
 
-Source checkpoints add the generic schema/compiler and parent bridge, plus an
-independent live validation oracle. Integration and retirement are in progress.
-No Canon manual reader is counted as retired yet. No project-wide generated
-percentage is inferred from these two edges or this table's 16 alternatives.
+The source checkpoint is published on
+`codex/afinfo2-production-integration-20260913`. Integration removes the manual
+AFInfo2/AFInfo3 arm, eight private sequence offsets, two parent-ID constants and
+the private 20-value AFAreaMode enum. The shared reader is the sole replacement.
+An independent source review accepts the ownership and rollback design.
+
+At the earlier `757b861e` checkpoint, a fresh native/control/candidate pair
+covered 53 real and 14 constructed files: 12,758 oracle tags, no process or
+parse failures, correct rows 11,841 -> 11,843 and extras 43 -> 3. All 53 real
+outputs were unchanged. Per-file matched-key sets lost no correct row; changes
+were native rejection of invalid-size/zero-prefix children and two zero-count
+PrimaryAFPoint corrections. This checkpoint still contained the fallback arm,
+so its pair is not final retirement evidence.
+
+With the manual arm removed, three public-reader tests pass, covering both
+byte orders, signed/multiword data, EOS/AFInfo3 state, invalid size, truncation,
+zero count and later siblings. The first shared-test compile exposed a missing
+test-only Ctx import; after repair, all 55 IFD-reader tests pass. All 61 IFD
+codegen tests and full Clippy pass. Retain that failed attempt in the evidence.
+
+Independent artifact review also found that supported processor selection was
+not yet verified and that old AFInfo's unsupported geometry validator was
+incorrectly emitted as executable. The generator now leaves that distinct
+edge explicitly unwalked. The processor-oracle repair, full official
+regeneration, exact exported-fixture oracle checks, the pair after retirement,
+upgrade proof, full corpus and final hosted acceptance remain required before
+merge. No Canon reader is counted as merged retirement yet; no project-wide
+percentage follows from this bounded work.

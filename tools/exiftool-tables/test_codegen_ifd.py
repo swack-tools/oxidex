@@ -535,8 +535,9 @@ class SubdirEdges(unittest.TestCase):
         broken["__deparse"] = broken["__deparse"].replace("Get16u", "Get32u")
         ctx.validation_helpers = {NAME: broken}
         src, stats = emit({"TagTable": "Image::ExifTool::Any::Child", "Validate": CALL})
-        self.assertIn("processor: IfdSubdirProcessor::Serial", src)
+        self.assertIn("processor: IfdSubdirProcessor::Native", src)
         self.assertIn("validation: None", src)
+        self.assertIn('unwalked: Some("serial Validate lacks authenticated primitive")', src)
         self.assertEqual(stats["ifd_subdir_refused_validate"], 1)
 
     def test_base_through_the_existing_grammar(self):

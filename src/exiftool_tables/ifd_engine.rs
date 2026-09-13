@@ -782,14 +782,14 @@ pub enum EntryRead {
 ///
 /// `Handled` includes native no-output paths such as a false parent condition,
 /// a failed source-authenticated validator, an empty child, and a selected
-/// serial record that ends at a normal unmatched alternative. `Fallback` is
-/// reserved for OxiDex's inability to authenticate or execute the generated
-/// route (Gate A/B, missing table/proof, or tainted serial walk). A carrier
-/// with a legacy reader can therefore retain its prior producer only in the
-/// latter case, without converting a native omission into invented output.
+/// serial record that ends at a normal unmatched alternative. `Refused` is
+/// an enabled route whose execution could not be proved; it publishes no
+/// speculative child rows or state. `Fallback` belongs only to a table whose
+/// ownership has not transferred to the shared reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SerialSubdirRead {
     Handled,
+    Refused,
     Fallback,
 }
 
@@ -1455,8 +1455,8 @@ impl SerialEmissionSink for IfdSerialSink<'_> {
 
 /// Publish a serial child's buffered rows only when its entire native walk
 /// stayed authenticated. A later unsupported state action invalidates an
-/// earlier prefix as well: callers must take their documented fallback rather
-/// than mixing two producers for one parent entry.
+/// earlier prefix as well. The ownership wrapper turns this internal fallback
+/// into an explicit refusal and restores the edge's prior state and output.
 fn finish_serial_child<T>(
     out: &mut Vec<T>,
     child: Vec<T>,
@@ -1481,16 +1481,58 @@ fn direct_serial_no_match(table: &'static IfdTable, id: u16) -> bool {
     };
     tag.condition.is_some()
         && !tag.omitted.condition
-        && matches!(
-            tag.subdir.as_ref().map(|edge| edge.processor),
-            Some(IfdSubdirProcessor::Serial)
-        )
+        && tag.subdir.as_ref().is_some_and(|edge| {
+            edge.processor == IfdSubdirProcessor::Serial
+                && enabled_serial::owns(edge.module, edge.table)
+        })
+}
+
+/// An enabled edge owns its output even when later source/execution facts are
+/// refused. Parent effects were applied before descent, so the snapshot keeps
+/// them while discarding any speculative child effects and earlier child rows.
+fn owned_serial_attempt(
+    ctx: &mut cond::Ctx,
+    out: &mut Vec<Emitted>,
+    attempt: impl FnOnce(&mut cond::Ctx, &mut Vec<Emitted>) -> DescendOutcome,
+) -> DescendOutcome {
+    let members = ctx.members.clone();
+    let before = out.len();
+    let outcome = attempt(ctx, out);
+    if outcome == DescendOutcome::Serial(SerialSubdirRead::Fallback) {
+        *ctx.members = members;
+        out.truncate(before);
+        DescendOutcome::Serial(SerialSubdirRead::Refused)
+    } else {
+        outcome
+    }
 }
 
 /// Exif.pm:6919-7102 -- open the directory (or directories) an entry points
 /// at and process each with the right table.
 #[allow(clippy::too_many_arguments)]
 fn descend(
+    table: &'static IfdTable,
+    tag: &'static IfdTag,
+    edge: &IfdSubdirEdge,
+    located: &Located<'_>,
+    dir: &IfdDir<'_>,
+    ctx: &mut cond::Ctx,
+    guard: &mut Guard,
+    out: &mut Vec<Emitted>,
+) -> DescendOutcome {
+    if edge.processor != IfdSubdirProcessor::Serial {
+        return descend_inner(table, tag, edge, located, dir, ctx, guard, out);
+    }
+    if !enabled_serial::owns(edge.module, edge.table) {
+        return DescendOutcome::Serial(SerialSubdirRead::Fallback);
+    }
+    owned_serial_attempt(ctx, out, |ctx, out| {
+        descend_inner(table, tag, edge, located, dir, ctx, guard, out)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn descend_inner(
     table: &'static IfdTable,
     tag: &'static IfdTag,
     edge: &IfdSubdirEdge,
@@ -1768,19 +1810,10 @@ fn descend(
                     serial_outcome = SerialSubdirRead::Handled;
                     continue;
                 }
-                // A serial state refusal may occur after an earlier selected
-                // row.  Its result is a legacy fallback, so do not expose a
-                // prefix from the unauthenticated walk beside the hand
-                // producer. Commit the child rows only after the whole
-                // directory is known clean.
+                // Commit child rows only after the entire serial directory
+                // is proved. The outer edge transaction also owns state
+                // rollback, including earlier child iterations.
                 let mut serial_rows = Vec::new();
-                // `process_serial_directory` may set members before reaching
-                // a later refusal. Its caller must not then enter the legacy
-                // producer with a prefix of state that native never proved
-                // this shared route could execute. Parent selection effects
-                // (for example AFInfo3's condition assignment) happened
-                // before this snapshot and are intentionally retained.
-                let members_before = ctx.members.clone();
                 guard.depth += 1;
                 let mut sink = IfdSerialSink {
                     out: &mut serial_rows,
@@ -1801,7 +1834,9 @@ fn descend(
                 guard.depth -= 1;
                 serial_outcome = finish_serial_child(out, serial_rows, &result);
                 if serial_outcome == SerialSubdirRead::Fallback {
-                    *ctx.members = members_before;
+                    // Refuse the whole edge, including prior child iterations;
+                    // the ownership wrapper rolls back their state and rows.
+                    return DescendOutcome::Serial(SerialSubdirRead::Fallback);
                 }
             }
         }
@@ -1818,7 +1853,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::exiftool_tables::cond::{CmpOp, Cond, EffectSource};
+    use crate::exiftool_tables::cond::{CmpOp, Cond, Ctx, EffectSource};
     use crate::exiftool_tables::ifd_schema::IfdVariantGroup;
     use crate::exiftool_tables::{
         ExprId, GateA, IfdFlags, Omitted, PrintConv, SizeExpectation, TagGroups, U16SizeCheck,
@@ -3365,6 +3400,100 @@ mod tests {
         );
         assert_eq!(outcome, SerialSubdirRead::Fallback);
         assert_eq!(out, vec!["parent"]);
+    }
+
+    #[test]
+    fn refused_owned_serial_walk_restores_child_state_but_keeps_parent_effects() {
+        let source = find_serial_table("Canon", "AFInfo2").unwrap();
+        let mut entries = source.entries.to_vec();
+        let mut later = entries[3].alternatives.to_vec();
+        // Deliberately inconsistent artifact: the earlier NumAFPoints
+        // SetMember executes before this later unsupported source hook.
+        later[0].omitted.hook = true;
+        entries[3].alternatives = Box::leak(later.into_boxed_slice());
+        let refused = Box::leak(Box::new(SerialTable {
+            entries: Box::leak(entries.into_boxed_slice()),
+            ..*source
+        }));
+        let data: Vec<u8> = [16u16, 2, 9, 1, 2, 3, 4, 5]
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let mut members = HashMap::from([
+            ("AFInfo3", MemberValue::Num(1)),
+            ("NumAFPoints", MemberValue::Num(7)),
+        ]);
+        let before = members.clone();
+        let mut ctx = Ctx::new(&mut members);
+        let mut out = Vec::new();
+        let outcome = owned_serial_attempt(&mut ctx, &mut out, |ctx, out| {
+            let mut child = Vec::new();
+            let result = process_serial_directory(
+                refused,
+                SerialDir {
+                    data: &data,
+                    dir_start: 0,
+                    dir_len: data.len(),
+                    base: 0,
+                    data_pos: 0,
+                    byte_order: ByteOrder::Little,
+                },
+                ctx,
+                &mut IfdSerialSink { out: &mut child },
+            );
+            assert!(result.tainted);
+            assert_eq!(ctx.members.get("NumAFPoints"), Some(&MemberValue::Num(9)));
+            assert_eq!(child.len(), 2, "a real generated prefix was read");
+            DescendOutcome::Serial(finish_serial_child(out, child, &result))
+        });
+        assert_eq!(outcome, DescendOutcome::Serial(SerialSubdirRead::Refused));
+        assert!(out.is_empty());
+        assert_eq!(*ctx.members, before);
+        assert!(
+            Cond::MemberCmp {
+                member: "NumAFPoints",
+                op: CmpOp::Eq,
+                value: 7,
+            }
+            .eval(&mut ctx)
+        );
+        assert!(
+            Cond::MemberTruthy {
+                member: "AFInfo3",
+                negate: false,
+            }
+            .eval(&mut ctx)
+        );
+    }
+
+    #[test]
+    fn missing_proof_on_owned_serial_edge_is_refusal_not_legacy_fallback() {
+        let mut tags = SERIAL_EDGE_TAGS.to_vec();
+        tags[0].subdir.as_mut().unwrap().validation = None;
+        let parent = Box::leak(Box::new(IfdTable {
+            tags: Box::leak(tags.into_boxed_slice()),
+            ..SERIAL_EDGE
+        }));
+        let data = serial_child_parent(ByteOrder::Little, 16);
+        let mut members = HashMap::from([("AFInfo3", MemberValue::Num(1))]);
+        let mut ctx = Ctx::new(&mut members);
+        let mut out = Vec::new();
+        let reads = process_exif_decoded(
+            parent,
+            IfdDir {
+                data: &data,
+                ifd_start: 0,
+                base: Some(0),
+                byte_order: ByteOrder::Little,
+                group1: None,
+            },
+            &mut ctx,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(reads.serial_subdirs, vec![(0, SerialSubdirRead::Refused)]);
+        assert!(out.is_empty());
+        assert_eq!(ctx.members.get("AFInfo3"), Some(&MemberValue::Num(1)));
     }
 
     // FujiFilm.pm:709-714 and Olympus.pm:809-822 supply direct (not
