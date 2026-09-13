@@ -222,6 +222,7 @@ class NativeWriteFacts(unittest.TestCase):
             with self.subTest(key=key):
                 fact = helpers[key]
                 self.assertTrue(fact["resolved"])
+                self.assertEqual(fact["requested_binding"], callable_name)
                 self.assertEqual(fact["__name"], callable_name)
                 self.assertEqual(fact["source_file"], "Image/ExifTool/Writer.pl")
                 self.assertEqual(fact["source_sha256"],
@@ -239,6 +240,8 @@ class NativeWriteFacts(unittest.TestCase):
         rebound = self.dump()
         fact = rebound["native_write_helpers"]["write_value"]
         self.assertTrue(fact["resolved"])
+        self.assertEqual(fact["requested_binding"], "Image::ExifTool::WriteValue")
+        self.assertNotEqual(fact["__name"], fact["requested_binding"])
         self.assertEqual(fact["source_file"], "Image/ExifTool/WriteExif.pl")
         self.assertNotEqual(before["native_write_helpers"]["write_value"]["__deparse"], fact["__deparse"])
 
@@ -264,15 +267,21 @@ class NativeWriteFacts(unittest.TestCase):
         self.assertTrue(doc["native_write_helpers"]["write_value"]["resolved"])
         missing = doc["native_write_helpers"]["check_value"]
         self.assertFalse(missing["resolved"])
+        self.assertEqual(missing["requested_binding"], "Image::ExifTool::CheckValue")
         self.assertEqual(missing["reason"], "code_ref_unavailable")
         self.assertIn("Exif", doc["modules"])
 
     def test_unloadable_helper_module_is_explicitly_unresolved(self):
         self.writer_helpers.unlink()
         helpers = self.dump()["native_write_helpers"]
-        for fact in helpers.values():
+        for key, fact in helpers.items():
             self.assertFalse(fact["resolved"])
             self.assertEqual(fact["reason"], "write_helper_load_failed")
+            self.assertEqual(
+                fact["requested_binding"],
+                {"write_value": "Image::ExifTool::WriteValue",
+                 "check_value": "Image::ExifTool::CheckValue"}[key],
+            )
 
     def test_write_only_source_mutation_changes_sidecar_not_read_projection(self):
         before = self.dump()

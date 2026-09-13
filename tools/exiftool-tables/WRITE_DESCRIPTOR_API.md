@@ -34,6 +34,13 @@ make these shared helper bindings observable; it never calls a native writer.
 An unreadable helper module or missing callable remains an explicit unresolved
 fact.
 
+`requested_binding` is the fully-qualified package glob the caller requested.
+It remains distinct from `__name`: a later source module may legitimately bind
+that glob to an anonymous CODE ref, whose actual callable name is
+`Image::ExifTool::__ANON__`. Consumers must bind calls through
+`requested_binding` while retaining the actual CV's body and provenance from
+the remaining fact fields.
+
 This map is provenance for a future default UTF-8 scalar mechanism, not proof
 that `WriteValue` or `CheckValue` is safe to execute. A mechanism compiler must
 still recognize the required native bodies and test their effects. Non-default
