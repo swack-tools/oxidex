@@ -17,7 +17,7 @@ The duplicated Sony handling must then be removed.
 | Measure | Starting point | Current evidence | Done when |
 | --- | --- | --- | --- |
 | Native table entries | 17; the shared generator already knew their layout, while a custom Sony reader supplied the output | Independent native inventory finds 17 native and 17 generated entries, with zero discrepancies for this table. | All are independently accounted for and their runtime behavior is verified. |
-| Stored-value and selection rules | One stored value; 16 dependent conditions; one parent selection condition | CI lint, 191 shared-engine tests and three focused Rust tests pass. The Python tool suite passes: 530 tests run, one skipped. | Native comparisons and the combined Rust checks pass. The full workspace gate remains separate. |
+| Stored-value and selection rules | One stored value; 16 dependent conditions; one parent selection condition | Exact CI lint and the complete Rust workspace command pass after correcting the stale test inventories. The Python tool suite passes: 530 tests run, one skipped. | Native comparisons and the combined Rust checks pass. Retirement changes still require their own validation. |
 | Real-file coverage | 41 files; 142 native rows | Exact native focus values match. Paired full-output comparison results are identical per file. Four files with the same tag name from other tables were excluded. | Candidate and control are compared per file, with no unexplained changes. This scoped check passes. |
 | Boundary coverage | 14 complete TIFF carriers | Library and CLI reproduce the native expectations for both byte orders, zero/one/fifteen points, short records and a rejected signature. | The candidate reproduces those results through both the library and CLI. This check passes. |
 | Automatic upstream changes | No complete pilot proof at the start | Actual native dump, regeneration and independent artifact checking pass for rename, enum, offset and new-row changes. Each stale artifact is rejected. | All four change types pass this chain; broader upgrade behavior is measured separately. |
@@ -47,14 +47,19 @@ Fuji's `GEImageSize` and Olympus's `SensorArea`/`BlackLevel` now have generated
 conditions, so they no longer belong in the list of conditions the generator
 cannot represent. The correction preserves the inventory assertions and adds
 positive/negative condition tests, including a saved count used by a child
-table. Its combined lint/workspace rerun is pending. This correction does not
+table. Its combined lint/workspace rerun passes: 5,691 unit/integration tests
+and 222 documentation tests, zero failures; 54 and 63 tests respectively remain
+ignored. `cargo test --workspace --all-features` took 262 seconds, and the exact
+CI lint command took six seconds. The recorded staged-source hash stayed
+unchanged during these checks. This correction does not
 claim new parser coverage: current callers still do not pass `Make` and
 `TIFF_TYPE` where those three tags need them.
 
 ## What is still open
 
-- Finish the corrected workspace gate. The full-corpus comparison passes for
-  the published pilot; changes to runtime behavior still need their own check.
+- Integrate and validate the reviewed duplicate-table removal. The corrected
+  workspace command and full-corpus comparison pass for the pilot; changes to
+  runtime behavior still need their own check.
 - Remove the retained custom declarations through a trustworthy generation
   path. Their recovered Sony-specific producer still has unresolved review
   findings, so it is not an accepted dependency for this migration.

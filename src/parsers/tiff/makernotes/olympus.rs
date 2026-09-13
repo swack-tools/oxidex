@@ -898,8 +898,10 @@ fn engine_walks(main_walked: bool, table: Option<&'static IfdTable>) -> bool {
 /// parser (the engine reads it for Exif.pm:6475's Sony-ILCE first-entry rule);
 /// `Make` is not available to a `MakerNoteParser` and is not guessed at -- the
 /// only `Make` the engine consults is the Apple `format 16` rule
-/// (Exif.pm:6463), which no Olympus note reaches. `Compression`/`SubfileType`
-/// the engine seeds itself (Exif.pm:6447).
+/// (Exif.pm:6463), which no Olympus note reaches. `TIFF_TYPE` is likewise
+/// absent: the generated 0x0400/0x0401 ERF conditions therefore correctly
+/// reject this adapter until the shared context carries the container type.
+/// `Compression`/`SubfileType` the engine seeds itself (Exif.pm:6447).
 ///
 /// Every `Emitted` is inserted the way `FoundTag` would record it
 /// (`shared::tag_priority`): a `Priority => 0` tag (`low_priority`, e.g. the

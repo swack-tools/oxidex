@@ -1186,8 +1186,6 @@ static MAIN_UNSUPPLIED: &[u16] = &[
     0x0201, // Quality -- `parse_camera_type_and_quality` (its PrintConv reads the CameraType data member)
     0x0207, // CameraType -- the same pass (a DataMember behind a Condition)
     0x0208, // TextInfo -- the same pass, then `text_info::parse`
-    0x0400, // a SubDirectory
-    0x0401, // BlackLevel, withheld with no hand conversion
     0x0e00, // PrintIM, which has its own parser
     0x2010, // the Equipment SubIFD edge
     0x2020, // the CameraSettings edge

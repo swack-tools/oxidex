@@ -4,11 +4,11 @@
 //! # What this module owns
 //!
 //! Every row of `%Image::ExifTool::FujiFilm::Main` (FujiFilm.pm:84-1022,
-//! pinned 13.59) the generated table reports -- every `Omitted::NONE`,
+//! pinned 13.59) the generated table can report -- every `Omitted::NONE`,
 //! non-`SubDirectory`, non-`Unknown` tag, both alternatives of the 0x1100
 //! `AutoBracketing` group -- except 0x0000 `Version`, whose engine value is
 //! an `undef[4]` run (`TagValue::Binary`) the string map cannot carry
-//! (`version_is_binary_and_the_residual_owns_it`). That is 88 ids; which
+//! (`version_is_binary_and_the_residual_owns_it`). That is 89 ids; which
 //! ones is never written down by hand outside the pin: [`is_residual`] and
 //! the generated withholding decide it, and
 //! `fuji_main_residual_matches_the_generated_withholding` pins the result.
@@ -84,15 +84,12 @@ pub(super) const FUJI_MAIN_RESIDUAL_IDS: &[u16] =
 /// `FujiFilm::Main` ids the generated table withholds and nothing in this
 /// build produces -- an honest absence, each with its class. Sorted.
 ///
-/// * 0x1304 `GEImageSize` -- `omitted.condition`
-///   (`$$self{Make} =~ /^GENERAL IMAGING/`, FujiFilm.pm:709-714; ExifTool is
-///   silent on every FUJIFILM note that carries it);
 /// * 0x1446 `FlickerReduction` -- `omitted.print_conv` (`q{}` +
 ///   `sprintf('%s (0x%.4x)')`, FujiFilm.pm:861-870);
 /// * 0x4282 `FaceRecInfo` -- an edge (`ProcessFaceRec`) with no transcribed
 ///   layout (FujiFilm.pm:999).
 #[cfg(test)]
-pub(super) const FUJI_MAIN_UNSUPPLIED: &[u16] = &[0x1304, 0x1446, 0x4282];
+pub(super) const FUJI_MAIN_UNSUPPLIED: &[u16] = &[0x1446, 0x4282];
 
 /// Whether `id` is one of the residual ids `parse_note` reads by hand.
 pub(super) fn is_residual(id: u16) -> bool {
@@ -162,8 +159,9 @@ fn insert_row(
 /// * `model` is `$$self{Model}` (EXIF `IFD0:Model` from the dispatcher;
 ///   `None` on the RAF and detached paths), absent when empty. Only the
 ///   0x1100 `AutoBracketing` X-T3 alternative reads it. `Make` is not
-///   available to a `MakerNoteParser` and is not guessed at; its only reader,
-///   0x1304, is withheld.
+///   available to a `MakerNoteParser` and is not guessed at, so the generated
+///   0x1304 `GEImageSize` condition correctly rejects this adapter's empty
+///   context until the dispatcher carries `Make` through.
 ///
 /// The residual walk in `parse_note` reads its entries with the same
 /// `read_ifd` the engine's walk uses, so both see one directory.
@@ -318,10 +316,11 @@ mod tests {
         0x1011, 0x1020, 0x1021, 0x1022, 0x1023, 0x1030, 0x1031, 0x1032, 0x1033, 0x1034, 0x1037,
         0x1044, 0x1045, 0x1047, 0x1048, 0x1049, 0x104b, 0x104c, 0x104d, 0x104e, 0x1050, 0x1051,
         0x1052, 0x1053, 0x1100, 0x1101, 0x1102, 0x1105, 0x1106, 0x1150, 0x1151, 0x1152, 0x1153,
-        0x1154, 0x1201, 0x1210, 0x1300, 0x1301, 0x1302, 0x1400, 0x1401, 0x1402, 0x1403, 0x1404,
-        0x1405, 0x1406, 0x1407, 0x140b, 0x1425, 0x1431, 0x1436, 0x1438, 0x1443, 0x1444, 0x1445,
-        0x1447, 0x1448, 0x144a, 0x144b, 0x144c, 0x144d, 0x3803, 0x3804, 0x3806, 0x3820, 0x3821,
-        0x3822, 0x3824, 0x4005, 0x4100, 0x4103, 0x4200, 0x4203, 0x8000, 0x8002, 0x8003, 0xb211,
+        0x1154, 0x1201, 0x1210, 0x1300, 0x1301, 0x1302, 0x1304, 0x1400, 0x1401, 0x1402, 0x1403,
+        0x1404, 0x1405, 0x1406, 0x1407, 0x140b, 0x1425, 0x1431, 0x1436, 0x1438, 0x1443, 0x1444,
+        0x1445, 0x1447, 0x1448, 0x144a, 0x144b, 0x144c, 0x144d, 0x3803, 0x3804, 0x3806, 0x3820,
+        0x3821, 0x3822, 0x3824, 0x4005, 0x4100, 0x4103, 0x4200, 0x4203, 0x8000, 0x8002, 0x8003,
+        0xb211,
     ];
 
     #[test]
@@ -336,7 +335,7 @@ mod tests {
                 "{name} must be sorted and free of duplicates"
             );
         }
-        assert_eq!(FUJI_MAIN_ENGINE_IDS.len(), 88);
+        assert_eq!(FUJI_MAIN_ENGINE_IDS.len(), 89);
     }
 
     /// The residual against the GENERATED table alone (the port of
@@ -445,7 +444,7 @@ mod tests {
             owned, FUJI_MAIN_ENGINE_IDS,
             "the ids the engine produces while the FujiFilm::Main line is in force"
         );
-        assert_eq!(reported.len(), 89, "88 engine ids plus 0x0000 Version");
+        assert_eq!(reported.len(), 90, "89 engine ids plus 0x0000 Version");
     }
 
     /// Test 4(a): the no-replay premise, half one. Engine-last insertion is
@@ -907,10 +906,45 @@ mod tests {
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 
-        // 0x1304 is GEImageSize on GENERAL IMAGING bodies only (withheld),
-        // never the `DynamicRangeWarning` the hand table once invented.
+        // 0x1304 is GEImageSize on GENERAL IMAGING bodies only, never the
+        // `DynamicRangeWarning` the hand table once invented. The parser has
+        // no Make context today, so the generated condition rejects it.
         let (tags, _) = parse(&le_note(&[short(0x1304, 1)]), None);
         assert!(tags.is_empty(), "{tags:?}");
+    }
+
+    /// FujiFilm.pm:709-714 emits 0x1304 only when `$$self{Make}` starts
+    /// `GENERAL IMAGING`. This exercises the generated direct condition both
+    /// ways at the IFD engine boundary: it must report when the caller has
+    /// supplied the native member and reject a normal Fuji make. The parser
+    /// integration deliberately remains covered above: it cannot seed Make
+    /// until the shared MakerNote dispatch context carries it.
+    #[test]
+    fn ge_image_size_follows_the_seeded_make() {
+        let note = le_note(&[short(0x1304, 1)]);
+        for (make, present) in [("GENERAL IMAGING CO.", true), ("FUJIFILM", false)] {
+            let mut members = HashMap::new();
+            members.insert("Make", MemberValue::Str(make.to_string()));
+            let mut ctx = Ctx::new(&mut members);
+            let mut out = Vec::new();
+            process_exif(
+                fuji_main(),
+                IfdDir {
+                    data: &note,
+                    ifd_start: 12,
+                    base: Some(0),
+                    byte_order: ByteOrder::LittleEndian.to_io_byte_order(),
+                    group1: Some("FujiFilm"),
+                },
+                &mut ctx,
+                &mut out,
+            );
+            assert_eq!(
+                out.iter().any(|row| row.name == "GEImageSize"),
+                present,
+                "Make {make:?}"
+            );
+        }
     }
 
     /// Test 7(h): the XP150 shape -- a real 0x0000 `undef[4]` `"0130"` first,
