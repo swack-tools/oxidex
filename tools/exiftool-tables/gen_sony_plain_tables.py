@@ -178,6 +178,43 @@ def format_field(value):
     return FORMATS[match[1]], count
 
 
+_CODE_BASE = {"__name", "__perl", "__opaque", "__deparse"}
+_CODE_PROVENANCE = _CODE_BASE | {"resolved", "source_file", "source_sha256", "dependencies"}
+_CODE_DEPENDENCY = _CODE_BASE | {"resolved", "source_file", "source_sha256"}
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _shared_binary_processor(proc):
+    """Accept the legacy name fact or the authenticated shared-code fact.
+
+    This producer does not interpret ProcessBinaryData itself, but it must not
+    collapse an unresolved/rebound callback into its old registered name. The
+    full body remains the shared engine-oracle contract; this narrow selector
+    authenticates the live CV and its direct Get16u binding.
+    """
+    if (not isinstance(proc, dict) or proc.get("__name") != "Image::ExifTool::ProcessBinaryData"
+            or proc.get("__perl") != "CODE" or proc.get("__opaque") not in (True, 1)
+            or not isinstance(proc.get("__deparse"), str)):
+        return False
+    keys = set(proc)
+    if keys == _CODE_BASE:
+        return True
+    if keys != _CODE_PROVENANCE or proc.get("resolved") is not True:
+        return False
+    if proc.get("source_file") != "Image/ExifTool.pm" or not isinstance(proc.get("source_sha256"), str) or not _SHA256.fullmatch(proc["source_sha256"]):
+        return False
+    dependencies = proc.get("dependencies")
+    if not isinstance(dependencies, dict) or set(dependencies) != {"Image::ExifTool::Get16u"}:
+        return False
+    reader = dependencies["Image::ExifTool::Get16u"]
+    return (isinstance(reader, dict) and set(reader) == _CODE_DEPENDENCY
+            and reader.get("__name") == "Image::ExifTool::Get16u"
+            and reader.get("__perl") == "CODE" and reader.get("__opaque") in (True, 1)
+            and reader.get("resolved") is True and isinstance(reader.get("__deparse"), str)
+            and reader.get("source_file") == "Image/ExifTool.pm"
+            and isinstance(reader.get("source_sha256"), str) and _SHA256.fullmatch(reader["source_sha256"]))
+
+
 def check_meta(name, table):
     if not isinstance(table, dict) or set(table) != {"meta", "tags", "full_name", "tag_count"} or not isinstance(table["tags"], dict) or not table["tags"]:
         raise Unsupported(f"{name}: malformed or empty table")
@@ -189,11 +226,8 @@ def check_meta(name, table):
                "PROCESS_PROC", "WRITABLE", "WRITE_PROC", "DATAMEMBER", "IS_SUBDIR"}
     if not isinstance(meta, dict) or set(meta) - allowed:
         raise Unsupported(f"{name}: unregistered table metadata")
-    proc = meta.get("PROCESS_PROC")
-    if (not isinstance(proc, dict) or proc.get("__name") != "Image::ExifTool::ProcessBinaryData"
-            or proc.get("__perl") != "CODE" or proc.get("__opaque") != 1
-            or set(proc) - {"__name", "__perl", "__opaque", "__deparse"}):
-        raise Unsupported(f"{name}: PROCESS_PROC changed")
+    if not _shared_binary_processor(meta.get("PROCESS_PROC")):
+        raise Unsupported(f"{name}: PROCESS_PROC changed or lacks authenticated shared provenance")
     group = "Camera" if name.startswith("CameraSettings") else "Image"
     if meta.get("GROUPS") != {"0": "MakerNotes", "2": group} or uint(meta.get("FIRST_ENTRY")) != 0:
         raise Unsupported(f"{name}: GROUPS/FIRST_ENTRY changed")

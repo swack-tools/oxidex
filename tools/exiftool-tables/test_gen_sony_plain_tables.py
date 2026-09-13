@@ -1,6 +1,7 @@
 """Finite Sony producer controls independent of the registry and generated Rust."""
 import copy
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -182,6 +183,47 @@ class SonyPlainGeneratorTests(unittest.TestCase):
             table(mutated, "ShotInfo")["tags"]["72"]["SubDirectory"].update(change)
             with self.assertRaises(generator.Unsupported):
                 generator.render(mutated)
+
+    def test_enriched_shared_processor_provenance_accepts_only_live_binding(self):
+        data = fixture()
+        processor = table(data)["meta"]["PROCESS_PROC"]
+        processor.update({
+            "resolved": True,
+            "source_file": "Image/ExifTool.pm",
+            "source_sha256": "a" * 64,
+            "dependencies": {"Image::ExifTool::Get16u": {
+                "__perl": "CODE", "__opaque": True, "__name": "Image::ExifTool::Get16u",
+                "__deparse": "sub { return 0; }", "resolved": True,
+                "source_file": "Image/ExifTool.pm", "source_sha256": "b" * 64,
+            }},
+        })
+        generator.render(data)
+        for mutate in (
+            lambda p: p.update(__name="Image::ExifTool::Other"),
+            lambda p: p.update(resolved=False),
+            lambda p: p.update(source_file="Image/ExifTool/Other.pm"),
+            lambda p: p["dependencies"].pop("Image::ExifTool::Get16u"),
+            lambda p: p["dependencies"]["Image::ExifTool::Get16u"].update(__name="Image::ExifTool::Get32u"),
+        ):
+            with self.subTest(mutate=mutate):
+                changed = fixture()
+                # Reconstruct the enriched shape before applying a refusal
+                # mutation so every control exercises the same selector.
+                p = table(changed)["meta"]["PROCESS_PROC"]
+                p.update({"resolved": True, "source_file": "Image/ExifTool.pm", "source_sha256": "a" * 64,
+                          "dependencies": {"Image::ExifTool::Get16u": {"__perl": "CODE", "__opaque": True,
+                              "__name": "Image::ExifTool::Get16u", "__deparse": "sub { return 0; }",
+                              "resolved": True, "source_file": "Image/ExifTool.pm", "source_sha256": "b" * 64}}})
+                mutate(p)
+                with self.assertRaises(generator.Unsupported):
+                    generator.render(changed)
+
+    @unittest.skipUnless(os.environ.get("OXIDEX_SONY_DUMP"), "set OXIDEX_SONY_DUMP to a canonical enriched dump")
+    def test_canonical_enriched_dump_keeps_legacy_sony_selection_identity(self):
+        data = json.loads(Path(os.environ["OXIDEX_SONY_DUMP"]).read_text(encoding="utf-8"))
+        for name in generator.TABLES:
+            with self.subTest(table=name):
+                generator.check_meta(name, data["modules"]["Sony"]["tables"][name])
 
     def test_table_contracts_missing_and_empty_tables_refuse(self):
         for field, value in [("PROCESS_PROC", {"__name": "Other"}), ("FIRST_ENTRY", "1"),
