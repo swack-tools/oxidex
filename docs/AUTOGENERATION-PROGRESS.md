@@ -7,8 +7,10 @@ This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
 Latest combined Canon definitions: **AFInfo 14/14 and AFInfo2 16/16**, both
 independently verified after formatting. Across all eight serial tables,
 emitted alternatives rise **106 -> 122** and omissions fall **26 -> 10**.
-This checkpoint is implemented and definition-validated; final execution and
-regeneration checks are pending, and it is not merged or active in Canon.
+This checkpoint is implemented, definition-validated and replayed through the
+actual generated tables: all three native/Rust tests pass, as does full
+regeneration. Remaining local and hosted merge checks are pending; it is not
+merged or active in a Canon production carrier.
 The [Canon plan](reference/serial-afinfo-plan.md) records the failed pipeline
 attempt, its formatting repair and the remaining acceptance work.
 

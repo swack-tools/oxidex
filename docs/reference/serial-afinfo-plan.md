@@ -111,3 +111,29 @@ follow the reader's checked unsigned path. The compiler and independent verifier
 now withhold dynamic counts unless every selectable prior controller is a proved
 unsigned scalar. Signed payload arrays remain supported. This keeps unknown
 upgrade behavior explicit rather than approximating it.
+
+## Native execution checkpoint
+
+At integration `864eb6b6` plus formatting, all three explicitly selected
+native/Rust tests pass: Real Audio and the two Canon autofocus tables. The
+Canon tests execute the actual generated definitions in a test-only sink.
+They cover both byte orders, signed arrays, multiword bit output, zero counts,
+short data, mapped and unmapped enums, saved raw state, alternative selection
+and hidden-field cursor consumption. The source tests also preserve absent
+members under `defined` while applying the proved string coercions.
+
+The full official regeneration retry passes in 90.647 seconds across 32
+declared artifacts. Its only change is the recorded interpreter command
+spelling (`perl` versus `perl5.38.2`); running the ledger producer with the
+exact portable invocation reproduces the committed ledger. All generated
+Rust is unchanged by the retry. The earlier failure is retained.
+
+Independent combined Python validation passes 49 tests with no skips. Rust
+native compilation and its three tests take 58.807 seconds, with actual test
+execution taking 0.66 seconds. The remaining shared-table unit checks and
+hosted merge checks are pending at this publication checkpoint. CI now
+requires all three native tests, including both Canon replays.
+
+This proves table execution in the test harness, not final carrier keys/groups
+or production activation. The Canon parent bridge, validators and retirement
+remain the next delivery.

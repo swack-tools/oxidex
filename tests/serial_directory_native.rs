@@ -26,11 +26,11 @@ use std::process::{Command, Stdio};
 use oxidex::core::TagValue;
 use oxidex::exiftool_oracle::repo_pin;
 use oxidex::exiftool_tables::{
-    find_serial_table, process_serial_directory, Ctx, Emitted, MemberValue, SerialDir,
-    SerialEmissionSink, SerialTable,
+    Ctx, Emitted, MemberValue, SerialDir, SerialEmissionSink, SerialTable, find_serial_table,
+    process_serial_directory,
 };
 use oxidex::io::ByteOrder;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const CANONICAL_PERL: &str = "v5.38.2";
 const PROBE: &str = "tools/exiftool-tables/probe_serial_processor.pl";
@@ -800,9 +800,11 @@ fn canon_afinfo_generated_tables_replay_pinned_native_contract() {
         ("int16u", 22, 8, "101 102 103 104 105 106 107 108")
     );
     assert_eq!(native_read(&hidden_reply, 12), ("int16u", 38, 1, "9"));
-    assert!(!hidden_rows
-        .iter()
-        .any(|row| row.name == "Canon_AFInfo_0x000b"));
+    assert!(
+        !hidden_rows
+            .iter()
+            .any(|row| row.name == "Canon_AFInfo_0x000b")
+    );
     assert_eq!(emitted_value(&hidden_rows, "PrimaryAFPoint"), "9");
 
     let powershot = ReplayCase {
@@ -827,12 +829,16 @@ fn canon_afinfo_generated_tables_replay_pinned_native_contract() {
     let visible_reply = native_replay(&native, &visible);
     let (visible_rows, visible_result, _) = rust_replay(table("Canon", "AFInfo"), &visible);
     assert!(!visible_result.tainted, "{visible_result:?}");
-    assert!(native_rows(&visible_reply)
-        .iter()
-        .any(|(name, _)| name == "Canon_AFInfo_0x000b"));
-    assert!(visible_rows
-        .iter()
-        .any(|row| row.name == "Canon_AFInfo_0x000b"));
+    assert!(
+        native_rows(&visible_reply)
+            .iter()
+            .any(|(name, _)| name == "Canon_AFInfo_0x000b")
+    );
+    assert!(
+        visible_rows
+            .iter()
+            .any(|row| row.name == "Canon_AFInfo_0x000b")
+    );
 
     let eos = ReplayCase {
         name: "afinfo-eos-stops-at-eleven",
