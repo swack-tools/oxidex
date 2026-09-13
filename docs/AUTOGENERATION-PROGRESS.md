@@ -6,11 +6,15 @@ at `a1626cb6`. It removed 17 duplicate declarations and brought the ten
 raw-ID fixes into the shared route. Its earlier comparisons, failed gate
 attempts and retirement checks remain below as history.
 
-The current milestone is the shared binary string capability at `019dd530`. Its
-first full candidate lost 55 previously correct rows through the legacy
-CameraInfo adapter; the published repair restores them. The repaired full
-candidate is artifact-complete, while both full-pair supervisor exit statuses
-are unavailable and explicitly retained as that validation limitation.
+The shared binary string capability merged in PR #747 at `8f0fdaf4`. Its first
+full candidate lost 55 previously correct rows through the legacy CameraInfo
+adapter; the merged repair restores them. The repaired candidate is
+artifact-complete, while both full-pair supervisor exit statuses remain
+unavailable and explicitly retained as that validation limitation.
+
+The keyed-directory schema/compiler checkpoint is validated at `74418ceb`, not
+merged or active. It has no reader, route, or runtime claim; reader work is in
+a separate worktree pending native validation.
 
 ## What the pilot must prove
 
@@ -120,7 +124,7 @@ debts remain visible; this follow-up does not claim they pass.
 
 ## Next common capability
 
-Shared string support is committed and pushed through `a93f1e4d`. It distinguishes
+Shared string support is merged in PR #747 at `8f0fdaf4`. It distinguishes
 a table's one-byte default from a field that reads the remaining record,
 preserves raw bytes in shared-engine saved state, and repairs invalid text at
 shared output projection. CameraInfo is a legacy text-domain adapter that
@@ -156,18 +160,36 @@ The migration must also generate parent routing and preserve file-order state,
 not stop at replacing the two child string decoders. Seven parent validation
 edges and the other manual Canon child producers remain separate work.
 
+## Keyed-directory schema validation record
+
+This unmerged, schema-only checkpoint uses recorded ExifTool 13.59 Perl 5.38
+source-dump SHA-256 `193cf4e91326f53c7bdfd674cb10da0937c8bcdb4c0285ad4f507fd9f96a8fb8`.
+The full replay at `74418ceb` produced binary source SHA-256
+`a8972dde5dc012ea7db27849fc02c52f68f9820dc8191c020fa40bb5adf26d97` and keyed
+source SHA-256 `830e7fcd88641ecce7e466b8c3e72b781735c46479c86bd6e8834dad2bdd05dd`;
+rustfmt-normalized binary source committed in the branch has SHA-256
+`076f64ff7d6318d21268d61347fd3806adc3928581877fbe3443e61395cccc82`.
+
+The table-tool suite passes 580 tests with that ledger-matching dump. The
+keyed-specific tests verify native processor selection, counts, formats,
+conditions, edges, atomic variants, enums, authenticated omissions and
+source-driven mutations. A keyed-only expression now appears in the shared
+`ExprId` enum whether or not the optional keyed artifact is written. This is
+compiler and inventory evidence only: no keyed reader or Canon route is active.
+
 ## What is still open
 
-- Review and merge the shared binary string capability. Preserve the initial
-  55-row regression, bounded repair proof and full-pair artifact-only caveat.
-  The separate Sony-specific recovery draft still has unresolved findings and
-  is not a dependency of the merged mechanical retirement.
 - Complete the wider inventory of manual, generated, unsupported and
   unclassified source rules, then refresh generated-route attribution on one
   recorded source revision.
-- The keyed-schema compiler checkpoint at `4d017bc6` has 579 Python tests
-  passing. Its full-dump replay found a missing keyed-only `ExprId` and is
-  under repair; it has no runtime validation or activation claim.
+- Merge the keyed-directory schema/compiler checkpoint only after review. Its
+  reader remains a separate native-validation task; do not call the schema an
+  active Canon route or a manual-decoder retirement.
+- Keep the next manual retirement unchanged: generate and execute Canon parent
+  routing in both standalone CRW and embedded JPEG CIFF, then retire the two
+  Make/Model child decoders only after native and runtime evidence agree.
+  The separate Sony-specific recovery draft still has unresolved findings and
+  is not a dependency of the merged mechanical retirement.
 
 At the Sony-pilot checkpoint, the broader binary-artifact check accounted for
 8,228 native rows: 6,993 generated and 1,235 declared omissions. The current

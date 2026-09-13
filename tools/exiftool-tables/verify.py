@@ -170,6 +170,52 @@ OMITTED_NATIVE_FIELD_RE = re.compile(
     r'reasons:\s*&\[',
     re.S,
 )
+# Keyed directories are a separate source family: their entries are selected
+# by a raw CIFF key, not BinaryTable's ordinal offsets.  The initial schema
+# slice emits an opt-in artifact (no production module or reader), so it gets
+# an equally separate parser and inventory instead of widening the binary
+# parser until an unrelated `KeyedTag` happens to look like `Field`.
+KEYED_TABLE_RE = re.compile(
+    r'pub\s+static\s+\w+\s*:\s*KeyedDirectoryTable\s*=\s*KeyedDirectoryTable\s*\{\s*'
+    r'module:\s*"(?P<module>(?:[^"\\]|\\.)*)",\s*'
+    r'table:\s*"(?P<table>(?:[^"\\]|\\.)*)",\s*'
+    r'group0:\s*"(?P<group0>(?:[^"\\]|\\.)*)",\s*'
+    r'group1:\s*"(?P<group1>(?:[^"\\]|\\.)*)",\s*'
+    r'group2:\s*"(?P<group2>(?:[^"\\]|\\.)*)",',
+    re.S,
+)
+KEYED_TAGS_MARKER_RE = re.compile(r"tags:\s*&\[")
+KEYED_VARIANTS_MARKER_RE = re.compile(r"variants:\s*&\[")
+KEYED_VARIANT_GROUP_RE = re.compile(
+    r"KeyedVariantGroup\s*\{\s*raw_id:\s*(?P<raw_id>0x[0-9a-fA-F_]+|\d+),\s*alternatives:\s*&\[",
+    re.S,
+)
+KEYED_TAG_RE = re.compile(
+    r'KeyedTag\s*\{\s*raw_id:\s*(?P<raw_id>0x[0-9a-fA-F_]+|\d+),\s*'
+    r'name:\s*"(?P<name>(?:[^"\\]|\\.)*)",\s*'
+    r'format:\s*(?P<format>None|Some\(Fmt::\w+(?:\(\d+\))?\)),\s*'
+    r'count:\s*(?P<count>None|Some\(\d+\)),\s*'
+    r'condition:\s*(?P<condition>.*?),\s*'
+    r'raw_conv:\s*(?P<raw_conv>.*?),\s*'
+    r'omitted:\s*(?:Omitted::NONE|Omitted\s*\{[^{}]*\}),\s*'
+    r'value_conv:\s*(?P<value_conv>None|Some\(ExprId::\w+\)),\s*print_conv:\s*',
+    re.S,
+)
+OMITTED_KEYED_NATIVE_ROWS_RE = re.compile(
+    r'pub\s+static\s+OMITTED_KEYED_NATIVE_ROWS\s*:\s*&\[\s*OmittedKeyedNativeRow\s*\]\s*=\s*&\[',
+    re.S,
+)
+OMITTED_KEYED_NATIVE_ROW_RE = re.compile(
+    r'OmittedKeyedNativeRow\s*\{\s*'
+    r'module:\s*"(?P<module>(?:[^"\\]|\\.)*)",\s*'
+    r'table:\s*"(?P<table>(?:[^"\\]|\\.)*)",\s*'
+    r'raw_id:\s*"(?P<raw_id>(?:[^"\\]|\\.)*)",\s*'
+    r'variant:\s*(?P<variant>true|false),\s*'
+    r'name:\s*(?P<name>None|Some\(\s*"(?:[^"\\]|\\.)*"\s*\)),\s*'
+    r'native:\s*',
+    re.S,
+)
+OMITTED_KEYED_NATIVE_REASONS_RE = re.compile(r'\s*,\s*reasons:\s*&\[', re.S)
 # Step 23: a table's `variants: &[VariantGroup { index: N, sub: S,
 # alternatives: &[(Cond, Field), ...] }, ...]` holds `Field` literals too --
 # ExifTool's `_variants` alternatives, several of which share one `index`/
@@ -856,6 +902,7 @@ class NativeOmission(NamedTuple):
     name: str | None
     variant: bool
     reasons: tuple[str, ...]
+    source_facts: object | None = None
 
 
 class ParsedNativeOmissions(NamedTuple):
@@ -909,6 +956,299 @@ def parse_omitted_native_fields(path):
             "the verifier is out of date; fix it before trusting a PASS"
         )
     return ParsedNativeOmissions(True, rows)
+
+
+class KeyedFact(NamedTuple):
+    format: str
+    count: str
+    condition: bool
+    raw_conv: bool
+    value_conv: bool
+    groups: tuple
+    edge: tuple | None
+
+
+class KeyedSourceFacts(NamedTuple):
+    format: str | None
+    count: str | None
+    condition: str | None
+    groups: tuple
+    subdir: tuple | None
+
+
+class ParsedKeyedRust(NamedTuple):
+    """The source-only keyed schema read back from its generated Rust."""
+
+    fields: dict
+    enums: dict
+    pc_refused: set
+    table_scope: set
+    table_groups: dict
+    facts: dict
+    source_facts: dict
+
+
+def _canonical_keyed_id(raw):
+    """Canonicalize a native numeric key without losing `_variants` position."""
+    text = unescape(raw)
+    base, marker, variant = text.partition("#")
+    try:
+        canonical = str(int(base, 0))
+    except ValueError:
+        raise SystemExit(f"keyed raw_id {text!r} is not a native numeric key")
+    if marker:
+        if not variant.isdecimal():
+            raise SystemExit(f"keyed raw_id {text!r} has an invalid variant suffix")
+        return f"{canonical}#{variant}"
+    return canonical
+
+
+def _option_string(text):
+    if text == "None":
+        return None
+    return unescape(re.fullmatch(r'Some\("((?:[^"\\]|\\.)*)"\)', text, re.S).group(1))
+
+
+def _parse_keyed_source_facts(text):
+    m = re.fullmatch(
+        r'KeyedNativeFacts\s*\{\s*format:\s*(?P<format>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+        r'count:\s*(?P<count>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+        r'condition:\s*(?P<condition>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+        r'groups:\s*(?P<groups>.*?),\s*subdir:\s*(?P<subdir>None|Some\(KeyedNativeSubdir\s*\{.*\}\))\s*,?\s*\}',
+        text, re.S,
+    )
+    if m is None:
+        raise SystemExit("unrecognised KeyedNativeFacts literal")
+    groups_text = m.group("groups").strip()
+    if groups_text == "TagGroups::NONE":
+        groups = (None, None, None)
+    else:
+        gm = re.fullmatch(
+            r'TagGroups\s*\{\s*g0:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+            r'g1:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+            r'g2:\s*(None|Some\("(?:[^"\\]|\\.)*"\))\s*,?\s*\}', groups_text, re.S,
+        )
+        if gm is None:
+            raise SystemExit("unrecognised KeyedNativeFacts groups")
+        groups = tuple(_option_string(gm.group(n)) for n in (1, 2, 3))
+    subdir_text = m.group("subdir").strip()
+    if subdir_text == "None":
+        subdir = None
+    else:
+        sm = re.fullmatch(
+            r'Some\(KeyedNativeSubdir\s*\{\s*tag_table:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+            r'start:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*validate:\s*(true|false),\s*'
+            r'process_proc:\s*(true|false)\s*,?\s*\}\s*,?\)', subdir_text, re.S,
+        )
+        if sm is None:
+            raise SystemExit("unrecognised KeyedNativeFacts subdir")
+        subdir = (_option_string(sm.group(1)), _option_string(sm.group(2)), sm.group(3) == "true", sm.group(4) == "true")
+    return KeyedSourceFacts(_option_string(m.group("format")), _option_string(m.group("count")),
+                            _option_string(m.group("condition")), groups, subdir)
+
+
+def _parse_keyed_tag(src, match, key, fields, enums, pc_refused, facts, source_facts):
+    """Read one KeyedTag and its enum body without trusting codegen input."""
+    if key in fields:
+        raise SystemExit(f"duplicate keyed generated field {key}")
+    fields[key] = unescape(match.group("name"))
+    if re.search(r"omitted:\s*Omitted\s*\{[^{}]*print_conv:\s*true", src[match.start():match.end()]):
+        pc_refused.add(key)
+    pc_end = _value_span(src, match.end())
+    print_conv = src[match.end():pc_end].strip()
+    if print_conv.startswith("PrintConv::IntEnum(&["):
+        open_bracket = src.find("[", match.end(), pc_end)
+        body, expected = _enum_body(src, open_bracket)
+        pairs = INT_PAIR_RE.findall(body)
+        if len(pairs) != expected:
+            raise SystemExit("keyed IntEnum parser is out of date; fix it before trusting a PASS")
+        enums[key] = {a: unescape(b) for a, b in pairs}
+    elif print_conv.startswith("PrintConv::StrEnum(&["):
+        open_bracket = src.find("[", match.end(), pc_end)
+        body, expected = _enum_body(src, open_bracket)
+        pairs = STR_PAIR_RE.findall(body)
+        if len(pairs) != expected:
+            raise SystemExit("keyed StrEnum parser is out of date; fix it before trusting a PASS")
+        enums[key] = {unescape(a): unescape(b) for a, b in pairs}
+    elif print_conv.startswith("PrintConv::PartialEnumInt {"):
+        exact = re.search(r"\bexact:\s*&\[", print_conv)
+        if exact is None:
+            raise SystemExit("keyed PartialEnumInt lacks exact entries")
+        open_bracket = match.end() + exact.end() - 1
+        body, expected = _enum_body(src, open_bracket)
+        pairs = INT_PAIR_RE.findall(body)
+        if len(pairs) != expected:
+            raise SystemExit("keyed PartialEnumInt parser is out of date; fix it before trusting a PASS")
+        enums[key] = {a: unescape(b) for a, b in pairs}
+    elif not print_conv.startswith(("PrintConv::None", "PrintConv::Expr(", "PrintConv::Bitmask {")):
+        raise SystemExit(f"unrecognised keyed print_conv {print_conv!r}; fix the verifier before trusting a PASS")
+    groups_marker = re.compile(r"\s*,\s*groups:\s*").search(src, pc_end)
+    if groups_marker is None:
+        raise SystemExit("KeyedTag lacks groups after print_conv")
+    groups_end = _value_span(src, groups_marker.end())
+    groups_src = src[groups_marker.end():groups_end].strip()
+    if groups_src == "TagGroups::NONE":
+        groups = (None, None, None)
+    else:
+        gm = re.fullmatch(
+            r'TagGroups\s*\{\s*g0:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+            r'g1:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
+            r'g2:\s*(None|Some\("(?:[^"\\]|\\.)*"\))\s*,?\s*\}', groups_src, re.S,
+        )
+        if gm is None:
+            raise SystemExit("unrecognised keyed TagGroups value")
+        def group_value(value):
+            return None if value == "None" else unescape(re.search(r'"((?:[^"\\]|\\.)*)"', value).group(1))
+        groups = tuple(group_value(gm.group(n)) for n in (1, 2, 3))
+    edge_marker = re.compile(r"\s*,\s*edge:\s*").search(src, groups_end)
+    if edge_marker is None:
+        raise SystemExit("KeyedTag lacks edge after groups")
+    edge_end = _value_span(src, edge_marker.end())
+    edge_src = src[edge_marker.end():edge_end].strip()
+    if edge_src == "None":
+        edge = None
+    elif edge_src == "Some(KeyedEdge::SameTableDirectory)":
+        edge = ("same", None, None, ())
+    else:
+        em = re.fullmatch(
+            r'Some\(KeyedEdge::BoundedValue\s*\{\s*module:\s*"((?:[^"\\]|\\.)*)",\s*'
+            r'table:\s*"((?:[^"\\]|\\.)*)",\s*start:\s*KeyedStart::Zero,\s*'
+            r'unwalked:\s*&\[(?P<unwalked>[^\]]*)\]\s*,?\s*\}\s*,?\)', edge_src, re.S,
+        )
+        if em is None:
+            raise SystemExit("unrecognised keyed edge value")
+        edge = ("bounded", unescape(em.group(1)), unescape(em.group(2)), tuple(
+            unescape(value) for value in re.findall(r'"((?:[^"\\]|\\.)*)"', em.group("unwalked"))
+        ))
+    facts[key] = KeyedFact(
+        match.group("format"), match.group("count"), match.group("condition") != "None",
+        match.group("raw_conv") != "None", match.group("value_conv") != "None", groups, edge,
+    )
+    native_marker = re.compile(r"\s*,\s*native:\s*").search(src, edge_end)
+    if native_marker is None:
+        raise SystemExit("KeyedTag lacks native facts after edge")
+    native_end = _value_span(src, native_marker.end())
+    source_facts[key] = _parse_keyed_source_facts(src[native_marker.end():native_end].strip())
+
+
+def parse_keyed_rust(path):
+    """Parse the optional keyed schema artifact independently of codegen.py.
+
+    A declared table is in scope even if all of its rows are sidecar
+    omissions.  Each `KeyedTag` must parse exactly once, so rustfmt or a new
+    schema member cannot turn under-parsing into a clean inventory result.
+    """
+    src = Path(path).read_text(encoding="utf-8")
+    heads = list(KEYED_TABLE_RE.finditer(src))
+    fields, enums, pc_refused, scope, table_groups, facts, source_facts = {}, defaultdict(dict), set(), set(), {}, {}, {}
+    expected = parsed = 0
+    for n, head in enumerate(heads):
+        end = heads[n + 1].start() if n + 1 < len(heads) else len(src)
+        module, table = unescape(head.group("module")), unescape(head.group("table"))
+        scope.add((module, table))
+        table_groups[(module, table)] = tuple(unescape(head.group(f"group{n}")) for n in range(3))
+        tags = KEYED_TAGS_MARKER_RE.search(src, head.end(), end)
+        if tags:
+            start, stop = _bracket_span(src, tags.end() - 1)
+            expected += len(re.findall(r"KeyedTag\s*\{", src[start:stop]))
+            for tag in KEYED_TAG_RE.finditer(src, start, stop):
+                _parse_keyed_tag(
+                    src, tag, (module, table, _canonical_keyed_id(tag.group("raw_id"))), fields, enums, pc_refused, facts, source_facts
+                )
+                parsed += 1
+        variants = KEYED_VARIANTS_MARKER_RE.search(src, head.end(), end)
+        if variants:
+            start, stop = _bracket_span(src, variants.end() - 1)
+            for group in KEYED_VARIANT_GROUP_RE.finditer(src, start, stop):
+                a_start, a_stop = _bracket_span(src, group.end() - 1)
+                expected += len(re.findall(r"KeyedTag\s*\{", src[a_start:a_stop]))
+                raw = _canonical_keyed_id(group.group("raw_id"))
+                for pos, tag in enumerate(KEYED_TAG_RE.finditer(src, a_start, a_stop)):
+                    _parse_keyed_tag(src, tag, (module, table, f"{raw}#{pos}"), fields, enums, pc_refused, facts, source_facts)
+                    parsed += 1
+    if parsed != expected:
+        raise SystemExit(
+            f"parsed {parsed} keyed tags but keyed arrays contain {expected} -- "
+            "the verifier is out of date; fix it before trusting a PASS"
+        )
+    return ParsedKeyedRust(fields, enums, pc_refused, scope, table_groups, facts, source_facts)
+
+
+def parse_omitted_keyed_native_rows(path):
+    """Read keyed source omissions; duplicate source identities fail closed."""
+    src = Path(path).read_text(encoding="utf-8")
+    marker = OMITTED_KEYED_NATIVE_ROWS_RE.search(src)
+    if marker is None:
+        return ParsedNativeOmissions(False, {})
+    start, end = _bracket_span(src, marker.end() - 1)
+    body = src[start:end]
+    expected = len(re.findall(r"OmittedKeyedNativeRow\s*\{", body))
+    rows = {}
+    for m in OMITTED_KEYED_NATIVE_ROW_RE.finditer(body):
+        native_end = _value_span(src, start + m.end())
+        source_facts = _parse_keyed_source_facts(src[start + m.end():native_end].strip())
+        reasons_marker = OMITTED_KEYED_NATIVE_REASONS_RE.match(src, native_end)
+        if reasons_marker is None:
+            raise SystemExit("OmittedKeyedNativeRow lacks reasons after native facts")
+        reasons_start, reasons_end = _bracket_span(src, reasons_marker.end() - 1)
+        reasons_body = src[reasons_start:reasons_end]
+        reason_literals = re.findall(r'"((?:[^"\\]|\\.)*)"', reasons_body)
+        if ",".join(f'"{x}"' for x in reason_literals) != re.sub(r"\s+", "", reasons_body).rstrip(","):
+            raise SystemExit("OmittedKeyedNativeRow reasons must be a literal string list")
+        reasons = tuple(unescape(x) for x in reason_literals)
+        if not reasons or len(set(reasons)) != len(reasons):
+            raise SystemExit("OmittedKeyedNativeRow must carry distinct non-empty reasons")
+        name_raw = m.group("name")
+        name = None if name_raw == "None" else unescape(re.search(r'"((?:[^"\\]|\\.)*)"', name_raw).group(1))
+        key = (unescape(m.group("module")), unescape(m.group("table")), _canonical_keyed_id(m.group("raw_id")))
+        if key in rows:
+            raise SystemExit(f"duplicate OmittedKeyedNativeRow for {key}; one missing rule must be named once")
+        rows[key] = NativeOmission(name, m.group("variant") == "true", reasons, source_facts)
+    if len(rows) != expected:
+        raise SystemExit(
+            f"parsed {len(rows)} OmittedKeyedNativeRow rows but sidecar contains {expected} -- "
+            "the verifier is out of date; fix it before trusting a PASS"
+        )
+    return ParsedNativeOmissions(True, rows)
+
+
+def parse_keyed_oracle(out):
+    """Read oracle.pl's independent `KEYED` ProcessCanonRaw row stream."""
+    names, enums, rawfmts, counts, conditions = {}, defaultdict(dict), {}, {}, {}
+    hooks, subdirs, masks, properties = set(), set(), {}, defaultdict(set)
+    table_groups, tag_groups, subdir_facts = {}, {}, {}
+    for line in out.splitlines():
+        p = line.split("\t")
+        if len(p) < 5 or p[0] != "KEYED":
+            continue
+        marker = p[4]
+        if marker == "TGROUPS" and len(p) == 8:
+            table_groups[(p[1], p[2])] = (p[5], p[6], p[7])
+            continue
+        key = (p[1], p[2], _canonical_keyed_id(p[3]))
+        if marker == "NAME" and len(p) == 6:
+            names[key] = p[5]
+        elif marker == "ENUM" and len(p) == 7:
+            enums[key][p[5]] = p[6]
+        elif marker == "FORMAT" and len(p) == 6:
+            rawfmts[key] = p[5]
+        elif marker == "COUNT" and len(p) == 6:
+            counts[key] = p[5]
+        elif marker == "GROUPS" and len(p) == 8:
+            tag_groups[key] = (p[5], p[6], p[7])
+        elif marker == "SUBDIR" and len(p) == 9:
+            subdirs.add(key)
+            subdir_facts[key] = {
+                "tagtable": p[5], "start": p[6], "validate": p[7] == "1", "processproc": p[8] == "1",
+            }
+        elif marker == "MASKDECL":
+            properties[key].add("mask_declared")
+        elif marker == "CONDITION" and len(p) == 6:
+            properties[key].add("condition")
+            conditions[key] = p[5]
+        elif marker in {"RAWCONV", "VALUECONV", "PRINTCONV", "UNKNOWN"}:
+            properties[key].add(marker.lower())
+    return names, enums, rawfmts, masks, hooks, subdirs, properties, counts, table_groups, tag_groups, subdir_facts, conditions
 
 
 def run_oracle(lib, oracle_pl):
@@ -1010,7 +1350,7 @@ def parse_binary_oracle(out):
 _NATIVE_RAW_ID_RE = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))?(?:#[0-9]+)?$")
 _OMISSION_REASONS = {
     "unknown", "format", "mask", "raw_conv", "value_conv", "condition",
-    "print_conv", "hook", "subdirectory", "raw_id",
+    "print_conv", "hook", "subdirectory", "raw_id", "count",
 }
 
 
@@ -1030,6 +1370,7 @@ class NativeInventory(NamedTuple):
     bad_reasons: tuple
     missing_enum_entries: tuple
     missing_enum_other_entries: tuple
+    keyed_fact_mismatches: tuple = ()
 
 
 def _omission_reason_matches_native(key, reason, rawfmts, masks, hooks, subdirs, properties):
@@ -1166,6 +1507,223 @@ def native_inventory(
         tuple(bad_reasons),
         tuple(missing_enum_entries),
         tuple(missing_enum_other_entries),
+    )
+
+
+def _keyed_expected_format(spelling):
+    if spelling is None:
+        return "None"
+    if spelling == "string":
+        return "Some(Fmt::Str(1))"
+    if _SIZED_FMT_RE.fullmatch(spelling):
+        return None
+    expected = expected_fmt_literal(spelling)
+    return expected[0] if expected is not None else None
+
+
+def _keyed_format_refused(spelling):
+    """Whether ProcessCanonRaw's own format path withholds this spelling.
+
+    This must not reuse the binary-table checker: ProcessBinaryData accepts
+    `int16u[N]`, while ProcessCanonRaw passes that spelling unchanged to
+    ReadValue and native treats it as unknown.  The same rule authenticates
+    the generated omission sidecar and validates an emitted KeyedTag.
+    """
+    return spelling is not None and _keyed_expected_format(spelling) is None
+
+
+def _keyed_truthy(value):
+    return value not in (None, "", "0", 0, False)
+
+
+def keyed_native_inventory(generated, omissions, or_names, or_enums, or_rawfmts,
+                           or_masks, or_hooks, or_subdirs, or_properties,
+                           or_counts, or_table_groups, or_tag_groups, or_subdir_facts, or_conditions):
+    """Native-minus-generated accounting for the opt-in keyed schema.
+
+    This has the same exact-one accounting as `native_inventory`, but its
+    native universe is the oracle's `KEYED` stream.  Reusing the binary
+    output here would accidentally assert ProcessBinaryData layout rules for
+    CIFF entries and hide a wrong reader behind a familiar table name.
+    """
+    # Oracle table groups name every live ProcessCanonRaw table.  Scope from
+    # that source, never only from generated statics: deleting a table must
+    # become missing rows, not a native=0 false pass.
+    table_scope = set(or_table_groups)
+    native = {k: v for k, v in or_names.items() if k[:2] in table_scope}
+    generated_keys = set(generated.fields)
+    declared = {k: v for k, v in omissions.rows.items() if k[:2] in table_scope}
+
+    def authentic_reason(key, reason):
+        if reason == "format":
+            return _keyed_format_refused(or_rawfmts.get(key))
+        if reason == "count":
+            try:
+                return int(or_counts[key], 0) < 0
+            except (KeyError, TypeError, ValueError):
+                return key in or_counts
+        if reason == "raw_id":
+            # ProcessCanonRaw's keyed type is encoded in bits 11:13.  A
+            # numeric key with an unmodelled type is a real source obstacle,
+            # distinct from the binary table parser's fractional-key check.
+            raw = int(key[2].split("#", 1)[0], 10)
+            return ((raw >> 8) & 0x38) not in {0x00, 0x08, 0x10, 0x18, 0x28, 0x30}
+        if _omission_reason_matches_native(
+            key, reason, or_rawfmts, or_masks, or_hooks, or_subdirs, or_properties
+        ):
+            return True
+        # Alternatives are atomic.  The source reason can belong to the
+        # sibling that prevents safely emitting the whole group, so validate
+        # that real sibling rather than inventing a per-alternative excuse.
+        if "#" not in key[2]:
+            return False
+        prefix = key[2].split("#", 1)[0] + "#"
+        return any(
+            _omission_reason_matches_native(
+                sibling, reason, or_rawfmts, or_masks, or_hooks, or_subdirs, or_properties
+            )
+            for sibling in native
+            if sibling[:2] == key[:2] and sibling[2].startswith(prefix)
+        )
+
+    stale, overlaps, generated_name_mismatches = [], [], []
+    name_mismatches, variant_mismatches, bad_reasons = [], [], []
+    for key in sorted(set(native) & generated_keys):
+        if generated.fields[key] != native[key]:
+            generated_name_mismatches.append((key, generated.fields[key], native[key]))
+    for key, omission in declared.items():
+        if key in generated_keys:
+            overlaps.append(key)
+            continue
+        native_name = native.get(key)
+        if native_name is None:
+            stale.append(key)
+            continue
+        if omission.name != native_name:
+            name_mismatches.append((key, omission.name, native_name))
+        if omission.variant != ("#" in key[2]):
+            variant_mismatches.append((key, omission.variant))
+        invalid = [
+            reason for reason in omission.reasons
+            if reason not in _OMISSION_REASONS or not authentic_reason(key, reason)
+        ]
+        if invalid:
+            bad_reasons.append((key, tuple(invalid)))
+
+    missing_enum_entries = []
+    for key in sorted(set(native) & generated_keys):
+        if key in generated.pc_refused:
+            continue
+        got = {norm_key(enum_key) for enum_key in generated.enums.get(key, {})}
+        for enum_key in or_enums.get(key, {}):
+            if norm_key(enum_key) not in got:
+                missing_enum_entries.append((key, norm_key(enum_key)))
+    keyed_fact_mismatches = []
+    def expected_source(key):
+        fact = or_subdir_facts.get(key)
+        subdir = None if fact is None else (
+            fact["tagtable"] or None, fact["start"] or None, fact["validate"], fact["processproc"],
+        )
+        return KeyedSourceFacts(
+            or_rawfmts.get(key), or_counts.get(key), or_conditions.get(key),
+            tuple(value or None for value in or_tag_groups.get(key, ("", "", ""))), subdir,
+        )
+    for key in sorted(set(native) & generated_keys):
+        got = generated.facts.get(key)
+        if got is None:
+            keyed_fact_mismatches.append((key, "missing parsed KeyedTag facts"))
+            continue
+        want_format = _keyed_expected_format(or_rawfmts.get(key))
+        if want_format is not None and got.format != want_format:
+            keyed_fact_mismatches.append((key, f"format {got.format!r} != native {want_format!r}"))
+        raw_count = or_counts.get(key)
+        want_count = "None" if raw_count is None else f"Some({raw_count})"
+        if got.count != want_count:
+            keyed_fact_mismatches.append((key, f"count {got.count!r} != native {want_count!r}"))
+        # Conditions must have a compiled executable guard, while an opaque
+        # RawConv/ValueConv is deliberately represented by `Omitted` rather
+        # than a false executable effect.  The retained native facts below
+        # authenticate all three source declarations without treating a
+        # conscious refusal as a stale executable conversion.
+        expected_condition = "condition" in or_properties.get(key, set())
+        if got.condition != expected_condition:
+            keyed_fact_mismatches.append((key, f"condition {got.condition!r} != native {expected_condition!r}"))
+        raw_groups = or_tag_groups.get(key, ("", "", ""))
+        want_groups = tuple(value or None for value in raw_groups)
+        if got.groups != want_groups:
+            keyed_fact_mismatches.append((key, f"groups {got.groups!r} != native {want_groups!r}"))
+        if generated.source_facts.get(key) != expected_source(key):
+            keyed_fact_mismatches.append((key, "generated native facts differ from live source"))
+        native_edge = or_subdir_facts.get(key)
+        if native_edge is None:
+            if got.edge is not None:
+                keyed_fact_mismatches.append((key, f"edge {got.edge!r} has no native SubDirectory"))
+            continue
+        raw = int(key[2].split("#", 1)[0], 10)
+        if not native_edge["tagtable"] and ((raw >> 8) & 0x38) in {0x28, 0x30}:
+            want_edge = ("same", None, None)
+            if got.edge is None or got.edge[:3] != want_edge:
+                keyed_fact_mismatches.append((key, f"edge {got.edge!r} != native same-table directory"))
+            continue
+        match = _TAGTABLE_RE.fullmatch(native_edge["tagtable"])
+        if match is None:
+            # An unsupported edge must be named as unwalked, not silently
+            # made a normal value.  Its exact placeholder target is not a
+            # stable source fact, so only insist it remains bounded/unwalked.
+            if got.edge is None or got.edge[0] != "bounded" or "tag_table" not in got.edge[3]:
+                keyed_fact_mismatches.append((key, f"edge {got.edge!r} omits unsupported native TagTable"))
+            continue
+        want_target = (match.group(1), match.group(2))
+        if got.edge is None or got.edge[0] != "bounded" or got.edge[1:3] != want_target:
+            keyed_fact_mismatches.append((key, f"edge target {got.edge!r} != native {want_target!r}"))
+            continue
+        required = set()
+        if _keyed_truthy(native_edge["start"]):
+            required.add("start")
+        if native_edge["validate"]:
+            required.add("validate")
+        if native_edge["processproc"]:
+            required.add("process_proc")
+        missing_edge_facts = required - set(got.edge[3])
+        if missing_edge_facts:
+            keyed_fact_mismatches.append((key, f"edge lacks native blockers {sorted(missing_edge_facts)!r}"))
+    for table, raw_groups in or_table_groups.items():
+        expected_groups = (raw_groups[0] or table[0], raw_groups[1] or "", raw_groups[2] or "Other")
+        if generated.table_groups.get(table) != expected_groups:
+            keyed_fact_mismatches.append((table, f"table groups {generated.table_groups.get(table)!r} != native {expected_groups!r}"))
+    for table in generated.table_scope - table_scope:
+        keyed_fact_mismatches.append((table, "generated keyed table has no live keyed processor identity"))
+    for key in sorted(generated_keys - set(native)):
+        keyed_fact_mismatches.append((key, "generated keyed row has no live native row"))
+    for key in sorted(set(native) & generated_keys):
+        if key in generated.pc_refused:
+            continue
+        for enum_key, native_value in or_enums.get(key, {}).items():
+            got_value = generated.enums.get(key, {}).get(norm_key(enum_key))
+            if got_value is not None and got_value != native_value:
+                keyed_fact_mismatches.append(
+                    (key, f"enum {norm_key(enum_key)!r} {got_value!r} != native {native_value!r}")
+                )
+    for key, omission in declared.items():
+        if omission.source_facts != expected_source(key):
+            keyed_fact_mismatches.append((key, "omission native facts differ from live source"))
+    accepted = [
+        key for key, omission in declared.items()
+        if key in native and key not in generated_keys
+        and omission.name == native[key]
+        and omission.variant == ("#" in key[2])
+        and not any(
+            reason not in _OMISSION_REASONS or not authentic_reason(key, reason)
+            for reason in omission.reasons
+        )
+    ]
+    return NativeInventory(
+        len(native), len(set(native) & generated_keys), len(declared),
+        len(set(native) & generated_keys) + len(accepted),
+        tuple(sorted(set(native) - generated_keys - set(declared))),
+        tuple(stale), tuple(overlaps), tuple(generated_name_mismatches),
+        tuple(name_mismatches), tuple(variant_mismatches), tuple(bad_reasons),
+        tuple(missing_enum_entries), (), tuple(keyed_fact_mismatches),
     )
 
 
@@ -2346,6 +2904,11 @@ def main():
              "completeness gates are being activated incrementally",
     )
     ap.add_argument(
+        "--keyed-generated", default=None, metavar="PATH",
+        help="optional source-only keyed-directory artifact emitted by --keyed-out; "
+             "it is checked against oracle.pl's independent KEYED stream",
+    )
+    ap.add_argument(
         "--ifd-generated", default=None,
         help="slice I-1's src/exiftool_tables/ifd_tables.rs (default: the file of that "
              "name beside GENERATED_RS); the IFD stage is skipped, with a message, when "
@@ -2391,6 +2954,19 @@ def main():
         or_bitmasks, or_other_present, or_other_print_hex, or_pcrefs,
         or_rawfmts, or_tblgroups, or_taggroups, or_properties,
     ) = parse_binary_oracle(oracle_out)
+    keyed_inventory = None
+    if args.keyed_generated is not None:
+        keyed_path = Path(args.keyed_generated)
+        keyed_generated = parse_keyed_rust(keyed_path)
+        keyed_omissions = parse_omitted_keyed_native_rows(keyed_path)
+        if not keyed_omissions.present:
+            sys.exit(
+                "keyed native inventory requested but generated Rust has no "
+                "OMITTED_KEYED_NATIVE_ROWS sidecar; regenerate it before trusting a PASS"
+            )
+        keyed_inventory = keyed_native_inventory(
+            keyed_generated, keyed_omissions, *parse_keyed_oracle(oracle_out)
+        )
     native_omissions = parse_omitted_native_fields(args.generated_rs)
     if args.native_inventory and not native_omissions.present:
         sys.exit(
@@ -2832,6 +3408,21 @@ def main():
         print(f"  unauthenticated omission reasons {len(inventory.bad_reasons)}")
         print(f"  native enum entries missing from generated rows {len(inventory.missing_enum_entries)}")
         print(f"    of which native OTHER partial conversions {len(inventory.missing_enum_other_entries)}")
+    if keyed_inventory is not None:
+        print("keyed native field inventory (schema only; no reader is activated)")
+        print(f"  native rows      {keyed_inventory.native_rows}")
+        print(f"  generated rows  {keyed_inventory.generated_rows}")
+        print(f"  declared omissions {keyed_inventory.omissions}")
+        print(f"  accounted once  {keyed_inventory.accounted}")
+        print(f"  UNCLASSIFIED native rows {len(keyed_inventory.missing)}")
+        print(f"  stale omissions {len(keyed_inventory.stale)}")
+        print(f"  duplicate-coverage omissions {len(keyed_inventory.overlaps)}")
+        print(f"  generated name mismatches {len(keyed_inventory.generated_name_mismatches)}")
+        print(f"  omission name mismatches {len(keyed_inventory.name_mismatches)}")
+        print(f"  omission variant mismatches {len(keyed_inventory.variant_mismatches)}")
+        print(f"  unauthenticated omission reasons {len(keyed_inventory.bad_reasons)}")
+        print(f"  native enum entries missing from generated rows {len(keyed_inventory.missing_enum_entries)}")
+        print(f"  native keyed fact mismatches {len(keyed_inventory.keyed_fact_mismatches)}")
 
     for k, got, want in bad_examples:
         print(f"  name  {k}: generated {got!r} != exiftool {want!r}")
@@ -2889,6 +3480,25 @@ def main():
             print(f"  omission reason {k}: not authenticated by native field: {', '.join(reasons)}")
         for k, enum_key in inventory.missing_enum_entries[:args.show]:
             print(f"  native enum {k} key {enum_key!r}: missing from generated PrintConv")
+    if keyed_inventory is not None:
+        for k in keyed_inventory.missing[:args.show]:
+            print(f"  keyed UNCLASSIFIED native field {k}: no generated KeyedTag or explicit omission")
+        for k in keyed_inventory.stale[:args.show]:
+            print(f"  keyed stale omission {k}: no matching native field")
+        for k in keyed_inventory.overlaps[:args.show]:
+            print(f"  keyed duplicate coverage {k}: both generated and declared omitted")
+        for k, got, want in keyed_inventory.generated_name_mismatches[:args.show]:
+            print(f"  keyed generated name {k}: generated {got!r} != native {want!r}")
+        for k, got, want in keyed_inventory.name_mismatches[:args.show]:
+            print(f"  keyed omission name {k}: generated {got!r} != native {want!r}")
+        for k, got in keyed_inventory.variant_mismatches[:args.show]:
+            print(f"  keyed omission variant {k}: generated {got!r} != native {('#' in k[2])!r}")
+        for k, reasons in keyed_inventory.bad_reasons[:args.show]:
+            print(f"  keyed omission reason {k}: not authenticated by native field: {', '.join(reasons)}")
+        for k, enum_key in keyed_inventory.missing_enum_entries[:args.show]:
+            print(f"  keyed native enum {k} key {enum_key!r}: missing from generated PrintConv")
+        for k, why in keyed_inventory.keyed_fact_mismatches[:args.show]:
+            print(f"  keyed native fact {k}: {why}")
 
     # Slice I-1: the IFD stage, from the same oracle run. Skipped -- never
     # silently passed -- when the generated file is not on this tree.
@@ -2925,6 +3535,14 @@ def main():
             + len(inventory.name_mismatches) + len(inventory.variant_mismatches)
             + len(inventory.bad_reasons)
             + len(inventory.missing_enum_entries)
+        )
+    if keyed_inventory is not None:
+        failed += (
+            len(keyed_inventory.missing) + len(keyed_inventory.stale) + len(keyed_inventory.overlaps)
+            + len(keyed_inventory.generated_name_mismatches)
+            + len(keyed_inventory.name_mismatches) + len(keyed_inventory.variant_mismatches)
+            + len(keyed_inventory.bad_reasons) + len(keyed_inventory.missing_enum_entries)
+            + len(keyed_inventory.keyed_fact_mismatches)
         )
     print("\nRESULT:", "PASS" if failed == 0 else f"FAIL ({failed} discrepancies)")
     sys.exit(1 if failed else 0)

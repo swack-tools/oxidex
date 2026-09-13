@@ -45,6 +45,7 @@ pub mod exprs;
 pub mod ifd_engine;
 pub mod ifd_schema;
 pub mod ifd_tables;
+pub mod keyed_schema;
 pub mod runtime;
 pub mod subdir;
 
@@ -65,6 +66,10 @@ pub use ifd_schema::{
     RawConvEffect,
 };
 pub use ifd_tables::{ALL_IFD_TABLES, IFD_EXIFTOOL_VERSION};
+pub use keyed_schema::{
+    KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedNativeFacts, KeyedNativeSubdir, KeyedStart,
+    KeyedTag, KeyedVariantGroup, OmittedKeyedNativeRow,
+};
 pub use runtime::{
     Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
     RefusalCounts, TableDecode, all_fractional_census, apply_value_conv, decode_binary_table,

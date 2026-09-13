@@ -1,0 +1,332 @@
+"""Source-only checks for the keyed-directory schema compiler.
+
+No Rust reader is linked here.  These tests establish that source mutations
+change emitted facts and that unavailable ProcessCanonRaw condition context is
+withheld before a future caller can accidentally invent a retry.
+"""
+
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import codegen
+import conds
+import keyed_directory
+import verify
+
+
+PROC = {"__perl": "CODE", "__name": "Image::ExifTool::CanonRaw::ProcessCanonRaw"}
+BIN = {"__perl": "CODE", "__name": "Image::ExifTool::ProcessBinaryData"}
+SERIAL = {"__perl": "CODE", "__name": "Image::ExifTool::Canon::ProcessSerialData"}
+
+
+def doc(main):
+    return {"modules": {"Any": {"tables": {
+        "Main": {"meta": {"PROCESS_PROC": PROC, "GROUPS": {"0": "MakerNotes"}}, "tags": main},
+        "MakeModel": {"meta": {"PROCESS_PROC": BIN}, "tags": {}},
+        "ImageFormat": {"meta": {"PROCESS_PROC": BIN}, "tags": {}},
+        "Serial": {"meta": {"PROCESS_PROC": SERIAL}, "tags": {}},
+    }}}}
+
+
+class Selection(unittest.TestCase):
+    def test_selection_is_processor_identity_not_module_or_table(self):
+        self.assertTrue(keyed_directory.is_keyed_directory_table({"PROCESS_PROC": PROC}))
+        self.assertFalse(keyed_directory.is_keyed_directory_table({"PROCESS_PROC": BIN}))
+        self.assertFalse(keyed_directory.is_keyed_directory_table({}))
+
+    def test_dump_identity_shape_is_accepted(self):
+        # This is the shape dump_tables.pl preserves for CanonRaw::Main.
+        self.assertEqual(keyed_directory.processor_name({"PROCESS_PROC": PROC}), PROC["__name"])
+
+
+class InitialContext(unittest.TestCase):
+    def test_no_value_context_includes_valpt_format_count_and_assignment_tail(self):
+        for condition in (
+            "$valPt =~ /^x/",
+            '$format eq "int16u"',
+            "$count == 6",
+            "($$self{Seen} = 1) and $count == 6",
+        ):
+            self.assertTrue(conds.needs_initial_get_tag_info_context(condition), condition)
+        self.assertFalse(conds.needs_initial_get_tag_info_context("$$self{Model} =~ /EOS/"))
+
+    def test_unavailable_condition_is_a_single_named_omission(self):
+        src, stats = keyed_directory.generate(doc({
+            "0x180b": {"Name": "SerialNumber", "Condition": "$count == 6"},
+        }))
+        self.assertIn('raw_id: "0x180b", variant: false, name: Some("SerialNumber"), native:', src)
+        self.assertIn('reasons: &["condition"]', src)
+        self.assertEqual(stats["keyed_condition"], 1)
+        self.assertNotIn('name: "SerialNumber"', src.split("OMITTED_KEYED_NATIVE_ROWS", 1)[0])
+
+
+class SourceDrivenFacts(unittest.TestCase):
+    def test_count_preserves_undefined_zero_and_explicit_scalar_source_count(self):
+        src, stats = keyed_directory.generate(doc({
+            "0x1001": {"Name": "Implicit"},
+            "0x1002": {"Name": "Zero", "Format": "int16u", "Count": 0},
+            "0x1003": {"Name": "Three", "Format": "int16u", "Count": 3},
+            "0x1004": {"Name": "Bad", "Format": "int16u", "Count": "many"},
+        }))
+        self.assertIn('raw_id: 0x1001, name: "Implicit", format: None, count: None', src)
+        self.assertIn('raw_id: 0x1002, name: "Zero", format: Some(Fmt::Int16u), count: Some(0)', src)
+        self.assertIn('raw_id: 0x1003, name: "Three", format: Some(Fmt::Int16u), count: Some(3)', src)
+        self.assertIn('raw_id: "0x1004", variant: false, name: Some("Bad"), native:', src)
+        self.assertIn('reasons: &["count"]', src)
+        self.assertEqual(stats["keyed_count"], 1)
+
+    def test_keyed_string_is_counted_bytes_and_sized_formats_are_refused(self):
+        src, stats = keyed_directory.generate(doc({
+            "0x0801": {"Name": "ThreeBytes", "Format": "string", "Count": 3},
+            "0x1005": {"Name": "Sized", "Format": "int16u[3]"},
+        }))
+        self.assertIn('raw_id: 0x0801, name: "ThreeBytes", format: Some(Fmt::Str(1)), count: Some(3)', src)
+        self.assertIn('raw_id: "0x1005", variant: false, name: Some("Sized"), native:', src)
+        self.assertIn('reasons: &["format"]', src)
+        self.assertEqual(stats["keyed_format"], 1)
+
+    def test_parent_id_and_target_mutations_change_schema_without_a_tag_rule(self):
+        base = {"0x080a": {"Name": "CanonRawMakeModel", "SubDirectory": {"TagTable": "Image::ExifTool::Any::MakeModel"}}}
+        moved = {"0x0809": base["0x080a"]}
+        target = {"0x080a": {"Name": "CanonRawMakeModel", "SubDirectory": {"TagTable": "Image::ExifTool::Any::ImageFormat"}}}
+        base_src, _ = keyed_directory.generate(doc(base))
+        moved_src, _ = keyed_directory.generate(doc(moved))
+        target_src, _ = keyed_directory.generate(doc(target))
+        self.assertIn("raw_id: 0x080a", base_src)
+        self.assertIn("raw_id: 0x0809", moved_src)
+        self.assertIn('table: "ImageFormat"', target_src)
+        self.assertNotIn('table: "MakeModel"', target_src)
+
+    def test_same_table_directory_and_unwalked_edge_facts_are_explicit(self):
+        src, stats = keyed_directory.generate(doc({
+            "0x2804": {"Name": "ImageDescription", "SubDirectory": {}},
+            "0x1803": {"Name": "ImageFormat", "SubDirectory": {
+                "TagTable": "Image::ExifTool::Any::Serial", "Start": "$val", "Validate": "1",
+                "ProcessProc": PROC,
+            }},
+        }))
+        self.assertIn("KeyedEdge::SameTableDirectory", src)
+        self.assertIn('unwalked: &["start", "validate", "process_proc", "target_processor"]', src)
+        self.assertEqual(stats["keyed_edge_unwalked"], 1)
+
+    def test_atomic_variants_keep_source_order(self):
+        src, _ = keyed_directory.generate(doc({
+            "0x180b": {"_variants": [
+                {"Name": "D30", "Condition": "$$self{Model} =~ /D30/"},
+                {"Name": "Other", "Condition": None},
+            ]},
+        }))
+        self.assertLess(src.index('name: "D30"'), src.index('name: "Other"'))
+        self.assertIn("KeyedVariantGroup", src)
+
+
+class SharedExprRegistry(unittest.TestCase):
+    def test_keyed_only_oracle_expression_is_declared_before_optional_output(self):
+        # A keyed directory can be the only source of an oracle-approved ExprId.
+        # The CLI must collect it before writing the shared binary enum, whether
+        # or not the optional keyed artifact is requested.
+        expression = "$val / 10"
+        proc = {"__perl": "CODE", "__name": "Image::ExifTool::CanonRaw::ProcessCanonRaw"}
+        source = {
+            "exiftool_version": "13.59",
+            "modules": {"Keyed": {"tables": {"Main": {
+                "meta": {"PROCESS_PROC": proc},
+                "tags": {"0x1001": {
+                    "Name": "Scaled",
+                    "PrintConv": {"kind": "expr", "expr": expression},
+                }},
+            }}}},
+        }
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tables = root / "tables.json"
+            tables.write_text(json.dumps(source), encoding="utf-8")
+            ledger = root / "ledger.json"
+            ledger.write_text(json.dumps({
+                "schema": codegen.LEDGER_SCHEMA,
+                "exiftool_version": "13.59",
+                "perl_version": "v5.38.2",
+                "tables_sha256": hashlib.sha256(tables.read_bytes()).hexdigest(),
+                "probe_counts": {"pass": 1, "fail": 0, "skip": 0},
+                "verified_expressions": [codegen.exprs.normalize(expression)],
+            }), encoding="utf-8")
+            first = root / "first.rs"
+            second = root / "second.rs"
+            keyed = root / "keyed.rs"
+            common = [sys.executable, str(Path(codegen.__file__)), str(tables),
+                      "--expr-ledger", str(ledger)]
+            subprocess.run([*common, "-o", str(first)], check=True, text=True,
+                           capture_output=True)
+            subprocess.run([*common, "-o", str(second), "--keyed-out", str(keyed)],
+                           check=True, text=True, capture_output=True)
+            ident = codegen.expr_ident(expression)
+            self.assertIn(f"ExprId::{ident}", first.read_text(encoding="utf-8"))
+            self.assertIn(f"ExprId::{ident}", second.read_text(encoding="utf-8"))
+            self.assertEqual(first.read_text(encoding="utf-8"), second.read_text(encoding="utf-8"))
+            self.assertIn(f"PrintConv::Expr(ExprId::{ident})", keyed.read_text(encoding="utf-8"))
+
+
+class IndependentInventory(unittest.TestCase):
+    def _artifact(self, tags):
+        src, _ = keyed_directory.generate(doc(tags))
+        temp = TemporaryDirectory()
+        path = Path(temp.name) / "keyed_tables.rs"
+        path.write_text(src, encoding="utf-8")
+        self.addCleanup(temp.cleanup)
+        return path
+
+    def test_parser_accounts_for_numeric_ids_variants_enums_and_omissions(self):
+        path = self._artifact({
+            "0x1001": {"Name": "Mode", "PrintConv": {
+                "kind": "enum", "map": {"0": "Off", "1": "On"}, "directives": {},
+            }},
+            "0x180b": {"Name": "Unavailable", "Condition": "$count == 6"},
+            "0x180c": {"_variants": [
+                {"Name": "D30", "Condition": "$$self{Model} =~ /D30/"},
+                {"Name": "Other", "Condition": None},
+            ]},
+        })
+        generated = verify.parse_keyed_rust(path)
+        omissions = verify.parse_omitted_keyed_native_rows(path)
+        self.assertEqual(generated.fields[("Any", "Main", "4097")], "Mode")
+        self.assertEqual(generated.enums[("Any", "Main", "4097")], {"0": "Off", "1": "On"})
+        self.assertEqual(generated.fields[("Any", "Main", "6156#0")], "D30")
+        self.assertEqual(generated.fields[("Any", "Main", "6156#1")], "Other")
+        self.assertTrue(omissions.present)
+        self.assertEqual(omissions.rows[("Any", "Main", "6155")].reasons, ("condition",))
+
+    def test_rustfmt_preserves_independently_parsed_edge_and_native_facts(self):
+        if shutil.which("rustfmt") is None:
+            self.skipTest("rustfmt unavailable")
+        path = self._artifact({
+            "0x080a": {"Name": "CanonRawMakeModel", "SubDirectory": {
+                "TagTable": "Image::ExifTool::Any::MakeModel",
+            }},
+            "0x1005": {"Name": "Sized", "Format": "int16u[3]"},
+        })
+        before = verify.parse_keyed_rust(path)
+        omissions_before = verify.parse_omitted_keyed_native_rows(path)
+        formatted = path.with_name("keyed_tables_rustfmt.rs")
+        formatted.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        subprocess.run(["rustfmt", "--edition", "2024", str(formatted)], check=True)
+        self.assertEqual(verify.parse_keyed_rust(formatted), before)
+        self.assertEqual(verify.parse_omitted_keyed_native_rows(formatted), omissions_before)
+        malformed = formatted.with_name("keyed_tables_bad_edge.rs")
+        malformed.write_text(
+            formatted.read_text(encoding="utf-8").replace(
+                "KeyedEdge::BoundedValue", "KeyedEdge::Unknown", 1,
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(SystemExit):
+            verify.parse_keyed_rust(malformed)
+
+    def test_inventory_rejects_an_unauthenticated_or_stale_omission_once(self):
+        path = self._artifact({"0x180b": {"Name": "Unavailable", "Condition": "$count == 6"}})
+        generated = verify.parse_keyed_rust(path)
+        omissions = verify.parse_omitted_keyed_native_rows(path)
+        names = {("Any", "Main", "6155"): "Unavailable"}
+        clean = verify.keyed_native_inventory(
+            generated, omissions, names, {}, {}, {}, set(), set(),
+            {("Any", "Main", "6155"): {"condition"}}, {},
+            {("Any", "Main"): ("MakerNotes", "", "")}, {}, {},
+            {("Any", "Main", "6155"): "$count == 6"},
+        )
+        self.assertEqual(clean.accounted, 1)
+        bad = verify.keyed_native_inventory(
+            generated, omissions, names, {}, {}, {}, set(), set(), {},
+            {}, {("Any", "Main"): ("MakerNotes", "", "")}, {}, {}, {},
+        )
+        self.assertEqual(bad.missing, ())
+        self.assertEqual(len(bad.bad_reasons), 1)
+
+    def test_sized_format_omission_is_authenticated_by_keyed_native_format_rules(self):
+        # ProcessCanonRaw refuses the sized spelling rather than borrowing
+        # ProcessBinaryData's array-format normalization.  This is a real
+        # compiler artifact parsed by the independent verifier, not a
+        # hand-built omission record.
+        path = self._artifact({"0x1005": {"Name": "Sized", "Format": "int16u[3]"}})
+        generated = verify.parse_keyed_rust(path)
+        omissions = verify.parse_omitted_keyed_native_rows(path)
+        key = ("Any", "Main", "4101")
+        source = ({key: "Sized"}, {}, {key: "int16u[3]"}, {}, set(), set(), {},
+                  {}, {("Any", "Main"): ("MakerNotes", "", "")}, {}, {}, {})
+        fresh = verify.keyed_native_inventory(generated, omissions, *source)
+        self.assertEqual(fresh.accounted, 1)
+        self.assertEqual(fresh.bad_reasons, ())
+        # A source change that makes the format executable must not let a
+        # stale `format` sidecar hide the row.
+        changed = list(source)
+        changed[2] = {key: "int16u"}
+        stale = verify.keyed_native_inventory(generated, omissions, *changed)
+        self.assertEqual(stale.missing, ())
+        self.assertEqual(len(stale.bad_reasons), 1)
+        self.assertTrue(any("native facts" in why for _key, why in stale.keyed_fact_mismatches))
+
+    def test_saved_parent_target_mutation_rejects_stale_executable_edge(self):
+        # Mirrors native-keyed-fixtures/mutation-diffs/parent-target.diff:
+        # Main 0x080a switches MakeModel to ImageFormat.  The tag name stays
+        # the same, so a names-only inventory would have passed stale Rust.
+        path = self._artifact({"0x080a": {
+            "Name": "CanonRawMakeModel",
+            "SubDirectory": {"TagTable": "Image::ExifTool::Any::MakeModel"},
+        }})
+        generated = verify.parse_keyed_rust(path)
+        omissions = verify.parse_omitted_keyed_native_rows(path)
+        key = ("Any", "Main", "2058")
+        base = verify.keyed_native_inventory(
+            generated, omissions, {key: "CanonRawMakeModel"}, {}, {}, {}, set(), set(), {},
+            {}, {("Any", "Main"): ("MakerNotes", "", "")}, {},
+            {key: {"tagtable": "Image::ExifTool::Any::MakeModel", "start": "", "validate": False, "processproc": False}}, {},
+        )
+        self.assertEqual(base.keyed_fact_mismatches, ())
+        moved = verify.keyed_native_inventory(
+            generated, omissions, {key: "CanonRawMakeModel"}, {}, {}, {}, set(), set(), {},
+            {}, {("Any", "Main"): ("MakerNotes", "", "")}, {},
+            {key: {"tagtable": "Image::ExifTool::Any::ImageFormat", "start": "", "validate": False, "processproc": False}}, {},
+        )
+        self.assertTrue(any("edge target" in why for _key, why in moved.keyed_fact_mismatches))
+        self.assertTrue(any("native facts" in why for _key, why in moved.keyed_fact_mismatches))
+
+    def test_live_keyed_scope_rejects_a_deleted_generated_table(self):
+        empty = verify.ParsedKeyedRust({}, {}, set(), set(), {}, {}, {})
+        key = ("Any", "Main", "2058")
+        inv = verify.keyed_native_inventory(
+            empty, verify.ParsedNativeOmissions(True, {}), {key: "CanonRawMakeModel"},
+            {}, {}, {}, set(), set(), {}, {}, {("Any", "Main"): ("MakerNotes", "", "")}, {}, {}, {},
+        )
+        self.assertEqual(inv.missing, (key,))
+
+    def test_inventory_rejects_enum_value_drift_generated_orphans_and_unknown_printconv(self):
+        path = self._artifact({"0x1001": {"Name": "Mode", "PrintConv": {
+            "kind": "enum", "map": {"0": "Off", "1": "On"}, "directives": {},
+        }}})
+        src = path.read_text()
+        key = ("Any", "Main", "4097")
+        oracle_args = ({key: "Mode"}, {key: {"0": "Off", "1": "On"}}, {}, {}, set(), set(), {},
+                       {}, {("Any", "Main"): ("MakerNotes", "", "")}, {}, {}, {})
+        drift = path.with_name("enum-drift.rs")
+        drift.write_text(src.replace('"On"', '"Broken"'), encoding="utf-8")
+        inv = verify.keyed_native_inventory(
+            verify.parse_keyed_rust(drift), verify.parse_omitted_keyed_native_rows(drift), *oracle_args
+        )
+        self.assertTrue(any("enum '1'" in why for _key, why in inv.keyed_fact_mismatches))
+        orphan = verify.keyed_native_inventory(
+            verify.parse_keyed_rust(path), verify.parse_omitted_keyed_native_rows(path),
+            {}, {}, {}, {}, set(), set(), {}, {}, {("Any", "Main"): ("MakerNotes", "", "")}, {}, {}, {},
+        )
+        self.assertTrue(any("no live native row" in why for _key, why in orphan.keyed_fact_mismatches))
+        unknown = path.with_name("unknown-printconv.rs")
+        unknown.write_text(src.replace("PrintConv::IntEnum", "PrintConv::Mystery"), encoding="utf-8")
+        with self.assertRaises(SystemExit):
+            verify.parse_keyed_rust(unknown)
+
+
+if __name__ == "__main__":
+    unittest.main()
