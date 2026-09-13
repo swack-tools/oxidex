@@ -185,9 +185,14 @@ fn serialize_itxt_chunk(keyword: &[u8], lang: &[u8], translated: &[u8], text: &s
 ///
 /// Serialized eXIf chunk data (TIFF format), or error if serialization fails
 fn serialize_exif_chunk(metadata: &MetadataMap) -> Result<Vec<u8>> {
-    // Filter only TIFF-writable EXIF tags
+    // Filter only TIFF-writable EXIF tags. Each takes the value as the file
+    // stores it where the reader keeps one beside a printed value
+    // (`TagOccurrence::stored`: the ExifIFD engine rows, whose map value is
+    // ExifTool's print conversion -- `MeteringMode` `Average` over a SHORT
+    // 1); serializing the printed value wrote `Average` as ASCII.
     let mut exif_metadata = MetadataMap::new();
-    for (tag_name, tag_value) in metadata.iter() {
+    for (tag_name, occurrence) in metadata.winner_occurrences() {
+        let tag_value = occurrence.stored.as_ref().unwrap_or(&occurrence.raw);
         // Accept all TIFF-compatible prefixes
         let is_tiff_writable = tag_name.starts_with("IFD0:")
             || tag_name.starts_with("IFD1:")

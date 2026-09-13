@@ -314,6 +314,14 @@ pub struct Emitted {
     /// when it carries `Avoid`). Binary-table fields never carry it; IFD tags
     /// do ([`super::ifd_schema::IfdFlags::avoid`]).
     pub avoid: bool,
+    /// The fraction a single rational entry was read as, before
+    /// `RoundFloat` -- ExifTool's `TAG_EXTRA{Rational}` (ExifTool.pm:6312-6320,
+    /// Exif.pm:7185), which `Canon::CalcSensorDiag` reads for its sensor
+    /// size (Canon.pm:10145-10175) -- set only when `value` IS that number
+    /// unconverted (no `ValueConv`, no `PrintConv`), so a caller may keep
+    /// the fraction as the row's `-n` form without changing what it prints.
+    /// IFD tables only; `None` for every binary-table field.
+    pub rational: Option<(i64, i64)>,
 }
 
 /// The `%dirInfo` a `ProcessBinaryData` call receives (ExifTool.pm:9880-9888).
@@ -695,6 +703,7 @@ fn walk_with_policy(
             // flags); no ProcessBinaryData field in the pinned tree declares
             // it.
             avoid: false,
+            rational: None,
         });
     }
     BinaryWalkOutcome::Complete

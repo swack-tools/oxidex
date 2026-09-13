@@ -678,6 +678,7 @@ mod tests {
             value_conv: None,
             low_priority: false,
             avoid: false,
+            rational: None,
         }
     }
 

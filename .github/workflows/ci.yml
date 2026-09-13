@@ -361,6 +361,19 @@ jobs:
       # measurement in hand -- narrowing it back to `--doc` does not shrink
       # it, it deletes it.
       - run: cargo test --all-features
+      # This opt-in test executes the generated reader against native Perl.
+      # Keep the same feature graph as the preceding build to reuse its cache.
+      - name: Compare generated word reader with pinned native processor
+        env:
+          EXIFTOOL_PERL: perl
+        run: |
+          set -euo pipefail
+          export OXIDEX_PINNED_EXIFTOOL="$(dirname "$EXIFTOOL")"
+          cargo test --all-features --lib \
+            exiftool_tables::keyed_engine::tests::generated_word_directory_matches_native_probe_v1 \
+            -- --ignored --exact --nocapture | tee "$RUNNER_TEMP/word-native-replay.log"
+          # Cargo also succeeds when a mistyped exact selector runs no tests.
+          grep -F 'test result: ok. 1 passed; 0 failed;' "$RUNNER_TEMP/word-native-replay.log"
       - name: Verify C header is up-to-date
         run: |
           cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
@@ -482,6 +495,7 @@ jobs:
             "$EXIFTOOL_SOURCE/lib" \
             --oracle tools/exiftool-tables/oracle.pl \
             --keyed-generated src/exiftool_tables/keyed_tables.rs \
+            --word-processor Image::ExifTool::CanonCustom::ProcessCanonCustom \
             --native-inventory --native-inventory-table Sony:Tag202a
           # verify.py independently checks which edges should be present;
           # this runs their actual Start/Base arithmetic against the pinned

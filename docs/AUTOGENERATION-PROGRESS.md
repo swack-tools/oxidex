@@ -1,6 +1,44 @@
 # Autogeneration progress
 
 This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
+
+## Current word-processor checkpoint — September 13
+
+PR #753 merged as `1a47cfa3`; the current work also includes the newer
+integration base `72eae8a5`. The shared word processor now generates nine
+native tables containing 132 rows, including the empty fallback table.
+The independent definition verifier reports **132 native / 132 generated,
+zero row discrepancies and zero source-binding discrepancies**. Scope comes
+from the native processor inventory, so deleting every generated table fails.
+This is definition coverage; production routing remains inactive.
+
+Four of the parent's five unsupported child processors now have generated
+descriptors. One dynamic-length processor and four omitted parent rows remain.
+No Canon manual reader has been retired and no project-wide percentage has
+been remeasured. The next measurable results are the remaining processor,
+real-carrier verification and removal of duplicate readers, after this
+checkpoint passes its full checks and merges.
+
+The combined source at `f613820d` passes 25 Rust reader tests and the explicit
+native/Rust comparison passes all seven cases with the real generated tables.
+This includes the generated parent edge, verbose-directory reporting, rejected
+headers, short reads and both byte orders. CI explicitly selects the native
+test and rejects a zero-test run. Clippy and formatting pass.
+
+Official two-tier regeneration passes at `b9c7f206` in 196 seconds and
+reproduces every declared artifact with zero net changes. All 607 translated
+expressions pass 16,789 native comparisons; 14 probe inputs are inapplicable.
+The earlier three failed regeneration attempts remain recorded. The full
+Python suite is being rerun serially after a wrong source-root setting and
+an unexpected compiler invocation in the first attempt; no full-suite pass
+is claimed. Hosted PR checks and merge remain pending.
+
+The [checkpoint record](reference/word-directory-checkpoint.md) separates
+these checks and publication states. Completed checkpoints are committed and
+pushed without waiting for the whole merge gate.
+
+## Earlier milestones and evidence
+
 The Sony focus-table pilot merged in PR #746 at `04eaf6e1`; final CI is green
 at `a1626cb6`. It removed 17 duplicate declarations and brought the ten
 raw-ID fixes into the shared route. Its earlier comparisons, failed gate

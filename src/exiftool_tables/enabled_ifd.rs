@@ -95,9 +95,9 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // file's VALUE or RENAME state before the change; the rows above were read
     // from both census JSONs.
     ("Canon", "Main"),
-    // Exif::Main, walked at DirName `IFD1` (slice IFD1, below) and
-    // `InteropIFD` (slice E-1, after the IFD1 evidence); `ExifIFD` is slice
-    // E-2 (not yet). Slice IFD1 -- the JPEG-APP1 thumbnail
+    // Exif::Main, walked at DirName `IFD1` (slice IFD1, below),
+    // `InteropIFD` (slice E-1, after the IFD1 evidence) and `ExifIFD` (slice
+    // E-2, after E-1's). Slice IFD1 -- the JPEG-APP1 thumbnail
     // IFD (landing 2; landing 1 landed as 759fa0e9: the codegen
     // policy aaf00801, the i7 regen dcc012f4, and the design spec's v1.1
     // amendment). The table is
@@ -264,6 +264,191 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // above (per-file rows compared as sets; per_file.value_diff order is not
     // stable between runs); 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA
     // (VERDICT PASS); oracle rows conserve (480,769).
+    //
+    // Slice E-2: the ExifIFD (spec `oxidex-ops/slices/exif-ifd/spec.md`).
+    // Call site: `tiff_helpers::parse_exif_subifd` -> `exif_dir_engine::walk`
+    // (DirName and group 1 `ExifIFD`, base 0 over the TIFF block) at every
+    // entry point that reaches it: JPEG APP1, the standalone-TIFF chain, and
+    // the embedded TIFF blocks of PNG/WebP/JXL/HEIF/PSD/PDF/FLIF/MIFF/BPG --
+    // NOT the TIFF-raw, RW2-preview, RAF, X3F, CR3-CMT and PDF byte-scan
+    // walkers, which keep their own ExifIFD code. Commit 1 (K-O): the engine's
+    // out-of-line value rule for every non-MakerNotes IFD table (this one, at
+    // IFD1/InteropIFD/ExifIFD) is ExifTool's -- refused iff the stored offset
+    // points into the TIFF header (Exif.pm:6539) or the value overlaps the
+    // entry array (Exif.pm:6549) -- not the `table_ifd.rs` floor; maker-note
+    // tables keep the floor.
+    //
+    // What E-2 changes: every ExifIFD id the table reports comes from the
+    // engine as `ExifIFD:<name>`, replayed at its entry's position in the
+    // hand walk (so every `order` slot is the hand walk's), with
+    // `--no-print-conv` = `Emitted::value_conv` -- or, for an unconverted
+    // single rational, its fraction (`Emitted::rational`, ExifTool's
+    // `TAG_EXTRA{Rational}`, which Canon's sensor-size Composite reads); a
+    // value in EXIF's date shape is stored as `TagValue::DateTime`, the type
+    // the hand arm gave it (same text; `date_shift`'s map path reads it). The
+    // hand residual is the complement: the 0x927c MakerNote row and dispatch,
+    // the 0xa005 pointer, the `omitted` ids, the offset class, `Unknown` and
+    // untranscribed ids, recorded at their tag's own priority 0 where it has
+    // one (0xfe4e WhiteBalance behind 0xa403's), and 0x9400 AmbientTemperature
+    // (`EXIF_IFD_HAND_KEPT`: `"$val C"` of RoundFloat's `-0` string, which the
+    // compiled expression cannot tell from a computed zero). An
+    // engine-reported entry falls back to its hand arm only where the absence
+    // is the engine's own (`DirEngineRows::undecoded`: a refusal ExifTool does
+    // not make, or a non-finite ValueConv the compiled sprintf would print as
+    // `inf`); one ExifTool refuses too (an overlapping or out-of-block value,
+    // an entry past the warning budget) or one the engine read and withheld
+    // stays absent. Engine rows keep the hand SHIM_DEFAULT_PRIORITY (JFIF is
+    // not modelled at ExifTool's -1, E-1's finding); the yield-to-IFD0 rule is
+    // applied to them with the hand's predicate (E-3 retires it); all ExifIFD
+    // rows still precede the MakerNote and InteropIFD passes; Make/Model
+    // members are IFD0's trimmed rows. Containers that re-home these rows
+    // (MIFF, JP2, CaptureOne, PDF DCT and image XObjects) carry each row's
+    // `-n` and stored forms, in file order. Each engine row also carries the
+    // value its entry stores, typed as the hand arm stored it
+    // (`TagOccurrence::stored`), which the PNG `eXIf` rebuild and
+    // `copy_metadata` (`-TagsFromFile`) serialize -- their output is the
+    // control's. The surgical writers map an engine-named row back to its
+    // entry (178 reported ids have no `tag_db` name: `ExifIFD:0x9210` is now
+    // `ExifIFD:FocalPlaneResolutionUnit`) only when `tag_db` writes the name
+    // to that id; a TIFF/EP legacy entry whose name is its EXIF 2.x twin's is
+    // carried, and an edit of the name adds the twin, as ExifTool does.
+    // Pinned by `exif_dir_engine` tests (snapshot, owner, keep_hand,
+    // undecoded, fraction, output rules a no-op over 1,568 real values),
+    // `tiff_helpers::exif_subifd_tests` (replay, legacy 0x920e-0x9210 ids,
+    // same-name pairs, yield, fallback, order on Canon.jpg) and
+    // `tests/exif_ifd_table.rs` (t/images Canon.jpg / Nikon.jpg /
+    // ExifTool.jpg / crafted PNG eXIf per tag -- FileSource `-n` 3 only the
+    // engine gives --, the crafted overlap/past-payload carriers, a Canon JP2
+    // read 24 times, a PDF DCT image, the PNG rebuild and -TagsFromFile,
+    // combined-samples LeicaM9, SonyILCE-6100, SonyILME-FX3, CanonEOS60D,
+    // GoogleNexusS, CanonEOS40D, CanonIXY640, CanonPowerShotELPH330HS against
+    // `exiftool-pinned.sh`).
+    //
+    // Local pre-measurement (a prediction, not the gate): conformance.py
+    // --recursive over `slices/exif-ifd/work/ab150.txt` (150 files), pinned
+    // 13.59 (both probes), control a release build of the merge base
+    // 7e928390, each treatment a release build of its commit
+    // (`OXIDEX_ALLOW_DIRTY_TREE=1`; --min-files 150 --min-tags 18067; totals
+    // from --json-out):
+    //     control    TOTAL 150 15886 0 74 940 159
+    //     K-O        TOTAL 150 15886 0 74 940 159   (0 files moved)
+    //     call site  TOTAL 150 15925 0 56 919 158
+    // call site, per file: 12 FocalPlaneX/YResolution/ResolutionUnit
+    // MISSING -> matched (LeicaM8, M8.2, M9, M_Monochrom: TIFF/EP ids
+    // 0x920e-0x9210); CanonEOS60D LensModel MISSING -> matched with its
+    // ExifIFD:LensModel EXTRA gone; 15 VALUE -> matched (FNumber x4, CreateDate
+    // x4, LensModel x2, SceneType x2, DateTimeOriginal, ExposureTime
+    // NikonCoolpix7900, ExposureCompensation SonyILME-FX3); and, downstream of
+    // those rows, 11 Composite rows -> matched (LeicaM8/M8.2 CircleOfConfusion,
+    // FOV, ScaleFactor35efl MISSING, FocalLength35efl VALUE; NikonCoolpix7900
+    // ShutterSpeed VALUE; SamsungNX3000/NX3300 LensID MISSING), each equal to
+    // the oracle; 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA; oracle rows
+    // conserve (16,900). The five OlympusOM/E-M1MarkIII bodies +
+    // CanonEOS20Da: TOTAL 6 1460 0 1 18 1 at control, K-O and call site.
+    // `-n` (ExifIFD/InteropIFD/Composite rows against the oracle's `-j -n
+    // -G1 -a`, `%.15g`-normalized; 457 files: 355 combined-samples including
+    // ab150, 21 t/images carriers, 81 crafted carriers), K-O vs call site:
+    // 1,105 rows toward the oracle, 0 away. Nine Composite rows differ from
+    // the oracle before and after: LeicaM8 FocalLength35efl
+    // 67.40925676973306 vs 67.409256769733 and LeicaM8.2 FOV
+    // 41.7602600646894 vs 41.7602600646895 (reachable only through the
+    // engine's FocalPlane rows; absent or wrong before, never right), three
+    // more now equal to it to 14 digits (FujiFilmFinePixS1730/A400
+    // LightValue, a Canon JP2's FocalLength35efl; arithmetic order), and
+    // Kodak.jpg's ShutterSpeed (twice in the list): ExifIFD's 1/180 in both,
+    // where the oracle's input is Kodak:ExposureTime, 0.00464.
+    // The call site carries the E-2 review's fixes, folded in so that no
+    // commit regresses on its own: AmbientTemperature kept on its hand arm
+    // (without it the OM bodies' `-0 C` went matched -> VALUE); entries
+    // ExifTool refuses stay absent (the crafted overlap, past-payload and
+    // TIFF-header-offset carriers print the oracle's rows); a non-finite
+    // ValueConv keeps the hand arm (a no-op until D-2); embedded copies in
+    // file order with their forms (a Canon JP2's Composite Aperture no longer
+    // flips 14.0/14.3; a PDF DCT image's Composites agree with the JPEG);
+    // stored forms for the PNG rebuild and -TagsFromFile, and legacy ids that
+    // do not own their twins' names in the writers; an IFD0/ExifIFD/GPS entry
+    // the reader surfaces no row for (a refused value here, D-2's withheld and
+    // D-3's silenced values later) is still the entry a by-name write edits
+    // or deletes: the JPEG writer replaces or drops it, the TIFF writer
+    // patches it or refuses the deletion, as while it had a row (108 by-name
+    // writes -- set, delete, `EXIF:`, bare name -- of 27 file/tag pairs
+    // row-less here or after D-2/D-3, and 9 -TagsFromFile copies onto and
+    // from them: control's bytes and status but for the
+    // crafted pastpayload.jpg, whose two past-the-block values control
+    // re-planted from its garbage rows and this drops; pinned 13.59 refuses
+    // that file). Writer round trip, 22 files x 7 edits and 9 -TagsFromFile
+    // copies: byte-identical to control (but for a LeicaM9
+    // FocalPlaneXResolution copy control could not
+    // make, now pinned 13.59's 0xa20e); the C3 PNG pin fails with the engine
+    // off.
+    //
+    // Decision D-2 (its own commit, after the call site): ApertureValue
+    // 0x9202 and MaxApertureValue 0x9205 leave the hand arm for the engine,
+    // whose `2**($val/2)` withholds a value Perl numifies but the runtime
+    // cannot (`undef` from a 0/0 rational, the two-count `2.971 1`, `inf`
+    // from a zero denominator): absent instead of the hand's wrong `undef` /
+    // `2.971 1` / `inf` (ExifTool prints 1.0 / 2.8 / Inf; construct K-N turns
+    // them into matches). A `2**($val/2)` that overflows (CanonEOS20Da.jpg's
+    // 2147483648/1) keeps the hand arm's `Inf` (the non-finite rule). Same
+    // instrument, control = the call site:
+    //     D-2        TOTAL 150 15925 0 47 928 158
+    // exactly 9 VALUE -> MISSING: ApertureValue SamsungDigimax220SE,
+    // HMX-H300; MaxApertureValue SamsungGT-B2710, GT-S3370, GT-S5350,
+    // HMX-H300, SM-C200, SM-R210, SonyDPP-FP60; 0 files otherwise moved;
+    // `-j`/`-n`/`--extended-output -j` over 457 files: only those 9 rows and
+    // the crafted `undef` / `2.971 1` / `inf` carriers' rows removed. The
+    // crafted 7/0 MaxApertureValue (hand `inf`, oracle `Inf`) is the one
+    // class conformance.py, which compares numerically, files as matched ->
+    // MISSING (6 crafted rows, no corpus file). Writes are control's: a
+    // by-name edit or deletion of a withheld value reaches its entry through
+    // the writers' row-less rule (the call site's); 64 by-name writes -- set,
+    // delete, `EXIF:`, bare name -- of the 9 corpus and 7 crafted pairs, and
+    // 6 -TagsFromFile copies onto them, keep control's bytes and status
+    // (control's own APEX encoding included: `-ExifIFD:MaxApertureValue=2.8`
+    // stores 14/5, which pinned 13.59 reads as 2.6). Reverting D-2's commit
+    // alone restores the hand arms.
+    //
+    // Decision D-3 (its own commit, after D-2): an ExifIFD `SubDirectory`
+    // edge id other than the 0xa005 pointer reports nothing
+    // (Exif.pm:7103-7104). Same instrument, control = D-2:
+    //     D-3        TOTAL 150 15925 0 47 928 157
+    // exactly DJI_XT2's ApplicationNotes EXTRA gone; `-j`/`-n`/`-x` over 457
+    // files: only that row removed. Accepted loss: ExifTool still reports an
+    // edge tag requested BY NAME (Exif.pm:7104 `$$et{REQ_TAG_LOOKUP}`;
+    // pinned `-j -ApplicationNotes` on DJI_XT2.jpg prints its binary
+    // placeholder), and so did oxidex before D-3; a silenced edge has no row,
+    // so `-ExifIFD:ApplicationNotes` now returns nothing (27 edge ids; the
+    // default listing, which the census scores, gains), and `-TagsFromFile
+    // DJI_XT2.jpg -ExifIFD:ApplicationNotes` copies nothing where control
+    // and pinned 13.59 copy the 1,035 bytes (the CLI still says "1 tags
+    // copied"). Writes to the file itself are control's: `-ExifIFD:
+    // ApplicationNotes=abc` and `-ExifIFD:ApplicationNotes=` reach the entry
+    // through the writers' row-less rule (the call site's); 4 by-name writes
+    // and 2 other -TagsFromFile copies onto and from DJI_XT2.jpg keep
+    // control's bytes and status. Reverting D-3's commit alone restores the
+    // rows.
+    //
+    // Gate B of record, E-2 (i7-missing-census.sh: conformance.py over 4,238
+    // files, pinned 13.59, clean trees, on the i7; per-file diff
+    // i7-ab-diff.py, rows compared as sets):
+    //     control   census c746 (04eaf6e1)           TOTAL 4238 468012 22 477 12258 1562
+    //     treatment census e2r  (efbd3511)          TOTAL 4238 468085 22 422 12240 1560
+    // 58 files: 27 MISSING -> matched (FocalPlaneX/YResolution and
+    // FocalPlaneResolutionUnit 12 on the four Leica files, EXIF:X/YResolution
+    // 6 (3 files), MakerNotes:LensModel 1, Composite
+    // ScaleFactor35efl/CircleOfConfusion/FOV/LensID 8), 46 VALUE -> matched
+    // (Composite:LightValue 28, FNumber 4, CreateDate 4, FocalLength35efl 2,
+    // SceneType 2, LensModel 2, ExposureTime, ShutterSpeed, DateTimeOriginal,
+    // ExposureCompensation), D-2's 9 VALUE -> MISSING (the files named
+    // above), 2 EXTRA removed (ExifIFD:LensModel, D-3's ApplicationNotes);
+    // 0 matched -> MISSING, 0 new VALUE, 0 new EXTRA; oracle rows conserve
+    // (480,769). i7-ab-diff.py prints FAIL for D-2's nine rows ("matched ->
+    // MISSING (or newly visible oracle row)"): they were value_diff rows in
+    // the control. The same 58 files and per-file transitions reproduce on
+    // the pre-rebase base (census e2 of 5ae7a579 on 7e928390 vs census l2:
+    // 468002 -> 468075), so the rebase onto #746 changed nothing in E-2.
+    // Rebased again onto 8f0fdaf4 (#747) for landing; the census of that
+    // tree against its own control is in the landing commit.
     ("Exif", "Main"),
     // FujiFilm::Main -- slice I-6. The table is `%Image::ExifTool::FujiFilm::Main`
     // (FujiFilm.pm:84-1022, pinned 13.59), reached from MakerNoteFujiFilm

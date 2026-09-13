@@ -394,10 +394,16 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         }
     }
 
-    // Extract embedded resources metadata
+    // Extract embedded resources metadata: an image XObject's DCT stream is
+    // a whole JPEG, re-entered through `parse_jpeg_metadata`, so these rows
+    // include the ExifIFD engine's, which store ExifTool's printed value and
+    // keep the `--no-print-conv` form beside it -- the form Composite inputs
+    // read (FocalPlaneX/YResolution's fraction for Canon's sensor size).
+    // Copy each winner as `insert()` did, with its forms, in file order:
+    // flattening through `iter()` kept only the printed value.
     if let Ok(res_meta) = resources_parser::parse_resources_metadata(reader) {
-        for (key, value) in res_meta.iter() {
-            metadata.insert(key.clone(), value.clone());
+        for (key, occurrence) in res_meta.winners_in_file_order() {
+            metadata.insert_carrying_forms(key.clone(), occurrence);
         }
     }
 

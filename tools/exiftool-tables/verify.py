@@ -54,6 +54,9 @@ import exiftool_oracle  # noqa: E402 -- capability-aware perl selection
 import instrument  # noqa: E402 -- git/instrument identity header
 import verify_directory_validation
 import verify_native_reader
+import verify_word_directory
+import verify_processor_inventory
+import verify_word_rows
 import json
 
 # The perl this verifier runs `oracle.pl` and the ExifTool-version probe
@@ -992,6 +995,8 @@ class ParsedKeyedRust(NamedTuple):
     table_groups: dict
     facts: dict
     source_facts: dict
+    layouts: dict | None = None
+    table_gates: dict | None = None
 
 
 def _canonical_keyed_id(raw):
@@ -1151,12 +1156,46 @@ def parse_keyed_rust(path):
     src = Path(path).read_text(encoding="utf-8")
     heads = list(KEYED_TABLE_RE.finditer(src))
     fields, enums, pc_refused, scope, table_groups, facts, source_facts = {}, defaultdict(dict), set(), set(), {}, {}, {}
+    layouts, table_gates = {}, {}
     expected = parsed = 0
     for n, head in enumerate(heads):
         end = heads[n + 1].start() if n + 1 < len(heads) else len(src)
         module, table = unescape(head.group("module")), unescape(head.group("table"))
+        if (module, table) in scope:
+            raise SystemExit(f"duplicate generated keyed table {(module, table)}")
         scope.add((module, table))
         table_groups[(module, table)] = tuple(unescape(head.group(f"group{n}")) for n in range(3))
+        layout_marker = re.compile(r"\s*layout:\s*").match(src, head.end())
+        if layout_marker is None:
+            raise SystemExit(f"generated keyed table {(module, table)} lacks its layout")
+        layout_end = _value_span(src, layout_marker.end())
+        try:
+            layouts[(module, table)] = verify_word_directory.parse_rust(
+                src[layout_marker.end():layout_end], unescape
+            )
+        except verify_word_directory.WordVerificationError as error:
+            raise SystemExit(f"keyed table {(module, table)}: {error}") from error
+        gate_marker = re.compile(r"\s*,\s*gate_a:\s*").match(src, layout_end)
+        if gate_marker is None:
+            raise SystemExit(f"generated keyed table {(module, table)} lacks Gate A")
+        gate_end = _value_span(src, gate_marker.end())
+        gate = re.fullmatch(r"GateA\s*\{\s*blocked_by:\s*&\[(.*)\]\s*,?\s*\}",
+                            src[gate_marker.end():gate_end].strip(), re.S)
+        if gate is None:
+            raise SystemExit("unrecognized keyed Gate A literal")
+        gates, cursor = [], 0
+        item_re = re.compile(r'\s*\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*(\d+)\s*,?\s*\)\s*(?:,|$)')
+        while cursor < len(gate.group(1)):
+            item = item_re.match(gate.group(1), cursor)
+            if item is None:
+                if gate.group(1)[cursor:].strip():
+                    raise SystemExit("unparsed keyed Gate A blocker")
+                break
+            gates.append((unescape(item.group(1)), int(item.group(2))))
+            cursor = item.end()
+        if len({name for name, count in gates}) != len(gates) or any(count == 0 for name, count in gates):
+            raise SystemExit("duplicate or empty keyed Gate A blocker")
+        table_gates[(module, table)] = tuple(gates)
         tags = KEYED_TAGS_MARKER_RE.search(src, head.end(), end)
         if tags:
             start, stop = _bracket_span(src, tags.end() - 1)
@@ -1181,7 +1220,47 @@ def parse_keyed_rust(path):
             f"parsed {parsed} keyed tags but keyed arrays contain {expected} -- "
             "the verifier is out of date; fix it before trusting a PASS"
         )
-    return ParsedKeyedRust(fields, enums, pc_refused, scope, table_groups, facts, source_facts)
+    return ParsedKeyedRust(fields, enums, pc_refused, scope, table_groups, facts, source_facts,
+                          layouts, table_gates)
+
+
+def audit_word_definitions(generated, omissions, oracle_out, processor_names, readers):
+    """Check selected native table completeness and live processor identity.
+
+    Processor selectors are verification scope, never parser routing. Keeping
+    scope in the invoking gate makes deletion of all generated word tables
+    fail instead of quietly shrinking the expected native population to zero.
+    Execution equivalence remains the separate native/Rust replay gate.
+    """
+    if not processor_names:
+        raise SystemExit("word definitions require explicit --word-processor verification scope")
+    try:
+        native = verify_processor_inventory.parse_processor_inventory(oracle_out)
+    except verify_processor_inventory.ProcessorInventoryError as error:
+        raise SystemExit(f"native processor inventory: {error}") from error
+    row_audit = verify_word_rows.audit_word_rows(generated, omissions, native, processor_names)
+    problems = []
+    for key, descriptor in (generated.layouts or {}).items():
+        if descriptor is None:
+            continue
+        processor = native.processors.get(verify_processor_inventory.ProcessorKey(*key))
+        if problem := verify_word_directory.source_mismatch(descriptor, processor, readers):
+            problems.append((key, problem))
+    return row_audit, problems
+
+
+def ciff_projection(generated):
+    """Keep independent CIFF key/type accounting out of the word family."""
+    scope = {key for key in generated.table_scope if (generated.layouts or {}).get(key) is None}
+    def table_rows(values):
+        return {key: value for key, value in values.items() if key[:2] in scope}
+    return generated._replace(
+        fields=table_rows(generated.fields), enums=table_rows(generated.enums),
+        pc_refused={key for key in generated.pc_refused if key[:2] in scope},
+        table_scope=scope, table_groups=table_rows(generated.table_groups),
+        facts=table_rows(generated.facts), source_facts=table_rows(generated.source_facts),
+        layouts={key: None for key in scope}, table_gates=table_rows(generated.table_gates or {}),
+    )
 
 
 def parse_omitted_keyed_native_rows(path):
@@ -2949,6 +3028,10 @@ def main():
     ap.add_argument("--oracle", default="oracle.pl")
     ap.add_argument("--show", type=int, default=10)
     ap.add_argument(
+        "--word-processor", action="append", default=[], metavar="NATIVE_NAME",
+        help="native PROCESS_PROC verification scope for word definitions; repeatable, includes empty tables",
+    )
+    ap.add_argument(
         "--native-inventory", action="store_true",
         help="require the generated OmittedNativeField sidecar and account for every "
             "native row in each generated binary table",
@@ -3011,6 +3094,7 @@ def main():
         or_rawfmts, or_tblgroups, or_taggroups, or_properties,
     ) = parse_binary_oracle(oracle_out)
     keyed_inventory = None
+    word_audit, word_source_problems = None, []
     if args.keyed_generated is not None:
         keyed_path = Path(args.keyed_generated)
         keyed_generated = parse_keyed_rust(keyed_path)
@@ -3020,9 +3104,16 @@ def main():
                 "keyed native inventory requested but generated Rust has no "
                 "OMITTED_KEYED_NATIVE_ROWS sidecar; regenerate it before trusting a PASS"
             )
+        keyed_oracle = parse_keyed_oracle(oracle_out)
+        if args.word_processor or any(value is not None for value in keyed_generated.layouts.values()):
+            word_audit, word_source_problems = audit_word_definitions(
+                keyed_generated, keyed_omissions, oracle_out, args.word_processor, keyed_oracle[-1]
+            )
         keyed_inventory = keyed_native_inventory(
-            keyed_generated, keyed_omissions, *parse_keyed_oracle(oracle_out)
+            ciff_projection(keyed_generated), keyed_omissions, *keyed_oracle
         )
+    elif args.word_processor:
+        sys.exit("--word-processor requires --keyed-generated")
     native_omissions = parse_omitted_native_fields(args.generated_rs)
     if args.native_inventory and not native_omissions.present:
         sys.exit(
@@ -3464,8 +3555,17 @@ def main():
         print(f"  unauthenticated omission reasons {len(inventory.bad_reasons)}")
         print(f"  native enum entries missing from generated rows {len(inventory.missing_enum_entries)}")
         print(f"    of which native OTHER partial conversions {len(inventory.missing_enum_other_entries)}")
+    if word_audit is not None:
+        print("word native definitions (source identity and rows; execution checked separately)")
+        print(f"  native tables {word_audit.expected_tables}   generated tables {word_audit.generated_tables}")
+        print(f"  native rows {word_audit.expected_rows}   generated rows {word_audit.generated_rows}")
+        print(f"  row discrepancies {len(word_audit.mismatches)}   source discrepancies {len(word_source_problems)}")
+        for mismatch in word_audit.mismatches[:args.show]:
+            print(f"  word row {mismatch.identity}: {mismatch.reason}")
+        for key, problem in word_source_problems[:args.show]:
+            print(f"  word source {key}: {problem}")
     if keyed_inventory is not None:
-        print("keyed native field inventory (schema only; no reader is activated)")
+        print("keyed native field inventory (CIFF schema only; no reader is activated)")
         print(f"  native rows      {keyed_inventory.native_rows}")
         print(f"  generated rows  {keyed_inventory.generated_rows}")
         print(f"  declared omissions {keyed_inventory.omissions}")
@@ -3600,6 +3700,8 @@ def main():
             + len(keyed_inventory.bad_reasons) + len(keyed_inventory.missing_enum_entries)
             + len(keyed_inventory.keyed_fact_mismatches)
         )
+    if word_audit is not None:
+        failed += len(word_audit.mismatches) + len(word_source_problems)
     print("\nRESULT:", "PASS" if failed == 0 else f"FAIL ({failed} discrepancies)")
     sys.exit(1 if failed else 0)
 
