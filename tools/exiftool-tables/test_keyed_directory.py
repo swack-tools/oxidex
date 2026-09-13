@@ -5,12 +5,16 @@ change emitted facts and that unavailable ProcessCanonRaw condition context is
 withheld before a future caller can accidentally invent a retry.
 """
 
+import hashlib
+import json
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import codegen
 import conds
 import keyed_directory
 import verify
@@ -120,6 +124,52 @@ class SourceDrivenFacts(unittest.TestCase):
         }))
         self.assertLess(src.index('name: "D30"'), src.index('name: "Other"'))
         self.assertIn("KeyedVariantGroup", src)
+
+
+class SharedExprRegistry(unittest.TestCase):
+    def test_keyed_only_oracle_expression_is_declared_before_optional_output(self):
+        # A keyed directory can be the only source of an oracle-approved ExprId.
+        # The CLI must collect it before writing the shared binary enum, whether
+        # or not the optional keyed artifact is requested.
+        expression = "$val / 10"
+        proc = {"__perl": "CODE", "__name": "Image::ExifTool::CanonRaw::ProcessCanonRaw"}
+        source = {
+            "exiftool_version": "13.59",
+            "modules": {"Keyed": {"tables": {"Main": {
+                "meta": {"PROCESS_PROC": proc},
+                "tags": {"0x1001": {
+                    "Name": "Scaled",
+                    "PrintConv": {"kind": "expr", "expr": expression},
+                }},
+            }}}},
+        }
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tables = root / "tables.json"
+            tables.write_text(json.dumps(source), encoding="utf-8")
+            ledger = root / "ledger.json"
+            ledger.write_text(json.dumps({
+                "schema": codegen.LEDGER_SCHEMA,
+                "exiftool_version": "13.59",
+                "perl_version": "v5.38.2",
+                "tables_sha256": hashlib.sha256(tables.read_bytes()).hexdigest(),
+                "probe_counts": {"pass": 1, "fail": 0, "skip": 0},
+                "verified_expressions": [codegen.exprs.normalize(expression)],
+            }), encoding="utf-8")
+            first = root / "first.rs"
+            second = root / "second.rs"
+            keyed = root / "keyed.rs"
+            common = [sys.executable, str(Path(codegen.__file__)), str(tables),
+                      "--expr-ledger", str(ledger)]
+            subprocess.run([*common, "-o", str(first)], check=True, text=True,
+                           capture_output=True)
+            subprocess.run([*common, "-o", str(second), "--keyed-out", str(keyed)],
+                           check=True, text=True, capture_output=True)
+            ident = codegen.expr_ident(expression)
+            self.assertIn(f"ExprId::{ident}", first.read_text(encoding="utf-8"))
+            self.assertIn(f"ExprId::{ident}", second.read_text(encoding="utf-8"))
+            self.assertEqual(first.read_text(encoding="utf-8"), second.read_text(encoding="utf-8"))
+            self.assertIn(f"PrintConv::Expr(ExprId::{ident})", keyed.read_text(encoding="utf-8"))
 
 
 class IndependentInventory(unittest.TestCase):

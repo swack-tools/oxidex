@@ -337,10 +337,20 @@ def gen_table(module, table, data, run_stats, verified_exprs, ctx, omissions):
     )
 
 
-def generate(doc, verified_exprs=None):
-    """Return an opt-in keyed artifact and source-derived omission sidecar."""
+def generate(doc, verified_exprs=None, modules=None):
+    """Return opt-in keyed source for the selected native module scope.
+
+    `codegen.py` always asks for this source before it freezes the shared
+    ExprId enum, even if ``--keyed-out`` does not write the optional artifact.
+    Matching the binary/IFD module scope keeps that enum deterministic across
+    output flags and prevents a keyed-only expression from dangling.
+    """
     ctx, stats, omissions, chunks = Context(doc), _stats(), [], []
-    for module, mod in sorted(doc.get("modules", {}).items()):
+    source_modules = sorted(doc.get("modules", {})) if modules is None else modules
+    for module in source_modules:
+        mod = doc.get("modules", {}).get(module)
+        if mod is None:
+            continue
         for table, data in sorted(mod.get("tables", {}).items()):
             src = gen_table(module, table, data, stats, verified_exprs, ctx, omissions)
             if src is not None:

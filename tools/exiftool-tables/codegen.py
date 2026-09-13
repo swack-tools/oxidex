@@ -4047,6 +4047,13 @@ def main():
     ifd_chunks, ifd_index_rows, ifd_stats = gen_ifd_tables(doc, names, verified_exprs)
     ifd_joined = "".join(ifd_chunks)
 
+    # Like IFD source, keyed source must be compiled before the shared ExprId
+    # enum is frozen. `--keyed-out` controls writing its opt-in artifact, not
+    # which variants binary_tables.rs declares; otherwise a keyed-only
+    # oracle-approved conversion emits a dangling ExprId reference.
+    import keyed_directory
+    keyed_src, keyed_stats = keyed_directory.generate(doc, verified_exprs, names)
+
     # Collect the expressions actually referenced so the enum has no dead arms.
     # Iterate in sorted order: set iteration order varies between runs, and a
     # generator whose output depends on it cannot be checked into git.
@@ -4062,7 +4069,11 @@ def main():
                 f"identifier collision: {ident!r} maps to both {used[ident]!r} "
                 f"and {e!r} -- two conversions would alias to one variant"
             )
-        if f"ExprId::{ident}" in joined or f"ExprId::{ident}" in ifd_joined:
+        if (
+            f"ExprId::{ident}" in joined
+            or f"ExprId::{ident}" in ifd_joined
+            or f"ExprId::{ident}" in keyed_src
+        ):
             used[ident] = e
 
     index = (
@@ -4131,9 +4142,8 @@ def main():
     if args.keyed_out:
         # Kept opt-in until a keyed reader and a reviewed caller exist.  This
         # file carries source facts and explicit omissions only; it is not a
-        # route or an enablement list.
-        import keyed_directory
-        keyed_src, keyed_stats = keyed_directory.generate(doc, verified_exprs)
+        # route or an enablement list. Source was already compiled above so
+        # the shared ExprId registry cannot depend on this output flag.
         with open(args.keyed_out, "w", encoding="utf-8") as fh:
             fh.write(keyed_src)
         print(f"wrote keyed tables   {args.keyed_out}")

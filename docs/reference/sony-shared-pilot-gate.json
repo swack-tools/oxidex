@@ -1,0 +1,166 @@
+{
+  "schema": 1,
+  "recorded_at": "2026-09-13T04:32:01.627987+00:00",
+  "status": "passed",
+  "scope": "Sony shared Tag202a migration plus duplicate retirement and raw-ID correctness repair; not generated-share attribution",
+  "source": {
+    "candidate_commit": "92dac917a349822542b033416b2581f6aac6066c",
+    "control_commit": "7e928390173364bcc693be1aa3d8306fb7b5d47e",
+    "clean": true,
+    "instrument_checkout": "92dac917a349822542b033416b2581f6aac6066c",
+    "evidence_checkpoint_runtime_change": "Only the Tag202a evidence comment changes after the validated runtime; no parser, generated table, Rust test or Cargo behavior change."
+  },
+  "binaries": {
+    "candidate_sha256": "d67a63ee44e451b84dfc1fcf1cac33caedcddbd404b6e6ffb81ef18a94d96717",
+    "control_sha256": "daccec21acaa9c6bcae83c6766dc6b746a535250612464f3960fde0f2daae6af"
+  },
+  "instrument": {
+    "name": "tools/exiftool-tables/conformance.py",
+    "pinned_exiftool_version": "13.59",
+    "oracle_family_options": "-G0:1:4",
+    "recursive": true,
+    "min_files": 4238,
+    "min_tags": 450000,
+    "json_out": true,
+    "perl": "system Perl on i7",
+    "capability": "The conformance resolver checks required Perl modules; both saved headers identify pinned13.59 with no degradation warning.",
+    "control_staleness_warning": "Expected: the control7e928390 binary predates the candidate92dac917 checkout used to run the shared instrument. Control source is recorded separately from instrument checkout."
+  },
+  "corpus": {
+    "label": "combined-samples",
+    "files": 4238,
+    "same_file_set": true,
+    "relative_file_set_sha256": "7c4a8c47efcf9a63b76042ed34b8fcf771505b5d743166d3d80b54bc1aba1110",
+    "content_manifest_sha256": null,
+    "limitation": "No corpus content manifest was recorded by this run."
+  },
+  "totals": {
+    "control": {
+      "files": 4238,
+      "matched": 468002,
+      "missing": 12268,
+      "value_diff": 477,
+      "extra": 1562,
+      "renames": 22
+    },
+    "candidate": {
+      "files": 4238,
+      "matched": 468012,
+      "missing": 12258,
+      "value_diff": 477,
+      "extra": 1562,
+      "renames": 22
+    }
+  },
+  "per_file_changes": [
+    {
+      "file": "Sony/SonyDSLR-A560.jpg",
+      "format": "JPEG",
+      "group": "MakerNotes",
+      "key": "ImageNumber",
+      "native_value": "0723",
+      "change": "missing_to_matched"
+    },
+    {
+      "file": "Sony/SonyDSLR-A580.jpg",
+      "format": "JPEG",
+      "group": "MakerNotes",
+      "key": "ImageNumber",
+      "native_value": "0084",
+      "change": "missing_to_matched"
+    },
+    {
+      "file": "Sony/SonyNEX-3.jpg",
+      "format": "JPEG",
+      "group": "MakerNotes",
+      "key": "ImageNumber",
+      "native_value": "0032",
+      "change": "missing_to_matched"
+    },
+    {
+      "file": "Sony/SonyNEX-5.jpg",
+      "format": "JPEG",
+      "group": "MakerNotes",
+      "key": "ImageNumber",
+      "native_value": "0062",
+      "change": "missing_to_matched"
+    },
+    {
+      "file": "Sony/SonyNEX-C3.jpg",
+      "format": "JPEG",
+      "group": "MakerNotes",
+      "key": "ImageNumber",
+      "native_value": "0001",
+      "change": "missing_to_matched"
+    },
+    {
+      "file": "Sony/SonyNEX-VG10E.jpg",
+      "format": "JPEG",
+      "group": "MakerNotes",
+      "key": "ImageNumber",
+      "native_value": 2492,
+      "change": "missing_to_matched"
+    },
+    {
+      "file": "Sony/SonySLT-A33.jpg",
+      "format": "JPEG",
+      "group": "MakerNotes",
+      "key": "ImageNumber",
+      "native_value": "0064",
+      "change": "missing_to_matched"
+    },
+    {
+      "file": "Sony/SonySLT-A35.jpg",
+      "format": "JPEG",
+      "group": "MakerNotes",
+      "key": "ImageNumber",
+      "native_value": "0189",
+      "change": "missing_to_matched"
+    },
+    {
+      "file": "Sony/SonySLT-A55.jpg",
+      "format": "JPEG",
+      "group": "MakerNotes",
+      "key": "ImageNumber",
+      "native_value": 9956,
+      "change": "missing_to_matched"
+    },
+    {
+      "file": "Sony/SonySLT-A55V.jpg",
+      "format": "JPEG",
+      "group": "MakerNotes",
+      "key": "ImageNumber",
+      "native_value": 2480,
+      "change": "missing_to_matched"
+    }
+  ],
+  "regressions": {
+    "new_missing": 0,
+    "new_value_diff": 0,
+    "new_extra": 0,
+    "rename_delta": 0,
+    "other_changed_per_file_records": 0
+  },
+  "raw_json_sha256": {
+    "control": "ad72d51671ace48cff09910adb1c4ea3a47610b412fa3a0ea49c68d6aae61710",
+    "candidate": "4fe4434230c0a38e4fa462feac8752a9a959bba7d25898230813b36850c74146"
+  },
+  "timings_seconds": {
+    "control": 500.901,
+    "candidate": 504.112
+  },
+  "exit_codes": {
+    "control": 0,
+    "candidate": 0
+  },
+  "continuation": {
+    "namespace": "sony-shared-table-final-92dac917a349822542b033416b2581f6aac6066c",
+    "original_stop": "All code/native/JPEG matrix stages passed. Private runner then misparsed Git porcelain XY whitespace while checking generated reference documents and stopped before the corpus pair.",
+    "recovery": "Preserved original failure and reference-document diff; restored those documents and reverified exact clean source. Resumed only the unfinished pair under the shared i7 lock. Shared gate script unchanged.",
+    "status": "pair-resume/status.json",
+    "raw_json": [
+      "pair-resume/control.json",
+      "pair-resume/candidate.json"
+    ]
+  }
+}
