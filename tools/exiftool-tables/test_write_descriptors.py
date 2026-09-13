@@ -1,6 +1,11 @@
 """Focused source-only checks for inactive write candidates."""
 
 import copy
+import json
+from pathlib import Path
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
 import unittest
 
 import write_descriptors
@@ -232,6 +237,81 @@ class InactiveWriteDescriptorTests(unittest.TestCase):
         changed["native_write_tables"]["Exif"]["Main"]["effective_write_proc"]["effective"]["__deparse"] = "changed-write-body"
         after, _ = population(changed)
         self.assertNotEqual(before, after)
+
+    def test_malformed_procedure_path_or_digest_is_a_named_refusal(self):
+        for key, value in (
+            ("source_file", "../../untracked.pm"),
+            ("source_file", "/absolute/Image/ExifTool/WriteExif.pl"),
+            ("source_file", "untracked.pm"),
+            ("source_sha256", "not-a-sha256"),
+        ):
+            with self.subTest(key=key, value=value):
+                changed = document()
+                changed["native_write_tables"]["Exif"]["Main"]["effective_write_proc"]["effective"][key] = value
+                source, report = population(changed)
+                self.assertEqual(report.emitted_tables, 0)
+                self.assertEqual(report.emitted_rows, 0)
+                self.assertIn('"write_provenance_unresolved"', source)
+                self.assertNotIn(value, source)
+
+    def test_outer_and_inner_table_identity_must_match_before_source_class_selection(self):
+        # A stale/mutated inner record cannot borrow Exif::Main eligibility
+        # merely by claiming that identity while living under another map key.
+        cases = {
+            "forged_inner_claim": document({"Other": {"Elsewhere": table(module="Exif", table_name="Main")}}),
+            "mutated_saved_exif_main": document(),
+        }
+        mutated = cases["mutated_saved_exif_main"]["native_write_tables"]["Exif"]["Main"]
+        mutated.update({
+            "module": "Other", "table": "Elsewhere", "full_name": "Image::ExifTool::Other::Elsewhere",
+        })
+        for label, changed in cases.items():
+            with self.subTest(label=label):
+                source, report = population(changed)
+                self.assertEqual(report.emitted_tables, 0)
+                self.assertEqual(report.emitted_rows, 0)
+                self.assertIn('"write_table_identity_mismatch"', source)
+                self.assertNotIn('pub static WRITE_EXIF_MAIN:', source)
+
+    def test_effective_groups_are_emitted_and_unrepresentable_groups_refuse(self):
+        before, _ = population(document())
+        changed = document()
+        groups = changed["native_write_tables"]["Exif"]["Main"]["table_properties"]["GROUPS"]
+        groups["value"] = {"0": "ChangedExif", "1": "ChangedIFD", "2": "ChangedImage"}
+        after, report = population(changed)
+        self.assertEqual(report.emitted_rows, 1)
+        self.assertIn('group0: "ChangedExif", group1: "ChangedIFD", group2: "ChangedImage"', after)
+        self.assertNotEqual(before, after)
+
+        changed["native_write_tables"]["Exif"]["Main"]["table_properties"]["GROUPS"] = {
+            "present": True, "value": {"3": "Unexpected"},
+        }
+        source, report = population(changed)
+        self.assertEqual(report.emitted_rows, 0)
+        self.assertIn('"write_table_groups_unrepresented"', source)
+
+    def test_default_optional_write_output_does_not_change_primary_artifact(self):
+        # The optional, inactive sidecar must not perturb ordinary codegen
+        # output.  This invokes the public CLI with the same minimal input
+        # twice rather than treating this module's renderer as a substitute.
+        payload = document()
+        payload.update({"exiftool_version": "13.59", "modules": {}})
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            tables = root / "tables.json"
+            tables.write_text(json.dumps(payload), encoding="utf-8")
+            ordinary = root / "ordinary.rs"
+            with_sidecar = root / "with-sidecar.rs"
+            sidecar = root / "inactive_write.rs"
+            common = [sys.executable, str(Path(__file__).with_name("codegen.py")), str(tables)]
+            subprocess.run([*common, "-o", str(ordinary)], check=True, text=True, capture_output=True)
+            subprocess.run(
+                [*common, "-o", str(with_sidecar), "--write-out", str(sidecar)],
+                check=True, text=True, capture_output=True,
+            )
+            self.assertEqual(ordinary.read_bytes(), with_sidecar.read_bytes())
+            self.assertTrue(sidecar.is_file())
+            self.assertIn("INACTIVE_WRITE_DESCRIPTOR_VERSION", sidecar.read_text(encoding="utf-8"))
 
     def test_symbolic_write_alias_is_a_named_row_omission_not_a_dump_abort(self):
         changed = document()

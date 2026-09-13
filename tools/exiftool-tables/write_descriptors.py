@@ -20,6 +20,7 @@ from collections import Counter
 from dataclasses import dataclass
 import hashlib
 import json
+from pathlib import PurePosixPath
 import re
 from typing import Any, Mapping
 
@@ -39,6 +40,8 @@ _ALLOWED_TABLE_PROPERTIES = frozenset(
 _ALLOWED_ROW_PROPERTIES = frozenset({"Name", "Writable", "WriteGroup"})
 _ALLOWED_ROW_CONTROLS = frozenset({"Writable", "WriteGroup"})
 _ID_RE = re.compile(r"^(?:0x[0-9A-Fa-f]+|[0-9]+)$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_CODE_NAME_RE = re.compile(r"^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)+$")
 
 
 class WriteDescriptorError(ValueError):
@@ -111,6 +114,34 @@ def _body_sha256(body: Any, context: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _relative_source_file(value: Any, context: str) -> str:
+    """Require the dumper's canonical library-relative source spelling.
+
+    A nonempty string is not provenance.  In particular, accepting ``..`` or
+    an absolute path would make a hand-mutated sidecar appear to bind a source
+    file outside the selected ExifTool library.
+    """
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise WriteDescriptorError(f"{context} is not a normalized relative path")
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or value in (".", "..")
+        or any(part in ("", ".", "..") for part in path.parts)
+        or path.as_posix() != value
+        or not value.startswith("Image/")
+        or value == "Image/"
+    ):
+        raise WriteDescriptorError(f"{context} is not a normalized relative path")
+    return value
+
+
+def _sha256(value: Any, context: str) -> str:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise WriteDescriptorError(f"{context} is not a SHA-256 digest")
+    return value
+
+
 def _procedure_provenance(fact: Any, context: str) -> dict[str, Any]:
     """Return facts that a later writer contract must authenticate again.
 
@@ -123,12 +154,14 @@ def _procedure_provenance(fact: Any, context: str) -> dict[str, Any]:
         raise WriteDescriptorError(f"{context} is unresolved")
     if fact.get("__perl") != "CODE":
         raise WriteDescriptorError(f"{context} is not a CODE fact")
-    result = {}
-    for key in ("__name", "source_file", "source_sha256"):
-        value = fact.get(key)
-        if not isinstance(value, str) or not value:
-            raise WriteDescriptorError(f"{context}.{key} is missing")
-        result[{"__name": "name"}.get(key, key)] = value
+    name = fact.get("__name")
+    if not isinstance(name, str) or _CODE_NAME_RE.fullmatch(name) is None:
+        raise WriteDescriptorError(f"{context} has no fully-qualified callable name")
+    result = {
+        "name": name,
+        "source_file": _relative_source_file(fact.get("source_file"), f"{context}.source_file"),
+        "source_sha256": _sha256(fact.get("source_sha256"), f"{context}.source_sha256"),
+    }
     result["body_sha256"] = _body_sha256(fact.get("__deparse"), context)
 
     dependencies = fact.get("dependencies", {})
@@ -157,6 +190,48 @@ def _table_provenance(doc: Mapping[str, Any], table: Mapping[str, Any]) -> dict[
             raise WriteDescriptorError(f"effective_{kind}_proc is absent")
         procedures[kind] = _procedure_provenance(proc.get("effective"), f"effective_{kind}_proc.effective")
     return {"autoload_router": router, "write_proc": procedures["write"], "check_proc": procedures["check"]}
+
+
+def _table_identity_matches(table: Mapping[str, Any], module: str, name: str) -> bool:
+    """Bind the sidecar map key to the table's own captured identity."""
+    return (
+        table.get("module") == module
+        and table.get("table") == name
+        and table.get("full_name") == f"Image::ExifTool::{module}::{name}"
+    )
+
+
+def _effective_groups(table: Mapping[str, Any], module: str) -> dict[str, str]:
+    """Resolve native ``GetTagTable`` group defaults from the captured table.
+
+    The native loader fills false groups 0 and 1 with the table-owning module
+    and false group 2 with ``Other``.  Keeping those effective values in the
+    candidate is required for later encoding/CharsetEXIF authentication; it
+    does not enable a writer.
+    """
+    props = _mapping(table.get("table_properties"), "table.table_properties")
+    present, raw_groups = _fact_value(props.get("GROUPS", {"present": False}), "table.table_properties.GROUPS")
+    if not present:
+        raw_groups = {}
+    if not isinstance(raw_groups, Mapping):
+        raise WriteDescriptorError("table GROUPS are not an object")
+    if any(not isinstance(key, str) or key not in {"0", "1", "2"} for key in raw_groups):
+        raise WriteDescriptorError("table GROUPS contain an unrepresented family")
+    if any(not isinstance(value, str) for value in raw_groups.values()):
+        raise WriteDescriptorError("table GROUPS are not literal strings")
+    default_module = module.split("::", 1)[0]
+    if not default_module:
+        raise WriteDescriptorError("table module has no native group default")
+    result = {}
+    for family in range(3):
+        value = raw_groups.get(str(family))
+        # Perl's boolean false values for the source representation are the
+        # empty string and "0"; native GetTagTable applies these defaults.
+        if value not in (None, "", "0"):
+            result[f"group{family}"] = value
+        else:
+            result[f"group{family}"] = default_module if family in (0, 1) else "Other"
+    return result
 
 
 def _entry_alternatives(entry: Mapping[str, Any], context: str) -> list[tuple[bool, int, Mapping[str, Any]]]:
@@ -254,9 +329,14 @@ def _row_reasons(entry: Mapping[str, Any], table: Mapping[str, Any]) -> tuple[li
     }
 
 
-def _table_reasons(doc: Mapping[str, Any], module: str, name: str, table: Mapping[str, Any]) -> tuple[list[str], dict[str, Any] | None]:
+def _table_reasons(
+    doc: Mapping[str, Any], module: str, name: str, table: Mapping[str, Any]
+) -> tuple[list[str], dict[str, Any] | None, dict[str, str] | None]:
+    identity_matches = _table_identity_matches(table, module, name)
+    if not identity_matches:
+        return ["write_table_identity_mismatch"], None, None
     if (module, name) != (_SOURCE_MODULE, _SOURCE_TABLE):
-        return ["write_source_class_unimplemented"], None
+        return ["write_source_class_unimplemented"], None, None
     unknown = _mapping(table.get("unknown_table_properties"), "table.unknown_table_properties")
     reasons = [f"write_table_unknown_property_{key}" for key in sorted(unknown)]
     props = _mapping(table.get("table_properties"), "table.table_properties")
@@ -270,7 +350,12 @@ def _table_reasons(doc: Mapping[str, Any], module: str, name: str, table: Mappin
     except WriteDescriptorError as error:
         reasons.append("write_provenance_unresolved")
         provenance = None
-    return sorted(set(reasons)), provenance
+    try:
+        groups = _effective_groups(table, module)
+    except WriteDescriptorError:
+        reasons.append("write_table_groups_unrepresented")
+        groups = None
+    return sorted(set(reasons)), provenance, groups
 
 
 def _rust_string(value: str) -> str:
@@ -305,6 +390,11 @@ def rust_source(population: Mapping[str, Any]) -> str:
 pub enum WriteValueType {{ Ascii }}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WritePhysicalGroup {{ IFD0, ExifIFD, GPS }}
+pub struct NativeWriteTableGroups {{
+    pub group0: &'static str,
+    pub group1: &'static str,
+    pub group2: &'static str,
+}}
 pub struct NativeWriteProcedureProvenance {{
     pub name: &'static str,
     pub source_file: &'static str,
@@ -321,6 +411,11 @@ pub struct InactiveWriteScalarString {{
 pub struct InactiveWriteTable {{
     pub module: &'static str,
     pub table: &'static str,
+    pub full_name: &'static str,
+    /// Effective native groups after GetTagTable's false-value defaults.
+    /// These facts are needed by a later encoding contract; they do not route
+    /// a writer or authenticate WriteExif/CheckExif behavior.
+    pub groups: NativeWriteTableGroups,
     pub autoload_router: NativeWriteProcedureProvenance,
     pub write_proc: NativeWriteProcedureProvenance,
     pub check_proc: NativeWriteProcedureProvenance,
@@ -356,7 +451,10 @@ pub const INACTIVE_WRITE_RUNTIME_STATUS: &str = {_rust_string(RUNTIME_STATUS)};
         prov = table["provenance"]
         chunks.append(
             f"\npub static {symbol}: InactiveWriteTable = InactiveWriteTable {{\n"
-            f"    module: {_rust_string(table['module'])}, table: {_rust_string(table['table'])},\n"
+            f"    module: {_rust_string(table['module'])}, table: {_rust_string(table['table'])}, full_name: {_rust_string(table['full_name'])},\n"
+            "    groups: NativeWriteTableGroups { "
+            f"group0: {_rust_string(table['groups']['group0'])}, group1: {_rust_string(table['groups']['group1'])}, "
+            f"group2: {_rust_string(table['groups']['group2'])} }},\n"
             f"    autoload_router: {_rust_provenance(prov['autoload_router'])},\n"
             f"    write_proc: {_rust_provenance(prov['write_proc'])},\n"
             f"    check_proc: {_rust_provenance(prov['check_proc'])},\n"
@@ -399,7 +497,7 @@ def generate(doc: Mapping[str, Any], modules: list[str] | None = None) -> tuple[
             table = _mapping(table_map[table_name], f"native_write_tables[{module!r}][{table_name!r}]")
             counts["tables_seen"] += 1
             rows = _mapping(table.get("rows"), f"{module}::{table_name}.rows")
-            table_reasons, provenance = _table_reasons(doc, module, table_name, table)
+            table_reasons, provenance, groups = _table_reasons(doc, module, table_name, table)
             if not table_reasons:
                 counts["candidate_tables"] += 1
             admitted = []
@@ -433,10 +531,11 @@ def generate(doc: Mapping[str, Any], modules: list[str] | None = None) -> tuple[
                         table_rows.append(raw_id)
                         counts["emitted_rows"] += 1
             if admitted:
-                if table_reasons or provenance is None:
+                if table_reasons or provenance is None or groups is None:
                     raise AssertionError("admitted write row without table provenance")
                 population["tables"].append({
-                    "module": module, "table": table_name, "provenance": provenance,
+                    "module": module, "table": table_name,
+                    "full_name": table["full_name"], "groups": groups, "provenance": provenance,
                     "tags": sorted(admitted, key=lambda tag: tag["raw_id"]),
                 })
                 counts["emitted_tables"] += 1
