@@ -16,9 +16,9 @@ populations. They are implementation history, not work to restart.
 
 | Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Reconcile IFD1 prerequisite and regenerate | Prepared; fresh regeneration waits for the shared i7 queue | Preserve the verified CODE-ref key/domain gate; regenerate with a fresh pinned dump and its matching ledger; demonstrate eligibility separately from activation |
+| 1 | Continue generated EXIF directory migration | IFD1 and InteropIFD landed; Claude owns ExifIFD E-2 | Preserve the verified CODE-ref key/domain gate, occurrence behavior and named-directory routing; measure each activation against its own control |
 | 2 | Correct classifier/producer accounting exposed by the release rehearsal | Queued | Existing Garmin runtime is recognized, standing debt is separated, repeated field changes are joined by cause, and emitted/activated/observed states remain distinct |
-| 3 | Broaden walk checks and reconstruct useful missing producers | Nikon settings producer recovered; independent verification and pipeline acceptance recorded below | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
+| 3 | Broaden walk checks and reconstruct useful missing producers | Nikon settings landed; Sony plain producer and native verification implemented, landing checks in progress | Demonstrated migration blockers addressed; deliberate bad offsets/conversions fail; residual and unexercised behavior stays explicit |
 
 The [13.55-to-13.59 retrospective rehearsal](./reference/bump-reports/13.55-to-13.59.md)
 passed on 2026-09-11 at `4fb705da` in **611.006 seconds**, with zero source-edit
@@ -27,8 +27,9 @@ interventions and unchanged caller source/index/pin. Both sides regenerated all
 oracle and 193 files, MATCH rose 9,963 to 9,966 and VALUE fell 34 to 31; only
 three Garmin file-identity values improved. MISSING remained 1,563. This measures
 one controlled refresh, not historical upgrade effort or complete coverage.
-The earlier 28-output same-pin acceptance at `1428b6c7` remains recorded below. Three Sony/Nikon outputs still lack
-committed producers after the Nikon settings recovery below. Catalog synchronization has separate carry-forward
+The earlier 28-output same-pin acceptance at `1428b6c7` remains recorded below.
+Two Sony/Nikon outputs still lack producers after the Sony plain recovery
+below. Catalog synchronization has separate carry-forward
 semantics and is outside this table transaction until that policy is resolved.
 See the [landing record](./TAG_MACHINERY_STATUS.md#landed-upgrade-tooling) for the
 four verified squash commits.
@@ -42,18 +43,13 @@ candidates from final workspace, projection and full-corpus acceptance, includin
 explicit PDF and output residuals. Generated tables and the version pin did not
 change; this is not Exif::Main activation.
 
-Next reconcile IFD1 prerequisite `7a69d2fa`, preserving the current verified-key
-and input-domain CODE-ref gate, then regenerate from a fresh pinned dump and
-its own verification ledger. Its old committed table changes were `unwalked:
-None`; improved eligibility existed only in a scratch preview. A clean patch
-apply-check is preparation, not a port, regenerated output or eligibility proof.
-Update the old whole-dump eligibility assertion to use the matching ledger, keep
-unwalked-edge diagnostics in the HAND accounting, and recheck the shared
-converter's 35 simple UNDEFINED declarations after regeneration.
-Separate subsequent named-directory activation from IFD4 conditions/Olympus
-retirement and broader embedded-directory state. IFD4 can reconcile independently.
-Existing old-head gates support review; each landing needs fresh source, binary,
-corpus and occurrence-aware acceptance.
+The earlier IFD1 prerequisite reconciliation and activation are complete
+(`759fa0e9`, `891587c5`); InteropIFD followed at `b4808958`. Canon and Fuji
+generated Main routing also landed, with their tested hand fallbacks retired
+at `e664e063`. Do not restart those preserved branches. Claude owns ExifIFD
+E-2; IFD0 and remaining directory state must retain separate acceptance.
+Each landing still needs fresh source, binary, corpus and occurrence-aware
+evidence. Eligibility and generated declarations alone do not establish gain.
 
 ### Nikon settings producer recovery
 
@@ -61,20 +57,27 @@ The [recovery record](./reference/nikon-settings-generator-recovery.md) starts
 from freshly fetched `79101d7d`, after the RawConv squash merge in #743.
 `gen_nikon_settings_tables.py` reproduces the complete existing file from a
 fresh pinned dump: 197 rows, 131 maps, 37 Unknown omissions. The shared manifest
-now owns 29 outputs (8 tier 1, 21 tier 2); the historical 28-output rehearsal
+owned 29 outputs at that milestone (8 tier 1, 21 tier 2); the historical 28-output rehearsal
 above is unchanged. No extraction or attribution percentage is credited to this
 maintenance change. `AFAreaMode` state propagation and the `BracketProgram`
 mask behavior remain explicit limitations.
 
-Next generator target: Sony plain tables, but first prove and repair the
-separate upstream keys `CameraSettings3[276]` and `[276.1]` being treated as
-alternatives at the same integer offset. A packed-word fixture must establish
-both `FolderNumber` and `ImageNumber` before claiming a faithful replacement.
+### Sony plain producer recovery
+
+Work from freshly fetched `e664e063` is recorded in the
+[Sony recovery report](./reference/sony-plain-generator-recovery.md). First
+milestone reproduces the existing six tables and 193 rows exactly, adds
+independent native declaration verification, and puts the output under the
+shared transaction. The complete tier-2 run passes with zero output drift.
+Next fix raw-key identity separately: a production-module probe confirms that
+keys `CameraSettings3[276]` and `[276.1]` are treated as alternatives and
+`ImageNumber` is omitted. `FolderNumber` already decodes correctly. The runtime
+repair must emit both fields and preserve actual conditional alternatives.
 Sony enciphered and Nikon encrypted remain larger producer recoveries.
 
-The other session owns the PNG text landing and paired normal/union-disabled
-censuses at `79101d7d`. Its reported 7.63% remains evidence at `afd3a628`
-until the per-file tip comparison finishes. Heavy i7 work must acquire
+The earlier paired censuses established the 7.63% result at `79101d7d`; that
+is historical evidence, not the current percentage. Later routing migrations
+need their own attribution. Heavy i7 work must acquire
 `flock /tmp/i7-heavy.lock`; process-name checks are not a reservation.
 
 ### Operational preservation on 2026-09-11

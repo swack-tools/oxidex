@@ -8,8 +8,8 @@ the pin remains 13.59.
 
 Conservative IFD-aware upgrade classification, one generated-output inventory,
 verified Canon CODE references and isolated upgrade orchestration are implemented.
-The inventory now contains 29 outputs after the
-[Nikon settings producer recovery](../../docs/reference/nikon-settings-generator-recovery.md). See the
+The inventory contains 30 outputs with the
+[Sony plain producer recovery](../../docs/reference/sony-plain-generator-recovery.md). See the
 [execution plan](../../docs/UPGRADE-NEXT-STEPS.md) for original validation evidence
 and the remaining work. The
 [13.55-to-13.59 retrospective rehearsal](../../docs/reference/bump-reports/13.55-to-13.59.md)
@@ -38,11 +38,11 @@ definitions and compiled Composite expressions, FITS names, and expression/value
 conversion ledgers. `regen-all.sh` adds vendor subdirectory tables, Nikon AF-point
 grids, bespoke transcriptions, recovered Sony/Minolta/Nikon generators, Macintosh
 CJK charset tables, GeoTIFF key maps, DICOM dictionaries and lens alternatives.
-`artifacts.py` is the single output inventory: 8 tier-1 and 21 tier-2 artifacts.
+`artifacts.py` is the single output inventory: 8 tier-1 and 22 tier-2 artifacts.
 Both scripts resolve
 their output paths and formatting sets from it; the bump's promotion/recovery sets
 and CI's tier-2 comparison use the same inventory. The bump classifier also
-reads it when identifying the three vendor files still lacking producers. Composite's second output
+reads it when identifying the two vendor files still lacking producers. Composite's second output
 and all four implicit charset outputs are included. Nikon AF points and Leica
 lens data preserve handwritten sections and are accounted for as whole mixed
 files, including during backup.
@@ -51,9 +51,9 @@ files, including during backup.
 existing shell entry point. See the transaction contract below and the historical
 [13.58 to 13.59 exercise](../../docs/reference/bump-reports/13.58-to-13.59.md).
 
-Three generated-origin files still lack producers: Sony `plain_tables.rs` /
-`enciphered_tables.rs` and Nikon `encrypted_tables.rs`. Sony main-extra, Minolta
-A100 and Nikon settings now have producers. `regen-all.sh` names the remaining
+Two generated-origin files still lack producers: Sony `enciphered_tables.rs`
+and Nikon `encrypted_tables.rs`. Sony main-extra, Sony plain, Minolta A100 and
+Nikon settings now have producers. `regen-all.sh` names the remaining
 limits; generated once does not mean automatically refreshable.
 
 Nikon settings is checked against freshly loaded Perl by
@@ -62,10 +62,18 @@ unchanged. The custom handwritten processor remains; the verifier checks
 transcribed facts, not whole-parser equivalence. `AFAreaMode` state propagation
 and the existing `BracketProgram` mask behavior remain explicit residuals.
 
+Sony plain uses `gen_sony_plain_tables.py` with the selected fresh dump, then
+`verify_sony_plain.py --input <output> --exiftool-dir <source> --perl <interpreter>`
+checks its six tables, 193 rows, 72 maps and one bitmap against live Perl.
+The native verifier parses the whole Rust DSL independently of the producer.
+It reports the existing raw-key 276/276.1 reader collision explicitly; unchanged
+declarations do not establish runtime parity. See its recovery report for
+the demonstrated missing field and the separate runtime repair requirements.
+
 ## Generated-output inventory and write checks
 
 ```sh
-python3 tools/exiftool-tables/artifacts.py paths                 # all 29 outputs
+python3 tools/exiftool-tables/artifacts.py paths                 # all 30 outputs
 python3 tools/exiftool-tables/artifacts.py paths --tier 2        # downstream outputs
 python3 tools/exiftool-tables/artifacts.py paths --tier 1 --kind rust --absolute
 python3 tools/exiftool-tables/artifacts.py path composite-compute
@@ -119,9 +127,10 @@ of the codebase that is generated. These producers can regenerate supported
 declaration changes and check their emitted facts automatically. A new Perl
 shape, conversion or runtime dependency deliberately refuses and requires a
 reviewed generator/engine change. The Canon ID collision discovered during
-wiring is an example of runtime work that generation alone cannot solve. Three
-Sony/Nikon outputs still lack producers. Only the planned release-delta exercise
-can establish which manual interventions that particular upgrade needs.
+wiring is an example of runtime work that generation alone cannot solve. Two
+Sony/Nikon outputs still lack producers. The recorded release-delta rehearsal
+establishes the interventions for that specific experiment; future releases
+need their own measured refresh and refusal record.
 
 ## Isolated upgrade transaction
 
@@ -136,10 +145,10 @@ reported by Cargo. Corpus A/B uses one target-version oracle and the same inputs
 
 ```sh
 bash tools/exiftool-tables/bump-exiftool.sh 13.59 --dry-run \
-  --old-exiftool-dir /absolute/path/to/ExifTool-13.59 \
-  --new-exiftool-dir /absolute/path/to/ExifTool-13.59 \
-  --perl /usr/bin/perl --corpus /absolute/path/to/corpus \
-  --report-dir /absolute/path/to/external/reports
+  --old-exiftool-dir ../ExifTool-13.59 \
+  --new-exiftool-dir ../ExifTool-13.59 \
+  --perl /usr/bin/perl --corpus ../corpus \
+  --report-dir ../upgrade-reports
 ```
 
 Use `--help` for selection and population-floor options. `--skip-conformance`
@@ -152,7 +161,7 @@ commit with their respective generated artifacts. This isolates the generator
 transition; it does not reconstruct an old released OxiDex implementation.
 
 Dry runs and failures before promotion leave caller source and index untouched.
-A live run rechecks caller identity and promotes only the 29 manifest outputs
+A live run rechecks caller identity and promotes only the 30 manifest outputs
 plus the pin, using journaled payloads and atomic file replacement. It preserves
 the index. Interrupted promotion can be resumed as checked restoration with:
 

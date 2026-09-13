@@ -151,10 +151,10 @@ class GeneratorLessDerivationTests(unittest.TestCase):
         "src/parsers/tiff/makernotes/sony/main_extra_tables.rs",
         "src/parsers/tiff/makernotes/minolta_a100_tables.rs",
         "src/parsers/tiff/makernotes/nikon/settings_tables.rs",
+        "src/parsers/tiff/makernotes/sony/plain_tables.rs",
     }
     STILL_GENERATOR_LESS = {
         "src/parsers/tiff/makernotes/sony/enciphered_tables.rs",
-        "src/parsers/tiff/makernotes/sony/plain_tables.rs",
         "src/parsers/tiff/makernotes/nikon/encrypted_tables.rs",
     }
 
@@ -168,7 +168,7 @@ class GeneratorLessDerivationTests(unittest.TestCase):
                 self.assertTrue((self.REPO_ROOT / path).is_file(),
                                 f"{path} named by BESPOKE_DSL_FILES does not exist")
 
-    def test_derived_list_is_exactly_the_four_without_a_generator(self):
+    def test_derived_list_is_exactly_the_remaining_generator_less_files(self):
         derived = {path for _m, path, _s in triage_bump.generator_less_files()}
         self.assertEqual(derived, self.STILL_GENERATOR_LESS)
 
