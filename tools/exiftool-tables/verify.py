@@ -2155,6 +2155,8 @@ _IFD_SUBDIR_TAIL_RE = re.compile(
     r'max_subdirs:\s*(?P<max_subdirs>None|Some\(\d+\))\s*,\s*'
     r'dir_name:\s*(?P<dir_name>None|Some\("(?:[^"\\]|\\.)*"\))\s*,\s*'
     r'validate:\s*(?P<validate>true|false)\s*,\s*'
+    r'(?:validation:\s*(?P<validation>None|Some\(\s*U16SizeCheck\s*\{.*?\}\s*\))\s*,\s*'
+    r'processor:\s*IfdSubdirProcessor::(?P<processor>Native|Serial)\s*,\s*)?'
     # rustfmt wraps a long reason as `Some(\n "...",\n)`: whitespace after `Some(` and a
     # trailing comma before `)` are part of the committed shape (ProfileIFD 0xc6f5, whose
     # reason names three refusals, is the first edge long enough to wrap).
@@ -2216,7 +2218,7 @@ def _parse_omitted(text, k):
     return out
 
 
-def _parse_ifd_subdir_value(text, k):
+def _parse_ifd_subdir_value(text, k, require_serial_schema=False):
     """`None` -> None; `Some(IfdSubdirEdge { ... })` -> its facts. The
     `base:` value (`None` or `Some(&BaseExpr::...)`, nested arbitrarily) is
     located by `_value_span` and kept as whitespace-free text."""
@@ -2231,6 +2233,8 @@ def _parse_ifd_subdir_value(text, k):
     tm = _IFD_SUBDIR_TAIL_RE.match(text, base_end)
     if not tm:
         raise SystemExit(f"{k}: unrecognised subdir value (tail) {text!r} {_OUT_OF_DATE}")
+    if require_serial_schema and tm.group("processor") is None:
+        raise SystemExit(f"{k}: serial subdir schema is missing validation/processor fields {_OUT_OF_DATE}")
     return {
         "module": m.group("module"),
         "table": m.group("table"),
@@ -2242,6 +2246,9 @@ def _parse_ifd_subdir_value(text, k):
         "max_subdirs": _some_int(tm.group("max_subdirs")),
         "dir_name": _some_str_opt(tm.group("dir_name")),
         "validate": tm.group("validate") == "true",
+        "validation": (None if tm.group("validation") is None
+                       else re.sub(r"\s+", "", tm.group("validation"))),
+        "processor": tm.group("processor") or "Native",
         "unwalked": _some_str_opt(tm.group("unwalked")),
     }
 
@@ -2267,7 +2274,7 @@ class ParsedIfd(NamedTuple):
     structure: list
 
 
-def _parse_one_ifd_tag(src, f, k, out, v2_schema):
+def _parse_one_ifd_tag(src, f, k, out, v2_schema, require_serial_schema=False):
     if v2_schema:
         condition_start = f.end()
         condition_end = _value_span(src, condition_start)
@@ -2321,7 +2328,9 @@ def _parse_one_ifd_tag(src, f, k, out, v2_schema):
             f"{src[pc_start:pc_end].strip()!r} {_OUT_OF_DATE}"
         )
     subdir_end = _value_span(src, sm.end())
-    tag["subdir"] = _parse_ifd_subdir_value(src[sm.end():subdir_end], k)
+    tag["subdir"] = _parse_ifd_subdir_value(
+        src[sm.end():subdir_end], k, require_serial_schema=require_serial_schema
+    )
     _parse_print_conv(
         src, pc_start, pc_end, k, out.enums, out.bitmasks, out.other_ids, out.print_hexes, out.pc_kinds,
     )
@@ -2345,6 +2354,7 @@ def parse_ifd_rust(path):
         src = fh.read()
     out = ParsedIfd({}, {}, set(), defaultdict(dict), {}, {}, {}, {}, [], [])
     v2_schema = IFD_TAG_V2_RE.search(src) is not None
+    require_serial_schema = "IfdSubdirProcessor" in src
     tag_re = IFD_TAG_V2_RE if v2_schema else IFD_TAG_RE
 
     heads = list(IFD_TABLE_RE.finditer(src))
@@ -2381,7 +2391,7 @@ def parse_ifd_rust(path):
             k = (mod, tbl, str(int(f.group("id"), 0)))
             if k in out.tags:
                 out.structure.append(f"{k}: duplicate id in `tags`")
-            _parse_one_ifd_tag(src, f, k, out, v2_schema)
+            _parse_one_ifd_tag(src, f, k, out, v2_schema, require_serial_schema)
             ids.append(int(f.group("id"), 0))
 
         vm = IFD_VARIANTS_MARKER_RE.search(src, t_end, end)
@@ -2398,7 +2408,7 @@ def parse_ifd_rust(path):
             for pos, f in enumerate(tag_re.finditer(src, a_s, a_e)):
                 k = (mod, tbl, f"{gid}#{pos}")
                 out.variant_keys.add(k)
-                _parse_one_ifd_tag(src, f, k, out, v2_schema)
+                _parse_one_ifd_tag(src, f, k, out, v2_schema, require_serial_schema)
                 if int(f.group("id"), 0) != gid:
                     out.structure.append(
                         f"{k}: alternative carries id {f.group('id')} inside group id {gid}"

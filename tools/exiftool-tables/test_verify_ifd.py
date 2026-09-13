@@ -262,6 +262,34 @@ class ParseFailsLoudly(unittest.TestCase):
                             '                unwalked: None,',
                             'dir_name: Some("KodakIFD"),\n                validate: false,')
 
+    def test_serial_edge_schema_requires_and_parses_processor_and_validation(self):
+        src = SAMPLE.read_text(encoding="utf-8")
+        src = src.replace("RawConvEffect,", "RawConvEffect, IfdSubdirProcessor, U16SizeCheck, SizeExpectation,", 1)
+        old = 'dir_name: Some("KodakIFD"),\n                validate: false,\n                unwalked: None,'
+        new = (
+            'dir_name: Some("KodakIFD"),\n                validate: true,\n'
+            '                validation: Some(U16SizeCheck { offset: 0, expected: &[SizeExpectation::Relative(0)], '
+            'expression: "Validate($dirData,$subdirStart,$size)", callee: "Validate", '
+            'source_file: "Image/ExifTool/Canon.pm", source_sha256: "' + "a" * 64 + '", '
+            'reader_contract_sha256: Some("' + "b" * 64 + '") }),\n'
+            '                processor: IfdSubdirProcessor::Serial,\n                unwalked: None,'
+        )
+        self.assertEqual(src.count(old), 1)
+        serial_src = src.replace(old, new)
+        serial_src = re.sub(
+            r'(validate: false,\n)(\s*)unwalked:',
+            r'\1\2validation: None,\n\2processor: IfdSubdirProcessor::Native,\n\2unwalked:',
+            serial_src,
+        )
+        parsed = _parse_text(serial_src)
+        edge = parsed.tags[("Exif", "Main", "33424")]["subdir"]
+        self.assertEqual(edge["processor"], "Serial")
+        self.assertTrue(edge["validate"])
+        self.assertIn("U16SizeCheck", edge["validation"])
+
+        with self.assertRaisesRegex(SystemExit, "serial subdir schema is missing"):
+            _parse_text(src)
+
     def test_rustfmt_wrapped_unwalked_reason_parses(self):
         # The committed regen wraps a long reason over three lines (ProfileIFD,
         # 0xc6f5, at the IFD1 landing-1 regen): whitespace after `Some(` and a

@@ -5328,6 +5328,18 @@ fn parse_canon_makernote_directory(
     // returning whatever tags we found even if parsing isn't perfect
     let _ = parse_ifd_entries(data, byte_order, &config, |entry, ifd_data| {
         hand_entries += 1;
+        let entry_index = hand_entries - 1;
+        // A source-selected serial child keeps its parent entry index from
+        // the IFD walk. Only a handled native result retires this arm: an
+        // unavailable/tainted route falls through to the established hand
+        // producer, while a false parent Condition or Validate deliberately
+        // suppresses it with native's no-output result.
+        if let Some(engine) = main_engine.as_mut()
+            && engine.replay_serial(entry_index, &mut tags, &mut value_forms)
+                == Some(crate::exiftool_tables::SerialSubdirRead::Handled)
+        {
+            return;
+        }
         // A row the generated table reports and no residual arm owns: the
         // engine's row for this entry goes in HERE, at the entry's own
         // position, so a later same-named sub-table row (Processing's

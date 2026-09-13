@@ -68,14 +68,17 @@
 //! its target lands on an allowlist -- even for another call site -- and 58
 //! of them have no `Validate` to stop it, several with a live hand decoder
 //! (FocalLength, WBInfo, CropInfo, AspectInfo, ColorInfo, LensInfo,
-//! CameraInfo*, ColorData). [`is_canon_main_row`] drops every row that is not
-//! `Canon::Main`'s own, and `canon_main_edges_reach_no_enabled_table` turns
-//! the day a target gets enabled into a red test instead of a silent change.
+//! CameraInfo*, ColorData). [`is_canon_main_row`] drops every ordinary child
+//! row. A source-authenticated serial edge is the narrow exception: the IFD
+//! engine returns its rows with the parent entry index, and this buffer replays
+//! them there while preserving a hand fallback for unavailable or tainted
+//! execution. Other newly enabled targets still turn the fence test red.
 
 use std::collections::HashMap;
 
 use crate::exiftool_tables::{
-    Ctx, Emitted, IfdDir, IfdTable, MemberValue, declares, engine_reports, process_exif, read_ifd,
+    Ctx, Emitted, IfdDir, IfdTable, MemberValue, SerialSubdirRead, declares, engine_reports,
+    process_exif_decoded,
 };
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::makernotes::shared::engine_value::engine_value_text;
@@ -137,6 +140,9 @@ struct Row {
     no_print_conv: Option<String>,
     low_priority: bool,
     consumed: bool,
+    /// The root entry that produced a serial child row. Root-table rows keep
+    /// `None` and retain their existing name-to-id replay contract.
+    parent_entry: Option<usize>,
 }
 
 /// What one engine walk of `Canon::Main` reported, held until the hand walk
@@ -146,6 +152,11 @@ pub(super) struct MainEngineRows {
     table: &'static IfdTable,
     /// In emission order, which is IFD entry order.
     rows: Vec<Row>,
+    /// Source-selected serial edge result, keyed by root IFD entry index.
+    /// This is not inferred from child tag names: false conditions and failed
+    /// validators are meaningful handled omissions even when no child row
+    /// exists.
+    serial_outcomes: Vec<(usize, SerialSubdirRead)>,
     /// How many entries the engine's `read_ifd` accepted, `None` when it
     /// refused the directory (then no row exists).
     entries: Option<usize>,
@@ -156,6 +167,7 @@ impl MainEngineRows {
         Self {
             table,
             rows: Vec::new(),
+            serial_outcomes: Vec::new(),
             entries: None,
         }
     }
@@ -193,6 +205,33 @@ impl MainEngineRows {
             row.consumed = true;
             insert_row(row, tags, forms);
         }
+    }
+
+    /// Replay every child row generated for this parent entry. `Handled`
+    /// consumes the parent hand arm even if native produced no rows; `Fallback`
+    /// leaves that arm available because the shared route was not authenticated
+    /// or became tainted.
+    pub(super) fn replay_serial(
+        &mut self,
+        entry: usize,
+        tags: &mut HashMap<String, String>,
+        forms: &mut Option<&mut HashMap<String, String>>,
+    ) -> Option<SerialSubdirRead> {
+        let outcome = self
+            .serial_outcomes
+            .iter()
+            .find_map(|(candidate, outcome)| (*candidate == entry).then_some(*outcome))?;
+        if outcome == SerialSubdirRead::Handled {
+            for row in self
+                .rows
+                .iter_mut()
+                .filter(|row| !row.consumed && row.parent_entry == Some(entry))
+            {
+                row.consumed = true;
+                insert_row(row, tags, forms);
+            }
+        }
+        Some(outcome)
     }
 
     /// Rows whose entry the hand walk never reached -- `parse_ifd_entries`
@@ -286,14 +325,13 @@ pub(super) fn walk(
     let Some(ifd_data) = data.get(start..) else {
         return rows;
     };
-    rows.entries = read_ifd(ifd_data, 0, order.to_io_byte_order()).map(|entries| entries.len());
     let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
     if !model.is_empty() {
         members.insert("Model", MemberValue::Str(model.to_string()));
     }
     let mut ctx = Ctx::new(&mut members);
     let mut emitted = Vec::new();
-    process_exif(
+    let Some(reads) = process_exif_decoded(
         table,
         IfdDir {
             data: ifd_data,
@@ -304,10 +342,17 @@ pub(super) fn walk(
         },
         &mut ctx,
         &mut emitted,
-    );
-    for row in emitted {
+    ) else {
+        return rows;
+    };
+    rows.entries = Some(reads.entries.len());
+    rows.serial_outcomes = reads.serial_subdirs.clone();
+    for (out_index, _) in reads.rows {
+        let Some(row) = emitted.get(out_index) else {
+            continue;
+        };
         // FENCE: `Canon::Main`'s own rows only. See the module doc.
-        if !is_canon_main_row(&row) {
+        if !is_canon_main_row(row) {
             continue;
         }
         let Some(text) = engine_value_text(&row.value) else {
@@ -319,6 +364,23 @@ pub(super) fn walk(
             no_print_conv: row.value_conv.as_ref().and_then(engine_value_text),
             low_priority: row.low_priority,
             consumed: false,
+            parent_entry: None,
+        });
+    }
+    for (out_index, entry_index) in reads.serial_rows {
+        let Some(row) = emitted.get(out_index) else {
+            continue;
+        };
+        let Some(text) = engine_value_text(&row.value) else {
+            continue;
+        };
+        rows.rows.push(Row {
+            name: row.name,
+            text,
+            no_print_conv: row.value_conv.as_ref().and_then(engine_value_text),
+            low_priority: row.low_priority,
+            consumed: false,
+            parent_entry: Some(entry_index),
         });
     }
     rows

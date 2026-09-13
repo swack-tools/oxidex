@@ -91,7 +91,8 @@
 //!   a tag means; the rest are inert for the makernote tables slice I-2
 //!   enables.
 //! * `Validate` (Exif.pm:7081-7085) is Perl evaluated against the directory
-//!   bytes; an edge carrying it is never walked.
+//!   bytes. It remains unwalked unless code generation authenticated the
+//!   closed U16-size helper and native reader contract for a serial target.
 //! * `Start => '$val'` on a tag WITHOUT `Flags => 'SubIFD'`: its value is
 //!   read as `undef` (Exif.pm:6733), so `eval('$val')` yields a byte string
 //!   and `IsInt` fails (Exif.pm:6957-6959) unless the bytes happen to spell
@@ -148,6 +149,7 @@ use crate::core::TagValue;
 use crate::io::ByteOrder;
 
 use super::cond::{self, MemberValue};
+use super::enabled_serial;
 use super::engine::{self, Dir, Emitted, Guard};
 use super::exprs;
 use super::ifd_schema::{
@@ -155,7 +157,10 @@ use super::ifd_schema::{
 };
 use super::runtime::{self, DecodedValue, decode_value_of};
 use super::subdir::BaseExpr;
-use super::{Fmt, find_ifd_table, find_table};
+use super::{
+    Fmt, SerialDir, SerialEmissionSink, SerialTable, SerialWalkResult, find_ifd_table,
+    find_serial_table, find_table, process_serial_directory,
+};
 
 #[path = "subdirectory_adapter.rs"]
 pub mod subdirectory_adapter;
@@ -773,6 +778,21 @@ pub enum EntryRead {
     Unread,
 }
 
+/// What an authenticated serial `SubDirectory` edge did for one root entry.
+///
+/// `Handled` includes native no-output paths such as a false parent condition,
+/// a failed source-authenticated validator, an empty child, and a selected
+/// serial record that ends at a normal unmatched alternative. `Fallback` is
+/// reserved for OxiDex's inability to authenticate or execute the generated
+/// route (Gate A/B, missing table/proof, or tainted serial walk). A carrier
+/// with a legacy reader can therefore retain its prior producer only in the
+/// latter case, without converting a native omission into invented output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SerialSubdirRead {
+    Handled,
+    Fallback,
+}
+
 /// What [`process_exif_decoded`] reports about the ROOT directory, beside
 /// the rows themselves.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -783,6 +803,16 @@ pub struct RootReads {
     /// index in `out` and the index of the entry that produced it. Rows a
     /// `SubDirectory` edge produced are not listed.
     pub rows: Vec<(usize, usize)>,
+    /// `(entry, outcome)` for source-selected serial child edges from this
+    /// root. This stays separate from [`Self::rows`]: emitted child rows do
+    /// not declare a name under their parent IFD tag, while a caller still
+    /// needs to place or suppress its legacy parent producer in entry order.
+    pub serial_subdirs: Vec<(usize, SerialSubdirRead)>,
+    /// `(row, entry)` for every serial-child row emitted while processing a
+    /// root edge. These rows are deliberately not mixed into [`Self::rows`]:
+    /// their names belong to the child table, while the index supplies the
+    /// parent-entry ordering a legacy carrier needs for a safe migration.
+    pub serial_rows: Vec<(usize, usize)>,
 }
 
 /// [`process_exif`], also reporting what the walk did with each entry of
@@ -848,6 +878,8 @@ fn walk(
         reads.entries.clear();
         reads.entries.resize(entries.len(), EntryRead::Unread);
         reads.rows.clear();
+        reads.serial_subdirs.clear();
+        reads.serial_rows.clear();
     }
     // Every entry from `from` on is one ExifTool never reaches.
     let refuse_rest = |decoded: &mut Option<&mut RootReads>, from: usize| {
@@ -913,6 +945,13 @@ fn walk(
             condition_resolved,
         }) = resolve(table, entry, &located, ctx)
         else {
+            if direct_serial_no_match(table, entry.tag_id) {
+                if let Some(reads) = decoded.as_deref_mut() {
+                    reads
+                        .serial_subdirs
+                        .push((index, SerialSubdirRead::Handled));
+                }
+            }
             continue;
         };
         // ExifTool.pm:9180-9186: an `Unknown` tag is not returned unless
@@ -934,7 +973,16 @@ fn walk(
         // (Exif.pm:7103-7104 `next unless $doMaker ...`, and the `MakerNotes`
         // option is off), so the edge is the whole of the tag.
         if let Some(edge) = &tag.subdir {
-            descend(table, tag, edge, &located, &dir, ctx, guard, out);
+            let out_before = out.len();
+            let outcome = descend(table, tag, edge, &located, &dir, ctx, guard, out);
+            if let DescendOutcome::Serial(outcome) = outcome
+                && let Some(reads) = decoded.as_deref_mut()
+            {
+                reads.serial_subdirs.push((index, outcome));
+                reads
+                    .serial_rows
+                    .extend((out_before..out.len()).map(|row| (row, index)));
+            }
             continue;
         }
         // Exif.pm:6729-6745.
@@ -1381,6 +1429,64 @@ fn test_hook_table(_module: &str, _table: &str) -> Option<&'static IfdTable> {
     None
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DescendOutcome {
+    Native,
+    Serial(SerialSubdirRead),
+}
+
+/// The IFD caller has no public Unknown-output option yet. It therefore
+/// preserves the existing default projection: serial Unknown slots select and
+/// consume bytes but do not call `FoundTag`. A caller that exposes that option
+/// must carry it into this sink before widening the route.
+struct IfdSerialSink<'a> {
+    out: &'a mut Vec<Emitted>,
+}
+
+impl SerialEmissionSink for IfdSerialSink<'_> {
+    fn emit(&mut self, row: Emitted) {
+        self.out.push(row);
+    }
+
+    fn serial_enabled(&self, table: &'static SerialTable) -> bool {
+        enabled_serial::is_enabled(table)
+    }
+}
+
+/// Publish a serial child's buffered rows only when its entire native walk
+/// stayed authenticated. A later unsupported state action invalidates an
+/// earlier prefix as well: callers must take their documented fallback rather
+/// than mixing two producers for one parent entry.
+fn finish_serial_child<T>(
+    out: &mut Vec<T>,
+    child: Vec<T>,
+    result: &SerialWalkResult,
+) -> SerialSubdirRead {
+    if result.gate_a_blocked != 0 || result.gate_b_blocked != 0 || result.tainted {
+        SerialSubdirRead::Fallback
+    } else {
+        out.extend(child);
+        SerialSubdirRead::Handled
+    }
+}
+
+/// A direct source candidate whose condition did not select an alternative.
+/// It is safe to call that a handled serial omission only when the declared
+/// row itself has a fully modeled condition and one source-selected serial
+/// edge. Variants and unmodeled conditions remain `Unread`, preserving the
+/// legacy producer rather than inferring an absence from a partial view.
+fn direct_serial_no_match(table: &'static IfdTable, id: u16) -> bool {
+    let Some(tag) = table.tags.iter().find(|tag| tag.id == id) else {
+        return false;
+    };
+    tag.condition.is_some()
+        && !tag.omitted.condition
+        && matches!(
+            tag.subdir.as_ref().map(|edge| edge.processor),
+            Some(IfdSubdirProcessor::Serial)
+        )
+}
+
 /// Exif.pm:6919-7102 -- open the directory (or directories) an entry points
 /// at and process each with the right table.
 #[allow(clippy::too_many_arguments)]
@@ -1393,21 +1499,32 @@ fn descend(
     ctx: &mut cond::Ctx,
     guard: &mut Guard,
     out: &mut Vec<Emitted>,
-) {
-    // Exif.pm:7081-7085: `Validate` is Perl over the directory bytes.
-    if edge.validate {
-        return;
+) -> DescendOutcome {
+    // Legacy IFD/binary Validate remains unwalked. A serial edge may proceed
+    // only when codegen carried the independently authenticated primitive;
+    // a schema mismatch is a carrier fallback, never an implicit approval.
+    if edge.validate && edge.processor == IfdSubdirProcessor::Native {
+        return DescendOutcome::Native;
+    }
+    if edge.validate && edge.validation.is_none() {
+        return DescendOutcome::Serial(SerialSubdirRead::Fallback);
     }
     // Slice IFD1: the generator emitted the edge but marked it unwalked --
     // the enclosing table itself (no TagTable, Exif.pm:6939-6944) or a
     // ProcessProc the walk cannot run. Same outcome as `validate`: the
     // pointer marks its place and nothing behind it is read.
     if edge.unwalked.is_some() {
-        return;
+        return match edge.processor {
+            IfdSubdirProcessor::Native => DescendOutcome::Native,
+            IfdSubdirProcessor::Serial => DescendOutcome::Serial(SerialSubdirRead::Fallback),
+        };
     }
     // Exif.pm:6921-6926 -- "don't process empty subdirectories".
     if located.bytes.is_empty() {
-        return;
+        return match edge.processor {
+            IfdSubdirProcessor::Native => DescendOutcome::Native,
+            IfdSubdirProcessor::Serial => DescendOutcome::Serial(SerialSubdirRead::Handled),
+        };
     }
     let in_maker_notes = table.group0 == "MakerNotes";
     let data = dir.data;
@@ -1420,29 +1537,43 @@ fn descend(
     enum Target {
         Ifd(&'static IfdTable),
         Binary(&'static super::BinaryTable),
+        Serial(&'static SerialTable),
     }
-    let target = if let Some(t) = ifd_target(edge.module, edge.table) {
+    let target = if edge.processor == IfdSubdirProcessor::Serial {
+        let Some(t) = find_serial_table(edge.module, edge.table) else {
+            return DescendOutcome::Serial(SerialSubdirRead::Fallback);
+        };
+        Target::Serial(t)
+    } else if let Some(t) = ifd_target(edge.module, edge.table) {
         if !walkable(t) {
             // Opt-in (Step 28 D1): an edge never enables its target.
-            return;
+            return DescendOutcome::Native;
         }
         Target::Ifd(t)
     } else if let Some(t) = find_table(edge.module, edge.table) {
         if !t.enabled() {
-            return;
+            return DescendOutcome::Native;
         }
         Target::Binary(t)
     } else {
         // Not a defect in the edge: the target is a table neither generator
         // transcribed (a custom `PROCESS_PROC`, a refused table).
-        return;
+        return DescendOutcome::Native;
     };
 
     // Exif.pm:6929-6938, 7100-7101: how many times the loop runs.
     let iterations: Vec<Option<i64>> = match edge.start {
         IfdStart::Val(_) => match pointer_values(tag, edge, located, dir.byte_order) {
             Some(pointers) => pointers.into_iter().map(Some).collect(),
-            None => return,
+            // Native cannot open a child when the pointer value is not
+            // readable.  This is a handled no-child path, not a reason for a
+            // legacy producer to invent a second interpretation of it.
+            None => {
+                return match edge.processor {
+                    IfdSubdirProcessor::Native => DescendOutcome::Native,
+                    IfdSubdirProcessor::Serial => DescendOutcome::Serial(SerialSubdirRead::Handled),
+                };
+            }
         },
         // A `$valuePtr` start does not depend on `$val`; with `MaxSubdirs`
         // ExifTool would loop over the value's pieces re-opening the SAME
@@ -1453,6 +1584,7 @@ fn descend(
 
     let dir_name = subdir_name(tag, edge, in_maker_notes);
 
+    let mut serial_outcome = SerialSubdirRead::Handled;
     for pointer in iterations {
         // Exif.pm:6951-6968 -- `#### eval Start ($valuePtr, $val)`, then
         // `$newStart -= $subdirDataPos` back to data-relative.
@@ -1460,13 +1592,26 @@ fn descend(
             (IfdStart::ValuePtr(offset), _) => value_pos.saturating_add(offset),
             (IfdStart::Val(offset), Some(pointer)) => {
                 // `$val + base` is where the pointer lands in `data`; with
-                // no correction the block cannot be located.
+                // no correction the shared reader cannot locate the block.
+                // This is an execution prerequisite, so retain the legacy
+                // producer rather than calling a failed source evaluation a
+                // native omission.
                 let Some(base) = dir.base else {
-                    return;
+                    return match edge.processor {
+                        IfdSubdirProcessor::Native => DescendOutcome::Native,
+                        IfdSubdirProcessor::Serial => {
+                            DescendOutcome::Serial(SerialSubdirRead::Fallback)
+                        }
+                    };
                 };
                 pointer.saturating_add(offset).saturating_add(base)
             }
-            (IfdStart::Val(_), None) => return,
+            (IfdStart::Val(_), None) => {
+                return match edge.processor {
+                    IfdSubdirProcessor::Native => DescendOutcome::Native,
+                    IfdSubdirProcessor::Serial => DescendOutcome::Serial(SerialSubdirRead::Handled),
+                };
+            }
         };
         // Exif.pm:6964-6966: `$size -= $newStart - $subdirStart` unless
         // SubIFD (or BadOffset, not modelled) -- the DirLen a binary target
@@ -1478,10 +1623,16 @@ fn descend(
         };
         // Exif.pm:7017-7037: "Bad SubDirectory start" ends the loop (`last`).
         if start < 0 || start.saturating_add(2) > data_len {
-            return;
+            return match edge.processor {
+                IfdSubdirProcessor::Native => DescendOutcome::Native,
+                IfdSubdirProcessor::Serial => DescendOutcome::Serial(SerialSubdirRead::Handled),
+            };
         }
         let Ok(start_pos) = usize::try_from(start) else {
-            return;
+            return match edge.processor {
+                IfdSubdirProcessor::Native => DescendOutcome::Native,
+                IfdSubdirProcessor::Serial => DescendOutcome::Serial(SerialSubdirRead::Handled),
+            };
         };
         // Exif.pm:6971-6997.
         let byte_order = match edge.byte_order {
@@ -1490,7 +1641,14 @@ fn descend(
             IfdByteOrder::Big => ByteOrder::Big,
             IfdByteOrder::Unknown => match detect_byte_order(data, start_pos, dir.byte_order) {
                 Some(order) => order,
-                None => return,
+                None => {
+                    return match edge.processor {
+                        IfdSubdirProcessor::Native => DescendOutcome::Native,
+                        IfdSubdirProcessor::Serial => {
+                            DescendOutcome::Serial(SerialSubdirRead::Fallback)
+                        }
+                    };
+                }
             },
         };
         // Exif.pm:6999-7004 -- `#### eval Base ($start,$base)` with `$start`
@@ -1502,14 +1660,26 @@ fn descend(
             None => dir.base,
             Some(expr) => {
                 if mentions_base(expr) {
-                    return;
+                    return match edge.processor {
+                        IfdSubdirProcessor::Native => DescendOutcome::Native,
+                        IfdSubdirProcessor::Serial => {
+                            DescendOutcome::Serial(SerialSubdirRead::Fallback)
+                        }
+                    };
                 }
                 match dir.base {
                     Some(base) => Some(base.saturating_add(expr.eval(start - base, 0))),
                     // `$start` is unknowable without a correction; a
                     // constant leaves the correction unknown too.
                     None if matches!(expr, BaseExpr::Const(_)) => None,
-                    None => return,
+                    None => {
+                        return match edge.processor {
+                            IfdSubdirProcessor::Native => DescendOutcome::Native,
+                            IfdSubdirProcessor::Serial => {
+                                DescendOutcome::Serial(SerialSubdirRead::Fallback)
+                            }
+                        };
+                    }
                 }
             }
         };
@@ -1573,7 +1743,62 @@ fn descend(
                 );
                 guard.depth -= 1;
             }
+            Target::Serial(target) => {
+                let Ok(dir_len) = usize::try_from(dir_len) else {
+                    serial_outcome = SerialSubdirRead::Handled;
+                    continue;
+                };
+                if edge.validate {
+                    let Ok(validation_size) = u32::try_from(dir_len) else {
+                        serial_outcome = SerialSubdirRead::Handled;
+                        continue;
+                    };
+                    if !edge
+                        .validation
+                        .expect("checked before serial descent")
+                        .matches(data, start_pos, validation_size, byte_order)
+                    {
+                        // Native Validate false is an ordinary handled omission;
+                        // it must not reactivate a legacy child reader.
+                        serial_outcome = SerialSubdirRead::Handled;
+                        continue;
+                    }
+                }
+                if !guard.admit(binary_addr(base, start_pos), table_key(target), false) {
+                    serial_outcome = SerialSubdirRead::Handled;
+                    continue;
+                }
+                // A serial state refusal may occur after an earlier selected
+                // row.  Its result is a legacy fallback, so do not expose a
+                // prefix from the unauthenticated walk beside the hand
+                // producer. Commit the child rows only after the whole
+                // directory is known clean.
+                let mut serial_rows = Vec::new();
+                guard.depth += 1;
+                let mut sink = IfdSerialSink {
+                    out: &mut serial_rows,
+                };
+                let result = process_serial_directory(
+                    target,
+                    SerialDir {
+                        data,
+                        dir_start: start_pos,
+                        dir_len,
+                        base: 0,
+                        data_pos: base.map_or(0, |value| -value),
+                        byte_order,
+                    },
+                    ctx,
+                    &mut sink,
+                );
+                guard.depth -= 1;
+                serial_outcome = finish_serial_child(out, serial_rows, &result);
+            }
         }
+    }
+    match edge.processor {
+        IfdSubdirProcessor::Native => DescendOutcome::Native,
+        IfdSubdirProcessor::Serial => DescendOutcome::Serial(serial_outcome),
     }
 }
 
@@ -1585,7 +1810,9 @@ mod tests {
     use super::*;
     use crate::exiftool_tables::cond::{CmpOp, Cond, EffectSource};
     use crate::exiftool_tables::ifd_schema::IfdVariantGroup;
-    use crate::exiftool_tables::{ExprId, GateA, IfdFlags, Omitted, PrintConv, TagGroups};
+    use crate::exiftool_tables::{
+        ExprId, GateA, IfdFlags, Omitted, PrintConv, SizeExpectation, TagGroups, U16SizeCheck,
+    };
 
     // -- Test-only enablement/lookup registry ----------------------------------
     //
@@ -2994,6 +3221,140 @@ mod tests {
             run_with(&DIRECT_CONDITION, &no, order, Some(0), &mut members).is_empty(),
             "a false direct Condition drops the parent tag before an adapter could descend"
         );
+    }
+
+    // A source-selected serial child is keyed only by generated module/table
+    // facts. The parent fixture supplies a TIFF `undef[16]` entry whose first
+    // child word is its declared byte size, the closed U16 validator shape.
+    static SERIAL_EDGE_TAGS: &[IfdTag] = &[IfdTag {
+        subdir: Some(IfdSubdirEdge {
+            module: "Canon",
+            table: "AFInfo2",
+            validation: Some(U16SizeCheck {
+                offset: 0,
+                expected: &[SizeExpectation::Relative(0)],
+                expression: "Test::Validate($dirData,$subdirStart,$size)",
+                callee: "Test::Validate",
+                source_file: "Image/ExifTool/Test.pm",
+                source_sha256: "test",
+                reader_contract_sha256: Some("test"),
+            }),
+            processor: IfdSubdirProcessor::Serial,
+            validate: true,
+            ..edge("AFInfo2")
+        }),
+        ..plain(0x0026, "SerialChild")
+    }];
+    static SERIAL_EDGE: IfdTable = table("SerialEdge", SERIAL_EDGE_TAGS);
+
+    fn serial_child_parent(order: ByteOrder, declared_size: u16) -> Vec<u8> {
+        let floor = trailer_at(1);
+        let mut child = Vec::new();
+        for word in [declared_size, 2, 0, 1, 2, 3, 4, 5] {
+            child.extend_from_slice(&bytes16(order, word));
+        }
+        ifd(
+            order,
+            &[entry(
+                order,
+                0x0026,
+                7,
+                child.len() as u32,
+                bytes32(order, floor as u32),
+            )],
+            &child,
+        )
+    }
+
+    #[test]
+    fn authenticated_serial_edge_checks_size_then_uses_generated_child_table() {
+        for order in [ByteOrder::Big, ByteOrder::Little] {
+            let data = serial_child_parent(order, 16);
+            let mut members = HashMap::new();
+            let mut ctx = Ctx::new(&mut members);
+            let mut out = Vec::new();
+            let reads = process_exif_decoded(
+                &SERIAL_EDGE,
+                IfdDir {
+                    data: &data,
+                    ifd_start: 0,
+                    base: Some(0),
+                    byte_order: order,
+                    group1: None,
+                },
+                &mut ctx,
+                &mut out,
+            )
+            .expect("the parent IFD is valid");
+            assert_eq!(
+                reads.serial_subdirs,
+                vec![(0, SerialSubdirRead::Handled)],
+                "{order:?}: a supported child is a handled source route"
+            );
+            assert_eq!(
+                reads.serial_rows,
+                (0..7).map(|row| (row, 0)).collect::<Vec<_>>(),
+                "{order:?}: child rows retain their parent-entry position"
+            );
+            assert_eq!(
+                values(&out),
+                vec![
+                    (
+                        "AFAreaMode",
+                        TagValue::String("Single-point AF".to_string())
+                    ),
+                    ("NumAFPoints", TagValue::Integer(0)),
+                    ("ValidAFPoints", TagValue::Integer(1)),
+                    ("CanonImageWidth", TagValue::Integer(2)),
+                    ("CanonImageHeight", TagValue::Integer(3)),
+                    ("AFImageWidth", TagValue::Integer(4)),
+                    ("AFImageHeight", TagValue::Integer(5)),
+                ],
+                "{order:?}: child selection, cursor and source enums come from SerialTable"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_serial_size_check_is_a_handled_native_omission() {
+        let data = serial_child_parent(ByteOrder::Little, 15);
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        let mut out = Vec::new();
+        let reads = process_exif_decoded(
+            &SERIAL_EDGE,
+            IfdDir {
+                data: &data,
+                ifd_start: 0,
+                base: Some(0),
+                byte_order: ByteOrder::Little,
+                group1: None,
+            },
+            &mut ctx,
+            &mut out,
+        )
+        .expect("the parent IFD is valid");
+        assert!(
+            out.is_empty(),
+            "native Validate false produces no child rows"
+        );
+        assert_eq!(reads.serial_subdirs, vec![(0, SerialSubdirRead::Handled)]);
+        assert!(reads.serial_rows.is_empty());
+    }
+
+    #[test]
+    fn tainted_serial_child_discards_an_earlier_buffered_prefix() {
+        let mut out = vec!["parent"];
+        let outcome = finish_serial_child(
+            &mut out,
+            vec!["serial-prefix"],
+            &SerialWalkResult {
+                tainted: true,
+                ..SerialWalkResult::default()
+            },
+        );
+        assert_eq!(outcome, SerialSubdirRead::Fallback);
+        assert_eq!(out, vec!["parent"]);
     }
 
     // FujiFilm.pm:709-714 and Olympus.pm:809-822 supply direct (not
