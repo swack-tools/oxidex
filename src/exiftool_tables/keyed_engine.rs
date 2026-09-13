@@ -1527,7 +1527,7 @@ mod tests {
                 "table": "FunctionsD30",
                 "case": {
                     "name": "missing-model-rejects-exception", "byte_order": "II", "data_hex": "0300020134",
-                    "dir_start": 0, "dir_len": 5, "members": {},
+                    "dir_start": 0, "dir_len": 5, "members": {}, "verbose": true,
                 },
             }),
             serde_json::json!({
@@ -1536,7 +1536,7 @@ mod tests {
                 "table": "FunctionsD30",
                 "case": {
                     "name": "d60-length-exception", "byte_order": "II", "data_hex": "0300020134",
-                    "dir_start": 0, "dir_len": 5, "members": {"Model": "EOS D60"},
+                    "dir_start": 0, "dir_len": 5, "members": {"Model": "EOS D60"}, "verbose": true,
                 },
             }),
             serde_json::json!({
@@ -1554,7 +1554,7 @@ mod tests {
                 "table": "FunctionsD30",
                 "case": {
                     "name": "empty", "byte_order": "II", "data_hex": "",
-                    "dir_start": 0, "dir_len": 0, "members": {},
+                    "dir_start": 0, "dir_len": 0, "members": {}, "verbose": true,
                 },
             }),
         ];
