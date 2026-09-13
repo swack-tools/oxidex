@@ -27,6 +27,10 @@
 #   MODULE  TABLE  INDEX  GROUPS  G0  G1  G2        -- tag's own Groups (7)
 #   MODULE  TABLE  INDEX  SUBDIR  TAGTABLE  START  BASE  PROCESSPROC  BYTEORDER  VALIDATE
 #                                                    -- field carries a SubDirectory (10)
+#   KEYED MODULE TABLE  INDEX  NAME NAME             -- ProcessCanonRaw keyed row (6)
+#   KEYED MODULE TABLE  INDEX  <property> ...        -- keyed-row facts, with
+#                                                    -- the same property spellings as
+#                                                    -- the binary rows above
 #
 # The trailing empty column on HOOK/VARFMT lines is not decorative: it is
 # what keeps them from colliding with a NAME line on column count (both
@@ -261,6 +265,42 @@ sub emit_entry {
     }
 }
 
+# ProcessCanonRaw uses keyed CIFF directory entries rather than BinaryTable's
+# offset sequence.  Keep its oracle rows on their own leading kind: the keyed
+# schema is independently parsed and must never be smuggled into the binary
+# verifier's layout assumptions.  This stays deliberately small because the
+# first keyed slice inventories source facts only; it does not execute a
+# caller or a CIFF reader.
+sub emit_keyed_entry {
+    my ($mod, $sym, $key, $e) = @_;
+    my $name = ref $e eq 'HASH' ? $e->{Name} : $e;
+    return unless defined $name && !ref $name;
+    print join("\t", 'KEYED', $mod, $sym, $key, 'NAME', clean($name)), "\n";
+    return unless ref $e eq 'HASH';
+
+    my $fmt = $e->{Format};
+    print join("\t", 'KEYED', $mod, $sym, $key, 'FORMAT', clean($fmt)), "\n"
+        if defined $fmt && !ref $fmt;
+    print join("\t", 'KEYED', $mod, $sym, $key, 'RAWCONV', 1), "\n" if defined $e->{RawConv};
+    print join("\t", 'KEYED', $mod, $sym, $key, 'VALUECONV', 1), "\n" if defined $e->{ValueConv};
+    print join("\t", 'KEYED', $mod, $sym, $key, 'CONDITION', 1), "\n" if defined $e->{Condition};
+    print join("\t", 'KEYED', $mod, $sym, $key, 'PRINTCONV', 1), "\n" if defined $e->{PrintConv};
+    print join("\t", 'KEYED', $mod, $sym, $key, 'UNKNOWN', 1), "\n" if $e->{Unknown};
+    print join("\t", 'KEYED', $mod, $sym, $key, 'MASKDECL', 1), "\n" if defined $e->{Mask};
+    if (defined $e->{SubDirectory} && ref $e->{SubDirectory} eq 'HASH') {
+        print join("\t", 'KEYED', $mod, $sym, $key, 'SUBDIR', 1), "\n";
+    }
+    my $pc = $e->{PrintConv};
+    if (ref $pc eq 'HASH') {
+        for my $ck (sort keys %$pc) {
+            next if $ck =~ /^(BITMASK|OTHER|Notes|PrintHex|SeparateTable)$/;
+            next if ref $pc->{$ck};
+            print join("\t", 'KEYED', $mod, $sym, $key, 'ENUM', clean($ck),
+                       clean($pc->{$ck})), "\n";
+        }
+    }
+}
+
 # --- Slice I-1: the IFD-style scope ---------------------------------------
 
 # Fully-qualified name of a CODE ref, '' when B cannot name it (an anonymous
@@ -491,7 +531,25 @@ for my $mod (grep { !$skip{$_} } @mods) {
         # one, and a table may sit in both (a scalar FORMAT with no
         # PROCESS_PROC); its two row sets are told apart by the `IFD` column.
         my $is_ifd = in_ifd_scope($t, $pp);
-        next unless $has_format || $is_bin || $is_ifd;
+        my $is_keyed = ref $pp eq 'CODE'
+            && sub_name($pp) eq 'Image::ExifTool::CanonRaw::ProcessCanonRaw';
+        next unless $has_format || $is_bin || $is_ifd || $is_keyed;
+
+        if ($is_keyed) {
+            for my $k (sort keys %$t) {
+                next if $k !~ /^\d+$/;
+                my $e = $t->{$k};
+                if (ref $e eq 'ARRAY') {
+                    my $i = 0;
+                    for my $alt (@$e) {
+                        emit_keyed_entry($mod, $sym, "$k#$i", $alt);
+                        $i++;
+                    }
+                } else {
+                    emit_keyed_entry($mod, $sym, $k, $e);
+                }
+            }
+        }
 
         if ($has_format || $is_bin) {
         # Step 26: the table's RAW GROUPS, exactly as the module declares it

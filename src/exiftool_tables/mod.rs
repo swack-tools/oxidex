@@ -45,6 +45,7 @@ pub mod exprs;
 pub mod ifd_engine;
 pub mod ifd_schema;
 pub mod ifd_tables;
+pub mod keyed_schema;
 pub mod runtime;
 pub mod subdir;
 
@@ -63,6 +64,10 @@ pub use ifd_engine::{IfdDir, IfdEntry, process_exif, read_ifd};
 pub use ifd_schema::{
     IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
     RawConvEffect,
+};
+pub use keyed_schema::{
+    KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedStart, KeyedTag, KeyedVariantGroup,
+    OmittedKeyedNativeRow,
 };
 pub use ifd_tables::{ALL_IFD_TABLES, IFD_EXIFTOOL_VERSION};
 pub use runtime::{
