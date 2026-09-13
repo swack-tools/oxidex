@@ -134,8 +134,8 @@ may finish their bounded branches in parallel; this list does not restart them.
 
 These are findings at the original integration snapshot; that documentation
 audit did not execute the bump command. PRs #737–#740 subsequently addressed
-items 1–4, including the isolated transaction. The four producer gaps in item 5
-remain. This historical defect list is not the current task queue; use the
+items 1–4, including the isolated transaction. Item 5 records subsequent
+producer recoveries. This historical defect list is not the current task queue; use the
 execution plan before implementing anything here.
 
 1. `bump-exiftool.sh`'s `TIER1_FILES`/`TIER2_FILES` lists lag the generators.
@@ -158,11 +158,17 @@ execution plan before implementing anything here.
    generation. A fresh AUTO/HAND percentage from that classifier is misleading.
    The repair subsequently landed in PR #737; see its evidence below.
    Do not start another implementation of this item.
-5. Three generated-origin files still lack producers:
-   `sony/plain_tables.rs`, `sony/enciphered_tables.rs` and
+5. Two generated-origin files still lack producers:
+   `sony/enciphered_tables.rs` and
    `nikon/encrypted_tables.rs` under `src/parsers/tiff/makernotes/`.
    [Nikon settings recovery](./reference/nikon-settings-generator-recovery.md)
    now regenerates its existing 197 rows and 131 maps without changing Rust.
+   [Sony plain recovery](./reference/sony-plain-generator-recovery.md) reproduces
+   six tables and 193 rows from `e664e063`, with the separate fractional
+   raw-key reader defect demonstrated against native ExifTool. Its integration
+   adds a thirtieth manifest output. Complete tier-2 regeneration and native
+   verification pass with zero output drift; landing evidence is recorded in
+   that report.
    `regen-all.sh` explicitly records the remaining limit.
    Count these as standing debt, not new work introduced by every release.
 

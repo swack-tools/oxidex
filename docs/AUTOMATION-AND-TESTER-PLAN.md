@@ -84,14 +84,12 @@ state is modeled, and other reviewed output debts remain explicit.
 Do not restart the old preserved RawConv port or treat its historical gates as
 the final implementation's proof.
 
-Next port IFD1 prerequisite `7a69d2fa` without weakening the named verified-key
-and input-domain CODE-ref gate, and regenerate using the current pinned pipeline.
-Its committed generated-file change only added `unwalked: None` fields; scratch
-eligibility results must be reproduced. This remains Gate A, with no Exif::Main
-enablement or extraction-gain claim. Later named-directory activation and
-retained occurrences are distinct from IFD4 conditions/Olympus retirement and
-the incomplete embedded-IFD0/PNG follow-ups. IFD4 can reconcile independently;
-respect each existing owner and coordinate heavy gates.
+IFD1 prerequisites and activation landed at `759fa0e9` and `891587c5`, followed
+by InteropIFD at `b4808958`. Canon and Fuji Main routing also landed and the
+verified hand fallbacks were removed at `e664e063`. Continue the remaining
+EXIF directories while preserving the named verified-key/input-domain gate
+and occurrence behavior. Claude owns ExifIFD E-2; respect that ownership.
+Broader embedded-directory state and IFD0 still need their own evidence.
 
 Acceptance for each landing:
 
@@ -116,8 +114,8 @@ inside emitted tables.
 
 Start with the concrete rehearsal findings: make new-module reasons aware of
 existing runtime producers without declaring those producers complete; separate
-standing generator-less outputs from release-caused changes (three remain
-after Nikon settings recovery; the recorded rehearsal had four); and group
+standing generator-less outputs from release-caused changes (two remain
+after Sony plain recovery; the recorded rehearsal had four); and group
 the four EXPR rows for `Exif::Main` tag 41998 by their one unsupported UTF-8 Decode
 cause. Preserve the raw row counts alongside that causal view. The Garmin dump
 change does not authorize writing a second FIT parser. Review actual routing and
@@ -157,8 +155,13 @@ expression oracle does not cover them.
 Nikon settings now has a [recovered producer](./reference/nikon-settings-generator-recovery.md)
 for its unchanged 197 rows and 131 maps. Independent declaration verification
 exposes the AFAreaMode state and BracketProgram mask limitations without claiming
-new coverage. Sony plain is next, subject to a native packed-word regression for
-its separate 276/276.1 keys; Sony enciphered and Nikon encrypted remain larger jobs.
+new coverage. [Sony plain recovery](./reference/sony-plain-generator-recovery.md)
+reproduces six tables and 193 unchanged rows, with independent native checks
+and a complete tier-2 run showing no output drift. Its native packed-word
+probe confirms a separate reader defect: integer-offset grouping omits
+`ImageNumber` from raw key 276.1. Recover the producer with that limitation
+explicit, then repair grouping with independently checked raw IDs and runtime
+regressions. Sony enciphered and Nikon encrypted remain larger jobs.
 
 Reconstruct the next missing Sony/Nikon generator or extend a shared expression rule
 when it removes demonstrated release work or unblocks useful runtime behavior.
