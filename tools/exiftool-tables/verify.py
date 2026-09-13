@@ -1014,7 +1014,7 @@ def _parse_keyed_source_facts(text):
         r'KeyedNativeFacts\s*\{\s*format:\s*(?P<format>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
         r'count:\s*(?P<count>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
         r'condition:\s*(?P<condition>None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
-        r'groups:\s*(?P<groups>.*?),\s*subdir:\s*(?P<subdir>None|Some\(KeyedNativeSubdir\s*\{.*\}\))\s*\}',
+        r'groups:\s*(?P<groups>.*?),\s*subdir:\s*(?P<subdir>None|Some\(KeyedNativeSubdir\s*\{.*\}\))\s*,?\s*\}',
         text, re.S,
     )
     if m is None:
@@ -1026,7 +1026,7 @@ def _parse_keyed_source_facts(text):
         gm = re.fullmatch(
             r'TagGroups\s*\{\s*g0:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
             r'g1:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
-            r'g2:\s*(None|Some\("(?:[^"\\]|\\.)*"\))\s*\}', groups_text, re.S,
+            r'g2:\s*(None|Some\("(?:[^"\\]|\\.)*"\))\s*,?\s*\}', groups_text, re.S,
         )
         if gm is None:
             raise SystemExit("unrecognised KeyedNativeFacts groups")
@@ -1038,7 +1038,7 @@ def _parse_keyed_source_facts(text):
         sm = re.fullmatch(
             r'Some\(KeyedNativeSubdir\s*\{\s*tag_table:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
             r'start:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*validate:\s*(true|false),\s*'
-            r'process_proc:\s*(true|false)\s*\}\)', subdir_text, re.S,
+            r'process_proc:\s*(true|false)\s*,?\s*\}\s*,?\)', subdir_text, re.S,
         )
         if sm is None:
             raise SystemExit("unrecognised KeyedNativeFacts subdir")
@@ -1093,7 +1093,7 @@ def _parse_keyed_tag(src, match, key, fields, enums, pc_refused, facts, source_f
         gm = re.fullmatch(
             r'TagGroups\s*\{\s*g0:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
             r'g1:\s*(None|Some\("(?:[^"\\]|\\.)*"\)),\s*'
-            r'g2:\s*(None|Some\("(?:[^"\\]|\\.)*"\))\s*\}', groups_src, re.S,
+            r'g2:\s*(None|Some\("(?:[^"\\]|\\.)*"\))\s*,?\s*\}', groups_src, re.S,
         )
         if gm is None:
             raise SystemExit("unrecognised keyed TagGroups value")
@@ -1113,7 +1113,7 @@ def _parse_keyed_tag(src, match, key, fields, enums, pc_refused, facts, source_f
         em = re.fullmatch(
             r'Some\(KeyedEdge::BoundedValue\s*\{\s*module:\s*"((?:[^"\\]|\\.)*)",\s*'
             r'table:\s*"((?:[^"\\]|\\.)*)",\s*start:\s*KeyedStart::Zero,\s*'
-            r'unwalked:\s*&\[(?P<unwalked>[^\]]*)\]\s*\}\)', edge_src, re.S,
+            r'unwalked:\s*&\[(?P<unwalked>[^\]]*)\]\s*,?\s*\}\s*,?\)', edge_src, re.S,
         )
         if em is None:
             raise SystemExit("unrecognised keyed edge value")
@@ -1521,6 +1521,17 @@ def _keyed_expected_format(spelling):
     return expected[0] if expected is not None else None
 
 
+def _keyed_format_refused(spelling):
+    """Whether ProcessCanonRaw's own format path withholds this spelling.
+
+    This must not reuse the binary-table checker: ProcessBinaryData accepts
+    `int16u[N]`, while ProcessCanonRaw passes that spelling unchanged to
+    ReadValue and native treats it as unknown.  The same rule authenticates
+    the generated omission sidecar and validates an emitted KeyedTag.
+    """
+    return spelling is not None and _keyed_expected_format(spelling) is None
+
+
 def _keyed_truthy(value):
     return value not in (None, "", "0", 0, False)
 
@@ -1544,6 +1555,8 @@ def keyed_native_inventory(generated, omissions, or_names, or_enums, or_rawfmts,
     declared = {k: v for k, v in omissions.rows.items() if k[:2] in table_scope}
 
     def authentic_reason(key, reason):
+        if reason == "format":
+            return _keyed_format_refused(or_rawfmts.get(key))
         if reason == "count":
             try:
                 return int(or_counts[key], 0) < 0
