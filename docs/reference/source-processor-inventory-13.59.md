@@ -7,13 +7,14 @@ file hashes, category counts, and conservation totals. It is not a measure of
 generated acceptance, runtime reachability, manual maintenance, output parity,
 or an automation percentage.
 
-To reproduce the committed report, run from this repository at selector commit
-`ebbe1ece906858b8c84590f59a0616f9f3675d73`. Supply the recorded dump through
-`DUMP`; its expected SHA-256 is part of the command. `OUT` must not exist.
+To reproduce the committed report, run from a checkout that contains this tool.
+The tool archives selectors from commit `ebbe1ece906858b8c84590f59a0616f9f3675d73`;
+the caller checkout itself does not need to be at that commit. Supply the
+recorded dump and a new output location through environment variables.
 
 ```sh
-DUMP=/path/to/tables-13.59-perl538.json
-OUT=/tmp/source-processor-inventory
+DUMP=${OXIDEX_TABLES_JSON:?set to the recorded table dump}
+OUT=${SOURCE_INVENTORY_OUT:?set to a new output directory}
 COMMIT=ebbe1ece906858b8c84590f59a0616f9f3675d73
 
 /usr/bin/python3 tools/exiftool-tables/inventory_source_processors.py \
