@@ -131,7 +131,11 @@ pub fn process_keyed_directory(
                         // operation. Its members survive ProcessDirectory, so
                         // no pending parent frame may evaluate another
                         // condition against fabricated state.
-                        work.clear();
+                        // Unwind every pending directory scope before
+                        // returning. Retaining only RestoreDir frames keeps
+                        // ProcessDirectory's DIR_NAME save/restore contract
+                        // while preventing any pending sibling evaluation.
+                        work.retain(|pending| matches!(pending, KeyedWork::RestoreDir(_)));
                     }
                     KeyedEntryAction::StopDirectory => {}
                     KeyedEntryAction::Continue => work.push(KeyedWork::Entries {
@@ -1224,10 +1228,27 @@ mod tests {
             &[(0x1801, 1.5f32.to_le_bytes().to_vec())],
         );
         let parent = ciff(ByteOrder::Little, &[(0x2804, child), (0x4002, vec![7])]);
-        let (sink, result) = walk_test(&TABLE, &parent, ByteOrder::Little);
+        let mut members = HashMap::new();
+        members.insert("DIR_NAME", MemberValue::Str("ParentDirectory".into()));
+        let mut ctx = Ctx::new(&mut members);
+        let mut sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let result = process_keyed_directory(
+            &TABLE,
+            KeyedBlock::new(&parent, ByteOrder::Little, scope()),
+            &mut ctx,
+            &mut sink,
+        );
         assert!(sink.rows.is_empty());
         assert_eq!(result.emitted, 0);
         assert_eq!(result.omitted, 1);
+        assert_eq!(
+            members.get("DIR_NAME"),
+            Some(&MemberValue::Str("ParentDirectory".into())),
+            "taint must discard pending sibling frames but still unwind child DIR_NAME"
+        );
     }
 
     #[test]
