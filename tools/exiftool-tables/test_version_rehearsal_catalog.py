@@ -320,6 +320,73 @@ class CatalogCaptureTests(unittest.TestCase):
                 self.assertEqual((sources / row["source_directory"] / "README").read_text(), row["release"])
                 self.assertEqual((sources / row["source_directory"] / "lib" / "ExifTool.pm").read_text(), f"module {row['release']}")
 
+    def test_materialization_refuses_rehashed_extracted_source_that_differs_from_archive(self):
+        catalog = self.normalized()
+        capture = self.capture()
+        plan = rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
+        selected = {side["release"]: side for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
+        responses = {
+            catalog_stage.immutable_archive_url(release, side["peeled_commit"]): response(tar_gz(release))
+            for release, side in selected.items()
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, sources = root / "cache", root / "sources"
+            resolution = catalog_stage.resolve_selected_archives(plan, catalog, capture, FixtureGet(responses), cache)
+            materialized = catalog_stage.materialize_selected_sources(plan, catalog, capture, resolution, cache, sources)
+            row = materialized["selected_releases"][0]
+            source = sources / row["source_directory"]
+            (source / "lib" / "ExifTool.pm").write_text("rehashed source mutation", encoding="utf-8")
+            # An attacker can recompute every mutable manifest field.  The
+            # verifier must still derive the expected tree from retained bytes.
+            row["tree"] = catalog_stage._tree_identity(source)
+            materialized["materialization_sha256"] = catalog_stage.sha256_json(
+                {key: value for key, value in materialized.items() if key != "materialization_sha256"}
+            )
+            with self.assertRaisesRegex(catalog_stage.Refused, "verified archive"):
+                catalog_stage.verify_source_materialization(
+                    materialized, plan, catalog, capture, resolution, cache, sources
+                )
+
+    def test_materialize_cli_has_no_network_timeout_attribute_and_records_failures(self):
+        catalog = self.normalized()
+        capture = self.capture()
+        plan = rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
+        selected = {side["release"]: side for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
+        responses = {
+            catalog_stage.immutable_archive_url(release, side["peeled_commit"]): response(tar_gz(release))
+            for release, side in selected.items()
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, sources = root / "cache", root / "sources"
+            resolution = catalog_stage.resolve_selected_archives(plan, catalog, capture, FixtureGet(responses), cache)
+            capture_path, catalog_path = root / "capture.json", root / "catalog.json"
+            plan_path, resolution_path = root / "plan.json", root / "resolution.json"
+            for path, document in (
+                (capture_path, capture), (catalog_path, catalog_stage.raw_catalog_from_capture(capture)),
+                (plan_path, plan), (resolution_path, resolution),
+            ):
+                path.write_text(json.dumps(document), encoding="utf-8")
+            happy_output = root / "happy.json"
+            arguments = [
+                "materialize-selected", "--capture", str(capture_path), "--catalog", str(catalog_path),
+                "--plan", str(plan_path), "--resolution", str(resolution_path),
+                "--archive-cache", str(cache), "--source-root", str(sources), "--output", str(happy_output),
+            ]
+            self.assertEqual(catalog_stage.main(arguments), 0)
+            self.assertTrue(json.loads(happy_output.read_text(encoding="utf-8"))["complete"])
+
+            # A separate source root avoids source reuse; a bad retained cache
+            # produces an attributable incomplete journal, never AttributeError.
+            first = resolution["selected_releases"][0]
+            (cache / first["archive"]["cache_key"]).write_bytes(b"tampered")
+            failed_output = root / "failed.json"
+            failed_arguments = [*arguments[:-1], str(failed_output)]
+            failed_arguments[failed_arguments.index("--source-root") + 1] = str(root / "failed-sources")
+            self.assertEqual(catalog_stage.main(failed_arguments), 2)
+            self.assertFalse(json.loads(failed_output.read_text(encoding="utf-8"))["complete"])
+
     def test_materialization_preserves_tamper_and_existing_source_failures(self):
         catalog = self.normalized()
         plan = rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
