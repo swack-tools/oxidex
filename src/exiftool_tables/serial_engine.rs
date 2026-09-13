@@ -739,7 +739,7 @@ mod tests {
                 dir_len: data.len(),
                 base: 0,
                 data_pos: 0,
-                byte_order: ByteOrder::LittleEndian,
+                byte_order: ByteOrder::Little,
             },
             &mut Ctx::new(members),
             sink,
@@ -887,7 +887,7 @@ mod tests {
             ..Sink::default()
         };
         let mut members = HashMap::new();
-        let result = walk(table, b"4ok\0x", &mut sink, &mut members);
+        let result = walk(table, b"\x04ok\0x", &mut sink, &mut members);
         assert_eq!(result.emitted, 2);
         assert_eq!(sink.rows[1].name, "CountedString");
         assert_eq!(sink.rows[1].value, TagValue::String("ok".to_owned()));
