@@ -1478,6 +1478,48 @@ mod tests {
         fields: BYTE_MEMBER_FIELDS,
         ..STATE
     };
+    static UNREPRESENTABLE_MEMBER_FIELDS: &[Field] = &[
+        Field {
+            index: 0,
+            sub: None,
+            name: "ByteMember",
+            format: Some(Fmt::Undef(1)),
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: Some(RawConvEffect::SetMember { member: "Bytes" }),
+            omitted: Omitted {
+                raw_conv: true,
+                ..Omitted::NONE
+            },
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 1,
+            sub: None,
+            name: "AfterBytes",
+            format: None,
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ];
+    static UNREPRESENTABLE_MEMBER: BinaryTable = BinaryTable {
+        table: "UnrepresentableMember",
+        fields: UNREPRESENTABLE_MEMBER_FIELDS,
+        ..STATE
+    };
     const SET_BEFORE_BOUND: cond::Cond = cond::Cond::SetMember {
         member: "SawPastEnd",
         source: cond::EffectSource::Const(1),
@@ -1812,6 +1854,26 @@ mod tests {
             member_value(&DecodedValue::Array(vec![DecodedValue::Integer(1)])),
             None
         );
+    }
+
+    #[test]
+    fn set_member_stops_when_raw_value_has_no_exact_member_domain() {
+        use std::collections::HashMap;
+
+        // Non-UTF-8 `undef` is legal Perl byte data but is not yet a modeled
+        // `MemberValue`. Continuing would let a later Condition see missing
+        // state, so the table stops at this RawConv.
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+        process_binary_data(
+            &UNREPRESENTABLE_MEMBER,
+            Dir::whole(&[0xff, 7], ByteOrder::Big),
+            &mut ctx,
+            &mut out,
+        );
+        assert!(out.is_empty());
+        assert!(!members.contains_key("Bytes"));
     }
 
     #[test]

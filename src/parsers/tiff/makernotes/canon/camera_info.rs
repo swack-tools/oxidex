@@ -321,10 +321,14 @@ fn read_value(data: &[u8], at: usize, fmt: Fmt, more: usize, byte_order: ByteOrd
         DecodedValue::String(s) => Some(Val::Str(s)),
         DecodedValue::Undefined(b) => Some(Val::Bytes(b)),
         // CameraInfo declares no float, rational or array field, so the
-        // shared reader cannot return one for a `shared_fmt` output. Refusing
-        // rather than inventing a rendering keeps that true if it ever stops
-        // being.
-        _ => None,
+        // shared reader cannot return one for a `shared_fmt` output. Keep
+        // every unsupported variant explicit: a future shared value domain
+        // must make this legacy adapter choose its conversion rather than
+        // being silently discarded as `StringBytes` once was.
+        DecodedValue::Float(_)
+        | DecodedValue::UnsignedRational(_, _)
+        | DecodedValue::SignedRational(_, _)
+        | DecodedValue::Array(_) => None,
     }
 }
 

@@ -480,7 +480,8 @@ jobs:
           python3 tools/exiftool-tables/verify.py \
             src/exiftool_tables/binary_tables.rs \
             "$EXIFTOOL_SOURCE/lib" \
-            --oracle tools/exiftool-tables/oracle.pl
+            --oracle tools/exiftool-tables/oracle.pl \
+            --native-inventory --native-inventory-table Sony:Tag202a
           # verify.py independently checks which edges should be present;
           # this runs their actual Start/Base arithmetic against the pinned
           # ProcessBinaryData Perl eval scope (ExifTool.pm:10118-10137).
