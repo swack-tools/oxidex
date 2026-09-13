@@ -1227,33 +1227,35 @@ mod tests {
         static TABLE: KeyedDirectoryTable = word_table(&TAGS, &[]);
         // The final byte cannot form a u16. Native `Get16u` returns undef,
         // then its numeric use yields zero and still invokes HandleTag.
-        let data = words(ByteOrder::Big, 5, &[0x01ff], &[0xff]);
-        let (sink, result) = walk_test(&TABLE, &data, ByteOrder::Big);
-        assert_eq!(
-            result.word_entries,
-            vec![
-                WordDirectoryEntry {
-                    raw_id: 1,
-                    value: 511,
-                    index: 0,
-                    format: Fmt::Int8u,
-                    count: 1,
-                    size: 1,
-                },
-                WordDirectoryEntry {
-                    raw_id: 0,
-                    value: 0,
-                    index: 1,
-                    format: Fmt::Int8u,
-                    count: 1,
-                    size: 1,
-                },
-            ]
-        );
-        assert_eq!(
-            sink.rows.iter().map(|row| row.name).collect::<Vec<_>>(),
-            vec!["First", "ShortWord"]
-        );
+        for order in [ByteOrder::Big, ByteOrder::Little] {
+            let data = words(order, 5, &[0x01ff], &[0xff]);
+            let (sink, result) = walk_test(&TABLE, &data, order);
+            assert_eq!(
+                result.word_entries,
+                vec![
+                    WordDirectoryEntry {
+                        raw_id: 1,
+                        value: 511,
+                        index: 0,
+                        format: Fmt::Int8u,
+                        count: 1,
+                        size: 1,
+                    },
+                    WordDirectoryEntry {
+                        raw_id: 0,
+                        value: 0,
+                        index: 1,
+                        format: Fmt::Int8u,
+                        count: 1,
+                        size: 1,
+                    },
+                ]
+            );
+            assert_eq!(
+                sink.rows.iter().map(|row| row.name).collect::<Vec<_>>(),
+                vec!["First", "ShortWord"]
+            );
+        }
     }
 
     #[test]
