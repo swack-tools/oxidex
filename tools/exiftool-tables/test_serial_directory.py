@@ -100,6 +100,7 @@ class SerialDescriptorTests(unittest.TestCase):
         self.assertEqual(descriptor["gate_a"]["blocked_by"], [["serial_decode_bits_words", 1]])
         alternative = descriptor["entries"][3]["alternatives"][0]
         self.assertEqual(alternative["condition"]["missing_member"], "empty_string")
+        self.assertEqual(alternative["refusals"], [])
         self.assertEqual(descriptor["entries"][3]["alternatives"][1]["flags"]["unknown"], True)
 
     def test_mutated_supported_operands_produce_a_new_descriptor_and_stale_rejects(self):
@@ -134,6 +135,31 @@ class SerialDescriptorTests(unittest.TestCase):
         self.assertEqual(alternatives[1]["name"], "Skipped")
         self.assertEqual(alternatives[1]["refusals"], ["serial_row_shape"])
         self.assertIn(["serial_row_shape", 1], descriptor["gate_a"]["blocked_by"])
+
+    def test_rust_emitter_uses_descriptor_facts_and_sidecars_every_withheld_row(self):
+        population = serial_directory.compile_serial_population({"modules": {"Fixture": {"tables": {"Serial": table()}}}})
+        source = serial_directory.serial_rust_source(population)
+        self.assertIn("pub static SERIAL_FIXTURE_SERIAL: SerialTable", source)
+        self.assertIn('serial_index: 2, variant: false, alternative: 0, name: Some("Words"), reasons: &["serial_decode_bits_words", "serial_emitter_format"]', source)
+        self.assertIn('gate_a: GateA { blocked_by: &[("serial_condition_missing_member", 2), ("serial_decode_bits_words", 1), ("serial_emitter_format", 2)] }', source)
+        self.assertIn('serial_index: 3, variant: true, alternative: 0, name: Some("NonEos"), reasons: &["serial_condition_missing_member"]', source)
+        self.assertIn('serial_index: 3, variant: true, alternative: 1, name: Some("Skipped"), reasons: &["serial_condition_missing_member"]', source)
+
+    def test_rust_emitter_keeps_refused_table_in_table_sidecar(self):
+        malformed = table()
+        malformed["tags"] = []
+        population = serial_directory.compile_serial_population({"modules": {"Fixture": {"tables": {"Malformed": malformed}}}})
+        source = serial_directory.serial_rust_source(population)
+        self.assertNotIn("SERIAL_FIXTURE_MALFORMED", source)
+        self.assertIn('OmittedSerialNativeTable { module: "Fixture", table: "Malformed", reasons: &["serial_descriptor_refused"] }', source)
+
+    def test_rust_emitter_refuses_a_format_not_supported_by_the_shared_reader(self):
+        changed = table()
+        changed["tags"]["0"]["Format"] = "int16s"
+        population = serial_directory.compile_serial_population({"modules": {"Fixture": {"tables": {"Serial": changed}}}})
+        source = serial_directory.serial_rust_source(population)
+        self.assertIn('serial_index: 0, variant: false, alternative: 0, name: Some("Count"), reasons: &["serial_emitter_format"]', source)
+        self.assertIn('("serial_emitter_format", 3)', source)
 
     def test_source_order_and_identity_refuse_malformed_processor(self):
         bad_order = PROCESSOR_BODY.replace("($val{$index} = $val);", "($et->FoundTag($tagInfo, $val));\n    ($val{$index} = $val);")
@@ -228,7 +254,7 @@ class PinnedSerialInventory(unittest.TestCase):
     def compile(self, source=None):
         return serial_directory.compile_serial_inventory("Canon", "AFInfo", source or self.table)
 
-    def test_pinned_afinfo_captures_full_order_and_only_decodebits_is_row_blocker(self):
+    def test_pinned_afinfo_captures_full_order_and_only_decodebits_is_source_row_blocker(self):
         descriptor = self.compile()
         self.assertEqual([entry["serial_index"] for entry in descriptor["entries"]], list(range(13)))
         self.assertEqual(descriptor["gate_a"]["blocked_by"], [["serial_decode_bits_words", 1]])
@@ -241,6 +267,7 @@ class PinnedSerialInventory(unittest.TestCase):
             {"kind": "floor_div_prior_raw_value", "serial_index": 0, "add": 15, "divisor": 16},
         )
         self.assertEqual(descriptor["entries"][11]["alternatives"][0]["condition"]["missing_member"], "empty_string")
+        self.assertEqual(descriptor["entries"][11]["alternatives"][0]["refusals"], [])
 
     def test_committed_descriptor_replays_the_recorded_native_facts(self):
         report = Path(__file__).resolve().parents[2] / "docs" / "reference" / "serial-layout-inventory-afinfo.json"
@@ -294,6 +321,17 @@ class PinnedSerialInventory(unittest.TestCase):
         self.assertTrue(report.is_file(), report)
         self.assertEqual(report.read_text(), serial_directory.population_json(population))
 
+    def test_real_audio_pair_emits_dynamic_raw_counts_and_no_omissions(self):
+        source = serial_directory.serial_rust_source(serial_directory.compile_serial_population(self.document))
+        self.assertIn("pub static SERIAL_REAL_AUDIOV3: SerialTable", source)
+        self.assertIn("pub static SERIAL_REAL_AUDIOV4: SerialTable", source)
+        self.assertIn('name: "Title", format: SerialFormat { format: Fmt::Str(1), count: SerialCount::PriorRaw { serial_index: 4 } }', source)
+        self.assertIn('name: "Title", format: SerialFormat { format: Fmt::Str(1), count: SerialCount::PriorRaw { serial_index: 23 } }', source)
+        self.assertIn('name: "Artist", format: SerialFormat { format: Fmt::Str(1), count: SerialCount::PriorRaw { serial_index: 6 } }', source)
+        self.assertIn('name: "Artist", format: SerialFormat { format: Fmt::Str(1), count: SerialCount::PriorRaw { serial_index: 25 } }', source)
+        self.assertNotIn('module: "Real", table: "AudioV3", serial_index:', source)
+        self.assertNotIn('module: "Real", table: "AudioV4", serial_index:', source)
+
 
 PINNED_SOURCE = os.environ.get("OXIDEX_PINNED_EXIFTOOL")
 CANONICAL_PERL = os.environ.get("EXIFTOOL_PERL")
@@ -305,25 +343,25 @@ DUMP_TABLES = Path(__file__).resolve().with_name("dump_tables.pl")
 class CopiedNativeSerialSource(unittest.TestCase):
     """The compiler consumes a dump of copied Perl, never a hand-built Rust fact."""
 
-    def dump(self, lib):
+    def dump(self, lib, module="Canon", table="AFInfo"):
         import subprocess
         result = subprocess.run(
-            [CANONICAL_PERL, str(DUMP_TABLES), str(lib), "Canon"],
+            [CANONICAL_PERL, str(DUMP_TABLES), str(lib), module],
             check=True, text=True, capture_output=True,
         )
-        return json.loads(result.stdout)["modules"]["Canon"]["tables"]["AFInfo"]
+        return json.loads(result.stdout)["modules"][module]["tables"][table]
 
-    def copied(self, before, after):
+    def copied(self, before, after, relative_source="Image/ExifTool/Canon.pm"):
         import shutil
         from tempfile import TemporaryDirectory
         tmp = TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name) / "lib"
         shutil.copytree(Path(PINNED_SOURCE) / "lib", root)
-        canon = root / "Image/ExifTool/Canon.pm"
-        text = canon.read_text()
+        source = root / relative_source
+        text = source.read_text()
         self.assertIn(before, text)
-        canon.write_text(text.replace(before, after, 1))
+        source.write_text(text.replace(before, after, 1))
         return root
 
     def test_source_count_mutation_changes_fresh_descriptor_and_rejects_stale(self):
@@ -343,6 +381,24 @@ class CopiedNativeSerialSource(unittest.TestCase):
         ))
         descriptor = serial_directory.compile_serial_inventory("Canon", "AFInfo", changed_source)
         self.assertEqual(descriptor["gate_a"]["blocked_by"], [["serial_print_conv_expr", 1]])
+
+    def test_real_audio_copied_source_count_mutation_changes_emitted_literal(self):
+        baseline_table = self.dump(Path(PINNED_SOURCE) / "lib", "Real", "AudioV3")
+        baseline = serial_directory.compile_serial_population({"modules": {"Real": {"tables": {"AudioV3": baseline_table}}}})
+        changed_table = self.dump(
+            self.copied(
+                "5  => { Name => 'Title',          Format => 'string[$val{4}]' },",
+                "5  => { Name => 'Title',          Format => 'string[$val{6}]' },",
+                "Image/ExifTool/Real.pm",
+            ),
+            "Real", "AudioV3",
+        )
+        changed = serial_directory.compile_serial_population({"modules": {"Real": {"tables": {"AudioV3": changed_table}}}})
+        baseline_source = serial_directory.serial_rust_source(baseline)
+        changed_source = serial_directory.serial_rust_source(changed)
+        self.assertIn("SerialCount::PriorRaw { serial_index: 4 }", baseline_source)
+        self.assertIn("SerialCount::PriorRaw { serial_index: 6 }", changed_source)
+        self.assertNotEqual(baseline_source, changed_source)
 
     def test_source_unknown_option_mutation_cannot_be_faked_by_a_quoted_string(self):
         changed_source = self.dump(self.copied(

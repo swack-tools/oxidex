@@ -1,15 +1,14 @@
 # Staged native serial-layout inventory
 
 `tools/exiftool-tables/serial_directory.py` compiles a captured native
-`ProcessSerialData` table into a versioned JSON descriptor. It is a source
-inventory only: it has no Rust literal, reader, enablement entry or carrier
-route.
+`ProcessSerialData` table into a versioned JSON descriptor. It is a source inventory and source-derived literal emitter only: it has no
+reader, enablement entry or carrier route.
 
-It can also inventory the complete source-selected population rather than a
-hand-picked table:
+It can also render inactive Rust facts from the complete source-selected
+population rather than a hand-picked table:
 
 ```sh
-python3 tools/exiftool-tables/serial_directory.py "$DUMP" --output "$OUT"
+python3 tools/exiftool-tables/serial_directory.py "$DUMP" --output "$OUT" --rust-output "$SERIAL_OUT"
 ```
 
 `$DUMP` is a recorded `dump_tables.pl` JSON capture from the pinned native
@@ -52,11 +51,14 @@ grammar and continue to flow from the captured source facts.
 The committed 13.59 recorded-input report
 `serial-layout-inventory-processserialdata.json` contains eight selected tables:
 130 native entries and 132 native alternatives. Eight tables produce descriptor
-records, 115 alternatives clear the descriptor's row gate, 17 retain named
-refusals, four tables have no row-level Gate A blocker, and no selected table is
-empty. `Real::MediaProps` also retains its native `PRIORITY => 0` as the named
+records, 115 alternatives clear the descriptor's source row gate, 17 retain named
+source refusals, four tables have no row-level Gate A blocker, and no selected
+table is empty. The emitter adds a separate runtime-readiness refusal for the
+four AFInfo/AFInfo2 alternatives whose native missing regex member is an empty
+string; current shared `Cond` semantics do not represent that policy. `Real::MediaProps` also retains its native `PRIORITY => 0` as the named
 table-level blocker `serial_table_priority`; this checkpoint does not discard
 collision/reporting policy. `Real::AudioV3` is the non-AFInfo control: it uses the same resolved
-processor and has 12 source rows with no row-level refusal. This describes
-source facts; it does not prove a Rust reader, parent dispatch, or carrier
-route.
+processor and has 12 source rows with no row-level refusal. The generated literal has `ALL_SERIAL_TABLES` plus sorted native-row/table
+omission sidecars. Table Gate A blocks any partial table from reader execution.
+This describes source facts; it does not prove a Rust reader, parent dispatch,
+or carrier route.

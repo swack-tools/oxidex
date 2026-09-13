@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import json
 import re
 
+import codegen
 import conds
 import serial_directory_facts as facts
 from serial_processor_grammar import SERIAL_PROCESSOR_V1_TOKENS
@@ -24,6 +25,7 @@ from serial_processor_grammar import SERIAL_PROCESSOR_V1_TOKENS
 
 DESCRIPTOR_VERSION = 1
 PROCESS_SERIAL_DATA = "ProcessSerialData"
+_RUNTIME_FORMATS = frozenset({"int8u", "int16u", "int32u", "string", "undef", "binary"})
 
 
 class SerialDirectoryRefused(ValueError):
@@ -282,7 +284,7 @@ def _entry(index, raw, default_format):
                 "refusals": ["serial_row_shape"],
                 "native_refusal": str(error),
             })
-    return {"serial_index": index, "alternatives": compiled}
+    return {"serial_index": index, "variant": alternatives is not None, "alternatives": compiled}
 
 
 def _table_meta(meta):
@@ -528,11 +530,261 @@ def stale_reason(existing, module, table, table_data):
     return None
 
 
+def _rust_fmt(format_operand):
+    """Render a descriptor format as the shared ``Fmt`` literal.
+
+    ``SerialCount`` carries the number of elements.  In particular,
+    ``string[$val{N}]`` is a one-byte-stride string with a prior-raw count,
+    while a bare field ``string`` has ProcessSerialData's remaining-bytes
+    rule.  These are deliberately distinct from binary-table formatting.
+    """
+    if not isinstance(format_operand, dict):
+        raise SerialDirectoryRefused("serial emitted Format fact is malformed")
+    spelling = format_operand.get("format")
+    count = format_operand.get("count")
+    if not isinstance(spelling, str) or not isinstance(count, dict):
+        raise SerialDirectoryRefused("serial emitted Format fact is incomplete")
+    if spelling == "string":
+        return "Fmt::RemainderString" if count.get("kind") == "remaining_bytes" else "Fmt::Str(1)"
+    if spelling in {"undef", "binary"}:
+        return "Fmt::Undef(1)"
+    if spelling == "pstring":
+        return "Fmt::PString"
+    modeled = codegen.SCALAR_FORMATS.get(spelling)
+    if modeled is None:
+        raise SerialDirectoryRefused(f"serial emitted Format is unsupported: {spelling!r}")
+    return f"Fmt::{modeled[0]}"
+
+
+def _runtime_format_reason(format_operand):
+    """Name formats which the staged serial reader has not modeled yet."""
+    if not isinstance(format_operand, dict) or not isinstance(format_operand.get("format"), str):
+        return "serial_emitter_format"
+    return None if format_operand["format"] in _RUNTIME_FORMATS else "serial_emitter_format"
+
+
+def _rust_count(count):
+    """Render a closed descriptor count operand as ``SerialCount``."""
+    if not isinstance(count, dict):
+        raise SerialDirectoryRefused("serial emitted count fact is malformed")
+    kind = count.get("kind")
+    if kind == "fixed" and isinstance(count.get("value"), int) and count["value"] >= 0:
+        return f"SerialCount::Fixed {{ value: {count['value']} }}"
+    if kind == "prior_raw_value" and isinstance(count.get("serial_index"), int) and count["serial_index"] >= 0:
+        return f"SerialCount::PriorRaw {{ serial_index: {count['serial_index']} }}"
+    if kind == "floor_div_prior_raw_value":
+        required = ("serial_index", "add", "divisor")
+        if all(isinstance(count.get(name), int) for name in required) and count["serial_index"] >= 0 and count["add"] >= 0 and count["divisor"] > 0:
+            return (
+                "SerialCount::FloorDivPriorRaw { "
+                f"serial_index: {count['serial_index']}, add: {count['add']}, divisor: {count['divisor']} }}"
+            )
+    if kind == "remaining_bytes" and set(count) == {"kind"}:
+        return "SerialCount::RemainingBytes"
+    raise SerialDirectoryRefused("serial emitted count is outside the closed descriptor grammar")
+
+
+def _rust_flags(flags):
+    if not isinstance(flags, dict) or any(not isinstance(flags.get(name), bool) for name in ("unknown", "binary", "list")):
+        raise SerialDirectoryRefused("serial emitted flags are malformed")
+    return codegen.ifd_flags_literal(flags["unknown"], flags["binary"], flags["list"], False, False, None)
+
+
+def _rust_groups(groups):
+    if not isinstance(groups, dict):
+        raise SerialDirectoryRefused("serial emitted Groups fact is malformed")
+    return codegen.compile_groups_field(groups, Counter())
+
+
+def _rust_condition(condition):
+    if not isinstance(condition, dict):
+        raise SerialDirectoryRefused("serial emitted Condition fact is malformed")
+    if condition.get("kind") == "always":
+        return "None"
+    if condition.get("kind") == "shared_cond" and condition.get("missing_member") == "shared_default":
+        compiled = condition.get("compiled")
+        if isinstance(compiled, str) and compiled:
+            return f"Some({compiled})"
+    raise SerialDirectoryRefused("serial emitted Condition is outside the shared execution contract")
+
+
+def _alternative_emission_reasons(alternative):
+    """Return every reason an alternative cannot become a ``SerialTag``.
+
+    Source-descriptor refusals are authoritative.  The additional condition
+    check protects reports produced by an older descriptor that has not yet
+    classified native missing-member-as-empty semantics.
+    """
+    if not isinstance(alternative, dict):
+        return ["serial_row_shape"]
+    reasons = alternative.get("refusals")
+    if not isinstance(reasons, list) or any(not isinstance(reason, str) or not reason for reason in reasons):
+        return ["serial_row_shape"]
+    out = list(reasons)
+    condition = alternative.get("condition")
+    if isinstance(condition, dict) and condition.get("missing_member") == "empty_string":
+        out.append("serial_condition_missing_member")
+    return sorted(set(out))
+
+
+def _gate_src(reasons):
+    if not reasons:
+        return "&[]"
+    return "&[" + ", ".join(f'(\"{codegen.rust_str(reason)}\", {count})' for reason, count in reasons) + "]"
+
+
+def _table_group(groups, family, fallback):
+    value = groups.get(str(family), fallback) if isinstance(groups, dict) else fallback
+    return value if isinstance(value, str) else fallback
+
+
+def _serial_tag_literal(alternative):
+    """Render one source-cleared alternative; callers record every refusal."""
+    if not isinstance(alternative, dict) or not isinstance(alternative.get("name"), str) or not alternative["name"]:
+        raise SerialDirectoryRefused("serial emitted alternative has no Name")
+    format_operand = alternative.get("format")
+    fmt = _rust_fmt(format_operand)
+    count = _rust_count(format_operand.get("count") if isinstance(format_operand, dict) else None)
+    condition = _rust_condition(alternative.get("condition"))
+    conversion = alternative.get("conversion")
+    if conversion != {"kind": "none"}:
+        raise SerialDirectoryRefused("serial emitted conversion is not modeled")
+    return (
+        "SerialTag { "
+        f'name: "{codegen.rust_str(alternative["name"])}", '
+        f"format: SerialFormat {{ format: {fmt}, count: {count} }}, condition: {condition}, "
+        f"flags: {_rust_flags(alternative.get('flags'))}, raw_conv: None, omitted: Omitted::NONE, "
+        f"value_conv: None, print_conv: PrintConv::None, groups: {_rust_groups(alternative.get('groups'))} }}"
+    )
+
+
+def serial_rust_source(population):
+    """Render a source-selected serial inventory as inactive shared literals.
+
+    This consumes descriptors, never table/name allowlists.  Every selected
+    table receives a literal when its descriptor compiled; table Gate A keeps
+    partially modeled tables non-executable.  Every withheld source
+    alternative is retained in ``OMITTED_SERIAL_NATIVE_ROWS``.
+    """
+    if not isinstance(population, dict) or population.get("version") != DESCRIPTOR_VERSION:
+        raise SerialDirectoryRefused("serial emitted population version is unsupported")
+    if population.get("kind") != "native_serial_layout_population" or not isinstance(population.get("tables"), list):
+        raise SerialDirectoryRefused("serial emitted population shape is unsupported")
+
+    tables, rows, omitted_tables = [], [], []
+    for record in sorted(population["tables"], key=lambda item: (item.get("module", ""), item.get("table", ""))):
+        module, table = record.get("module"), record.get("table")
+        if not isinstance(module, str) or not module or not isinstance(table, str) or not table:
+            raise SerialDirectoryRefused("serial emitted table identity is unavailable")
+        if record.get("outcome") != "descriptor_compiled":
+            omitted_tables.append((module, table, ["serial_descriptor_refused"]))
+            continue
+        descriptor = record.get("descriptor")
+        if not isinstance(descriptor, dict) or descriptor.get("module") != module or descriptor.get("table") != table:
+            raise SerialDirectoryRefused("serial emitted descriptor identity disagrees with population")
+        facts_ = descriptor.get("table_facts")
+        processor = descriptor.get("processor")
+        entries = descriptor.get("entries")
+        gate = descriptor.get("gate_a", {}).get("blocked_by")
+        if not isinstance(facts_, dict) or not isinstance(processor, dict) or not isinstance(entries, list) or not isinstance(gate, list):
+            raise SerialDirectoryRefused("serial emitted descriptor is incomplete")
+        default_format = facts_.get("default_format")
+        default_operand = {"format": default_format, "count": {"kind": "fixed", "value": 1}}
+        if _runtime_format_reason(default_operand) is not None:
+            omitted_tables.append((module, table, ["serial_emitter_default_format"]))
+            continue
+        default_fmt = _rust_fmt(default_operand)
+        processor_name = processor.get("name")
+        source_file = processor.get("source_file")
+        source_sha = processor.get("source_sha256")
+        body_sha = processor.get("source_body_sha256")
+        if not all(isinstance(value, str) and value for value in (processor_name, source_file, source_sha, body_sha)):
+            raise SerialDirectoryRefused("serial emitted processor provenance is incomplete")
+
+        gate_counts = Counter()
+        native_gate_names = set()
+        for reason, count in gate:
+            if not isinstance(reason, str) or not reason or not isinstance(count, int) or count < 1:
+                raise SerialDirectoryRefused("serial emitted Gate A fact is malformed")
+            gate_counts[reason] += count
+            native_gate_names.add(reason)
+        rendered_entries = []
+        for entry in sorted(entries, key=lambda item: item.get("serial_index", -1)):
+            index = entry.get("serial_index") if isinstance(entry, dict) else None
+            alternatives = entry.get("alternatives") if isinstance(entry, dict) else None
+            variant = entry.get("variant") if isinstance(entry, dict) else None
+            if not isinstance(index, int) or index < 0 or not isinstance(alternatives, list) or not isinstance(variant, bool):
+                raise SerialDirectoryRefused("serial emitted entry is malformed")
+            rendered_alternatives = []
+            for alternative_index, alternative in enumerate(alternatives):
+                reasons = _alternative_emission_reasons(alternative)
+                format_reason = _runtime_format_reason(
+                    alternative.get("format") if isinstance(alternative, dict) else None
+                )
+                if format_reason is not None:
+                    reasons = sorted(set(reasons + [format_reason]))
+                if reasons:
+                    for reason in reasons:
+                        # Newer descriptors include this in Gate A.  Count it
+                        # here only for backwards-compatible inputs.
+                        if reason not in native_gate_names:
+                            gate_counts[reason] += 1
+                    name = alternative.get("name") if isinstance(alternative, dict) else None
+                    name_src = "None" if not isinstance(name, str) else f'Some("{codegen.rust_str(name)}")'
+                    rows.append((module, table, index, variant, alternative_index, name_src, reasons))
+                    continue
+                try:
+                    rendered_alternatives.append(_serial_tag_literal(alternative))
+                except SerialDirectoryRefused:
+                    reason = "serial_emitter_shape"
+                    gate_counts[reason] += 1
+                    name = alternative.get("name") if isinstance(alternative, dict) else None
+                    name_src = "None" if not isinstance(name, str) else f'Some("{codegen.rust_str(name)}")'
+                    rows.append((module, table, index, variant, alternative_index, name_src, [reason]))
+            if rendered_alternatives:
+                rendered_entries.append(
+                    f"SerialEntry {{ serial_index: {index}, alternatives: &[{', '.join(rendered_alternatives)}] }}"
+                )
+        groups = facts_.get("groups")
+        tables.append(
+            "pub static SERIAL_" + re.sub(r"[^A-Za-z0-9]", "_", f"{module}_{table}").upper() + ": SerialTable = SerialTable { "
+            f'module: "{codegen.rust_str(module)}", table: "{codegen.rust_str(table)}", '
+            f'group0: "{codegen.rust_str(_table_group(groups, 0, module))}", '
+            f'group1: "{codegen.rust_str(_table_group(groups, 1, ""))}", '
+            f'group2: "{codegen.rust_str(_table_group(groups, 2, "Other"))}", '
+            f"default_format: {default_fmt}, processor: SerialProcessorFacts {{ name: \"{codegen.rust_str(processor_name)}\", source_file: \"{codegen.rust_str(source_file)}\", "
+            f"source_sha256: \"{codegen.rust_str(source_sha)}\", source_body_sha256: \"{codegen.rust_str(body_sha)}\" }}, "
+            f"gate_a: GateA {{ blocked_by: {_gate_src(sorted(gate_counts.items()))} }}, entries: &[{', '.join(rendered_entries)}] }};\n"
+        )
+
+    index = ["    &" + re.search(r"SERIAL_[A-Z0-9_]+", table).group(0) + "," for table in tables]
+    row_src = []
+    for module, table, index_value, variant, alternative, name, reasons in sorted(rows):
+        reasons_src = ", ".join(f'"{codegen.rust_str(reason)}"' for reason in reasons)
+        row_src.append(
+            f'    OmittedSerialNativeRow {{ module: "{codegen.rust_str(module)}", table: "{codegen.rust_str(table)}", '
+            f"serial_index: {index_value}, variant: {str(variant).lower()}, alternative: {alternative}, name: {name}, reasons: &[{reasons_src}] }},"
+        )
+    table_src = []
+    for module, table, reasons in sorted(omitted_tables):
+        reasons_src = ", ".join(f'"{codegen.rust_str(reason)}"' for reason in reasons)
+        table_src.append(
+            f'    OmittedSerialNativeTable {{ module: "{codegen.rust_str(module)}", table: "{codegen.rust_str(table)}", reasons: &[{reasons_src}] }},'
+        )
+    prelude = "//! Generated serial-directory facts; no reader or route is activated by this file.\nuse super::*;\n"
+    return prelude + "".join(tables) + (
+        "pub static ALL_SERIAL_TABLES: &[&SerialTable] = &[\n" + "\n".join(index) + "\n];\n"
+        "pub static OMITTED_SERIAL_NATIVE_ROWS: &[OmittedSerialNativeRow] = &[\n" + "\n".join(row_src) + "\n];\n"
+        "pub static OMITTED_SERIAL_NATIVE_TABLES: &[OmittedSerialNativeTable] = &[\n" + "\n".join(table_src) + "\n];\n"
+    )
+
+
 def main(argv=None):
     """Write the complete selected serial-processor population from one dump."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source_dump", help="captured dump_tables.pl JSON input")
     parser.add_argument("--output", required=True, help="destination JSON report")
+    parser.add_argument("--rust-output", help="optional inactive shared serial Rust facts")
     args = parser.parse_args(argv)
     try:
         document = json.loads(open(args.source_dump, encoding="utf-8").read())
@@ -541,6 +793,9 @@ def main(argv=None):
         parser.error(str(error))
     with open(args.output, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(population_json(population))
+    if args.rust_output:
+        with open(args.rust_output, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(serial_rust_source(population))
 
 
 if __name__ == "__main__":
