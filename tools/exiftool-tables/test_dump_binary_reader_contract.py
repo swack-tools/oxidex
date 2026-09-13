@@ -26,7 +26,7 @@ class BinaryReaderContract(unittest.TestCase):
         self.fixture.parent.mkdir(parents=True, exist_ok=True)
         self.fixture.write_text("package Image::ExifTool::Fixture; our %Main = (1 => { Name => 'One' }); 1;\n", encoding="utf-8")
 
-    def write_core(self, intel_s):
+    def write_core(self, intel_s, get16u_body="return DoUnpackStd('S', @_);"):
         self.core.write_text(textwrap.dedent(f"""\
             package Image::ExifTool;
             our $VERSION = 'fixture';
@@ -36,7 +36,7 @@ class BinaryReaderContract(unittest.TestCase):
             $currentByteOrder = 'MM';
             %unpackStd = %unpackMotorola;
             sub DoUnpackStd {{ return $_[2] ? unpack("x$_[2] $unpackStd{{$_[0]}}", ${{$_[1]}}) : unpack($unpackStd{{$_[0]}}, ${{$_[1]}}); }}
-            sub Get16u {{ return DoUnpackStd('S', @_); }}
+            sub Get16u {{ {get16u_body} }}
             sub GetByteOrder {{ return $currentByteOrder; }}
             sub SetByteOrder {{
                 my ($order) = @_;
@@ -108,6 +108,10 @@ class BinaryReaderContract(unittest.TestCase):
         self.assertEqual(contract["builtin_overrides"], standalone["builtin_overrides"])
         self.assertEqual(contract["builtin_override_facts"], standalone["builtin_override_facts"])
         self.assertEqual(contract["isolated_functions"], standalone["loaded_functions"])
+        self.assertEqual(contract["loaded_state"], {
+            "reported_byte_order": "MM", "unpack_std_s": "n",
+        })
+        self.assertEqual(contract["isolated_loaded_state"], standalone["loaded_state"])
         expected_names = {
             "get16u": "Image::ExifTool::Get16u",
             "do_unpack_std": "Image::ExifTool::DoUnpackStd",
@@ -138,6 +142,49 @@ class BinaryReaderContract(unittest.TestCase):
             contract["builtin_override_facts"]["unpack"]["function"]["source_file"],
             "Image/ExifTool/Fixture.pm",
         )
+
+    def test_parent_loaded_state_mismatch_blocks_contract_without_function_change(self):
+        self.fixture.write_text(textwrap.dedent("""\
+            package Image::ExifTool::Fixture;
+            BEGIN {
+                $Image::ExifTool::currentByteOrder = 'II';
+                $Image::ExifTool::unpackStd{'S'} = 'n';
+            }
+            our %Main = (1 => { Name => 'One' });
+            1;
+        """), encoding="utf-8")
+        result = subprocess.run(
+            ["/usr/bin/perl", str(TABLE_DUMP), str(self.lib), "Fixture"],
+            check=True, text=True, capture_output=True,
+        )
+        contract = json.loads(result.stdout)["native_reader_contracts"]["unsigned16"]
+        self.assertFalse(contract["resolved"])
+        self.assertEqual(contract["reason"], "parent_loaded_state_mismatch")
+        self.assertEqual(contract["loaded_state"], {
+            "reported_byte_order": "II", "unpack_std_s": "n",
+        })
+        self.assertEqual(
+            contract["loaded_functions"], contract["isolated_functions"],
+        )
+
+    def test_isolated_timeout_fails_closed_when_native_reader_hangs(self):
+        self.write_core("v", "while (1) {}")
+        runner = """
+            use JSON::PP;
+            use OxiDex::NativeReaderContract qw(capture_isolated_contract);
+            print JSON::PP->new->canonical->encode(
+                capture_isolated_contract($^X, $ARGV[0], $ARGV[1], 1));
+        """
+        result = subprocess.run(
+            [
+                "/usr/bin/perl", f"-I{REPO_ROOT / 'tools/exiftool-tables'}",
+                "-e", runner, str(DUMP), str(self.lib),
+            ],
+            check=True, text=True, capture_output=True, timeout=5,
+        )
+        contract = json.loads(result.stdout)
+        self.assertFalse(contract["resolved"])
+        self.assertEqual(contract["reason"], "extractor_timeout")
 
     def test_template_only_source_edit_changes_live_ii_observation(self):
         before = self.dump()

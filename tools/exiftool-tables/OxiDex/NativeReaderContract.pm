@@ -8,6 +8,9 @@ use Cwd qw(abs_path);
 use Digest::SHA qw(sha256_hex);
 use Exporter qw(import);
 use File::Spec ();
+use File::Temp qw(tempfile);
+use POSIX qw(WNOHANG);
+use Time::HiRes qw(time sleep);
 use JSON::PP;
 
 our @EXPORT_OK = qw(capture_in_process capture_isolated_contract finalise_loaded_contract);
@@ -85,6 +88,14 @@ sub builtin_overrides {
     my ($facts) = @_;
     return { map { $_ => $facts->{$_}{present} ? JSON::PP::true : JSON::PP::false }
         qw(unpack pack) };
+}
+
+sub loaded_state {
+    no warnings 'once';
+    return {
+        reported_byte_order => $Image::ExifTool::currentByteOrder,
+        unpack_std_s => $Image::ExifTool::unpackStd{'S'},
+    };
 }
 
 sub observe_order {
@@ -192,6 +203,7 @@ sub probe_get16u {
 sub capture_in_process {
     my ($lib_abs) = @_;
     my $initial = Image::ExifTool::GetByteOrder();
+    my $state_at_entry = loaded_state();
     my %orders = map { $_ => observe_order($_) } qw(II MM);
     my $restore_return = eval { Image::ExifTool::SetByteOrder($initial) };
     my $restore_error = $@ || undef;
@@ -207,6 +219,7 @@ sub capture_in_process {
         },
         builtin_overrides => builtin_overrides($override_facts),
         builtin_override_facts => $override_facts,
+        loaded_state => $state_at_entry,
         observations => {
             initial_byte_order => $initial,
             orders => \%orders,
@@ -227,15 +240,50 @@ sub unresolved_contract {
 }
 
 sub capture_isolated_contract {
-    my ($perl, $extractor, $lib) = @_;
+    my ($perl, $extractor, $lib, $timeout) = @_;
     return unresolved_contract('extractor_unavailable') unless -f $extractor;
-    open(my $fh, '-|', $perl, $extractor, $lib)
-        or return unresolved_contract('extractor_spawn_failed');
+    $timeout //= 60;
+    return unresolved_contract('extractor_invalid_timeout')
+        unless $timeout =~ /\A[1-9]\d*\z/;
+    my @command = ($perl, $extractor, '--timeout', $timeout, $lib);
+    my ($out_fh, $out_path) = tempfile('oxidex-reader-contract-out-XXXX',
+        TMPDIR => 1, UNLINK => 1);
+    my ($err_fh, $err_path) = tempfile('oxidex-reader-contract-err-XXXX',
+        TMPDIR => 1, UNLINK => 1);
+    close($out_fh) && close($err_fh)
+        or return unresolved_contract('extractor_tempfile_close_failed');
+    my $pid = fork();
+    return unresolved_contract('extractor_spawn_failed') unless defined $pid;
+    if (!$pid) {
+        open(STDOUT, '>', $out_path) or exit 127;
+        open(STDERR, '>', $err_path) or exit 127;
+        exec @command;
+        exit 127;
+    }
+    my $deadline = time() + $timeout;
+    my $status;
+    while (1) {
+        my $done = waitpid($pid, WNOHANG);
+        if ($done == $pid) {
+            $status = $?;
+            last;
+        }
+        if (time() >= $deadline) {
+            kill 'TERM', $pid;
+            sleep 0.05;
+            kill 'KILL', $pid if waitpid($pid, WNOHANG) == 0;
+            waitpid($pid, 0);
+            return unresolved_contract('extractor_timeout');
+        }
+        sleep 0.01;
+    }
+    return unresolved_contract('extractor_failed') unless $status == 0;
+    open(my $fh, '<:raw', $out_path)
+        or return unresolved_contract('extractor_output_unreadable');
     local $/;
     my $output = <$fh>;
-    my $closed = close($fh);
-    return unresolved_contract('extractor_failed')
-        unless $closed && $? == 0 && defined $output;
+    close($fh) or return unresolved_contract('extractor_output_unreadable');
+    return unresolved_contract('extractor_empty_output') unless defined $output;
     my $contract = eval { JSON::PP::decode_json($output) };
     return unresolved_contract('extractor_invalid_json') unless ref($contract) eq 'HASH';
     return unresolved_contract('extractor_invalid_shape')
@@ -243,6 +291,7 @@ sub capture_isolated_contract {
             && ref($contract->{loaded_functions}) eq 'HASH'
             && ref($contract->{builtin_overrides}) eq 'HASH'
             && ref($contract->{builtin_override_facts}) eq 'HASH'
+            && ref($contract->{loaded_state}) eq 'HASH'
             && ref($contract->{observations}) eq 'HASH'
             && ref($contract->{get16u_probe}) eq 'HASH';
     return $contract;
@@ -278,6 +327,8 @@ sub finalise_loaded_contract {
     $contract->{isolated_functions} = $contract->{loaded_functions};
     $contract->{isolated_builtin_overrides} = $contract->{builtin_overrides};
     $contract->{isolated_builtin_override_facts} = $contract->{builtin_override_facts};
+    $contract->{isolated_loaded_state} = $contract->{loaded_state};
+    $contract->{loaded_state} = loaded_state();
     my $parent_functions = {
         get16u => code_source_fact('Image::ExifTool::Get16u', $lib_abs),
         do_unpack_std => code_source_fact('Image::ExifTool::DoUnpackStd', $lib_abs),
@@ -290,6 +341,18 @@ sub finalise_loaded_contract {
     if (has_override($contract->{isolated_builtin_overrides}) || has_override($parent_overrides)) {
         $contract->{resolved} = JSON::PP::false;
         $contract->{reason} = 'builtin_override_present';
+        return $contract;
+    }
+    my $state = $contract->{loaded_state};
+    my $expected_state = ref($state) eq 'HASH'
+        ? $contract->{observations}{orders}{$state->{reported_byte_order}}
+        : undef;
+    unless (ref($expected_state) eq 'HASH'
+        && defined($state->{unpack_std_s})
+        && defined($expected_state->{unpack_std_s})
+        && $state->{unpack_std_s} eq $expected_state->{unpack_std_s}) {
+        $contract->{resolved} = JSON::PP::false;
+        $contract->{reason} = 'parent_loaded_state_mismatch';
         return $contract;
     }
     for my $name (sort keys %$parent_functions) {
