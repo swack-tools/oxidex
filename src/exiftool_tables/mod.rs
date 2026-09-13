@@ -71,8 +71,8 @@ pub use ifd_engine::{
     read_ifd,
 };
 pub use ifd_schema::{
-    IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
-    RawConvEffect,
+    IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag,
+    IfdVariantGroup, RawConvEffect,
 };
 pub use ifd_tables::{ALL_IFD_TABLES, IFD_EXIFTOOL_VERSION};
 pub use keyed_engine::{

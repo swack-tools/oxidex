@@ -150,7 +150,9 @@ use crate::io::ByteOrder;
 use super::cond::{self, MemberValue};
 use super::engine::{self, Dir, Emitted, Guard};
 use super::exprs;
-use super::ifd_schema::{IfdByteOrder, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, RawConvEffect};
+use super::ifd_schema::{
+    IfdByteOrder, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag, RawConvEffect,
+};
 use super::runtime::{self, DecodedValue, decode_value_of};
 use super::subdir::BaseExpr;
 use super::{Fmt, find_ifd_table, find_table};
@@ -1677,6 +1679,8 @@ mod tests {
             max_subdirs: None,
             dir_name: None,
             validate: false,
+            validation: None,
+            processor: IfdSubdirProcessor::Native,
             unwalked: None,
         }
     }
