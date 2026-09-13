@@ -714,17 +714,30 @@ sub hydrate_write_helpers {
 
 sub native_write_helper_facts {
     my ($lib_abs, $status) = @_;
+    my %bindings = (
+        write_value => 'Image::ExifTool::WriteValue',
+        check_value => 'Image::ExifTool::CheckValue',
+    );
     if (!$status->{loaded}) {
         my $reason = $status->{reason} // 'write_helper_load_failed';
-        return {
-            write_value => unresolved_code_fact('Image::ExifTool::WriteValue', $reason),
-            check_value => unresolved_code_fact('Image::ExifTool::CheckValue', $reason),
-        };
+        my %facts;
+        for my $key (sort keys %bindings) {
+            my $fact = unresolved_code_fact($bindings{$key}, $reason);
+            $fact->{requested_binding} = $bindings{$key};
+            $facts{$key} = $fact;
+        }
+        return \%facts;
     }
-    return {
-        write_value => code_source_fact('Image::ExifTool::WriteValue', $lib_abs),
-        check_value => code_source_fact('Image::ExifTool::CheckValue', $lib_abs),
-    };
+    my %facts;
+    for my $key (sort keys %bindings) {
+        # The requested package glob remains meaningful when a later module
+        # assigns an anonymous CODE ref: `__name` then identifies that actual
+        # CV while this field binds it to the native helper call site.
+        my $fact = code_source_fact($bindings{$key}, $lib_abs);
+        $fact->{requested_binding} = $bindings{$key};
+        $facts{$key} = $fact;
+    }
+    return \%facts;
 }
 
 sub dump_tag_entry {
