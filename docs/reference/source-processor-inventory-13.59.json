@@ -27,7 +27,7 @@
     "unknown": "Unknown overlaps the named/unnamed partition",
     "variants": "one alternative per _variants list item; an empty list remains a raw key with zero alternatives"
   },
-  "runner_sha256": "f1291353a3be17acfe5e9ab6b24ce86a64f72d607100d27de519d30d431937d6",
+  "runner_sha256": "c1ce00cdae68939fb9ed9058606cb60bd0d10900d2b8a66fad939b022f11b9da",
   "scope": "one recorded dump only; source-shape inventory, not generated acceptance, runtime reachability, manual share, output parity, or an automation percentage",
   "selection_table_counts": {
     "binary": 651,

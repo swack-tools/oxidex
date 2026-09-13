@@ -263,6 +263,12 @@ def main() -> None:
         entries = validate_document(doc)
     except ValueError as exc:
         raise SystemExit(f"invalid dump structure: {exc}") from exc
+    runner_sha = sha_file(Path(__file__).resolve())
+    print("=== instrument: inventory_source_processors ===", file=sys.stderr)
+    print(f"runner_sha256: {runner_sha}", file=sys.stderr)
+    print(f"immutable_selector_commit: {commit}", file=sys.stderr)
+    print(f"recorded_dump: ExifTool {doc.get('exiftool_version')} sha256={dump_sha}", file=sys.stderr)
+    print("scope: recorded-input only; no oxidex or live Perl oracle run", file=sys.stderr)
     args.out.mkdir(parents=True)
     snapshot = archive_tools(args.repo, commit, args.out)
     metas = [meta for _, _, _, meta, _ in entries]
@@ -323,7 +329,7 @@ def main() -> None:
         })
     family_rows.sort(key=lambda row: (-row["counts"].get("named_alternatives", 0), -row["counts"]["tables"], row["processor_identity"] or "", row["processor_shape"]))
     summary = {
-        "runner_sha256": sha_file(Path(__file__).resolve()),
+        "runner_sha256": runner_sha,
         "scope": "one recorded dump only; source-shape inventory, not generated acceptance, runtime reachability, manual share, output parity, or an automation percentage",
         "dump": {
             "sha256": dump_sha,

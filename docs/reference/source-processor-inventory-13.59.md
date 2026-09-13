@@ -28,5 +28,6 @@ COMMIT=ebbe1ece906858b8c84590f59a0616f9f3675d73
 
 The tool requires both expected identities, rejects an empty/incomplete dump
 before writing output, checks every module and table count, and imports all
-three selectors from the archived commit. Output paths in the report are
-relative to `OUT`, so the committed JSON is relocatable.
+three selectors from the archived commit. It writes a named instrument header
+to stderr before its machine-readable stdout JSON. Output paths in the report
+are relative to `OUT`, so the committed JSON is relocatable.
