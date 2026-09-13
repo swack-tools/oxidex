@@ -65,11 +65,11 @@ pub use ifd_schema::{
     IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
     RawConvEffect,
 };
-pub use keyed_schema::{
-    KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedNativeFacts, KeyedNativeSubdir,
-    KeyedStart, KeyedTag, KeyedVariantGroup, OmittedKeyedNativeRow,
-};
 pub use ifd_tables::{ALL_IFD_TABLES, IFD_EXIFTOOL_VERSION};
+pub use keyed_schema::{
+    KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedNativeFacts, KeyedNativeSubdir, KeyedStart,
+    KeyedTag, KeyedVariantGroup, OmittedKeyedNativeRow,
+};
 pub use runtime::{
     Acknowledged, DecodedField, DecodedValue, FractionalCensus, PerlCitation, RawAccess,
     RefusalCounts, TableDecode, all_fractional_census, apply_value_conv, decode_binary_table,
