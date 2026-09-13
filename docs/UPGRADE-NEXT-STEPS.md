@@ -19,7 +19,7 @@ populations. They are implementation history, not work to restart.
 
 | Priority | Remaining work | State | Completion evidence |
 | --- | --- | --- | --- |
-| 1 | Establish the starting rule inventory and migrate Sony Tag202a through shared machinery | Implementation next; 17-entry candidate identified | Native-source change tests, shared execution, exact retired/remaining custom rules, and no unexplained per-file regression |
+| 1 | Establish the starting rule inventory and migrate Sony Tag202a through shared machinery | Published at `5bd15e00`, including removal of 17 duplicate declarations; local lint/workspace/Python/build checks pass; final Linux/corpus gate pending | Native-source change tests, shared execution, exact retired/remaining custom rules, and no unexplained per-file regression; details in the [scoreboard](./AUTOGENERATION-PROGRESS.md) |
 | 2 | Continue generated EXIF directory migration | IFD1 and InteropIFD landed; Claude owns ExifIFD E-2 | Preserve occurrence behavior and named-directory routing; measure each activation against its own control |
 | 3 | Join producer and upgrade accounting | Queued alongside the pilot | Generated facts, manual rules, unsupported rules and actual execution remain distinct; ordinary source changes need no new tag rules |
 | 4 | Preserve Sony/Nikon producer recovery evidence | Sony plain landed; enciphered/encrypted recovery preserved and unlanded | Recovery is labeled maintenance; no numbering-only reconstruction or duplicate per-vendor interpreter is promoted as the target |
@@ -80,8 +80,11 @@ implemented separately: generated exact IDs distinguish
 `CameraSettings3[276]` and `[276.1]`, restoring `ImageNumber` while preserving
 actual conditional alternatives. Both fields match native ExifTool in six
 synthetic TIFF carriers; all 68 Sony tests and the complete all-features
-workspace suite pass. Complete the real-file/runtime gates before landing or
-claiming a corpus gain.
+workspace suite pass. The complete local 4,238-file comparison gains ten correct
+`ImageNumber` rows with no other changed per-file residuals. The corrected Linux
+stages and corpus totals also pass, but that pair omitted per-file JSON. The
+final combined pilot gate will preserve both JSONs before landing; see the
+[scoreboard](./AUTOGENERATION-PROGRESS.md) for current validation scope.
 Sony enciphered and Nikon encrypted remain larger producer recoveries.
 
 The earlier paired censuses established the 7.63% result at `79101d7d`; that
@@ -107,9 +110,11 @@ or observed output coverage. Four additional hook mappings and executable
 callback contracts remain separate. Do not add those dictionaries as the
 permanent architecture when the shared compiler can own the behavior.
 
-A scan of the genuine pinned dump with `codegen.is_binary_table` and the same
-shared expression recognizer finds 235 RawConv declarations across 19 modules.
-The binary generator currently marks RawConv omitted. This identifies a shared
+A pre-pilot scan of the genuine pinned dump with `codegen.is_binary_table` and
+the same shared expression recognizer found 235 RawConv declarations across
+19 modules. The pilot now models closed saved-value effects and proves one
+value-local form safe for later fields, while unsupported behavior remains
+withheld. The earlier population identifies a broader shared
 capability to assess: execute verified pure RawConv expressions in the common
 conversion pipeline, preserving suppression, input domains, conversion order
 and state rules. It is a candidate population, not a promise of 235 new rows.
@@ -133,10 +138,11 @@ migration. Existing useful bug repairs continue through their current gates.
 
 Use GPT-5.6 Terra workers for independent generator and verifier scopes. Each
 worker owns one branch and checkout, plus a bounded deliverable. Reuse finished
-worktrees after preserving their handoffs. Current parallel scopes are shared Sony migration analysis, independent
-review of the preserved Sony producer, and deterministic Nikon generation
-with explicit handwritten residuals. A completed implementation still needs independent review and
-integration before it counts as landed.
+worktrees after preserving their handoffs. The current pilot uses independent
+integration review and Linux validation, while the next capability's native
+fixtures can be prepared without a Rust build. See the scoreboard for current
+ownership and deliverables. A completed implementation still needs independent
+review and integration before it counts as landed.
 
 During authoring, run syntax checks, focused Python tests, native Perl fact
 checks and byte comparisons. Do not run a Cargo build for each generator edit

@@ -166,8 +166,12 @@ probe confirms a separate reader defect: integer-offset grouping omits
 `ImageNumber` from raw key 276.1. Recover the producer with that limitation
 explicit, then repair grouping with independently checked raw IDs and runtime
 regressions. That [raw-ID repair](./reference/sony-raw-id-runtime.md) now passes
-the synthetic carrier and Sony module checks; real-file and full runtime
-acceptance remain pending. Sony enciphered and Nikon encrypted remain larger jobs.
+the synthetic carrier and Sony module checks. The full local 4,238-file pair
+gains ten correct `ImageNumber` rows with no other changed per-file residuals.
+The final combined shared-pilot Linux gate remains pending; its two corpus
+runs must retain per-file JSON. See the [scoreboard](./AUTOGENERATION-PROGRESS.md)
+for the exact candidate and evidence scope. Sony enciphered and Nikon encrypted
+remain larger jobs.
 
 Reconstruct the next missing Sony/Nikon generator or extend a shared expression rule
 when it removes demonstrated release work or unblocks useful runtime behavior.

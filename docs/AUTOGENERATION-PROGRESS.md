@@ -70,8 +70,19 @@ exactly. In-place replay leaves source and ledger bytes and modification times
 unchanged. The retirement's own lint, complete workspace and build checks pass;
 the workspace took 244 seconds. All 19 retirement checks pass, and the complete
 Python tool suite passes: 549 tests run, one skipped, in 193 seconds. The final
-corpus comparison and Linux pilot gate remain pending. Earlier corpus results above describe the
-pilot before this removal and are not substituted for its final check.
+corpus comparison and Linux pilot gate remain pending. Earlier corpus results
+above describe the pilot before this removal and are not substituted for its
+final check.
+
+The final Linux gate at `5bd15e00` passed staleness and formatting, then stopped
+at the generated C-header check before tests and corpus comparison. Removing
+the custom table also removes its exposed `TAG202A` macro and renumbers the
+22 following Sony index macros. The header was regenerated with pinned
+`cbindgen 0.29.2`; `just cbindgen-check` now passes locally. Review confirms
+that the macro values match the Rust indices and no C function signature or
+layout changed. External callers using these exposed indices must use the
+updated definitions. The original failed gate remains recorded; the corrected
+candidate still needs the downstream Linux checks.
 
 ## What is still open
 
