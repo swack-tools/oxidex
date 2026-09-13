@@ -11,8 +11,8 @@
 //!
 //! ```text
 //! env -u PERL5LIB -u PERLLIB -u PERL5OPT \
-//!   EXIFTOOL_PERL=/path/to/perl5.38.2 \
-//!   OXIDEX_PINNED_EXIFTOOL=/path/to/exiftool-13.59 \
+//!   EXIFTOOL_PERL=perl \
+//!   OXIDEX_PINNED_EXIFTOOL=/path/to/pinned-exiftool \
 //!   cargo test --test serial_directory_native -- --ignored
 //! ```
 
@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use oxidex::core::TagValue;
+use oxidex::exiftool_oracle::repo_pin;
 use oxidex::exiftool_tables::{
     Ctx, Emitted, MemberValue, SerialDir, SerialEmissionSink, SerialTable, find_serial_table,
     process_serial_directory,
@@ -31,7 +32,6 @@ use oxidex::io::ByteOrder;
 use serde_json::{Value, json};
 
 const CANONICAL_PERL: &str = "v5.38.2";
-const EXIFTOOL_VERSION: &str = "13.59";
 const PROBE: &str = "tools/exiftool-tables/probe_serial_processor.pl";
 
 #[derive(Clone, Copy)]
@@ -50,8 +50,8 @@ impl Order {
 
     const fn rust(self) -> ByteOrder {
         match self {
-            Self::Ii => ByteOrder::LittleEndian,
-            Self::Mm => ByteOrder::BigEndian,
+            Self::Ii => ByteOrder::Little,
+            Self::Mm => ByteOrder::Big,
         }
     }
 }
@@ -77,23 +77,33 @@ impl SerialEmissionSink for Sink {
 }
 
 struct NativeEnv {
-    perl: PathBuf,
+    /// Command name or absolute path. CI deliberately supplies `perl`.
+    perl: String,
     source: PathBuf,
+}
+
+struct ReplayCase<'a> {
+    table: &'static str,
+    name: &'static str,
+    order: Order,
+    data: &'a [u8],
+    dir_start: usize,
+    dir_len: usize,
+    unknown: bool,
 }
 
 impl NativeEnv {
     fn require() -> Self {
-        let perl = PathBuf::from(env::var("EXIFTOOL_PERL").expect(
+        let perl = env::var("EXIFTOOL_PERL").expect(
             "serial native replay was invoked: set EXIFTOOL_PERL to canonical Perl v5.38.2",
-        ));
+        );
+        assert!(
+            !perl.is_empty(),
+            "EXIFTOOL_PERL must name an interpreter command or path"
+        );
         let source = PathBuf::from(env::var("OXIDEX_PINNED_EXIFTOOL").expect(
             "serial native replay was invoked: set OXIDEX_PINNED_EXIFTOOL to ExifTool 13.59 source",
         ));
-        assert!(
-            perl.is_file(),
-            "EXIFTOOL_PERL is not a file: {}",
-            perl.display()
-        );
         assert!(
             source.join("lib/Image/ExifTool/Real.pm").is_file(),
             "OXIDEX_PINNED_EXIFTOOL lacks lib/Image/ExifTool/Real.pm: {}",
@@ -136,8 +146,9 @@ impl NativeEnv {
         );
         assert_eq!(
             String::from_utf8(exiftool_version.stdout).expect("ExifTool version is UTF-8"),
-            EXIFTOOL_VERSION,
-            "serial native replay requires pinned ExifTool {EXIFTOOL_VERSION}"
+            repo_pin(),
+            "serial native replay requires the repository-pinned ExifTool {}",
+            repo_pin()
         );
         Self { perl, source }
     }
@@ -212,27 +223,18 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn native_replay(
-    native: &NativeEnv,
-    table: &str,
-    case: &str,
-    order: Order,
-    data: &[u8],
-    dir_start: usize,
-    dir_len: usize,
-    unknown: bool,
-) -> Value {
+fn native_replay(native: &NativeEnv, case: &ReplayCase<'_>) -> Value {
     let request = json!({
         "protocol": "oxidex.serial_processor.v1",
         "module": "Real",
-        "table": table,
+        "table": case.table,
         "case": {
-            "name": case,
-            "byte_order": order.native(),
-            "data_hex": hex(data),
-            "dir_start": dir_start,
-            "dir_len": dir_len,
-            "unknown": if unknown { 1 } else { 0 },
+            "name": case.name,
+            "byte_order": case.order.native(),
+            "data_hex": hex(case.data),
+            "dir_start": case.dir_start,
+            "dir_len": case.dir_len,
+            "unknown": if case.unknown { 1 } else { 0 },
             "verbose": 1,
             "members": {},
         },
@@ -293,26 +295,22 @@ fn native_replay(
 
 fn rust_replay(
     table: &'static SerialTable,
-    order: Order,
-    data: &[u8],
-    dir_start: usize,
-    dir_len: usize,
-    unknown: bool,
+    case: &ReplayCase<'_>,
 ) -> (Vec<Emitted>, oxidex::exiftool_tables::SerialWalkResult) {
     let mut sink = Sink {
-        unknown,
+        unknown: case.unknown,
         ..Sink::default()
     };
     let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
     let result = process_serial_directory(
         table,
         SerialDir {
-            data,
-            dir_start,
-            dir_len,
+            data: case.data,
+            dir_start: case.dir_start,
+            dir_len: case.dir_len,
             base: 0,
             data_pos: 0,
-            byte_order: order.rust(),
+            byte_order: case.order.rust(),
         },
         &mut Ctx::new(&mut members),
         &mut sink,
@@ -409,29 +407,20 @@ fn table(name: &str) -> &'static SerialTable {
     table
 }
 
-fn assert_case(
-    native: &NativeEnv,
-    table_name: &str,
-    case: &str,
-    order: Order,
-    data: &[u8],
-    dir_start: usize,
-    dir_len: usize,
-    unknown: bool,
-) {
-    let native_reply = native_replay(
-        native, table_name, case, order, data, dir_start, dir_len, unknown,
-    );
-    let table = table(table_name);
-    let (rows, result) = rust_replay(table, order, data, dir_start, dir_len, unknown);
+fn assert_case(native: &NativeEnv, case: &ReplayCase<'_>) {
+    let native_reply = native_replay(native, case);
+    let table = table(case.table);
+    let (rows, result) = rust_replay(table, case);
     assert!(
         !result.tainted,
-        "{case}: shared serial reader refused a native V3/V4 subset case: {result:?}"
+        "{}: shared serial reader refused a native V3/V4 subset case: {result:?}",
+        case.name
     );
     assert_eq!(
         rust_rows(&rows),
         native_rows(&native_reply),
-        "{case}: FoundTag input projection"
+        "{}: FoundTag input projection",
+        case.name
     );
     assert_source_groups(table, &native_reply);
 }
@@ -444,93 +433,81 @@ fn real_audio_serial_tables_replay_pinned_native_callbacks() {
         let v3 = real_v3(order, b"Hi!", b"Me", b"C", b"Yo");
         assert_case(
             &native,
-            "AudioV3",
-            "v3-normal",
-            order,
-            &v3,
-            0,
-            v3.len(),
-            false,
+            &ReplayCase {
+                table: "AudioV3",
+                name: "v3-normal",
+                order,
+                data: &v3,
+                dir_start: 0,
+                dir_len: v3.len(),
+                unknown: false,
+            },
         );
         let v4 = real_v4(order);
         assert_case(
             &native,
-            "AudioV4",
-            "v4-normal",
-            order,
-            &v4,
-            0,
-            v4.len(),
-            false,
+            &ReplayCase {
+                table: "AudioV4",
+                name: "v4-normal",
+                order,
+                data: &v4,
+                dir_start: 0,
+                dir_len: v4.len(),
+                unknown: false,
+            },
         );
     }
 
     let normal = real_v3(Order::Ii, b"Hi!", b"Me", b"C", b"Yo");
-    assert_case(
-        &native,
-        "AudioV3",
-        "v3-unknown-off",
-        Order::Ii,
-        &normal,
-        0,
-        normal.len(),
-        false,
-    );
-    assert_case(
-        &native,
-        "AudioV3",
-        "v3-unknown-on",
-        Order::Ii,
-        &normal,
-        0,
-        normal.len(),
-        true,
-    );
+    for (name, unknown) in [("v3-unknown-off", false), ("v3-unknown-on", true)] {
+        assert_case(
+            &native,
+            &ReplayCase {
+                table: "AudioV3",
+                name,
+                order: Order::Ii,
+                data: &normal,
+                dir_start: 0,
+                dir_len: normal.len(),
+                unknown,
+            },
+        );
+    }
 
     let zero = real_v3(Order::Ii, b"", b"", b"", b"");
-    assert_case(
-        &native,
-        "AudioV3",
-        "v3-zero-strings",
-        Order::Ii,
-        &zero,
-        0,
-        zero.len(),
-        false,
-    );
     let nul = real_v3(Order::Ii, b"H\0!", b"Me", b"C", b"Yo");
-    assert_case(
-        &native,
-        "AudioV3",
-        "v3-nul-string",
-        Order::Ii,
-        &nul,
-        0,
-        nul.len(),
-        false,
-    );
     let truncated = &normal[..15]; // title count remains 3 but no title byte fits.
-    assert_case(
-        &native,
-        "AudioV3",
-        "v3-truncated-string",
-        Order::Ii,
-        truncated,
-        0,
-        truncated.len(),
-        false,
-    );
+    for (name, data) in [
+        ("v3-zero-strings", zero.as_slice()),
+        ("v3-nul-string", nul.as_slice()),
+        ("v3-truncated-string", truncated),
+    ] {
+        assert_case(
+            &native,
+            &ReplayCase {
+                table: "AudioV3",
+                name,
+                order: Order::Ii,
+                data,
+                dir_start: 0,
+                dir_len: data.len(),
+                unknown: false,
+            },
+        );
+    }
 
     let mut bounded = vec![0xa5, 0x5a, 0xff];
     bounded.extend_from_slice(&normal);
     assert_case(
         &native,
-        "AudioV3",
-        "v3-bounded-nonzero-offset",
-        Order::Ii,
-        &bounded,
-        3,
-        normal.len(),
-        false,
+        &ReplayCase {
+            table: "AudioV3",
+            name: "v3-bounded-nonzero-offset",
+            order: Order::Ii,
+            data: &bounded,
+            dir_start: 3,
+            dir_len: normal.len(),
+            unknown: false,
+        },
     );
 }
