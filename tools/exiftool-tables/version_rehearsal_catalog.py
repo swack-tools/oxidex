@@ -89,8 +89,7 @@ def _official_api_url(url: str) -> bool:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or parsed.netloc != "api.github.com":
         return False
-    return (parsed.path.startswith(f"/repos/{REPOSITORY}/")
-            or parsed.path.startswith(f"/repositories/{REPOSITORY_ID}/tags"))
+    return parsed.path in {f"/repos/{REPOSITORY}/tags", f"/repositories/{REPOSITORY_ID}/tags"}
 
 
 def _next_url(headers: dict[str, str]) -> str | None:

@@ -105,6 +105,18 @@ class CatalogCaptureTests(unittest.TestCase):
         with self.assertRaisesRegex(catalog_stage.Refused, "incomplete pagination"):
             catalog_stage.raw_catalog_from_capture(capture)
 
+    def test_non_tag_pagination_target_is_refused_before_any_population_is_accepted(self):
+        responses = complete_responses()
+        responses[catalog_stage.TAG_PAGE_URL] = response(
+            [tag("13.59", OID_C)],
+            {"Link": '<https://api.github.com/repositories/132751855/tags-shadow?page=2>; rel="next"'},
+        )
+        capture = catalog_stage.capture_tag_catalog(FixtureGet(responses), "2026-09-13T12:00:00Z")
+        self.assertFalse(capture["complete"])
+        self.assertEqual(capture["failures"][0]["kind"], "page_malformed")
+        with self.assertRaisesRegex(catalog_stage.Refused, "incomplete pagination"):
+            catalog_stage.raw_catalog_from_capture(capture)
+
     def test_moved_ref_is_preserved_and_blocks_population(self):
         responses = complete_responses()
         responses[catalog_stage._ref_url("13.58")] = response({"object": {"type": "commit", "sha": OID_A}})
