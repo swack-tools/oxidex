@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import shutil
 import subprocess
+import json
 
 import directory_validation as validation
 import keyed_directory
@@ -95,7 +96,7 @@ class CallSource(unittest.TestCase):
 
 
 class GeneratedValidation(unittest.TestCase):
-    def artifact(self, root, call=CALL, fact=None):
+    def artifact(self, root, call=CALL, fact=None, reader_state=None):
         native = {"subdirectory_validate_functions": {NAME: helper() if fact is None else fact},
                   "modules": {"Any": {"tables": {
                       "Main": {"meta": {"PROCESS_PROC": {"__perl": "CODE", "__name": "Image::ExifTool::CanonRaw::ProcessCanonRaw"}},
@@ -103,11 +104,13 @@ class GeneratedValidation(unittest.TestCase):
                                    "TagTable": "Image::ExifTool::Any::Child", "Validate": call}}}},
                       "Child": {"meta": {"PROCESS_PROC": {"__perl": "CODE", "__name": "Image::ExifTool::ProcessBinaryData"}}, "tags": {}},
                   }}}}
+        if reader_state is not None:
+            native["native_reader_contracts"] = {"unsigned16": reader_state}
         path = root / "keyed.rs"
         path.write_text(keyed_directory.generate(native)[0])
         return path
 
-    def audit(self, path, call=CALL, sha="1" * 64):
+    def audit(self, path, call=CALL, sha="1" * 64, reader_state=None):
         source = "\n".join([
             "KEYED\tAny\tMain\t\tTGROUPS\t\t\t",
             "KEYED\tAny\tMain\t4097\tNAME\tChild",
@@ -115,6 +118,8 @@ class GeneratedValidation(unittest.TestCase):
             "KEYED\tAny\tMain\t4097\tSUBDIR\tImage::ExifTool::Any::Child\t\t1\t",
             "KEYED\tAny\tMain\t4097\tVALIDATION\t" + "\t".join((call, NAME, "Image/ExifTool/Canon.pm", sha)),
         ])
+        if reader_state is not None:
+            source += "\nNATIVE_READER_CONTRACT\tunsigned16\t" + json.dumps(reader_state)
         return verify.keyed_native_inventory(
             verify.parse_keyed_rust(path), verify.parse_omitted_keyed_native_rows(path),
             *verify.parse_keyed_oracle(source))
@@ -133,6 +138,17 @@ class GeneratedValidation(unittest.TestCase):
                 subprocess.run(["rustfmt", "--edition", "2024", str(path)], check=True)
                 self.assertEqual(verify.parse_keyed_rust(path), before)
                 self.assertEqual(self.audit(path, call=changed).keyed_fact_mismatches, ())
+
+    def test_accepted_reader_digest_survives_rustfmt_and_native_inventory(self):
+        from test_native_reader_contract import snapshot, bound_helper
+        state = snapshot()
+        with TemporaryDirectory() as tmp:
+            path = self.artifact(Path(tmp), fact=bound_helper(state), reader_state=state)
+            before = verify.parse_keyed_rust(path)
+            self.assertIsNotNone(before.facts[("Any", "Main", "4097")].edge[4][6])
+            subprocess.run(["rustfmt", "--edition", "2024", str(path)], check=True)
+            self.assertEqual(verify.parse_keyed_rust(path), before)
+            self.assertEqual(self.audit(path, reader_state=state).keyed_fact_mismatches, ())
 
     def test_absent_or_changed_helper_keeps_child_explicitly_unwalked(self):
         for fact in ({}, helper(BODY.replace("Get16u", "Get32u"))):

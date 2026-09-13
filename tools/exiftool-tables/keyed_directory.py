@@ -137,6 +137,7 @@ class Context:
         self.processors = {}
         self.table_meta = {}
         self.validation_helpers = doc.get("subdirectory_validate_functions", {})
+        self.reader_contracts = doc.get("native_reader_contracts", {})
         for module, mod in doc.get("modules", {}).items():
             for table, value in mod.get("tables", {}).items():
                 self.processors[(module, table)] = processor_name(value.get("meta"))
@@ -179,12 +180,10 @@ def _edge(tag, raw_id, ctx, stats):
     validation = "None"
     if sd.get("Validate") is not None:
         try:
-            validation = directory_validation.compile_validation(sd["Validate"], ctx.validation_helpers).rust(codegen.rust_str)
-            # Recording the outer helper is insufficient to prove the native
-            # reader it calls. Keep this edge inactive until Get16u and its
-            # unpacking dependencies have an independently verified contract.
-            # In particular, changing Get16u can leave Canon::Validate intact.
-            reasons.append("validate_reader_contract")
+            compiled = directory_validation.compile_validation(sd["Validate"], ctx.validation_helpers, ctx.reader_contracts)
+            validation = compiled.rust(codegen.rust_str)
+            if compiled.reader_contract_sha256 is None:
+                reasons.append("validate_reader_contract")
         except directory_validation.ValidationRefused:
             reasons.append("validate")
     if sd.get("ProcessProc") is not None:

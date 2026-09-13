@@ -1,67 +1,80 @@
 # Directory validation implementation checkpoint
 
-Base: `5fb979d8` on `refactor/tag-machinery`. This work records native helper
-source, compiles supported call arguments and supplies a common Rust size
-comparison. It does not activate Canon directory routing or remove manual code.
+Integration base: `634e5616` on `refactor/tag-machinery`, including the inactive
+reader merged in PR #752. Work branch:
+`codex/source-backed-directory-validation-20260913`. This source checkpoint is
+locally validated; canonical generated artifacts and ledgers remain pending.
+It does not activate Canon routing or remove manual code.
 
-`dump_tables.pl` records the loaded helper body, source file and hash, resolving
-aliases only after all requested modules load. Nested function dependencies
-are captured as provenance, with explicit cycle and depth refusals; global
-unpacking state still requires a separate contract. The compiler recognizes a closed
-u16 membership-check body and takes offsets and expected sizes from the source
-call. It does not select behavior by camera, tag or helper name. Unsupported
-syntax stays explicitly unwalked. The independent oracle reads live source
-provenance, and its verifier parses call operands independently of the compiler.
+## What changed
 
-The primitive preserves inherited byte order, declared-size comparisons,
-alternative sizes, exact division and native short-read numeric coercion. These
-comparisons are not structural buffer bounds checks.
+`dump_tables.pl` records each loaded validation helper's body, source file,
+hash and nested function dependencies after module loading. A bounded isolated
+native probe captures the actual unsigned reader, unpacking implementation,
+byte-order setters/getters and observed unpacking state. The loaded parent must
+agree with that snapshot. Aliases, overrides, inconsistent state, incomplete
+facts and timeouts cause refusal.
+
+The compiler recognizes complete supported source bodies and takes offsets and
+expected sizes from the native call. It does not dispatch by camera, tag or
+validation-helper name. The independent oracle checks source facts, call
+operands and numeric-reader provenance without importing compiler recognition.
+Unknown behavior remains explicitly unwalked.
+
+The shared reader applies validation to the complete bounded child value with
+its declared size and inherited byte order. A rejected child preserves parent
+state and processing of later entries. Native short reads at or before the
+buffer end coerce to zero; starting beyond the buffer throws in Perl and must
+reject the child. This distinction was found by native probing and corrected.
 
 ## Verified locally
 
-- Focused Python suite: 39 checks, including extraction after deferred module
-  loading, aliases, real generated-artifact parsing, source/operand mutations,
-  and rejection when an artifact drops the required reader-contract blocker.
-- Rust primitive suite: three checks, with the log confirming compilation from
-  the owned checkout. Exact repository CI lint command passes.
-- ExifTool 13.59 with explicit Perl 5.34.1: seven compiled CanonRaw validation
-  calls; independent keyed inventory accounts for 61 native rows, with 57
-  represented and four explicit omissions, zero native-fact discrepancies.
-  This is source-fact evidence, not a complete runtime validation verdict.
+| Instrument | Result | Limit |
+| --- | --- | --- |
+| Focused Python test modules listed below | 56 tests pass | Not the complete tool suite or merge gate. |
+| Rust keyed-reader tests | 17 pass | The production Canon route remains inactive. |
+| Rust size-check primitive tests | Three pass | Shared operation checks, not carrier coverage. |
+| Exact repository CI lint command | Pass | Broader earlier integration-test lint had 23 existing warnings. |
+| Actual ExifTool 13.59 dump, code generation and independent oracle replay, explicit Perl 5.34.1 | 61 source rows = 57 represented + four explicit omissions; zero missing, stale or mismatched native facts | Local source replay; canonical Perl 5.38.2 regeneration remains required. |
+| Native unsigned-reader probe | 262,144 numeric cases across both byte orders and two offsets, plus ten boundary cases; zero failures | Complemented by complete supported-body recognition; not every possible caller or offset. |
+| Copied native source: change only `Get16u` from unsigned 16-bit to unsigned 32-bit | All seven fresh checks retain the blocker; all seven stale checks fail independent verification | One real native mutation, plus focused synthetic source/state mutations. |
 
-The local commands are:
+Local source replay now gives reader proof to all seven validation calls.
+Three have no remaining child-edge blockers; four retain `target_processor`.
+Including one other unsupported edge, the parent has five unwalked child edges,
+down from eight. Undefined parent format and three opaque-value keys also
+remain unresolved. These are compiler milestones, not live output gains.
 
 ```sh
-python3 -m unittest discover -s tools/exiftool-tables -p 'test_directory_validation.py'
-python3 -m unittest discover -s tools/exiftool-tables -p 'test_dump_validate_functions.py'
-python3 -m unittest discover -s tools/exiftool-tables -p 'test_keyed_directory.py'
+PYTHONPATH=tools/exiftool-tables python3 -m unittest test_native_reader_contract test_directory_validation test_keyed_directory test_dump_validate_functions test_dump_binary_reader_contract
+cargo test --lib --all-features exiftool_tables::keyed_engine::tests
 cargo test --lib --all-features exiftool_tables::validation::tests
 cargo clippy --all-features -- -D warnings
 ```
 
-An additional lint attempt with `--lib --tests -- -D warnings` failed on 23
-warnings in unchanged integration tests. No passing verdict is claimed for
-that command. The initial source replay also had two report-format errors;
-the dump, artifact and oracle outputs were preserved and the final source-fact
-assertions passed. Neither failed attempt is counted as validation.
+Evidence is under `shared-pilot/directory-validation-20260913/reader-contract/`
+within the session evidence root; `final/native-replay.json` and
+`final/core-width-mutation.json` retain the source replay and mutation results.
+The system temporary directory's `oxidex-sony-plain-current.txt` points to that
+root. The full native artifact also survives Rust formatting and independent
+verification. Review corrected multiline digest parsing and requires all ten
+distinct boundary records with their inputs and outcomes. Earlier report-format
+failures and the corrected reader-test fixture failure are preserved; failed attempts are not counted as validation.
 
-## Required before activation
+## What remains
 
-Independent review changed native `Get16u` from a 16-bit to a 32-bit unpack.
-The outer validation helper's source hash stayed unchanged, while its result
-changed. This proves that outer-helper provenance alone is insufficient.
-Every compiled edge therefore retains `validate_reader_contract` in its
-unwalked reasons, and the independent verifier refuses its removal. The seven
-call sites are implemented operands; zero of these edges are cleared for use.
+1. Complete the full Python tool suite (running at publication) and add the
+   inline eight-byte child validation regression identified by review.
+2. Regenerate official artifacts and ledgers through
+   `tools/exiftool-tables/regen.sh` with the repository pin and canonical Perl
+   5.38.2 environment, holding the i7 heavy-job lock across every phase. The
+   new source facts deliberately change the dump hash; an old ledger cannot
+   authenticate them. The i7 accepts authentication but currently cannot open
+   a command session. Its live lock, processes and native paths are unverified.
+3. Resolve remaining parent/child processing rules and prove both CRW and JPEG
+   carriers establish the native byte order immediately before reading. A
+   consistent initial byte-order switch is not itself part of the fingerprint.
+4. Run required current-head checks and carrier/corpus comparisons before
+   production activation, then retire the replaced manual Make/Model code.
 
-Capture and verify the numeric reader and its unpacking/state dependencies,
-including a copied-source mutation that changes only the reader. Then integrate
-validation into the shared reader and prove a rejected child leaves subsequent
-parent behavior intact. Regenerate official artifacts and ledgers through
-`tools/exiftool-tables/regen.sh` with the pinned release and canonical Perl
-5.38.2 environment, holding the i7 heavy-job lock for every phase. The new dump
-facts deliberately change its hash; an old ledger cannot authenticate them.
-
-Other parent blockers and both CRW/JPEG carrier comparisons still remain.
-Complete those before enabling Canon routing and retiring manual Make/Model
-code. This checkpoint establishes no whole-project automation percentage.
+This checkpoint establishes no whole-project automation percentage.

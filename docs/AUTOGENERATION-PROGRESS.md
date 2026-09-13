@@ -13,8 +13,9 @@ artifact-complete, while both full-pair supervisor exit statuses remain
 unavailable and explicitly retained as that validation limitation.
 
 The keyed-directory schema/compiler merged in PR #748 at `ebbe1ece`, after all
-final hosted checks passed at `a422e8de`. The separate reader is published at
-`94effe69`; focused tests cover full directory counts, deep nesting, native
+final hosted checks passed at `a422e8de`. The separate reader merged in PR #752
+at `634e5616` on September 13, 06:30 UTC, after all required checks passed on
+`ad6d8562` against `35487962`. Focused tests cover full directory counts, deep nesting, native
 group projection, legacy continuation after child failure and directory-state
 restoration when a checked walk stops. Independent review found no remaining
 blocking defect in those two corrections. No
@@ -36,21 +37,27 @@ required checks passed on `dd8d89b3`; its 1,512-identity report preserves
 the separate historical artifact snapshot `18a8ef17`. It still does not
 classify runtime producers or manually maintained rules.
 
-The next compiler checkpoint captures native validation helper source and
-turns seven CanonRaw call sites into shared size-comparison operands. Local
+The work-branch compiler checkpoint captures native validation helper source
+and turns seven CanonRaw call sites into shared size-comparison operands.
+Independent numeric-reader source and byte-order checks now clear all seven
+validation-proof blockers in local replay. **Five child edges still have
+unsupported processing rules; the parent route remains inactive.** Local
 source/oracle replay accounts for 61 rows (57 represented, four explicit
-omissions) with zero source-fact discrepancies. **All seven validation edges
-remain blocked.** Independent review changed only native `Get16u` and proved
-that authenticating the outer helper alone misses a behavior change. The
-compiler and independent verifier now require an explicit
-`validate_reader_contract` blocker until that dependency is validated.
+omissions) with zero source-fact discrepancies. It checks 262,144 native numeric
+reads and ten boundary cases. Changing only native `Get16u` from a 16-bit to a
+32-bit read blocks all seven newly generated checks and rejects all seven
+stale artifact checks.
 
-This checkpoint passes 39 focused Python checks, three Rust primitive tests
-and the repository's exact CI lint command. A broader lint attempt with tests
-and warnings denied failed on 23 existing integration-test warnings; that
-failure is retained. No canonical dump/ledger refresh, production activation,
-corpus gain or manual Canon retirement is claimed. See the
-[checkpoint and remaining checks](reference/directory-validation-checkpoint.md).
+Focused Python checks, 17 Rust reader tests, three Rust primitive tests and the
+repository's exact CI lint command pass. The
+[checkpoint](reference/directory-validation-checkpoint.md) records the final
+Python count and scope. Native probing also corrected a boundary bug: a short
+read at the buffer end coerces to zero, whereas starting beyond the buffer
+rejects the child. Earlier failed attempts remain recorded.
+
+Canonical dump/ledger regeneration is pending: the i7 authenticates but cannot
+open a command session, so its current lock/job state is unverified. No
+production activation, corpus gain or manual Canon retirement is claimed.
 
 ## What the pilot must prove
 

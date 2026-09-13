@@ -11,9 +11,7 @@ use crate::io::ByteOrder;
 use super::cond::{Ctx, MemberValue};
 use super::engine::{self, Emitted};
 use super::runtime;
-use super::{
-    Fmt, IfdFlags, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, find_table,
-};
+use super::{Fmt, IfdFlags, KeyedDirectoryTable, KeyedEdge, KeyedLayout, KeyedTag, find_table};
 
 /// Carrier projection applied after generated tag/table group resolution.
 ///
@@ -1087,7 +1085,7 @@ mod tests {
                 validation: Some(VALIDATION),
                 unwalked: &[],
             }),
-            ..tag(1, "Child", None, None)
+            ..tag(0x1001, "Child", None, None)
         };
         static LATER: KeyedTag = tag(2, "Later", Some(Fmt::Int8u), None);
         static TAGS: [KeyedTag; 2] = [CHILD, LATER];

@@ -9,6 +9,8 @@ to trust a function name. B::Deparse's -p form preserves operator grouping.
 from dataclasses import dataclass
 import re
 from pathlib import PurePosixPath
+import native_reader_contract
+import native_reader_facts
 
 
 class ValidationRefused(ValueError):
@@ -95,6 +97,7 @@ class CompiledValidation:
     callee: str
     source_file: str
     source_sha256: str
+    reader_contract_sha256: str | None = None
 
     def rust(self, escape):
         values = ", ".join(f"SizeExpectation::{kind}({value})" for kind, value in self.expected)
@@ -103,7 +106,9 @@ class CompiledValidation:
             f"offset: {self.offset}, expected: &[{values}], "
             f'expression: "{escape(self.expression)}", '
             f'callee: "{escape(self.callee)}", source_file: "{escape(self.source_file)}", '
-            f'source_sha256: "{self.source_sha256}" }})'
+            f'source_sha256: "{self.source_sha256}", '
+            + (f'reader_contract_sha256: Some("{self.reader_contract_sha256}")' if self.reader_contract_sha256 else 'reader_contract_sha256: None')
+            + " })"
         )
 
 
@@ -116,7 +121,7 @@ def _integer(text, *, maximum):
     return value
 
 
-def compile_validation(expression, helpers):
+def compile_validation(expression, helpers, reader_contracts=None):
     if not isinstance(expression, str):
         raise ValidationRefused("validation is not a source expression")
     match = re.fullmatch(r"\s*(" + _FQ + r")\s*\(([^()]*)\)\s*", expression)
@@ -158,4 +163,22 @@ def compile_validation(expression, helpers):
             or PurePosixPath(file).as_posix() != file or "\\" in file
             or not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{64}", sha) is None):
         raise ValidationRefused("helper source provenance is unavailable")
-    return CompiledValidation(offset, tuple(expected), expression, name, file, sha)
+    reader_sha = None
+    try:
+        snapshot = reader_contracts.get("unsigned16") if isinstance(reader_contracts, dict) else None
+        reader_sha = native_reader_contract.fingerprint(snapshot)
+        # The isolated reader contract must describe the very functions
+        # reached by the loaded helper, not an earlier library incarnation.
+        dependencies = helper.get("dependencies")
+        if not isinstance(dependencies, dict):
+            raise native_reader_facts.ReaderRefused("missing helper reader dependency")
+        get16u = dependencies.get("Image::ExifTool::Get16u")
+        unpack_dependencies = get16u.get("dependencies") if isinstance(get16u, dict) else None
+        do_unpack = unpack_dependencies.get("Image::ExifTool::DoUnpackStd") if isinstance(unpack_dependencies, dict) else None
+        for fact, key, called in ((get16u, "get16u", "Image::ExifTool::Get16u"),
+                                  (do_unpack, "do_unpack_std", "Image::ExifTool::DoUnpackStd")):
+            if native_reader_facts.source_fact(fact, called) != native_reader_facts.source_fact(snapshot["loaded_functions"][key], called):
+                raise native_reader_facts.ReaderRefused("loaded validation reader differs from isolated contract")
+    except native_reader_facts.ReaderRefused:
+        reader_sha = None
+    return CompiledValidation(offset, tuple(expected), expression, name, file, sha, reader_sha)

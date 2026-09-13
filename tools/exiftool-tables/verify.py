@@ -53,6 +53,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import exiftool_oracle  # noqa: E402 -- capability-aware perl selection
 import instrument  # noqa: E402 -- git/instrument identity header
 import verify_directory_validation
+import verify_native_reader
+import json
 
 # The perl this verifier runs `oracle.pl` and the ExifTool-version probe
 # under. Resolved once, by capability (not a bare "perl" off PATH -- see
@@ -1227,8 +1229,14 @@ def parse_keyed_oracle(out):
     table_groups, tag_groups, subdir_facts = {}, {}, {}
     flags = {}
     validations = {}
+    reader_contracts = {}
     for line in out.splitlines():
         p = line.split("\t")
+        if len(p) == 3 and p[0] == "NATIVE_READER_CONTRACT":
+            if p[1] in reader_contracts:
+                raise SystemExit("duplicate native reader contract")
+            reader_contracts[p[1]] = json.loads(p[2])
+            continue
         if len(p) < 5 or p[0] != "KEYED":
             continue
         marker = p[4]
@@ -1274,7 +1282,7 @@ def parse_keyed_oracle(out):
         if key not in subdir_facts or not subdir_facts[key]["validate"]:
             raise SystemExit(f"native keyed validation lacks its declared edge: {key}")
         subdir_facts[key]["validation"] = validation
-    return names, enums, rawfmts, masks, hooks, subdirs, properties, counts, table_groups, tag_groups, subdir_facts, conditions, flags
+    return names, enums, rawfmts, masks, hooks, subdirs, properties, counts, table_groups, tag_groups, subdir_facts, conditions, flags, reader_contracts
 
 
 def run_oracle(lib, oracle_pl):
@@ -1565,7 +1573,7 @@ def _keyed_truthy(value):
 def keyed_native_inventory(generated, omissions, or_names, or_enums, or_rawfmts,
                            or_masks, or_hooks, or_subdirs, or_properties,
                            or_counts, or_table_groups, or_tag_groups, or_subdir_facts, or_conditions,
-                           or_flags=None):
+                           or_flags=None, or_reader_contracts=None):
     """Native-minus-generated accounting for the opt-in keyed schema.
 
     This has the same exact-one accounting as `native_inventory`, but its
@@ -1718,10 +1726,14 @@ def keyed_native_inventory(generated, omissions, or_names, or_enums, or_rawfmts,
         if native_edge["validate"] and compiled_validation is None:
             required.add("validate")
         elif compiled_validation is not None:
-            # The captured outer helper does not authenticate its transitive
-            # native numeric reader. Until that contract is verified, the
-            # compiled operands must never make this edge executable.
-            required.add("validate_reader_contract")
+            reader_sha = compiled_validation[6]
+            if reader_sha is None:
+                required.add("validate_reader_contract")
+            else:
+                readers = or_reader_contracts if isinstance(or_reader_contracts, dict) else {}
+                problem = verify_native_reader.mismatch(reader_sha, readers.get("unsigned16"))
+                if problem:
+                    keyed_fact_mismatches.append((key, problem))
             problem = verify_directory_validation.mismatch(compiled_validation, native_edge.get("validation"))
             if problem:
                 keyed_fact_mismatches.append((key, problem))

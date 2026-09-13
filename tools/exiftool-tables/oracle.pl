@@ -118,6 +118,10 @@ use Encode qw(decode);
 use B ();
 use Cwd qw(abs_path);
 use Digest::SHA qw(sha256_hex);
+use FindBin;
+use lib $FindBin::Bin;
+use JSON::PP ();
+use OxiDex::NativeReaderContract ();
 
 my $LIB = shift @ARGV or die "usage: $0 <exiftool-lib-dir>\n";
 unshift @INC, $LIB;
@@ -657,3 +661,12 @@ for my $mod (grep { !$skip{$_} } @mods) {
         emit_ifd_table($mod, $sym, $t) if $is_ifd;
     }
 }
+
+# Run the primitive oracle in isolation, then authenticate its refs against
+# the modules this oracle actually loaded. The snapshot records native reads
+# and state transitions; no compiler body recognizer participates here.
+my $reader_contract = OxiDex::NativeReaderContract::finalise_loaded_contract(
+    OxiDex::NativeReaderContract::capture_isolated_contract(
+        $^X, "$FindBin::Bin/dump_binary_reader_contract.pl", $LIB), abs_path($LIB));
+print join("\t", 'NATIVE_READER_CONTRACT', 'unsigned16',
+    JSON::PP->new->canonical->encode($reader_contract)), "\n";

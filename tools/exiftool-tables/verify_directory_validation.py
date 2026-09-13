@@ -16,12 +16,13 @@ def parse_rust(text, unescape):
         r'Some\(U16SizeCheck\s*\{\s*offset:\s*(\d+),\s*expected:\s*&\[([^\]]*)\],\s*'
         + r'expression:\s*' + string + r',\s*callee:\s*' + string
         + r',\s*source_file:\s*' + string + r',\s*source_sha256:\s*' + string
+        + r',\s*reader_contract_sha256:\s*(None|Some\(\s*"[0-9a-f]{64}"\s*,?\s*\))'
         + r'\s*,?\s*\}\s*,?\)'
     )
     match = re.fullmatch(pattern, text, re.S)
     if match is None:
         raise SystemExit("unrecognised directory validation schema")
-    offset, values, expression, callee, file, sha = match.groups()
+    offset, values, expression, callee, file, sha, reader = match.groups()
     expected, at = [], 0
     token = re.compile(r"\s*SizeExpectation::(Relative|Constant|Quotient)\((-?\d+)\)\s*(?:,|$)")
     while at < len(values):
@@ -41,7 +42,8 @@ def parse_rust(text, unescape):
     if not expected or int(offset) > 0xffffffff:
         raise SystemExit("empty or unrepresentable directory size check")
     return (int(offset), tuple(expected), unescape(expression), unescape(callee),
-            unescape(file), unescape(sha))
+            unescape(file), unescape(sha),
+            None if reader == "None" else re.search(r'"([0-9a-f]{64})"', reader).group(1))
 
 
 def _operand(source):
@@ -106,7 +108,7 @@ def mismatch(compiled, native):
         offset, expected, called = call_arguments(expression)
     except (ValueError, SyntaxError):
         return "compiled validation claims an unmodeled native call"
-    if compiled[:2] != (offset, expected) or compiled[3:] != (called, file, sha) or callee != called:
+    if compiled[:2] != (offset, expected) or compiled[3:6] != (called, file, sha) or callee != called:
         return "compiled validation operands or helper source differ from native"
     if re.sub(r"[\t\r\n]+", " ", compiled[2]) != expression:
         return "compiled validation expression differs from native"

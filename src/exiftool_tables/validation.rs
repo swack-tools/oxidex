@@ -22,22 +22,30 @@ pub struct U16SizeCheck {
     pub callee: &'static str,
     pub source_file: &'static str,
     pub source_sha256: &'static str,
+    /// Proven native reader source and endian-state identity; never a dispatch key.
+    pub reader_contract_sha256: Option<&'static str>,
 }
 
 impl U16SizeCheck {
     /// The generated helper reads at start + offset in the supplied buffer.
-    /// Native short/out-of-range Get16u is undefined and numeric comparison
-    /// coerces it to zero. Reproduce that explicitly; callers still enforce
-    /// their own file/directory bounds independently of this comparison.
+    /// A short Get16u at or before the buffer end is undefined and numeric
+    /// comparison coerces it to zero. Starting beyond the buffer throws;
+    /// the enclosing native Validate evaluation then rejects the child.
     #[must_use]
     pub fn matches(&self, data: &[u8], start: usize, size: u32, order: ByteOrder) -> bool {
-        let word = start
-            .checked_add(self.offset as usize)
-            .and_then(|at| at.checked_add(2).and_then(|end| data.get(at..end)))
-            .map_or(0, |bytes| match order {
-                ByteOrder::Big => u16::from_be_bytes([bytes[0], bytes[1]]),
-                ByteOrder::Little => u16::from_le_bytes([bytes[0], bytes[1]]),
-            });
+        let Some(at) = start.checked_add(self.offset as usize) else {
+            return false;
+        };
+        if at > data.len() {
+            return false;
+        }
+        let word =
+            at.checked_add(2)
+                .and_then(|end| data.get(at..end))
+                .map_or(0, |bytes| match order {
+                    ByteOrder::Big => u16::from_be_bytes([bytes[0], bytes[1]]),
+                    ByteOrder::Little => u16::from_le_bytes([bytes[0], bytes[1]]),
+                });
         self.expected.iter().any(|expected| match *expected {
             SizeExpectation::Relative(delta) => {
                 i64::from(word) == i64::from(size) + i64::from(delta)
@@ -62,6 +70,7 @@ mod tests {
             callee: "test",
             source_file: "test",
             source_sha256: "test",
+            reader_contract_sha256: None,
         }
     }
 
@@ -82,8 +91,9 @@ mod tests {
         assert!(check.matches(&[9, 9, 4, 0], 0, 6, ByteOrder::Little));
         assert!(check.matches(&[9, 9, 6, 0], 0, 6, ByteOrder::Little));
         assert!(!check.matches(&[9, 9, 5, 0], 0, 6, ByteOrder::Little));
-        assert!(check.matches(&[], 0, 2, ByteOrder::Big));
-        assert!(check.matches(&[9], usize::MAX, 0, ByteOrder::Big));
+        assert!(!check.matches(&[], 0, 2, ByteOrder::Big));
+        assert!(!check.matches(&[9], usize::MAX, 0, ByteOrder::Big));
+        assert!(check.matches(&[9, 9], 0, 2, ByteOrder::Big));
         assert!(!check.matches(&[], 0, 1, ByteOrder::Big));
     }
 
