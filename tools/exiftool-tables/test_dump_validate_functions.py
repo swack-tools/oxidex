@@ -25,7 +25,16 @@ class ValidateFunctionFacts(unittest.TestCase):
             encoding="utf-8",
         )
         self.module = package / "Fixture.pm"
+        self.later = package / "Later.pm"
+        self.write_later_module()
         self.write_module("return $data == $first ? 1 : undef;")
+
+    def write_later_module(self):
+        self.later.write_text(textwrap.dedent("""\
+            package Image::ExifTool::Later;
+            sub Validate { return 1; }
+            1;
+        """), encoding="utf-8")
 
     def write_module(self, body):
         self.module.write_text(textwrap.dedent(f"""\
@@ -49,13 +58,22 @@ class ValidateFunctionFacts(unittest.TestCase):
                 3 => {{ Flags => {{ SubDirectory => {{
                     Validate => 'Image::ExifTool::Fixture::Validate($dirData,$subdirStart,$size)'
                 }} }} }},
+                4 => {{ SubDirectory => {{
+                    Validate => 'Image::ExifTool::Later::Validate($dirData,$subdirStart,$size)'
+                }} }},
             );
+            our @ArrayOnly = (
+                {{ SubDirectory => {{
+                    Validate => 'Image::ExifTool::Fixture::ArrayValidate($dirData,$subdirStart,$size)'
+                }} }},
+            );
+            *ArrayValidate = \\&Validate;
             1;
         """), encoding="utf-8")
 
     def dump(self):
         result = subprocess.run(
-            ["/usr/bin/perl", str(DUMP), str(self.lib), "Fixture"],
+            ["/usr/bin/perl", str(DUMP), str(self.lib), "Fixture", "Later"],
             check=True, text=True, capture_output=True,
         )
         return json.loads(result.stdout)
@@ -74,6 +92,19 @@ class ValidateFunctionFacts(unittest.TestCase):
             helper["source_sha256"],
             hashlib.sha256(self.module.read_bytes()).hexdigest(),
         )
+
+        # The source alias is preserved as the map key while the fact records
+        # the CODE ref's canonical name. This ARRAY package variable would be
+        # invisible if discovery only walked hash table rows.
+        array_alias = facts["Image::ExifTool::Fixture::ArrayValidate"]
+        self.assertTrue(array_alias["resolved"])
+        self.assertEqual(array_alias["__name"], "Image::ExifTool::Fixture::Validate")
+
+        # Fixture is requested before Later. Resolution after all loads must
+        # still capture Later's CODE ref instead of caching a false unresolved.
+        later = facts["Image::ExifTool::Later::Validate"]
+        self.assertTrue(later["resolved"])
+        self.assertEqual(later["source_file"], "Image/ExifTool/Later.pm")
 
         unresolved = facts["Image::ExifTool::Ghost::Missing"]
         self.assertFalse(unresolved["resolved"])
