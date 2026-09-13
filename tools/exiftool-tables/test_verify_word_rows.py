@@ -150,6 +150,24 @@ class WordRowsTests(unittest.TestCase):
         self.assertIn("Condition", reasons)
         self.assertIn("Flags", reasons)
 
+    def test_unmodeled_read_properties_and_table_defaults_fail_closed(self):
+        for property_name in ("Mask", "BitShift", "ByteOrder", "DataMember", "Hook", "Offset", "PrintHex", "Require"):
+            with self.subTest(property_name=property_name):
+                inv = processor.parse_processor_inventory(inventory_text(
+                    mutation=lambda r, name=property_name: r["properties"].__setitem__(name, prop(native("scalar", "1")))
+                ))
+                got = rows.audit_word_rows(generated(), Omissions(True, {}), inv, {PROCESSOR})
+                self.assertTrue(any(f"unsupported native {property_name}" in item.reason for item in got.mismatches))
+        inv = processor.parse_processor_inventory(inventory_text())
+        table_fact = dict(inv.tables)
+        key = processor.ProcessorKey("Fixture", "Words")
+        mutated = dict(table_fact[key])
+        mutated["format"] = prop(native("scalar", "int16u"))
+        table_fact[key] = mutated
+        changed = processor.ProcessorInventory(inv.processors, table_fact, inv.rows)
+        got = rows.audit_word_rows(generated(), Omissions(True, {}), changed, {PROCESSOR})
+        self.assertTrue(any("table FORMAT" in item.reason for item in got.mismatches))
+
     def test_omission_and_unmodeled_conversion_never_pass(self):
         inv = processor.parse_processor_inventory(inventory_text(mutation=lambda r: r["properties"].__setitem__("RawConv", prop(native("scalar", "$val")))))
         omitted = Omissions(True, {("Fixture", "Words", "1"): object()})

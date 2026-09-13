@@ -43,6 +43,16 @@ class WordRowAudit:
 _NUMERIC_ID = re.compile(r"(?:0|[1-9]\d*)\Z")
 _FLAG_NAMES = ("Unknown", "Binary", "List", "Protected", "Avoid", "Priority")
 
+# These properties affect a selected value, parsing position/format, nested
+# reads, tag eligibility, or read-side presentation.  WordDirectory has no
+# representation for them.  Keep documentation and write-only properties
+# (Description, Notes, Writable, *ConvInv) out of this set.
+_UNMODELED_RUNTIME_PROPERTIES = (
+    "Mask", "BitShift", "BitsPerWord", "BitsTotal", "ByteOrder", "DataMember",
+    "Hook", "Base", "Offset", "ChangeBase", "FixFormat", "SubIFD", "RelatedTag",
+    "SeparateTable", "PrintHex", "Require", "Desire", "Inhibit", "Hidden",
+)
+
 
 def _mismatches(mismatches: list[WordRowMismatch], identity: tuple[str, ...], reason: str) -> None:
     mismatches.append(WordRowMismatch(identity, reason))
@@ -174,8 +184,9 @@ def _field_facts(row: dict[str, Any], key: tuple[str, str, str], generated: Any,
     if facts is None or source is None:
         _mismatches(mismatches, key, "generated row lacks parsed facts/source facts")
         return
-    # ProcessCanonCustom supplies HandleTag Format int8u / Count 1.  A word
-    # descriptor may represent that execution default as `Some(Fmt::Int8u)`
+    # ProcessCanonCustom supplies HandleTag selection metadata Format int8u /
+    # Count 1.  The native integer value itself is not constrained to eight
+    # bits. A word descriptor may represent that selection default as `Some(Fmt::Int8u)`
     # while retaining absent per-row source Format/Count as None.  No other
     # format/count projection is accepted here.
     for prop, generated_value, source_value, expected_generated, expected_source in (
@@ -226,6 +237,13 @@ def _field_facts(row: dict[str, Any], key: tuple[str, str, str], generated: Any,
     if flag_error or _attr(source, "flags", None) != flags or _attr(facts, "flags", None) != flags:
         _mismatches(mismatches, key, flag_error or "effective native Flags are not represented exactly")
 
+    for prop in _UNMODELED_RUNTIME_PROPERTIES:
+        present, _value, error = _property(row, prop)
+        if error:
+            _mismatches(mismatches, key, error)
+        elif present:
+            _mismatches(mismatches, key, f"unsupported native {prop} has no WordDirectory representation")
+
     present, value, error = _property(row, "SubDirectory")
     if error:
         _mismatches(mismatches, key, error)
@@ -235,6 +253,11 @@ def _field_facts(row: dict[str, Any], key: tuple[str, str, str], generated: Any,
 
 def audit_word_rows(generated: Any, omissions: Any, inventory: ProcessorInventory, processor_names: Iterable[str]) -> WordRowAudit:
     """Audit one caller-selected word layout against full native row inventory.
+
+    The native processor-table protocol currently supplies only table Groups,
+    FORMAT, and FIRST_ENTRY.  This audit certifies those captured table facts;
+    broader table-level metadata requires a protocol expansion before it can
+    become a word-layout acceptance claim.
 
     ``generated`` may be the whole ParsedKeyedRust-like object when it exposes
     ``layouts``: only entries with a non-None WordDirectory descriptor belong
@@ -277,9 +300,21 @@ def audit_word_rows(generated: Any, omissions: Any, inventory: ProcessorInventor
     table_groups = _attr(generated, "table_groups", {})
     for table_key in sorted(selected):
         identity = (table_key.module, table_key.table)
-        native_groups, error = _table_groups(inventory.tables[table_key])
+        native_table = inventory.tables[table_key]
+        native_groups, error = _table_groups(native_table)
         if error or table_groups.get(identity) != native_groups:
             _mismatches(mismatches, identity, error or "table Groups differ from native source")
+        # The inventory protocol currently captures these two executable
+        # table defaults in addition to Groups.  A word descriptor authenticates
+        # neither, so a source mutation must remain a refusal rather than a
+        # clean row-only pass. Other table metadata is not yet in the generic
+        # processor-table protocol and is called out in this module's contract.
+        for property_name, label in (("format", "FORMAT"), ("first_entry", "FIRST_ENTRY")):
+            property_fact = native_table.get(property_name)
+            if not isinstance(property_fact, dict) or not isinstance(property_fact.get("present"), bool):
+                _mismatches(mismatches, identity, f"table {label} fact is malformed")
+            elif property_fact["present"]:
+                _mismatches(mismatches, identity, f"unsupported native table {label} has no WordDirectory representation")
 
     fields = _attr(generated, "fields", {})
     generated_ids = {key for key in fields if tuple(key[:2]) in generated_scope}
