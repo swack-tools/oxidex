@@ -4,8 +4,9 @@
 # This helper deliberately has no knowledge of Canon IDs, table names, or a
 # compiler grammar. Each request chooses the native module/table. It invokes
 # the table's actual PROCESS_PROC with bounded bytes and records only object
-# callbacks ExifTool actually makes; direct package ReadValue calls are named
-# as unobserved rather than simulated.
+# callbacks ExifTool actually makes.  It authenticates and wraps the selected
+# processor package's bare ReadValue binding, so the observed scalar values
+# remain tied to the native CV actually called by the processor.
 
 use strict;
 use warnings;
@@ -98,6 +99,29 @@ sub code_fact {
     };
 }
 
+sub selected_bare_binding {
+    my ($processor, $symbol) = @_;
+    my $processor_name = code_name($processor);
+    return (undef, 'processor_name_unavailable') unless defined $processor_name;
+    my ($package) = $processor_name =~ /\A(.+)::[^:]+\z/;
+    return (undef, 'processor_package_unavailable') unless defined $package;
+    my $deparse = eval { B::Deparse->new('-p', '-sC')->coderef2text($processor) };
+    return (undef, 'processor_deparse_unavailable') unless defined $deparse;
+    # This native-only probe supports the direct package-local ReadValue form.
+    # A qualified call or a more indirect source shape must not be relabelled as
+    # a captured dependency merely because a same-named symbol happens to exist.
+    return (undef, "bare_${symbol}_not_found")
+        unless $deparse =~ /(?<!:)(?<![A-Za-z0-9_])\Q$symbol\E\s*\(/;
+    no strict 'refs';
+    my $binding = *{"${package}::${symbol}"}{CODE};
+    return (undef, "bare_${symbol}_binding_unavailable") unless ref($binding) eq 'CODE';
+    my $fact = code_fact($binding, "${package}::${symbol}");
+    return (undef, "bare_${symbol}_$fact->{reason}") unless $fact->{resolved};
+    $fact->{binding_package} = $package;
+    $fact->{binding_symbol} = $symbol;
+    return ($binding, $fact);
+}
+
 sub scalar_fact {
     my ($value) = @_;
     return { defined => JSON::PP::false } unless defined $value;
@@ -133,6 +157,7 @@ sub tag_info_fact {
             _probe_table_address => refaddr($table_ref),
             _probe_calls => [], _probe_warnings => [], _probe_verbose_dirs => [],
             _probe_verbose_info => [], _probe_get_tag_info => [], _probe_found_tags => [],
+            _probe_read_values => [],
             _probe_options => { Verbose => $verbose ? 1 : 0, Unknown => $unknown ? 1 : 0 },
             OPTIONS => { Verbose => $verbose ? 1 : 0, Unknown => $unknown ? 1 : 0 },
         }, $class;
@@ -163,7 +188,13 @@ sub tag_info_fact {
 
     sub GetTagInfo {
         my ($self, $table, $index, @args) = @_;
-        my $info = $self->SUPER::GetTagInfo($table, $index, @args);
+        my $base = $OxiDex::SerialProcessorProbe::BASE_GET_TAG_INFO
+            or die 'base GetTagInfo binding unavailable';
+        # Calling the saved CV is deliberate: Image::ExifTool::GetTagInfo is
+        # locally guarded while the selected processor runs, so a direct
+        # package call fails but this object callback can still use the real
+        # native selection implementation.
+        my $info = $base->($self, $table, $index, @args);
         push @{ $self->{_probe_calls} }, { method => 'GetTagInfo' };
         push @{ $self->{_probe_get_tag_info} }, {
             table_reference => refaddr($table) == $self->{_probe_table_address}
@@ -298,6 +329,8 @@ sub process_request {
     my $table = $request->{table};
     my $process_fact = code_fact($selected->{process}, "${module}::${table}::PROCESS_PROC");
     return request_error($request, 'process_fact', $process_fact->{reason}) unless $process_fact->{resolved};
+    my ($read_value, $read_value_fact) = selected_bare_binding($selected->{process}, 'ReadValue');
+    return request_error($request, 'read_value_fact', $read_value_fact) unless defined $read_value;
 
     my $before = eval { Image::ExifTool::GetByteOrder() };
     my ($run_error, $restore_error, $returned, @perl_warnings, $active_order);
@@ -312,9 +345,25 @@ sub process_request {
         # The selected processor should dispatch through this object's methods.
         # A package-qualified object callback is a probe error, never a pass.
         no warnings qw(redefine once);
+        $OxiDex::SerialProcessorProbe::BASE_GET_TAG_INFO = \&Image::ExifTool::GetTagInfo;
         local *Image::ExifTool::FoundTag = sub { die 'unexpected package-qualified FoundTag callback' };
         local *Image::ExifTool::Warn = sub { die 'unexpected package-qualified Warn callback' };
         local *Image::ExifTool::Options = sub { die 'unexpected package-qualified Options callback' };
+        local *Image::ExifTool::GetTagInfo = sub { die 'unexpected package-qualified GetTagInfo callback' };
+        local *Image::ExifTool::VerboseInfo = sub { die 'unexpected package-qualified VerboseInfo callback' };
+        my $read_value_package = $read_value_fact->{binding_package};
+        my $read_value_symbol = $read_value_fact->{binding_symbol};
+        no strict 'refs';
+        local *{"${read_value_package}::${read_value_symbol}"} = sub {
+            my @args = @_;
+            my $value = $read_value->(@args);
+            push @{ $probe->{_probe_read_values} }, {
+                offset => scalar_fact($args[1]), format => scalar_fact($args[2]),
+                count => scalar_fact($args[3]), available => scalar_fact($args[4]),
+                value => scalar_fact($value),
+            };
+            return $value;
+        };
         my $ok = eval {
             my $data = $case->{data};
             $returned = $selected->{process}->(
@@ -338,7 +387,7 @@ sub process_request {
     return {
         protocol => 'oxidex.serial_processor.v1', ok => $error ? JSON::PP::false : JSON::PP::true,
         request => { module => $module, table => $request->{table}, case => $request->{case}{name} },
-        selection => { process => $process_fact },
+        selection => { process => $process_fact, read_value => $read_value_fact },
         byte_order => {
             before => $before, requested => $request->{case}{byte_order}, active => $active_order,
             restored => eval { Image::ExifTool::GetByteOrder() }, restore_error => $restore_error || undef,
@@ -347,6 +396,7 @@ sub process_request {
         warnings => $probe->{_probe_warnings},
         verbose_dirs => $probe->{_probe_verbose_dirs},
         verbose_info => $probe->{_probe_verbose_info},
+        read_values => $probe->{_probe_read_values},
         get_tag_info => $probe->{_probe_get_tag_info},
         found_tags => $probe->{_probe_found_tags},
         method_calls => $probe->{_probe_calls},
@@ -360,7 +410,7 @@ sub process_request {
             get_tag_info => 'observed via object callback',
             found_tag => 'observed via object callback',
             verbose_info => 'observed only when native Options(Verbose) is true',
-            read_value => 'unobserved: ProcessSerialData calls package ReadValue directly',
+            read_value => 'observed via selected processor package bare binding',
             dynamic_count_eval => 'unobserved: Perl eval occurs inside ProcessSerialData before verbose callback',
             nested_process_directory => 'unobserved: not intercepted by this native-only probe',
         },
