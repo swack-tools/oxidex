@@ -81,6 +81,14 @@ class MandatoryRecipe:
     encodings: tuple["DefaultEncoding", ...] = ()
     unencoded_numeric_defaults: tuple["DefaultEncodingOmission", ...] = ()
     write_value_source_sha256: str = ""
+    survivor_encodings: tuple["SurvivorEncoding", ...] = ()
+
+@dataclass(frozen=True)
+class SurvivorEncoding:
+    format_name: str
+    tiff_type: int
+    width: int
+    operation: str
 
 @dataclass(frozen=True)
 class DefaultEncoding:
@@ -301,9 +309,20 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
         # It is deliberately not a fatal error for unrelated directories, but
         # remains in the serialized recipe/report as an explicit omission.
         continue
+    sizes = registry.get("format_size")
+    names = registry.get("format_name")
+    survivor = []
+    for format_name in numeric.formats:
+        type_code = numbers.get(format_name)
+        if (type(type_code) is not int or not isinstance(sizes, list) or not isinstance(names, list)
+                or type_code <= 0 or type_code >= len(sizes) or type_code >= len(names)
+                or type(sizes[type_code]) is not int or names[type_code] != format_name):
+            raise MandatoryRefused("mandatory survivor format registry entry is unsupported")
+        survivor.append(SurvivorEncoding(format_name, type_code, sizes[type_code], "write_value_scalar"))
     return replace(recipe, encodings=tuple(encodings),
                    unencoded_numeric_defaults=tuple(omissions),
-                   write_value_source_sha256=str(write_value["source_sha256"]))
+                   write_value_source_sha256=str(write_value["source_sha256"]),
+                   survivor_encodings=tuple(survivor))
 
 
 def recipe_json(recipe: MandatoryRecipe) -> dict[str, Any]:

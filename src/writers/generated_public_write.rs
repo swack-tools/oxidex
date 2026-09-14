@@ -365,8 +365,15 @@ fn cleanup_source_mandatory_ifd1(bytes: &[u8]) -> Result<Vec<u8>> {
                     mandatory::TiffByteOrder::Big
                 }
             };
-            mandatory::matches_existing_mandatory_value(*default, field_type, count, value, order)
-                .map_err(ExifToolError::unsupported_format)
+            mandatory::matches_existing_mandatory_value(
+                &MANDATORY_DEFAULTS,
+                *default,
+                field_type,
+                count,
+                value,
+                order,
+            )
+            .map_err(ExifToolError::unsupported_format)
         },
     )
 }

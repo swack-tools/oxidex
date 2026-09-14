@@ -1226,7 +1226,12 @@ mod tests {
                         ByteOrder::BigEndian => mandatory::TiffByteOrder::Big,
                     };
                     mandatory::matches_existing_mandatory_value(
-                        *default, field_type, count, value, actual,
+                        &MANDATORY_DEFAULTS,
+                        *default,
+                        field_type,
+                        count,
+                        value,
+                        actual,
                     )
                     .map_err(|reason| invalid(&reason))
                 },

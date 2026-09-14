@@ -422,12 +422,14 @@ def mandatory_cleanup_recipe():
     defaults = [entry for group in recipe.get("directories", [])
                 if group.get("directory") == "IFD1"
                 for entry in group.get("defaults", [])]
-    if not defaults or any(entry.get("kind") != "Integer" for entry in defaults):
+    survivor = recipe.get("survivor_encodings")
+    if (not defaults or any(entry.get("kind") != "Integer" for entry in defaults)
+            or not isinstance(survivor, list)):
         raise ValueError("mandatory IFD1 defaults are not source-representable")
-    return defaults
+    return defaults, survivor
 
 
-def native_survivor_value(default, entry, byte_order):
+def native_survivor_value(default, entry, byte_order, survivor_encodings):
     """Pinned WriteValue packing for the captured scalar integer operands.
 
     The physical record selects the native form during WriteExif cleanup, so
@@ -440,12 +442,14 @@ def native_survivor_value(default, entry, byte_order):
     field_type, count = entry.get("type"), entry.get("count")
     if type(value) is not int or type(field_type) is not int or type(count) is not int:
         return None
-    if field_type in (3, 4):
+    admitted = {(item.get("format_name"), item.get("tiff_type"), item.get("width"), item.get("operation"))
+               for item in survivor_encodings}
+    if field_type in (3, 4) and (("int16u" if field_type == 3 else "int32u"), field_type, 2 if field_type == 3 else 4, "write_value_scalar") in admitted:
         if count != 1:
             return None
         width = 2 if field_type == 3 else 4
         return (value & ((1 << (width * 8)) - 1)).to_bytes(width, byte_order).hex()
-    if field_type == 5:
+    if field_type == 5 and ("rational64u", 5, 8, "write_value_scalar") in admitted:
         if count != 1 or not 0 <= value <= 0xffffffff:
             return None
         return value.to_bytes(4, byte_order).hex() + (1).to_bytes(4, byte_order).hex()
@@ -456,13 +460,14 @@ def assert_prunable_ifd1(directory, removed_tag_ids):
     """Allow only captured mandatory survivors in their native physical form."""
     if directory.get("children") or directory.get("image_payload_hex"):
         raise AssertionError("pruned IFD1 contained an unrelated subtree or image payload")
-    expected = {str(entry["tag_id"]): entry for entry in mandatory_cleanup_recipe()}
+    defaults, survivor_encodings = mandatory_cleanup_recipe()
+    expected = {str(entry["tag_id"]): entry for entry in defaults}
     for key, entry in directory["tags"].items():
         if key in removed_tag_ids:
             continue
         default = expected.get(key)
         value_hex = None if default is None else native_survivor_value(
-            default, entry, directory["byte_order"]
+            default, entry, directory["byte_order"], survivor_encodings
         )
         if value_hex is None or entry.get("value_hex") != value_hex:
             raise AssertionError(f"pruned IFD1 contained unrelated or nondefault tag {key}")

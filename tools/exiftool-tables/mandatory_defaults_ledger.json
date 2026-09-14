@@ -151,7 +151,27 @@
     ],
     "write_value_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     "writer_source_file": "Image/ExifTool/WriteExif.pl",
-    "writer_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+    "writer_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+    "survivor_encodings": [
+      {
+        "format_name": "int16u",
+        "tiff_type": 3,
+        "width": 2,
+        "operation": "write_value_scalar"
+      },
+      {
+        "format_name": "int32u",
+        "tiff_type": 4,
+        "width": 4,
+        "operation": "write_value_scalar"
+      },
+      {
+        "format_name": "rational64u",
+        "tiff_type": 5,
+        "width": 8,
+        "operation": "write_value_scalar"
+      }
+    ]
   },
   "status": "inactive source-derived defaults; no public writer",
   "writer_tables_joined": true
