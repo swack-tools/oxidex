@@ -20,7 +20,7 @@ import sys
 from typing import Any, Callable
 
 import artifacts
-from generated_tiff_write_matrix import GeneratedTarget, generated_targets
+import generated_tiff_write_matrix as generated_matrix
 import native_write_matrix as native
 import version_rehearsal as rehearsal
 import version_rehearsal_executor as executor
@@ -30,6 +30,30 @@ OID = rehearsal.GIT_OID_RE
 COMMAND_TIMEOUT_SECONDS = 3600
 READ_FIXTURE_KIND = "oxidex_version_rehearsal_fixture_manifest"
 WRITE_FIXTURE_KIND = "oxidex_version_rehearsal_write_fixture_manifest"
+V4_ORIGINAL_SUBSET = 684
+V4_DECLARED = 1242
+V4_CASE_FAMILIES = {"native_string_scalar": 648, "native_unsigned_numeric_scalar": 594}
+V4_COVERAGE_FAMILIES = {
+    "baseline_native_string_scalar": 432,
+    "baseline_native_unsigned_numeric_scalar": 252,
+    "extended_baseline_native_unsigned_numeric_scalar": 144,
+    "extended_selected_directory_native_unsigned_numeric_scalar": 72,
+    "selected_directory_native_string_scalar": 216,
+    "selected_directory_native_unsigned_numeric_scalar": 126,
+}
+V4_QUALIFIERS = {"EXIF": 414, "IFD0": 414, "IFD1": 414}
+
+# The v4 matrix exposes these source-derived operands.  Keep the adapters as
+# module globals so the offline stage tests can supply a complete fixture
+# contract without invoking native generation.
+GeneratedTarget = generated_matrix.GeneratedTarget
+generated_targets = generated_matrix.generated_targets
+case_inputs = getattr(generated_matrix, "case_inputs", None)
+explicit_directory_operands = getattr(generated_matrix, "explicit_directory_operands", None)
+selected_qualifiers = getattr(generated_matrix, "selected_qualifiers", None)
+directory_path = getattr(generated_matrix, "directory_path", None)
+matrix_inputs = getattr(generated_matrix, "matrix_inputs", None)
+public_scalar = getattr(generated_matrix, "public_scalar", None)
 
 
 class Refused(ValueError):
@@ -427,88 +451,146 @@ def _build_binary(previous: dict[str, Any], target: Path, field: str, label: str
     return {"path": str(binary), "sha256": _sha(binary), "bytes": binary.stat().st_size}
 
 
-def _generated_write_cohort(ledger: Path, rules: Path) -> list[dict[str, Any]]:
-    """Render the exact generated operand cohort the matrix must exercise."""
+def _v4_callable(name: str) -> Callable[..., Any]:
+    value = globals().get(name)
+    if not callable(value):
+        raise Refused(f"generated write matrix v4 operand {name} is unavailable")
+    return value
+
+
+def _matrix_source_artifacts(checkout: Path) -> dict[str, Path]:
+    """All generated source inputs that authorize the v4 public matrix."""
+    paths = {
+        "final_ledger": checkout / "tools/exiftool-tables/tiff_scalar_final_ledger.json",
+        "final_rules": checkout / "src/writers/generated_tiff_scalar_final_rules.rs",
+        "scalar_helper_ledger": checkout / "tools/exiftool-tables/scalar_helper_ledger.json",
+        "scalar_rules": checkout / "src/writers/generated_scalar_rules.rs",
+        "address_rules": checkout / "src/writers/generated_setnewvalue_address_rules.rs",
+    }
+    for label, source in paths.items():
+        _regular(source, f"generated write {label.replace('_', ' ')}")
+    return paths
+
+
+def _source_proof(paths: dict[str, Path]) -> dict[str, dict[str, str]]:
+    return {label: {"path": str(path), "sha256": _sha(path)} for label, path in paths.items()}
+
+
+def _matrix_contract(paths: dict[str, Path]) -> tuple[list[dict[str, Any]], tuple[str, ...], set[tuple[Any, ...]], int]:
+    """Recompute every v4 row from authenticated generated source operands."""
     try:
-        targets: tuple[GeneratedTarget, ...] = generated_targets(ledger, rules)
-    except ValueError as exc:
-        raise Refused("generated write source cohort is unavailable") from exc
-    return [
-        {"raw_tag_id": target.raw_tag_id, "name": target.name,
-         "table_group0": target.table_group0,
-         "physical_write_group": target.physical_write_group,
-         "qualifiers": list(target.qualifiers)}
-        for target in targets
-    ]
+        targets: tuple[GeneratedTarget, ...] = generated_targets(paths["final_ledger"], paths["final_rules"])
+        directories = tuple(_v4_callable("explicit_directory_operands")(
+            rules_path=paths["scalar_rules"], ledger_path=paths["scalar_helper_ledger"], address_path=paths["address_rules"]))
+    except (TypeError, ValueError, OSError, KeyError) as exc:
+        raise Refused("generated write v4 source cohort is unavailable") from exc
+    if directories != ("IFD0", "IFD1"):
+        raise Refused("generated write v4 explicit directory operands are incomplete")
+    source_cohort, expected = [], set()
+    original_subset = 0
+    for target in targets:
+        try:
+            target_identity = {"raw_tag_id": target.raw_tag_id, "name": target.name,
+                               "table_group0": target.table_group0,
+                               "physical_write_group": target.physical_write_group,
+                               "wire_format": target.wire_format}
+            family = target.case_family
+            original = _v4_callable("case_inputs")(target)
+            inputs = _v4_callable("matrix_inputs")(target)
+            qualifiers = tuple(_v4_callable("selected_qualifiers")(target, directories))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise Refused("generated write v4 target contract is malformed") from exc
+        if (set(target_identity) != {"raw_tag_id", "name", "table_group0", "physical_write_group", "wire_format"}
+                or type(target_identity["raw_tag_id"]) is not int or not 0 <= target_identity["raw_tag_id"] <= 0xffff
+                or any(not isinstance(target_identity[name], str) or not target_identity[name]
+                       for name in ("name", "table_group0", "physical_write_group", "wire_format"))
+                or not isinstance(family, str) or not family
+                or not isinstance(original, dict) or not isinstance(inputs, dict)
+                or not qualifiers or any(not isinstance(name, str) or not name for name in qualifiers)
+                or not set(original).issubset(inputs)):
+            raise Refused("generated write v4 target contract is malformed")
+        case_proof = {}
+        for operation, value in inputs.items():
+            if not isinstance(operation, str) or not operation or value is not None and not isinstance(value, bytes):
+                raise Refused("generated write v4 inputs are malformed")
+            scalar = _v4_callable("public_scalar")(target, operation, value)
+            if not isinstance(scalar, str) or not scalar:
+                raise Refused("generated write v4 public scalar is malformed")
+            case_proof[operation] = {"value_hex": None if value is None else value.hex(), "public_scalar": scalar}
+        source_cohort.append({**target_identity, "case_family": family, "cases": list(inputs),
+                              "case_inputs": case_proof, "qualifiers": list(qualifiers)})
+        original_subset += 3 * len(target.qualifiers) * len(original)
+        for carrier in ("tiff_little", "tiff_big", "jpeg"):
+            for qualifier in qualifiers:
+                try:
+                    target_directory = tuple(_v4_callable("directory_path")(target, qualifier, directories))
+                except (TypeError, ValueError) as exc:
+                    raise Refused("generated write v4 directory path is malformed") from exc
+                if any(not isinstance(part, str) or not part for part in target_directory):
+                    raise Refused("generated write v4 directory path is malformed")
+                for operation, case in case_proof.items():
+                    extended = operation not in original
+                    coverage = ("extended_" if extended else "") + (
+                        "selected_directory_" if target_directory else "baseline_") + family
+                    expected.add((carrier, tuple(target_identity.items()), qualifier, tuple(target_directory), family,
+                                  coverage, case["public_scalar"], operation))
+    if original_subset != V4_ORIGINAL_SUBSET or len(expected) != V4_DECLARED:
+        raise Refused("generated write v4 source cohort does not retain the 684-case subset and 1242-case matrix")
+    return source_cohort, directories, expected, original_subset
 
 
 def _matrix_report(path: Path, *, args: argparse.Namespace, native_perl: Path, native_lib: Path,
-                   writer: dict[str, Any], ledger: Path, rules: Path, pin: Path) -> dict[str, Any]:
+                   writer: dict[str, Any], paths: dict[str, Path], pin: Path) -> dict[str, Any]:
     value = _json(path)
-    contract = value.get("contract")
-    matrix_native = value.get("native_identity")
-    cohort = value.get("cohort")
-    rows = value.get("rows")
-    source_cohort = _generated_write_cohort(ledger, rules)
-    if cohort != source_cohort:
-        raise Refused("generated write matrix cohort differs from current source operands")
-    expected: set[tuple[str, tuple[int, str, str, str], str, str]] = set()
-    for target in source_cohort:
-        if (not isinstance(target, dict) or set(target) != {"raw_tag_id", "name", "table_group0",
-                                                             "physical_write_group", "qualifiers"}
-                or type(target["raw_tag_id"]) is not int or not 0 <= target["raw_tag_id"] <= 0xffff
-                or any(not isinstance(target[key], str) or not target[key]
-                       for key in ("name", "table_group0", "physical_write_group"))
-                or not isinstance(target["qualifiers"], list) or not target["qualifiers"]
-                or any(not isinstance(name, str) or not name for name in target["qualifiers"])):
-            raise Refused("generated write matrix cohort is malformed")
-        identity = (target["raw_tag_id"], target["name"], target["table_group0"],
-                    target["physical_write_group"])
-        for carrier in ("tiff_little", "tiff_big", "jpeg"):
-            for qualifier in target["qualifiers"]:
-                for operation in native.CASES:
-                    expected.add((carrier, identity, qualifier, operation))
-    actual: set[tuple[str, tuple[int, str, str, str], str, str]] = set()
-    if isinstance(rows, list):
-        for row in rows:
-            driver = row.get("driver_result") if isinstance(row, dict) else None
-            target = row.get("target") if isinstance(row, dict) else None
-            if (not isinstance(row, dict) or row.get("state") not in {"passed", "failed"}
-                    or not isinstance(target, dict) or set(target) != {"raw_tag_id", "name", "table_group0", "physical_write_group"}
-                    or type(target.get("raw_tag_id")) is not int
-                    or any(not isinstance(target.get(key), str) or not target[key]
-                           for key in ("name", "table_group0", "physical_write_group"))
-                    or not isinstance(row.get("carrier"), str) or not isinstance(row.get("requested_name"), str)
-                    or not isinstance(row.get("operation"), str) or not isinstance(row.get("output"), str)
-                    or not isinstance(driver, dict) or driver.get("ok") is not True
-                    or driver.get("output") != row["output"] or driver.get("warnings") != []
-                    or "error" in driver):
-                raise Refused("generated write matrix row lacks an actual successful public-driver result")
-            identity = (target["raw_tag_id"], target["name"], target["table_group0"],
-                        target["physical_write_group"])
-            actual.add((row["carrier"], identity, row["requested_name"], row["operation"]))
+    contract, matrix_native, cohort, rows = value.get("contract"), value.get("native_identity"), value.get("cohort"), value.get("rows")
+    source_cohort, directories, expected, original_subset = _matrix_contract(paths)
+    if cohort != source_cohort or value.get("explicit_directories") != list(directories):
+        raise Refused("generated write matrix cohort differs from current v4 source operands")
+    actual: set[tuple[Any, ...]] = set()
+    if not isinstance(rows, list):
+        raise Refused("generated write matrix rows are malformed")
+    for row in rows:
+        driver = row.get("driver_result") if isinstance(row, dict) else None
+        target = row.get("target") if isinstance(row, dict) else None
+        if (not isinstance(row, dict) or row.get("state") not in {"passed", "failed"}
+                or not isinstance(target, dict) or set(target) != {"raw_tag_id", "name", "table_group0", "physical_write_group", "wire_format"}
+                or type(target.get("raw_tag_id")) is not int
+                or any(not isinstance(target.get(name), str) or not target[name]
+                       for name in ("name", "table_group0", "physical_write_group", "wire_format"))
+                or not isinstance(row.get("carrier"), str) or not isinstance(row.get("requested_name"), str)
+                or not isinstance(row.get("target_directory"), list) or any(not isinstance(item, str) or not item for item in row["target_directory"])
+                or not isinstance(row.get("case_family"), str) or not isinstance(row.get("coverage_family"), str)
+                or not isinstance(row.get("public_scalar"), str) or not isinstance(row.get("operation"), str)
+                or not isinstance(row.get("output"), str) or not isinstance(driver, dict) or driver.get("ok") is not True
+                or driver.get("output") != row["output"] or driver.get("warnings") != [] or "error" in driver):
+            raise Refused("generated write matrix row lacks an actual successful public-driver result")
+        actual.add((row["carrier"], tuple(target.items()), row["requested_name"], tuple(row["target_directory"]),
+                    row["case_family"], row["coverage_family"], row["public_scalar"], row["operation"]))
+    family_counts = {family: sum(row.get("case_family") == family for row in rows) for family in sorted({row.get("case_family") for row in rows if isinstance(row, dict)})}
+    coverage_counts = {family: sum(row.get("coverage_family") == family for row in rows) for family in sorted({row.get("coverage_family") for row in rows if isinstance(row, dict)})}
+    qualifier_counts = {name: sum(row.get("requested_name", "").split(":", 1)[0] == name for row in rows)
+                        for name in sorted({row.get("requested_name", "").split(":", 1)[0] for row in rows if isinstance(row, dict)})}
     native_sources = _native_writer_sources(native_lib)
-    if (value.get("instrument") != "generated_scalar_write_matrix_v2" or value.get("route") != "public-api"
-            or not isinstance(matrix_native, dict)
-            or not isinstance(matrix_native.get("result"), dict)
-            or not isinstance(matrix_native.get("command"), list)
-            or matrix_native.get("result", {}).get("exiftool_version") != args.release
+    if (value.get("instrument") != "generated_scalar_write_matrix_v4" or value.get("route") != "public-api"
+            or not isinstance(matrix_native, dict) or not isinstance(matrix_native.get("result"), dict)
+            or not isinstance(matrix_native.get("command"), list) or matrix_native["result"].get("exiftool_version") != args.release
             or matrix_native.get("command", [None, None])[:2] != [str(native_perl), "-I" + str(native_lib)]
-            or matrix_native["result"].get("source_sha256") != native_sources
-            or value.get("source_commit") != args.source_commit
+            or matrix_native["result"].get("source_sha256") != native_sources or value.get("source_commit") != args.source_commit
             or not isinstance(contract, dict) or contract.get("mode") != "selected-release-rehearsal"
             or contract.get("release") != args.release or contract.get("ledger_exiftool_version") != args.release
             or contract.get("pin") != str(pin.resolve()) or contract.get("pin_sha256") != _sha(pin)
             or value.get("test_binary_path") != writer["path"] or value.get("test_binary_sha256") != writer["sha256"]
-            or value.get("ledger_sha256") != _sha(ledger) or value.get("rules_sha256") != _sha(rules)
-            or type(value.get("declared")) is not int or value["declared"] != len(expected)
-            or type(value.get("passed")) is not int or not 0 <= value["passed"] <= value["declared"]
-            or not isinstance(rows, list) or len(rows) != value["declared"]
-            or actual != expected or len(actual) != len(rows)
-            or value["passed"] != sum(row["state"] == "passed" for row in rows)):
-        raise Refused("generated write matrix report is not bound to the selected build and native release")
-    return {"path": str(path), "sha256": _sha(path), "declared": value["declared"],
-            "passed": value["passed"], "mismatched": value["declared"] - value["passed"]}
+            or value.get("ledger_sha256") != _sha(paths["final_ledger"]) or value.get("rules_sha256") != _sha(paths["final_rules"])
+            or value.get("declared_by_case_family") != family_counts or value.get("declared_by_coverage_family") != coverage_counts
+            or value.get("declared_by_qualifier") != qualifier_counts or family_counts != V4_CASE_FAMILIES
+            or coverage_counts != V4_COVERAGE_FAMILIES or qualifier_counts != V4_QUALIFIERS or type(value.get("declared")) is not int
+            or value["declared"] != V4_DECLARED or value["declared"] != len(expected) or type(value.get("passed")) is not int
+            or not 0 <= value["passed"] <= value["declared"] or len(rows) != value["declared"]
+            or actual != expected or len(actual) != len(rows) or value["passed"] != sum(row["state"] == "passed" for row in rows)):
+        raise Refused("generated write matrix report is not bound to the selected v4 build and native release")
+    return {"path": str(path), "sha256": _sha(path), "declared": value["declared"], "passed": value["passed"],
+            "mismatched": value["declared"] - value["passed"], "original_subset": original_subset,
+            "source_contract": _source_proof(paths)}
 
 
 def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> dict[str, Any]:
@@ -519,10 +601,9 @@ def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     generated = _validate_artifacts(checkout, previous.get("generated_artifacts"))
     writer = _build_binary(previous, target, "writer_binary", "writer driver")
     fixtures, fixture_digest, _corpus = _write_fixtures(Path(args.fixture_manifest), target)
-    ledger = checkout / "tools/exiftool-tables/tiff_scalar_final_ledger.json"
-    rules = checkout / "src/writers/generated_tiff_scalar_final_rules.rs"
-    _regular(ledger, "generated final-stage ledger"); _regular(rules, "generated final-stage rules")
-    ledger_sha, rules_sha = _sha(ledger), _sha(rules)
+    matrix_sources = _matrix_source_artifacts(checkout)
+    ledger, rules = matrix_sources["final_ledger"], matrix_sources["final_rules"]
+    source_proof = _source_proof(matrix_sources)
     native_sources = _native_writer_sources(native_lib)
     pin = checkout / ".exiftool-version"
     matrix_root = report.parent / "raw" / "write-matrix"
@@ -547,15 +628,15 @@ def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
             _raw(report, "write", {"commands": records, "state": "failed"})
             raise Refused("generated write matrix did not publish a report")
         matrix_reports.append(_matrix_report(output, args=args, native_perl=perl, native_lib=native_lib, writer=writer,
-                                             ledger=ledger, rules=rules, pin=pin))
+                                             paths=matrix_sources, pin=pin))
     raw = _raw(report, "write", {"commands": records, "matrix_reports": matrix_reports,
                                   "state": "ok" if all(record["state"] == "ok" for record in records) else "failed"})
     _verify_staged_fixtures(fixtures)
     _prior(report, "build", args, identity, checkout)
     _validate_artifacts(checkout, generated)
     _build_binary(previous, target, "writer_binary", "writer driver")
-    if _sha(ledger) != ledger_sha or _sha(rules) != rules_sha:
-        raise Refused("generated writer rules changed during matrix comparison")
+    if _source_proof(matrix_sources) != source_proof:
+        raise Refused("generated writer source contract changed during matrix comparison")
     if _native_writer_sources(native_lib) != native_sources:
         raise Refused("selected native writer source changed during matrix comparison")
     for matrix in matrix_reports:
@@ -574,7 +655,10 @@ def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
                            "manifest_sha256": fixture_digest, "entries": fixtures},
               "matrix_reports": matrix_reports, "raw_report": raw,
               "write_mode": {"kind": "selected-release-live-native", "release": args.release,
-                             "ledger_sha256": ledger_sha, "rules_sha256": rules_sha},
+                             "ledger_sha256": source_proof["final_ledger"]["sha256"],
+                             "rules_sha256": source_proof["final_rules"]["sha256"],
+                             "source_contract": source_proof,
+                             "original_subset": V4_ORIGINAL_SUBSET, "expanded_matrix": V4_DECLARED},
               "scope": "selected-release public-api generated scalar cohort on staged JPEG fixtures plus synthetic little- and big-endian TIFF carriers",
               "limitations": ["Only the emitted TIFF/JPEG scalar cohort is exercised.",
                               "Fresh/empty EXIF, other writer grammars, and non-JPEG formats remain outside this rehearsal stage."]}
