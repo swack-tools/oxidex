@@ -754,7 +754,13 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                     refusal = userdata_candidate["reasons"]
         ifd_candidate = ifd.get(identity)
         if ifd_candidate is not None and state == "joined":
-            if ifd_candidate["name"] != entry["name"]:
+            # Detached scalar/shorthand rows can have no Name until native
+            # hydration. The IFD compiler refuses these rows; retain that
+            # refusal without attributing an emitted declaration by bare name.
+            unnamed_refusal = (ifd_candidate["artifact_state"] == "refused"
+                               and ifd_candidate["reader_state"] == "refused"
+                               and ifd_candidate["name"] is None)
+            if ifd_candidate["name"] != entry["name"] and not unnamed_refusal:
                 raise ValueError("IFD ledger/catalog name identity differs")
             implementation = reader_implementation = "ifd_schema_declaration_" + ifd_candidate["reader_state"] + "_unobserved"
             refusal = (ifd_candidate["reasons"] + ifd_candidate["omissions"]) or None

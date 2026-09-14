@@ -57,9 +57,9 @@ def observation_rows(fixture_name, fixture_bytes, expected, actual):
 
 
 class CatalogHydratedJoinTests(unittest.TestCase):
-    def ifd_facts(self):
+    def ifd_facts(self, tags=None):
         document = {"exiftool_version": "13.59", "modules": {"Exif": {"tables": {"Main": {
-            "meta": {}, "tags": {"315": {"Name": "Artist", "Format": "int16u"},
+            "meta": {}, "tags": tags if tags is not None else {"315": {"Name": "Artist", "Format": "int16u"},
                                 "316": {"Name": "Omitted", "Format": "int16u", "RawConv": "$val"}}}}}}}
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -71,6 +71,25 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return source.read_bytes(), json.loads(ledger.read_text()), rust.read_text()
+
+    def test_unnamed_detached_ifd_refusal_is_accounted_without_declaration_credit(self):
+        source, ledger, rust = self.ifd_facts({"Artist": "Artist"})
+        entry_row = entry("Artist", "Artist")
+        entry_row["table"] = "Image::ExifTool::Exif::Main"
+        cat = catalog([entry_row])
+        hyd = {"exiftool_version": "13.59", "hydrated_layouts": {
+            "catalog_counts": {"total_tag_entries": 1}, "source_provenance": {"sources": copy.deepcopy(SOURCE)},
+            "tables": {entry_row["table"]: {"full_name": entry_row["table"],
+                                          "tags": {"Artist": {"Name": "Artist"}}}}}}
+        digests = {"source_sha256": hashlib.sha256(source).hexdigest(),
+                   "ledger_sha256": hashlib.sha256(json.dumps(ledger).encode()).hexdigest(),
+                   "rust_sha256": hashlib.sha256(rust.encode()).hexdigest()}
+        result = join.build(cat, hyd, "catalog", "hydrated", ifd_source=source, ifd_ledger=ledger,
+                            ifd_rust=rust, ifd_input_digests=digests)
+        row = result["entries"][0]
+        self.assertEqual(row["reader_implementation"], "ifd_schema_declaration_refused_unobserved")
+        self.assertTrue(row["implementation_refusal_reasons"])
+        self.assertEqual(row["observed_read"], "not_observed_yet")
 
     def test_ifd_schema_declarations_replay_and_remain_unobserved(self):
         source, ledger, rust = self.ifd_facts()
