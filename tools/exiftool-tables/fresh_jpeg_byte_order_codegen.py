@@ -16,6 +16,11 @@ from typing import Any, Mapping
 
 from native_reader_facts import body_tokens
 
+
+def _normalized_body_sha256(body: str) -> str:
+    """Digest the complete B::Deparse token stream, ignoring whitespace only."""
+    return hashlib.sha256("\x1f".join(body_tokens(body)).encode()).hexdigest()
+
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -95,6 +100,20 @@ _METHOD_TEMPLATE: tuple[str | None, ...] = (
     'GetByteOrder', ')', ';', '}'
 )
 
+# The only dynamic operation admitted from SetPreferredByteOrder is its
+# selected II/MM fallback.  Its two direct package helpers are closed too: they
+# mutate and read process-global byte-order state that controls the emitted
+# TIFF header.
+_SET_BYTE_ORDER_FULL_BODY_SHA256 = '59a7c469a92f6dfa30781a7fcac4c4cf4783bba998448501bcf3220b87af7fe3'
+_GET_BYTE_ORDER_FULL_BODY_SHA256 = 'ec444b8559811d658353c39da300d2e105ef2f30bfb0298aee35245111f394d9'
+
+
+# This is the full normalized executable body of DoProcessTIFF, not merely the
+# newly-created-header fragment.  A source change anywhere in the invoking
+# routine (including immediately after the header block) is an omission until
+# a new closed grammar is supplied.
+_DOPROCESS_TIFF_FULL_BODY_SHA256 = '89fadbe942d8a4669b7f2c0329e061333026176e2854a79ab4bae4569008a1e0'
+
 _CALLER_BLOCK: tuple[str, ...] = (
     'unless', '(', 'defined', '(', '$', 'self', '-', '>', '{', "'EXIF_DATA'", '}', ')', ')', '{',
     'my', '$', 'defaultByteOrder', ';', 'if', '(', '(', '$', 'dirInfo', '-', '>', '{',
@@ -125,11 +144,25 @@ def _method_default(body: str) -> str:
     return values[0]
 
 
+def _closed_helper(body: str, expected_normalized_sha256: str, name: str) -> None:
+    # These helper bodies have no admitted variable positions.  The digest is
+    # over every B::Deparse token, so whitespace-only source differences are
+    # harmless but no executable statement/token is ignored.
+    if _normalized_body_sha256(body) != expected_normalized_sha256:
+        raise FreshByteOrderRefused(f"{name} body is outside the admitted grammar")
+
+
 def _caller_new_ifd0(body: str) -> None:
     tokens = body_tokens(body)
+    # Match the exact branch before checking the complete caller body.  The
+    # branch check explains unsupported fresh-header changes; the full-body
+    # normalized digest prevents an unmodeled write immediately before/after it
+    # from silently changing EXIF_DATA or the downstream selected order.
     locations = [index for index in range(len(tokens)) if tuple(tokens[index:index + len(_CALLER_BLOCK)]) == _CALLER_BLOCK]
     if len(locations) != 1:
         raise FreshByteOrderRefused("DoProcessTIFF new-header caller block is outside the admitted grammar")
+    if _normalized_body_sha256(body) != _DOPROCESS_TIFF_FULL_BODY_SHA256:
+        raise FreshByteOrderRefused("DoProcessTIFF complete caller body is outside the admitted grammar")
 
 
 @dataclass(frozen=True)
@@ -137,6 +170,10 @@ class FreshJpegByteOrderRecipe:
     order: str
     set_preferred_source_sha256: str
     set_preferred_body_sha256: str
+    set_byte_order_source_sha256: str
+    set_byte_order_body_sha256: str
+    get_byte_order_source_sha256: str
+    get_byte_order_body_sha256: str
     caller_source_sha256: str
     caller_body_sha256: str
     closure_sha256: str
@@ -193,12 +230,23 @@ def _writer_capture_join(probe: Mapping[str, Any], writer_document: Mapping[str,
 
 def compile_recipe(document: Mapping[str, Any], writer_document: Mapping[str, Any]) -> FreshJpegByteOrderRecipe:
     method = _fact(document, "set_preferred_byte_order", "Image::ExifTool::SetPreferredByteOrder", "Image/ExifTool/Writer.pl")
+    set_byte_order = _fact(document, "set_byte_order", "Image::ExifTool::SetByteOrder", "Image/ExifTool.pm")
+    get_byte_order = _fact(document, "get_byte_order", "Image::ExifTool::GetByteOrder", "Image/ExifTool.pm")
     caller = _fact(document, "new_jpeg_caller", "Image::ExifTool::DoProcessTIFF", "Image/ExifTool.pm")
     method_source = _sha(method["source_sha256"], "SetPreferredByteOrder source")
+    set_byte_order_source = _sha(set_byte_order["source_sha256"], "SetByteOrder source")
+    get_byte_order_source = _sha(get_byte_order["source_sha256"], "GetByteOrder source")
     caller_source = _sha(caller["source_sha256"], "DoProcessTIFF source")
+    # Both unqualified helpers reached by SetPreferredByteOrder bind in the
+    # core package.  Their source file identity must be the exact selected
+    # core source that supplied DoProcessTIFF and the loaded-closure record.
+    if set_byte_order_source != caller_source or get_byte_order_source != caller_source:
+        raise FreshByteOrderRefused("byte-order helper source does not join DoProcessTIFF core source")
     _capture_context(document, method_source, caller_source)
     writer_capture_closure_sha256, writer_read_capture_closure_sha256 = _writer_capture_join(document, writer_document)
     fallback = _method_default(method["__deparse"])
+    _closed_helper(set_byte_order["__deparse"], _SET_BYTE_ORDER_FULL_BODY_SHA256, "SetByteOrder")
+    _closed_helper(get_byte_order["__deparse"], _GET_BYTE_ORDER_FULL_BODY_SHA256, "GetByteOrder")
     _caller_new_ifd0(caller["__deparse"])
     observations = _mapping(document.get("observations"), "observations")
     default = _mapping(observations.get("fresh_ifd0_no_overrides"), "fresh IFD0 observation")
@@ -214,6 +262,10 @@ def compile_recipe(document: Mapping[str, Any], writer_document: Mapping[str, An
         order=fallback,
         set_preferred_source_sha256=method_source,
         set_preferred_body_sha256=hashlib.sha256(method["__deparse"].encode()).hexdigest(),
+        set_byte_order_source_sha256=set_byte_order_source,
+        set_byte_order_body_sha256=hashlib.sha256(set_byte_order["__deparse"].encode()).hexdigest(),
+        get_byte_order_source_sha256=get_byte_order_source,
+        get_byte_order_body_sha256=hashlib.sha256(get_byte_order["__deparse"].encode()).hexdigest(),
         caller_source_sha256=caller_source,
         caller_body_sha256=hashlib.sha256(caller["__deparse"].encode()).hexdigest(),
         closure_sha256=_sha(_mapping(document["capture_context"], "capture_context")["loaded_closure_sha256"], "closure digest"),
@@ -226,7 +278,7 @@ def compile_recipe(document: Mapping[str, Any], writer_document: Mapping[str, An
 
 def render_rust(recipe: FreshJpegByteOrderRecipe) -> str:
     variant = "LittleEndian" if recipe.order == "II" else "BigEndian"
-    return f'''// @generated by fresh_jpeg_byte_order_codegen.py; selected native executable operands only.\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub(crate) enum FreshJpegExifByteOrder {{ LittleEndian, BigEndian }}\n\npub(crate) struct FreshJpegByteOrderRecipe {{\n    pub selected: FreshJpegExifByteOrder,\n    pub set_preferred_source_sha256: &'static str,\n    pub set_preferred_body_sha256: &'static str,\n    pub caller_source_sha256: &'static str,\n    pub caller_body_sha256: &'static str,\n    pub closure_sha256: &'static str,\n    pub writer_capture_closure_sha256: &'static str,\n    pub writer_read_capture_closure_sha256: &'static str,\n    pub exiftool_version: &'static str,\n    pub perl_version: &'static str,\n}}\n\npub(crate) struct FreshJpegByteOrderInputs<'a> {{\n    pub byte_order_option: Option<&'a str>,\n    pub exif_byte_order: Option<&'a str>,\n    pub maker_note_byte_order: Option<&'a str>,\n}}\n\npub(crate) const FRESH_JPEG_BYTE_ORDER: FreshJpegByteOrderRecipe = FreshJpegByteOrderRecipe {{\n    selected: FreshJpegExifByteOrder::{variant},\n    set_preferred_source_sha256: "{recipe.set_preferred_source_sha256}",\n    set_preferred_body_sha256: "{recipe.set_preferred_body_sha256}",\n    caller_source_sha256: "{recipe.caller_source_sha256}",\n    caller_body_sha256: "{recipe.caller_body_sha256}",\n    closure_sha256: "{recipe.closure_sha256}",\n    writer_capture_closure_sha256: "{recipe.writer_capture_closure_sha256}",\n    writer_read_capture_closure_sha256: "{recipe.writer_read_capture_closure_sha256}",\n    exiftool_version: "{recipe.exiftool_version}",\n    perl_version: "{recipe.perl_version}",\n}};\n\npub(crate) fn fresh_jpeg_byte_order(\n    recipe: &FreshJpegByteOrderRecipe,\n    inputs: FreshJpegByteOrderInputs<'_>,\n) -> Result<FreshJpegExifByteOrder, &'static str> {{\n    if inputs.byte_order_option.is_some() || inputs.exif_byte_order.is_some() || inputs.maker_note_byte_order.is_some() {{\n        return Err("fresh JPEG byte-order override is outside the generated native branch");\n    }}\n    Ok(recipe.selected)\n}}\n'''
+    return f'''// @generated by fresh_jpeg_byte_order_codegen.py; selected native executable operands only.\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub(crate) enum FreshJpegExifByteOrder {{\n    LittleEndian,\n    BigEndian,\n}}\n\npub(crate) struct FreshJpegByteOrderRecipe {{\n    pub selected: FreshJpegExifByteOrder,\n    pub set_preferred_source_sha256: &'static str,\n    pub set_preferred_body_sha256: &'static str,\n    pub set_byte_order_source_sha256: &'static str,\n    pub set_byte_order_body_sha256: &'static str,\n    pub get_byte_order_source_sha256: &'static str,\n    pub get_byte_order_body_sha256: &'static str,\n    pub caller_source_sha256: &'static str,\n    pub caller_body_sha256: &'static str,\n    pub closure_sha256: &'static str,\n    pub writer_capture_closure_sha256: &'static str,\n    pub writer_read_capture_closure_sha256: &'static str,\n    pub exiftool_version: &'static str,\n    pub perl_version: &'static str,\n}}\n\npub(crate) struct FreshJpegByteOrderInputs<'a> {{\n    pub byte_order_option: Option<&'a str>,\n    pub exif_byte_order: Option<&'a str>,\n    pub maker_note_byte_order: Option<&'a str>,\n}}\n\npub(crate) const FRESH_JPEG_BYTE_ORDER: FreshJpegByteOrderRecipe = FreshJpegByteOrderRecipe {{\n    selected: FreshJpegExifByteOrder::{variant},\n    set_preferred_source_sha256: "{recipe.set_preferred_source_sha256}",\n    set_preferred_body_sha256: "{recipe.set_preferred_body_sha256}",\n    set_byte_order_source_sha256: "{recipe.set_byte_order_source_sha256}",\n    set_byte_order_body_sha256: "{recipe.set_byte_order_body_sha256}",\n    get_byte_order_source_sha256: "{recipe.get_byte_order_source_sha256}",\n    get_byte_order_body_sha256: "{recipe.get_byte_order_body_sha256}",\n    caller_source_sha256: "{recipe.caller_source_sha256}",\n    caller_body_sha256: "{recipe.caller_body_sha256}",\n    closure_sha256: "{recipe.closure_sha256}",\n    writer_capture_closure_sha256: "{recipe.writer_capture_closure_sha256}",\n    writer_read_capture_closure_sha256: "{recipe.writer_read_capture_closure_sha256}",\n    exiftool_version: "{recipe.exiftool_version}",\n    perl_version: "{recipe.perl_version}",\n}};\n\npub(crate) fn fresh_jpeg_byte_order(\n    recipe: &FreshJpegByteOrderRecipe,\n    inputs: FreshJpegByteOrderInputs<'_>,\n) -> Result<FreshJpegExifByteOrder, &'static str> {{\n    if inputs.byte_order_option.is_some()\n        || inputs.exif_byte_order.is_some()\n        || inputs.maker_note_byte_order.is_some()\n    {{\n        return Err("fresh JPEG byte-order override is outside the generated native branch");\n    }}\n    Ok(recipe.selected)\n}}\n'''
 
 
 def generate(document: Mapping[str, Any], writer_document: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:

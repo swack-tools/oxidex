@@ -44,6 +44,8 @@ print JSON::PP->new->canonical->encode({
   loaded_modules=>\%loaded, loaded_closure_sha256=>sha256_hex(JSON::PP->new->canonical->encode(\@closure)),
   exiftool_version=>"$Image::ExifTool::VERSION", perl_version=>"$]"},
  set_preferred_byte_order=>fact('Image::ExifTool::SetPreferredByteOrder'),
+ set_byte_order=>fact('Image::ExifTool::SetByteOrder'),
+ get_byte_order=>fact('Image::ExifTool::GetByteOrder'),
  new_jpeg_caller=>fact('Image::ExifTool::DoProcessTIFF'),
  observations=>{fresh_ifd0_no_overrides=>selected('default'), byte_order_option=>selected('option'),
                 exif_byte_order=>selected('new'), maker_note_byte_order=>selected('maker')},

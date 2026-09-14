@@ -58,6 +58,8 @@ class FreshJpegByteOrderTests(unittest.TestCase):
         self.assertEqual(report["state"], "resolved")
         self.assertIn("selected: FreshJpegExifByteOrder::BigEndian", source)
         self.assertIn(recipe.set_preferred_source_sha256, source)
+        self.assertIn(recipe.set_byte_order_body_sha256, source)
+        self.assertIn(recipe.get_byte_order_body_sha256, source)
 
     def test_native_fresh_jpeg_header_uses_observed_default(self) -> None:
         from native_write_matrix import run_native
@@ -122,6 +124,58 @@ class FreshJpegByteOrderTests(unittest.TestCase):
             with self.assertRaisesRegex(FreshByteOrderRefused, "new-header caller block"):
                 compile_recipe(native_document(copied), native_writer_document(copied))
 
+    def test_copied_post_block_exif_write_changes_native_outcome_and_refuses(self) -> None:
+        # This write is deliberately *after* the matched new-header block.
+        # The previous substring-only admission accepted it even though native
+        # fresh JPEG output becomes Intel ordered.
+        from native_write_matrix import run_native
+        source_fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/jpeg/edge_cases/orientation_2.jpg"
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            copied = temp / "lib"
+            shutil.copytree(LIB, copied)
+            core = copied / "Image/ExifTool.pm"
+            source = core.read_text(encoding="utf-8")
+            boundary = "    }\n    $$self{EXIF_POS} = $base + $$self{BASE};"
+            self.assertEqual(source.count(boundary), 1)
+            core.write_text(source.replace(
+                boundary,
+                "    }\n    $$self{EXIF_DATA} = \"II\\0\\x2a\\0\\x08\\0\\0\\0\";\n    $$self{EXIF_POS} = $base + $$self{BASE};",
+                1), encoding="utf-8")
+            target = temp / "output.jpg"
+            native = run_native(PERL, copied, source_fixture, target, "insert", "IFD0:HostComputer")
+            self.assertEqual(native["returncode"], 0, native["stderr"])
+            # The replacement is post-branch and produces a malformed IFD0 in
+            # the actual native writer; it must be rejected before a generated
+            # rule can ignore that changed control path.
+            self.assertEqual(native["result"]["write_return"], 0, native["result"])
+            self.assertIn("Bad IFD0 directory", native["result"]["error"])
+            self.assertFalse(target.exists())
+            with self.assertRaisesRegex(FreshByteOrderRefused, "complete caller body"):
+                compile_recipe(native_document(copied), native_writer_document(copied))
+
+    def test_copied_reachable_get_byte_order_change_refuses(self) -> None:
+        # SetPreferredByteOrder returns GetByteOrder, so changing that helper
+        # changes the fresh-header branch despite leaving its own body intact.
+        from native_write_matrix import run_native
+        source_fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/jpeg/edge_cases/orientation_2.jpg"
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            copied = temp / "lib"
+            shutil.copytree(LIB, copied)
+            core = copied / "Image/ExifTool.pm"
+            source = core.read_text(encoding="utf-8")
+            old = "sub GetByteOrder() { return $currentByteOrder; }"
+            self.assertEqual(source.count(old), 1)
+            core.write_text(source.replace(old, "sub GetByteOrder() { return 'II'; }", 1), encoding="utf-8")
+            target = temp / "output.jpg"
+            native = run_native(PERL, copied, source_fixture, target, "insert", "IFD0:HostComputer")
+            self.assertEqual(native["returncode"], 0, native["stderr"])
+            offset = target.read_bytes().index(b"Exif\0\0") + len(b"Exif\0\0")
+            self.assertEqual(target.read_bytes()[offset:offset + 4], b"II*\0")
+            with self.assertRaisesRegex(FreshByteOrderRefused, "GetByteOrder body"):
+                compile_recipe(native_document(copied), native_writer_document(copied))
+
     def test_full_writer_or_reader_capture_mismatch_refuses(self) -> None:
         changed = copy.deepcopy(self.writer_document)
         changed["native_write_capture_context"]["loaded_modules"]["Image/ExifTool/Writer.pl"] = "0" * 64
@@ -140,6 +194,10 @@ class FreshJpegByteOrderTests(unittest.TestCase):
         changed = copy.deepcopy(self.document)
         changed["capture_context"]["loaded_modules"]["Image/ExifTool.pm"] = "0" * 64
         with self.assertRaisesRegex(FreshByteOrderRefused, "closure"):
+            compile_recipe(changed, self.writer_document)
+        changed = copy.deepcopy(self.document)
+        changed["set_byte_order"]["source_sha256"] = "0" * 64
+        with self.assertRaisesRegex(FreshByteOrderRefused, "helper source does not join"):
             compile_recipe(changed, self.writer_document)
         changed = copy.deepcopy(self.document)
         changed["observations"]["fresh_ifd0_no_overrides"]["selected"] = "II"
