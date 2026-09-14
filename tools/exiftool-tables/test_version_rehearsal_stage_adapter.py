@@ -439,16 +439,17 @@ class AdapterTests(unittest.TestCase):
         import version_rehearsal_executor as executor
         with executor._HostLock(lock): pass
 
-    def test_executor_timeout_reaps_late_pipe_closing_child(self):
-        """A child born after the first snapshot still receives group cleanup."""
+    def test_executor_timeout_reaps_late_child_after_parent_exits(self):
+        """A child born after the snapshot cannot survive its parent's early exit."""
         lock, pid = self.root / "late.lock", self.root / "late.pid"
         helper = self.root / "late-helper.py"
         child_code = f"from pathlib import Path; import os,time; Path({str(pid)!r}).write_text(str(os.getpid())); time.sleep(30)"
         helper.write_text(
-            "import os, subprocess, sys, time\n"
+            "import os, subprocess, sys, time\nfrom pathlib import Path\n"
             "time.sleep(1.2)\n"
-            f"subprocess.Popen([sys.executable, '-c', {child_code!r}], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)\n"
-            "time.sleep(30)\n")
+            f"child = subprocess.Popen([sys.executable, '-c', {child_code!r}], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)\n"
+            f"Path({str(pid)!r}).write_text(str(child.pid))\n"
+            "# Exit before the executor's first cleanup grace period expires.\n")
         supervisor = self.root / "late-supervisor.py"
         supervisor.write_text(
             "import json, os, subprocess, sys\nfrom pathlib import Path\n"

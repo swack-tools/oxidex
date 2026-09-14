@@ -502,21 +502,17 @@ def _text_output(value: str | bytes | None) -> str:
     return value or ""
 
 
-def _live_pids(pids: list[int]) -> bool:
-    for pid in pids:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            continue
-        else:
-            return True
-    return False
+def _group_live(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
     """Give an adapter a chance to reap, then bound cleanup by its process group."""
     descendants = _descendants(child.pid)
-    seen_descendants = descendants[:]
     for pid in reversed(descendants):
         _signal_pid(pid, signal.SIGTERM)
     try:
@@ -526,7 +522,6 @@ def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
         # process-group fallback, which also covers descendants that close the
         # inherited stdout/stderr pipes and otherwise evade communicate().
         descendants = _descendants(child.pid)
-        seen_descendants.extend(pid for pid in descendants if pid not in seen_descendants)
         for pid in reversed(descendants):
             _signal_pid(pid, signal.SIGTERM)
         try:
@@ -548,23 +543,24 @@ def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
                 except subprocess.TimeoutExpired as exc:
                     # Never turn timeout cleanup into an unbounded wait.
                     stdout, stderr = exc.output, exc.stderr
-    # communicate() only proves the direct adapter has exited. A late child
-    # may have closed inherited pipes, so retain the old bounded group fallback
-    # until the process tree is gone.
-    remaining = seen_descendants
-    if _live_pids(remaining):
+    # communicate() only proves the direct adapter has exited. Its late child
+    # may have closed inherited pipes and may not have existed in either
+    # snapshot, so always drain the owned group before releasing the lock.
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    while _group_live(child.pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    if _group_live(child.pid):
         try:
-            os.killpg(child.pid, signal.SIGTERM)
+            os.killpg(child.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
-        while _live_pids(remaining) and time.monotonic() < deadline:
+        while _group_live(child.pid) and time.monotonic() < deadline:
             time.sleep(0.02)
-        if _live_pids(remaining):
-            try:
-                os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
     return _text_output(stdout), _text_output(stderr)
 
 
