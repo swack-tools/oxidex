@@ -14,11 +14,42 @@ use crate::core::{OrderedTags, TagValue};
 use crate::error::{ExifToolError, Result};
 use std::collections::HashMap;
 
+/// ICC decoders replace a repeated name with its later record. Retire the
+/// previous slot so the winner also takes that record's encounter position.
+/// Inserts stay constant-time on average, including profiles with many
+/// repeated language records; removing and shifting an ordered map would
+/// make those profiles quadratic.
+#[derive(Default)]
+struct IccTagRecords {
+    records: Vec<Option<(String, TagValue)>>,
+    winners: HashMap<String, usize>,
+}
+
+impl IccTagRecords {
+    fn insert(&mut self, name: String, value: TagValue) {
+        if let Some(previous) = self.winners.insert(name.clone(), self.records.len()) {
+            self.records[previous] = None;
+        }
+        self.records.push(Some((name, value)));
+    }
+}
+
 /// Parses ICC tags using the tag registry
 ///
 /// This function reads the tag table and dispatches each tag to its
 /// appropriate decoder based on the tag type in the registry.
 pub fn parse_tags_registry(data: &[u8], metadata: &mut OrderedTags<TagValue>) -> Result<()> {
+    let mut records = IccTagRecords::default();
+    for (name, value) in std::mem::take(metadata) {
+        records.insert(name, value);
+    }
+    let result = parse_tag_records(data, &mut records);
+    // Preserve any successfully decoded prefix even if a later entry fails.
+    metadata.extend(records.records.into_iter().flatten());
+    result
+}
+
+fn parse_tag_records(data: &[u8], metadata: &mut IccTagRecords) -> Result<()> {
     if data.len() < 132 {
         return Ok(());
     }
@@ -87,7 +118,7 @@ pub fn icc_output_group1(name: &str) -> &'static str {
 ///
 /// This function looks up the tag signature in the registry and calls
 /// the appropriate decoder based on the tag type.
-fn decode_tag(signature: &str, data: &[u8], size: usize, metadata: &mut OrderedTags<TagValue>) {
+fn decode_tag(signature: &str, data: &[u8], size: usize, metadata: &mut IccTagRecords) {
     // Find tag in registry
     let Some(def) = TAG_REGISTRY.iter().find(|t| t.signature == signature) else {
         return;
@@ -173,12 +204,7 @@ fn binary_placeholder(size: usize) -> TagValue {
 /// a `-<lang>-<COUNTRY>` suffix. Records are applied in file order and a later
 /// one overwrites an earlier one on the same key, which is how ExifTool's
 /// duplicate-tag priority resolves two records that both map to the bare name.
-fn decode_multi_localized(
-    base_name: &str,
-    data: &[u8],
-    size: usize,
-    metadata: &mut OrderedTags<TagValue>,
-) {
+fn decode_multi_localized(base_name: &str, data: &[u8], size: usize, metadata: &mut IccTagRecords) {
     // ExifTool: `next if $size < 28` - too small to hold a single record.
     if size < 28 {
         return;
@@ -275,7 +301,7 @@ fn decode_utf16_be(bytes: &[u8]) -> String {
 /// Decodes viewing conditions into multiple metadata entries
 fn decode_viewing_conditions(
     vc: HashMap<String, String>,
-    metadata: &mut OrderedTags<TagValue>,
+    metadata: &mut IccTagRecords,
 ) -> Option<TagValue> {
     if let Some(illuminant) = vc.get("illuminant") {
         metadata.insert(
@@ -301,7 +327,7 @@ fn decode_viewing_conditions(
 /// Decodes measurement data into multiple metadata entries
 fn decode_measurement(
     m: HashMap<String, String>,
-    metadata: &mut OrderedTags<TagValue>,
+    metadata: &mut IccTagRecords,
 ) -> Option<TagValue> {
     if let Some(observer) = m.get("observer") {
         metadata.insert(
@@ -347,7 +373,7 @@ fn decode_measurement(
 /// `ProcessBinaryData` simply never reads. Like `view`/`meas`, this produces
 /// several metadata entries rather than one, so `decode_tag` discards this
 /// function's `None` return and reads the entries it inserted directly.
-fn decode_cicp(data: &[u8], metadata: &mut OrderedTags<TagValue>) {
+fn decode_cicp(data: &[u8], metadata: &mut IccTagRecords) {
     if data.len() < 12 {
         return;
     }
@@ -672,6 +698,52 @@ mod tests {
         assert_eq!(
             value(&metadata, "ProfileDescriptionML"),
             Some("Profil generique RVB")
+        );
+    }
+
+    #[test]
+    fn mluc_replaced_winner_keeps_its_later_record_position() {
+        // Pinned ExifTool 13.59 ProcessICC_Profile handles these records in
+        // sequence. Its winner projection (-G1 -s) is French, then last bare.
+        // Retaining the bare name's first insertion position reverses them.
+        let metadata = parse(&build_profile(&[(
+            "dscm",
+            build_mluc(&[
+                ("enUS", "first bare"),
+                ("frFR", "French"),
+                ("fr\0\0", "last bare"),
+            ]),
+        )]));
+        let winners: Vec<(&str, &str)> = metadata
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_string().unwrap()))
+            .collect();
+        assert_eq!(
+            winners,
+            [
+                ("ProfileDescriptionML-fr-FR", "French"),
+                ("ProfileDescriptionML", "last bare"),
+            ]
+        );
+    }
+
+    #[test]
+    fn icc_replacements_follow_record_order_across_payloads() {
+        let metadata = parse(&build_profile(&[
+            ("dscm", build_mluc(&[("enUS", "first bare")])),
+            ("dscm", build_mluc(&[("frFR", "French")])),
+            ("dscm", build_mluc(&[("enUS", "last bare")])),
+        ]));
+        let winners: Vec<(&str, &str)> = metadata
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_string().unwrap()))
+            .collect();
+        assert_eq!(
+            winners,
+            [
+                ("ProfileDescriptionML-fr-FR", "French"),
+                ("ProfileDescriptionML", "last bare"),
+            ]
         );
     }
 

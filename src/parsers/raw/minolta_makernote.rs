@@ -26,9 +26,30 @@ use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_ver
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use std::collections::HashSet;
 
-/// A parsed value plus the tags it produced, in the order they were decoded
-/// -- the order the caller records them in, which `-a` renders.
+/// The Minolta parser's one-value-per-key output, ordered by each key's final
+/// native encounter. `parse_main` keeps its full local encounter stream until
+/// it can project the last normal-priority winner for every duplicate key.
 type Tags = OrderedTags<TagValue>;
+
+/// Project a local event stream to one value per key without assigning an
+/// overwritten key its first encounter position.
+///
+/// ExifTool keeps both `FoundTag` occurrences, but this parser's existing
+/// public handoff is a one-value-per-key map. Reverse de-duplication is the
+/// bounded equivalent for that handoff: a later normal-priority Main value
+/// remains at its Main record rather than inheriting the earlier
+/// CameraSettings subdirectory slot.
+fn last_winners_in_encounter_order(events: Vec<(String, TagValue)>) -> Tags {
+    let mut seen = HashSet::new();
+    let mut winners = Vec::with_capacity(events.len());
+    for (key, value) in events.into_iter().rev() {
+        if seen.insert(key.clone()) {
+            winners.push((key, value));
+        }
+    }
+    winners.reverse();
+    winners.into_iter().collect()
+}
 
 /// What [`parse_ttw_makernotes`] hands back: the decoded tags, plus the subset
 /// of their keys whose visible value came from `%Minolta::CameraSettings`.
@@ -777,10 +798,21 @@ fn parse_camera_settings(data: &[u8], model: &str) -> Tags {
 /// subdirectory's, and the set of keys the subdirectory ended up owning -- see
 /// [`TtwMakerNote`] for why that set has to leave this function.
 fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags, HashSet<String>) {
-    let mut tags = Tags::new();
-    // Held apart from `tags` until the end of the function; see the merge
-    // there for why that reproduces ExifTool's own name arbitration.
-    let mut camera_settings = Tags::new();
+    let mut events = Vec::new();
+    // `CameraSettings` has table-wide `PRIORITY => 0`. Keep that source
+    // identity separate from its position in the parent IFD: ExifTool enters
+    // the subdirectory immediately, then a later normal-priority Main tag
+    // becomes the winner at its own later file-order slot.
+    let mut owned_by_camera_settings = HashSet::new();
+    let mut normal_main = HashSet::new();
+    macro_rules! insert_main {
+        ($key:expr, $value:expr $(,)?) => {{
+            let key = $key.to_string();
+            owned_by_camera_settings.remove(&key);
+            normal_main.insert(key.clone());
+            events.push((key, $value));
+        }};
+    }
     let mut preview: (Option<usize>, Option<usize>) = (None, None);
 
     for e in read_ifd(t, mn_offset) {
@@ -789,7 +821,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             0x0000 => {
                 let v = e.ascii(t);
                 if !v.is_empty() {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:MakerNoteVersion".to_string(),
                         TagValue::new_string(v),
                     );
@@ -801,14 +833,20 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
                 if e.tag == 0x0003 && model == "DiMAGE X31" {
                     continue;
                 }
-                camera_settings.extend(parse_camera_settings(e.bytes(t), model));
+                for (key, value) in parse_camera_settings(e.bytes(t), model) {
+                    // A later low-priority subdirectory never displaces a
+                    // normal-priority Main value that was already found.
+                    if !normal_main.contains(&key) && owned_by_camera_settings.insert(key.clone()) {
+                        events.push((key, value));
+                    }
+                }
             }
             // 0x0018 is an 8 kB block whose mere presence means stabilisation
             // was enabled, but only on the bodies ExifTool lists. On the A100
             // the same tag is ISInfoA100, which is not decoded here.
             0x0018 => {
                 if matches!(model, "DiMAGE A1" | "DiMAGE A2" | "DiMAGE X1") {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:ImageStabilization".to_string(),
                         TagValue::new_string("On"),
                     );
@@ -816,7 +854,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x0040 => {
                 if let Some(v) = e.as_u32(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:CompressedImageSize".to_string(),
                         TagValue::Integer(i64::from(v)),
                     );
@@ -824,7 +862,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             // 0x0081 is an inline JPEG preview (DiMAGE 7).
             0x0081 => {
-                tags.insert(
+                insert_main!(
                     "MakerNotes:PreviewImage".to_string(),
                     TagValue::Binary(e.bytes(t).to_vec()),
                 );
@@ -832,7 +870,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             0x0088 => {
                 if let Some(v) = e.as_u32(t) {
                     preview.0 = Some(v as usize);
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:PreviewImageStart".to_string(),
                         TagValue::Integer(i64::from(v)),
                     );
@@ -841,7 +879,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             0x0089 => {
                 if let Some(v) = e.as_u32(t) {
                     preview.1 = Some(v as usize);
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:PreviewImageLength".to_string(),
                         TagValue::Integer(i64::from(v)),
                     );
@@ -849,7 +887,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x0100 => {
                 if let Some(v) = e.as_u32(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:SceneMode".to_string(),
                         TagValue::new_string(print_conv(v, SCENE_MODE)),
                     );
@@ -861,7 +899,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
                 if !make.starts_with("SONY")
                     && let Some(v) = e.as_u32(t)
                 {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:ColorMode".to_string(),
                         TagValue::new_string(print_conv(v, COLOR_MODE)),
                     );
@@ -869,7 +907,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x0102 => {
                 if let Some(v) = e.as_u32(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:MinoltaQuality".to_string(),
                         TagValue::new_string(print_conv(v, QUALITY)),
                     );
@@ -880,12 +918,12 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             0x0103 => {
                 if let Some(v) = e.as_u32(t) {
                     if matches!(model, "DiMAGE A2" | "DiMAGE 7Hi") {
-                        tags.insert(
+                        insert_main!(
                             "MakerNotes:MinoltaQuality".to_string(),
                             TagValue::new_string(print_conv(v, QUALITY)),
                         );
                     } else if model != "DiMAGE A200" {
-                        tags.insert(
+                        insert_main!(
                             "MakerNotes:MinoltaImageSize".to_string(),
                             TagValue::new_string(print_conv(
                                 v,
@@ -904,7 +942,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x0104 => {
                 if let Some(v) = e.as_rational(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:FlashExposureComp".to_string(),
                         TagValue::new_string(num(v)),
                     );
@@ -912,7 +950,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x0107 => {
                 if let Some(v) = e.as_u32(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:ImageStabilization".to_string(),
                         TagValue::new_string(print_conv(v, &[(1, "Off"), (5, "On")])),
                     );
@@ -920,7 +958,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x0109 => {
                 if let Some(v) = e.as_u32(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:RawAndJpgRecording".to_string(),
                         TagValue::new_string(print_conv(v, &[(0, "Off"), (1, "On")])),
                     );
@@ -928,7 +966,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x010a => {
                 if let Some(v) = e.as_u32(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:ZoneMatching".to_string(),
                         TagValue::new_string(print_conv(
                             v,
@@ -939,7 +977,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x010b => {
                 if let Some(v) = e.as_u32(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:ColorTemperature".to_string(),
                         TagValue::Integer(i64::from(v)),
                     );
@@ -947,7 +985,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x0111 => {
                 if let Some(v) = e.as_i32(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:ColorCompensationFilter".to_string(),
                         TagValue::Integer(i64::from(v)),
                     );
@@ -955,7 +993,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x0112 => {
                 if let Some(v) = e.as_i32(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:WhiteBalanceFineTune".to_string(),
                         TagValue::Integer(i64::from(v)),
                     );
@@ -963,7 +1001,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
             }
             0x0115 => {
                 if let Some(v) = e.as_u32(t) {
-                    tags.insert(
+                    insert_main!(
                         "MakerNotes:WhiteBalance".to_string(),
                         TagValue::new_string(print_conv(
                             v,
@@ -990,7 +1028,7 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
                     ByteOrder::LittleEndian
                 };
                 if let Some(version) = decode_print_im_version(e.bytes(t), order) {
-                    tags.insert(
+                    insert_main!(
                         PRINT_IM_VERSION_TAG.to_string(),
                         TagValue::new_string(version),
                     );
@@ -1002,40 +1040,21 @@ fn parse_main(t: &Tiff<'_>, mn_offset: usize, make: &str, model: &str) -> (Tags,
 
     // ExifTool synthesises PreviewImage from the offset/length pair. Both are
     // relative to the TIFF base, which is this buffer.
-    if !tags.contains_key("MakerNotes:PreviewImage")
+    if !normal_main.contains("MakerNotes:PreviewImage")
         && let (Some(start), Some(len)) = preview
         && len > 0
         && let Some(bytes) = t.data.get(start..start.saturating_add(len))
     {
-        tags.insert(
+        insert_main!(
             "MakerNotes:PreviewImage".to_string(),
             TagValue::Binary(bytes.to_vec()),
         );
     }
 
-    // Merge the `%Minolta::CameraSettings` subdirectory last, without
-    // displacing anything `%Minolta::Main` already reported.
-    //
-    // Seven names occur in both tables -- WhiteBalance, ColorMode,
-    // MinoltaQuality, MinoltaImageSize, FlashExposureComp, ImageStabilization,
-    // ZoneMatching -- and ExifTool reports the `%Minolta::Main` reading for
-    // each: a TIFF IFD is walked in tag-id order, the subdirectory is tag
-    // 0x0001/0x0003, and every Main entry that shares a name has a higher id,
-    // so the Main value arrives second at equal-or-higher priority and takes
-    // the plain name (`ExifTool.pm:9564`). Skipping an already-present key
-    // here is that same outcome, and it is what the old inline
-    // `tags.insert(k, v)` in the 0x0001/0x0003 arm already produced -- values
-    // are unchanged by this restructuring. What it adds is the set below:
-    // which keys are still the `PRIORITY => 0` table's (Minolta.pm:974).
-    let mut owned_by_camera_settings = HashSet::new();
-    for (key, value) in camera_settings {
-        if !tags.contains_key(&key) {
-            owned_by_camera_settings.insert(key.clone());
-            tags.insert(key, value);
-        }
-    }
-
-    (tags, owned_by_camera_settings)
+    (
+        last_winners_in_encounter_order(events),
+        owned_by_camera_settings,
+    )
 }
 
 // ============================================================================
@@ -1180,6 +1199,63 @@ mod tests {
         assert_eq!(get("MakerNotes:MinoltaDate"), "2004:11:18");
         assert_eq!(get("MakerNotes:MinoltaTime"), "23:14:58");
         assert_eq!(get("MakerNotes:Saturation"), "Normal");
+    }
+
+    #[test]
+    fn camera_settings_keep_native_encounter_order_when_main_replaces_a_value() {
+        // ExifTool's ProcessExif handles the 0x0003 SubDirectory by calling
+        // ProcessDirectory immediately (ExifTool.pm HandleTag), before it
+        // resumes the later parent entries. ProcessBinaryData then visits the
+        // CameraSettings indices in ascending order. This minimal Main IFD
+        // has that subdirectory, a later Main-only tag, and a later Main
+        // MinoltaQuality which overlaps CameraSettings index 5.
+        let mut data = vec![0u8; 256];
+        data[..2].copy_from_slice(&3u16.to_le_bytes());
+        let entry = |data: &mut [u8], index: usize, tag: u16, value: u32, count: u32| {
+            let offset = 2 + index * 12;
+            data[offset..offset + 2].copy_from_slice(&tag.to_le_bytes());
+            data[offset + 2..offset + 4].copy_from_slice(&4u16.to_le_bytes());
+            data[offset + 4..offset + 8].copy_from_slice(&count.to_le_bytes());
+            data[offset + 8..offset + 12].copy_from_slice(&value.to_le_bytes());
+        };
+        // MinoltaCameraSettings (type is irrelevant to this parser): 8 big-endian words.
+        entry(&mut data, 0, 0x0003, 64, 8);
+        entry(&mut data, 1, 0x0040, 1607, 1);
+        entry(&mut data, 2, 0x0102, 0, 1); // Main MinoltaQuality: Raw
+        data[64 + 5 * 4..64 + 6 * 4].copy_from_slice(&5u32.to_be_bytes());
+
+        let tiff = Tiff {
+            data: &data,
+            big_endian: false,
+        };
+        let (tags, camera_settings) = parse_main(&tiff, 0, "MINOLTA", "DiMAGE 7");
+        let keys: Vec<&str> = tags.iter().map(|(key, _)| key.as_str()).collect();
+
+        assert_eq!(
+            keys,
+            vec![
+                "MakerNotes:ExposureMode",
+                "MakerNotes:FlashMode",
+                "MakerNotes:WhiteBalance",
+                "MakerNotes:MinoltaImageSize",
+                "MakerNotes:DriveMode",
+                "MakerNotes:MeteringMode",
+                "MakerNotes:CompressedImageSize",
+                "MakerNotes:MinoltaQuality",
+            ],
+            "the overlapping Main winner stays at its later native encounter position"
+        );
+        assert_eq!(
+            tags.get("MakerNotes:MinoltaQuality")
+                .and_then(TagValue::as_string),
+            Some("Raw"),
+            "the later normal-priority Main value replaces the low-priority CameraSettings value"
+        );
+        assert!(camera_settings.contains("MakerNotes:ExposureMode"));
+        assert!(
+            !camera_settings.contains("MakerNotes:MinoltaQuality"),
+            "the Main replacement must not retain CameraSettings priority"
+        );
     }
 
     #[test]
