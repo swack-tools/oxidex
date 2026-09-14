@@ -5,6 +5,12 @@
     "perl_version": "v5.38.2"
   },
   "recipe": {
+    "cleanup": {
+      "all_mandatory": true,
+      "entry_count_shrinks_or_new": true,
+      "no_next_ifd": true,
+      "omit_empty_ifd1": true
+    },
     "directories": [
       {
         "defaults": [
@@ -130,7 +136,7 @@
       "directory": "IFD0",
       "probe": "JFIFYResolution"
     },
-    "recipe_sha256": "2d8671775c7250ea04f24b47fea76632d02a78cb4da50e09b058bcb7f1db9294",
+    "recipe_sha256": "6c5cab18356b8861172c821f59511b81e6f6c5c6bcb1ae87b7948fe139bfa7d2",
     "selection": {
       "directory_operand": "dirName",
       "disabled_when": "noMandatory",

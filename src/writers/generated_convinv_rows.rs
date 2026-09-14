@@ -1132,11 +1132,11 @@ const ROW_51_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("double"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_51_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -1176,11 +1176,11 @@ const ROW_53_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("double"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_53_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -1198,11 +1198,11 @@ const ROW_54_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("double"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(16),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_54_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -1216,15 +1216,15 @@ const ROW_54_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_55_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("binary"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("double"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(16),
     },
 ];
 const ROW_55_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -1238,7 +1238,7 @@ const ROW_55_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_56_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("binary"),
     },
     Property {
         name: "Writable",
@@ -1282,11 +1282,11 @@ const ROW_57_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_58_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int16u"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Count",
@@ -1308,7 +1308,7 @@ const ROW_59_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("double"),
+        value: PropertyValue::Text("int16u"),
     },
     Property {
         name: "Count",
@@ -1330,7 +1330,7 @@ const ROW_60_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("double"),
     },
     Property {
         name: "Count",
@@ -1348,11 +1348,11 @@ const ROW_60_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_61_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -1370,11 +1370,11 @@ const ROW_61_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_62_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int8u"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Count",
@@ -1480,11 +1480,11 @@ const ROW_66_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_67_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("int8u"),
     },
     Property {
         name: "Count",
@@ -1506,7 +1506,7 @@ const ROW_68_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int16u"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -1550,7 +1550,7 @@ const ROW_70_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("int16u"),
     },
     Property {
         name: "Count",
@@ -1594,7 +1594,7 @@ const ROW_72_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -1616,11 +1616,11 @@ const ROW_73_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int8u"),
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(4),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_73_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -1660,11 +1660,11 @@ const ROW_75_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("int8u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(4),
     },
 ];
 const ROW_75_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -1678,7 +1678,7 @@ const ROW_75_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_76_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
@@ -1700,11 +1700,11 @@ const ROW_76_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_77_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -1748,11 +1748,11 @@ const ROW_79_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int16u"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_79_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -1774,7 +1774,7 @@ const ROW_80_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(2),
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_80_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -1792,11 +1792,11 @@ const ROW_81_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("int16u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Integer(2),
     },
 ];
 const ROW_81_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -1814,7 +1814,7 @@ const ROW_82_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
@@ -1836,11 +1836,11 @@ const ROW_83_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(2),
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_83_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -1858,7 +1858,7 @@ const ROW_84_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
@@ -1902,11 +1902,11 @@ const ROW_86_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64s"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Integer(2),
     },
 ];
 const ROW_86_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2034,7 +2034,7 @@ const ROW_92_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("rational64s"),
     },
     Property {
         name: "Count",
@@ -2082,7 +2082,7 @@ const ROW_94_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(2),
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_94_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2100,11 +2100,11 @@ const ROW_95_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64s"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(2),
     },
 ];
 const ROW_95_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2122,7 +2122,7 @@ const ROW_96_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("rational64s"),
     },
     Property {
         name: "Count",
@@ -2166,7 +2166,7 @@ const ROW_98_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
@@ -2188,7 +2188,7 @@ const ROW_99_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
@@ -2210,7 +2210,7 @@ const ROW_100_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
@@ -2232,11 +2232,11 @@ const ROW_101_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(4),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_101_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2258,7 +2258,7 @@ const ROW_102_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(4),
     },
 ];
 const ROW_102_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2320,7 +2320,7 @@ const ROW_105_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int16u"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
@@ -2386,7 +2386,7 @@ const ROW_108_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("int16u"),
     },
     Property {
         name: "Count",
@@ -2404,15 +2404,15 @@ const ROW_108_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_109_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int8u"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(16),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_109_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2426,15 +2426,15 @@ const ROW_109_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_110_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("int8u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(16),
     },
 ];
 const ROW_110_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2448,11 +2448,11 @@ const ROW_110_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_111_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -2474,11 +2474,11 @@ const ROW_112_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(4),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_112_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2500,7 +2500,7 @@ const ROW_113_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Integer(4),
     },
 ];
 const ROW_113_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2518,11 +2518,11 @@ const ROW_114_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_114_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2540,11 +2540,11 @@ const ROW_115_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64s"),
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_115_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2562,11 +2562,11 @@ const ROW_116_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Text("rational64s"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_116_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2584,11 +2584,11 @@ const ROW_117_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64s"),
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_117_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2606,11 +2606,11 @@ const ROW_118_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int16u"),
+        value: PropertyValue::Text("rational64s"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_118_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2628,7 +2628,7 @@ const ROW_119_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("int16u"),
     },
     Property {
         name: "Count",
@@ -2646,11 +2646,11 @@ const ROW_119_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_120_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Count",
@@ -2694,7 +2694,7 @@ const ROW_122_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Count",
@@ -2734,11 +2734,11 @@ const ROW_123_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_124_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -2756,11 +2756,11 @@ const ROW_124_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_125_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Count",
@@ -2778,11 +2778,11 @@ const ROW_125_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_126_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -2800,11 +2800,11 @@ const ROW_126_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_127_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
@@ -2822,15 +2822,15 @@ const ROW_127_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_128_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(3),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_128_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2852,7 +2852,7 @@ const ROW_129_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(3),
     },
 ];
 const ROW_129_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2866,11 +2866,11 @@ const ROW_129_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_130_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
@@ -2888,15 +2888,15 @@ const ROW_130_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_131_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64s"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_131_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2932,15 +2932,15 @@ const ROW_132_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_133_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("rational64s"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_133_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -2998,11 +2998,11 @@ const ROW_135_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_136_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int8u"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -3020,11 +3020,11 @@ const ROW_136_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_137_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("int8u"),
     },
     Property {
         name: "Count",
@@ -3042,15 +3042,15 @@ const ROW_137_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_138_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int8u"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(16),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_138_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3086,15 +3086,15 @@ const ROW_139_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_140_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("int8u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(3),
+        value: PropertyValue::Integer(16),
     },
 ];
 const ROW_140_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3112,11 +3112,11 @@ const ROW_141_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("double"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Integer(3),
     },
 ];
 const ROW_141_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3134,7 +3134,7 @@ const ROW_142_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int8u"),
+        value: PropertyValue::Text("double"),
     },
     Property {
         name: "Count",
@@ -3156,11 +3156,11 @@ const ROW_143_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64s"),
+        value: PropertyValue::Text("int8u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_143_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3178,11 +3178,11 @@ const ROW_144_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("rational64s"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_144_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3200,11 +3200,11 @@ const ROW_145_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_145_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3222,11 +3222,11 @@ const ROW_146_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(2),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_146_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3266,7 +3266,7 @@ const ROW_148_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
@@ -3288,11 +3288,11 @@ const ROW_149_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(2),
     },
 ];
 const ROW_149_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3310,7 +3310,7 @@ const ROW_150_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -3354,7 +3354,7 @@ const ROW_152_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64s"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
@@ -3376,7 +3376,7 @@ const ROW_153_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("rational64s"),
     },
     Property {
         name: "Count",
@@ -3394,15 +3394,15 @@ const ROW_153_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_154_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int8u"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(16),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_154_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3416,15 +3416,15 @@ const ROW_154_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_155_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("double"),
+        value: PropertyValue::Text("int8u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(16),
     },
 ];
 const ROW_155_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3438,15 +3438,15 @@ const ROW_155_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_156_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("int8u"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("double"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(4),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_156_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3460,11 +3460,11 @@ const ROW_156_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_157_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("int8u"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
@@ -3486,11 +3486,11 @@ const ROW_158_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int16u"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(4),
     },
 ];
 const ROW_158_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3508,7 +3508,7 @@ const ROW_159_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("int16u"),
     },
     Property {
         name: "Count",
@@ -3552,7 +3552,7 @@ const ROW_161_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int16u"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
@@ -3596,7 +3596,7 @@ const ROW_163_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("int16u"),
     },
     Property {
         name: "Count",
@@ -3618,7 +3618,7 @@ const ROW_164_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -3640,7 +3640,7 @@ const ROW_165_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Count",
@@ -3684,7 +3684,7 @@ const ROW_167_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int16u"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Count",
@@ -3706,11 +3706,11 @@ const ROW_168_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64s"),
+        value: PropertyValue::Text("int16u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_168_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3772,11 +3772,11 @@ const ROW_171_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Text("rational64s"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_171_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3838,11 +3838,11 @@ const ROW_174_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(4),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_174_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3860,11 +3860,11 @@ const ROW_175_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64s"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(-1),
+        value: PropertyValue::Integer(4),
     },
 ];
 const ROW_175_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3882,11 +3882,11 @@ const ROW_176_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Text("rational64s"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(-1),
     },
 ];
 const ROW_176_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -3926,7 +3926,7 @@ const ROW_178_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Count",
@@ -3948,7 +3948,7 @@ const ROW_179_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
@@ -4010,11 +4010,11 @@ const ROW_181_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_182_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("undef"),
     },
     Property {
         name: "Count",
@@ -4032,11 +4032,11 @@ const ROW_182_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_183_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("float"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
@@ -4058,7 +4058,7 @@ const ROW_184_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int32u"),
+        value: PropertyValue::Text("float"),
     },
     Property {
         name: "Count",
@@ -4102,7 +4102,7 @@ const ROW_186_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("string"),
+        value: PropertyValue::Text("int32u"),
     },
     Property {
         name: "Count",
@@ -4124,11 +4124,11 @@ const ROW_187_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("string"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(3),
+        value: PropertyValue::Undefined,
     },
 ];
 const ROW_187_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -4146,11 +4146,11 @@ const ROW_188_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int16u"),
+        value: PropertyValue::Text("rational64u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Undefined,
+        value: PropertyValue::Integer(3),
     },
 ];
 const ROW_188_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -4168,11 +4168,11 @@ const ROW_189_TAG_PROPERTIES: &[Property<'static>] = &[
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("rational64u"),
+        value: PropertyValue::Text("int16u"),
     },
     Property {
         name: "Count",
-        value: PropertyValue::Integer(6),
+        value: PropertyValue::Integer(2),
     },
 ];
 const ROW_189_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
@@ -4186,11 +4186,11 @@ const ROW_189_TAG_GROUPS: &[Property<'static>] = &[Property {
 const ROW_190_TAG_PROPERTIES: &[Property<'static>] = &[
     Property {
         name: "Format",
-        value: PropertyValue::Text("undef"),
+        value: PropertyValue::Undefined,
     },
     Property {
         name: "Writable",
-        value: PropertyValue::Text("int8u"),
+        value: PropertyValue::Text("int16u"),
     },
     Property {
         name: "Count",
@@ -4202,6 +4202,50 @@ const ROW_190_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
     value: PropertyValue::Undefined,
 }];
 const ROW_190_TAG_GROUPS: &[Property<'static>] = &[Property {
+    name: "0",
+    value: PropertyValue::Undefined,
+}];
+const ROW_191_TAG_PROPERTIES: &[Property<'static>] = &[
+    Property {
+        name: "Format",
+        value: PropertyValue::Undefined,
+    },
+    Property {
+        name: "Writable",
+        value: PropertyValue::Text("rational64u"),
+    },
+    Property {
+        name: "Count",
+        value: PropertyValue::Integer(6),
+    },
+];
+const ROW_191_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
+    name: "WRITABLE",
+    value: PropertyValue::Undefined,
+}];
+const ROW_191_TAG_GROUPS: &[Property<'static>] = &[Property {
+    name: "0",
+    value: PropertyValue::Undefined,
+}];
+const ROW_192_TAG_PROPERTIES: &[Property<'static>] = &[
+    Property {
+        name: "Format",
+        value: PropertyValue::Text("undef"),
+    },
+    Property {
+        name: "Writable",
+        value: PropertyValue::Text("int8u"),
+    },
+    Property {
+        name: "Count",
+        value: PropertyValue::Undefined,
+    },
+];
+const ROW_192_TABLE_PROPERTIES: &[Property<'static>] = &[Property {
+    name: "WRITABLE",
+    value: PropertyValue::Undefined,
+}];
+const ROW_192_TAG_GROUPS: &[Property<'static>] = &[Property {
     name: "0",
     value: PropertyValue::Undefined,
 }];
@@ -5128,11 +5172,11 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "33920",
-        name: "IntergraphMatrix",
-        write_group: "IFD0",
+        raw_id: "339",
+        name: "SampleFormat",
+        write_group: "SubIFD",
         conversion: [
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -5146,8 +5190,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "33922",
-        name: "ModelTiePoint",
+        raw_id: "33920",
+        name: "IntergraphMatrix",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5164,8 +5208,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "34118",
-        name: "SEMInfo",
+        raw_id: "33922",
+        name: "ModelTiePoint",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5182,8 +5226,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "34264",
-        name: "ModelTransform",
+        raw_id: "34118",
+        name: "SEMInfo",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5200,8 +5244,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "34377",
-        name: "PhotoshopSettings",
+        raw_id: "34264",
+        name: "ModelTransform",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5218,8 +5262,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "34665",
-        name: "ExifOffset",
+        raw_id: "34377",
+        name: "PhotoshopSettings",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5236,8 +5280,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "34675",
-        name: "ICC_Profile",
+        raw_id: "34665",
+        name: "ExifOffset",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5254,8 +5298,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "34735",
-        name: "GeoTiffDirectory",
+        raw_id: "34675",
+        name: "ICC_Profile",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5263,7 +5307,7 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
             ConversionProperty::Absent,
         ],
-        gates: [false, false, false, true],
+        gates: [false, false, false, false],
         tag_properties: ROW_58_TAG_PROPERTIES,
         table_properties: ROW_58_TABLE_PROPERTIES,
         tag_groups: ROW_58_TAG_GROUPS,
@@ -5272,8 +5316,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "34736",
-        name: "GeoTiffDoubleParams",
+        raw_id: "34735",
+        name: "GeoTiffDirectory",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5290,8 +5334,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "34737",
-        name: "GeoTiffAsciiParams",
+        raw_id: "34736",
+        name: "GeoTiffDoubleParams",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5299,7 +5343,7 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
             ConversionProperty::Absent,
         ],
-        gates: [false, false, false, false],
+        gates: [false, false, false, true],
         tag_properties: ROW_60_TAG_PROPERTIES,
         table_properties: ROW_60_TABLE_PROPERTIES,
         tag_groups: ROW_60_TAG_GROUPS,
@@ -5308,8 +5352,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "34853",
-        name: "GPSInfo",
+        raw_id: "34737",
+        name: "GeoTiffAsciiParams",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5326,14 +5370,14 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "40091",
-        name: "XPTitle",
+        raw_id: "34853",
+        name: "GPSInfo",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
-            ConversionProperty::Defined,
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
         tag_properties: ROW_62_TAG_PROPERTIES,
@@ -5344,8 +5388,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "40092",
-        name: "XPComment",
+        raw_id: "40091",
+        name: "XPTitle",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5362,8 +5406,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "40093",
-        name: "XPAuthor",
+        raw_id: "40092",
+        name: "XPComment",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5380,8 +5424,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "40094",
-        name: "XPKeywords",
+        raw_id: "40093",
+        name: "XPAuthor",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5398,8 +5442,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "40095",
-        name: "XPSubject",
+        raw_id: "40094",
+        name: "XPKeywords",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5416,14 +5460,14 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "4096",
-        name: "RelatedImageFileFormat",
-        write_group: "InteropIFD",
+        raw_id: "40095",
+        name: "XPSubject",
+        write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
+            ConversionProperty::Defined,
         ],
         gates: [false, false, false, false],
         tag_properties: ROW_67_TAG_PROPERTIES,
@@ -5434,8 +5478,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "4097",
-        name: "RelatedImageWidth",
+        raw_id: "4096",
+        name: "RelatedImageFileFormat",
         write_group: "InteropIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -5452,8 +5496,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "4098",
-        name: "RelatedImageHeight",
+        raw_id: "4097",
+        name: "RelatedImageWidth",
         write_group: "InteropIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -5470,9 +5514,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "42112",
-        name: "GDALMetadata",
-        write_group: "IFD0",
+        raw_id: "4098",
+        name: "RelatedImageHeight",
+        write_group: "InteropIFD",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -5488,8 +5532,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "42113",
-        name: "GDALNoData",
+        raw_id: "42112",
+        name: "GDALMetadata",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5506,12 +5550,12 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50341",
-        name: "PrintIM",
+        raw_id: "42113",
+        name: "GDALNoData",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
         ],
@@ -5524,11 +5568,11 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50706",
-        name: "DNGVersion",
+        raw_id: "50341",
+        name: "PrintIM",
         write_group: "IFD0",
         conversion: [
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
             ConversionProperty::Defined,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -5542,8 +5586,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50707",
-        name: "DNGBackwardVersion",
+        raw_id: "50706",
+        name: "DNGVersion",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Defined,
@@ -5560,6 +5604,24 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
+        raw_id: "50707",
+        name: "DNGBackwardVersion",
+        write_group: "IFD0",
+        conversion: [
+            ConversionProperty::Defined,
+            ConversionProperty::Defined,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+        ],
+        gates: [false, false, false, false],
+        tag_properties: ROW_75_TAG_PROPERTIES,
+        table_properties: ROW_75_TABLE_PROPERTIES,
+        tag_groups: ROW_75_TAG_GROUPS,
+    },
+    StaticConvInvRow {
+        module: "Exif",
+        table: "Main",
+        full_name: "Image::ExifTool::Exif::Main",
         raw_id: "50708",
         name: "UniqueCameraModel",
         write_group: "IFD0",
@@ -5570,9 +5632,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_75_TAG_PROPERTIES,
-        table_properties: ROW_75_TABLE_PROPERTIES,
-        tag_groups: ROW_75_TAG_GROUPS,
+        tag_properties: ROW_76_TAG_PROPERTIES,
+        table_properties: ROW_76_TABLE_PROPERTIES,
+        tag_groups: ROW_76_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -5588,24 +5650,6 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Defined,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_76_TAG_PROPERTIES,
-        table_properties: ROW_76_TABLE_PROPERTIES,
-        tag_groups: ROW_76_TAG_GROUPS,
-    },
-    StaticConvInvRow {
-        module: "Exif",
-        table: "Main",
-        full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50710",
-        name: "CFAPlaneColor",
-        write_group: "SubIFD",
-        conversion: [
-            ConversionProperty::Defined,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
-        ],
-        gates: [false, false, false, false],
         tag_properties: ROW_77_TAG_PROPERTIES,
         table_properties: ROW_77_TABLE_PROPERTIES,
         tag_groups: ROW_77_TAG_GROUPS,
@@ -5614,8 +5658,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50711",
-        name: "CFALayout",
+        raw_id: "50710",
+        name: "CFAPlaneColor",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Defined,
@@ -5632,11 +5676,11 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50712",
-        name: "LinearizationTable",
+        raw_id: "50711",
+        name: "CFALayout",
         write_group: "SubIFD",
         conversion: [
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -5650,8 +5694,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50713",
-        name: "BlackLevelRepeatDim",
+        raw_id: "50712",
+        name: "LinearizationTable",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -5668,8 +5712,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50714",
-        name: "BlackLevel",
+        raw_id: "50713",
+        name: "BlackLevelRepeatDim",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -5686,8 +5730,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50717",
-        name: "WhiteLevel",
+        raw_id: "50714",
+        name: "BlackLevel",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -5704,8 +5748,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50718",
-        name: "DefaultScale",
+        raw_id: "50717",
+        name: "WhiteLevel",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -5722,8 +5766,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50719",
-        name: "DefaultCropOrigin",
+        raw_id: "50718",
+        name: "DefaultScale",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -5740,8 +5784,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50720",
-        name: "DefaultCropSize",
+        raw_id: "50719",
+        name: "DefaultCropOrigin",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -5758,9 +5802,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50721",
-        name: "ColorMatrix1",
-        write_group: "IFD0",
+        raw_id: "50720",
+        name: "DefaultCropSize",
+        write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -5776,8 +5820,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50722",
-        name: "ColorMatrix2",
+        raw_id: "50721",
+        name: "ColorMatrix1",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5794,8 +5838,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50723",
-        name: "CameraCalibration1",
+        raw_id: "50722",
+        name: "ColorMatrix2",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5812,8 +5856,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50724",
-        name: "CameraCalibration2",
+        raw_id: "50723",
+        name: "CameraCalibration1",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5830,8 +5874,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50725",
-        name: "ReductionMatrix1",
+        raw_id: "50724",
+        name: "CameraCalibration2",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5848,8 +5892,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50726",
-        name: "ReductionMatrix2",
+        raw_id: "50725",
+        name: "ReductionMatrix1",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5866,8 +5910,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50727",
-        name: "AnalogBalance",
+        raw_id: "50726",
+        name: "ReductionMatrix2",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5884,8 +5928,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50728",
-        name: "AsShotNeutral",
+        raw_id: "50727",
+        name: "AnalogBalance",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5902,8 +5946,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50729",
-        name: "AsShotWhiteXY",
+        raw_id: "50728",
+        name: "AsShotNeutral",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5920,8 +5964,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50730",
-        name: "BaselineExposure",
+        raw_id: "50729",
+        name: "AsShotWhiteXY",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5938,8 +5982,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50731",
-        name: "BaselineNoise",
+        raw_id: "50730",
+        name: "BaselineExposure",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5956,8 +6000,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50732",
-        name: "BaselineSharpness",
+        raw_id: "50731",
+        name: "BaselineNoise",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -5974,9 +6018,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50733",
-        name: "BayerGreenSplit",
-        write_group: "SubIFD",
+        raw_id: "50732",
+        name: "BaselineSharpness",
+        write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -5992,9 +6036,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50734",
-        name: "LinearResponseLimit",
-        write_group: "IFD0",
+        raw_id: "50733",
+        name: "BayerGreenSplit",
+        write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -6010,8 +6054,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50735",
-        name: "CameraSerialNumber",
+        raw_id: "50734",
+        name: "LinearResponseLimit",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6028,12 +6072,12 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50736",
-        name: "DNGLensInfo",
+        raw_id: "50735",
+        name: "CameraSerialNumber",
         write_group: "IFD0",
         conversion: [
-            ConversionProperty::Defined,
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
         ],
@@ -6046,12 +6090,12 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50737",
-        name: "ChromaBlurRadius",
-        write_group: "SubIFD",
+        raw_id: "50736",
+        name: "DNGLensInfo",
+        write_group: "IFD0",
         conversion: [
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
+            ConversionProperty::Defined,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
         ],
@@ -6064,8 +6108,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50738",
-        name: "AntiAliasStrength",
+        raw_id: "50737",
+        name: "ChromaBlurRadius",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -6082,9 +6126,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50739",
-        name: "ShadowScale",
-        write_group: "IFD0",
+        raw_id: "50738",
+        name: "AntiAliasStrength",
+        write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -6100,11 +6144,11 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50741",
-        name: "MakerNoteSafety",
+        raw_id: "50739",
+        name: "ShadowScale",
         write_group: "IFD0",
         conversion: [
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -6118,8 +6162,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50778",
-        name: "CalibrationIlluminant1",
+        raw_id: "50741",
+        name: "MakerNoteSafety",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Defined,
@@ -6136,8 +6180,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50779",
-        name: "CalibrationIlluminant2",
+        raw_id: "50778",
+        name: "CalibrationIlluminant1",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Defined,
@@ -6154,11 +6198,11 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50780",
-        name: "BestQualityScale",
-        write_group: "SubIFD",
+        raw_id: "50779",
+        name: "CalibrationIlluminant2",
+        write_group: "IFD0",
         conversion: [
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -6172,14 +6216,14 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50781",
-        name: "RawDataUniqueID",
-        write_group: "IFD0",
+        raw_id: "50780",
+        name: "BestQualityScale",
+        write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
-            ConversionProperty::Defined,
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
         tag_properties: ROW_109_TAG_PROPERTIES,
@@ -6190,8 +6234,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50827",
-        name: "OriginalRawFileName",
+        raw_id: "50781",
+        name: "RawDataUniqueID",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6208,14 +6252,14 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50828",
-        name: "OriginalRawFileData",
+        raw_id: "50827",
+        name: "OriginalRawFileName",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
+            ConversionProperty::Defined,
         ],
         gates: [false, false, false, false],
         tag_properties: ROW_111_TAG_PROPERTIES,
@@ -6226,9 +6270,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50829",
-        name: "ActiveArea",
-        write_group: "SubIFD",
+        raw_id: "50828",
+        name: "OriginalRawFileData",
+        write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -6244,8 +6288,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50830",
-        name: "MaskedAreas",
+        raw_id: "50829",
+        name: "ActiveArea",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -6262,6 +6306,24 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
+        raw_id: "50830",
+        name: "MaskedAreas",
+        write_group: "SubIFD",
+        conversion: [
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+        ],
+        gates: [false, false, false, false],
+        tag_properties: ROW_114_TAG_PROPERTIES,
+        table_properties: ROW_114_TABLE_PROPERTIES,
+        tag_groups: ROW_114_TAG_GROUPS,
+    },
+    StaticConvInvRow {
+        module: "Exif",
+        table: "Main",
+        full_name: "Image::ExifTool::Exif::Main",
         raw_id: "50831",
         name: "AsShotICCProfile",
         write_group: "IFD0",
@@ -6272,9 +6334,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, true, false],
-        tag_properties: ROW_114_TAG_PROPERTIES,
-        table_properties: ROW_114_TABLE_PROPERTIES,
-        tag_groups: ROW_114_TAG_GROUPS,
+        tag_properties: ROW_115_TAG_PROPERTIES,
+        table_properties: ROW_115_TABLE_PROPERTIES,
+        tag_groups: ROW_115_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6290,9 +6352,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_115_TAG_PROPERTIES,
-        table_properties: ROW_115_TABLE_PROPERTIES,
-        tag_groups: ROW_115_TAG_GROUPS,
+        tag_properties: ROW_116_TAG_PROPERTIES,
+        table_properties: ROW_116_TABLE_PROPERTIES,
+        tag_groups: ROW_116_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6308,9 +6370,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, true, false],
-        tag_properties: ROW_116_TAG_PROPERTIES,
-        table_properties: ROW_116_TABLE_PROPERTIES,
-        tag_groups: ROW_116_TAG_GROUPS,
+        tag_properties: ROW_117_TAG_PROPERTIES,
+        table_properties: ROW_117_TABLE_PROPERTIES,
+        tag_groups: ROW_117_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6326,9 +6388,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_117_TAG_PROPERTIES,
-        table_properties: ROW_117_TABLE_PROPERTIES,
-        tag_groups: ROW_117_TAG_GROUPS,
+        tag_properties: ROW_118_TAG_PROPERTIES,
+        table_properties: ROW_118_TABLE_PROPERTIES,
+        tag_groups: ROW_118_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6344,9 +6406,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_118_TAG_PROPERTIES,
-        table_properties: ROW_118_TABLE_PROPERTIES,
-        tag_groups: ROW_118_TAG_GROUPS,
+        tag_properties: ROW_119_TAG_PROPERTIES,
+        table_properties: ROW_119_TABLE_PROPERTIES,
+        tag_groups: ROW_119_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6362,24 +6424,6 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_119_TAG_PROPERTIES,
-        table_properties: ROW_119_TABLE_PROPERTIES,
-        tag_groups: ROW_119_TAG_GROUPS,
-    },
-    StaticConvInvRow {
-        module: "Exif",
-        table: "Main",
-        full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50898",
-        name: "PanasonicTitle",
-        write_group: "IFD0",
-        conversion: [
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
-            ConversionProperty::Defined,
-            ConversionProperty::Defined,
-        ],
-        gates: [false, false, false, false],
         tag_properties: ROW_120_TAG_PROPERTIES,
         table_properties: ROW_120_TABLE_PROPERTIES,
         tag_groups: ROW_120_TAG_GROUPS,
@@ -6388,8 +6432,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50899",
-        name: "PanasonicTitle2",
+        raw_id: "50898",
+        name: "PanasonicTitle",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6406,8 +6450,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50931",
-        name: "CameraCalibrationSig",
+        raw_id: "50899",
+        name: "PanasonicTitle2",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6424,8 +6468,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50932",
-        name: "ProfileCalibrationSig",
+        raw_id: "50931",
+        name: "CameraCalibrationSig",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6442,6 +6486,24 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
+        raw_id: "50932",
+        name: "ProfileCalibrationSig",
+        write_group: "IFD0",
+        conversion: [
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+            ConversionProperty::Defined,
+            ConversionProperty::Defined,
+        ],
+        gates: [false, false, false, false],
+        tag_properties: ROW_124_TAG_PROPERTIES,
+        table_properties: ROW_124_TABLE_PROPERTIES,
+        tag_groups: ROW_124_TAG_GROUPS,
+    },
+    StaticConvInvRow {
+        module: "Exif",
+        table: "Main",
+        full_name: "Image::ExifTool::Exif::Main",
         raw_id: "50933",
         name: "ProfileIFD",
         write_group: "IFD0",
@@ -6452,9 +6514,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_124_TAG_PROPERTIES,
-        table_properties: ROW_124_TABLE_PROPERTIES,
-        tag_groups: ROW_124_TAG_GROUPS,
+        tag_properties: ROW_125_TAG_PROPERTIES,
+        table_properties: ROW_125_TABLE_PROPERTIES,
+        tag_groups: ROW_125_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6470,9 +6532,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Defined,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_125_TAG_PROPERTIES,
-        table_properties: ROW_125_TABLE_PROPERTIES,
-        tag_groups: ROW_125_TAG_GROUPS,
+        tag_properties: ROW_126_TAG_PROPERTIES,
+        table_properties: ROW_126_TABLE_PROPERTIES,
+        tag_groups: ROW_126_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6488,9 +6550,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_126_TAG_PROPERTIES,
-        table_properties: ROW_126_TABLE_PROPERTIES,
-        tag_groups: ROW_126_TAG_GROUPS,
+        tag_properties: ROW_127_TAG_PROPERTIES,
+        table_properties: ROW_127_TABLE_PROPERTIES,
+        tag_groups: ROW_127_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6506,9 +6568,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Defined,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_127_TAG_PROPERTIES,
-        table_properties: ROW_127_TABLE_PROPERTIES,
-        tag_groups: ROW_127_TAG_GROUPS,
+        tag_properties: ROW_128_TAG_PROPERTIES,
+        table_properties: ROW_128_TABLE_PROPERTIES,
+        tag_groups: ROW_128_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6524,9 +6586,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_128_TAG_PROPERTIES,
-        table_properties: ROW_128_TABLE_PROPERTIES,
-        tag_groups: ROW_128_TAG_GROUPS,
+        tag_properties: ROW_129_TAG_PROPERTIES,
+        table_properties: ROW_129_TABLE_PROPERTIES,
+        tag_groups: ROW_129_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6542,9 +6604,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_129_TAG_PROPERTIES,
-        table_properties: ROW_129_TABLE_PROPERTIES,
-        tag_groups: ROW_129_TAG_GROUPS,
+        tag_properties: ROW_130_TAG_PROPERTIES,
+        table_properties: ROW_130_TABLE_PROPERTIES,
+        tag_groups: ROW_130_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6560,24 +6622,6 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Defined,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_130_TAG_PROPERTIES,
-        table_properties: ROW_130_TABLE_PROPERTIES,
-        tag_groups: ROW_130_TAG_GROUPS,
-    },
-    StaticConvInvRow {
-        module: "Exif",
-        table: "Main",
-        full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50964",
-        name: "ForwardMatrix1",
-        write_group: "IFD0",
-        conversion: [
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
-        ],
-        gates: [false, false, false, false],
         tag_properties: ROW_131_TAG_PROPERTIES,
         table_properties: ROW_131_TABLE_PROPERTIES,
         tag_groups: ROW_131_TAG_GROUPS,
@@ -6586,8 +6630,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50965",
-        name: "ForwardMatrix2",
+        raw_id: "50964",
+        name: "ForwardMatrix1",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6604,14 +6648,14 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50966",
-        name: "PreviewApplicationName",
+        raw_id: "50965",
+        name: "ForwardMatrix2",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
-            ConversionProperty::Defined,
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
         tag_properties: ROW_133_TAG_PROPERTIES,
@@ -6622,8 +6666,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50967",
-        name: "PreviewApplicationVersion",
+        raw_id: "50966",
+        name: "PreviewApplicationName",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6640,8 +6684,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50968",
-        name: "PreviewSettingsName",
+        raw_id: "50967",
+        name: "PreviewApplicationVersion",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6658,8 +6702,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50969",
-        name: "PreviewSettingsDigest",
+        raw_id: "50968",
+        name: "PreviewSettingsName",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6676,14 +6720,14 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50970",
-        name: "PreviewColorSpace",
+        raw_id: "50969",
+        name: "PreviewSettingsDigest",
         write_group: "IFD0",
         conversion: [
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
             ConversionProperty::Defined,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
         ],
         gates: [false, false, false, false],
         tag_properties: ROW_137_TAG_PROPERTIES,
@@ -6694,14 +6738,14 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50972",
-        name: "RawImageDigest",
+        raw_id: "50970",
+        name: "PreviewColorSpace",
         write_group: "IFD0",
         conversion: [
+            ConversionProperty::Defined,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
-            ConversionProperty::Defined,
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
         tag_properties: ROW_138_TAG_PROPERTIES,
@@ -6712,8 +6756,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50973",
-        name: "OriginalRawFileDigest",
+        raw_id: "50972",
+        name: "RawImageDigest",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6730,14 +6774,14 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "50981",
-        name: "ProfileLookTableDims",
+        raw_id: "50973",
+        name: "OriginalRawFileDigest",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
+            ConversionProperty::Defined,
         ],
         gates: [false, false, false, false],
         tag_properties: ROW_140_TAG_PROPERTIES,
@@ -6748,9 +6792,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51041",
-        name: "NoiseProfile",
-        write_group: "SubIFD",
+        raw_id: "50981",
+        name: "ProfileLookTableDims",
+        write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -6766,14 +6810,14 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51043",
-        name: "TimeCodes",
-        write_group: "IFD0",
+        raw_id: "51041",
+        name: "NoiseProfile",
+        write_group: "SubIFD",
         conversion: [
-            ConversionProperty::Defined,
-            ConversionProperty::Defined,
-            ConversionProperty::Defined,
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
         tag_properties: ROW_142_TAG_PROPERTIES,
@@ -6784,14 +6828,14 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51044",
-        name: "FrameRate",
+        raw_id: "51043",
+        name: "TimeCodes",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Defined,
             ConversionProperty::Defined,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
+            ConversionProperty::Defined,
         ],
         gates: [false, false, false, false],
         tag_properties: ROW_143_TAG_PROPERTIES,
@@ -6802,8 +6846,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51058",
-        name: "TStop",
+        raw_id: "51044",
+        name: "FrameRate",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Defined,
@@ -6820,12 +6864,12 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51081",
-        name: "ReelName",
+        raw_id: "51058",
+        name: "TStop",
         write_group: "IFD0",
         conversion: [
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
+            ConversionProperty::Defined,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
         ],
@@ -6838,8 +6882,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51089",
-        name: "OriginalDefaultFinalSize",
+        raw_id: "51081",
+        name: "ReelName",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6856,8 +6900,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51090",
-        name: "OriginalBestQualitySize",
+        raw_id: "51089",
+        name: "OriginalDefaultFinalSize",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6874,8 +6918,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51091",
-        name: "OriginalDefaultCropSize",
+        raw_id: "51090",
+        name: "OriginalBestQualitySize",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6892,8 +6936,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51105",
-        name: "CameraLabel",
+        raw_id: "51091",
+        name: "OriginalDefaultCropSize",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -6910,11 +6954,11 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51107",
-        name: "ProfileHueSatMapEncoding",
+        raw_id: "51105",
+        name: "CameraLabel",
         write_group: "IFD0",
         conversion: [
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -6928,8 +6972,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51108",
-        name: "ProfileLookTableEncoding",
+        raw_id: "51107",
+        name: "ProfileHueSatMapEncoding",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Defined,
@@ -6946,6 +6990,24 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
+        raw_id: "51108",
+        name: "ProfileLookTableEncoding",
+        write_group: "IFD0",
+        conversion: [
+            ConversionProperty::Defined,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+        ],
+        gates: [false, false, false, false],
+        tag_properties: ROW_152_TAG_PROPERTIES,
+        table_properties: ROW_152_TABLE_PROPERTIES,
+        tag_groups: ROW_152_TAG_GROUPS,
+    },
+    StaticConvInvRow {
+        module: "Exif",
+        table: "Main",
+        full_name: "Image::ExifTool::Exif::Main",
         raw_id: "51109",
         name: "BaselineExposureOffset",
         write_group: "IFD0",
@@ -6956,9 +7018,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_152_TAG_PROPERTIES,
-        table_properties: ROW_152_TABLE_PROPERTIES,
-        tag_groups: ROW_152_TAG_GROUPS,
+        tag_properties: ROW_153_TAG_PROPERTIES,
+        table_properties: ROW_153_TABLE_PROPERTIES,
+        tag_groups: ROW_153_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6974,9 +7036,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_153_TAG_PROPERTIES,
-        table_properties: ROW_153_TABLE_PROPERTIES,
-        tag_groups: ROW_153_TAG_GROUPS,
+        tag_properties: ROW_154_TAG_PROPERTIES,
+        table_properties: ROW_154_TABLE_PROPERTIES,
+        tag_groups: ROW_154_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -6992,9 +7054,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Defined,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_154_TAG_PROPERTIES,
-        table_properties: ROW_154_TABLE_PROPERTIES,
-        tag_groups: ROW_154_TAG_GROUPS,
+        tag_properties: ROW_155_TAG_PROPERTIES,
+        table_properties: ROW_155_TABLE_PROPERTIES,
+        tag_groups: ROW_155_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -7010,9 +7072,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_155_TAG_PROPERTIES,
-        table_properties: ROW_155_TABLE_PROPERTIES,
-        tag_groups: ROW_155_TAG_GROUPS,
+        tag_properties: ROW_156_TAG_PROPERTIES,
+        table_properties: ROW_156_TABLE_PROPERTIES,
+        tag_groups: ROW_156_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -7028,9 +7090,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_156_TAG_PROPERTIES,
-        table_properties: ROW_156_TABLE_PROPERTIES,
-        tag_groups: ROW_156_TAG_GROUPS,
+        tag_properties: ROW_157_TAG_PROPERTIES,
+        table_properties: ROW_157_TABLE_PROPERTIES,
+        tag_groups: ROW_157_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -7046,9 +7108,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_157_TAG_PROPERTIES,
-        table_properties: ROW_157_TABLE_PROPERTIES,
-        tag_groups: ROW_157_TAG_GROUPS,
+        tag_properties: ROW_158_TAG_PROPERTIES,
+        table_properties: ROW_158_TABLE_PROPERTIES,
+        tag_groups: ROW_158_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -7064,24 +7126,6 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_158_TAG_PROPERTIES,
-        table_properties: ROW_158_TABLE_PROPERTIES,
-        tag_groups: ROW_158_TAG_GROUPS,
-    },
-    StaticConvInvRow {
-        module: "Exif",
-        table: "Main",
-        full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51178",
-        name: "DepthNear",
-        write_group: "IFD0",
-        conversion: [
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
-            ConversionProperty::Absent,
-        ],
-        gates: [false, false, false, false],
         tag_properties: ROW_159_TAG_PROPERTIES,
         table_properties: ROW_159_TABLE_PROPERTIES,
         tag_groups: ROW_159_TAG_GROUPS,
@@ -7090,8 +7134,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51179",
-        name: "DepthFar",
+        raw_id: "51178",
+        name: "DepthNear",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7108,11 +7152,11 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51180",
-        name: "DepthUnits",
+        raw_id: "51179",
+        name: "DepthFar",
         write_group: "IFD0",
         conversion: [
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -7126,8 +7170,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51181",
-        name: "DepthMeasureType",
+        raw_id: "51180",
+        name: "DepthUnits",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Defined,
@@ -7144,11 +7188,11 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "51182",
-        name: "EnhanceParams",
+        raw_id: "51181",
+        name: "DepthMeasureType",
         write_group: "IFD0",
         conversion: [
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -7162,9 +7206,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52525",
-        name: "ProfileGainTableMap",
-        write_group: "SubIFD",
+        raw_id: "51182",
+        name: "EnhanceParams",
+        write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -7180,8 +7224,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52526",
-        name: "SemanticName",
+        raw_id: "52525",
+        name: "ProfileGainTableMap",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -7198,8 +7242,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52528",
-        name: "SemanticInstanceID",
+        raw_id: "52526",
+        name: "SemanticName",
         write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
@@ -7216,11 +7260,11 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52529",
-        name: "CalibrationIlluminant3",
-        write_group: "IFD0",
+        raw_id: "52528",
+        name: "SemanticInstanceID",
+        write_group: "SubIFD",
         conversion: [
-            ConversionProperty::Defined,
+            ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -7234,11 +7278,11 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52530",
-        name: "CameraCalibration3",
+        raw_id: "52529",
+        name: "CalibrationIlluminant3",
         write_group: "IFD0",
         conversion: [
-            ConversionProperty::Absent,
+            ConversionProperty::Defined,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -7252,8 +7296,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52531",
-        name: "ColorMatrix3",
+        raw_id: "52530",
+        name: "CameraCalibration3",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7270,8 +7314,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52532",
-        name: "ForwardMatrix3",
+        raw_id: "52531",
+        name: "ColorMatrix3",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7288,8 +7332,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52533",
-        name: "IlluminantData1",
+        raw_id: "52532",
+        name: "ForwardMatrix3",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7306,8 +7350,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52534",
-        name: "IlluminantData2",
+        raw_id: "52533",
+        name: "IlluminantData1",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7324,8 +7368,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52535",
-        name: "IlluminantData3",
+        raw_id: "52534",
+        name: "IlluminantData2",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7342,9 +7386,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52536",
-        name: "MaskSubArea",
-        write_group: "SubIFD",
+        raw_id: "52535",
+        name: "IlluminantData3",
+        write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -7360,9 +7404,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52538",
-        name: "ReductionMatrix3",
-        write_group: "IFD0",
+        raw_id: "52536",
+        name: "MaskSubArea",
+        write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -7378,8 +7422,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52543",
-        name: "RGBTables",
+        raw_id: "52538",
+        name: "ReductionMatrix3",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7396,8 +7440,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52544",
-        name: "ProfileGainTableMap2",
+        raw_id: "52543",
+        name: "RGBTables",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7414,9 +7458,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52547",
-        name: "ColumnInterleaveFactor",
-        write_group: "SubIFD",
+        raw_id: "52544",
+        name: "ProfileGainTableMap2",
+        write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -7432,9 +7476,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52548",
-        name: "ImageSequenceInfo",
-        write_group: "IFD0",
+        raw_id: "52547",
+        name: "ColumnInterleaveFactor",
+        write_group: "SubIFD",
         conversion: [
             ConversionProperty::Absent,
             ConversionProperty::Absent,
@@ -7450,8 +7494,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52550",
-        name: "ImageStats",
+        raw_id: "52548",
+        name: "ImageSequenceInfo",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7468,8 +7512,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52551",
-        name: "ProfileDynamicRange",
+        raw_id: "52550",
+        name: "ImageStats",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7486,8 +7530,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52552",
-        name: "ProfileGroupName",
+        raw_id: "52551",
+        name: "ProfileDynamicRange",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7504,8 +7548,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52553",
-        name: "JXLDistance",
+        raw_id: "52552",
+        name: "ProfileGroupName",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7522,8 +7566,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52554",
-        name: "JXLEffort",
+        raw_id: "52553",
+        name: "JXLDistance",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7540,8 +7584,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
-        raw_id: "52555",
-        name: "JXLDecodeSpeed",
+        raw_id: "52554",
+        name: "JXLEffort",
         write_group: "IFD0",
         conversion: [
             ConversionProperty::Absent,
@@ -7558,6 +7602,24 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
+        raw_id: "52555",
+        name: "JXLDecodeSpeed",
+        write_group: "IFD0",
+        conversion: [
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+        ],
+        gates: [false, false, false, false],
+        tag_properties: ROW_186_TAG_PROPERTIES,
+        table_properties: ROW_186_TABLE_PROPERTIES,
+        tag_groups: ROW_186_TAG_GROUPS,
+    },
+    StaticConvInvRow {
+        module: "Exif",
+        table: "Main",
+        full_name: "Image::ExifTool::Exif::Main",
         raw_id: "52897",
         name: "SEAL",
         write_group: "IFD0",
@@ -7568,9 +7630,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, true, false],
-        tag_properties: ROW_186_TAG_PROPERTIES,
-        table_properties: ROW_186_TABLE_PROPERTIES,
-        tag_groups: ROW_186_TAG_GROUPS,
+        tag_properties: ROW_187_TAG_PROPERTIES,
+        table_properties: ROW_187_TABLE_PROPERTIES,
+        tag_groups: ROW_187_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -7586,9 +7648,27 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_187_TAG_PROPERTIES,
-        table_properties: ROW_187_TABLE_PROPERTIES,
-        tag_groups: ROW_187_TAG_GROUPS,
+        tag_properties: ROW_188_TAG_PROPERTIES,
+        table_properties: ROW_188_TABLE_PROPERTIES,
+        tag_groups: ROW_188_TAG_GROUPS,
+    },
+    StaticConvInvRow {
+        module: "Exif",
+        table: "Main",
+        full_name: "Image::ExifTool::Exif::Main",
+        raw_id: "530",
+        name: "YCbCrSubSampling",
+        write_group: "IFD0",
+        conversion: [
+            ConversionProperty::Defined,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+            ConversionProperty::Absent,
+        ],
+        gates: [false, false, false, false],
+        tag_properties: ROW_189_TAG_PROPERTIES,
+        table_properties: ROW_189_TABLE_PROPERTIES,
+        tag_groups: ROW_189_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -7604,9 +7684,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_188_TAG_PROPERTIES,
-        table_properties: ROW_188_TABLE_PROPERTIES,
-        tag_groups: ROW_188_TAG_GROUPS,
+        tag_properties: ROW_190_TAG_PROPERTIES,
+        table_properties: ROW_190_TABLE_PROPERTIES,
+        tag_groups: ROW_190_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -7622,9 +7702,9 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_189_TAG_PROPERTIES,
-        table_properties: ROW_189_TABLE_PROPERTIES,
-        tag_groups: ROW_189_TAG_GROUPS,
+        tag_properties: ROW_191_TAG_PROPERTIES,
+        table_properties: ROW_191_TABLE_PROPERTIES,
+        tag_groups: ROW_191_TAG_GROUPS,
     },
     StaticConvInvRow {
         module: "Exif",
@@ -7640,8 +7720,8 @@ pub(crate) const CONV_INV_ROWS: &[StaticConvInvRow] = &[
             ConversionProperty::Absent,
         ],
         gates: [false, false, false, false],
-        tag_properties: ROW_190_TAG_PROPERTIES,
-        table_properties: ROW_190_TABLE_PROPERTIES,
-        tag_groups: ROW_190_TAG_GROUPS,
+        tag_properties: ROW_192_TAG_PROPERTIES,
+        table_properties: ROW_192_TABLE_PROPERTIES,
+        tag_groups: ROW_192_TAG_GROUPS,
     },
 ];

@@ -10,9 +10,14 @@
           "semantics_sha256": "31057f9d5b2074308bec4aadbb6d1d2dfbac94de3c4a806217aada40d0ede96e",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "31057f9d5b2074308bec4aadbb6d1d2dfbac94de3c4a806217aada40d0ede96e",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "ProcessingSoftware",
       "raw_tag_id": 11,
@@ -42,9 +47,14 @@
           "semantics_sha256": "c77dcd93b5d16a68a1f6700837c51556cdc5109cdf88ac1542c9870a2b55de5e",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "c77dcd93b5d16a68a1f6700837c51556cdc5109cdf88ac1542c9870a2b55de5e",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "DocumentName",
       "raw_tag_id": 269,
@@ -69,9 +79,14 @@
           "semantics_sha256": "604a6d281c27d1483e8346135142092b60a69b36a77ebe073537b367d7ac7d67",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "604a6d281c27d1483e8346135142092b60a69b36a77ebe073537b367d7ac7d67",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "MinSampleValue",
       "raw_tag_id": 280,
@@ -96,9 +111,14 @@
           "semantics_sha256": "a36fe86f48db726bd81187996ed7229d850c3e8cf900694aa14a34c28907d79e",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "a36fe86f48db726bd81187996ed7229d850c3e8cf900694aa14a34c28907d79e",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "MaxSampleValue",
       "raw_tag_id": 281,
@@ -123,9 +143,14 @@
           "semantics_sha256": "08a2c95a33b664d59ec277cb2adcafffefa71807356f3f960be92382f69080ce",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "08a2c95a33b664d59ec277cb2adcafffefa71807356f3f960be92382f69080ce",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "XResolution",
       "raw_tag_id": 282,
@@ -150,9 +175,14 @@
           "semantics_sha256": "5478d3436e2741cd9f3f614f7f57b4761d1539bb98aadfbee8e2cdd105a8d657",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "5478d3436e2741cd9f3f614f7f57b4761d1539bb98aadfbee8e2cdd105a8d657",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "YResolution",
       "raw_tag_id": 283,
@@ -182,9 +212,14 @@
           "semantics_sha256": "b0cb0c2efee5db9c74abbe6307fd0800ce710f9f582c58b47e5a8041b3eb57fb",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "b0cb0c2efee5db9c74abbe6307fd0800ce710f9f582c58b47e5a8041b3eb57fb",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "PageName",
       "raw_tag_id": 285,
@@ -209,9 +244,14 @@
           "semantics_sha256": "c88687f95faaa8d54039d28f34fa89f2adbe2ae09766eabf9e16d64fa271b164",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "c88687f95faaa8d54039d28f34fa89f2adbe2ae09766eabf9e16d64fa271b164",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "XPosition",
       "raw_tag_id": 286,
@@ -236,9 +276,14 @@
           "semantics_sha256": "c97dbce9dc700b7e4911fca9145421946bd558b81de66f745dce24cafc2e8bb6",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "c97dbce9dc700b7e4911fca9145421946bd558b81de66f745dce24cafc2e8bb6",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "YPosition",
       "raw_tag_id": 287,
@@ -258,9 +303,14 @@
           "semantics_sha256": "17b3ec139f4eef30d2b817b227aafff874ebb1919ce6d87b3c0838e98570b024",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "17b3ec139f4eef30d2b817b227aafff874ebb1919ce6d87b3c0838e98570b024",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "Artist",
       "raw_tag_id": 315,
@@ -290,9 +340,14 @@
           "semantics_sha256": "f54d5a7a9716debf4869dcc80e611b3302fa7287c3f5f24ca806acf54bb022b9",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "f54d5a7a9716debf4869dcc80e611b3302fa7287c3f5f24ca806acf54bb022b9",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "HostComputer",
       "raw_tag_id": 316,
@@ -322,9 +377,14 @@
           "semantics_sha256": "26e2efc042a2489cb8d1fb6f13daa83218171e284635966cbe205d6e31eab5fd",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "26e2efc042a2489cb8d1fb6f13daa83218171e284635966cbe205d6e31eab5fd",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "TargetPrinter",
       "raw_tag_id": 337,
@@ -344,9 +404,14 @@
           "semantics_sha256": "7884b0589d15fd0352088fdbd7fb65492ea758cf72401515f6ce6026206e4e67",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "7884b0589d15fd0352088fdbd7fb65492ea758cf72401515f6ce6026206e4e67",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "SEMInfo",
       "raw_tag_id": 34118,
@@ -376,9 +441,14 @@
           "semantics_sha256": "2e0facf69321a741527a9ed6da1caead355933f75654947561d147ae26e6fe78",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "2e0facf69321a741527a9ed6da1caead355933f75654947561d147ae26e6fe78",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "GDALMetadata",
       "raw_tag_id": 42112,
@@ -408,9 +478,14 @@
           "semantics_sha256": "c99a8794a4012c09c404645c9a6adaed1166cd057899240f5aaa079967dfad5b",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "c99a8794a4012c09c404645c9a6adaed1166cd057899240f5aaa079967dfad5b",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "GDALNoData",
       "raw_tag_id": 42113,
@@ -440,9 +515,14 @@
           "semantics_sha256": "415608f4c37a901cfdc66005a985c71bf85ae828f23d4c25cb566502f54308b9",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "415608f4c37a901cfdc66005a985c71bf85ae828f23d4c25cb566502f54308b9",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "UniqueCameraModel",
       "raw_tag_id": 50708,
@@ -462,9 +542,14 @@
           "semantics_sha256": "7d172ea65e87d5305c31e4b8db36a3acc0bde1d98b98d87c1e759f134d0dbffe",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "7d172ea65e87d5305c31e4b8db36a3acc0bde1d98b98d87c1e759f134d0dbffe",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "CameraSerialNumber",
       "raw_tag_id": 50735,
@@ -494,9 +579,14 @@
           "semantics_sha256": "540709aea41a1bff5e9408d609e49e5d9160c352db3f051704e6983b102e45f2",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "540709aea41a1bff5e9408d609e49e5d9160c352db3f051704e6983b102e45f2",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "ReelName",
       "raw_tag_id": 51081,
@@ -526,9 +616,14 @@
           "semantics_sha256": "5b693c8ddf0195edbcf3056ed123e106ba2f5818ea8af5c34419619ca997b94c",
           "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "5b693c8ddf0195edbcf3056ed123e106ba2f5818ea8af5c34419619ca997b94c",
+          "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
+          "state": "current"
         }
       ],
-      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "last_seen": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
       "module": "Exif",
       "name": "CameraLabel",
       "raw_tag_id": 51105,
@@ -539,12 +634,12 @@
       "write_group": "IFD0"
     }
   ],
-  "ledger_sha256": "ea55869e56274acb227d7a132b0477406c5406489b49d98de59cd3127ad06fbc",
-  "predecessor": "f6834057099ddcd88f34f002c385180712330feff3dd1dc7c2bc6dd5ceedbb7a",
+  "ledger_sha256": "fb3d4814ec21681d83fa71e6cf324e865f8795bd9543b7cad0702a4897745fbd",
+  "predecessor": "ea55869e56274acb227d7a132b0477406c5406489b49d98de59cd3127ad06fbc",
   "schema": "setnewvalue_public_migration_ledger_v1",
   "source": {
     "address_queries_sha256": "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
-    "address_rows_sha256": "4b40a73c2dde50ff9ff94a23d60045f04f564efa4bc2db1cc5060666a268138f",
+    "address_rows_sha256": "b1f23ac79cc697f2bf1fc601c05f4da0ff5e1c9907fa3753a1fd32f6bcf95e59",
     "capture": {
       "exif_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
       "exiftool_version": "13.59",
@@ -555,8 +650,21 @@
     "final_recipes_sha256": "618dcb4541f55c943617772275ea55f65883b22ab890d53c79185fc03b366e13",
     "intersection_sha256": "f6cf9dba5396c30574e78b8998a4c4369b7b75c41037c62d832ddf4c66f465a1"
   },
-  "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+  "source_identity": "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87",
   "sources": {
+    "1145dc487121d7fd4b6cf728e22aef3439a1c5cc9235f3f1777827477762ca87": {
+      "address_queries_sha256": "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
+      "address_rows_sha256": "b1f23ac79cc697f2bf1fc601c05f4da0ff5e1c9907fa3753a1fd32f6bcf95e59",
+      "capture": {
+        "exif_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        "exiftool_version": "13.59",
+        "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+        "write_exif_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+      },
+      "final_recipes_sha256": "618dcb4541f55c943617772275ea55f65883b22ab890d53c79185fc03b366e13",
+      "intersection_sha256": "f6cf9dba5396c30574e78b8998a4c4369b7b75c41037c62d832ddf4c66f465a1"
+    },
     "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd": {
       "address_queries_sha256": "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
       "address_rows_sha256": "4b40a73c2dde50ff9ff94a23d60045f04f564efa4bc2db1cc5060666a268138f",

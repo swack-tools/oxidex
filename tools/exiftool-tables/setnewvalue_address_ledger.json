@@ -2,9 +2,9 @@
   "emitted": true,
   "lookup_candidates": 1261,
   "owned_names": 561,
-  "ownership_ledger_sha256": "e29c951272719e40ccc061f3e9f8c4b85e46ef744f9633584f270bff975dd589",
+  "ownership_ledger_sha256": "42e6f334ac8b312fcf443af128dbd5f5fb67631ff40eee27f9143295fa289923",
   "removed_owned_names": 0,
-  "rows": 191,
+  "rows": 193,
   "runtime_status": "inactive_source_addressing_no_public_setnewvalue_admission",
   "source_capture_identity": {
     "exif_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
@@ -943,7 +943,7 @@
     },
     "omitted_rows": [],
     "query_names_sha256": "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
-    "rows_emitted": 191,
+    "rows_emitted": 193,
     "rows_omitted": 0,
     "runtime_status": "inactive_source_addressing_no_public_setnewvalue_admission",
     "set_new_value": {
@@ -958,8 +958,8 @@
         "CHECK_PROC: CHECK_PROC is absent": 940,
         "effective Table binding is not the authenticated containing table": 2154,
         "row effective-property resolution is unrepresented": 78,
-        "row has no scalar Name or WriteGroup identity": 336,
-        "row has unsupported source properties: ConvertBinary, PrintConvColumns": 3,
+        "row has no scalar Name or WriteGroup identity": 337,
+        "row has unsupported source properties: ConvertBinary": 3,
         "row has unsupported source properties: FixedSize": 1,
         "row has unsupported source properties: IsImageData, IsOffset, OffsetPair": 3,
         "row has unsupported source properties: IsOffset, OffsetPair": 6,
@@ -967,7 +967,6 @@
         "row has unsupported source properties: OffsetPair": 5,
         "row has unsupported source properties: PSRaw": 11,
         "row has unsupported source properties: Permanent": 11,
-        "row has unsupported source properties: PrintConvColumns": 3,
         "row has unsupported source properties: ReadFromRAF": 1,
         "row has unsupported source properties: Shift": 7,
         "row has unsupported source properties: TruncateOK": 1,
@@ -66677,12 +66676,6 @@
         },
         {
           "module": "Exif",
-          "raw_id": "339",
-          "reason": "row has unsupported source properties: PrintConvColumns",
-          "table": "Main"
-        },
-        {
-          "module": "Exif",
           "raw_id": "33918",
           "reason": "row has no scalar Name or WriteGroup identity",
           "table": "Main"
@@ -67074,7 +67067,7 @@
         {
           "module": "Exif",
           "raw_id": "37121",
-          "reason": "row has unsupported source properties: PrintConvColumns",
+          "reason": "row has no scalar Name or WriteGroup identity",
           "table": "Main"
         },
         {
@@ -68046,19 +68039,19 @@
         {
           "module": "Exif",
           "raw_id": "51008",
-          "reason": "row has unsupported source properties: ConvertBinary, PrintConvColumns",
+          "reason": "row has unsupported source properties: ConvertBinary",
           "table": "Main"
         },
         {
           "module": "Exif",
           "raw_id": "51009",
-          "reason": "row has unsupported source properties: ConvertBinary, PrintConvColumns",
+          "reason": "row has unsupported source properties: ConvertBinary",
           "table": "Main"
         },
         {
           "module": "Exif",
           "raw_id": "51022",
-          "reason": "row has unsupported source properties: ConvertBinary, PrintConvColumns",
+          "reason": "row has unsupported source properties: ConvertBinary",
           "table": "Main"
         },
         {
@@ -68143,12 +68136,6 @@
           "module": "Exif",
           "raw_id": "52545",
           "reason": "row has no scalar Name or WriteGroup identity",
-          "table": "Main"
-        },
-        {
-          "module": "Exif",
-          "raw_id": "530",
-          "reason": "row has unsupported source properties: PrintConvColumns",
           "table": "Main"
         },
         {
@@ -209530,6 +209517,57 @@
         },
         {
           "conversion": [
+            "Defined",
+            "Absent",
+            "Absent",
+            "Absent"
+          ],
+          "full_name": "Image::ExifTool::Exif::Main",
+          "gates": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "module": "Exif",
+          "name": "SampleFormat",
+          "raw_id": "339",
+          "table": "Main",
+          "table_properties": [
+            {
+              "kind": "Undefined",
+              "name": "WRITABLE",
+              "value": null
+            }
+          ],
+          "tag_groups": [
+            {
+              "kind": "Undefined",
+              "name": "0",
+              "value": null
+            }
+          ],
+          "tag_properties": [
+            {
+              "kind": "Undefined",
+              "name": "Format",
+              "value": null
+            },
+            {
+              "kind": "Undefined",
+              "name": "Writable",
+              "value": null
+            },
+            {
+              "kind": "Undefined",
+              "name": "Count",
+              "value": null
+            }
+          ],
+          "write_group": "SubIFD"
+        },
+        {
+          "conversion": [
             "Absent",
             "Absent",
             "Absent",
@@ -216530,6 +216568,57 @@
             false
           ],
           "module": "Exif",
+          "name": "YCbCrSubSampling",
+          "raw_id": "530",
+          "table": "Main",
+          "table_properties": [
+            {
+              "kind": "Undefined",
+              "name": "WRITABLE",
+              "value": null
+            }
+          ],
+          "tag_groups": [
+            {
+              "kind": "Undefined",
+              "name": "0",
+              "value": null
+            }
+          ],
+          "tag_properties": [
+            {
+              "kind": "Undefined",
+              "name": "Format",
+              "value": null
+            },
+            {
+              "kind": "Text",
+              "name": "Writable",
+              "value": "int16u"
+            },
+            {
+              "kind": "Integer",
+              "name": "Count",
+              "value": 2
+            }
+          ],
+          "write_group": "IFD0"
+        },
+        {
+          "conversion": [
+            "Defined",
+            "Absent",
+            "Absent",
+            "Absent"
+          ],
+          "full_name": "Image::ExifTool::Exif::Main",
+          "gates": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "module": "Exif",
           "name": "YCbCrPositioning",
           "raw_id": "531",
           "table": "Main",
@@ -216669,10 +216758,10 @@
           "write_group": "IFD0"
         }
       ],
-      "rows_emitted": 191,
-      "rows_omitted": 34325,
+      "rows_emitted": 193,
+      "rows_omitted": 34323,
       "runtime_status": "inactive; static source rows are not connected to public writing"
     },
-    "source_rows_sha256": "4b40a73c2dde50ff9ff94a23d60045f04f564efa4bc2db1cc5060666a268138f"
+    "source_rows_sha256": "b1f23ac79cc697f2bf1fc601c05f4da0ff5e1c9907fa3753a1fd32f6bcf95e59"
   }
 }

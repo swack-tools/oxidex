@@ -279,10 +279,10 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE: StaticPublicSetNewValue
         write_exif_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
         writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
         exif_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
-        address_rows_sha256: "4b40a73c2dde50ff9ff94a23d60045f04f564efa4bc2db1cc5060666a268138f",
+        address_rows_sha256: "b1f23ac79cc697f2bf1fc601c05f4da0ff5e1c9907fa3753a1fd32f6bcf95e59",
         address_queries_sha256: "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
         final_recipes_sha256: "618dcb4541f55c943617772275ea55f65883b22ab890d53c79185fc03b366e13",
         intersection_sha256: "f6cf9dba5396c30574e78b8998a4c4369b7b75c41037c62d832ddf4c66f465a1",
     };
 pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATION_LEDGER_SHA256: &str =
-    "ea55869e56274acb227d7a132b0477406c5406489b49d98de59cd3127ad06fbc";
+    "fb3d4814ec21681d83fa71e6cf324e865f8795bd9543b7cad0702a4897745fbd";

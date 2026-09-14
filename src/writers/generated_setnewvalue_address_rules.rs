@@ -611,6 +611,17 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
+        raw_id: "339",
+        name: "SampleFormat",
+        group0: "EXIF",
+        group1: "IFD0",
+        write_group: "SubIFD",
+    },
+    StaticSetNewValueAddress {
+        index: 52,
+        module: "Exif",
+        table: "Main",
+        full_name: "Image::ExifTool::Exif::Main",
         raw_id: "33920",
         name: "IntergraphMatrix",
         group0: "EXIF",
@@ -618,7 +629,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 52,
+        index: 53,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -629,7 +640,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 53,
+        index: 54,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -640,7 +651,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 54,
+        index: 55,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -651,7 +662,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 55,
+        index: 56,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -662,7 +673,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 56,
+        index: 57,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -673,7 +684,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 57,
+        index: 58,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -684,7 +695,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 58,
+        index: 59,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -695,7 +706,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 59,
+        index: 60,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -706,7 +717,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 60,
+        index: 61,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -717,7 +728,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 61,
+        index: 62,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -728,7 +739,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 62,
+        index: 63,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -739,7 +750,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 63,
+        index: 64,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -750,7 +761,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 64,
+        index: 65,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -761,7 +772,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 65,
+        index: 66,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -772,7 +783,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 66,
+        index: 67,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -783,7 +794,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 67,
+        index: 68,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -794,7 +805,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "InteropIFD",
     },
     StaticSetNewValueAddress {
-        index: 68,
+        index: 69,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -805,7 +816,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "InteropIFD",
     },
     StaticSetNewValueAddress {
-        index: 69,
+        index: 70,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -816,7 +827,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "InteropIFD",
     },
     StaticSetNewValueAddress {
-        index: 70,
+        index: 71,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -827,7 +838,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 71,
+        index: 72,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -838,7 +849,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 72,
+        index: 73,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -849,7 +860,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 73,
+        index: 74,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -860,7 +871,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 74,
+        index: 75,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -871,7 +882,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 75,
+        index: 76,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -882,7 +893,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 76,
+        index: 77,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -893,7 +904,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 77,
+        index: 78,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -904,7 +915,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 78,
+        index: 79,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -915,7 +926,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 79,
+        index: 80,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -926,7 +937,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 80,
+        index: 81,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -937,7 +948,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 81,
+        index: 82,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -948,7 +959,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 82,
+        index: 83,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -959,7 +970,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 83,
+        index: 84,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -970,7 +981,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 84,
+        index: 85,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -981,7 +992,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 85,
+        index: 86,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -992,7 +1003,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 86,
+        index: 87,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1003,7 +1014,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 87,
+        index: 88,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1014,7 +1025,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 88,
+        index: 89,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1025,7 +1036,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 89,
+        index: 90,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1036,7 +1047,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 90,
+        index: 91,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1047,7 +1058,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 91,
+        index: 92,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1058,7 +1069,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 92,
+        index: 93,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1069,7 +1080,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 93,
+        index: 94,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1080,7 +1091,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 94,
+        index: 95,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1091,7 +1102,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 95,
+        index: 96,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1102,7 +1113,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 96,
+        index: 97,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1113,7 +1124,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 97,
+        index: 98,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1124,7 +1135,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 98,
+        index: 99,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1135,7 +1146,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 99,
+        index: 100,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1146,7 +1157,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 100,
+        index: 101,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1157,7 +1168,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 101,
+        index: 102,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1168,7 +1179,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 102,
+        index: 103,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1179,7 +1190,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 103,
+        index: 104,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1190,7 +1201,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 104,
+        index: 105,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1201,7 +1212,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 105,
+        index: 106,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1212,7 +1223,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 106,
+        index: 107,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1223,7 +1234,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 107,
+        index: 108,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1234,7 +1245,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 108,
+        index: 109,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1245,7 +1256,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 109,
+        index: 110,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1256,7 +1267,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 110,
+        index: 111,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1267,7 +1278,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 111,
+        index: 112,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1278,7 +1289,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 112,
+        index: 113,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1289,7 +1300,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 113,
+        index: 114,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1300,7 +1311,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 114,
+        index: 115,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1311,7 +1322,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 115,
+        index: 116,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1322,7 +1333,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 116,
+        index: 117,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1333,7 +1344,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 117,
+        index: 118,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1344,7 +1355,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 118,
+        index: 119,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1355,7 +1366,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 119,
+        index: 120,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1366,7 +1377,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 120,
+        index: 121,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1377,7 +1388,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 121,
+        index: 122,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1388,7 +1399,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 122,
+        index: 123,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1399,7 +1410,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 123,
+        index: 124,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1410,7 +1421,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 124,
+        index: 125,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1421,7 +1432,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 125,
+        index: 126,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1432,7 +1443,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 126,
+        index: 127,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1443,7 +1454,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 127,
+        index: 128,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1454,7 +1465,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 128,
+        index: 129,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1465,7 +1476,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 129,
+        index: 130,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1476,7 +1487,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 130,
+        index: 131,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1487,7 +1498,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 131,
+        index: 132,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1498,7 +1509,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 132,
+        index: 133,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1509,7 +1520,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 133,
+        index: 134,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1520,7 +1531,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 134,
+        index: 135,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1531,7 +1542,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 135,
+        index: 136,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1542,7 +1553,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 136,
+        index: 137,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1553,7 +1564,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 137,
+        index: 138,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1564,7 +1575,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 138,
+        index: 139,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1575,7 +1586,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 139,
+        index: 140,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1586,7 +1597,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 140,
+        index: 141,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1597,7 +1608,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 141,
+        index: 142,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1608,7 +1619,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 142,
+        index: 143,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1619,7 +1630,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 143,
+        index: 144,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1630,7 +1641,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 144,
+        index: 145,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1641,7 +1652,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 145,
+        index: 146,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1652,7 +1663,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 146,
+        index: 147,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1663,7 +1674,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 147,
+        index: 148,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1674,7 +1685,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 148,
+        index: 149,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1685,7 +1696,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 149,
+        index: 150,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1696,7 +1707,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 150,
+        index: 151,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1707,7 +1718,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 151,
+        index: 152,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1718,7 +1729,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 152,
+        index: 153,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1729,7 +1740,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 153,
+        index: 154,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1740,7 +1751,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 154,
+        index: 155,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1751,7 +1762,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 155,
+        index: 156,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1762,7 +1773,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 156,
+        index: 157,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1773,7 +1784,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD2",
     },
     StaticSetNewValueAddress {
-        index: 157,
+        index: 158,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1784,7 +1795,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 158,
+        index: 159,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1795,7 +1806,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 159,
+        index: 160,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1806,7 +1817,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 160,
+        index: 161,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1817,7 +1828,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 161,
+        index: 162,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1828,7 +1839,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 162,
+        index: 163,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1839,7 +1850,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 163,
+        index: 164,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1850,7 +1861,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 164,
+        index: 165,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1861,7 +1872,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 165,
+        index: 166,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1872,7 +1883,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 166,
+        index: 167,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1883,7 +1894,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 167,
+        index: 168,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1894,7 +1905,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 168,
+        index: 169,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1905,7 +1916,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 169,
+        index: 170,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1916,7 +1927,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 170,
+        index: 171,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1927,7 +1938,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 171,
+        index: 172,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1938,7 +1949,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 172,
+        index: 173,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1949,7 +1960,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 173,
+        index: 174,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1960,7 +1971,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 174,
+        index: 175,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1971,7 +1982,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 175,
+        index: 176,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1982,7 +1993,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 176,
+        index: 177,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -1993,7 +2004,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 177,
+        index: 178,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2004,7 +2015,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 178,
+        index: 179,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2015,7 +2026,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "SubIFD",
     },
     StaticSetNewValueAddress {
-        index: 179,
+        index: 180,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2026,7 +2037,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 180,
+        index: 181,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2037,7 +2048,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 181,
+        index: 182,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2048,7 +2059,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 182,
+        index: 183,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2059,7 +2070,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 183,
+        index: 184,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2070,7 +2081,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 184,
+        index: 185,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2081,7 +2092,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 185,
+        index: 186,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2092,7 +2103,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 186,
+        index: 187,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2103,7 +2114,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 187,
+        index: 188,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2114,7 +2125,18 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 188,
+        index: 189,
+        module: "Exif",
+        table: "Main",
+        full_name: "Image::ExifTool::Exif::Main",
+        raw_id: "530",
+        name: "YCbCrSubSampling",
+        group0: "EXIF",
+        group1: "IFD0",
+        write_group: "IFD0",
+    },
+    StaticSetNewValueAddress {
+        index: 190,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2125,7 +2147,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 189,
+        index: 191,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2136,7 +2158,7 @@ pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[
         write_group: "IFD0",
     },
     StaticSetNewValueAddress {
-        index: 190,
+        index: 192,
         module: "Exif",
         table: "Main",
         full_name: "Image::ExifTool::Exif::Main",
@@ -2218,7 +2240,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "activearea",
-        row_index: Some(112),
+        row_index: Some(113),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -2524,7 +2546,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "analogbalance",
-        row_index: Some(92),
+        row_index: Some(93),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -2558,7 +2580,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "antialiasstrength",
-        row_index: Some(103),
+        row_index: Some(104),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -2762,7 +2784,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "applicationnotes",
-        row_index: Some(190),
+        row_index: Some(192),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3136,7 +3158,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "asshoticcprofile",
-        row_index: Some(114),
+        row_index: Some(115),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3170,7 +3192,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "asshotneutral",
-        row_index: Some(93),
+        row_index: Some(94),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3204,7 +3226,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "asshotpreprofilematrix",
-        row_index: Some(115),
+        row_index: Some(116),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3238,7 +3260,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "asshotprofilename",
-        row_index: Some(125),
+        row_index: Some(126),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3272,7 +3294,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "asshotwhitexy",
-        row_index: Some(94),
+        row_index: Some(95),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3306,7 +3328,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "baselineexposure",
-        row_index: Some(95),
+        row_index: Some(96),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3340,7 +3362,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "baselineexposureoffset",
-        row_index: Some(152),
+        row_index: Some(153),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3374,7 +3396,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "baselinenoise",
-        row_index: Some(96),
+        row_index: Some(97),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3408,7 +3430,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "baselinesharpness",
-        row_index: Some(97),
+        row_index: Some(98),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3680,7 +3702,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "bayergreensplit",
-        row_index: Some(98),
+        row_index: Some(99),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3714,7 +3736,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "bestqualityscale",
-        row_index: Some(108),
+        row_index: Some(109),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -3884,7 +3906,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "blacklevel",
-        row_index: Some(81),
+        row_index: Some(82),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -4224,7 +4246,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "blacklevelrepeatdim",
-        row_index: Some(80),
+        row_index: Some(81),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -5312,7 +5334,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "cacheversion",
-        row_index: Some(156),
+        row_index: Some(157),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -5346,7 +5368,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "calibrationilluminant1",
-        row_index: Some(106),
+        row_index: Some(107),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -5380,7 +5402,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "calibrationilluminant2",
-        row_index: Some(107),
+        row_index: Some(108),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -5414,7 +5436,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "calibrationilluminant3",
-        row_index: Some(167),
+        row_index: Some(168),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -5448,7 +5470,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "cameracalibration1",
-        row_index: Some(88),
+        row_index: Some(89),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -5482,7 +5504,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "cameracalibration2",
-        row_index: Some(89),
+        row_index: Some(90),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -5516,7 +5538,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "cameracalibration3",
-        row_index: Some(168),
+        row_index: Some(169),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -5550,7 +5572,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "cameracalibrationsig",
-        row_index: Some(122),
+        row_index: Some(123),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -5720,7 +5742,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "cameralabel",
-        row_index: Some(149),
+        row_index: Some(150),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -5788,7 +5810,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "cameraserialnumber",
-        row_index: Some(100),
+        row_index: Some(101),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -6128,7 +6150,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "chromablurradius",
-        row_index: Some(102),
+        row_index: Some(103),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -6536,7 +6558,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "colorimetricreference",
-        row_index: Some(118),
+        row_index: Some(119),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -6570,7 +6592,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "colormatrix1",
-        row_index: Some(86),
+        row_index: Some(87),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -6638,7 +6660,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "colormatrix2",
-        row_index: Some(87),
+        row_index: Some(88),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -6740,7 +6762,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "colormatrix3",
-        row_index: Some(169),
+        row_index: Some(170),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -7454,7 +7476,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "columninterleavefactor",
-        row_index: Some(178),
+        row_index: Some(179),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -10276,7 +10298,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "currenticcprofile",
-        row_index: Some(116),
+        row_index: Some(117),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -10310,7 +10332,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "currentpreprofilematrix",
-        row_index: Some(117),
+        row_index: Some(118),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -10854,7 +10876,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "defaultblackrender",
-        row_index: Some(153),
+        row_index: Some(154),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -10888,7 +10910,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "defaultcroporigin",
-        row_index: Some(84),
+        row_index: Some(85),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -10922,7 +10944,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "defaultcropsize",
-        row_index: Some(85),
+        row_index: Some(86),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -10956,7 +10978,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "defaultscale",
-        row_index: Some(83),
+        row_index: Some(84),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -10990,7 +11012,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "defaultusercrop",
-        row_index: Some(157),
+        row_index: Some(158),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -11024,7 +11046,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "depthfar",
-        row_index: Some(160),
+        row_index: Some(161),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -11058,7 +11080,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "depthformat",
-        row_index: Some(158),
+        row_index: Some(159),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -11092,7 +11114,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "depthmeasuretype",
-        row_index: Some(162),
+        row_index: Some(163),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -11126,7 +11148,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "depthnear",
-        row_index: Some(159),
+        row_index: Some(160),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -11160,7 +11182,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "depthunits",
-        row_index: Some(161),
+        row_index: Some(162),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -12078,7 +12100,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "dngbackwardversion",
-        row_index: Some(74),
+        row_index: Some(75),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -12112,7 +12134,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "dnglensinfo",
-        row_index: Some(101),
+        row_index: Some(102),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -12146,7 +12168,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "dngversion",
-        row_index: Some(73),
+        row_index: Some(74),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -12214,7 +12236,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "enhanceparams",
-        row_index: Some(163),
+        row_index: Some(164),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -20884,7 +20906,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "forwardmatrix1",
-        row_index: Some(131),
+        row_index: Some(132),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -20918,7 +20940,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "forwardmatrix2",
-        row_index: Some(132),
+        row_index: Some(133),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -20952,7 +20974,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "forwardmatrix3",
-        row_index: Some(170),
+        row_index: Some(171),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -21054,7 +21076,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "framerate",
-        row_index: Some(143),
+        row_index: Some(144),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -21394,7 +21416,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "gdalmetadata",
-        row_index: Some(70),
+        row_index: Some(71),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -21428,7 +21450,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "gdalnodata",
-        row_index: Some(71),
+        row_index: Some(72),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -21462,7 +21484,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "geotiffasciiparams",
-        row_index: Some(60),
+        row_index: Some(61),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -21496,7 +21518,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "geotiffdirectory",
-        row_index: Some(58),
+        row_index: Some(59),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -21530,7 +21552,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "geotiffdoubleparams",
-        row_index: Some(59),
+        row_index: Some(60),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -21836,7 +21858,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "illuminantdata1",
-        row_index: Some(171),
+        row_index: Some(172),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -21870,7 +21892,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "illuminantdata2",
-        row_index: Some(172),
+        row_index: Some(173),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -21904,7 +21926,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "illuminantdata3",
-        row_index: Some(173),
+        row_index: Some(174),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -22720,7 +22742,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "imagesequenceinfo",
-        row_index: Some(179),
+        row_index: Some(180),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -22788,7 +22810,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "imagestats",
-        row_index: Some(180),
+        row_index: Some(181),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -23366,7 +23388,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "intergraphmatrix",
-        row_index: Some(51),
+        row_index: Some(52),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -25882,7 +25904,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "jxldecodespeed",
-        row_index: Some(185),
+        row_index: Some(186),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -25916,7 +25938,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "jxldistance",
-        row_index: Some(183),
+        row_index: Some(184),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -25950,7 +25972,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "jxleffort",
-        row_index: Some(184),
+        row_index: Some(185),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -27310,7 +27332,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "linearizationtable",
-        row_index: Some(79),
+        row_index: Some(80),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -27344,7 +27366,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "linearresponselimit",
-        row_index: Some(99),
+        row_index: Some(100),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -27378,7 +27400,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "localizedcameramodel",
-        row_index: Some(76),
+        row_index: Some(77),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -27786,7 +27808,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "makernotesafety",
-        row_index: Some(105),
+        row_index: Some(106),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -27820,7 +27842,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "maskedareas",
-        row_index: Some(113),
+        row_index: Some(114),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -29418,7 +29440,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "modeltiepoint",
-        row_index: Some(52),
+        row_index: Some(53),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -29452,7 +29474,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "modeltransform",
-        row_index: Some(54),
+        row_index: Some(55),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -29826,7 +29848,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "newrawimagedigest",
-        row_index: Some(154),
+        row_index: Some(155),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -29860,7 +29882,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "noiseprofile",
-        row_index: Some(141),
+        row_index: Some(142),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -30404,7 +30426,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "noisereductionapplied",
-        row_index: Some(126),
+        row_index: Some(127),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -30846,7 +30868,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "originalbestqualitysize",
-        row_index: Some(147),
+        row_index: Some(148),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -30880,7 +30902,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "originaldefaultcropsize",
-        row_index: Some(148),
+        row_index: Some(149),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -30914,7 +30936,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "originaldefaultfinalsize",
-        row_index: Some(146),
+        row_index: Some(147),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -31118,7 +31140,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "originalrawfiledata",
-        row_index: Some(111),
+        row_index: Some(112),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -31152,7 +31174,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "originalrawfiledigest",
-        row_index: Some(139),
+        row_index: Some(140),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -31186,7 +31208,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "originalrawfilename",
-        row_index: Some(110),
+        row_index: Some(111),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -31628,7 +31650,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "panasonictitle",
-        row_index: Some(120),
+        row_index: Some(121),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -31662,7 +31684,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "panasonictitle2",
-        row_index: Some(121),
+        row_index: Some(122),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32138,7 +32160,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "previewapplicationname",
-        row_index: Some(133),
+        row_index: Some(134),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32172,7 +32194,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "previewapplicationversion",
-        row_index: Some(134),
+        row_index: Some(135),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32206,7 +32228,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "previewcolorspace",
-        row_index: Some(137),
+        row_index: Some(138),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32274,7 +32296,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "previewsettingsdigest",
-        row_index: Some(136),
+        row_index: Some(137),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32308,7 +32330,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "previewsettingsname",
-        row_index: Some(135),
+        row_index: Some(136),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32410,7 +32432,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "printim",
-        row_index: Some(72),
+        row_index: Some(73),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32478,7 +32500,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profilecalibrationsig",
-        row_index: Some(123),
+        row_index: Some(124),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32512,7 +32534,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profilecopyright",
-        row_index: Some(130),
+        row_index: Some(131),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32546,7 +32568,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profiledynamicrange",
-        row_index: Some(181),
+        row_index: Some(182),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32580,7 +32602,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profileembedpolicy",
-        row_index: Some(129),
+        row_index: Some(130),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32614,7 +32636,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profilegaintablemap",
-        row_index: Some(164),
+        row_index: Some(165),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32648,7 +32670,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profilegaintablemap2",
-        row_index: Some(177),
+        row_index: Some(178),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32682,7 +32704,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profilegroupname",
-        row_index: Some(182),
+        row_index: Some(183),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32818,7 +32840,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profilehuesatmapdims",
-        row_index: Some(128),
+        row_index: Some(129),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32852,7 +32874,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profilehuesatmapencoding",
-        row_index: Some(150),
+        row_index: Some(151),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32920,7 +32942,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profilelooktabledims",
-        row_index: Some(140),
+        row_index: Some(141),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32954,7 +32976,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profilelooktableencoding",
-        row_index: Some(151),
+        row_index: Some(152),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -32988,7 +33010,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "profilename",
-        row_index: Some(127),
+        row_index: Some(128),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -33668,7 +33690,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "rawdatauniqueid",
-        row_index: Some(109),
+        row_index: Some(110),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -33804,7 +33826,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "rawimagedigest",
-        row_index: Some(138),
+        row_index: Some(139),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -33838,7 +33860,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "rawtopreviewgain",
-        row_index: Some(155),
+        row_index: Some(156),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -33940,7 +33962,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "reductionmatrix1",
-        row_index: Some(90),
+        row_index: Some(91),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -33974,7 +33996,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "reductionmatrix2",
-        row_index: Some(91),
+        row_index: Some(92),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -34008,7 +34030,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "reductionmatrix3",
-        row_index: Some(175),
+        row_index: Some(176),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -34042,7 +34064,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "reelname",
-        row_index: Some(145),
+        row_index: Some(146),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -34110,7 +34132,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "referenceblackwhite",
-        row_index: Some(189),
+        row_index: Some(191),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -34178,7 +34200,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "relatedimagefileformat",
-        row_index: Some(67),
+        row_index: Some(68),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -34212,7 +34234,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "relatedimageheight",
-        row_index: Some(69),
+        row_index: Some(70),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -34246,7 +34268,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "relatedimagewidth",
-        row_index: Some(68),
+        row_index: Some(69),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -34450,7 +34472,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "rgbtables",
-        row_index: Some(176),
+        row_index: Some(177),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -36082,7 +36104,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "seal",
-        row_index: Some(186),
+        row_index: Some(187),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -36184,7 +36206,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "seminfo",
-        row_index: Some(53),
+        row_index: Some(54),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -37850,7 +37872,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "shadowscale",
-        row_index: Some(104),
+        row_index: Some(105),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -41114,7 +41136,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "timecodes",
-        row_index: Some(142),
+        row_index: Some(143),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -41284,7 +41306,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "tstop",
-        row_index: Some(144),
+        row_index: Some(145),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -41318,7 +41340,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "uniquecameramodel",
-        row_index: Some(75),
+        row_index: Some(76),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -44004,7 +44026,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "whitelevel",
-        row_index: Some(82),
+        row_index: Some(83),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -44310,7 +44332,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "xpauthor",
-        row_index: Some(64),
+        row_index: Some(65),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -44344,7 +44366,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "xpcomment",
-        row_index: Some(63),
+        row_index: Some(64),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -44378,7 +44400,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "xpkeywords",
-        row_index: Some(65),
+        row_index: Some(66),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -44446,7 +44468,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "xpsubject",
-        row_index: Some(66),
+        row_index: Some(67),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -44480,7 +44502,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "xptitle",
-        row_index: Some(62),
+        row_index: Some(63),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -44650,7 +44672,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "ycbcrcoefficients",
-        row_index: Some(187),
+        row_index: Some(188),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -44718,7 +44740,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "ycbcrpositioning",
-        row_index: Some(188),
+        row_index: Some(190),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
@@ -44786,7 +44808,7 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     },
     StaticNativeLookupCandidate {
         name: "ycbcrsubsampling",
-        row_index: None,
+        row_index: Some(189),
         source_identity_present: true,
         module: Some("Exif"),
         table: Some("Main"),
