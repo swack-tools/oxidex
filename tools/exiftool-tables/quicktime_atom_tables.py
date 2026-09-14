@@ -134,8 +134,16 @@ def report(raw: bytes):
     if document.get("exiftool_version") != pinned:
         raise ValueError("capture version differs from repository pin")
     capture = document.get("capture_scope", {})
+    if capture.get("kind") != "verbatim selected tables from hydrated dump":
+        raise ValueError("capture kind must identify a hydrated table selection")
     if capture.get("tables") != ["QuickTime::" + table for table in TABLES]:
         raise ValueError("capture must identify the three selected source tables")
+    parent_count = capture.get("source_module_table_count")
+    if type(parent_count) is not int or parent_count < len(TABLES):
+        raise ValueError("capture parent table count must cover the selected tables")
+    module = document["modules"]["QuickTime"]
+    if module.get("table_count") != len(TABLES) or set(module["tables"]) != set(TABLES):
+        raise ValueError("selected module table count or identities disagree with capture scope")
     for key, length in (("source_commit", 40), ("full_dump_sha256", 64), ("dump_tool_sha256", 64)):
         if not re.fullmatch(r"[a-f0-9]{" + str(length) + "}", str(capture.get(key, ""))):
             raise ValueError("missing or malformed capture provenance: " + key)

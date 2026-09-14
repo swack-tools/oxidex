@@ -34,6 +34,7 @@ class BaselineTests(unittest.TestCase):
 
     def test_committed_source_ledger_and_summary_are_current(self):
         report = selector.report((HERE / "fixtures/quicktime_source_13_59.json").read_bytes())
+        self.assertEqual(report["source"]["capture_scope"]["source_module_table_count"], 87)
         self.assertEqual(selector.serialized(report), (HERE / "quicktime_source_capabilities.json").read_text())
         self.assertEqual(selector.serialized(selector.summary(report)),
                          (baseline.ROOT / "docs/reference/quicktime-source-baseline.json").read_text())
@@ -69,7 +70,7 @@ class BaselineTests(unittest.TestCase):
 
     def test_capture_provenance_cannot_be_removed_or_reassigned(self):
         document = json.loads((HERE / "fixtures/quicktime_source_13_59.json").read_text())
-        for key in ("tables", "source_commit", "full_dump_sha256", "dump_tool_sha256", "perl_version"):
+        for key in ("kind", "tables", "source_module_table_count", "source_commit", "full_dump_sha256", "dump_tool_sha256", "perl_version"):
             changed = json.loads(json.dumps(document))
             del changed["capture_scope"][key]
             with self.assertRaises(ValueError):
