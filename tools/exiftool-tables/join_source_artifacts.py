@@ -42,7 +42,7 @@ ENABLEMENT_PATHS = {"binary": ("src/exiftool_tables/enabled.rs", "ENABLED"), "if
 RUNTIME_CONSUMERS = {
     "binary": {"kind": "generic_binary_engine", "refs": ["src/exiftool_tables/engine.rs"]},
     "ifd": {"kind": "generic_ifd_engine", "refs": ["src/core/exif_dir_engine.rs"]},
-    "keyed": {"kind": "generic_keyed_directory", "refs": ["src/exiftool_tables/engine.rs"]},
+    "keyed": {"kind": "generic_keyed_directory", "refs": ["src/exiftool_tables/keyed_engine.rs"]},
 }
 
 def consumer_snapshot(repo: Path, commit: str) -> dict[str, Any]:
@@ -60,10 +60,29 @@ def consumer_snapshot(repo: Path, commit: str) -> dict[str, Any]:
 
 def parse_enabled(text: str, symbol: str) -> set[tuple[str, str]]:
     import re
-    marker = re.search(rf"pub static {symbol}: &\[\(&str, &str\)\] = &\[", text)
+    # Preserve strings while blanking comments before locating the array.
+    out=[]; i=0; quote=False; block=0
+    while i < len(text):
+        if quote:
+            out.append(text[i]);
+            if text[i] == "\\" and i + 1 < len(text): out.append(text[i+1]); i += 2; continue
+            if text[i] == '"': quote=False
+            i += 1; continue
+        if text.startswith('//', i):
+            j=text.find('\n',i); j=len(text) if j<0 else j; out.extend(' '*(j-i)); i=j; continue
+        if text.startswith('/*', i):
+            depth=1; j=i+2
+            while j < len(text) and depth:
+                depth += 1 if text.startswith('/*',j) else -1 if text.startswith('*/',j) else 0; j += 2 if text.startswith(('/*','*/'),j) else 1
+            if depth: raise ValueError('unterminated block comment')
+            out.extend(' '*(j-i)); i=j; continue
+        quote = text[i] == '"'; out.append(text[i]); i += 1
+    if quote: raise ValueError('unterminated string')
+    code=''.join(out)
+    marker = re.search(rf"pub static {symbol}: &\[\(&str, &str\)\] = &\[", code)
     if marker is None: raise ValueError(f"missing {symbol}")
-    start, end = brace_span(text, marker.end() - 1, "[", "]")
-    body = re.sub(r"//[^\n]*|/\*.*?\*/", "", text[start + 1:end - 1], flags=re.S)
+    start, end = brace_span(code, marker.end() - 1, "[", "]")
+    body = code[start + 1:end - 1]
     entries = re.findall(r'\s*\("([^"\\]+)",\s*"([^"\\]+)"\)\s*,?', body)
     remainder = re.sub(r'\s*\("[^"\\]+",\s*"[^"\\]+"\)\s*,?', '', body)
     if remainder.strip(): raise ValueError(f"unrecognised {symbol} entry syntax")
