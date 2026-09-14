@@ -125,6 +125,62 @@ def mandatory_legacy_candidates(ledger_path: Path = MANDATORY_LEDGER,
     )))
 
 
+def jfif_adjusted_candidates(carrier: Any, ledger_path: Path = MANDATORY_LEDGER,
+                             address_path: Path = ADDRESS_RULES) -> tuple[MandatoryCandidate, ...]:
+    """Derive IFD0 JFIF-adjusted mandatory defaults for one raw JFIF carrier."""
+    if getattr(carrier, "jfif", None) is None or carrier.jfif.unit is None:
+        return ()
+    recipe = json.loads(ledger_path.read_text(encoding="utf-8")).get("recipe")
+    override = recipe.get("jfif_override") if isinstance(recipe, dict) else None
+    if not isinstance(override, dict) or override.get("directory") != "IFD0":
+        raise ValueError("JFIF mandatory override is unresolved")
+    raw = carrier.jfif
+    props = {"JFIFXResolution": raw.x_density, "JFIFYResolution": raw.y_density,
+             "JFIFResolutionUnit": raw.unit}
+    assignments = override.get("assignments")
+    if not isinstance(assignments, list):
+        raise ValueError("JFIF mandatory assignments are unavailable")
+    derived = []
+    for item in assignments:
+        if not (isinstance(item, list) and len(item) == 3 and type(item[0]) is int
+                and isinstance(item[1], str) and type(item[2]) is int and item[1] in props):
+            raise ValueError("JFIF mandatory assignment is malformed")
+        derived.append((item[0], item[1], props[item[1]] + item[2]))
+    rows = {}
+    for match in _ADDRESS.finditer(address_path.read_text(encoding="utf-8")):
+        row = match.groupdict()
+        try: raw_id = int(row["raw_id"], 0)
+        except ValueError: continue
+        if (row["module"], row["table"], row["full_name"]) == ("Exif", "Main", "Image::ExifTool::Exif::Main"):
+            rows.setdefault(raw_id, []).append(row)
+    candidates=[]
+    for raw_id, _property, default in derived:
+        matches=rows.get(raw_id, [])
+        if len(matches) > 1: raise ValueError("JFIF mandatory address is ambiguous")
+        if not matches: continue
+        alternatives=[value for other_id, _prop, value in derived if other_id != raw_id and value != default]
+        if not alternatives: continue
+        row=matches[0]
+        candidates.append(MandatoryCandidate(raw_id,row['name'],row['group0'],row['write_group'],"IFD0",default,alternatives[0]))
+    return tuple(sorted(candidates,key=lambda item:(item.raw_tag_id,item.name,item.override_value)))
+
+
+def select_native_jfif_candidate(*, perl: Path, library: Path, root: Path, target: GeneratedTarget,
+                                 carrier: Any, ledger_path: Path, address_path: Path) -> tuple[MandatoryCandidate, list[dict[str, Any]]]:
+    """Choose an executable IFD0 adjusted default using the raw JFIF carrier."""
+    probe_root=root/f"jfif-selection-{carrier.label}"; probe_root.mkdir()
+    source=probe_root/'source.jpg'; write_carrier(source,carrier); probes=[]
+    for index,candidate in enumerate(jfif_adjusted_candidates(carrier,ledger_path,address_path)):
+        set_spec=[native_item(target.qualifiers[0],"utf8","batch-target"),native_item(candidate.qualifier,"utf8",str(candidate.override_value))]
+        delete_spec=[native_item(target.qualifiers[0],"utf8","batch-target"),native_item(candidate.qualifier,"undefined")]
+        set_call=native.run_native_batch(perl,library,source,probe_root/f'{index}-set.jpg',set_spec)
+        delete_call=native.run_native_batch(perl,library,source,probe_root/f'{index}-delete.jpg',delete_spec)
+        accepted=all(call.get('returncode')==0 and isinstance(call.get('result'),dict) and call['result'].get('write_return')==1 and all(x.get('return') in (1,2) for x in call['result'].get('set_calls',[])) for call in (set_call,delete_call))
+        probes.append({'candidate':asdict(candidate),'set':set_call,'delete':delete_call,'accepted':accepted})
+        if accepted:return candidate,probes
+    raise ValueError(f'no source-addressed JFIF mandatory default accepted override/deletion for {carrier.label}')
+
+
 def select_native_mandatory_candidate(*, perl: Path, library: Path, root: Path,
                                       target: GeneratedTarget, ledger_path: Path = MANDATORY_LEDGER,
                                       address_path: Path = ADDRESS_RULES) -> tuple[MandatoryCandidate, list[dict[str, Any]]]:
@@ -221,8 +277,14 @@ def assert_native_batch(call: dict[str, Any], label: str, expected: list[dict[st
     if not isinstance(actual, list) or len(actual) != len(expected):
         raise AssertionError(f"{label}: native batch operand count differs")
     for observed, planned in zip(actual, expected, strict=True):
-        if observed.get("tag") != planned["tag"] or observed.get("return") not in (1, 2):
-            raise AssertionError(f"{label}: native batch operand order/name differs")
+        if observed.get("tag") != planned["tag"]:
+            raise AssertionError(f"{label}: native batch operand order/name differs: {observed.get('tag')!r} != {planned['tag']!r}")
+        if observed.get("return") not in (1, 2):
+            raise AssertionError(
+                f"{label}: native batch operand was rejected for {planned['tag']!r}: "
+                f"return={observed.get('return')!r}; stderr={call.get('stderr', '').strip()!r}; "
+                f"error={result.get('error')!r}"
+            )
         scalar = planned["scalar"]
         expected_input: dict[str, Any] = {"defined": scalar != "undefined"}
         if scalar != "undefined":
@@ -294,23 +356,36 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
         perl=perl, library=library, root=root, target=targets[0],
         ledger_path=mandatory_ledger, address_path=address_rules,
     )
+    jfif_candidates: dict[str, MandatoryCandidate] = {}
+    jfif_probes: dict[str, list[dict[str, Any]]] = {}
+    for carrier in CARRIERS:
+        if carrier.jfif.unit is not None:
+            candidate, probes = select_native_jfif_candidate(
+                perl=perl, library=library, root=root, target=targets[0], carrier=carrier,
+                ledger_path=mandatory_ledger, address_path=address_rules,
+            )
+            jfif_candidates[carrier.label], jfif_probes[carrier.label] = candidate, probes
     rows, requests = [], []
     for carrier in CARRIERS:
         source = root / f"{carrier.label}-source.jpg"
         write_carrier(source, carrier)
+        cohorts = [(mandatory, BATCH_CASES, "lexical")]
+        if carrier.label in jfif_candidates:
+            cohorts.append((jfif_candidates[carrier.label], BATCH_CASES[1:], "jfif-adjusted"))
         for target in targets:
-            for case in BATCH_CASES:
-                spec = batch_case(target, mandatory, case)
-                stem = f"{carrier.label}-{target.raw_tag_id:04x}-{case}"
-                native_output, generated_output = root / f"{stem}-native.jpg", root / f"{stem}-generated.jpg"
-                native_call = native.run_native_batch(perl, library, source, native_output, spec["native"])
-                assert_native_batch(native_call, stem, spec["native"])
-                requests.append({"route": "public-batch", "carrier": "jpeg", "input": str(source),
-                                 "output": str(generated_output), "batch": spec["public"]})
-                rows.append({"id": stem, "carrier": asdict(carrier), "case": case,
-                             "target": asdict(target), "mandatory": asdict(mandatory), "spec": spec,
-                             "source": str(source), "native_output": str(native_output),
-                             "output": str(generated_output), "native_call": native_call})
+            for active_mandatory, cases, source_kind in cohorts:
+                for case in cases:
+                    spec = batch_case(target, active_mandatory, case)
+                    stem = f"{carrier.label}-{target.raw_tag_id:04x}-{source_kind}-{active_mandatory.raw_tag_id:04x}-{case}"
+                    native_output, generated_output = root / f"{stem}-native.jpg", root / f"{stem}-generated.jpg"
+                    native_call = native.run_native_batch(perl, library, source, native_output, spec["native"])
+                    assert_native_batch(native_call, stem, spec["native"])
+                    requests.append({"route": "public-batch", "carrier": "jpeg", "input": str(source),
+                                     "output": str(generated_output), "batch": spec["public"]})
+                    rows.append({"id": stem, "carrier": asdict(carrier), "case": case,
+                                 "target": asdict(target), "mandatory": asdict(active_mandatory), "mandatory_source": source_kind, "spec": spec,
+                                 "source": str(source), "native_output": str(native_output),
+                                 "output": str(generated_output), "native_call": native_call})
     request_path, result_path = root / "requests.json", root / "results.json"
     request_path.write_text(json.dumps(requests, indent=2) + "\n", encoding="utf-8")
     env = os.environ.copy() | {"OXIDEX_SCALAR_WRITE_REQUESTS": str(request_path),
@@ -324,7 +399,9 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
         raise AssertionError("public batch fixture results differ from requests")
     report: dict[str, Any] = {"instrument": "fresh_jpeg_public_batch_matrix_v2", "declared": len(rows),
                               "passed": 0, "mandatory_candidate": asdict(mandatory),
-                              "mandatory_selection_probes": mandatory_probes, "rows": rows}
+                              "mandatory_selection_probes": mandatory_probes,
+                              "jfif_adjusted_candidates": {key: asdict(value) for key, value in jfif_candidates.items()},
+                              "jfif_adjusted_selection_probes": jfif_probes, "rows": rows}
     for row, result in zip(rows, results, strict=True):
         row["driver_result"] = result
         try:
@@ -360,7 +437,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     identity = native.native_identity(perl, library)
     native.assert_contract_version(identity)
     targets = generated_targets(args.ledger, args.rules)
-    declared = len(CARRIERS) * len(targets) * len(BATCH_CASES)
+    declared = len(CARRIERS) * len(targets) * len(BATCH_CASES) + sum(
+        2 * len(targets) for carrier in CARRIERS if carrier.jfif.unit is not None
+    )
     print_header(tool="fresh_jpeg_public_batch_matrix_v1", git=state, binary=binary,
                  dirty_overridden=overridden,
                  extra=[f"native: {identity}", f"{declared} fresh/empty public batches"])

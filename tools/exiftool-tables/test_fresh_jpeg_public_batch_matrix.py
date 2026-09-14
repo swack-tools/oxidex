@@ -59,6 +59,14 @@ class FreshJpegPublicBatchMatrixTests(unittest.TestCase):
         self.assertEqual(removal["native"][1], {"tag": "IFD1:Artist", "scalar": "utf8", "value": "batch-artist"})
         self.assertEqual(removal["native"][2], {"tag": "IFD1:MandatoryFromLedger", "scalar": "undefined"})
 
+    def test_jfif_adjusted_candidates_follow_raw_carrier_properties(self) -> None:
+        zero = next(case for case in matrix.CARRIERS if case.label == "fresh-jfif-zero")
+        nonzero = next(case for case in matrix.CARRIERS if case.label == "fresh-jfif-nonzero")
+        zero_candidate = matrix.jfif_adjusted_candidates(zero)[0]
+        nonzero_candidate = matrix.jfif_adjusted_candidates(nonzero)[0]
+        self.assertEqual((zero_candidate.directory, zero_candidate.name, zero_candidate.default_value, zero_candidate.override_value), ("IFD0", "XResolution", 0, 1))
+        self.assertEqual((nonzero_candidate.directory, nonzero_candidate.name, nonzero_candidate.default_value, nonzero_candidate.override_value), ("IFD0", "XResolution", 72, 300))
+
     def test_ifd1_mandatory_entry_uses_parsed_next_ifd(self) -> None:
         document = {
             "exif": {"tags": {"282": {"value_hex": "wrong-level"}},
