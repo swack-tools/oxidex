@@ -269,7 +269,68 @@ class NativeWriteFacts(unittest.TestCase):
         self.assertFalse(missing["resolved"])
         self.assertEqual(missing["requested_binding"], "Image::ExifTool::CheckValue")
         self.assertEqual(missing["reason"], "code_ref_unavailable")
+        self.assertFalse(missing["lexical_hashes"]["resolved"])
         self.assertIn("Exif", doc["modules"])
+
+    def test_loaded_lexical_dispatch_changes_without_changing_helper_body(self):
+        source = textwrap.dedent("""\
+            package Image::ExifTool;
+            sub WriterHelper($) { return $_[0]; }
+            my %formats = (
+                int8u => \\&WriterHelper,
+                string => sub($) { return 'intercepted'; },
+                empty => '', zero => 0, missing => undef, range => [-2, 9],
+            );
+            # MUTATE_LOADED_MAP
+            sub WriteValue($$) {
+                my ($value, $format) = @_;
+                return $formats{$format};
+            }
+            sub CheckValue($$) { return undef; }
+            1;
+        """)
+        self.writer_helpers.write_text(source.replace(
+            "# MUTATE_LOADED_MAP", "delete $formats{string};"
+        ), encoding="utf-8")
+        before = self.dump()
+        self.writer_helpers.write_text(source, encoding="utf-8")
+        after = self.dump()
+        old = before["native_write_helpers"]["write_value"]
+        new = after["native_write_helpers"]["write_value"]
+        self.assertEqual(old["__deparse"], new["__deparse"])
+        self.assertEqual(before["modules"], after["modules"])
+        self.assertTrue(new["lexical_hashes"]["resolved"])
+        old_map = old["lexical_hashes"]["bindings"]["%formats"]
+        new_map = new["lexical_hashes"]["bindings"]["%formats"]
+        self.assertTrue(old_map["resolved"] and new_map["resolved"])
+        self.assertNotIn("string", old_map["entries"])
+        entries = new_map["entries"]
+        self.assertTrue(entries["string"]["resolved"])
+        self.assertIn("__ANON__", entries["string"]["__name"])
+        self.assertEqual(entries["string"]["source_sha256"],
+                         hashlib.sha256(self.writer_helpers.read_bytes()).hexdigest())
+        self.assertEqual(entries["int8u"]["__name"], "Image::ExifTool::WriterHelper")
+        self.assertEqual(entries["empty"], "")
+        self.assertEqual(str(entries["zero"]), "0")
+        self.assertIsNone(entries["missing"])
+        self.assertEqual([str(value) for value in entries["range"]], ["-2", "9"])
+
+    def test_lexical_capture_uses_final_rebound_callable_and_preserves_empty_map(self):
+        self.write_writer("return 1;", extra=textwrap.dedent("""\
+            package Image::ExifTool;
+            my %replacement;
+            no warnings 'redefine';
+            *Image::ExifTool::WriteValue = sub($$) {
+                return $replacement{$_[1]};
+            };
+        """))
+        fact = self.dump()["native_write_helpers"]["write_value"]
+        self.assertEqual(fact["requested_binding"], "Image::ExifTool::WriteValue")
+        self.assertEqual(fact["source_file"], "Image/ExifTool/WriteExif.pl")
+        self.assertEqual(fact["lexical_hashes"], {
+            "resolved": True,
+            "bindings": {"%replacement": {"resolved": True, "entries": {}}},
+        })
 
     def test_unloadable_helper_module_is_explicitly_unresolved(self):
         self.writer_helpers.unlink()

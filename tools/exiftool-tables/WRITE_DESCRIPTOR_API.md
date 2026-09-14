@@ -67,3 +67,19 @@ and `full_name` before applying this source class. It rejects malformed or
 non-relative provenance paths, non-SHA-256 digests, and unrepresentable group
 maps. `--write-out` is optional: requesting this inactive artifact does not
 change the ordinary generated binary artifact.
+# Loaded helper hash state
+
+The top-level `native_write_helpers` facts also carry `lexical_hashes` from
+the final callable's live Perl pad. A resolved capture has a `bindings` map,
+keyed by the actual lexical name (including `%`). Each hash is either explicitly
+unresolved or has resolved `entries`. Empty hashes, empty strings, zero, undef
+and reference values remain distinct. CODE entries retain the actual callable
+body, source identity and bounded dependency facts.
+
+This matters for `WriteValue`: a newly added dispatch entry can intercept
+`string` or `undef` before the string branch without changing the helper body.
+Capture follows the loaded state, including platform-time removals, rather
+than parsing the initializer. A future compiler must authenticate its actual
+lookup, local initialization and control flow against these facts. A missing
+or unresolved pad must never be treated as an empty map. These additional facts
+do not activate a writer or translate helper behavior.

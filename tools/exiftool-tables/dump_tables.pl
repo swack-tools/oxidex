@@ -712,6 +712,49 @@ sub hydrate_write_helpers {
     return { loaded => JSON::PP::false, reason => 'write_helper_load_failed' };
 }
 
+# A helper's body may dispatch through a closed-over hash before reaching an
+# otherwise supported branch. Capture the live pad, not an initializer parsed
+# from source: Writer.pl can remove entries after platform capability checks.
+# These are facts only. A consumer must still prove the lookup/control flow and
+# refuse an unresolved pad; a missing capture is never an empty dispatch map.
+sub native_helper_lexical_hashes {
+    my ($binding, $lib_abs) = @_;
+    no strict 'refs';
+    my $cv = *{$binding}{CODE};
+    return { resolved => JSON::PP::false, reason => 'code_ref_unavailable' } unless $cv;
+    my (@names, @values);
+    my $loaded = eval {
+        my @pad = B::svref_2object($cv)->PADLIST->ARRAY;
+        die "missing pad" unless @pad >= 2;
+        @names = $pad[0]->ARRAY;
+        @values = $pad[1]->ARRAY;
+        1;
+    };
+    return { resolved => JSON::PP::false, reason => 'lexical_pad_unavailable' } unless $loaded;
+    my %hashes;
+    for my $index (0 .. $#names) {
+        my $name = eval { $names[$index]->PV };
+        next unless defined $name && $name =~ /^%/;
+        return { resolved => JSON::PP::false, reason => 'ambiguous_lexical_hash_name' }
+            if exists $hashes{$name};
+        my $value = $values[$index];
+        my $hash = eval { $value->isa('B::HV') ? $value->object_2svref : undef };
+        if (ref($hash) ne 'HASH') {
+            $hashes{$name} = { resolved => JSON::PP::false, reason => 'lexical_hash_unavailable' };
+            next;
+        }
+        my %entries;
+        for my $key (sort keys %$hash) {
+            my $entry = $hash->{$key};
+            $entries{to_text($key)} = ref($entry) eq 'CODE'
+                ? code_ref_fact($entry, code_name($entry), $lib_abs)
+                : write_scrub($entry);
+        }
+        $hashes{$name} = { resolved => JSON::PP::true, entries => \%entries };
+    }
+    return { resolved => JSON::PP::true, bindings => \%hashes };
+}
+
 sub native_write_helper_facts {
     my ($lib_abs, $status) = @_;
     my %bindings = (
@@ -735,6 +778,7 @@ sub native_write_helper_facts {
         # CV while this field binds it to the native helper call site.
         my $fact = code_source_fact($bindings{$key}, $lib_abs);
         $fact->{requested_binding} = $bindings{$key};
+        $fact->{lexical_hashes} = native_helper_lexical_hashes($bindings{$key}, $lib_abs);
         $facts{$key} = $fact;
     }
     return \%facts;
