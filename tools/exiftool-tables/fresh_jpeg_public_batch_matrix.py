@@ -418,6 +418,8 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
         output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         raise
     if not isinstance(results, list) or len(results) != len(rows):
+        report.update(state="driver-failed", error="public batch fixture results differ from requests")
+        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         raise AssertionError("public batch fixture results differ from requests")
     for row, result in zip(rows, results, strict=True):
         row["driver_result"] = result
@@ -431,6 +433,8 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
         except (AssertionError, OSError, ValueError) as error:
             row.update(state="failed", error=str(error))
         output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    report["state"] = "passed" if report["passed"] == report["declared"] else "failed"
+    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 
 

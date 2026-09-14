@@ -457,13 +457,13 @@ fn transform_exif<T>(
         }
         index
     } else {
+        // ExtendedEXIF is represented by repeated Exif\0\0 APP1 blocks;
+        // Adobe's XMP extension is a distinct protocol and remains a control case.
         if policy
             .creation_wait_for_directories
             .contains(&"ExtendedEXIF")
             && head.iter().any(|segment| {
-                segment
-                    .data
-                    .starts_with(b"http://ns.adobe.com/xmp/extension/\0")
+                segment.marker == APP1_MARKER && segment.data.starts_with(EXIF_IDENTIFIER)
             })
         {
             return Err(ExifToolError::unsupported_format(
