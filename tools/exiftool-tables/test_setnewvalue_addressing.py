@@ -153,6 +153,17 @@ class SetNewValueAddressingTests(unittest.TestCase):
         with self.assertRaisesRegex(RecipeRefused, "query set"):
             resolve(addressing, unavailable, "NoAllowlist")
 
+    def test_explicit_ifd_destination_does_not_replace_source_preference(self):
+        addressing = self.compiled()
+        native = observations(addressing.rows)
+        selected = resolve(addressing, native, "IFD1:NoAllowlist")
+        self.assertEqual(selected.state, "resolved")
+        self.assertEqual(selected.row.write_group, "IFD0")
+        self.assertEqual(selected.selected_group, "IFD1")
+        accepted, failures = resolve_batch(addressing, native, {"IFD0:NoAllowlist": "one", "IFD1:NoAllowlist": "two"})
+        self.assertEqual(failures, ())
+        self.assertEqual({item.selected_group for item, value in accepted}, {"IFD0", "IFD1"})
+
     def test_aliases_deduplicate_and_conflicts_refuse_same_physical_field(self):
         addressing = self.compiled()
         native = observations(addressing.rows)
@@ -266,3 +277,28 @@ class SetNewValueAddressingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExplicitDirectoryCaptureTests(unittest.TestCase):
+    def test_changed_caller_and_mixed_closures_cannot_emit_directory_authority(self):
+        from scalar_helper_codegen import generate
+        original = source()
+        numeric = json.loads((ROOT / 'testdata/numeric_scalar_source.json').read_text())
+        for key in ('write_value', 'check_value'):
+            original['native_write_helpers'][key] = numeric['native_write_helpers'][key]
+        rendered, report = generate(original)
+        self.assertEqual(report['helpers']['explicit_directories']['state'], 'compiled')
+        for mutation in ('body', 'writer', 'generic'):
+            changed = deepcopy(original)
+            if mutation == 'body':
+                changed['native_write_helpers']['set_new_value']['__deparse'] += ' $val += 1;'
+            elif mutation == 'writer':
+                changed['native_write_capture_context']['loaded_modules']['Image/ExifTool/Writer.pl'] = 'f' * 64
+            else:
+                modules = changed['native_capture_context']['loaded_closure']['modules']
+                next(item for item in modules if item['inc'] == 'Image/ExifTool/Writer.pl')['source_sha256'] = 'f' * 64
+                changed['native_capture_context']['loaded_closure'] = closure_manifest(modules)
+            rendered, report = generate(changed)
+            with self.subTest(mutation=mutation):
+                self.assertEqual(report['helpers']['explicit_directories']['state'], 'unsupported')
+                self.assertIn('PUBLIC_SET_NEW_VALUE_CALLER: Option<crate::writers::generated_scalar::PublicSetNewValueCallerRecipe> = None', rendered)

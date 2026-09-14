@@ -113,8 +113,12 @@ class NativeScalarDifferential(unittest.TestCase):
     def test_actual_native_helper_matches_all_scalar_states_and_counts(self):
         document = json.loads(Path(os.environ["OXIDEX_TABLES_JSON"]).read_text())
         recipe = compile_scalar_check(document["native_write_helpers"]["check_value"])
+        # The gate may provide either the selected ExifTool tree or its `lib`
+        # directory.  Resolve once before constructing `-I`; appending `lib`
+        # unconditionally turns a valid library path into `lib/lib`.
         native_root = Path(os.environ["OXIDEX_PINNED_EXIFTOOL"])
-        lib = native_root / "lib"
+        lib = native_root / "lib" if (native_root / "lib").is_dir() else native_root
+        self.assertTrue((lib / "Image/ExifTool/Writer.pl").is_file())
         values = [NativeScalar("undefined", None)]
         values += [NativeScalar("bytes", value) for value in
                    (b"", b"A", b"abc", b"a\0b", b"\0", b"\xff", b"\xc3\xa9", b"line\n")]

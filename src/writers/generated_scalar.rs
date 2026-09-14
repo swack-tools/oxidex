@@ -367,3 +367,269 @@ mod tests {
         assert!(serialize_scalar(&WRITE, Scalar::Bytes(vec![]), "string", Some(i64::MAX)).is_err());
     }
 }
+
+/// Closed count-one numeric scalar specialization. Formats and bounds
+/// are emitted only after CheckValue, WriteValue and their dependencies compile.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NumericScalarRecipe {
+    pub formats: [&'static str; 2],
+    pub maxima: [u64; 2],
+    pub writer_source_sha256: &'static str,
+    pub main_source_sha256: &'static str,
+    pub rounding_offset: f64,
+    pub rational_relative_error: f64,
+    pub integer_range_exception: u64,
+}
+
+pub(crate) fn numeric_value(
+    recipe: &NumericScalarRecipe,
+    value: &Scalar,
+    format: &str,
+    count: Option<i64>,
+) -> Result<(u32, u32)> {
+    if count.is_some_and(|count| count != 1 && count != 0) {
+        return Err(refused(
+            "numeric scalar count is outside the proven specialization",
+        ));
+    }
+    let index = recipe
+        .formats
+        .iter()
+        .position(|item| *item == format)
+        .ok_or_else(|| refused("numeric format has no compiled recipe"))?;
+    let bytes = match value {
+        Scalar::Bytes(bytes) => bytes.as_slice(),
+        Scalar::Utf8(text) => text.as_bytes(),
+        Scalar::Undefined => return Err(refused("numeric scalar is undefined")),
+    };
+    fn digits(bytes: &[u8]) -> Option<u64> {
+        if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        bytes.iter().try_fold(0u64, |value, byte| {
+            value.checked_mul(10)?.checked_add(u64::from(byte - b'0'))
+        })
+    }
+    fn unsigned(bytes: &[u8]) -> Option<u64> {
+        digits(bytes.strip_prefix(b"+").unwrap_or(bytes))
+    }
+    fn float(bytes: &[u8]) -> Option<f64> {
+        // Exact ASCII specialization of the compiled IsFloat alternatives.
+        let body = bytes
+            .strip_prefix(b"+")
+            .or_else(|| bytes.strip_prefix(b"-"))
+            .unwrap_or(bytes);
+        let mut at = 0;
+        while body.get(at).is_some_and(u8::is_ascii_digit) {
+            at += 1;
+        }
+        let mut digits_count = at;
+        if body
+            .get(at)
+            .is_some_and(|byte| *byte == b'.' || *byte == b',')
+        {
+            at += 1;
+            let start = at;
+            while body.get(at).is_some_and(u8::is_ascii_digit) {
+                at += 1;
+            }
+            digits_count += at - start;
+        }
+        if digits_count == 0 {
+            return None;
+        }
+        if body
+            .get(at)
+            .is_some_and(|byte| *byte == b'E' || *byte == b'e')
+        {
+            at += 1;
+            if body
+                .get(at)
+                .is_some_and(|byte| *byte == b'+' || *byte == b'-')
+            {
+                at += 1;
+            }
+            let start = at;
+            while body.get(at).is_some_and(u8::is_ascii_digit) {
+                at += 1;
+            }
+            if at == start {
+                return None;
+            }
+        }
+        if at != body.len() {
+            return None;
+        }
+        std::str::from_utf8(bytes)
+            .ok()?
+            .replace(',', ".")
+            .parse()
+            .ok()
+    }
+    let maximum = recipe.maxima[index];
+    if index == 0 {
+        let signed = bytes
+            .strip_prefix(b"+")
+            .or_else(|| bytes.strip_prefix(b"-"))
+            .unwrap_or(bytes);
+        let number = if digits(signed).is_some() {
+            float(bytes)
+        } else {
+            // Native checks IsHex before IsFloat: "1e3" is hexadecimal here.
+            let hex = bytes
+                .strip_prefix(b"0x")
+                .or_else(|| bytes.strip_prefix(b"0X"))
+                .unwrap_or(bytes);
+            if !hex.is_empty() && hex.len() <= 8 && hex.iter().all(u8::is_ascii_hexdigit) {
+                std::str::from_utf8(hex)
+                    .ok()
+                    .and_then(|text| u32::from_str_radix(text, 16).ok())
+                    .map(f64::from)
+            } else {
+                float(bytes).map(|value| {
+                    (value
+                        + if value < 0.0 {
+                            -recipe.rounding_offset
+                        } else {
+                            recipe.rounding_offset
+                        })
+                    .trunc()
+                })
+            }
+        }
+        .ok_or_else(|| refused("numeric input fails source integer validation"))?;
+        if !number.is_finite()
+            || number < 0.0
+            || (number > maximum as f64 && number != recipe.integer_range_exception as f64)
+        {
+            return Err(refused("numeric input is outside source integer range"));
+        }
+        return Ok((number as u32, 1));
+    }
+    if bytes == b"inf" {
+        return Ok((1, 0));
+    }
+    if bytes == b"undef" {
+        return Ok((0, 0));
+    }
+    if let Some(slash) = bytes.iter().position(|byte| *byte == b'/') {
+        // CheckValue accepts only an unsigned numerator and an unsigned
+        // denominator; Rationalize returns the original operands without
+        // reduction. Native Set32u packs the low 32 bits of these integers.
+        let numerator = unsigned(&bytes[..slash])
+            .or_else(|| {
+                bytes[..slash]
+                    .strip_prefix(b"-")
+                    .and_then(digits)
+                    .filter(|value| *value == 0)
+            })
+            .ok_or_else(|| refused("invalid unsigned rational numerator"))?;
+        let denominator = digits(&bytes[slash + 1..])
+            .ok_or_else(|| refused("invalid unsigned rational denominator"))?;
+        return Ok((numerator as u32, denominator as u32));
+    }
+    let value = float(bytes)
+        .ok_or_else(|| refused("numeric input fails source floating point validation"))?;
+    if !value.is_finite() || value < 0.0 {
+        return Err(refused("numeric input is not a finite unsigned rational"));
+    }
+    if value == 0.0 {
+        return Ok((0, 1));
+    }
+    let mut fraction = value;
+    let mut fractions: Vec<u64> = Vec::new();
+    let mut saved = None;
+    loop {
+        let mut numerator = (fraction + recipe.rounding_offset)
+            .trunc()
+            .min((maximum + 1) as f64) as u64;
+        let mut denominator = 1u64;
+        // AssembleRational consumes the continued fractions deepest first.
+        // Saturation beyond maxInt preserves its sole use: the bound test.
+        for part in &fractions {
+            let next = part
+                .saturating_mul(numerator)
+                .saturating_add(denominator)
+                .min(maximum + 1);
+            denominator = numerator;
+            numerator = next;
+        }
+        if numerator > maximum || denominator > maximum {
+            return Ok(saved.unwrap_or(if value < 1.0 {
+                (1, maximum as u32)
+            } else {
+                (maximum as u32, 1)
+            }));
+        }
+        saved = Some((numerator as u32, denominator as u32));
+        let error = (numerator as f64 / denominator as f64 - value) / value;
+        if error.abs() < recipe.rational_relative_error {
+            return Ok(saved.unwrap());
+        }
+        let integer = fraction.trunc();
+        fractions.insert(0, integer as u64);
+        fraction -= integer;
+        if fraction == 0.0 {
+            return Ok(saved.unwrap());
+        }
+        fraction = 1.0 / fraction;
+    }
+}
+
+pub(crate) fn serialize_numeric(
+    recipe: &NumericScalarRecipe,
+    value: &Scalar,
+    format: &str,
+    little: bool,
+) -> Result<Vec<u8>> {
+    let (number, denominator) = numeric_value(recipe, value, format, None)?;
+    let index = recipe
+        .formats
+        .iter()
+        .position(|item| *item == format)
+        .ok_or_else(|| refused("numeric format has no compiled recipe"))?;
+    // Compiler proves the ordered Set16u / SetRational64u dispatch and both
+    // native byte-order maps. Validation and rationalization run above.
+    match index {
+        0 => {
+            let number = number as u16; // Native Set16u also packs the range-exception sentinel.
+            Ok(if little {
+                number.to_le_bytes()
+            } else {
+                number.to_be_bytes()
+            }
+            .to_vec())
+        }
+        1 => {
+            let mut bytes = if little {
+                number.to_le_bytes()
+            } else {
+                number.to_be_bytes()
+            }
+            .to_vec();
+            bytes.extend(if little {
+                denominator.to_le_bytes()
+            } else {
+                denominator.to_be_bytes()
+            });
+            Ok(bytes)
+        }
+        _ => Err(refused("numeric packing operation is unsupported")),
+    }
+}
+
+/// Captured native source intersection shared by caller operands.
+pub(crate) struct NativeSourceCapture {
+    pub exiftool_version: &'static str,
+    pub main_source_sha256: &'static str,
+    pub write_exif_source_sha256: &'static str,
+    pub writer_source_sha256: &'static str,
+    pub exif_source_sha256: &'static str,
+}
+
+/// Fully recognized SetNewValue caller branches with their source identity.
+pub(crate) struct PublicSetNewValueCallerRecipe {
+    pub directories: &'static [&'static str],
+    pub undefined_value_bypasses_conversion: bool,
+    pub capture: NativeSourceCapture,
+}

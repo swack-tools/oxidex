@@ -5,6 +5,12 @@
     "perl_version": "v5.38.2"
   },
   "recipe": {
+    "cleanup": {
+      "all_mandatory": true,
+      "entry_count_shrinks_or_new": true,
+      "no_next_ifd": true,
+      "omit_empty_ifd1": true
+    },
     "directories": [
       {
         "defaults": [
@@ -82,6 +88,33 @@
         "directory": "InteropIFD"
       }
     ],
+    "encodings": [
+      {
+        "format_name": "int16u",
+        "tag_id": 259,
+        "tiff_type": 3
+      },
+      {
+        "format_name": "rational64u",
+        "tag_id": 282,
+        "tiff_type": 5
+      },
+      {
+        "format_name": "rational64u",
+        "tag_id": 283,
+        "tiff_type": 5
+      },
+      {
+        "format_name": "int16u",
+        "tag_id": 296,
+        "tiff_type": 3
+      },
+      {
+        "format_name": "int16u",
+        "tag_id": 531,
+        "tiff_type": 3
+      }
+    ],
     "jfif_override": {
       "assignments": [
         [
@@ -103,12 +136,13 @@
       "directory": "IFD0",
       "probe": "JFIFYResolution"
     },
-    "recipe_sha256": "6e6c383520a07f958e0daf33c42ff9bd5c92e0c0a682b9ed46ca67bed7c6af76",
+    "recipe_sha256": "402d44630221065009a418b119c9a23297ccbceca166d689c88dbcab4bd95118",
     "selection": {
       "directory_operand": "dirName",
       "disabled_when": "noMandatory",
       "new_directory_when": "numEntries == 0"
     },
+    "write_value_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     "writer_source_file": "Image/ExifTool/WriteExif.pl",
     "writer_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
   },

@@ -108,13 +108,16 @@ def run_matrix(*, repo: Path, test_binary: Path, perl: Path, library: Path,
                        'output': str(actual), 'target': asdict(target), 'qualifier': qualifier}
                 report['native_rows'].append(row)
                 save()
-                call = native.run_native(perl, library, source, expected, 'insert', qualifier)
+                value = generated.target_text(target, 'insert-value')
+                call = (native.run_native(perl, library, source, expected, 'insert', qualifier)
+                        if target.case_family == 'native_string_scalar' else
+                        generated.run_typed_native(perl, library, source, expected, qualifier, value))
                 row['native_call'] = call
                 save()
                 assert_actual_native_set(fresh, call, stem)
                 # Require actual target presence before launching the public driver.
                 fresh._assert_native_target_transition(source_doc, native.parse_jpeg(expected), target, 'fresh-insert')
-                requests.append(fresh._request(source, actual, target, qualifier, 'utf8', 'insert-value'))
+                requests.append(fresh._request(source, actual, target, qualifier, 'utf8', value))
     request_path, result_path = directory / 'requests.json', directory / 'results.json'
     request_path.write_text(json.dumps(requests, indent=2) + '\n')
     report['state'] = 'public-driver'
@@ -170,7 +173,7 @@ def main(argv=None) -> int:
     native.assert_contract_version(identity)
     ledger, rules = args.ledger or fresh.LEDGER, args.rules or fresh.RULES
     fresh.print_header(tool='jfif_timing_public_write_matrix_v1', git=state, binary=binary,
-                       dirty_overridden=overridden, extra=[f'native: {identity}', '12 timing carriers; source cohort 9; both qualifiers'])
+                       dirty_overridden=overridden, extra=[f'native: {identity}', '12 timing carriers; complete source-format cohort; both qualifiers'])
     report = run_matrix(repo=repo, test_binary=binary.path, perl=perl, library=library,
                         output=args.output, base=args.jpeg_base or fresh.DEFAULT_JPEG, ledger=ledger, rules=rules)
     report.update(source_commit=state.commit, native_identity=identity,

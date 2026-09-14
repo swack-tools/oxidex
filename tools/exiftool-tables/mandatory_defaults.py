@@ -43,6 +43,14 @@ _LEGACY_CONTEXT = re.compile(
     r"\(defined\(\$set\{\$_\}\) or \(\$set\{\$_\} = \$tagTablePtr->\{\$_\}\)\); \} \} "
     r"\} else \{ \$deleteAll = undef; \} my\(\$addDirs, \@newTags\);\Z"
 )
+_CLEANUP_CONTEXT = re.compile(
+    r"\Aif \(\$allMandatory and not \$isNextIFD and \(\$newEntries < \$numEntries or \$numEntries == 0\)\) \{ "
+    r"\$newEntries = 0; \$dirBuff = ''; \$valBuff = ''; undef \$dirFixup; # no fixups in this directory "
+    r"\+\+\$deleteAll if defined \$deleteAll; \$verbose > 1 and print \$out \" - \$allMandatory mandatory tag\(s\)\\n\"; "
+    r"\$\$et\{CHANGED\} -= \$addMandatory; # didn't change these after all \} "
+    r"if \(\$ifd and not \$newEntries\) \{ \$verbose and print \$out \" Deleting IFD1\\n\"; "
+    r"last; # don't write IFD1 if empty \}\Z"
+)
 
 @dataclass(frozen=True)
 class Default: tag_id: int; kind: str; value: str | int
@@ -56,12 +64,19 @@ class MandatorySelection:
     disabled_when: str | None
     new_directory_when: str
 @dataclass(frozen=True)
+class MandatoryCleanup:
+    all_mandatory: bool
+    no_next_ifd: bool
+    entry_count_shrinks_or_new: bool
+    omit_empty_ifd1: bool
+@dataclass(frozen=True)
 class MandatoryRecipe:
     writer_source_file: str
     writer_source_sha256: str
     directories: tuple[DirectoryDefaults, ...]
     jfif_override: JfifOverride
     selection: MandatorySelection
+    cleanup: MandatoryCleanup
     encodings: tuple["DefaultEncoding", ...] = ()
     write_value_source_sha256: str = ""
 
@@ -91,6 +106,19 @@ def _source_context(value: Any) -> tuple[JfifOverride, MandatorySelection]:
         (int(groups["y"]), groups["yprop"], 0),
         (int(groups["unit"]), groups["unitprop"], 1),
     )), MandatorySelection("dirName", no_mandatory, "numEntries == 0")
+
+
+def _cleanup_policy(fact: Mapping[str, Any]) -> MandatoryCleanup:
+    source = fact.get("mandatory_cleanup_source")
+    digest = fact.get("mandatory_cleanup_source_sha256")
+    if not isinstance(source, str) or not isinstance(digest, str) or not _SHA.fullmatch(digest):
+        raise MandatoryMalformed("mandatory cleanup source provenance is unavailable")
+    if hashlib.sha256(source.encode()).hexdigest() != digest:
+        raise MandatoryRefused("mandatory cleanup source digest differs")
+    normalized = re.sub(r"\s+", " ", source).strip()
+    if not _CLEANUP_CONTEXT.fullmatch(normalized):
+        raise MandatoryRefused("mandatory cleanup source is outside the closed grammar")
+    return MandatoryCleanup(True, True, True, True)
 
 def compile_mandatory(fact: Mapping[str, Any]) -> MandatoryRecipe:
     fact = _mapping(fact, "mandatory fact")
@@ -134,7 +162,8 @@ def compile_mandatory(fact: Mapping[str, Any]) -> MandatoryRecipe:
         directories.append(DirectoryDefaults(directory, tuple(defaults)))
     if not directories: raise MandatoryRefused("mandatory map is empty")
     override, selection = _source_context(fact.get("new_directory_context_deparse"))
-    return MandatoryRecipe(str(source), digest, tuple(directories), override, selection)
+    cleanup = _cleanup_policy(fact)
+    return MandatoryRecipe(str(source), digest, tuple(directories), override, selection, cleanup)
 
 def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any]) -> MandatoryRecipe:
     """Require defaults and the general captured WriteExif callback share a source identity."""
@@ -189,7 +218,16 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
     # The direct new-directory path chooses Format when present, otherwise
     # Writable.  This bounded encoder only implements those two native scalar
     # packing procedures, and rejects every row with another write hook.
-    ids = {item.tag_id for directory in recipe.directories if directory.directory == "IFD0" for item in directory.defaults}
+    # WriteExif chooses its direct WriteValue packing from the active
+    # directory's tag table. Compile every source-captured mandatory operand;
+    # IFD1 has the same admitted scalar encodings as IFD0, including
+    # Compression, and must not be silently omitted from a new IFD1.
+    ids = {
+        item.tag_id
+        for directory in recipe.directories
+        for item in directory.defaults
+        if directory.directory in {"IFD0", "IFD1"} and item.kind == "Integer"
+    }
     ids.update(tag_id for tag_id, _property, _adjustment in recipe.jfif_override.assignments)
     encodings = []
     for tag_id in sorted(ids):

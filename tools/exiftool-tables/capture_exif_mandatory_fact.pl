@@ -47,6 +47,16 @@ my $deparse = B::Deparse->new('-p', '-sC')->coderef2text($cv);
 my @contexts = $deparse =~ /((?:\(my|my)\(\$mandatory.*?my\(\$addDirs,\ \@newTags\);)/sg;
 die "mandatory executable fragment is absent or ambiguous\n" unless @contexts == 1;
 my $context = $contexts[0];
+# Capture the source body that decides whether a directory containing only
+# mandatory values is removed.  The compiler accepts one closed predicate
+# grammar rather than inferring cleanup from the defaults map.
+my @cleanup_contexts = $source =~ /(
+        if \(\$allMandatory and not \$isNextIFD and \(\$newEntries < \$numEntries or \$numEntries == 0\)\) \{.*?
+        \}
+        if \(\$ifd and not \$newEntries\) \{.*?
+        \})/sg;
+die "mandatory cleanup source fragment is absent or ambiguous\n" unless @cleanup_contexts == 1;
+my $cleanup_context = $cleanup_contexts[0];
 my @pad = B::svref_2object($cv)->PADLIST->ARRAY;
 die "WriteExif pad is unavailable\n" unless @pad >= 2;
 my @names = $pad[0]->ARRAY;
@@ -125,4 +135,6 @@ print JSON::PP->new->utf8->canonical->pretty->encode({
     raw_exif_main_row_properties => \%raw_rows,
     loaded_exiftool_closure => \%closure,
     new_directory_context_deparse => $context,
+    mandatory_cleanup_source => $cleanup_context,
+    mandatory_cleanup_source_sha256 => sha256_hex($cleanup_context),
 });

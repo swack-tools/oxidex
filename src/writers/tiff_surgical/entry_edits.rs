@@ -88,7 +88,9 @@ pub(crate) fn apply_entry_edits(file: &[u8], edits: &[ScopedEntryEdit]) -> Resul
         if changes.is_empty() {
             continue;
         }
-        if let Some(new_at) = rewrite_directory(&mut out, offset, &changes, bo, None)? {
+        if let DirectoryRewrite::Present(new_at) =
+            rewrite_directory(&mut out, offset, &changes, bo, None, false)?
+        {
             let new_at = u32::try_from(new_at).map_err(too_big)?;
             let mut encoded = vec![0; 4];
             put_u32(&mut encoded, new_at, bo);
@@ -111,18 +113,123 @@ pub(crate) fn apply_entry_edits(file: &[u8], edits: &[ScopedEntryEdit]) -> Resul
     let ifd1_next = if ifd1_changes.is_empty() {
         None
     } else {
-        rewrite_directory(&mut out, directories.ifd1_offset, &ifd1_changes, bo, None)?
-            .map(|offset| u32::try_from(offset).map_err(too_big))
-            .transpose()?
+        match rewrite_directory(
+            &mut out,
+            directories.ifd1_offset,
+            &ifd1_changes,
+            bo,
+            None,
+            true,
+        )? {
+            DirectoryRewrite::Unchanged => None,
+            DirectoryRewrite::Present(offset) => Some(u32::try_from(offset).map_err(too_big)?),
+            // WriteExif omits an emptied IFD1 rather than leaving a linked
+            // zero-entry directory. Repoint the copied root to no next IFD.
+            DirectoryRewrite::Removed => Some(0),
+        }
     };
 
-    if let Some(new_at) =
-        rewrite_directory(&mut out, Some(scan.ifd0_offset), &root_edits, bo, ifd1_next)?
-    {
+    if let DirectoryRewrite::Present(new_at) = rewrite_directory(
+        &mut out,
+        Some(scan.ifd0_offset),
+        &root_edits,
+        bo,
+        ifd1_next,
+        false,
+    )? {
         let new_at = u32::try_from(new_at).map_err(too_big)?;
         put_u32(&mut out[4..8], new_at, bo);
     }
     Ok(out)
+}
+
+/// Return the first linked IFD1's physical entry count.  This is structural
+/// carrier state, used by the public transaction to apply source mandatory
+/// defaults only while native would be creating that directory.
+pub(crate) fn ifd1_entry_count(file: &[u8]) -> Result<Option<u16>> {
+    let scan = scan_tiff(file)?;
+    let layout = validate_directory_layout(file, &scan)?;
+    Ok(layout
+        .ifd1_offset
+        .map(|at| read_u16(&file[at..at + 2], scan.byte_order)))
+}
+
+/// Apply the captured WriteExif mandatory-only cleanup rule for IFD1.
+///
+/// WriteExif removes a directory after a deletion when every remaining entry
+/// is an exact mandatory value and it has no next IFD. The caller supplies
+/// the immutable, source-derived default encodings; this layer compares only
+/// physical TIFF records and has no tag-name or default knowledge of its own.
+pub(crate) fn remove_ifd1_if_only_mandatory(
+    file: &[u8],
+    mandatory: &[ScopedEntryEdit],
+    source_predicate: bool,
+) -> Result<Vec<u8>> {
+    if !source_predicate {
+        return Ok(file.to_vec());
+    }
+    let scan = scan_tiff(file)?;
+    let layout = validate_directory_layout(file, &scan)?;
+    let Some(ifd1_at) = layout.ifd1_offset else {
+        return Ok(file.to_vec());
+    };
+    let (records, next) = directory_records(file, ifd1_at, scan.byte_order)?;
+    if nonzero_offset(&next, scan.byte_order).is_some() || records.len() > mandatory.len() {
+        return Ok(file.to_vec());
+    }
+    for record in &records {
+        let tag_id = read_u16(&record[..2], scan.byte_order);
+        let matches: Vec<_> = mandatory
+            .iter()
+            .filter(|expected| expected.tag_id == tag_id)
+            .collect();
+        if matches.len() != 1 {
+            return Ok(file.to_vec());
+        }
+        let expected = matches[0];
+        let EntryMutation::Set {
+            field_type,
+            count,
+            bytes,
+        } = &expected.mutation
+        else {
+            return Err(invalid(
+                "Mandatory cleanup requires only encoded set operands",
+            ));
+        };
+        if expected.ifd != IfdKind::Ifd1 {
+            return Err(invalid("Mandatory cleanup operands must target IFD1"));
+        }
+        if read_u16(&record[2..4], scan.byte_order) != *field_type
+            || read_u32(&record[4..8], scan.byte_order) != *count
+        {
+            return Ok(file.to_vec());
+        }
+        let value = if bytes.len() <= 4 {
+            &record[8..8 + bytes.len()]
+        } else {
+            let at = read_u32(&record[8..12], scan.byte_order) as usize;
+            let Some(value) = at
+                .checked_add(bytes.len())
+                .and_then(|end| file.get(at..end))
+            else {
+                return Err(invalid("Mandatory IFD1 value is outside the TIFF carrier"));
+            };
+            value
+        };
+        if value != bytes {
+            return Ok(file.to_vec());
+        }
+    }
+    let removals: Vec<_> = mandatory
+        .iter()
+        .map(|entry| ScopedEntryEdit {
+            ifd: IfdKind::Ifd1,
+            tag_id: entry.tag_id,
+            mutation: EntryMutation::Delete,
+        })
+        .collect();
+    apply_entry_edits(file, &removals)
 }
 
 /// Validate every directory this primitive may rewrite, including children
@@ -247,15 +354,22 @@ fn append_checked(out: &mut Vec<u8>, bytes: &[u8]) -> Result<usize> {
 
 /// Return a new offset only when a directory actually changes. Unchanged and
 /// absent deletions preserve the entire original byte sequence.
+enum DirectoryRewrite {
+    Unchanged,
+    Present(usize),
+    Removed,
+}
+
 fn rewrite_directory(
     out: &mut Vec<u8>,
     at: Option<usize>,
     changes: &[ScopedEntryEdit],
     bo: ByteOrder,
     next_override: Option<u32>,
-) -> Result<Option<usize>> {
+    remove_if_empty: bool,
+) -> Result<DirectoryRewrite> {
     if changes.is_empty() && next_override.is_none() {
-        return Ok(None);
+        return Ok(DirectoryRewrite::Unchanged);
     }
     let (mut records, original_next) = match at {
         Some(at) => directory_records(out, at, bo)?,
@@ -329,7 +443,10 @@ fn rewrite_directory(
         }
     }
     if !changed {
-        return Ok(None);
+        return Ok(DirectoryRewrite::Unchanged);
+    }
+    if remove_if_empty && records.is_empty() {
+        return Ok(DirectoryRewrite::Removed);
     }
     let count =
         u16::try_from(records.len()).map_err(|_| invalid("IFD exceeds its entry-count limit"))?;
@@ -342,7 +459,7 @@ fn rewrite_directory(
     }
     table.extend_from_slice(&next);
     let offset = append_checked(out, &table)?;
-    Ok(Some(offset))
+    Ok(DirectoryRewrite::Present(offset))
 }
 
 #[cfg(test)]
@@ -603,6 +720,23 @@ mod tests {
         }
     }
 
+    fn ifd1_fixture_entries(fixture: &Ifd1Fixture, bo: ByteOrder) -> Vec<ScopedEntryEdit> {
+        let at = fixture.original_ifd1_at.unwrap();
+        let (entries, _) = read_test_directory(&fixture.file, at, bo);
+        entries
+            .iter()
+            .map(|entry| ScopedEntryEdit {
+                ifd: IfdKind::Ifd1,
+                tag_id: entry.tag_id,
+                mutation: EntryMutation::Set {
+                    field_type: entry.field_type,
+                    count: entry.count,
+                    bytes: test_entry_value(&fixture.file, entry, bo),
+                },
+            })
+            .collect()
+    }
+
     fn ifd1_fixture(bo: ByteOrder, with_ifd1: bool) -> Ifd1Fixture {
         let mut file = Vec::new();
         file.extend_from_slice(match bo {
@@ -763,6 +897,79 @@ mod tests {
             assert_eq!(&out[8..fixture.file.len()], &fixture.file[8..]);
             assert_eq!(&out[fixture.image], &[0xa5; 8]);
             assert_eq!(&out[fixture.thumbnail], &[0x5a; 6]);
+        }
+    }
+
+    #[test]
+    fn raw_scoped_ifd1_delete_of_every_entry_omits_the_directory() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let fixture = ifd1_fixture(bo, true);
+            let (original_root, _) = read_test_directory(&fixture.file, 8, bo);
+            let out = apply_entry_edits(
+                &fixture.file,
+                &[0x010e, 0x013b, 0x0201, 0x0202].map(|tag_id| ScopedEntryEdit {
+                    ifd: IfdKind::Ifd1,
+                    tag_id,
+                    mutation: EntryMutation::Delete,
+                }),
+            )
+            .unwrap();
+            let root_at = test_u32(&out[4..8], bo) as usize;
+            let (root, next) = read_test_directory(&out, root_at, bo);
+            assert!(root_at >= fixture.file.len());
+            assert_eq!(root, original_root);
+            assert_eq!(next, 0, "an empty IFD1 must be omitted");
+            assert_eq!(ifd1_entry_count(&out).unwrap(), None);
+            // The old thumbnail directory becomes unreachable but existing
+            // carrier bytes, including the image and thumbnail payloads, are
+            // never rewritten by a directory-only removal.
+            assert_eq!(&out[8..fixture.file.len()], &fixture.file[8..]);
+            assert_eq!(&out[fixture.image], &[0xa5; 8]);
+            assert_eq!(&out[fixture.thumbnail], &[0x5a; 6]);
+        }
+    }
+
+    #[test]
+    fn raw_scoped_ifd1_mandatory_cleanup_honors_source_predicates() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let fixture = ifd1_fixture(bo, true);
+            let mandatory = ifd1_fixture_entries(&fixture, bo);
+            let ifd1_at = fixture.original_ifd1_at.unwrap();
+            let (entries, _) = read_test_directory(&fixture.file, ifd1_at, bo);
+            let ifd1_next_at = ifd1_at + 2 + entries.len() * 12;
+            let mut no_next = fixture.file.clone();
+            write_test_u32(&mut no_next[ifd1_next_at..ifd1_next_at + 4], 0, bo);
+
+            // Existing mandatory-only data has not shrunk and must survive.
+            assert_eq!(
+                remove_ifd1_if_only_mandatory(&no_next, &mandatory, false).unwrap(),
+                no_next
+            );
+            // A nonmandatory survivor defeats the allMandatory predicate.
+            let survivor =
+                apply_entry_edits(&no_next, &[raw_ascii(0x013c, b"survivor\0")]).unwrap();
+            assert_eq!(
+                remove_ifd1_if_only_mandatory(&survivor, &mandatory, true).unwrap(),
+                survivor
+            );
+            // A changed directory that now contains only source-provided
+            // mandatory values is removed when it has no following IFD.
+            let shrunk = apply_entry_edits(
+                &no_next,
+                &[ScopedEntryEdit {
+                    ifd: IfdKind::Ifd1,
+                    tag_id: 0x010e,
+                    mutation: EntryMutation::Delete,
+                }],
+            )
+            .unwrap();
+            let removed = remove_ifd1_if_only_mandatory(&shrunk, &mandatory, true).unwrap();
+            assert_eq!(ifd1_entry_count(&removed).unwrap(), None);
+            // A following IFD keeps the mandatory-only directory reachable.
+            assert_eq!(
+                remove_ifd1_if_only_mandatory(&fixture.file, &mandatory, true).unwrap(),
+                fixture.file
+            );
         }
     }
 

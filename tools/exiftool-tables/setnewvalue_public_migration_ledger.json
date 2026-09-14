@@ -1,6 +1,28 @@
 {
   "entries": [
     {
+      "first_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "group0": "EXIF",
+      "group1": "IFD0",
+      "history": [
+        {
+          "semantics_sha256": "31057f9d5b2074308bec4aadbb6d1d2dfbac94de3c4a806217aada40d0ede96e",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
+        }
+      ],
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "module": "Exif",
+      "name": "ProcessingSoftware",
+      "raw_tag_id": 11,
+      "semantics_sha256": "31057f9d5b2074308bec4aadbb6d1d2dfbac94de3c4a806217aada40d0ede96e",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "state": "current",
+      "table": "Main",
+      "write_group": "IFD0"
+    },
+    {
       "first_seen": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
       "full_name": "Image::ExifTool::Exif::Main",
       "group0": "EXIF",
@@ -10,13 +32,131 @@
           "semantics_sha256": "f9361f9d8518744083c2af7201df8de6ab1d44e578e34ce9498e5d0a634e86bd",
           "source_identity": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "c77dcd93b5d16a68a1f6700837c51556cdc5109cdf88ac1542c9870a2b55de5e",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "c77dcd93b5d16a68a1f6700837c51556cdc5109cdf88ac1542c9870a2b55de5e",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
         }
       ],
-      "last_seen": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
       "module": "Exif",
       "name": "DocumentName",
       "raw_tag_id": 269,
-      "semantics_sha256": "f9361f9d8518744083c2af7201df8de6ab1d44e578e34ce9498e5d0a634e86bd",
+      "semantics_sha256": "c77dcd93b5d16a68a1f6700837c51556cdc5109cdf88ac1542c9870a2b55de5e",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "state": "current",
+      "table": "Main",
+      "write_group": "IFD0"
+    },
+    {
+      "first_seen": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "group0": "EXIF",
+      "group1": "IFD0",
+      "history": [
+        {
+          "semantics_sha256": "604a6d281c27d1483e8346135142092b60a69b36a77ebe073537b367d7ac7d67",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "604a6d281c27d1483e8346135142092b60a69b36a77ebe073537b367d7ac7d67",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
+        }
+      ],
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "module": "Exif",
+      "name": "MinSampleValue",
+      "raw_tag_id": 280,
+      "semantics_sha256": "604a6d281c27d1483e8346135142092b60a69b36a77ebe073537b367d7ac7d67",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "state": "current",
+      "table": "Main",
+      "write_group": "IFD0"
+    },
+    {
+      "first_seen": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "group0": "EXIF",
+      "group1": "IFD0",
+      "history": [
+        {
+          "semantics_sha256": "a36fe86f48db726bd81187996ed7229d850c3e8cf900694aa14a34c28907d79e",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "a36fe86f48db726bd81187996ed7229d850c3e8cf900694aa14a34c28907d79e",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
+        }
+      ],
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "module": "Exif",
+      "name": "MaxSampleValue",
+      "raw_tag_id": 281,
+      "semantics_sha256": "a36fe86f48db726bd81187996ed7229d850c3e8cf900694aa14a34c28907d79e",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "state": "current",
+      "table": "Main",
+      "write_group": "IFD0"
+    },
+    {
+      "first_seen": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "group0": "EXIF",
+      "group1": "IFD0",
+      "history": [
+        {
+          "semantics_sha256": "08a2c95a33b664d59ec277cb2adcafffefa71807356f3f960be92382f69080ce",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "08a2c95a33b664d59ec277cb2adcafffefa71807356f3f960be92382f69080ce",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
+        }
+      ],
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "module": "Exif",
+      "name": "XResolution",
+      "raw_tag_id": 282,
+      "semantics_sha256": "08a2c95a33b664d59ec277cb2adcafffefa71807356f3f960be92382f69080ce",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "state": "current",
+      "table": "Main",
+      "write_group": "IFD0"
+    },
+    {
+      "first_seen": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "group0": "EXIF",
+      "group1": "IFD0",
+      "history": [
+        {
+          "semantics_sha256": "5478d3436e2741cd9f3f614f7f57b4761d1539bb98aadfbee8e2cdd105a8d657",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "5478d3436e2741cd9f3f614f7f57b4761d1539bb98aadfbee8e2cdd105a8d657",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
+        }
+      ],
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "module": "Exif",
+      "name": "YResolution",
+      "raw_tag_id": 283,
+      "semantics_sha256": "5478d3436e2741cd9f3f614f7f57b4761d1539bb98aadfbee8e2cdd105a8d657",
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "state": "current",
       "table": "Main",
@@ -32,13 +172,99 @@
           "semantics_sha256": "6dffed4dc89e6e9a60d6acd646c4f060938671888d61b696940af827184a70b6",
           "source_identity": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "b0cb0c2efee5db9c74abbe6307fd0800ce710f9f582c58b47e5a8041b3eb57fb",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "b0cb0c2efee5db9c74abbe6307fd0800ce710f9f582c58b47e5a8041b3eb57fb",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
         }
       ],
-      "last_seen": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
       "module": "Exif",
       "name": "PageName",
       "raw_tag_id": 285,
-      "semantics_sha256": "6dffed4dc89e6e9a60d6acd646c4f060938671888d61b696940af827184a70b6",
+      "semantics_sha256": "b0cb0c2efee5db9c74abbe6307fd0800ce710f9f582c58b47e5a8041b3eb57fb",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "state": "current",
+      "table": "Main",
+      "write_group": "IFD0"
+    },
+    {
+      "first_seen": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "group0": "EXIF",
+      "group1": "IFD0",
+      "history": [
+        {
+          "semantics_sha256": "c88687f95faaa8d54039d28f34fa89f2adbe2ae09766eabf9e16d64fa271b164",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "c88687f95faaa8d54039d28f34fa89f2adbe2ae09766eabf9e16d64fa271b164",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
+        }
+      ],
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "module": "Exif",
+      "name": "XPosition",
+      "raw_tag_id": 286,
+      "semantics_sha256": "c88687f95faaa8d54039d28f34fa89f2adbe2ae09766eabf9e16d64fa271b164",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "state": "current",
+      "table": "Main",
+      "write_group": "IFD0"
+    },
+    {
+      "first_seen": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "group0": "EXIF",
+      "group1": "IFD0",
+      "history": [
+        {
+          "semantics_sha256": "c97dbce9dc700b7e4911fca9145421946bd558b81de66f745dce24cafc2e8bb6",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "c97dbce9dc700b7e4911fca9145421946bd558b81de66f745dce24cafc2e8bb6",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
+        }
+      ],
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "module": "Exif",
+      "name": "YPosition",
+      "raw_tag_id": 287,
+      "semantics_sha256": "c97dbce9dc700b7e4911fca9145421946bd558b81de66f745dce24cafc2e8bb6",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "state": "current",
+      "table": "Main",
+      "write_group": "IFD0"
+    },
+    {
+      "first_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "group0": "EXIF",
+      "group1": "IFD0",
+      "history": [
+        {
+          "semantics_sha256": "17b3ec139f4eef30d2b817b227aafff874ebb1919ce6d87b3c0838e98570b024",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
+        }
+      ],
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "module": "Exif",
+      "name": "Artist",
+      "raw_tag_id": 315,
+      "semantics_sha256": "17b3ec139f4eef30d2b817b227aafff874ebb1919ce6d87b3c0838e98570b024",
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "state": "current",
       "table": "Main",
@@ -54,13 +280,23 @@
           "semantics_sha256": "7136be3ff59ea224a3547d059bec50fc84caa1eb5d3af3a7d5fd5bd0b36b6f53",
           "source_identity": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "f54d5a7a9716debf4869dcc80e611b3302fa7287c3f5f24ca806acf54bb022b9",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "f54d5a7a9716debf4869dcc80e611b3302fa7287c3f5f24ca806acf54bb022b9",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
         }
       ],
-      "last_seen": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
       "module": "Exif",
       "name": "HostComputer",
       "raw_tag_id": 316,
-      "semantics_sha256": "7136be3ff59ea224a3547d059bec50fc84caa1eb5d3af3a7d5fd5bd0b36b6f53",
+      "semantics_sha256": "f54d5a7a9716debf4869dcc80e611b3302fa7287c3f5f24ca806acf54bb022b9",
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "state": "current",
       "table": "Main",
@@ -76,13 +312,45 @@
           "semantics_sha256": "a56a019fc12f25fab0620d7245a229caef2ac4bbfd9000d0cf4a357a90c3827c",
           "source_identity": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "26e2efc042a2489cb8d1fb6f13daa83218171e284635966cbe205d6e31eab5fd",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "26e2efc042a2489cb8d1fb6f13daa83218171e284635966cbe205d6e31eab5fd",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
         }
       ],
-      "last_seen": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
       "module": "Exif",
       "name": "TargetPrinter",
       "raw_tag_id": 337,
-      "semantics_sha256": "a56a019fc12f25fab0620d7245a229caef2ac4bbfd9000d0cf4a357a90c3827c",
+      "semantics_sha256": "26e2efc042a2489cb8d1fb6f13daa83218171e284635966cbe205d6e31eab5fd",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "state": "current",
+      "table": "Main",
+      "write_group": "IFD0"
+    },
+    {
+      "first_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "group0": "EXIF",
+      "group1": "IFD0",
+      "history": [
+        {
+          "semantics_sha256": "7884b0589d15fd0352088fdbd7fb65492ea758cf72401515f6ce6026206e4e67",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
+        }
+      ],
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "module": "Exif",
+      "name": "SEMInfo",
+      "raw_tag_id": 34118,
+      "semantics_sha256": "7884b0589d15fd0352088fdbd7fb65492ea758cf72401515f6ce6026206e4e67",
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "state": "current",
       "table": "Main",
@@ -98,13 +366,23 @@
           "semantics_sha256": "dc14db276b3f41d2a2b54d1a66d50942f10477288cf2ab4b0a7aba117d7f1bff",
           "source_identity": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "2e0facf69321a741527a9ed6da1caead355933f75654947561d147ae26e6fe78",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "2e0facf69321a741527a9ed6da1caead355933f75654947561d147ae26e6fe78",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
         }
       ],
-      "last_seen": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
       "module": "Exif",
       "name": "GDALMetadata",
       "raw_tag_id": 42112,
-      "semantics_sha256": "dc14db276b3f41d2a2b54d1a66d50942f10477288cf2ab4b0a7aba117d7f1bff",
+      "semantics_sha256": "2e0facf69321a741527a9ed6da1caead355933f75654947561d147ae26e6fe78",
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "state": "current",
       "table": "Main",
@@ -120,13 +398,23 @@
           "semantics_sha256": "3bccc99fc83b8ea185f2f40d60831164d498e8d27bc7fefe80c33fb4a6827e3a",
           "source_identity": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "c99a8794a4012c09c404645c9a6adaed1166cd057899240f5aaa079967dfad5b",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "c99a8794a4012c09c404645c9a6adaed1166cd057899240f5aaa079967dfad5b",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
         }
       ],
-      "last_seen": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
       "module": "Exif",
       "name": "GDALNoData",
       "raw_tag_id": 42113,
-      "semantics_sha256": "3bccc99fc83b8ea185f2f40d60831164d498e8d27bc7fefe80c33fb4a6827e3a",
+      "semantics_sha256": "c99a8794a4012c09c404645c9a6adaed1166cd057899240f5aaa079967dfad5b",
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "state": "current",
       "table": "Main",
@@ -142,13 +430,45 @@
           "semantics_sha256": "7278f033e1a965a53f42c9c2a1ddb9639f2d1e7aa62bdbdc4244172fb6087f3d",
           "source_identity": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "415608f4c37a901cfdc66005a985c71bf85ae828f23d4c25cb566502f54308b9",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "415608f4c37a901cfdc66005a985c71bf85ae828f23d4c25cb566502f54308b9",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
         }
       ],
-      "last_seen": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
       "module": "Exif",
       "name": "UniqueCameraModel",
       "raw_tag_id": 50708,
-      "semantics_sha256": "7278f033e1a965a53f42c9c2a1ddb9639f2d1e7aa62bdbdc4244172fb6087f3d",
+      "semantics_sha256": "415608f4c37a901cfdc66005a985c71bf85ae828f23d4c25cb566502f54308b9",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "state": "current",
+      "table": "Main",
+      "write_group": "IFD0"
+    },
+    {
+      "first_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "group0": "EXIF",
+      "group1": "IFD0",
+      "history": [
+        {
+          "semantics_sha256": "7d172ea65e87d5305c31e4b8db36a3acc0bde1d98b98d87c1e759f134d0dbffe",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
+        }
+      ],
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+      "module": "Exif",
+      "name": "CameraSerialNumber",
+      "raw_tag_id": 50735,
+      "semantics_sha256": "7d172ea65e87d5305c31e4b8db36a3acc0bde1d98b98d87c1e759f134d0dbffe",
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "state": "current",
       "table": "Main",
@@ -164,13 +484,23 @@
           "semantics_sha256": "a940c61c840761c660963b867be2ca1f731c22c8d3a3b06781aee92634add35a",
           "source_identity": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "540709aea41a1bff5e9408d609e49e5d9160c352db3f051704e6983b102e45f2",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "540709aea41a1bff5e9408d609e49e5d9160c352db3f051704e6983b102e45f2",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
         }
       ],
-      "last_seen": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
       "module": "Exif",
       "name": "ReelName",
       "raw_tag_id": 51081,
-      "semantics_sha256": "a940c61c840761c660963b867be2ca1f731c22c8d3a3b06781aee92634add35a",
+      "semantics_sha256": "540709aea41a1bff5e9408d609e49e5d9160c352db3f051704e6983b102e45f2",
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "state": "current",
       "table": "Main",
@@ -186,21 +516,31 @@
           "semantics_sha256": "dd9688bc8d3643461543a382c695c7d18486fd073ba54153505f061d9a79228f",
           "source_identity": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
           "state": "current"
+        },
+        {
+          "semantics_sha256": "5b693c8ddf0195edbcf3056ed123e106ba2f5818ea8af5c34419619ca997b94c",
+          "source_identity": "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae",
+          "state": "current"
+        },
+        {
+          "semantics_sha256": "5b693c8ddf0195edbcf3056ed123e106ba2f5818ea8af5c34419619ca997b94c",
+          "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
+          "state": "current"
         }
       ],
-      "last_seen": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
+      "last_seen": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
       "module": "Exif",
       "name": "CameraLabel",
       "raw_tag_id": 51105,
-      "semantics_sha256": "dd9688bc8d3643461543a382c695c7d18486fd073ba54153505f061d9a79228f",
+      "semantics_sha256": "5b693c8ddf0195edbcf3056ed123e106ba2f5818ea8af5c34419619ca997b94c",
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "state": "current",
       "table": "Main",
       "write_group": "IFD0"
     }
   ],
-  "ledger_sha256": "31a8aff07b730b09b6b07ce9248ce9e3dae9b096ccef9d8382454be2c2e9a43c",
-  "predecessor": null,
+  "ledger_sha256": "ea55869e56274acb227d7a132b0477406c5406489b49d98de59cd3127ad06fbc",
+  "predecessor": "f6834057099ddcd88f34f002c385180712330feff3dd1dc7c2bc6dd5ceedbb7a",
   "schema": "setnewvalue_public_migration_ledger_v1",
   "source": {
     "address_queries_sha256": "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
@@ -212,10 +552,10 @@
       "write_exif_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
       "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
     },
-    "final_recipes_sha256": "6ed57e6d5b6f830d63490c64823bf08390cb07893e5d2e8092ad8a6196c37ec0",
-    "intersection_sha256": "0fd91c4eda8a1b80298cde829944b6a35647d9d12d440d71a80e3d035e557c72"
+    "final_recipes_sha256": "618dcb4541f55c943617772275ea55f65883b22ab890d53c79185fc03b366e13",
+    "intersection_sha256": "f6cf9dba5396c30574e78b8998a4c4369b7b75c41037c62d832ddf4c66f465a1"
   },
-  "source_identity": "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd",
+  "source_identity": "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8",
   "sources": {
     "837be4eca585f8bddcd2586bba3efbc808ccd8eb608af75cccdfd88cd0fe30fd": {
       "address_queries_sha256": "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
@@ -229,6 +569,32 @@
       },
       "final_recipes_sha256": "6ed57e6d5b6f830d63490c64823bf08390cb07893e5d2e8092ad8a6196c37ec0",
       "intersection_sha256": "0fd91c4eda8a1b80298cde829944b6a35647d9d12d440d71a80e3d035e557c72"
+    },
+    "91c075ae6283735258ecfe46e156392e575bc50e83558f5fbf8b92c25bb989ae": {
+      "address_queries_sha256": "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
+      "address_rows_sha256": "4b40a73c2dde50ff9ff94a23d60045f04f564efa4bc2db1cc5060666a268138f",
+      "capture": {
+        "exif_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        "exiftool_version": "13.59",
+        "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+        "write_exif_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+      },
+      "final_recipes_sha256": "4570f72b260cc2bad6c36129690ee10731d00b84a70a980228b786e25ada49a2",
+      "intersection_sha256": "4c72d290160203be65f837b9c893ca7120a04fab073841dbf25ce094e9974cc0"
+    },
+    "c5b7f55d977364901ecf90334284b9234b6e3ad66b9924624ff074aa4ab0f0b8": {
+      "address_queries_sha256": "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
+      "address_rows_sha256": "4b40a73c2dde50ff9ff94a23d60045f04f564efa4bc2db1cc5060666a268138f",
+      "capture": {
+        "exif_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        "exiftool_version": "13.59",
+        "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+        "write_exif_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+      },
+      "final_recipes_sha256": "618dcb4541f55c943617772275ea55f65883b22ab890d53c79185fc03b366e13",
+      "intersection_sha256": "f6cf9dba5396c30574e78b8998a4c4369b7b75c41037c62d832ddf4c66f465a1"
     }
   }
 }

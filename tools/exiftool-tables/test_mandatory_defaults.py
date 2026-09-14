@@ -2,7 +2,7 @@
 from __future__ import annotations
 from copy import deepcopy
 from functools import lru_cache
-import json, os, sys
+import hashlib, json, os, sys
 from pathlib import Path
 import shutil, subprocess, tempfile, unittest
 
@@ -66,6 +66,26 @@ class MandatoryTests(unittest.TestCase):
         changed = deepcopy(fact); changed['lexical']['entries']['IFD0']['not-an-id'] = 1
         with self.assertRaisesRegex(MandatoryRefused, 'unrepresentable'):
             compile_mandatory(changed)
+
+    @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
+    def test_cleanup_source_requires_all_mandatory_shrink_no_next_and_ifd1_omission(self):
+        assert NATIVE is not None
+        fact = capture(NATIVE[1])
+        cleanup = compile_mandatory(fact).cleanup
+        self.assertEqual((cleanup.all_mandatory, cleanup.no_next_ifd,
+                          cleanup.entry_count_shrinks_or_new, cleanup.omit_empty_ifd1),
+                         (True, True, True, True))
+        for original, replacement in (
+            ('$allMandatory and not $isNextIFD', '$allMandatory or not $isNextIFD'),
+            ('$newEntries < $numEntries', '$newEntries <= $numEntries'),
+            ('if ($ifd and not $newEntries)', 'if ($ifd or not $newEntries)'),
+        ):
+            changed = deepcopy(fact)
+            changed['mandatory_cleanup_source'] = changed['mandatory_cleanup_source'].replace(original, replacement)
+            changed['mandatory_cleanup_source_sha256'] = hashlib.sha256(
+                changed['mandatory_cleanup_source'].encode()).hexdigest()
+            with self.subTest(original=original), self.assertRaisesRegex(MandatoryRefused, 'closed grammar'):
+                compile_mandatory(changed)
 
     @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
     def test_executable_flow_mutation_refuses_but_dead_source_text_does_not(self):

@@ -123,7 +123,7 @@ fn final_rule<'a>(
 }
 
 fn physical_ifd(group: &str) -> Result<IfdKind> {
-    [IfdKind::Ifd0, IfdKind::ExifIfd, IfdKind::Gps]
+    [IfdKind::Ifd0, IfdKind::Ifd1, IfdKind::ExifIfd, IfdKind::Gps]
         .into_iter()
         .find(|ifd| ifd.prefix() == group)
         .ok_or_else(|| refused("physical directory is unsupported by the TIFF carrier"))
@@ -138,7 +138,10 @@ pub(crate) fn rewrite_generated_scalars(
 ) -> Result<ScalarWriteOutput> {
     let selected = requests
         .into_iter()
-        .map(|request| Ok((final_rule(request.key, rules.finals)?, request.value)))
+        .map(|request| {
+            let rule = final_rule(request.key, rules.finals)?;
+            Ok((rule, rule.physical_write_group, request.value))
+        })
         .collect::<Result<Vec<_>>>()?;
     plan_selected_scalars(file, selected, rules)?.apply(file)
 }
@@ -153,9 +156,11 @@ pub(crate) struct ResolvedScalarWriteRequest<'a> {
     pub raw_id: &'a str,
     pub name: &'a str,
     pub write_group: &'a str,
+    pub selected_group: &'a str,
     pub write_proc_source_sha256: &'a str,
     pub registry_source_sha256: &'a str,
     pub writer_source_sha256: &'a str,
+    pub main_source_sha256: &'a str,
     pub value: Scalar,
 }
 
@@ -210,6 +215,7 @@ pub(crate) fn plan_resolved_generated_scalars(
                 && rule.write_proc_source_sha256 == request.write_proc_source_sha256
                 && rule.registry_source_sha256 == request.registry_source_sha256
                 && rule.writer_source_sha256 == request.writer_source_sha256
+                && rule.main_source_sha256 == request.main_source_sha256
         });
         let rule = matches
             .next()
@@ -217,14 +223,23 @@ pub(crate) fn plan_resolved_generated_scalars(
         if matches.next().is_some() {
             return Err(refused("resolved address has ambiguous final rules"));
         }
-        selected.push((rule, request.value));
+        if request.selected_group != request.write_group
+            && !crate::writers::generated_write_address::authenticated_explicit_directories()
+                .map_err(refused)?
+                .contains(&request.selected_group)
+        {
+            return Err(refused(
+                "resolved directory has no source selection operand",
+            ));
+        }
+        selected.push((rule, request.selected_group, request.value));
     }
     plan_selected_scalars(file, selected, rules)
 }
 
 fn plan_selected_scalars(
     file: &[u8],
-    selected: Vec<(&TiffScalarFinalStageRecipe, Scalar)>,
+    selected: Vec<(&TiffScalarFinalStageRecipe, &str, Scalar)>,
     rules: &ScalarWriteRules<'_>,
 ) -> Result<ScalarWritePlan> {
     let scan = scan_tiff(file)?;
@@ -244,9 +259,9 @@ fn plan_selected_scalars(
     let mut addressed = Vec::new();
     let mut edits = Vec::new();
     let mut warnings = Vec::new();
-    for (final_rule, requested_value) in selected {
+    for (final_rule, selected_group, requested_value) in selected {
         let row = conversion_row(final_rule, rules.rows)?;
-        let ifd = physical_ifd(final_rule.physical_write_group)?;
+        let ifd = physical_ifd(selected_group)?;
         let identity = (ifd, final_rule.raw_tag_id);
         if addressed.contains(&identity) {
             return Err(refused("multiple requests address the same physical tag"));
@@ -273,7 +288,14 @@ fn plan_selected_scalars(
                 escape: EscapeOption::Disabled,
             },
         )?;
-        let converted = conv_inv_static(conv_rule, value, row, rules.checks, None, None)?;
+        let converted = if matches!(value, Scalar::Undefined)
+            && crate::writers::generated_write_address::undefined_value_bypasses_conversion()
+                .map_err(refused)?
+        {
+            crate::writers::generated_convinv::ConvInvResult { value, error: None }
+        } else {
+            conv_inv_static(conv_rule, value, row, rules.checks, None, None)?
+        };
         if let Some(error) = converted.error {
             // Native SetNewValue checks definedness first: false defined
             // errors go to WriteAlso without setting this value. They must
@@ -290,7 +312,6 @@ fn plan_selected_scalars(
             operation,
             byte_order,
         )? {
-            ResolvedTiffScalarEdit::NoEdit => {}
             ResolvedTiffScalarEdit::NoOverwrite { native_warning } => warnings.push(native_warning),
             ResolvedTiffScalarEdit::Delete { raw_tag_id } => edits.push(ScopedEntryEdit {
                 ifd,
@@ -338,6 +359,11 @@ fn plan_selected_scalars(
             }
         }
     }
+    // The carrier's source-derived directory operation removes an emptied
+    // IFD1 and lets the JPEG boundary elide an empty IFD0 payload.  A delete
+    // therefore remains a delete even when it was the last non-default entry;
+    // mandatory default creation is applied by the public transaction before
+    // this plan is committed.
     Ok(ScalarWritePlan {
         edits,
         warnings,
@@ -377,7 +403,9 @@ mod tests {
         fn scalar(scalar: &str, value: Option<&str>) -> std::result::Result<Scalar, String> {
             Ok(match (scalar, value) {
                 ("undefined", None) => Scalar::Undefined,
-                ("utf8", Some(value)) => Scalar::Utf8(value.to_owned()),
+                ("utf8" | "integer" | "rational" | "float", Some(value)) => {
+                    Scalar::Utf8(value.to_owned())
+                }
                 ("bytes", Some(hex)) if hex.is_ascii() && hex.len().is_multiple_of(2) => {
                     Scalar::Bytes(
                         (0..hex.len())
@@ -431,6 +459,22 @@ mod tests {
                                 .collect::<std::result::Result<Vec<_>, _>>()
                                 .map_err(|error| error.to_string())?;
                             desired.insert(&item.key, TagValue::Binary(bytes));
+                        }
+                        ("rational", Some(value)) => {
+                            let (numerator, denominator) = value
+                                .split_once('/')
+                                .ok_or("rational fixture lacks separator")?;
+                            desired.insert(
+                                &item.key,
+                                TagValue::Rational {
+                                    numerator: numerator.parse().map_err(
+                                        |error: std::num::ParseIntError| error.to_string(),
+                                    )?,
+                                    denominator: denominator.parse().map_err(
+                                        |error: std::num::ParseIntError| error.to_string(),
+                                    )?,
+                                },
+                            );
                         }
                         ("integer", Some(value)) => {
                             let integer =
@@ -502,7 +546,32 @@ mod tests {
                 match value {
                     Scalar::Undefined => operations::remove_tag(&request.output, key),
                     Scalar::Utf8(text) => {
-                        operations::modify_tag(&request.output, key, TagValue::String(text))
+                        let value = match scalar_name {
+                            "float" => {
+                                TagValue::Float(text.parse().map_err(
+                                    |error: std::num::ParseFloatError| error.to_string(),
+                                )?)
+                            }
+                            "integer" => TagValue::Integer(
+                                text.parse()
+                                    .map_err(|error: std::num::ParseIntError| error.to_string())?,
+                            ),
+                            "rational" => {
+                                let (numerator, denominator) = text
+                                    .split_once('/')
+                                    .ok_or("rational fixture lacks separator")?;
+                                TagValue::Rational {
+                                    numerator: numerator.parse().map_err(
+                                        |error: std::num::ParseIntError| error.to_string(),
+                                    )?,
+                                    denominator: denominator.parse().map_err(
+                                        |error: std::num::ParseIntError| error.to_string(),
+                                    )?,
+                                }
+                            }
+                            _ => TagValue::String(text),
+                        };
+                        operations::modify_tag(&request.output, key, value)
                     }
                     Scalar::Bytes(bytes) => {
                         operations::modify_tag(&request.output, key, TagValue::Binary(bytes))
@@ -523,8 +592,12 @@ mod tests {
                     Resolution::Unsupported(reason) => return Err(reason.into()),
                 };
                 let resolved =
-                    crate::writers::generated_write_dispatch::resolved_scalar_request(row, value)
-                        .map_err(|error| error.to_string())?;
+                    crate::writers::generated_write_dispatch::resolved_scalar_request_at(
+                        row.row,
+                        value,
+                        row.selected_group,
+                    )
+                    .map_err(|error| error.to_string())?;
                 match request.carrier.as_deref() {
                     None | Some("tiff_little" | "tiff_big") => rewrite_resolved_generated_scalars(
                         &input,
@@ -598,9 +671,11 @@ mod tests {
             raw_id: &id,
             name: rule.tag_name,
             write_group: rule.physical_write_group,
+            selected_group: rule.physical_write_group,
             write_proc_source_sha256: rule.write_proc_source_sha256,
             registry_source_sha256: rule.registry_source_sha256,
             writer_source_sha256: rule.writer_source_sha256,
+            main_source_sha256: rule.main_source_sha256,
             value: Scalar::Bytes(b"resolved".to_vec()),
         };
         let empty = b"II\x2a\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00";
@@ -650,6 +725,10 @@ mod tests {
             },
             ResolvedScalarWriteRequest {
                 writer_source_sha256: "different",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                main_source_sha256: "different",
                 ..request()
             },
         ] {

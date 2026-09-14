@@ -12,6 +12,14 @@ pub(crate) fn resolved_scalar_request(
     row: &StaticSetNewValueAddress,
     value: Scalar,
 ) -> Result<ResolvedScalarWriteRequest<'static>> {
+    resolved_scalar_request_at(row, value, row.write_group)
+}
+
+pub(crate) fn resolved_scalar_request_at(
+    row: &StaticSetNewValueAddress,
+    value: Scalar,
+    selected_group: &str,
+) -> Result<ResolvedScalarWriteRequest<'static>> {
     let capture = SET_NEW_VALUE_ADDRESS_CAPTURE.ok_or_else(|| {
         ExifToolError::unsupported_format("generated public address capture is unavailable")
     })?;
@@ -31,6 +39,18 @@ pub(crate) fn resolved_scalar_request(
         .ok_or_else(|| {
             ExifToolError::unsupported_format("address is not in the selected generated capture")
         })?;
+    let selected_group = if selected_group == row.write_group {
+        row.write_group
+    } else {
+        super::generated_write_address::authenticated_explicit_directories()
+            .map_err(ExifToolError::unsupported_format)?
+            .iter()
+            .copied()
+            .find(|group| *group == selected_group)
+            .ok_or_else(|| {
+                ExifToolError::unsupported_format("selected directory has no source operand")
+            })?
+    };
     Ok(ResolvedScalarWriteRequest {
         module: row.module,
         table: row.table,
@@ -38,9 +58,11 @@ pub(crate) fn resolved_scalar_request(
         raw_id: row.raw_id,
         name: row.name,
         write_group: row.write_group,
+        selected_group,
         write_proc_source_sha256: capture.write_exif_source_sha256,
         registry_source_sha256: capture.exif_source_sha256,
         writer_source_sha256: capture.writer_source_sha256,
+        main_source_sha256: capture.main_source_sha256,
         value,
     })
 }

@@ -145,19 +145,6 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     );
 
     registry.insert(
-        "EXIF:Artist",
-        TagDescriptor::new(
-            TagId::new_numeric(0x013B),
-            "EXIF:Artist".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Name of photographer or creator".to_string(),
-            vec!["John Doe".to_string(), "Jane Smith".to_string()],
-        ),
-    );
-
-    registry.insert(
         "EXIF:Copyright",
         TagDescriptor::new(
             TagId::new_numeric(0x8298),
@@ -409,32 +396,6 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             "Image orientation (1=Horizontal, 3=Rotate 180, 6=Rotate 90 CW, 8=Rotate 270 CW)"
                 .to_string(),
             vec!["1".to_string(), "6".to_string(), "8".to_string()],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:XResolution",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011A),
-            "EXIF:XResolution".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "Horizontal resolution in pixels per resolution unit".to_string(),
-            vec!["72".to_string(), "300".to_string()],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:YResolution",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011B),
-            "EXIF:YResolution".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "Vertical resolution in pixels per resolution unit".to_string(),
-            vec!["72".to_string(), "300".to_string()],
         ),
     );
 
@@ -1010,32 +971,6 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             ValueType::Integer,
             "Logical order of bits within a byte".to_string(),
             vec!["1".to_string(), "2".to_string()],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:XPosition",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011e),
-            "EXIF:XPosition".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "X position of image on page".to_string(),
-            vec!["0".to_string(), "72.5".to_string()],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:YPosition",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011f),
-            "EXIF:YPosition".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Rational,
-            "Y position of image on page".to_string(),
-            vec!["0".to_string(), "72.5".to_string()],
         ),
     );
 
@@ -5613,31 +5548,6 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     );
 
     // --- More EXIF Tags (40 tags) ---
-    registry.insert(
-        "EXIF:MinSampleValue",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0118),
-            "EXIF:MinSampleValue".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Minimum component value".to_string(),
-            vec!["0".to_string()],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:MaxSampleValue",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0119),
-            "EXIF:MaxSampleValue".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::Integer,
-            "Maximum component value".to_string(),
-            vec!["255".to_string(), "65535".to_string()],
-        ),
-    );
 
     registry.insert(
         "EXIF:StripRowCounts",
@@ -6917,6 +6827,8 @@ static GENERATED_SCALAR_DESCRIPTOR_ENTRIES: LazyLock<Option<HashMap<String, TagD
         for fact in facts {
             let value_type = match fact.value_class {
                 SourceValueClass::String => ValueType::String,
+                SourceValueClass::Integer => ValueType::Integer,
+                SourceValueClass::Rational => ValueType::Rational,
             };
             let name = format!("{}:{}", fact.group0, fact.name);
             if descriptors
@@ -7252,12 +7164,25 @@ mod tests {
             let descriptor =
                 get_tag_descriptor(&name).expect("generated descriptor is publicly reachable");
             assert!(descriptor.is_writable(), "{name}");
-            assert_eq!(descriptor.value_type(), ValueType::String, "{name}");
-            crate::writers::exif_surgical::validate_changed(
-                &name,
-                &crate::core::TagValue::String("source-backed value".into()),
-            )
-            .expect("legacy surgical validation consumes generated descriptor");
+            let (expected_type, value) = match fact.value_class {
+                SourceValueClass::String => (
+                    ValueType::String,
+                    crate::core::TagValue::String("source-backed value".into()),
+                ),
+                SourceValueClass::Integer => {
+                    (ValueType::Integer, crate::core::TagValue::Integer(1))
+                }
+                SourceValueClass::Rational => (
+                    ValueType::Rational,
+                    crate::core::TagValue::Rational {
+                        numerator: 1,
+                        denominator: 1,
+                    },
+                ),
+            };
+            assert_eq!(descriptor.value_type(), expected_type, "{name}");
+            crate::writers::exif_surgical::validate_changed(&name, &value)
+                .expect("legacy surgical validation consumes generated descriptor");
         }
     }
 

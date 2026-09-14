@@ -74,7 +74,7 @@ sub helper_fact {
 my $input = decode_json(read_raw($input_path));
 die "probe input is not an object\n" unless ref($input) eq 'HASH';
 die "probe input schema is unsupported\n"
-    unless $input->{schema} eq 'native_setnewvalue_address_probe_input_v2';
+    unless $input->{schema} eq 'native_setnewvalue_address_probe_input_v3';
 my $capture = $input->{capture};
 my $rows = $input->{rows};
 my $query_names = $input->{query_names};
@@ -101,10 +101,18 @@ my $runtime_setnew = helper_fact('Image::ExifTool::SetNewValue');
 for my $key (qw(find_tag_info set_new_value)) {
     die "capture helper is not an object: $key\n" unless ref($capture->{$key}) eq 'HASH';
 }
-die "FindTagInfo identity differs from supplied dump capture\n"
-    unless $canonical->encode($runtime_find) eq $canonical->encode($capture->{find_tag_info});
-die "SetNewValue identity differs from supplied dump capture\n"
-    unless $canonical->encode($runtime_setnew) eq $canonical->encode($capture->{set_new_value});
+# The compiler structurally authenticates the two admitted FindTagInfo deparse
+# renderings (the XMP prototype spelling differs by load state).  This probe
+# must not turn that source-proved equivalence into a byte-hash mismatch.
+# Bindings, selected source files and their bytes remain exact here.
+for my $pair ([$runtime_find, $capture->{find_tag_info}, 'FindTagInfo'], [$runtime_setnew, $capture->{set_new_value}, 'SetNewValue']) {
+    my ($live, $saved, $label) = @$pair;
+    die "$label capture is not an object\n" unless ref($saved) eq 'HASH';
+    for my $key (qw(requested_binding actual_name source_file source_sha256)) {
+        die "$label identity differs from supplied dump capture\n"
+            unless defined($live->{$key}) && defined($saved->{$key}) && $live->{$key} eq $saved->{$key};
+    }
+}
 
 my $context = $capture->{native_capture_context};
 die "native capture context is not an object\n" unless ref($context) eq 'HASH';
@@ -146,6 +154,30 @@ for my $row (@$rows) {
         or die "cannot load selected table $row->{full_name}\n";
     $selected{refaddr($table)} = { map { $_ => $row->{$_} } qw(module table full_name) };
 }
+
+# `FindTagInfo` returns table references, not a durable table spelling.  The
+# old probe recorded an unselected reference merely as "external", which
+# loses the distinction between two physical EXIF/IFD0 fields (notably
+# Exif::Main and PanasonicRaw::Main Artist).  Resolve every selected native
+# table reference through TagLookup's authoritative table list before we
+# inspect candidates.  This is intentionally not a group/name heuristic.
+#
+# Loading a previously unseen candidate table changes the native closure; the
+# closure equality check below then refuses an old dump capture.  A successful
+# regeneration must therefore have warmed and captured the same table.
+my $lookup_source = read_raw(File::Spec->catfile($lib_abs, 'Image/ExifTool/TagLookup.pm'));
+$lookup_source =~ /my\s+\@tableList\s*=\s*\(\n(.*?)^\);/ms
+    or die "TagLookup tableList source is unsupported\n";
+my @native_table_names = ($1 =~ /^\s*'([^']+)'\s*,?\s*(?:#.*)?$/mg);
+die "TagLookup tableList source is empty\n" unless @native_table_names;
+my %native_table_identity;
+for my $full (@native_table_names) {
+    next unless defined $full && $full =~ /^Image::ExifTool::([^:]+)::([^:]+)$/;
+    my $table = Image::ExifTool::GetTagTable($full) or next;
+    $native_table_identity{refaddr($table)} = {
+        module => $1, table => $2, full_name => $full,
+    };
+}
 my $et = Image::ExifTool->new;
 my %queries;
 for my $lower (@query_names) {
@@ -153,8 +185,14 @@ for my $lower (@query_names) {
     my @candidates;
     for my $info (Image::ExifTool::TagLookup::FindTagInfo($name)) {
         my $table = $info->{Table};
-        my %candidate = (name => "$info->{Name}", raw_id => "$info->{TagID}");
-        if (my $identity = $selected{refaddr($table)}) {
+        # Preserve table-local write controls with the candidate identity.  A
+        # same numeric id and group is not an alias when `Permanent` or the
+        # selected table's write controls differ.
+        my %candidate = (name => "$info->{Name}", raw_id => "$info->{TagID}",
+                         writable => (defined $info->{Writable} ? "$info->{Writable}" : undef),
+                         permanent => ($info->{Permanent} ? JSON::PP::true : JSON::PP::false),
+                         write_group => (defined $info->{WriteGroup} ? "$info->{WriteGroup}" : undef));
+        if (my $identity = $native_table_identity{refaddr($table)}) {
             @candidate{qw(module table full_name)} = @{$identity}{qw(module table full_name)};
         } else {
             $candidate{external_table} = (ref($table) eq 'HASH' && defined($table->{TABLE_NAME}))
@@ -174,7 +212,7 @@ for my $module (@{$closure->{modules}}) {
         unless $canonical->encode($module) eq $canonical->encode($captured);
 }
 print JSON::PP->new->canonical->utf8->encode({
-    schema => 'native_setnewvalue_addressing_v2', capture => $capture,
+    schema => 'native_setnewvalue_addressing_v3', capture => $capture,
     runtime => { %actual_context, loaded_closure => $closure,
                  helpers => { find_tag_info => $runtime_find, set_new_value => $runtime_setnew } },
     queries => \%queries,

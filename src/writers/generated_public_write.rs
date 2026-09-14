@@ -70,7 +70,7 @@ pub(crate) fn resolve_public<'a>(
     }
     match generated_write_address::resolve(key, rules) {
         Resolution::Resolved(row) => {
-            let mut matches = migrations.iter().filter(|entry| same_identity(row, entry));
+            let mut matches = migrations.iter().filter(|entry| same_identity(&row, entry));
             match (matches.next(), matches.next()) {
                 (Some(entry), None) if !entry.removed_or_unsupported => Resolution::Resolved(row),
                 (Some(_), _) => Resolution::Unsupported(
@@ -145,7 +145,7 @@ pub(crate) fn plan_public_write(
     for (row, value) in &plan.generated {
         let entry = PUBLIC_SET_NEW_VALUE_MIGRATIONS
             .iter()
-            .find(|entry| same_identity(row, entry))
+            .find(|entry| same_identity(&row, entry))
             .ok_or_else(|| refused("planned identity is absent from migration ledger"))?;
         let mut selected = finals.finals.iter().filter(|item| {
             item.module == row.module
@@ -156,28 +156,42 @@ pub(crate) fn plan_public_write(
                 && item.table_group0 == row.group0
                 && item.physical_write_group == row.write_group
         });
-        if !matches!((selected.next(), selected.next()), (Some(item), None) if item.source_control_sha256 == entry.source_control_sha256)
-        {
-            return Err(refused(
-                "public migration does not join current final control",
-            ));
-        }
+        let final_rule = match (selected.next(), selected.next()) {
+            (Some(item), None) if item.source_control_sha256 == entry.source_control_sha256 => item,
+            _ => {
+                return Err(refused(
+                    "public migration does not join current final control",
+                ));
+            }
+        };
+        let numeric = super::generated_scalar_rules::NUMERIC_SCALAR
+            .as_ref()
+            .is_some_and(|recipe| recipe.formats.contains(&final_rule.conversion_format));
         let scalar = match value {
             None => Scalar::Undefined,
+            Some(TagValue::Integer(number)) if numeric => Scalar::Utf8(number.to_string()),
+            Some(TagValue::Float(number)) if numeric && number.is_finite() => {
+                Scalar::Utf8(number.to_string())
+            }
+            Some(TagValue::Rational {
+                numerator,
+                denominator,
+            }) if numeric => Scalar::Utf8(format!("{numerator}/{denominator}")),
             Some(TagValue::String(text)) => Scalar::Utf8(text.clone()),
             Some(TagValue::Binary(bytes)) => Scalar::Bytes(bytes.clone()),
             _ => return Err(refused("public scalar representation is not yet admitted")),
         };
-        generated.push(super::generated_write_dispatch::resolved_scalar_request(
-            row, scalar,
+        generated.push(super::generated_write_dispatch::resolved_scalar_request_at(
+            row.row,
+            scalar,
+            row.selected_group,
         )?);
     }
     let is_generated =
         |key: &str| match resolve_public(key, &rules, PUBLIC_SET_NEW_VALUE_MIGRATIONS) {
-            Resolution::Resolved(row) => plan
-                .generated
-                .iter()
-                .any(|(planned, _)| planned.index == row.index),
+            Resolution::Resolved(row) => plan.generated.iter().any(|(planned, _)| {
+                planned.index == row.index && planned.selected_group == row.selected_group
+            }),
             _ => false,
         };
     let mut legacy_metadata = desired.clone();
@@ -236,15 +250,33 @@ pub(crate) fn rewrite_tiff_transaction(
 mod tests {
     use super::*;
 
+    fn inventory_only_key() -> String {
+        // Choose a current source declaration outside every current or retained
+        // public migration. The fixture follows the migration boundary as it grows.
+        let rules = generated_write_address::generated_rules();
+        rules
+            .rows
+            .unwrap()
+            .iter()
+            .map(|row| format!("{}:{}", row.group0, row.name))
+            .find(|key| {
+                !PUBLIC_SET_NEW_VALUE_MIGRATIONS
+                    .iter()
+                    .any(|entry| owns_name(key, entry))
+            })
+            .expect("source inventory has an unmigrated declaration")
+    }
+
     #[test]
     fn migrated_alias_delta_keeps_legacy_and_generated_edits_separate() {
+        let legacy_key = inventory_only_key();
         let mut original = MetadataMap::new();
         original.insert("IFD0:HostComputer", TagValue::new_string("old"));
-        original.insert("IFD0:Artist", TagValue::new_string("artist"));
+        original.insert(&legacy_key, TagValue::new_string("artist"));
         let mut desired = original.clone();
         desired.remove("IFD0:HostComputer");
         desired.insert("EXIF:HostComputer", TagValue::new_string("new"));
-        desired.insert("IFD0:Artist", TagValue::new_string("changed"));
+        desired.insert(&legacy_key, TagValue::new_string("changed"));
         let plan = plan_public_write(&original, &desired, &[]).unwrap();
         assert_eq!(plan.generated.len(), 1);
         assert_eq!(plan.generated[0].value, Scalar::Utf8("new".into()));
@@ -254,8 +286,8 @@ mod tests {
         );
         assert!(plan.legacy_metadata.get("EXIF:HostComputer").is_none());
         assert_eq!(
-            plan.legacy_metadata.get("IFD0:Artist"),
-            desired.get("IFD0:Artist")
+            plan.legacy_metadata.get(&legacy_key),
+            desired.get(&legacy_key)
         );
         assert!(plan.has_legacy_changes);
     }
@@ -302,8 +334,9 @@ mod tests {
 
     #[test]
     fn source_inventory_only_names_keep_legacy_routing() {
+        let legacy_key = inventory_only_key();
         let mut desired = MetadataMap::new();
-        desired.insert("IFD0:Artist", TagValue::new_string("artist"));
+        desired.insert(&legacy_key, TagValue::new_string("artist"));
         let plan = plan_public_write(&MetadataMap::new(), &desired, &[]).unwrap();
         assert!(plan.generated.is_empty());
         assert!(plan.has_legacy_changes);
@@ -335,5 +368,46 @@ mod tests {
                 "{key}"
             );
         }
+    }
+    #[test]
+    fn public_integer_and_rational_values_keep_source_format_and_directory() {
+        for (key, value, scalar, directory) in [
+            ("EXIF:XResolution", TagValue::Integer(300), "300", "IFD0"),
+            (
+                "IFD1:XResolution",
+                TagValue::Rational {
+                    numerator: 3,
+                    denominator: 2,
+                },
+                "3/2",
+                "IFD1",
+            ),
+            (
+                "EXIF:YResolution",
+                TagValue::Rational {
+                    numerator: 1,
+                    denominator: 0,
+                },
+                "1/0",
+                "IFD0",
+            ),
+        ] {
+            let mut desired = MetadataMap::new();
+            desired.insert(key, value);
+            let plan = plan_public_write(&MetadataMap::new(), &desired, &[]).unwrap();
+            assert!(!plan.has_legacy_changes);
+            assert_eq!(plan.generated.len(), 1);
+            assert_eq!(plan.generated[0].value, Scalar::Utf8(scalar.into()));
+            assert_eq!(plan.generated[0].selected_group, directory);
+        }
+        let mut desired = MetadataMap::new();
+        desired.insert("EXIF:XResolution", TagValue::Float(1.5));
+        assert_eq!(
+            plan_public_write(&MetadataMap::new(), &desired, &[])
+                .unwrap()
+                .generated[0]
+                .value,
+            Scalar::Utf8("1.5".into())
+        );
     }
 }

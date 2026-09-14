@@ -58,10 +58,16 @@ class PublicTimingTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, 'absent-to-present'):
                 self.fresh.compare_jpeg(source, noop, noop, target, 'fresh-insert')
 
-    def test_source_joined_cohort_declares_216_requests(self):
+    def test_source_joined_cohort_preserves_216_string_and_adds_numeric_requests(self):
         targets = self.generated.generated_targets(self.fresh.LEDGER, self.fresh.RULES)
-        self.assertEqual(len(targets), 9)
-        self.assertEqual(len(matrix.timing_cases(self.fresh)) * sum(len(t.qualifiers) for t in targets), 216)
+        predecessor = self.generated.predecessor_public_targets(targets)
+        self.assertEqual(len(predecessor), 15)
+        self.assertTrue(set(predecessor).issubset(targets))
+        self.assertGreater(len(targets), len(predecessor))
+        self.assertEqual(len(matrix.timing_cases(self.fresh)) * sum(len(t.qualifiers) for t in predecessor), 360)
+        strings = [target for target in predecessor if target.case_family == "native_string_scalar"]
+        self.assertEqual(len(matrix.timing_cases(self.fresh)) * sum(len(t.qualifiers) for t in strings), 216)
+        self.assertGreater(len(matrix.timing_cases(self.fresh)) * sum(len(t.qualifiers) for t in targets), 360)
 
 
 if __name__ == '__main__':
