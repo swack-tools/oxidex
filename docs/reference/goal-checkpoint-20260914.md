@@ -13,8 +13,8 @@ Neither number measures extraction or writing success.
 
 QuickTime ItemList has 92 generated reader declarations. The integrated Keys
 reader has 70 direct source-derived declarations and 11 explicit refusals. The
-Keys catalog join is being completed separately; the published catalog report
-must not be read as already including these new declarations. UserData remains
+Keys catalog join is implemented; the published catalog report still requires
+regeneration with these new declarations. UserData remains
 blocked on its shared record/language protocol. The full hydrated QuickTime
 selector accounts for 399 variants across the three tables, including source
 rows outside the ordinary catalog denominator.
@@ -34,15 +34,19 @@ preserves the existing metadata map and asserts exact SOS-through-EOI bytes.
 
 That regeneration command also exposed a source-input defect: it omitted the
 hydrated-layout flag, silently reducing the QuickTime ledger by three records.
-The output is preserved as diagnostic evidence. The command now explicitly
-captures hydrated layouts; a fresh complete regeneration and runtime gate are
-required. Eleven shell control tests passed for the hydration change. Updated
-controls also exercise the new Keys generator.
+The output is preserved as diagnostic evidence. A subsequent combined hydrated
+reader/writer capture was stopped deliberately while still active to replace
+that expensive capture arrangement. Reader and writer views now have separate
+fresh-capture inputs from the same pinned Perl library. The QuickTime generators
+consume the fully hydrated reader view. Neither diagnostic run establishes
+regeneration parity; a fresh complete regeneration and runtime gate are required.
 
-Fifty-four focused Python tests pass for catalog joins, QuickTime source/spec
-compilation, Keys behavior selection, runtime-input identity and baseline
-integrity. The Keys native fixture is recognized by pinned Perl as Keys:Artist;
-its OxiDex end-to-end Rust test still needs the combined runtime gate.
+Fifty-four focused Python tests pass for catalog joins, authenticated Keys
+observations, write/readback evidence and the writer matrix. Nineteen manifest
+tests pass with both Keys artifacts included. Twelve Keys fixtures were checked
+in two print modes against pinned Perl, producing 24 native observations. These
+verify the fixture instrument, not OxiDex coverage; the fresh paired runtime
+comparison still needs to run.
 
 ## Measurements still required
 
@@ -62,7 +66,7 @@ runtime verdict or corpus-wide percentage. Fresh evidence must be a new report.
 
 1. Finish corrected canonical regeneration, Clippy, Rust and affected Python
    gates; inspect generated changes and explicit refusals before accepting them.
-2. Complete the Keys catalog join and regenerate JSON plus the human-readable
+2. Regenerate the completed Keys catalog join as JSON plus the human-readable
    report from matching catalog, hydrated source and reader/writer artifacts.
 3. Run fresh native reader and real writer/readback comparisons from immutable
    source, import observed identities, and publish the family report through Pages.
