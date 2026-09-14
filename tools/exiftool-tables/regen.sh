@@ -116,6 +116,18 @@ python3 "$HERE/convinv_rust_codegen.py" "$JSON" \
     --report "$(artifact_path convinv-ledger)"
 
 echo
+echo ">> generating static inverse-conversion row inputs"
+python3 "$HERE/convinv_row_codegen.py" "$JSON" \
+    --output "$(artifact_path convinv-rows)" \
+    --report "$(artifact_path convinv-row-ledger)"
+
+echo
+echo ">> generating source-derived final scalar writer operands"
+python3 "$HERE/final_scalar_stage.py" "$JSON" \
+    --output "$(artifact_path tiff-scalar-final-rules)" \
+    --report "$(artifact_path tiff-scalar-final-ledger)"
+
+echo
 echo ">> extracting file-identification tables"
 "$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \

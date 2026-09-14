@@ -55,6 +55,7 @@ use crate::writers::exif_surgical::{
 // are accepted. This primitive contains carrier mechanics, not tag knowledge.
 #[allow(dead_code)]
 pub(crate) mod entry_edits;
+pub(crate) mod generated_scalar;
 
 /// IFD0 tag pointing to the ExifIFD
 const EXIF_IFD_POINTER: u16 = 0x8769;

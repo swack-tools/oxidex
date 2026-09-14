@@ -20,6 +20,23 @@ pub(crate) enum ConversionProperty {
     Undefined,
     Defined,
 }
+/// One source row, emitted from ``native_write_tables``. The property slices
+/// deliberately own no recipe borrow: the caller constructs a short-lived
+/// CheckExifInput while executing the row.
+#[derive(Clone, Copy)]
+pub(crate) struct StaticConvInvRow {
+    pub module: &'static str,
+    pub table: &'static str,
+    pub full_name: &'static str,
+    pub raw_id: &'static str,
+    pub name: &'static str,
+    pub write_group: &'static str,
+    pub conversion: [ConversionProperty; 4],
+    pub gates: [bool; 4],
+    pub tag_properties: &'static [crate::writers::generated_checkexif::Property<'static>],
+    pub table_properties: &'static [crate::writers::generated_checkexif::Property<'static>],
+    pub tag_groups: &'static [crate::writers::generated_checkexif::Property<'static>],
+}
 #[derive(Clone, Copy)]
 pub(crate) struct ConvInvRow<'a> {
     pub print_conv: ConversionProperty,
@@ -128,4 +145,64 @@ fn check_error(
             row.write_group, row.actual_tag
         )),
     })
+}
+
+fn recipe_for_row<'a>(
+    row: &StaticConvInvRow,
+    recipes: &'a [CheckExifRecipe],
+) -> Result<&'a CheckExifRecipe> {
+    let mut matched = recipes.iter().filter(|recipe| {
+        recipe.source_tables.iter().any(|table| {
+            table.module == row.module
+                && table.table == row.table
+                && table.full_name == row.full_name
+        })
+    });
+    let recipe = matched
+        .next()
+        .ok_or_else(|| refused("row source table has no authenticated CHECK_PROC recipe"))?;
+    if matched.next().is_some() {
+        return Err(refused(
+            "row source table matches multiple CHECK_PROC recipes",
+        ));
+    }
+    Ok(recipe)
+}
+
+/// Execute a generated row without a public writer route.  The exact recipe is
+/// joined at call time by all three native table identity fields, preventing a
+/// same-named table from borrowing a different CHECK_PROC.
+pub(crate) fn conv_inv_static(
+    recipe: &ConvInvRecipe,
+    value: Scalar,
+    row: &StaticConvInvRow,
+    recipes: &[CheckExifRecipe],
+    conversion_type: Option<&str>,
+    object_conv_type: Option<&str>,
+) -> Result<ConvInvResult> {
+    let input = CheckExifInput {
+        tag_properties: row.tag_properties,
+        table_properties: row.table_properties,
+        tag_groups: row.tag_groups,
+    };
+    let check_proc = if row.gates[3] {
+        None
+    } else {
+        Some((recipe_for_row(row, recipes)?, &input))
+    };
+    let transient = ConvInvRow {
+        print_conv: row.conversion[0],
+        print_conv_inv: row.conversion[1],
+        value_conv: row.conversion[2],
+        value_conv_inv: row.conversion[3],
+        list: row.gates[0],
+        raw_join: row.gates[1],
+        write_check: row.gates[2],
+        raw_conv_inv: row.gates[3],
+        check_proc,
+        requested_tag: row.name,
+        actual_tag: row.name,
+        write_group: row.write_group,
+    };
+    conv_inv_scalar(recipe, value, transient, conversion_type, object_conv_type)
 }

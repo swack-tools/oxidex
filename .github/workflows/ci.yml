@@ -442,10 +442,14 @@ jobs:
   # throwaway harness to execute the committed Start/Base forms.
   verify-tables:
     name: Verify Generated Tables
-    # This job now verifies generated artifacts and runs the complete native
-    # mutation/replay suite. Keep the existing runner size; allow the serial
-    # Perl/Python work to finish instead of treating it as a short I/O check.
-    runs-on: warp-ubuntu-latest-x64-2x
+    # This job keeps a module-complete native writer capture: CheckExif's
+    # freshness ledger records every omitted source table as well as its one
+    # admitted recipe, so an Exif-only capture would silently weaken coverage.
+    # On the 2x class three consecutive PR #768 attempts were SIGTERM'd around
+    # six minutes while the redirected complete dump was still running. This
+    # termination pattern does not establish its cause. Try the already
+    # supported 4x class while retaining the full source inventory.
+    runs-on: warp-ubuntu-latest-x64-4x
     # PR #761 at 149387d2 used 5m47s for setup/tier verification, then hit the
     # former 20m job cap during native inventory mutations (679 tests reached).
     # No check is removed; retain a finite bound with room for the full suite.

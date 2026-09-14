@@ -196,6 +196,37 @@ pub(crate) fn apply_raw_exif_edits(
     reader: &dyn FileReader,
     edits: &[crate::writers::tiff_surgical::entry_edits::ScopedEntryEdit],
 ) -> Result<Vec<u8>> {
+    replace_existing_exif(reader, |tiff| {
+        crate::writers::tiff_surgical::entry_edits::apply_entry_edits(tiff, edits)
+            .map(|bytes| (bytes, ()))
+    })
+    .map(|(bytes, ())| bytes)
+}
+
+/// Apply generated scalar semantics to an existing JPEG EXIF block. The
+/// replacement mechanism knows only JPEG storage, not names or tag formats.
+/// Source-derived defaults for creating a new EXIF block remain unsupported.
+pub(crate) fn rewrite_generated_exif_scalars(
+    reader: &dyn FileReader,
+    requests: Vec<crate::writers::tiff_surgical::generated_scalar::ScalarWriteRequest<'_>>,
+    rules: &crate::writers::tiff_surgical::generated_scalar::ScalarWriteRules<'_>,
+) -> Result<crate::writers::tiff_surgical::generated_scalar::ScalarWriteOutput> {
+    use crate::writers::tiff_surgical::generated_scalar::{
+        ScalarWriteOutput, rewrite_generated_scalars,
+    };
+    let (bytes, warnings) = replace_existing_exif(reader, |tiff| {
+        rewrite_generated_scalars(tiff, requests, rules)
+            .map(|output| (output.bytes, output.warnings))
+    })?;
+    Ok(ScalarWriteOutput { bytes, warnings })
+}
+
+/// Replace exactly one existing EXIF payload and preserve every other byte,
+/// including non-EXIF APP1 blocks, scan data and the trailer.
+fn replace_existing_exif<T>(
+    reader: &dyn FileReader,
+    transform: impl FnOnce(&[u8]) -> Result<(Vec<u8>, T)>,
+) -> Result<(Vec<u8>, T)> {
     let segments = parse_segments(reader)?;
     let end_index = segments
         .iter()
@@ -223,10 +254,7 @@ pub(crate) fn apply_raw_exif_edits(
             "Ambiguous multiple JPEG EXIF blocks",
         ));
     }
-    let tiff = crate::writers::tiff_surgical::entry_edits::apply_entry_edits(
-        &block.data[EXIF_IDENTIFIER.len()..],
-        edits,
-    )?;
+    let (tiff, outcome) = transform(&block.data[EXIF_IDENTIFIER.len()..])?;
     let length = tiff
         .len()
         .checked_add(EXIF_IDENTIFIER.len() + 2)
@@ -245,7 +273,7 @@ pub(crate) fn apply_raw_exif_edits(
     out.extend_from_slice(EXIF_IDENTIFIER);
     out.extend_from_slice(&tiff);
     out.extend_from_slice(&bytes[end..]);
-    Ok(out)
+    Ok((out, outcome))
 }
 
 /// Reconstructs a complete JPEG file with modified EXIF segment.
@@ -539,6 +567,101 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("APP1 size limit"));
+    }
+
+    #[test]
+    fn generated_scalar_jpeg_preserves_other_segments_and_exact_scalar_states() {
+        use crate::writers::generated_scalar::Scalar;
+        use crate::writers::tiff_surgical::generated_scalar::{
+            ScalarWriteRequest, generated_rules,
+        };
+        let mut original = vec![0xff, 0xd8];
+        write_segment(&mut original, 0xffe2, b"unknown\0APP2 bytes").unwrap();
+        write_segment(
+            &mut original,
+            APP1_MARKER,
+            b"http://ns.adobe.com/xap/1.0/\0keep",
+        )
+        .unwrap();
+        let prefix_len = original.len();
+        let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0".to_vec();
+        exif.extend_from_slice(&[0; 6]);
+        write_segment(&mut original, APP1_MARKER, &exif).unwrap();
+        let tail_start = original.len();
+        write_segment(&mut original, SOS_MARKER, b"scan header").unwrap();
+        original.extend_from_slice(b"\x12\xff\0\x34\xff\xd9trailer");
+        let mut file = original.clone();
+        for (value, expected) in [
+            (Scalar::Utf8("é".to_owned()), Some(b"\xc3\xa9\0".as_slice())),
+            (Scalar::Bytes(b"a\0b".to_vec()), Some(b"a\0b\0".as_slice())),
+            (Scalar::Bytes(Vec::new()), Some(b"\0".as_slice())),
+            (Scalar::Undefined, None),
+        ] {
+            let result = rewrite_generated_exif_scalars(
+                &TestReader::new(file),
+                vec![ScalarWriteRequest {
+                    key: "EXIF:HostComputer",
+                    value,
+                }],
+                &generated_rules(),
+            )
+            .unwrap();
+            assert!(result.warnings.is_empty());
+            assert_eq!(&result.bytes[..prefix_len], &original[..prefix_len]);
+            assert!(result.bytes.ends_with(&original[tail_start..]));
+            let tiff = crate::writers::exif_surgical_test_support::tiff_slice(&result.bytes);
+            let scan = crate::writers::exif_surgical::scan_exif_entries(tiff).unwrap();
+            let entry = scan.entries.iter().find(|entry| entry.tag_id == 0x013c);
+            match expected {
+                Some(value) => {
+                    let entry = entry.unwrap();
+                    assert_eq!(entry.field_type, 2);
+                    assert_eq!(entry.count as usize, value.len());
+                    assert_eq!(entry.value, value);
+                }
+                None => assert!(entry.is_none()),
+            }
+            file = result.bytes;
+        }
+    }
+
+    #[test]
+    fn generated_scalar_jpeg_refuses_missing_duplicate_and_oversized_blocks() {
+        use crate::writers::generated_scalar::Scalar;
+        use crate::writers::tiff_surgical::generated_scalar::{
+            ScalarWriteRequest, generated_rules,
+        };
+        let mut file = vec![0xff, 0xd8];
+        let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0".to_vec();
+        exif.extend_from_slice(&[0; 6]);
+        write_segment(&mut file, APP1_MARKER, &exif).unwrap();
+        let mut duplicate = file.clone();
+        write_segment(&mut duplicate, APP1_MARKER, &exif).unwrap();
+        duplicate.extend_from_slice(&[0xff, 0xd9]);
+        for rejected in [create_jpeg_without_exif(), duplicate] {
+            assert!(
+                rewrite_generated_exif_scalars(
+                    &TestReader::new(rejected),
+                    vec![ScalarWriteRequest {
+                        key: "EXIF:HostComputer",
+                        value: Scalar::Bytes(b"x".to_vec())
+                    }],
+                    &generated_rules()
+                )
+                .is_err()
+            );
+        }
+        file.extend_from_slice(&[0xff, 0xd9]);
+        let error = rewrite_generated_exif_scalars(
+            &TestReader::new(file),
+            vec![ScalarWriteRequest {
+                key: "IFD0:HostComputer",
+                value: Scalar::Bytes(vec![b'x'; 65_530]),
+            }],
+            &generated_rules(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("APP1 size limit"));
     }
 
     #[test]
