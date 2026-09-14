@@ -24,7 +24,11 @@ from instrument import git_state, print_header, refuse_if_dirty
 
 CASES = ("insert", "update", "growth", "shrinkage", "delete", "empty", "utf8", "embedded_nul")
 NAMES = ("EXIF:HostComputer", "IFD0:HostComputer")
-TIFF_TYPES = {1: 1, 2: 1, 3: 2, 4: 4}
+# Classic TIFF wire widths; preserve raw values without interpreting tag rules.
+# Native JPEG EXIF creation can add RATIONAL resolution entries even when the
+# requested field is a string, so the carrier inspector must support them.
+TIFF_TYPES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2,
+              9: 4, 10: 8, 11: 4, 12: 8}
 CONTRACT_EXIFTOOL_RELEASE = "13.59"
 
 # This is deliberately a pinned-native acceptance contract, not a writer
