@@ -33,6 +33,13 @@ def digest(value):
                                      ensure_ascii=False).encode()).hexdigest()
 
 
+def semantic_normal_form(row):
+    """Remove only selector-declared behavior-inert source metadata markers."""
+    if not isinstance(row, dict):
+        return row
+    return {key: value for key, value in row.items() if key != "_shorthand"}
+
+
 def variants(row, path=()):
     if isinstance(row, dict) and "_variants" in row:
         children = row["_variants"]

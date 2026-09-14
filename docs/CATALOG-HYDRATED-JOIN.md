@@ -1,13 +1,17 @@
 # Catalog-to-hydrated join
 
 `tools/exiftool-tables/join_catalog_hydrated.py` produces the first complete
-source-coordinate ledger for BuildTagLookup's ordinary entries. It requires all
-four explicit paths:
+source-coordinate ledger for BuildTagLookup's ordinary entries. It requires the
+catalog, hydrated capture, and the four replay-bound QuickTime inputs:
 
 ```sh
 python3 tools/exiftool-tables/join_catalog_hydrated.py \
   --catalog "$CATALOG_SOURCE_JSON" \
   --hydrated "$HYDRATED_LAYOUT_JSON" \
+  --quicktime-bounded-source "$QUICKTIME_BOUNDED_SOURCE_JSON" \
+  --quicktime-itemlist-ledger "$QUICKTIME_ITEMLIST_LEDGER_JSON" \
+  --quicktime-source-capabilities "$QUICKTIME_CAPABILITIES_JSON" \
+  --quicktime-itemlist-rust "$QUICKTIME_ITEMLIST_RUST" \
   --output "$JOIN_JSON" \
   --report "$JOIN_REPORT_MD"
 ```
@@ -26,7 +30,11 @@ axes:
 - `observed_read` and `observed_write` remain `not_observed_yet` until pinned
   ExifTool fixture evidence exists.
 
-The tool refuses version skew, malformed native denominators or unique-name sets,
+The tool replays `quicktime_generated_specs.compile_document` and
+`quicktime_atom_tables.report` from the supplied bounded QuickTime source, then
+requires the supplied ledger, capabilities, and Rust artifact to match that
+complete replay. The joined output records SHA-256 digests for those four inputs.
+It refuses version skew, malformed native denominators or unique-name sets,
 duplicate catalog coordinates, malformed hydrated table identities, and any absent
 or mismatched catalog producer source in the hydrated source manifest. The catalog
 manifest is intentionally a subset of the hydrated reader manifest (168 versus
