@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
+import final_scalar_stage
 from final_scalar_stage import FinalStageRefused, compile_final_scalar_rows, compile_final_scalar_stage, generate, render_rust
 
 
@@ -264,6 +265,52 @@ class FinalScalarStageTests(unittest.TestCase):
             generated = execute_rendered_recipe(document, recipe, bytes.fromhex("c3a9"))
             self.assertEqual(native["count"], 2)
             self.assertEqual(generated, native | {"hex": native["hex"].ljust(8, "0")})
+
+
+class HistoricalFinalStageProfilesTests(unittest.TestCase):
+    """Portable checks for the preserved selected-release WriteExif bodies."""
+
+    def table(self, tokens):
+        return {"effective_write_proc": {"present": True, "effective": {
+            "resolved": True, "__perl": "CODE", "__name": "Image::ExifTool::Exif::WriteExif",
+            "source_file": "Image/ExifTool/WriteExif.pl", "source_sha256": "a" * 64,
+            # body_tokens is deliberately lexical. Whitespace is not source
+            # semantics, so this compact reconstruction exercises the exact
+            # committed token sequence without inventing a Perl interpreter.
+            "__deparse": " ".join(tokens),
+        }}}
+
+    def test_selected_11_78_profile_maps_charset_disabled_string_path(self):
+        old = json.loads((Path(__file__).parent / "final_scalar_writeexif_full_template_11_78.json").read_text(encoding="utf-8"))
+        body = self.table(old)["effective_write_proc"]["effective"]["__deparse"]
+        _, _, control = final_scalar_stage._authenticate_write_exif(self.table(old))
+        self.assertEqual(control, "c11e22346f6d090aadfb1cc754556cc8c748f70240bfe666e4af423224955fe6")
+        final_scalar_stage._authenticate_operative_final_scalar_semantics(body, {"string"})
+
+    def test_selected_12_64_profile_maps_all_final_scalar_operands(self):
+        tokens = json.loads((Path(__file__).parent / "final_scalar_writeexif_full_template_12_64.json").read_text(encoding="utf-8"))
+        body = self.table(tokens)["effective_write_proc"]["effective"]["__deparse"]
+        _, _, control = final_scalar_stage._authenticate_write_exif(self.table(tokens))
+        self.assertEqual(control, "01b5e22f902c21cd20917ea0db9f5168e56ebfc8e3ad35f81d074c3b5814718f")
+        final_scalar_stage._authenticate_operative_final_scalar_semantics(body, {"string"})
+
+    def test_operative_source_operand_extraction_refuses_missing_selected_utf8_wire_branch(self):
+        tokens = json.loads((Path(__file__).parent / "final_scalar_writeexif_full_template_11_78.json").read_text(encoding="utf-8"))
+        body = self.table(tokens)["effective_write_proc"]["effective"]["__deparse"]
+        with self.assertRaisesRegex(FinalStageRefused, "UTF-8 wire-format encoding"):
+            final_scalar_stage._authenticate_operative_final_scalar_semantics(body, {"utf8"})
+
+    def test_historical_profile_insertions_and_profile_mixing_refuse(self):
+        old = json.loads((Path(__file__).parent / "final_scalar_writeexif_full_template_11_78.json").read_text(encoding="utf-8"))
+        newer = json.loads((Path(__file__).parent / "final_scalar_writeexif_full_template_12_64.json").read_text(encoding="utf-8"))
+        changed = old + ["injected", "(", ")", ";"]
+        with self.assertRaisesRegex(FinalStageRefused, "complete final-stage token grammar"):
+            final_scalar_stage._authenticate_write_exif(self.table(changed))
+        # A partial source cannot borrow one historical branch from another:
+        # the complete 12.64 body is admitted, but a joined prefix/suffix is not.
+        mixed = old[:len(old) // 2] + newer[len(newer) // 2:]
+        with self.assertRaisesRegex(FinalStageRefused, "complete final-stage token grammar"):
+            final_scalar_stage._authenticate_write_exif(self.table(mixed))
 
 
 class StandaloneRustTests(unittest.TestCase):

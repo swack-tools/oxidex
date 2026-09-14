@@ -32,7 +32,93 @@ class FinalStageRefused(ValueError):
 
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _RAW_ID = re.compile(r"(?:0x[0-9a-fA-F]+|[0-9]+)\Z")
-_FULL_TEMPLATE = json.loads((Path(__file__).with_name("final_scalar_writeexif_full_template.json")).read_text(encoding="utf-8"))
+_FULL_TEMPLATE_PATHS = (
+    "final_scalar_writeexif_full_template.json",
+    # These complete token profiles were captured from the immutable selected
+    # 11.78/12.64 source pair.  They deliberately describe the whole
+    # final-loaded CV, including historical branches now absent in 13.59.
+    # A version label never admits a source: only exact token consumption does.
+    "final_scalar_writeexif_full_template_11_78.json",
+    "final_scalar_writeexif_full_template_12_64.json",
+)
+_FULL_TEMPLATES = tuple(
+    json.loads(Path(__file__).with_name(name).read_text(encoding="utf-8"))
+    for name in _FULL_TEMPLATE_PATHS
+)
+
+
+# This stage deliberately does not turn a complete historical body match into
+# blanket source compatibility.  It uses only the ordinary scalar terminal
+# path below: undefined input/delete, WriteValue, defined-nonempty output,
+# UTF-8 or disabled-CharsetEXIF encoding, the later count-ceil assignment, and
+# the TIFF value-buffer append/padding path.  The full template proves no
+# other executable body tokens were ignored; these operands prove that the
+# executor's individual final-stage operations still have their native source
+# meanings.  The patterns operate on B::Deparse with whitespace removed.
+_OPERATIVE_FINAL_SCALAR_OPERANDS = (
+    ("undefined/delete", "if((not(defined($newVal))or($xDelete{$newID}andnot(defined($nvHash->{'Shift'})))))"),
+    ("WriteValue operands", "($newValue=WriteValue($newVal,$newFormName,$newCount));"),
+    ("invalid serialized value", "unless(defined($newValue)){"),
+    ("defined-empty guard", "if(length($newValue)){"),
+    ("zero-length NoOverwrite", "Can'twritezerolength"),
+    ("later count ceil", "(($oldInfoand$oldInfo->{'FixedSize'})or($newCount=int(((($newSize+$fsize)-1)/$fsize))));"),
+    ("out-of-line guard", "if(($newSize>4)){"),
+    ("even/count-width padding", "while((($newSize&1)or($newSize<($newCount*$fsize)))){"),
+    ("out-of-line append", "($valBuff.=$$newValuePt);"),
+)
+
+
+def _authenticate_operative_final_scalar_semantics(body: str, wire_formats: set[str]) -> None:
+    """Require native operations represented by the selected scalar recipes.
+
+    ``utf8`` is a native *wire-format name*.  It is unrelated to Rust's
+    ``Scalar::Utf8``, which this stage refuses because the final boundary is
+    after Sanitize and therefore contains bytes.  Require the native UTF-8
+    encoding branch only when a selected recipe actually has the ``utf8``
+    format.  A selected ``string`` recipe instead requires its guarded
+    CharsetEXIF branch; default disabled CharsetEXIF leaves those bytes
+    untouched, exactly as the final executor requires.
+    """
+    compact = re.sub(r"\s+", "", body)
+    positions = []
+    for operand, source in _OPERATIVE_FINAL_SCALAR_OPERANDS:
+        position = compact.find(source)
+        if position < 0:
+            raise FinalStageRefused(
+                f"WriteExif operative final-scalar {operand} is outside the generated executor"
+            )
+        positions.append(position)
+
+    if "string" in wire_formats:
+        charset_guard = "($strEncand($newFormNameeq'string'))"
+        charset_encode = "($newValue=$et->Encode($newValue,$strEnc));"
+        charset_position = compact.find(charset_guard)
+        charset_encode_position = compact.find(charset_encode, charset_position)
+        if charset_position < 0 or charset_encode_position < charset_position:
+            raise FinalStageRefused(
+                "WriteExif operative final-scalar CharsetEXIF string guard is outside the generated executor"
+            )
+        encoding_positions = [charset_position, charset_encode_position]
+    else:
+        encoding_positions = []
+
+    if "utf8" in wire_formats:
+        utf8 = "if(($newFormNameeq'utf8')){($newValue=$et->Encode($newValue,'UTF8'));}"
+        utf8_position = compact.find(utf8)
+        if utf8_position < 0:
+            raise FinalStageRefused(
+                "WriteExif operative final-scalar UTF-8 wire-format encoding is outside the generated executor"
+            )
+        encoding_positions.append(utf8_position)
+
+    # The generic terminal path must remain in source order.  Encoding branches
+    # sit after the nonempty guard (index 3) and before the zero-length branch
+    # (index 4), not at the tail after count/padding/append.
+    if positions != sorted(positions) or any(
+        position <= positions[3] or position >= positions[4]
+        for position in encoding_positions
+    ) or encoding_positions != sorted(encoding_positions):
+        raise FinalStageRefused("WriteExif operative final-scalar branch order is outside the generated executor")
 
 
 def _authenticate_capture_context(document: Mapping[str, Any]) -> None:
@@ -159,7 +245,7 @@ def _authenticate_write_exif(table: Mapping[str, Any]) -> tuple[str, str, str]:
     # substring anchors grant execution: every inserted/reordered action leaves
     # an unconsumed token and refuses. Whitespace/comments are intentionally
     # absent from body_tokens.
-    if tokens != _FULL_TEMPLATE:
+    if not any(tokens == template for template in _FULL_TEMPLATES):
         raise FinalStageRefused("WriteExif body is outside the complete final-stage token grammar")
     control_sha = hashlib.sha256(json.dumps(tokens, separators=(",", ":")).encode("utf-8")).hexdigest()
     return hashlib.sha256(body.encode("utf-8")).hexdigest(), source_sha, control_sha
@@ -285,6 +371,13 @@ def compile_final_scalar_stage(document: Mapping[str, Any]) -> tuple[list[FinalS
         recipes.append(FinalScalarRecipe("Exif", "Main", "Image::ExifTool::Exif::Main", tag_id, name, "EXIF", group,
                                          candidate["properties"]["Writable"]["value"], candidate["properties"]["Writable"]["value"], "CeilDivision", control_sha, write_body_sha,
                                          write_source_sha, registry.source_sha256, scalar_write.provenance.source_sha256))
+    # The encoding predicate is selected from the rows that survived every
+    # source-row/WriteValue/registry guard above.  Do not require a native
+    # wire-format branch that no emitted recipe can invoke.
+    write_body = _mapping(_mapping(table.get("effective_write_proc"), "effective_write_proc").get("effective"), "effective_write_proc.effective").get("__deparse")
+    if not isinstance(write_body, str):
+        raise FinalStageRefused("WriteExif body is unavailable")
+    _authenticate_operative_final_scalar_semantics(write_body, {recipe.wire_format for recipe in recipes})
     return recipes, omissions, registry
 
 
