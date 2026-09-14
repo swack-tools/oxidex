@@ -56,6 +56,20 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
             self.assertIn('name: "FreshDumpTag"', rust.read_text())
             self.assertEqual(json.loads(ledger.read_text())["identity_counts"]["generated"], 92)
 
+    def test_literal_source_group_override_generates_and_dynamic_group_refuses(self):
+        document = fresh_dump()
+        source = document['modules']['QuickTime']['tables']['ItemList']['tags']['plID']
+        source['Groups'] = {'0': 'SourceFamily', '1': 'SourceDirectory'}
+        result = specs.compile_document(document)
+        row = next(row for row in result['specs'] if row['name'] == 'AlbumID')
+        self.assertEqual((row['group0'], row['group']), ('SourceFamily', 'SourceDirectory'))
+        self.assertIn('group0: "SourceFamily"', specs.render_rust(result))
+        source['Groups']['0'] = {'__perl': 'CODE'}
+        result = specs.compile_document(document)
+        rejected = next(row for row in result['ledger'] if row['identity']['raw_key'] == 'plID')
+        self.assertFalse(rejected['generated'])
+        self.assertIn('missing_literal_family0_group', rejected['reasons'])
+
     def test_callback_or_format_change_is_omitted_from_generated_specs(self):
         document = snapshot()
         row = document["modules"]["QuickTime"]["tables"]["ItemList"]["tags"]["plID"]

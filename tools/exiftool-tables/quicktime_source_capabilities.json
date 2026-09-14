@@ -46,6 +46,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "40505354",
             "name": "ParentShortTitle",
             "print_enum": null
@@ -66,6 +67,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "40707069",
             "name": "ParentProductID",
             "print_enum": null
@@ -86,6 +88,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "40707469",
             "name": "ParentTitle",
             "print_enum": null
@@ -106,6 +109,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "40737469",
             "name": "ShortTitle",
             "print_enum": null
@@ -183,6 +187,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "47554944",
             "name": "GUID",
             "print_enum": null
@@ -203,6 +208,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "56455253",
             "name": "ProductVersion",
             "print_enum": null
@@ -223,6 +229,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "61415254",
             "name": "AlbumArtist",
             "print_enum": null
@@ -243,6 +250,7 @@
           "spec": {
             "format": "int8u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "616b4944",
             "name": "AppleStoreAccountType",
             "print_enum": {
@@ -266,6 +274,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "616c626d",
             "name": "Album",
             "print_enum": null
@@ -286,6 +295,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "61704944",
             "name": "AppleStoreAccount",
             "print_enum": null
@@ -306,6 +316,7 @@
           "spec": {
             "format": "int32u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "61744944",
             "name": "ArtistID",
             "print_enum": null
@@ -326,6 +337,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "61757468",
             "name": "Author",
             "print_enum": null
@@ -346,6 +358,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "63617467",
             "name": "Category",
             "print_enum": null
@@ -366,6 +379,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "636d4944",
             "name": "ComposerID",
             "print_enum": null
@@ -386,6 +400,7 @@
           "spec": {
             "format": "int32u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "636e4944",
             "name": "AppleStoreCatalogID",
             "print_enum": null
@@ -428,6 +443,7 @@
           "spec": {
             "format": "int8u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "6370696c",
             "name": "Compilation",
             "print_enum": {
@@ -451,6 +467,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "63707274",
             "name": "Copyright",
             "print_enum": null
@@ -471,6 +488,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "64657363",
             "name": "Description",
             "print_enum": null
@@ -519,6 +537,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "64736370",
             "name": "Description",
             "print_enum": null
@@ -539,6 +558,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "65676964",
             "name": "EpisodeGlobalUniqueID",
             "print_enum": null
@@ -559,6 +579,7 @@
           "spec": {
             "format": "int32u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "67654944",
             "name": "GenreID",
             "print_enum": {
@@ -3260,6 +3281,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "67727570",
             "name": "Grouping",
             "print_enum": null
@@ -3280,6 +3302,7 @@
           "spec": {
             "format": "string",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "67736868",
             "name": "GoogleHostHeader",
             "print_enum": null
@@ -3300,6 +3323,7 @@
           "spec": {
             "format": "string",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "6773706d",
             "name": "GooglePingMessage",
             "print_enum": null
@@ -3320,6 +3344,7 @@
           "spec": {
             "format": "string",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "67737075",
             "name": "GooglePingURL",
             "print_enum": null
@@ -3340,6 +3365,7 @@
           "spec": {
             "format": "string",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "67737364",
             "name": "GoogleSourceData",
             "print_enum": null
@@ -3360,6 +3386,7 @@
           "spec": {
             "format": "string",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "67737374",
             "name": "GoogleStartTime",
             "print_enum": null
@@ -3416,6 +3443,7 @@
           "spec": {
             "format": "int8u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "68647664",
             "name": "HDVideo",
             "print_enum": {
@@ -3439,6 +3467,7 @@
           "spec": {
             "format": "int8u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "69746e75",
             "name": "iTunesU",
             "print_enum": {
@@ -3462,6 +3491,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "6b657977",
             "name": "Keyword",
             "print_enum": null
@@ -3482,6 +3512,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "6c646573",
             "name": "LongDescription",
             "print_enum": null
@@ -3502,6 +3533,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "6f776e72",
             "name": "Owner",
             "print_enum": null
@@ -3522,6 +3554,7 @@
           "spec": {
             "format": "int8u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "70637374",
             "name": "Podcast",
             "print_enum": {
@@ -3545,6 +3578,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "70657266",
             "name": "Performer",
             "print_enum": null
@@ -3565,6 +3599,7 @@
           "spec": {
             "format": "int8u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "70676170",
             "name": "PlayGap",
             "print_enum": {
@@ -3588,6 +3623,7 @@
           "spec": {
             "format": "int64u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "706c4944",
             "name": "AlbumID",
             "print_enum": null
@@ -3608,6 +3644,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "70724944",
             "name": "ProductID",
             "print_enum": null
@@ -3628,6 +3665,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "70757264",
             "name": "PurchaseDate",
             "print_enum": null
@@ -3648,6 +3686,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "7075726c",
             "name": "PodcastURL",
             "print_enum": null
@@ -3668,6 +3707,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "72617465",
             "name": "RatingPercent",
             "print_enum": null
@@ -3688,6 +3728,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "726c6474",
             "name": "ReleaseDate",
             "print_enum": null
@@ -3708,6 +3749,7 @@
           "spec": {
             "format": "int8u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "72746e67",
             "name": "Rating",
             "print_enum": {
@@ -3733,6 +3775,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "73646573",
             "name": "StoreDescription",
             "print_enum": null
@@ -3753,6 +3796,7 @@
           "spec": {
             "format": "int32u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "73664944",
             "name": "AppleStoreCountry",
             "print_enum": {
@@ -3929,6 +3973,7 @@
           "spec": {
             "format": "int8u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "7368776d",
             "name": "ShowMovement",
             "print_enum": {
@@ -3974,6 +4019,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "736f6161",
             "name": "SortAlbumArtist",
             "print_enum": null
@@ -3994,6 +4040,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "736f616c",
             "name": "SortAlbum",
             "print_enum": null
@@ -4014,6 +4061,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "736f6172",
             "name": "SortArtist",
             "print_enum": null
@@ -4034,6 +4082,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "736f636f",
             "name": "SortComposer",
             "print_enum": null
@@ -4054,6 +4103,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "736f6e6d",
             "name": "SortName",
             "print_enum": null
@@ -4074,6 +4124,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "736f736e",
             "name": "SortShow",
             "print_enum": null
@@ -4134,6 +4185,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "7469746c",
             "name": "Title",
             "print_enum": null
@@ -4154,6 +4206,7 @@
           "spec": {
             "format": "int16u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "746d706f",
             "name": "BeatsPerMinute",
             "print_enum": null
@@ -4224,6 +4277,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "7476656e",
             "name": "TVEpisodeID",
             "print_enum": null
@@ -4244,6 +4298,7 @@
           "spec": {
             "format": "int32u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "74766573",
             "name": "TVEpisode",
             "print_enum": null
@@ -4264,6 +4319,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "74766e6e",
             "name": "TVNetworkName",
             "print_enum": null
@@ -4284,6 +4340,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "74767368",
             "name": "TVShow",
             "print_enum": null
@@ -4304,6 +4361,7 @@
           "spec": {
             "format": "int32u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "7476736e",
             "name": "TVSeason",
             "print_enum": null
@@ -4324,6 +4382,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "78696420",
             "name": "ISRC",
             "print_enum": null
@@ -4344,6 +4403,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "79727263",
             "name": "Year",
             "print_enum": null
@@ -4364,6 +4424,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9415254",
             "name": "Artist",
             "print_enum": null
@@ -4384,6 +4445,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9616c62",
             "name": "Album",
             "print_enum": null
@@ -4404,6 +4466,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9617264",
             "name": "ArtDirector",
             "print_enum": null
@@ -4424,6 +4487,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9617267",
             "name": "Arranger",
             "print_enum": null
@@ -4444,6 +4508,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9617574",
             "name": "Author",
             "print_enum": null
@@ -4464,6 +4529,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9636d74",
             "name": "Comment",
             "print_enum": null
@@ -4484,6 +4550,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9636f6d",
             "name": "Composer",
             "print_enum": null
@@ -4504,6 +4571,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9636f6e",
             "name": "Conductor",
             "print_enum": null
@@ -4524,6 +4592,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9637079",
             "name": "Copyright",
             "print_enum": null
@@ -4586,6 +4655,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9646573",
             "name": "Description",
             "print_enum": null
@@ -4606,6 +4676,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9646972",
             "name": "Director",
             "print_enum": null
@@ -4626,6 +4697,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9656e63",
             "name": "EncodedBy",
             "print_enum": null
@@ -4646,6 +4718,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a967656e",
             "name": "Genre",
             "print_enum": null
@@ -4666,6 +4739,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9677270",
             "name": "Grouping",
             "print_enum": null
@@ -4686,6 +4760,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a96c7972",
             "name": "Lyrics",
             "print_enum": null
@@ -4706,6 +4781,7 @@
           "spec": {
             "format": "int16u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a96d7663",
             "name": "MovementCount",
             "print_enum": null
@@ -4726,6 +4802,7 @@
           "spec": {
             "format": "int16u",
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a96d7669",
             "name": "MovementNumber",
             "print_enum": null
@@ -4746,6 +4823,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a96d766e",
             "name": "MovementName",
             "print_enum": null
@@ -4766,6 +4844,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a96e616d",
             "name": "Title",
             "print_enum": null
@@ -4786,6 +4865,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a96e7274",
             "name": "Narrator",
             "print_enum": null
@@ -4806,6 +4886,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a96f7065",
             "name": "OriginalArtist",
             "print_enum": null
@@ -4826,6 +4907,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9707264",
             "name": "Producer",
             "print_enum": null
@@ -4846,6 +4928,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9707562",
             "name": "Publisher",
             "print_enum": null
@@ -4866,6 +4949,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9736e65",
             "name": "SoundEngineer",
             "print_enum": null
@@ -4886,6 +4970,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9736f6c",
             "name": "Soloist",
             "print_enum": null
@@ -4906,6 +4991,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9737433",
             "name": "Subtitle",
             "print_enum": null
@@ -4926,6 +5012,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9746f6f",
             "name": "Encoder",
             "print_enum": null
@@ -4946,6 +5033,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a974726b",
             "name": "Track",
             "print_enum": null
@@ -4966,6 +5054,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a977726b",
             "name": "Work",
             "print_enum": null
@@ -4986,6 +5075,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9777274",
             "name": "Composer",
             "print_enum": null
@@ -5006,6 +5096,7 @@
           "spec": {
             "format": null,
             "group": "ItemList",
+            "group0": "QuickTime",
             "key_hex": "a9787064",
             "name": "ExecutiveProducer",
             "print_enum": null
@@ -11730,6 +11821,6 @@
       ]
     },
     "dump_sha256": "647bd906aeae340db6a0a92a11878814357172d6d61a06bc9a09c433ba79c9fe",
-    "selector_sha256": "ad1ceb95998306cb8668b7e344ec2b603ecf73e4774076521a7a022ff7a55f68"
+    "selector_sha256": "b7ab9e9dbf2548a7b58d6142ea4394ea0413f56f6fcd7ff20ba0fce4c871d211"
   }
 }

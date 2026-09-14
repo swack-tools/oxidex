@@ -147,6 +147,7 @@ def compile_document(document):
                     "raw_fourcc": spec["key_hex"],
                     "name": spec["name"],
                     "group": spec["group"],
+                    "group0": spec["group0"],
                     "source_format": source_format(spec["format"]),
                     "safe_enum_operands": [{"raw": raw, "rendered": rendered}
                                            for raw, rendered in (spec["print_enum"] or {}).items()],
@@ -233,6 +234,7 @@ def render_rust(result):
         "    pub raw_fourcc: [u8; 4],",
         "    pub name: &'static str,",
         "    pub group: &'static str,",
+        "    pub group0: &'static str,",
         "    pub source_format: SourceFormat,",
         "    pub safe_enum_operands: &'static [EnumOperand],",
         "}",
@@ -245,8 +247,8 @@ def render_rust(result):
         enums = ", ".join("EnumOperand { raw: %s, rendered: %s }" %
                           (rust_string(item["raw"]), rust_string(item["rendered"]))
                           for item in row["safe_enum_operands"])
-        lines.append("    ItemListSpec { raw_fourcc: [%s], name: %s, group: %s, source_format: %s, safe_enum_operands: &[%s] }," %
-                     (raw, rust_string(row["name"]), rust_string(row["group"]),
+        lines.append("    ItemListSpec { raw_fourcc: [%s], name: %s, group: %s, group0: %s, source_format: %s, safe_enum_operands: &[%s] }," %
+                     (raw, rust_string(row["name"]), rust_string(row["group"]), rust_string(row["group0"]),
                       render_format(row["source_format"]), enums))
     lines.extend([
         "];",

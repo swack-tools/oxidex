@@ -35,7 +35,7 @@ pub(crate) fn read_item(
     // ItemList is the generated family-1 group; QuickTime is the ItemList
     // table's source-declared family-0 group and therefore the canonical key.
     metadata.insert_occurrence_with_raw(
-        format!("QuickTime:{}", spec.name),
+        format!("{}:{}", spec.group0, spec.name),
         display,
         raw,
         SHIM_DEFAULT_PRIORITY,

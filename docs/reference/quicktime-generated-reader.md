@@ -1,6 +1,6 @@
 # Generated ItemList reader progress
 
-This implementation is local and under validation; it is not merged and does
+This implementation is pushed and under validation; it is not merged and does
 not complete the full-parity goal. Source pin: ExifTool 13.59.
 
 ## What is connected
@@ -43,12 +43,12 @@ The [machine-readable report](quicktime-generated-reading-13.59.json) records
 source state, binary hash, tool/helper hashes, oracle commit and every observation.
 The run built the exact compiler-reported binary and checked the 247-file oracle
 source manifest before and after measurement. Its dirty-tree state is explicit.
-A generic timestamp warning remained because the new Python verifier was newer
-than the cached Rust binary; Cargo validated the runtime before the comparison.
+The latest run rebuilt and verified the current runtime including source group
+overrides.
 
-Validation so far: 65 QuickTime Rust tests, a fresh CLI build, Clippy with denied
-warnings, and the 44 native comparisons. Workspace-wide regression checks and
-real-container conformance remain pending.
+Validation so far: 34 focused Python tests, a fresh CLI build, Clippy with denied
+warnings, 44 native comparisons, and the full workspace test suite pass.
+Real-container conformance remains pending.
 
 ## Reproduce
 
@@ -64,10 +64,6 @@ python3 tools/exiftool-tables/quicktime_generated_specs.py --check
 
 ## Required before this implementation is ready to land
 
-- Capture and guard source dependencies of the processor, including
-  `QuickTimeFormat` and string encodings. Checking `ProcessMOV` alone does not
-  detect a helper-only parsing change. A whole-module hash must not reject an
-  ordinary newly added row whose protocol is unchanged.
 - Finish carrier/caller integration, including the older AAC ItemList path,
   other ItemList locations, and duplicate/group behavior on real containers.
 - Preserve unknown atoms explicitly as unknown. The remaining legacy fallback
@@ -90,5 +86,8 @@ assertions to the canonical family-0 storage keys. The separate classic
 workspace tests do not extend that measurement to the whole catalog.
 
 Protocol guards now include QuickTimeFormat, ReadValue, Decode, and Charset
-helper bodies. Capturing the charset mapping data they consume remains an
-explicit upgrade-sensitivity follow-up. No generated writer is enabled here.
+helper bodies, LoadCharset, reachable csType values and the loaded ShiftJIS
+mapping. Map-only changes and missing maps refuse generation; ordinary new
+rows retain the existing protocol. Literal source family-0 overrides are now
+propagated into generated specs rather than silently replaced with QuickTime.
+No generated writer is enabled here.

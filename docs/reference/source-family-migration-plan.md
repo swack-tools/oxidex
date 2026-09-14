@@ -101,16 +101,48 @@ and committed/merged state. Keep every denominator and fixture/corpus scope visi
 
 ## Current measured checkpoint
 
-- PR #775: reproducible historical QuickTime baseline; latest generated-table
-  CI check pending, review threads resolved.
-- PR #776: corrected source/artifact inventory published with a conserved
-  1,512-table report. Static presence and enablement remain distinct from reads.
-- PR #777: hydrated catalog identity reconciliation published. The equal-sized
-  dump and catalog sets differ by 67 missing catalog tables and 66 extra legacy
-  identities plus one shortcut helper. Actual missing-layout capture is next.
-- Local ItemList integration: 91 generated specs connected in the primary
-  default-locale carrier; 22 behavior fixtures match 44/44 printed/raw
-  observations. See `quicktime-generated-reader.md` for incomplete protocols,
-  source-dependency guards and required pre-merge validation.
+- PR #775 merged as `996665ef`: reproducible historical QuickTime baseline.
+- PR #776 merged as `4a460cac`: corrected source/artifact inventory, conserving
+  1,512 tables. Static definitions and enablement are separate from observed reads.
+- PR #777 merged as `f6101205`: hydrated catalog identity reconciliation. The
+  equal-sized old dump and catalog differ by 67 missing catalog tables and 66
+  extra legacy identities plus one shortcut helper.
+- PR #778 is open: complete catalog-entry snapshot, denominator definitions,
+  downloadable JSON, Pages report and native regeneration check. It preserves
+  33,487 ordinary entries, 21,373 actual case-insensitive entry names, and the
+  distinct native legacy counter of 21,437. Container rows remain separate.
+- Full hydrated source-layout capture is incomplete. Two attempts exposed
+  excessive serialization growth; failed-run evidence was retained. Reference
+  interning is implemented, and reader versus writer capture stages are being
+  isolated. A bounded reference test is not a complete-catalog capture.
+- ItemList integration is committed and pushed separately: 91 generated specs
+  in the primary default-locale carrier, 22 behavior fixtures and 44/44 native
+  comparisons. Workspace tests pass. Generated protocol guards cover reader
+  helper bodies and reachable charset mapping data; caller/unknown/language
+  work and real-container conformance remain before landing.
 - Writing: no new observed results in these milestones. Writer checkpoints and
   the complete source-family writing denominator still require completion.
+
+## Permanent catalog accounting requirement
+
+The expanded goal requires a per-entry join, not just table totals. Preserve the
+full BuildTagLookup table/key/variant identity and case-insensitive name. Join it
+with hydrated runtime source, generated reader and writer artifacts, exact
+omission reasons, and observed read/write evidence. Every entry must have an
+explicit classification, including unresolved joins and unobserved behavior.
+
+The first complete baseline must publish JSON and a human-readable Pages report,
+state the denominators, and fail CI if regeneration leaves entries unclassified.
+PR #778 establishes the source snapshot and checks its conservation; it does
+not yet satisfy the joined implementation/observation ledger requirement.
+
+Measure these axes independently:
+
+1. Catalog entries and distinct names accounted for, preserving table context.
+2. Source rows accepted by generated readers and writers, with exact refusals.
+3. Observed Group1:TagName identities and occurrences read correctly; identities
+   and operations actually written and verified by pinned read-back.
+
+A fixture is required per distinct on-disk format/conversion behavior, not per
+catalog name. Generated verification identifies rows sharing that behavior;
+only tags actually exercised receive an observed-read or observed-write claim.

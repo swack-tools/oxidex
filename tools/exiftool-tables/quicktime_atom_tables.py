@@ -89,16 +89,19 @@ def inspect_row(table_name, table, raw_key, path, row, structural_reason):
     groups = table.get("meta", {}).get("GROUPS", {})
     override = row.get("Groups", {})
     if not isinstance(groups, dict) or not isinstance(override, dict):
-        group = None
+        group = group0 = None
     else:
         group = override.get("1", groups.get("1"))
+        group0 = override.get("0", groups.get("0", "QuickTime"))
     if not isinstance(group, str) or not group:
         reasons.append("missing_literal_output_group")
+    if not isinstance(group0, str) or not group0:
+        reasons.append("missing_literal_family0_group")
     result = {"identity": identity, "reasons": sorted(set(reasons)),
               "runtime_connected": False, "observed_read": None, "observed_write": None}
     if not reasons:
         result["spec"] = {"key_hex": key_bytes.hex(), "name": row["Name"],
-                          "group": group, "format": fmt, "print_enum": enum}
+                          "group": group, "group0": group0, "format": fmt, "print_enum": enum}
     else:
         result["refused_source"] = original_row
     return result
