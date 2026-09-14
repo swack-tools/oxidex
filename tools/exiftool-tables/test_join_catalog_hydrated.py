@@ -104,6 +104,12 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         ):
             with self.subTest(mutated=True), self.assertRaises(ValueError):
                 join.ifd_implementation(bad_source, bad_ledger, bad_rust)
+        forged_rust = rust.replace('name: "Artist"', 'name: "Forged"', 1)
+        self.assertNotEqual(forged_rust, rust)
+        forged_ledger = copy.deepcopy(ledger)
+        forged_ledger["source"]["ifd_rust_sha256"] = join.codegen._canonical_ifd_rust_sha256(forged_rust)
+        with self.assertRaisesRegex(ValueError, "compiler replay"):
+            join.ifd_implementation(source, forged_ledger, forged_rust)
         self.assertIsNone(ledger["source"]["expr_ledger_sha256"])
         bound = copy.deepcopy(ledger)
         oracle = b'{"authenticated":true}'

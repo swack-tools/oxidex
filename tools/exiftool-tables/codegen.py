@@ -3144,6 +3144,18 @@ IFD_REPORT = (
 )
 
 
+def render_ifd_file(version, chunks, index_rows):
+    """Render the complete IFD Rust artifact from one compiler result."""
+    ifd_index = (
+        "\n/// Every generated IFD-style table, sorted by `(module, table)` for\n"
+        "/// `find_ifd_table`'s binary search.\n"
+        "pub static ALL_IFD_TABLES: &[&IfdTable] = &[\n"
+        + "\n".join(index_rows)
+        + "\n];\n"
+    )
+    return IFD_PRELUDE.replace("__VERSION__", version) + "".join(chunks) + ifd_index
+
+
 def print_ifd_report(ifd_stats):
     """Print `IFD_REPORT` from `ifd_stats` and the diagnostic listings, and
     refuse (SystemExit) if any counter the code touched is not reported --
@@ -4345,14 +4357,7 @@ def main():
 
     ifd_output = None
     if args.ifd_out:
-        ifd_index = (
-            "\n/// Every generated IFD-style table, sorted by `(module, table)` for\n"
-            "/// `find_ifd_table`'s binary search.\n"
-            "pub static ALL_IFD_TABLES: &[&IfdTable] = &[\n"
-            + "\n".join(ifd_index_rows)
-            + "\n];\n"
-        )
-        ifd_output = IFD_PRELUDE.replace("__VERSION__", version) + ifd_joined + ifd_index
+        ifd_output = render_ifd_file(version, ifd_chunks, ifd_index_rows)
         with open(args.ifd_out, "w", encoding="utf-8") as fh:
             fh.write(ifd_output)
         print(f"wrote IFD tables     {args.ifd_out}")

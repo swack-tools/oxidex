@@ -282,10 +282,10 @@ def ifd_implementation(source: bytes | None, ledger: dict | None, emitted_rust: 
                        expr_ledger: bytes | None = None) -> dict:
     """Authenticate IFD compiler rows as schema declarations only.
 
-    IFD codegen's Rust can contain oracle-approved conversions. The identity
-    ledger does not carry that oracle input, so replay uses no oracle and only
-    admits rows which remain free of withheld semantics in both results. This
-    deliberately never implies dispatch reachability or an observed read.
+    IFD codegen may use oracle-approved conversions. When the ledger binds an
+    expression oracle, replay validates and uses that exact input; a ledger
+    that explicitly binds none replays conservatively without one. This never
+    implies dispatch reachability or an observed read.
     """
     supplied = (source, ledger, emitted_rust)
     if all(value is None for value in supplied):
@@ -327,10 +327,14 @@ def ifd_implementation(source: bytes | None, ledger: dict | None, emitted_rust: 
     rows = ledger.get("rows")
     if not isinstance(rows, list):
         raise ValueError("IFD ledger rows are malformed")
-    # Replay the whole IFD compiler from these exact source objects. No oracle
-    # is intentionally supplied: accepting an oracle-dependent conversion
-    # without its immutable input would overclaim an implementation fact.
-    _, _, _, replay = codegen.gen_ifd_tables(document, sorted(document.get("modules", {})), verified_exprs)
+    # Replay the complete compiler artifact from these exact source and,
+    # where bound, expression-oracle inputs.
+    replay_chunks, replay_index_rows, _, replay = codegen.gen_ifd_tables(
+        document, sorted(document.get("modules", {})), verified_exprs
+    )
+    replay_rust = codegen.render_ifd_file(str(document.get("exiftool_version")), replay_chunks, replay_index_rows)
+    if not quicktime_rust_matches(replay_rust, emitted_rust):
+        raise ValueError("IFD Rust artifact differs from compiler replay")
     replay_by_id = {(row["full_name"], row["raw_key"], tuple(row["variant_path"])): row for row in replay}
     if len(replay_by_id) != len(replay):
         raise ValueError("IFD compiler replay has duplicate identities")
