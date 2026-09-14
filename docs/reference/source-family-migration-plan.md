@@ -97,3 +97,20 @@ Progress measures, recorded at each milestone: source identities inventoried;
 accepted and refused rows with reasons; verified runtime connections; observed
 read matches/missing/value errors; observed write create/replace/delete results;
 and committed/merged state. Keep every denominator and fixture/corpus scope visible.
+
+
+## Current measured checkpoint
+
+- PR #775: reproducible historical QuickTime baseline; latest generated-table
+  CI check pending, review threads resolved.
+- PR #776: corrected source/artifact inventory published with a conserved
+  1,512-table report. Static presence and enablement remain distinct from reads.
+- PR #777: hydrated catalog identity reconciliation published. The equal-sized
+  dump and catalog sets differ by 67 missing catalog tables and 66 extra legacy
+  identities plus one shortcut helper. Actual missing-layout capture is next.
+- Local ItemList integration: 91 generated specs connected in the primary
+  default-locale carrier; 22 behavior fixtures match 44/44 printed/raw
+  observations. See `quicktime-generated-reader.md` for incomplete protocols,
+  source-dependency guards and required pre-merge validation.
+- Writing: no new observed results in these milestones. Writer checkpoints and
+  the complete source-family writing denominator still require completion.

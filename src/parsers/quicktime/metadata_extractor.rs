@@ -2326,36 +2326,33 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
                 continue;
             }
 
+            // Names, formats and safe conversions come from the hydrated source
+            // specs. Walk every data child, retaining repeated values in source order.
+            let mut generated = false;
+            for child in item.parse_children().unwrap_or_default() {
+                if child.atom_type.matches("data") {
+                    generated |=
+                        super::itemlist_reader::read_item(atom_bytes, child.data, metadata);
+                }
+            }
+            if generated {
+                continue;
+            }
+
             // Each item contains a data atom
             if let Some(data_atom) = item.find_child("data")
                 && let Some(value) = extract_itunes_data_value(data_atom.data)
             {
                 let mut add_year_tag = false;
                 let tag_name: Cow<'static, str> = match atom_bytes {
-                    b"\xa9nam" => Cow::Borrowed("ItemList:Title"),
-                    b"\xa9ART" => Cow::Borrowed("ItemList:Artist"),
-                    b"\xa9alb" => Cow::Borrowed("ItemList:Album"),
                     b"\xa9day" => {
                         add_year_tag = true;
                         Cow::Borrowed("ItemList:ContentCreateDate")
                     }
-                    b"\xa9cmt" => Cow::Borrowed("ItemList:Comment"),
-                    b"\xa9gen" => Cow::Borrowed("ItemList:Genre"),
-                    b"\xa9too" => Cow::Borrowed("ItemList:Encoder"),
-                    b"aART" => Cow::Borrowed("ItemList:AlbumArtist"),
-                    b"\xa9wrt" => Cow::Borrowed("ItemList:Composer"),
-                    b"\xa9grp" => Cow::Borrowed("ItemList:Grouping"),
-                    b"\xa9lyr" => Cow::Borrowed("ItemList:Lyrics"),
                     b"trkn" => Cow::Borrowed("ItemList:TrackNumber"),
                     b"disk" => Cow::Borrowed("ItemList:DiscNumber"),
-                    b"cprt" | b"\xa9cpy" => Cow::Borrowed("ItemList:Copyright"),
-                    b"tmpo" => Cow::Borrowed("ItemList:BeatsPerMinute"),
                     b"covr" => Cow::Borrowed("ItemList:CoverArt"),
                     b"gnre" => Cow::Borrowed("ItemList:Genre"),
-                    b"desc" => Cow::Borrowed("ItemList:Description"),
-                    b"ldes" => Cow::Borrowed("ItemList:LongDescription"),
-                    b"cpil" => Cow::Borrowed("ItemList:Compilation"),
-                    b"pgap" => Cow::Borrowed("ItemList:PlayGap"),
                     _ => {
                         if let Ok(s) = std::str::from_utf8(atom_bytes) {
                             Cow::Owned(format!("ItemList:{}", s))
@@ -2371,23 +2368,9 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
                 // Also insert into QuickTime: namespace for iTunes ilst metadata
                 // This matches ExifTool behavior which uses QuickTime: prefix
                 let qt_tag = match atom_bytes {
-                    b"\xa9nam" => Some("QuickTime:Title"),
-                    b"\xa9ART" => Some("QuickTime:Artist"),
-                    b"\xa9alb" => Some("QuickTime:Album"),
                     b"\xa9day" => Some("QuickTime:ContentCreateDate"),
-                    b"\xa9cmt" => Some("QuickTime:Comment"),
-                    b"\xa9gen" => Some("QuickTime:Genre"),
-                    b"\xa9too" => Some("QuickTime:Encoder"),
-                    b"aART" => Some("QuickTime:AlbumArtist"),
-                    b"\xa9wrt" => Some("QuickTime:Composer"),
-                    b"\xa9grp" => Some("QuickTime:Grouping"),
-                    b"\xa9lyr" => Some("QuickTime:Lyrics"),
-                    b"cprt" | b"\xa9cpy" => Some("QuickTime:Copyright"),
-                    b"tmpo" => Some("QuickTime:BeatsPerMinute"),
                     b"covr" => Some("QuickTime:CoverArt"),
                     b"gnre" => Some("QuickTime:Genre"),
-                    b"desc" => Some("QuickTime:Description"),
-                    b"ldes" => Some("QuickTime:LongDescription"),
                     _ => None,
                 };
                 // Handle TrackNumber and DiscNumber formatted as "X of Y"
@@ -2413,21 +2396,6 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
                     metadata.insert(tag.to_string(), TagValue::new_string(formatted));
                     formatted_track_or_disc = true;
                 }
-
-                // ExifTool prints these two flags rather than their raw byte.
-                let value = match (atom_bytes, value.as_integer()) {
-                    (b"cpil", Some(flag)) => TagValue::new_string(match flag {
-                        0 => "No".to_string(),
-                        1 => "Yes".to_string(),
-                        other => format!("Unknown ({})", other),
-                    }),
-                    (b"pgap", Some(flag)) => TagValue::new_string(match flag {
-                        0 => "Insert Gap".to_string(),
-                        1 => "No Gap".to_string(),
-                        other => format!("Unknown ({})", other),
-                    }),
-                    _ => value,
-                };
 
                 // For trkn/disk, don't insert the raw binary ItemList value - only the formatted QuickTime value
                 if !formatted_track_or_disc {
@@ -3854,10 +3822,14 @@ mod tests {
             extract_itunes_metadata(&atoms[0], &mut metadata).unwrap();
 
             let name = if kind == b"cpil" {
-                "ItemList:Compilation"
+                "QuickTime:Compilation"
             } else {
-                "ItemList:PlayGap"
+                "QuickTime:PlayGap"
             };
+            assert_eq!(
+                metadata.occurrences_for(name)[0].group1.as_ref(),
+                "ItemList"
+            );
             match metadata.get(name) {
                 Some(TagValue::String(s)) => assert_eq!(s, expected),
                 other => panic!("{} -> {:?}", name, other),

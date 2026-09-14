@@ -19,23 +19,6 @@ The verbatim three-table snapshot, including processor metadata, is
 records the parent dump/tool hashes, base commit and Perl version. This snapshot
 covers three tables, not the complete ExifTool universe.
 
-`tools/exiftool-tables/quicktime_generated_specs.py` turns the 91 accepted
-ItemList source rows into the inert Rust declaration artifact
-`src/parsers/quicktime/generated_itemlist_specs.rs`. It carries raw FourCC,
-name, group, implicit/string/unsigned-width source format and safe enum operands.
-`tools/exiftool-tables/quicktime_generated_itemlist_ledger.json` conserves all
-396 selected source identities: 91 generated declarations and 305 omitted rows,
-including the existing 14 ItemList refusals plus distinct UserData and Keys
-protocol refusals. The generator requires the captured ItemList processor
-contract; a missing or changed processor makes every ItemList row explicitly
-refused. Its fresh-regeneration path consumes `regen.sh`'s hydrated full dump,
-not this bounded fixture, so a newly declared eligible ItemList row generates
-without an edited snapshot. The fixture remains the deterministic test input.
-The whole `QuickTime.pm` source hash is recorded as provenance only; eligibility
-checks the deparsed `ProcessMOV` behavior and ItemList protocol metadata. These
-declarations have no Rust runtime consumer and are not reading or writing
-coverage.
-
 ## Reproduce and check staleness
 
 From the repository root:
@@ -46,7 +29,6 @@ python3 tools/exiftool-tables/quicktime_atom_tables.py \
   --output tools/exiftool-tables/quicktime_source_capabilities.json \
   --summary docs/reference/quicktime-source-baseline.json --check
 python3 tools/exiftool-tables/quicktime_baseline.py --check-fixtures
-python3 tools/exiftool-tables/quicktime_generated_specs.py --check
 python3 -m unittest discover -s tools/exiftool-tables -p 'test_quicktime*.py'
 ```
 
@@ -128,3 +110,8 @@ the manifest hash. Same-version local source edits are refused. The source
 fingerprint covers tracked differences and untracked file contents, detecting
 changes even when the dirty-path list stays the same. Fixture-check mode also
 prints its instrument header and enforces the standard dirty-tree policy.
+
+## Subsequent implementation
+
+The baseline above is historical. Current ItemList integration and remaining
+work are recorded in [generated ItemList progress](quicktime-generated-reader.md).

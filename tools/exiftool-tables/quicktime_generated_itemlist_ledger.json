@@ -5377,6 +5377,7 @@
     "eligible": true,
     "processor_contract": {
       "FORMAT": "string",
+      "GROUPS.0": "QuickTime",
       "GROUPS.1": "ItemList",
       "LANG_INFO.__name": "Image::ExifTool::QuickTime::GetLangInfo",
       "__deparse_sha256": "5ae906b19e81d6e0a1f7bbbe89522e570edb8fcf0be8bb9eaa81fb47d43c5005",
