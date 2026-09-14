@@ -37,7 +37,7 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
         self.assertEqual(generated["FutureCounter"]["raw_fourcc"], "7a39213f")
         self.assertEqual(generated["FutureCounter"]["source_format"], {"kind": "unsigned", "width": 64})
         self.assertIn('name: "FutureCounter"', specs.render_rust(result))
-        self.assertEqual(result["identity_counts"], {"source_records": 397, "generated": 92, "omitted": 305})
+        self.assertEqual(result["identity_counts"], {"source_records": 397, "generated": 93, "omitted": 304})
 
     def test_cli_generates_from_fresh_dump_without_baseline_capture(self):
         document = fresh_dump()
@@ -54,7 +54,19 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
                                  text=True, capture_output=True)
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertIn('name: "FreshDumpTag"', rust.read_text())
-            self.assertEqual(json.loads(ledger.read_text())["identity_counts"]["generated"], 92)
+            self.assertEqual(json.loads(ledger.read_text())["identity_counts"]["generated"], 93)
+
+    def test_catalog_enum_columns_do_not_block_runtime_operands(self):
+        document = fresh_dump()
+        source = document['modules']['QuickTime']['tables']['ItemList']['tags']['plID']
+        source['_extra_keys'] = ['PrintConvColumns']
+        result = specs.compile_document(document)
+        self.assertTrue(any(row['name'] == 'AlbumID' for row in result['specs']))
+        source['_extra_keys'].append('FutureReaderRule')
+        result = specs.compile_document(document)
+        rejected = next(row for row in result['ledger'] if row['identity']['raw_key'] == 'plID')
+        self.assertFalse(rejected['generated'])
+        self.assertIn('uncaptured_source_property:FutureReaderRule', rejected['reasons'])
 
     def test_literal_source_group_override_generates_and_dynamic_group_refuses(self):
         document = fresh_dump()
@@ -101,7 +113,7 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
 
         result = specs.compile_document(document)
 
-        self.assertEqual(len(result["specs"]), 91)
+        self.assertEqual(len(result["specs"]), 92)
         self.assertIsNone(result["protocol"]["reason"])
 
     def test_changed_processor_body_refuses_without_renaming_it(self):
@@ -152,7 +164,7 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
 
         result = specs.compile_document(document)
 
-        self.assertEqual(len(result["specs"]), 91)
+        self.assertEqual(len(result["specs"]), 92)
         self.assertIsNone(result["protocol"]["reason"])
 
     def test_rust_output_escapes_source_strings(self):
@@ -175,9 +187,9 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
                          (specs.ROOT / "src/parsers/quicktime/generated_itemlist_specs.rs").read_text())
         self.assertEqual(len({json.dumps(row["identity"], sort_keys=True) for row in result["ledger"]}),
                          result["identity_counts"]["source_records"])
-        self.assertEqual(result["identity_counts"], {"source_records": 396, "generated": 91, "omitted": 305})
+        self.assertEqual(result["identity_counts"], {"source_records": 396, "generated": 92, "omitted": 304})
         self.assertEqual(sum(not row["generated"] for row in result["ledger"]
-                             if row["identity"]["table"] == "ItemList"), 14)
+                             if row["identity"]["table"] == "ItemList"), 13)
 
     def test_committed_artifact_keeps_selected_table_identity_not_full_dump_provenance(self):
         raw = (HERE / "fixtures/quicktime_source_13_59.json").read_bytes()

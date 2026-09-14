@@ -15,6 +15,9 @@ import quicktime_baseline as baseline
 def cases():
     """One fixture per framing, format, or conversion behavior, not per tag."""
     extra = [
+        ("media-enum", b"stik", 21, b"\x02"),
+        ("unknown-ascii", b"zzzz", 1, b"not a known tag"),
+        ("unknown-binary-key", b"\xff\xfe\xfd\xfc", 1, b"not a known tag"),
         ("utf8-alias", b"\xa9nam", 4, b"A\0\0"),
         ("utf16", b"\xa9nam", 2, "Title".encode("utf-16-be")),
         ("utf16-alias", b"\xa9nam", 5, "Title".encode("utf-16-be")),
@@ -89,7 +92,8 @@ def compare(tree: Path, output: Path):
             (output / (prefix + ".oxidex.json")).write_text(actual.stdout)
             expected = baseline.projection(json.loads(native.stdout))
             got = baseline.projection(json.loads(actual.stdout))
-            if len(expected) != 1:
+            expected_count = 0 if name.startswith("unknown-") else 1
+            if len(expected) != expected_count:
                 raise ValueError(f"native fixture degraded: {name}/{mode}: {expected}")
             rows.append({"fixture": name, "mode": mode,
                          "fixture_sha256": hashlib.sha256(contents).hexdigest(),

@@ -73,7 +73,10 @@ def inspect_row(table_name, table, raw_key, path, row, structural_reason):
         reasons.append("unsupported_format:" + str(fmt))
     for prop in sorted(set(row) - NON_READING_PROPERTIES):
         if prop == "_extra_keys" and isinstance(row[prop], list):
-            reasons.extend("uncaptured_source_property:" + str(key) for key in row[prop])
+            # BuildTagLookup uses PrintConvColumns only to lay out the HTML
+            # enum table. It has no role in reading bytes or converting values.
+            reasons.extend("uncaptured_source_property:" + str(key) for key in row[prop]
+                           if key != "PrintConvColumns")
         else:
             reasons.append("unsupported_source_property:" + prop)
     pc = row.get("PrintConv")

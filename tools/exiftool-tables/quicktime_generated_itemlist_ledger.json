@@ -1,7 +1,7 @@
 {
   "identity_counts": {
-    "generated": 91,
-    "omitted": 305,
+    "generated": 92,
+    "omitted": 304,
     "source_records": 396
   },
   "ledger": [
@@ -740,7 +740,8 @@
       "reasons": []
     },
     {
-      "generated": false,
+      "generated": true,
+      "generated_spec_sha256": "3e9e7e7539a8e1f994ec4552018ba2b8324c57a3ae64c806d3c1eb31072316ad",
       "identity": {
         "module": "QuickTime",
         "raw_key": "stik",
@@ -748,9 +749,7 @@
         "table": "ItemList",
         "variant_path": []
       },
-      "reasons": [
-        "uncaptured_source_property:PrintConvColumns"
-      ]
+      "reasons": []
     },
     {
       "generated": true,
@@ -17630,6 +17629,69 @@
         "module": "QuickTime",
         "raw_key": "sosn",
         "source_sha256": "14eed25b7a3e1fcae60444861479f84740237d087041321ae02341b7d2c26e81",
+        "table": "ItemList",
+        "variant_path": []
+      }
+    },
+    {
+      "group": "ItemList",
+      "group0": "QuickTime",
+      "name": "MediaType",
+      "raw_fourcc": "7374696b",
+      "safe_enum_operands": [
+        {
+          "raw": "0",
+          "rendered": "Movie (old)"
+        },
+        {
+          "raw": "1",
+          "rendered": "Normal (Music)"
+        },
+        {
+          "raw": "10",
+          "rendered": "TV Show"
+        },
+        {
+          "raw": "11",
+          "rendered": "Booklet"
+        },
+        {
+          "raw": "14",
+          "rendered": "Ringtone"
+        },
+        {
+          "raw": "2",
+          "rendered": "Audiobook"
+        },
+        {
+          "raw": "21",
+          "rendered": "Podcast"
+        },
+        {
+          "raw": "23",
+          "rendered": "iTunes U"
+        },
+        {
+          "raw": "5",
+          "rendered": "Whacked Bookmark"
+        },
+        {
+          "raw": "6",
+          "rendered": "Music Video"
+        },
+        {
+          "raw": "9",
+          "rendered": "Movie"
+        }
+      ],
+      "source_format": {
+        "kind": "unsigned",
+        "width": 8
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "stik",
+        "source_sha256": "ce30412579ebb939e8ca7a94436c6e59a50af0b45091df9ff1e79cda190495ed",
         "table": "ItemList",
         "variant_path": []
       }

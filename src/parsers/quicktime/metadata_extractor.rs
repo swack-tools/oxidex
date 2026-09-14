@@ -2339,6 +2339,21 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
                 continue;
             }
 
+            // Entries without a generated or existing legacy reader retain
+            // their identifier and child payload without a guessed public tag.
+            // The five source-declared legacy readers below remain hand-driven.
+            if !matches!(
+                atom_bytes,
+                b"\xa9day" | b"trkn" | b"disk" | b"covr" | b"gnre"
+            ) {
+                metadata.retain_raw_block(crate::core::RawMetadataBlock {
+                    context: "QuickTime::ItemList".to_string(),
+                    identifier: atom_bytes.to_vec(),
+                    payload: item.data.to_vec(),
+                });
+                continue;
+            }
+
             // Each item contains a data atom
             if let Some(data_atom) = item.find_child("data")
                 && let Some(value) = extract_itunes_data_value(data_atom.data)
@@ -2353,16 +2368,7 @@ fn extract_itunes_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<()
                     b"disk" => Cow::Borrowed("ItemList:DiscNumber"),
                     b"covr" => Cow::Borrowed("ItemList:CoverArt"),
                     b"gnre" => Cow::Borrowed("ItemList:Genre"),
-                    _ => {
-                        if let Ok(s) = std::str::from_utf8(atom_bytes) {
-                            Cow::Owned(format!("ItemList:{}", s))
-                        } else {
-                            Cow::Owned(format!(
-                                "ItemList:{:02X}{:02X}{:02X}{:02X}",
-                                atom_bytes[0], atom_bytes[1], atom_bytes[2], atom_bytes[3]
-                            ))
-                        }
-                    }
+                    _ => unreachable!("unrecognized entries retained above"),
                 };
 
                 // Also insert into QuickTime: namespace for iTunes ilst metadata
@@ -3834,6 +3840,37 @@ mod tests {
                 Some(TagValue::String(s)) => assert_eq!(s, expected),
                 other => panic!("{} -> {:?}", name, other),
             }
+        }
+    }
+
+    #[test]
+    fn unrecognized_itemlist_payload_survives_merge_without_guessing_a_tag() {
+        for key in [b"zzzz", b"\xff\xfe\xfd\xfc"] {
+            let data = child_atom(b"data", b"\0\0\0\x01\0\0\0\0not a known tag");
+            let meta = child_atom(b"meta", &itunes_meta_atom(&ilst_item(key, &data)));
+            let atoms = super::super::atom_parser::parse_atoms(&meta).unwrap().1;
+            let mut parsed = MetadataMap::new();
+            extract_itunes_metadata(&atoms[0], &mut parsed).unwrap();
+            assert!(parsed.is_empty());
+            let mut merged = MetadataMap::new();
+            merged.merge(parsed);
+            assert_eq!(merged.raw_blocks().len(), 1);
+            let raw = &merged.raw_blocks()[0];
+            assert_eq!(raw.context, "QuickTime::ItemList");
+            assert_eq!(raw.identifier, key);
+            assert_eq!(raw.payload, data);
+            assert_eq!(serde_json::to_string(&merged).unwrap(), "{}");
+            assert_eq!(merged.clone().raw_blocks(), merged.raw_blocks());
+            assert_eq!(
+                merged.without_print_conv().raw_blocks(),
+                merged.raw_blocks()
+            );
+            assert_eq!(
+                crate::core::normalize_metadata_map(&merged).raw_blocks(),
+                merged.raw_blocks()
+            );
+            merged.clear();
+            assert!(merged.raw_blocks().is_empty());
         }
     }
 

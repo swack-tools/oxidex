@@ -46,7 +46,7 @@ pub use file_reader_trait::FileReader;
 pub use flag_utils::decode_flags;
 pub use format_parser_trait::FormatParser;
 pub use metadata::Metadata;
-pub use metadata_map::MetadataMap;
+pub use metadata_map::{MetadataMap, RawMetadataBlock};
 pub use operations::{
     clear_all_metadata, modify_tag, read_metadata, read_metadata_report,
     read_metadata_report_with_detector, read_metadata_report_with_detector_and_options,

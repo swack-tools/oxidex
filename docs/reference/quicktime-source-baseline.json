@@ -2,11 +2,10 @@
   "exiftool_version": "13.59",
   "families": [
     {
-      "declarative_candidates": 91,
+      "declarative_candidates": 92,
       "raw_rows": 105,
       "refusal_counts_nonexclusive": {
         "uncaptured_source_property:Deletable": 1,
-        "uncaptured_source_property:PrintConvColumns": 1,
         "uncaptured_source_property:Shift": 1,
         "unsupported_format:undef": 3,
         "unsupported_print_conversion": 4,
@@ -15,7 +14,7 @@
         "unsupported_source_property:Unknown": 3,
         "unsupported_source_property:ValueConv": 6
       },
-      "refused_records": 14,
+      "refused_records": 13,
       "source_table_sha256": "cbf711d4902c540c30f958df3c25f9a98677e1454855ef0afb7d48180d746d77",
       "table": "ItemList",
       "variant_records": 105
@@ -90,6 +89,6 @@
       ]
     },
     "dump_sha256": "647bd906aeae340db6a0a92a11878814357172d6d61a06bc9a09c433ba79c9fe",
-    "selector_sha256": "b7ab9e9dbf2548a7b58d6142ea4394ea0413f56f6fcd7ff20ba0fce4c871d211"
+    "selector_sha256": "5db9156b29d0ea1ccd8c128f4a8b8a600a30678cfac0153be7480fac3dea636c"
   }
 }

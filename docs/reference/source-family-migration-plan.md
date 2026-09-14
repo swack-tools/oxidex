@@ -107,7 +107,7 @@ and committed/merged state. Keep every denominator and fixture/corpus scope visi
 - PR #777 merged as `f6101205`: hydrated catalog identity reconciliation. The
   equal-sized old dump and catalog differ by 67 missing catalog tables and 66
   extra legacy identities plus one shortcut helper.
-- PR #778 is open: complete catalog-entry snapshot, denominator definitions,
+- PR #778 merged as `b027ce0b`: complete catalog-entry snapshot, denominator definitions,
   downloadable JSON, Pages report and native regeneration check. It preserves
   33,487 ordinary entries, 21,373 actual case-insensitive entry names, and the
   distinct native legacy counter of 21,437. Container rows remain separate.
@@ -115,10 +115,10 @@ and committed/merged state. Keep every denominator and fixture/corpus scope visi
   excessive serialization growth; failed-run evidence was retained. Reference
   interning is implemented, and reader versus writer capture stages are being
   isolated. A bounded reference test is not a complete-catalog capture.
-- ItemList integration is committed and pushed separately: 91 generated specs
-  in the primary default-locale carrier, 22 behavior fixtures and 44/44 native
+- ItemList integration is committed and pushed separately: 92 generated specs
+  in the primary default-locale carrier, 25 behavior fixtures and 50/50 native
   comparisons. Workspace tests pass. Generated protocol guards cover reader
-  helper bodies and reachable charset mapping data; caller/unknown/language
+  helper bodies and reachable charset mapping data; remaining caller/language
   work and real-container conformance remain before landing.
 - Writing: no new observed results in these milestones. Writer checkpoints and
   the complete source-family writing denominator still require completion.
