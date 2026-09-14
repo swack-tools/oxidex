@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import quicktime_atom_tables as quicktime_selector
 import quicktime_generated_specs as quicktime_specs
 import quicktime_keys_specs
+import catalog_userdata
 import final_scalar_stage
 import codegen
 import setnewvalue_public_migration_ledger as public_migration
@@ -592,7 +593,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           quicktime_keys_ledger: dict | None = None, quicktime_keys_rust: str | None = None,
           writer_read_evidence: dict | None = None, quicktime_keys_read_evidence: dict | None = None,
           ifd_source: bytes | None = None, ifd_ledger: dict | None = None, ifd_rust: str | None = None,
-          ifd_expr_ledger: bytes | None = None, ifd_input_digests: dict[str, str] | None = None) -> dict:
+          ifd_expr_ledger: bytes | None = None, ifd_input_digests: dict[str, str] | None = None,
+          userdata_ledger: dict | None = None, userdata_rust: str | None = None,
+          userdata_input_digests: dict[str, str] | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
     supplied_quicktime = (itemlist_ledger, quicktime_capabilities, quicktime_bounded_source, quicktime_rust)
@@ -618,6 +621,18 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     hydrated_by_id, table_hashes = source_rows(hydrated)
     quicktime = quicktime_implementation(*supplied_quicktime)
     keys = quicktime_keys_implementation(quicktime_keys_ledger, quicktime_bounded_source, quicktime_keys_rust)
+    userdata = catalog_userdata.implementation(userdata_ledger, quicktime_bounded_source, userdata_rust,
+                project=quicktime_selector_projection, rust_matches=quicktime_rust_matches,
+                catalog_sources=catalog["producer"]["sources"])
+    if userdata_ledger is not None or userdata_rust is not None:
+        expected_userdata_digests = {
+            "source_sha256": hashlib.sha256(quicktime_bounded_source).hexdigest(),
+            "ledger_sha256": canonical_hash(userdata_ledger),
+            "rust_sha256": hashlib.sha256(userdata_rust.encode()).hexdigest()}
+        if userdata_input_digests != expected_userdata_digests:
+            raise ValueError("UserData input digests differ from replayed artifacts")
+    elif userdata_input_digests is not None:
+        raise ValueError("UserData input digests require complete artifacts")
     ifd = ifd_implementation(ifd_source, ifd_ledger, ifd_rust, ifd_expr_ledger)
     expected_ifd_digests = {"source_sha256", "ledger_sha256", "rust_sha256"}
     if ifd_ledger and require_mapping(ifd_ledger.get("source"), "IFD ledger source").get("expr_ledger_sha256") is not None:
@@ -722,6 +737,16 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                     and (identity[1], variant_path, entry["name"]) in observed_keys
                     and entry["groups"]["1"] == "Keys"):
                 observed_read = "observed_matched_read"
+            userdata_candidate = userdata.get((identity[0].rsplit("::", 1)[-1], identity[1], selector_hash, variant_path))
+            if userdata_candidate is not None and state == "joined":
+                if userdata_candidate["generated"]:
+                    if userdata_candidate["name"] != entry["name"]:
+                        raise ValueError("UserData ledger/catalog name identity differs")
+                    implementation = reader_implementation = "generated_reader_declaration_unobserved"
+                    refusal = None
+                else:
+                    implementation = reader_implementation = "blocked_generated_reader_refusal"
+                    refusal = userdata_candidate["reasons"]
         ifd_candidate = ifd.get(identity)
         if ifd_candidate is not None and state == "joined":
             if ifd_candidate["name"] != entry["name"]:
@@ -765,6 +790,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         inputs["writer"] = dict(sorted(writer_input_digests.items()))
     if ifd_input_digests is not None:
         inputs["ifd"] = dict(sorted(ifd_input_digests.items()))
+    if userdata_input_digests is not None:
+        inputs["quicktime_userdata"] = dict(sorted(userdata_input_digests.items()))
     if quicktime_read_evidence is not None:
         inputs["quicktime_read_evidence"] = {"sha256": canonical_hash(quicktime_read_evidence),
                                              "producer": quicktime_read_evidence["producer"]}
@@ -869,6 +896,8 @@ def main() -> int:
     parser.add_argument("--quicktime-itemlist-rust", required=True, type=Path)
     parser.add_argument("--quicktime-keys-ledger", required=True, type=Path)
     parser.add_argument("--quicktime-keys-rust", required=True, type=Path)
+    parser.add_argument("--quicktime-userdata-ledger", type=Path)
+    parser.add_argument("--quicktime-userdata-rust", type=Path)
     parser.add_argument("--quicktime-read-evidence", type=Path)
     parser.add_argument("--quicktime-keys-read-evidence", type=Path)
     parser.add_argument("--writer-read-evidence", type=Path)
@@ -889,6 +918,9 @@ def main() -> int:
     writer_paths = (args.writer_source, args.writer_final_ledger, args.writer_final_rust, args.writer_public_ledger, args.writer_public_rust)
     ifd_paths = (args.ifd_source, args.ifd_identity_ledger, args.ifd_rust)
     ifd_expr_paths = (*ifd_paths, args.ifd_expr_ledger)
+    userdata_paths = (args.quicktime_userdata_ledger, args.quicktime_userdata_rust)
+    if any(path is not None for path in userdata_paths) and any(path is None for path in userdata_paths):
+        raise ValueError("UserData join inputs must be supplied together")
     if any(path is not None for path in writer_paths) and any(path is None for path in writer_paths):
         raise ValueError("writer join inputs must be supplied together")
     if any(path is not None for path in ifd_paths) and any(path is None for path in ifd_paths):
@@ -899,6 +931,7 @@ def main() -> int:
                           args.quicktime_bounded_source, args.quicktime_itemlist_ledger,
                           args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
                           args.quicktime_keys_ledger, args.quicktime_keys_rust,
+                          *(userdata_paths if all(path is not None for path in userdata_paths) else ()),
                           *(writer_paths if all(path is not None for path in writer_paths) else ()),
                           *(ifd_expr_paths if all(path is not None for path in ifd_paths) else ()),
                           *([args.quicktime_read_evidence] if args.quicktime_read_evidence else []),
@@ -910,6 +943,12 @@ def main() -> int:
     quicktime_rust = args.quicktime_itemlist_rust.read_text(encoding="utf-8")
     keys_ledger = args.quicktime_keys_ledger.read_bytes()
     keys_rust = args.quicktime_keys_rust.read_text(encoding="utf-8")
+    userdata_ledger = read_json(args.quicktime_userdata_ledger) if args.quicktime_userdata_ledger else None
+    userdata_rust = args.quicktime_userdata_rust.read_text(encoding="utf-8") if args.quicktime_userdata_rust else None
+    userdata_digests = ({"source_sha256": hashlib.sha256(quicktime_source).hexdigest(),
+                         "ledger_sha256": canonical_hash(userdata_ledger),
+                         "rust_sha256": hashlib.sha256(userdata_rust.encode()).hexdigest()}
+                        if userdata_ledger is not None else None)
     quicktime_digests = {"source_sha256": hashlib.sha256(quicktime_source).hexdigest(),
                          "ledger_sha256": hashlib.sha256(quicktime_ledger).hexdigest(),
                          "capabilities_sha256": hashlib.sha256(quicktime_capabilities).hexdigest(),
@@ -939,6 +978,8 @@ def main() -> int:
                  json.loads(quicktime_ledger), json.loads(quicktime_capabilities), quicktime_source, quicktime_rust,
                  quicktime_digests, read_json(args.quicktime_read_evidence) if args.quicktime_read_evidence else None,
                  quicktime_keys_ledger=json.loads(keys_ledger), quicktime_keys_rust=keys_rust,
+                 userdata_ledger=userdata_ledger, userdata_rust=userdata_rust,
+                 userdata_input_digests=userdata_digests,
                  writer_source=writer_source, writer_final_ledger=json.loads(writer_final) if writer_final else None,
                  writer_final_rust=writer_final_rust, writer_public_ledger=json.loads(writer_public) if writer_public else None,
                  writer_public_rust=writer_public_rust, writer_input_digests=writer_digests,

@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import unittest
 
@@ -10,8 +11,12 @@ import quicktime_userdata_specs as compiler
 class CatalogUserDataTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = compiler.SNAPSHOT.read_bytes()
-        cls.document = json.loads(cls.source)
+        cls.document = json.loads(compiler.SNAPSHOT.read_bytes())
+        # Synthetic join input: bind only this test document to the current
+        # producer. This is not a native recapture or an observed-read receipt.
+        cls.document["capture_scope"]["dump_tool_sha256"] = hashlib.sha256(
+            (compiler.SNAPSHOT.parent.parent / "dump_tables.pl").read_bytes()).hexdigest()
+        cls.source = json.dumps(cls.document).encode()
         cls.ledger = compiler.compile_document(cls.document)
         cls.rust = compiler.render_rust(cls.ledger)
         cls.catalog_sources = json.loads((compiler.ROOT / "docs/public/measurements/catalog-source-13.59.json").read_text())["producer"]["sources"]
@@ -74,6 +79,42 @@ class CatalogUserDataTests(unittest.TestCase):
                 catalog_userdata.implementation(ledger, source, rust,
                     project=join.quicktime_selector_projection, rust_matches=join.quicktime_rust_matches,
                     catalog_sources=self.catalog_sources)
+
+    def test_catalog_join_counts_userdata_declarations_but_leaves_them_unobserved(self):
+        table_name = "Image::ExifTool::QuickTime::UserData"
+        catalog = json.loads((compiler.ROOT / "docs/public/measurements/catalog-source-13.59.json").read_text())
+        catalog["entries"] = [row for row in catalog["entries"] if row["table"] == table_name]
+        names = sorted({row["normalized_name"] for row in catalog["entries"]})
+        catalog["unique_names"] = names
+        catalog["counts"] = {"catalog_total_tag_entries": len(catalog["entries"]),
+                             "distinct_case_insensitive_entry_names": len(names),
+                             "catalog_unique_tag_names": len(names)}
+        table = copy.deepcopy(self.document["modules"]["QuickTime"]["tables"]["UserData"])
+        table["full_name"] = table_name
+        hydrated = {"exiftool_version": catalog["exiftool_version"], "hydrated_layouts": {
+            "catalog_counts": {"total_tag_entries": len(catalog["entries"])},
+            "source_provenance": {"sources": self.catalog_sources}, "tables": {table_name: table}}}
+        itemlist = join.quicktime_specs.compile_document(self.document)
+        capabilities = join.quicktime_selector.report(self.source)
+        rust = join.quicktime_specs.render_rust(itemlist)
+        inputs = {"source_sha256": hashlib.sha256(self.source).hexdigest(),
+                  "ledger_sha256": join.canonical_hash(itemlist),
+                  "capabilities_sha256": join.canonical_hash(capabilities),
+                  "rust_sha256": hashlib.sha256(rust.encode()).hexdigest()}
+        userdata_inputs = {"source_sha256": inputs["source_sha256"],
+                           "ledger_sha256": join.canonical_hash(self.ledger),
+                           "rust_sha256": hashlib.sha256(self.rust.encode()).hexdigest()}
+        def build(digests):
+            return join.build(catalog, hydrated, "catalog", "hydrated", itemlist, capabilities,
+                self.source, rust, inputs, userdata_ledger=self.ledger, userdata_rust=self.rust,
+                userdata_input_digests=digests)
+        result = build(userdata_inputs)
+        self.assertEqual(result["counts"]["reader_implementation"]["generated_reader_declaration_unobserved"], 17)
+        self.assertTrue(all(row["observed_read"] == "not_observed_yet" for row in result["entries"]))
+        self.assertEqual(len(result["entries"]), len(catalog["entries"]))
+        self.assertEqual(result["source_tables"][table_name]["catalog_entries"], len(catalog["entries"]))
+        with self.assertRaisesRegex(ValueError, "input digests"):
+            build({**userdata_inputs, "rust_sha256": "0" * 64})
 
 
 if __name__ == "__main__":
