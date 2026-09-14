@@ -30,9 +30,9 @@ still require their own joins.
 
 The [machine-readable graph audit](/measurements/hydrated-reader-layout-audit-13.59.json)
 records the capture hash, producer hash, source-file identities and counts.
-The full external capture is 99,132,291 bytes, SHA-256
-`34f6bc9efc38be6a04d2f8710a522d26e941a945c967a777020e886879072164`. Its evidence directory is
-`source-family-goal-20260914/hydrated-reader-landing-1789408680/` under the session evidence root.
+The full external capture is 99,146,085 bytes, SHA-256
+`716f6a295e83711c60ef672762734c9e6034324b8a9f4f03289856713c86185e`. Its evidence directory is
+`source-family-goal-20260914/itemlist-stacked-capture-1789410050/` under the session evidence root.
 
 ## Reproduce
 

@@ -1,6 +1,6 @@
 # Generated ItemList reader progress
 
-This implementation is pushed and under validation; it is not merged and does
+This implementation is being prepared as a reviewed, bounded reader PR; it does
 not complete the full-parity goal. Source pin: ExifTool 13.59.
 
 ## What is connected
@@ -77,7 +77,7 @@ python3 tools/exiftool-tables/verify_quicktime_reader.py \
 python3 tools/exiftool-tables/quicktime_generated_specs.py --check
 ```
 
-## Required before this implementation is ready to land
+## Remaining work toward full source-derived reading
 
 - Finish other ItemList locations and verify duplicate/group behavior on real
   containers. The AAC/M4A entry point now delegates to the shared QuickTime parser.
@@ -87,8 +87,8 @@ python3 tools/exiftool-tables/quicktime_generated_specs.py --check
   capabilities are migrated. Raw retention is not a file-writing guarantee.
 - Add source-derived language identities. Non-default locales are currently
   omitted rather than mislabeled as the default; this is a known protocol gap.
-- Record unsupported malformed-text and non-finite-number behavior explicitly,
-  run regression/conformance gates, and address review findings before merging.
+- Extend malformed-text and non-finite-number evidence as shared capabilities
+  expand; continue regression/conformance gates on each change.
 
 UserData, Keys, remaining ItemList refusals, other source families and writing
 remain part of the full goal. Passing these fixtures does not remove them.
@@ -124,3 +124,16 @@ other unknown properties still refuse generation. Native MediaType reading now
 exercises the same generated numeric/enum executor. No tag-specific Rust map was
 added. Formatting, denied-warning Clippy, workspace tests and all 50 native
 printed/raw comparisons pass on this follow-up.
+
+## Stacked source capture
+
+Rebasing onto the full hydrated graph capture leaves all Rust source, tests and
+Cargo files byte-identical to the validated reader commit. A fresh canonical
+Perl capture retains exactly the same selected QuickTime tables and graph counts.
+Its five helper deparses have reviewed cosmetic declaration/undef spellings; the
+guard accepts only the exact bounded and fully hydrated body hashes for each
+named helper. All other changed bodies remain refused. The capture tool now
+retains the reader protocol directly, so rebuilding the bounded fixture needs no
+manual source-fact patch. Thirty-two focused Python tests pass after regeneration.
+The generated Rust is byte-identical. Source provenance is updated; the earlier
+50/50 runtime observations remain bound to their recorded tested commit.

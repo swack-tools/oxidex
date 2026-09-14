@@ -158,6 +158,19 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
         self.assertEqual(result["protocol"]["reason"],
                          "missing_or_changed_reader_protocol:charset_map:ShiftJIS")
 
+    def test_bounded_and_full_protocol_forms_accept_but_changed_bodies_refuse(self):
+        document = snapshot()
+        protocols = [document['quicktime_itemlist_reader_protocol'],
+                     json.loads((HERE / 'fixtures/quicktime_reader_protocol_bounded_13_59.json').read_text())]
+        for protocol in protocols:
+            document['quicktime_itemlist_reader_protocol'] = protocol
+            self.assertEqual(len(specs.compile_document(document)['specs']), 92)
+            for dependency in protocol['dependencies'].values():
+                body = dependency['__deparse']
+                dependency['__deparse'] = body + '\nreturn 0;'
+                self.assertEqual(specs.compile_document(document)['specs'], [])
+                dependency['__deparse'] = body
+
     def test_reader_dependency_source_hash_is_provenance_not_eligibility(self):
         document = snapshot()
         document["quicktime_itemlist_reader_protocol"]["dependencies"]["read_value"]["source_sha256"] = "0" * 64

@@ -41,13 +41,16 @@ EXPECTED_READER_PROTOCOL = {
             "map_sha256": "819f6b328c761d1369cc79d458a2c68ebdc0cf04064f3238446216e03f5934dc",
         },
     },
+    # Bounded and fully hydrated captures have two reviewed B::Deparse forms.
+    # Only lexical declaration parentheses and scalar undef spelling differ.
+    # Accept exact bodies; never normalize arbitrary changed Perl into a match.
     "dependencies": {
-        "quicktime_format": ("Image::ExifTool::QuickTime::QuickTimeFormat", "c29829e95ea7df45de2cde0527d51d953583c9c73b26c52931f4bb91b2223883"),
-        "read_value": ("Image::ExifTool::ReadValue", "91213f64302774d00eb5fadd4835ca3fbcad3607c70eec98afd89d3423f0ad29"),
-        "decode": ("Image::ExifTool::Decode", "8ce89a36fea0f6ce930188e0b11d1846c9fbdb4538ec1f64e51bb24c649bd0e5"),
-        "charset_decompose": ("Image::ExifTool::Charset::Decompose", "f07e59a85a207c3895a3e39ec7aa06a1f682199f303e7dbe62217998d66b77e2"),
-        "charset_load": ("Image::ExifTool::Charset::LoadCharset", "68b4cb0042008c2e41a92077adcf5da02b0f95cf2ea717b09fa8dcef88c18e98"),
-        "charset_recompose": ("Image::ExifTool::Charset::Recompose", "ea4fbd153500dbe5735c2de7350e79f6779b85918fa9d8b27251ba2043551cef"),
+        "quicktime_format": ("Image::ExifTool::QuickTime::QuickTimeFormat", ("c29829e95ea7df45de2cde0527d51d953583c9c73b26c52931f4bb91b2223883",)),
+        "read_value": ("Image::ExifTool::ReadValue", ("91213f64302774d00eb5fadd4835ca3fbcad3607c70eec98afd89d3423f0ad29", "226a9d703536d68c9b036bb4f122398d5a6ac95ef6a146fcaaa3420ccf65eedc")),
+        "decode": ("Image::ExifTool::Decode", ("8ce89a36fea0f6ce930188e0b11d1846c9fbdb4538ec1f64e51bb24c649bd0e5", "5ea8e0ab21c8519a56cc4d1aadc86d5fbc9b4d48faf6780b5b7a7de376720aef")),
+        "charset_decompose": ("Image::ExifTool::Charset::Decompose", ("f07e59a85a207c3895a3e39ec7aa06a1f682199f303e7dbe62217998d66b77e2", "ace1034e46ea3be8245ebe1cb8d5dbd77adeed1bb29e58dcefe1d507e056901e")),
+        "charset_load": ("Image::ExifTool::Charset::LoadCharset", ("68b4cb0042008c2e41a92077adcf5da02b0f95cf2ea717b09fa8dcef88c18e98", "f464fe8656a11f5b7347c409125ffdcfa07528cf26f3d943233bef3665c5ea0d")),
+        "charset_recompose": ("Image::ExifTool::Charset::Recompose", ("ea4fbd153500dbe5735c2de7350e79f6779b85918fa9d8b27251ba2043551cef", "1d7f968e0e6f088c82c6002867534eb6abb47acb840180d74b38f58a4618bd60")),
     },
 }
 
@@ -106,7 +109,7 @@ def reader_protocol_reason(document):
     dependencies = protocol.get("dependencies")
     if not isinstance(dependencies, dict):
         return "missing_or_changed_reader_protocol:dependencies"
-    for key, (name, body_sha256) in EXPECTED_READER_PROTOCOL["dependencies"].items():
+    for key, (name, body_sha256s) in EXPECTED_READER_PROTOCOL["dependencies"].items():
         fact = dependencies.get(key)
         if not isinstance(fact, dict):
             return f"missing_or_changed_reader_protocol:{key}"
@@ -114,7 +117,7 @@ def reader_protocol_reason(document):
                 or fact.get("__name") != name or fact.get("resolved") is not True):
             return f"missing_or_changed_reader_protocol:{key}"
         body = fact.get("__deparse")
-        if not isinstance(body, str) or hashlib.sha256(body.encode()).hexdigest() != body_sha256:
+        if not isinstance(body, str) or hashlib.sha256(body.encode()).hexdigest() not in body_sha256s:
             return f"missing_or_changed_reader_protocol:{key}"
     return None
 

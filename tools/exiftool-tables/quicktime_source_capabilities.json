@@ -11792,19 +11792,11 @@
   "scope": "source capability candidates; no generated runtime or observed support claimed",
   "source": {
     "capture_scope": {
-      "dump_tool_sha256": "976d227873ed625baa3bafec03c486694246cae6eb4009ac32041559b82ff533",
-      "full_dump_sha256": "05c13f3ee804838a6d8db5b2f8d64156883dd98afe5a5b0983b6870a8a561556",
+      "dump_tool_sha256": "a6efcbcbe12b13d5651a7c6d84f02cffa843f8e1afafe59c874c5cb0bc2b1d28",
+      "full_dump_sha256": "716f6a295e83711c60ef672762734c9e6034324b8a9f4f03289856713c86185e",
       "kind": "verbatim selected tables from hydrated dump",
       "perl_version": "5.38.2",
-      "source_commit": "304d6339274d14f3a26cfeed85e2428855ea688a",
-      "source_fact_refresh": {
-        "captured_dump_tool_sha256": "976d227873ed625baa3bafec03c486694246cae6eb4009ac32041559b82ff533",
-        "dump_tool_sha256": "2f51424cb05d0d5f4e97d71b01f9529fbe11bcb4cbd97e0ab70b0dabc033cae2",
-        "exiftool_version": "13.59",
-        "kind": "quicktime_itemlist_reader_protocol_from_canonical_perl",
-        "perl_version": "5.34.1",
-        "protocol_sha256": "c9081e38cf9ea34309bf34b58f6a0cbe1478b165f42cd1fb68199bca809f22c1"
-      },
+      "source_commit": "b8414c60d9442cc5682c7fee8841c20725cf9ad0",
       "source_module_table_count": 87,
       "tables": [
         "QuickTime::ItemList",
@@ -11812,7 +11804,7 @@
         "QuickTime::Keys"
       ]
     },
-    "dump_sha256": "647bd906aeae340db6a0a92a11878814357172d6d61a06bc9a09c433ba79c9fe",
+    "dump_sha256": "e97cba4210265925bcee1a6813c9ec9fdba752dd1acb0f19844353f1aa3d91ae",
     "selector_sha256": "5db9156b29d0ea1ccd8c128f4a8b8a600a30678cfac0153be7480fac3dea636c"
   }
 }
