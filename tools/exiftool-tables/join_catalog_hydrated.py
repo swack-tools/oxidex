@@ -20,10 +20,68 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import quicktime_atom_tables as quicktime_selector
 import quicktime_generated_specs as quicktime_specs
+import final_scalar_stage
+import setnewvalue_public_migration_ledger as public_migration
 
 SCHEMA = "oxidex_catalog_hydrated_join_v2"
 CATALOG_SCHEMA = "oxidex_hydrated_catalog_universe_v1"
 QUICKTIME_READ_EVIDENCE_SCHEMA = "oxidex_quicktime_generated_read_evidence_v1"
+
+
+def writer_implementation(source: bytes | None, final_ledger: dict | None, final_rust: str | None,
+                          public_ledger: dict | None, public_rust: str | None) -> dict[tuple[str, str, int], dict]:
+    """Replay the authenticated writer compilers before indexing public rows.
+
+    This is declaration accounting only: no native write execution is claimed.
+    """
+    supplied = (source, final_ledger, final_rust, public_ledger, public_rust)
+    if all(value is None for value in supplied):
+        return {}
+    if any(value is None for value in supplied) or not isinstance(source, bytes) or not isinstance(final_rust, str) or not isinstance(public_rust, str):
+        raise ValueError("writer replay requires source, final ledger/Rust, and public ledger/Rust together")
+    try:
+        document = json.loads(source)
+    except json.JSONDecodeError as exc:
+        raise ValueError("writer source is malformed") from exc
+    if not isinstance(document, dict):
+        raise ValueError("writer source is malformed")
+    expected_final_rust, expected_final = final_scalar_stage.generate(document)
+    if final_ledger != expected_final or not quicktime_rust_matches(expected_final_rust, final_rust):
+        raise ValueError("writer final artifacts differ from authenticated source replay")
+    try:
+        compiled_source, current = public_migration.compile_current(document)
+        public_migration.validate_ledger(public_ledger)
+    except public_migration.RecipeRefused as exc:
+        raise ValueError("writer public ledger is malformed") from exc
+    if public_ledger.get("source") != compiled_source:
+        raise ValueError("writer public ledger source closure differs from authenticated replay")
+    if public_migration.render_rust(public_ledger) != public_rust:
+        raise ValueError("writer public Rust artifact differs from authenticated ledger")
+    recipes = {(row["full_name"], row["raw_tag_id"], row["name"], row["physical_write_group"])
+               for row in expected_final.get("recipes", [])}
+    rows = {}
+    for entry in public_ledger["entries"]:
+        if entry.get("state") != "current":
+            continue
+        try:
+            expected = current.get(public_migration._entry_key(entry))
+        except public_migration.RecipeMalformed as exc:
+            raise ValueError("writer public ledger identity is malformed") from exc
+        if (expected is None or entry["full_name"] != expected.full_name or entry["name"] != expected.name
+                or entry.get("source_control_sha256") != expected.source_control_sha256
+                or entry.get("semantics_sha256") != expected.semantics_sha256):
+            raise ValueError("writer public ledger identity differs from authenticated replay")
+        recipe_key = (entry["full_name"], entry["raw_tag_id"], entry["name"], entry["write_group"])
+        if recipe_key not in recipes:
+            raise ValueError("writer public ledger is absent from final scalar recipes")
+        identity = (entry["full_name"], str(entry["raw_tag_id"]), 0)
+        if identity in rows:
+            raise ValueError("writer public ledger has duplicate catalog identity")
+        rows[identity] = {"name": entry["name"], "write_group": entry["write_group"],
+                          "semantics_sha256": entry["semantics_sha256"]}
+    if len(rows) != len(recipes):
+        raise ValueError("writer public/final recipe conservation failed")
+    return rows
 
 
 def canonical_hash(value: object) -> str:
@@ -320,7 +378,10 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           itemlist_ledger: dict | None = None, quicktime_capabilities: dict | None = None,
           quicktime_bounded_source: bytes | None = None, quicktime_rust: str | None = None,
           quicktime_input_digests: dict[str, str] | None = None,
-          quicktime_read_evidence: dict | None = None) -> dict:
+          quicktime_read_evidence: dict | None = None,
+          writer_source: bytes | None = None, writer_final_ledger: dict | None = None,
+          writer_final_rust: str | None = None, writer_public_ledger: dict | None = None,
+          writer_public_rust: str | None = None, writer_input_digests: dict[str, str] | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
     supplied_quicktime = (itemlist_ledger, quicktime_capabilities, quicktime_bounded_source, quicktime_rust)
@@ -342,6 +403,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     validate_provenance(catalog, hydrated)
     hydrated_by_id, table_hashes = source_rows(hydrated)
     quicktime = quicktime_implementation(*supplied_quicktime)
+    writer = writer_implementation(writer_source, writer_final_ledger, writer_final_rust, writer_public_ledger, writer_public_rust)
+    if writer and (writer_input_digests is None or set(writer_input_digests) != {"source_sha256", "final_ledger_sha256", "final_rust_sha256", "public_ledger_sha256", "public_rust_sha256"}):
+        raise ValueError("writer input digests are incomplete")
     observed_quicktime = quicktime_observed_reads(quicktime_read_evidence, quicktime_input_digests,
                                                  itemlist_ledger["specs"] if itemlist_ledger else None)
     hydrated_count = require_mapping(hydrated["hydrated_layouts"].get("catalog_counts"), "hydrated catalog counts").get("total_tag_entries")
@@ -388,6 +452,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                 else:
                     implementation = "blocked_generated_reader_refusal"
                     refusal = candidate.get("reasons")
+        writer_candidate = writer.get(identity)
+        if writer_candidate is not None and state == "joined" and writer_candidate["name"] == entry["name"]:
+            implementation = "generated_writer_declaration_unobserved"
         implementation_counts[implementation] += 1
         observed_counts[observed_read] += 1
         records.append({"identity": {"table": identity[0], "raw_key": identity[1], "variant_index": identity[2]},
@@ -404,6 +471,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
               "exiftool_version": catalog["exiftool_version"]}
     if quicktime_input_digests is not None:
         inputs["quicktime"] = dict(sorted(quicktime_input_digests.items()))
+    if writer_input_digests is not None:
+        inputs["writer"] = dict(sorted(writer_input_digests.items()))
     if quicktime_read_evidence is not None:
         inputs["quicktime_read_evidence"] = {"sha256": canonical_hash(quicktime_read_evidence),
                                              "producer": quicktime_read_evidence["producer"]}
@@ -471,13 +540,23 @@ def main() -> int:
     parser.add_argument("--quicktime-source-capabilities", required=True, type=Path)
     parser.add_argument("--quicktime-itemlist-rust", required=True, type=Path)
     parser.add_argument("--quicktime-read-evidence", type=Path)
+    parser.add_argument("--writer-source", type=Path,
+                        help="authenticated full native dump used by both writer compilers")
+    parser.add_argument("--writer-final-ledger", type=Path)
+    parser.add_argument("--writer-final-rust", type=Path)
+    parser.add_argument("--writer-public-ledger", type=Path)
+    parser.add_argument("--writer-public-rust", type=Path)
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--replace", action="store_true")
     action.add_argument("--check", action="store_true")
     args = parser.parse_args()
+    writer_paths = (args.writer_source, args.writer_final_ledger, args.writer_final_rust, args.writer_public_ledger, args.writer_public_rust)
+    if any(path is not None for path in writer_paths) and any(path is None for path in writer_paths):
+        raise ValueError("writer join inputs must be supplied together")
     validate_destinations(args.catalog, args.hydrated, args.output, args.report,
                           args.quicktime_bounded_source, args.quicktime_itemlist_ledger,
                           args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
+                          *(writer_paths if all(path is not None for path in writer_paths) else ()),
                           *([args.quicktime_read_evidence] if args.quicktime_read_evidence else []))
     quicktime_source = args.quicktime_bounded_source.read_bytes()
     quicktime_ledger = args.quicktime_itemlist_ledger.read_bytes()
@@ -487,9 +566,21 @@ def main() -> int:
                          "ledger_sha256": hashlib.sha256(quicktime_ledger).hexdigest(),
                          "capabilities_sha256": hashlib.sha256(quicktime_capabilities).hexdigest(),
                          "rust_sha256": hashlib.sha256(quicktime_rust.encode()).hexdigest()}
+    writer_source = args.writer_source.read_bytes() if args.writer_source else None
+    writer_final = args.writer_final_ledger.read_bytes() if args.writer_final_ledger else None
+    writer_final_rust = args.writer_final_rust.read_text(encoding="utf-8") if args.writer_final_rust else None
+    writer_public = args.writer_public_ledger.read_bytes() if args.writer_public_ledger else None
+    writer_public_rust = args.writer_public_rust.read_text(encoding="utf-8") if args.writer_public_rust else None
+    writer_digests = {"source_sha256": hashlib.sha256(writer_source).hexdigest(),
+                      "final_ledger_sha256": hashlib.sha256(writer_final).hexdigest(),
+                      "final_rust_sha256": hashlib.sha256(writer_final_rust.encode()).hexdigest(),
+                      "public_ledger_sha256": hashlib.sha256(writer_public).hexdigest(),
+                      "public_rust_sha256": hashlib.sha256(writer_public_rust.encode()).hexdigest()} if writer_source else None
     join = build(read_json(args.catalog), read_json(args.hydrated), sha256(args.catalog), sha256(args.hydrated),
                  json.loads(quicktime_ledger), json.loads(quicktime_capabilities), quicktime_source, quicktime_rust,
-                 quicktime_digests, read_json(args.quicktime_read_evidence) if args.quicktime_read_evidence else None)
+                 quicktime_digests, read_json(args.quicktime_read_evidence) if args.quicktime_read_evidence else None,
+                 writer_source, json.loads(writer_final) if writer_final else None, writer_final_rust, json.loads(writer_public) if writer_public else None, writer_public_rust,
+                 writer_digests)
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
     if args.check:
         if not args.output.exists() or not args.report.exists():

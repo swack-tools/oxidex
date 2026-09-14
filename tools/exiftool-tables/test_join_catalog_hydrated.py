@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 import verify_quicktime_reader as read_verifier
 
 PATH = Path(__file__).with_name("join_catalog_hydrated.py")
@@ -53,6 +54,28 @@ def observation_rows(fixture_name, fixture_bytes, expected, actual):
 
 
 class CatalogHydratedJoinTests(unittest.TestCase):
+    def test_writer_replay_requires_exact_source_bound_artifacts_and_conserves_rows(self):
+        source = json.dumps({"exiftool_version": "13.59"}).encode()
+        row = {"module": "Exif", "table": "Main", "full_name": "Image::ExifTool::Exif::Main",
+               "raw_tag_id": 315, "name": "Artist", "group0": "EXIF", "group1": "IFD0",
+               "write_group": "IFD0", "source_control_sha256": "a" * 64, "semantics_sha256": "b" * 64,
+               "state": "current"}
+        current = {join.public_migration._entry_key(row): SimpleNamespace(
+            full_name=row["full_name"], name=row["name"], source_control_sha256=row["source_control_sha256"],
+            semantics_sha256=row["semantics_sha256"])}
+        final = {"recipes": [{"full_name": row["full_name"], "raw_tag_id": 315, "name": "Artist", "physical_write_group": "IFD0"}]}
+        public = {"source": {"capture": "bound"}, "entries": [row]}
+        with patch.object(join.final_scalar_stage, "generate", return_value=("final-rust", final)), \
+             patch.object(join.public_migration, "compile_current", return_value=({"capture": "bound"}, current)), \
+             patch.object(join.public_migration, "validate_ledger"), \
+             patch.object(join.public_migration, "render_rust", return_value="public-rust"):
+            rows = join.writer_implementation(source, final, "final-rust", public, "public-rust")
+            self.assertEqual(rows, {(row["full_name"], "315", 0): {"name": "Artist", "write_group": "IFD0", "semantics_sha256": "b" * 64}})
+            with self.assertRaisesRegex(ValueError, "final artifacts"):
+                join.writer_implementation(source, final, "tampered", public, "public-rust")
+            bad = copy.deepcopy(public); bad["entries"][0]["name"] = "Alias"
+            with self.assertRaisesRegex(ValueError, "identity"):
+                join.writer_implementation(source, final, "final-rust", bad, "public-rust")
     def replayed_quicktime_facts(self):
         source = json.loads((PATH.parent / "fixtures/quicktime_source_13_59.json").read_text())
         # This test-only bounded input is a fresh capture fixture: preserve all
