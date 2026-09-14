@@ -125,7 +125,7 @@ pub(crate) fn plan_public_write(
     let whole_exif_clear = desired.iter().all(|(key, _)| {
         !matches!(
             key.split_once(':').map(|(group, _)| group),
-            Some("EXIF" | "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD")
+            Some("EXIF" | "IFD0" | "ExifIFD" | "GPS")
         )
     });
     let rules = generated_write_address::generated_rules();
@@ -322,6 +322,17 @@ mod tests {
         .unwrap();
         assert!(!plan.generated.is_empty());
         assert!(plan.whole_exif_clear);
+
+        let mut thumbnail_only = MetadataMap::new();
+        thumbnail_only.insert(
+            "IFD1:Artist",
+            TagValue::new_string("not a standalone EXIF root"),
+        );
+        assert!(
+            plan_public_write(&MetadataMap::new(), &thumbnail_only, &[])
+                .unwrap()
+                .whole_exif_clear
+        );
     }
 
     #[test]

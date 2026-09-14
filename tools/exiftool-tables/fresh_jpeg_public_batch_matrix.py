@@ -345,8 +345,30 @@ def compare_batch(source: Path, native_output: Path, generated_output: Path,
         raise AssertionError("mixed public mandatory type/count/value bytes differ")
 
 
+def persist_report(output: Path, report: dict[str, Any]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
                ledger: Path, rules: Path, mandatory_ledger: Path, address_rules: Path) -> dict[str, Any]:
+    report: dict[str, Any] = {"instrument": INSTRUMENT, "declared": 0, "passed": 0,
+                              "rows": [], "state": "pre-driver-pending"}
+    persist_report(output, report)
+    try:
+        return _run_matrix(test_binary=test_binary, perl=perl, library=library, output=output,
+                           ledger=ledger, rules=rules, mandatory_ledger=mandatory_ledger,
+                           address_rules=address_rules, report=report)
+    except (AssertionError, OSError, ValueError, subprocess.TimeoutExpired) as error:
+        if not str(report.get("state", "")).startswith("driver-"):
+            report.update(state="pre-driver-failed", error=str(error))
+            persist_report(output, report)
+        raise
+
+
+def _run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
+                ledger: Path, rules: Path, mandatory_ledger: Path, address_rules: Path,
+                report: dict[str, Any]) -> dict[str, Any]:
     if not hasattr(native, "run_native_batch"):
         raise RuntimeError("fresh public batch matrix requires the committed native batch oracle helper")
     targets = generated_targets(ledger, rules)
@@ -392,34 +414,39 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
     request_path.write_text(json.dumps(requests, indent=2) + "\n", encoding="utf-8")
     env = os.environ.copy() | {"OXIDEX_SCALAR_WRITE_REQUESTS": str(request_path),
                                "OXIDEX_SCALAR_WRITE_RESULTS": str(result_path)}
-    report: dict[str, Any] = {"instrument": INSTRUMENT, "declared": len(rows),
-                              "passed": 0, "mandatory_candidate": asdict(mandatory),
-                              "mandatory_selection_probes": mandatory_probes,
-                              "jfif_adjusted_candidates": {key: asdict(value) for key, value in jfif_candidates.items()},
-                              "jfif_adjusted_selection_probes": jfif_probes, "rows": rows,
-                              "state": "driver-pending"}
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    report.update({"declared": len(rows), "mandatory_candidate": asdict(mandatory),
+                   "mandatory_selection_probes": mandatory_probes,
+                   "jfif_adjusted_candidates": {key: asdict(value) for key, value in jfif_candidates.items()},
+                   "jfif_adjusted_selection_probes": jfif_probes, "rows": rows,
+                   "state": "driver-pending"})
+    persist_report(output, report)
     try:
         completed = subprocess.run([str(test_binary), DRIVER, "--exact", "--ignored", "--nocapture"],
                                    env=env, text=True, capture_output=True, timeout=180)
     except (subprocess.TimeoutExpired, OSError) as error:
+        stdout, stderr = getattr(error, "stdout", "") or "", getattr(error, "stderr", "") or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        (root / "driver.log").write_text(str(stdout) + str(stderr) + f"\n{error}\n", encoding="utf-8")
         report.update(state="driver-failed", error=str(error))
-        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        persist_report(output, report)
         raise
     (root / "driver.log").write_text(completed.stdout + completed.stderr, encoding="utf-8")
     if completed.returncode:
         report.update(state="driver-failed", returncode=completed.returncode)
-        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        persist_report(output, report)
         completed.check_returncode()
     try:
         results = json.loads(result_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         report.update(state="driver-failed", error=str(error))
-        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        persist_report(output, report)
         raise
     if not isinstance(results, list) or len(results) != len(rows):
         report.update(state="driver-failed", error="public batch fixture results differ from requests")
-        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        persist_report(output, report)
         raise AssertionError("public batch fixture results differ from requests")
     for row, result in zip(rows, results, strict=True):
         row["driver_result"] = result
@@ -432,9 +459,9 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
             report["passed"] += 1
         except (AssertionError, OSError, ValueError) as error:
             row.update(state="failed", error=str(error))
-        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        persist_report(output, report)
     report["state"] = "passed" if report["passed"] == report["declared"] else "failed"
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    persist_report(output, report)
     return report
 
 
