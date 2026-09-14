@@ -100,7 +100,7 @@ class IdentityLedger(unittest.TestCase):
         return {
             "exiftool_version": "13.59",
             "modules": {"Test": {"tables": {"Main": {"meta": {}, "tags": {
-                "1": {"Name": "Alpha", "Format": "int16u"},
+                "1": {"Name": "Alpha", "Format": "int16u", "RawConv": "$val"},
                 "2": {"Name": "NoFormat", "Format": "unmodelled"},
                 "raw": {"Name": "NotAnIfdId"},
                 "3": {"_variants": [
@@ -124,6 +124,8 @@ class IdentityLedger(unittest.TestCase):
         self.assertEqual(emitted, plain, "ledger collection must not alter Rust")
         by_identity = {(row["raw_key"], tuple(row["variant_path"])): row for row in rows}
         self.assertEqual(by_identity[("1", ())]["state"], "emitted")
+        self.assertEqual(by_identity[("1", ())]["reader_state"], "omitted")
+        self.assertEqual(by_identity[("1", ())]["omissions"], ["raw_conv"])
         self.assertEqual(by_identity[("2", ())]["reasons"], ["ifd_format_unsupported"])
         self.assertEqual(by_identity[("raw", ())]["reasons"], ["raw_key_unrepresentable"])
         self.assertEqual(by_identity[("3", (0,))]["state"], "emitted")
@@ -146,6 +148,17 @@ class IdentityLedger(unittest.TestCase):
             {(row["raw_key"], tuple(row["variant_path"])): row for row in refused_rows}[("3", (0,))]["reasons"],
             ["tag_variant_cond_unsupported"],
         )
+        raw_variants = {"meta": {}, "tags": {"not-a-tag-id": {"_variants": [
+            {"Name": "One"}, {"Name": "Two"},
+        ]}}}
+        _, raw_rows = codegen.gen_ifd_table(
+            "Test", "Raw", raw_variants, codegen.new_ifd_stats(), None, _ctx(),
+            include_identity_ledger=True,
+        )
+        self.assertEqual(
+            {(row["raw_key"], tuple(row["variant_path"]), row["name"]) for row in raw_rows},
+            {("not-a-tag-id", (0,), "One"), ("not-a-tag-id", (1,), "Two")},
+        )
 
     def test_cli_binds_ledger_to_input_and_emitted_ifd_rust(self):
         doc = self._doc()
@@ -160,14 +173,15 @@ class IdentityLedger(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             report = json.loads(ledger.read_text())
             self.assertEqual(report["schema"], "oxidex_ifd_identity_ledger_v1")
-            self.assertEqual(report["counts"], {"rows": 5, "emitted": 3, "refused": 2})
+            self.assertEqual(report["counts"], {"rows": 5, "emitted": 3, "refused": 2,
+                                                "reader_eligible": 2, "reader_omitted": 1})
             self.assertEqual(
                 report["source"]["tables_json_sha256"],
                 __import__("hashlib").sha256(tables.read_bytes()).hexdigest(),
             )
             self.assertEqual(
                 report["source"]["ifd_rust_sha256"],
-                __import__("hashlib").sha256(ifd.read_bytes()).hexdigest(),
+                codegen._canonical_ifd_rust_sha256(ifd.read_text()),
             )
             missing_ifd = subprocess.run([
                 sys.executable, str(ROOT / "tools" / "exiftool-tables" / "codegen.py"), str(tables),
