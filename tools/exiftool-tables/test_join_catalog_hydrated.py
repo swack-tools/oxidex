@@ -39,7 +39,7 @@ def hydrated(tags, sources=SOURCE, total=1):
 class CatalogHydratedJoinTests(unittest.TestCase):
     def quicktime_facts(self, source, *, generated, reasons):
         identity = {"module": "QuickTime", "table": "ItemList", "raw_key": "titl",
-                    "source_sha256": join.canonical_hash(source), "variant_path": []}
+                    "source_sha256": join.quicktime_selector.digest(source), "variant_path": []}
         return ({"schema": "quicktime_generated_itemlist_specs_v1",
                  "ledger": [{"identity": identity, "generated": generated, "reasons": reasons}]},
                 {"families": [{"records": [{"identity": identity, "reasons": reasons}]}]})

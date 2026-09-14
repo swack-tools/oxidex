@@ -13,6 +13,9 @@ import os
 from collections import Counter, defaultdict
 from pathlib import Path
 import tempfile
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import quicktime_atom_tables as quicktime_selector
 
 SCHEMA = "oxidex_catalog_hydrated_join_v2"
 CATALOG_SCHEMA = "oxidex_hydrated_catalog_universe_v1"
@@ -118,7 +121,7 @@ def validate_provenance(catalog: dict, hydrated: dict) -> None:
             raise ValueError(f"source provenance mismatch: {key}")
 
 
-def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | None) -> dict[tuple[str, str, str], dict]:
+def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | None) -> dict[tuple[str, str, str, tuple[int, ...]], dict]:
     """Index emitted QuickTime selector facts by table, key, and source hash."""
     if itemlist_ledger is None or capabilities is None:
         return {}
@@ -129,14 +132,16 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
         identity = record.get("identity", {})
         if not isinstance(identity, dict) or identity.get("module") != "QuickTime":
             raise ValueError("QuickTime generated ledger identity is malformed")
-        key = (identity.get("table"), identity.get("raw_key"), identity.get("source_sha256"))
-        if not all(isinstance(value, str) and value for value in key) or key in rows:
+        path = identity.get("variant_path")
+        key = (identity.get("table"), identity.get("raw_key"), identity.get("source_sha256"), tuple(path) if isinstance(path, list) and all(type(v) is int and v >= 0 for v in path) else None)
+        if not all(isinstance(value, str) and value for value in key[:3]) or key[3] is None or key in rows:
             raise ValueError("QuickTime generated ledger identity is duplicated or malformed")
         rows[key] = {"generated": record.get("generated") is True, "reasons": record.get("reasons")}
     for family in capabilities.get("families", []):
         for record in family.get("records", []):
             identity = record.get("identity", {})
-            key = (identity.get("table"), identity.get("raw_key"), identity.get("source_sha256"))
+            path = identity.get("variant_path")
+            key = (identity.get("table"), identity.get("raw_key"), identity.get("source_sha256"), tuple(path) if isinstance(path, list) else None)
             if key in rows:
                 rows[key]["selector_reasons"] = record.get("reasons")
     return rows
@@ -170,7 +175,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         implementation = "source_row_not_yet_consumed"
         refusal = None
         if source is not None and identity[0].startswith("Image::ExifTool::QuickTime::"):
-            candidate = quicktime.get((identity[0].rsplit("::", 1)[-1], identity[1], row_hash))
+            variant_path = (identity[2],) if "_variants" in hydrated["hydrated_layouts"]["tables"][identity[0]]["tags"][identity[1]] else ()
+            candidate = quicktime.get((identity[0].rsplit("::", 1)[-1], identity[1], quicktime_selector.digest(source), variant_path))
             if candidate is not None:
                 if candidate["generated"]:
                     implementation = "generated_reader_declaration_unobserved"
@@ -215,11 +221,11 @@ def aliases(left: Path, right: Path) -> bool:
     return left.resolve() == right.resolve() or (left.exists() and right.exists() and os.path.samefile(left, right))
 
 
-def validate_destinations(catalog: Path, hydrated: Path, output: Path, report_path: Path) -> None:
+def validate_destinations(catalog: Path, hydrated: Path, output: Path, report_path: Path, *inputs: Path) -> None:
     if aliases(output, report_path):
         raise ValueError("output and report destinations alias each other")
     for destination in (output, report_path):
-        if any(aliases(destination, source) for source in (catalog, hydrated)):
+        if any(aliases(destination, source) for source in (catalog, hydrated, *inputs)):
             raise ValueError("output or report aliases an input")
 
 
@@ -254,7 +260,8 @@ def main() -> int:
     action.add_argument("--replace", action="store_true")
     action.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    validate_destinations(args.catalog, args.hydrated, args.output, args.report)
+    validate_destinations(args.catalog, args.hydrated, args.output, args.report,
+                          args.quicktime_itemlist_ledger, args.quicktime_source_capabilities)
     join = build(read_json(args.catalog), read_json(args.hydrated), sha256(args.catalog), sha256(args.hydrated),
                  read_json(args.quicktime_itemlist_ledger), read_json(args.quicktime_source_capabilities))
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
