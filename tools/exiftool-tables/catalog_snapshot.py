@@ -6,8 +6,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
+import tempfile
 import sys
 
 HERE = Path(__file__).resolve().parent
@@ -21,6 +23,15 @@ def validate(document: dict, pin: str) -> None:
         raise ValueError('unsupported catalog schema')
     if document.get('exiftool_version') != pin:
         raise ValueError('catalog version differs from repository pin')
+    environment = document.get('capture_environment')
+    if (not isinstance(environment, dict)
+            or set(environment) != {'perl_version', 'perl_executable_basename'}
+            or not re.fullmatch(r'v\d+\.\d+\.\d+', str(environment.get('perl_version', '')))
+            or not isinstance(environment.get('perl_executable_basename'), str)
+            or not environment['perl_executable_basename']
+            or '/' in environment['perl_executable_basename']
+            or '\\' in environment['perl_executable_basename']):
+        raise ValueError('Perl capture environment is missing or malformed')
     counts = document['counts']
     tables = document['families']['hydrated_tables']
     table_names = [t['full_name'] for t in tables]
@@ -104,6 +115,44 @@ def rendered_report(document: dict, template: str) -> str:
     return prefix + begin + '\n' + render_counts(document) + '\n' + end + suffix
 
 
+def semantic_document(document: dict) -> dict:
+    # Runtime identity is provenance. Cross-Perl checking is allowed only when
+    # all source fingerprints and all catalog facts still match exactly.
+    return {key: value for key, value in document.items() if key != 'capture_environment'}
+
+
+def validate_destinations(output: Path, report: Path, source: Path, root: Path = ROOT) -> None:
+    output, report, source = output.resolve(), report.resolve(), source.resolve()
+    protected = {(root / 'tools/exiftool-tables/catalog_snapshot.py').resolve(),
+                 (root / 'tools/exiftool-tables/dump_hydrated_catalog.pl').resolve(),
+                 (root / '.exiftool-version').resolve()}
+    if output == report:
+        raise ValueError('snapshot and report destinations alias each other')
+    for destination in (output, report):
+        if destination == source or source in destination.parents or destination in protected:
+            raise ValueError('output or report aliases a source input')
+
+
+def write_staged(documents: list[tuple[Path, str]]) -> None:
+    # Stage both files before changing either destination. Each replace is
+    # atomic; this is deliberately not described as a filesystem transaction.
+    staged = []
+    try:
+        for destination, content in documents:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=destination.parent,
+                                             prefix='.catalog-', delete=False) as handle:
+                temporary = Path(handle.name)
+                staged.append((temporary, destination))
+                handle.write(content)
+            temporary.chmod(destination.stat().st_mode & 0o777 if destination.exists() else 0o644)
+        for temporary, destination in staged:
+            os.replace(temporary, destination)
+    finally:
+        for temporary, _ in staged:
+            temporary.unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--exiftool-dir', type=Path, required=True)
@@ -118,10 +167,7 @@ def main() -> int:
     overridden = instrument.refuse_if_dirty(state, 'catalog_snapshot.py')
     output = args.output.resolve()
     source = args.exiftool_dir.resolve()
-    protected = {Path(__file__).resolve(), (HERE / 'dump_hydrated_catalog.pl').resolve(),
-                 (ROOT / '.exiftool-version').resolve(), args.report.resolve()}
-    if output == source or source in output.parents or output in protected:
-        raise ValueError('output aliases a source input')
+    validate_destinations(output, args.report, source)
     if output.exists() and not (args.check or args.replace):
         raise ValueError('output exists; use --check or --replace')
     print('=== instrument: catalog_snapshot.py ===', file=sys.stderr)
@@ -129,19 +175,23 @@ def main() -> int:
     print(f'scope: native catalog only; no oxidex binary, fixtures or write operations', file=sys.stderr)
     print(f'pin: {(ROOT / ".exiftool-version").read_text().strip()}; source: {source}; perl: {args.perl}', file=sys.stderr)
     document = capture(source, args.perl)
+    print('capture_environment: ' + json.dumps(document['capture_environment'], sort_keys=True), file=sys.stderr)
     rendered = json.dumps(document, sort_keys=True, ensure_ascii=True, separators=(',', ':')) + '\n'
     report_before = args.report.read_text()
     report_after = rendered_report(document, report_before)
     if args.check:
         if report_before != report_after:
             raise ValueError('report counts are stale; regenerate from the pinned source')
-        if output.read_text() != rendered:
+        recorded = json.loads(output.read_text())
+        validate(recorded, document['exiftool_version'])
+        print('recorded_capture_environment: ' + json.dumps(recorded.get('capture_environment'), sort_keys=True), file=sys.stderr)
+        if semantic_document(recorded) != semantic_document(document):
             raise ValueError('catalog snapshot is stale; regenerate from the pinned source')
     else:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(rendered)
+        documents = [(output, rendered)]
         if report_before != report_after:
-            args.report.write_text(report_after)
+            documents.append((args.report, report_after))
+        write_staged(documents)
     print(json.dumps(document['counts'], sort_keys=True))
     return 0
 

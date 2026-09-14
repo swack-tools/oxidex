@@ -23,6 +23,12 @@ read or write every entry.
 Every entry includes its full source table name, raw source key, variant index,
 public spelling, case-insensitive identity, and source groups. The snapshot also
 records the SHA-256 of its producer and every loaded ExifTool source file (168 in this capture). User configuration is disabled, and the wrapper checks that source files do not change during capture.
+The snapshot records its Perl version and executable basename. The interpreter
+is recorded rather than globally pinned for this catalog-only capture. A check
+on another Perl must reproduce every catalog fact and source fingerprint; only
+the recorded interpreter environment may differ, and both environments are
+printed in the check log. This differs from executable-body dumps that require
+a matching canonical Perl/deparser.
 These counts are generated from the pin; they are not constants in the producer.
 
 The native unique-name counter and the distinct-name set differ. In pinned

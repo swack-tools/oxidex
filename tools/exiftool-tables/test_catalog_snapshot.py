@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -22,6 +23,7 @@ def fixture():
                for i, name in enumerate(('Sample', 'SAMPLE'))]
     return dict(schema='oxidex_hydrated_catalog_universe_v1', exiftool_version='13.59',
                 entries=entries, unique_names=['sample'], container_rows_outside_total=[],
+                capture_environment={'perl_version':'v5.38.2','perl_executable_basename':'perl'},
                 counts=dict(catalog_total_tag_entries=2, catalog_unique_tag_names=1,
                             distinct_case_insensitive_entry_names=1, hydrated_tables=1,
                             catalog_container_rows_outside_total=0),
@@ -67,6 +69,44 @@ class CatalogSnapshot(unittest.TestCase):
         self.assertTrue(report.endswith('\nafter\n'))
         with self.assertRaises(ValueError): snapshot.rendered_report(doc, 'no markers')
 
+    def test_both_destinations_protect_inputs_and_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); source = root / 'oracle'; source.mkdir()
+            report = root / 'report.md'; output = root / 'snapshot.json'
+            snapshot.validate_destinations(output, report, source, root)
+            for bad in (source/'source.pm', root/'.exiftool-version', root/'tools/exiftool-tables/dump_hydrated_catalog.pl'):
+                for destinations in ((bad, report), (output, bad)):
+                    with self.subTest(destinations=destinations), self.assertRaisesRegex(ValueError, 'source input'):
+                        snapshot.validate_destinations(*destinations, source, root)
+            link = root / 'linked.md'; link.symlink_to(source/'source.pm')
+            with self.assertRaises(ValueError): snapshot.validate_destinations(output, link, source, root)
+            with self.assertRaises(ValueError): snapshot.validate_destinations(output, output, source, root)
+
+    def test_failed_staging_preserves_both_originals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); first = root/'one.json'; second = root/'two.md'
+            first.write_text('old one'); second.write_text('old two')
+            original = snapshot.tempfile.NamedTemporaryFile
+            calls = 0
+            def fail_second(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 2: raise OSError('cannot stage report')
+                return original(*args, **kwargs)
+            with patch.object(snapshot.tempfile, 'NamedTemporaryFile', side_effect=fail_second):
+                with self.assertRaises(OSError): snapshot.write_staged([(first, 'new one'), (second, 'new two')])
+            self.assertEqual(first.read_text(), 'old one')
+            self.assertEqual(second.read_text(), 'old two')
+            self.assertEqual(sorted(p.name for p in root.iterdir()), ['one.json', 'two.md'])
+
+    def test_cross_perl_comparison_does_not_ignore_catalog_facts(self):
+        original = fixture(); changed = copy.deepcopy(original)
+        original['capture_environment'] = {'perl_version':'v5.38.2'}
+        changed['capture_environment'] = {'perl_version':'v5.40.0'}
+        self.assertEqual(snapshot.semantic_document(original), snapshot.semantic_document(changed))
+        changed['entries'][0]['name'] = 'Different'
+        self.assertNotEqual(snapshot.semantic_document(original), snapshot.semantic_document(changed))
+
     def test_wrong_pin_refuses(self):
         with self.assertRaisesRegex(ValueError, 'version'):
             snapshot.validate(fixture(), '99.99')
@@ -82,7 +122,7 @@ class CatalogSnapshot(unittest.TestCase):
     def test_native_regeneration_matches_committed_snapshot(self):
         actual = snapshot.capture(CANONICAL_LIB, CANONICAL_PERL)
         expected = json.loads(ARTIFACT.read_text())
-        self.assertEqual(actual, expected)
+        self.assertEqual(snapshot.semantic_document(actual), snapshot.semantic_document(expected))
 
     @unittest.skipUnless(NATIVE_READY, 'configured pinned ExifTool is unavailable')
     def test_user_config_is_not_loaded(self):
@@ -96,20 +136,23 @@ class CatalogSnapshot(unittest.TestCase):
             finally:
                 if old is None: os.environ.pop('EXIFTOOL_HOME', None)
                 else: os.environ['EXIFTOOL_HOME'] = old
-            self.assertEqual(result, json.loads(ARTIFACT.read_text()))
+            self.assertEqual(snapshot.semantic_document(result), snapshot.semantic_document(json.loads(ARTIFACT.read_text())))
 
     @unittest.skipUnless(NATIVE_READY, 'configured pinned ExifTool is unavailable')
     def test_stale_snapshot_is_rejected_without_overwriting_it(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / 'stale.json'
-            out.write_text('{}\n')
+            stale = json.loads(ARTIFACT.read_text())
+            stale['entries'][0]['unknown'] = not stale['entries'][0]['unknown']
+            before = json.dumps(stale) + '\n'
+            out.write_text(before)
             env = os.environ.copy(); env['OXIDEX_ALLOW_DIRTY_TREE'] = '1'
             result = subprocess.run([sys.executable, str(HERE/'catalog_snapshot.py'),
                                      '--exiftool-dir', str(CANONICAL_LIB), '--perl', CANONICAL_PERL,
                                      '--output', str(out), '--check'], env=env, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('stale', result.stderr)
-            self.assertEqual(out.read_text(), '{}\n')
+            self.assertEqual(out.read_text(), before)
 
 
 if __name__ == '__main__': unittest.main()

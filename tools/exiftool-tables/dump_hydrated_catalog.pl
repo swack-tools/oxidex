@@ -8,6 +8,7 @@ use warnings;
 use Cwd qw(abs_path);
 use Digest::SHA qw(sha256_hex);
 use File::Spec ();
+use File::Basename qw(basename);
 use FindBin;
 use JSON::PP ();
 
@@ -132,6 +133,10 @@ my $document = {
         kind => 'pinned_build_tag_lookup_hydrated_catalog_v1',
         expected_exiftool_version => $pin,
         sources => \%provenance,
+    },
+    capture_environment => {
+        perl_version => "$^V",
+        perl_executable_basename => basename($^X),
     },
     counts => {
         hydrated_tables => scalar(@tables),
