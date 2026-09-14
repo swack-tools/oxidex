@@ -330,8 +330,10 @@ def predecessor_public_targets(targets: tuple[GeneratedTarget, ...] | None = Non
     if len(frozen_identities) != len(frozen) or not frozen_identities:
         raise ValueError("public migration predecessor cohort is malformed")
     import hashlib
-    rendered_cohort = json.dumps(sorted(frozen, key=lambda item: (item["raw_tag_id"], item["name"], item["group0"], item["write_group"])),
-                                sort_keys=True, separators=(",", ":")).encode()
+    rendered_cohort = json.dumps(
+        sorted(frozen, key=lambda item: (item["raw_tag_id"], item["name"], item["group0"], item["write_group"])),
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")
     if ledger.get("predecessor_cohort_sha256") != hashlib.sha256(rendered_cohort).hexdigest():
         raise ValueError("public migration predecessor cohort integrity differs")
     migrated_current, preserved = [], []

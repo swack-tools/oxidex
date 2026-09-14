@@ -113,6 +113,9 @@ class PublicMigrationLedgerTest(unittest.TestCase):
         tampered = dict(migrated); tampered["predecessor_cohort"] = []; tampered.pop("ledger_sha256"); tampered["ledger_sha256"] = _digest(tampered)
         with self.assertRaisesRegex(RecipeRefused, "cohort"):
             validate_ledger(tampered)
+        malformed = dict(migrated); malformed["predecessor_cohort"] = [{**migrated["predecessor_cohort"][0], "name": ""}]; malformed.pop("ledger_sha256"); malformed["ledger_sha256"] = _digest(malformed)
+        with self.assertRaisesRegex(RecipeRefused, "malformed"):
+            validate_ledger(malformed)
 
     def test_ambiguous_or_unjoined_final_identity_refuses(self):
         with self.assertRaisesRegex(RecipeRefused, "lacks one exact"):

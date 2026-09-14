@@ -251,7 +251,7 @@ def validate_ledger(ledger: Mapping[str, Any], *, allow_legacy_cohort: bool = Fa
             raise RecipeRefused("public migration predecessor cohort is malformed")
         required = {"raw_tag_id", "name", "group0", "write_group"}
         if any(not isinstance(item, dict) or set(item) != required or type(item["raw_tag_id"]) is not int
-               or any(not isinstance(item[key], str) and item[key] for key in required - {"raw_tag_id"}) for item in cohort):
+               or any(not isinstance(item[key], str) or not item[key] for key in required - {"raw_tag_id"}) for item in cohort):
             raise RecipeRefused("public migration predecessor cohort is malformed")
         ordered = sorted(cohort, key=lambda item: (item["raw_tag_id"], item["name"], item["group0"], item["write_group"]))
         if cohort != ordered or len({tuple(item[key] for key in ("raw_tag_id", "name", "group0", "write_group")) for item in cohort}) != len(cohort) or _digest(cohort) != cohort_digest:

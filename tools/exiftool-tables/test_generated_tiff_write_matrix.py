@@ -13,6 +13,7 @@ from generated_tiff_write_matrix import (
     compare_carrier,
     authenticated_ifd1_mandatory_input,
     generated_targets,
+    predecessor_public_targets,
     native_requested_insert_is_noop,
     observed_operation,
     selected_rehearsal_contract,
@@ -21,6 +22,20 @@ from native_write_matrix import parse_tiff
 
 
 class GeneratedTiffComparison(unittest.TestCase):
+    def test_predecessor_cohort_refuses_a_retired_identity(self):
+        target = GeneratedTarget(315, "Artist", "EXIF", "IFD0")
+        cohort = [{"raw_tag_id": 315, "name": "Artist", "group0": "EXIF", "write_group": "IFD0"}]
+        import hashlib
+        digest = hashlib.sha256(json.dumps(cohort, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+        ledger = {"source_identity": "a" * 64, "entries": [{**cohort[0], "state": "current", "history": [{"state": "current"}]}],
+                  "predecessor_cohort": cohort, "predecessor_cohort_sha256": digest}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "migration.json"
+            path.write_text(json.dumps(ledger))
+            self.assertEqual(predecessor_public_targets((target,), path), (target,))
+            with self.assertRaisesRegex(ValueError, "absent from current final recipes"):
+                predecessor_public_targets((), path)
+
     def test_selected_release_contract_requires_pin_native_and_regenerated_ledger_to_agree(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
