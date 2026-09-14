@@ -13,8 +13,8 @@
     "set_byte_order_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
     "set_preferred_body_sha256": "38f17b07e63cced6fe77dfea11a0ff9df13a581a1d7e0c0dc6f9a89f3a963306",
     "set_preferred_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
-    "writer_capture_closure_sha256": "31b7505048d163e716b258da6a680183927291cc40708b74a32619def62944fc",
-    "writer_read_capture_closure_sha256": "44e1835bb0f8ec909831cd79487298b43f71f65132ec8e16e41891e9e5f846ac"
+    "writer_capture_closure_sha256": "89d8caff32ee063df5afd01336ad0d53d0a73d6da1dc08a0b470fe2bc35ae756",
+    "writer_read_capture_closure_sha256": "b43f05195e4a72e4e2043419c27f31f99861c949eb268de619c750ded901a32d"
   },
   "state": "resolved",
   "writer_capture_joined": true

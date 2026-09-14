@@ -34,7 +34,7 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATIONS: &[StaticPublicSetNewValueMigra
         group1: "IFD0",
         write_group: "IFD0",
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
-        semantics_sha256: "f9361f9d8518744083c2af7201df8de6ab1d44e578e34ce9498e5d0a634e86bd",
+        semantics_sha256: "71b0603f4e159c019609e92114c12b1736f89d668f81c2f107f6c6b022dc1111",
         removed_or_unsupported: false,
     },
     StaticPublicSetNewValueMigration {
@@ -47,7 +47,7 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATIONS: &[StaticPublicSetNewValueMigra
         group1: "IFD0",
         write_group: "IFD0",
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
-        semantics_sha256: "6dffed4dc89e6e9a60d6acd646c4f060938671888d61b696940af827184a70b6",
+        semantics_sha256: "145eb22ebe59d3c27b661b0c1df0c6893f9431bfe21e49c401516f40bc5af699",
         removed_or_unsupported: false,
     },
     StaticPublicSetNewValueMigration {
@@ -60,7 +60,7 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATIONS: &[StaticPublicSetNewValueMigra
         group1: "IFD0",
         write_group: "IFD0",
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
-        semantics_sha256: "7136be3ff59ea224a3547d059bec50fc84caa1eb5d3af3a7d5fd5bd0b36b6f53",
+        semantics_sha256: "866457849b68d6b900f5e29785d8e4919647d8ab1f8d97defa2f44cd80eca9ad",
         removed_or_unsupported: false,
     },
     StaticPublicSetNewValueMigration {
@@ -73,7 +73,7 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATIONS: &[StaticPublicSetNewValueMigra
         group1: "IFD0",
         write_group: "IFD0",
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
-        semantics_sha256: "a56a019fc12f25fab0620d7245a229caef2ac4bbfd9000d0cf4a357a90c3827c",
+        semantics_sha256: "261145f88b54c6bebdf0b4315ee5707ee5ac9811c96c8d6a9eb07f882573288a",
         removed_or_unsupported: false,
     },
     StaticPublicSetNewValueMigration {
@@ -86,7 +86,7 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATIONS: &[StaticPublicSetNewValueMigra
         group1: "IFD0",
         write_group: "IFD0",
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
-        semantics_sha256: "dc14db276b3f41d2a2b54d1a66d50942f10477288cf2ab4b0a7aba117d7f1bff",
+        semantics_sha256: "83542216ad03678c4dec109b2f43ccfeecc294925428ff9d3ec7098ca9c55b75",
         removed_or_unsupported: false,
     },
     StaticPublicSetNewValueMigration {
@@ -99,7 +99,7 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATIONS: &[StaticPublicSetNewValueMigra
         group1: "IFD0",
         write_group: "IFD0",
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
-        semantics_sha256: "3bccc99fc83b8ea185f2f40d60831164d498e8d27bc7fefe80c33fb4a6827e3a",
+        semantics_sha256: "78672d93890c8d6bc3c960609d8d693aba2095c4ea22577a768dffc69595c1a6",
         removed_or_unsupported: false,
     },
     StaticPublicSetNewValueMigration {
@@ -112,7 +112,7 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATIONS: &[StaticPublicSetNewValueMigra
         group1: "IFD0",
         write_group: "IFD0",
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
-        semantics_sha256: "7278f033e1a965a53f42c9c2a1ddb9639f2d1e7aa62bdbdc4244172fb6087f3d",
+        semantics_sha256: "23908d69a5b61bfba47c906cc294c863c1560cb6e15592ec4e407a4b79e2e5e8",
         removed_or_unsupported: false,
     },
     StaticPublicSetNewValueMigration {
@@ -125,7 +125,7 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATIONS: &[StaticPublicSetNewValueMigra
         group1: "IFD0",
         write_group: "IFD0",
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
-        semantics_sha256: "a940c61c840761c660963b867be2ca1f731c22c8d3a3b06781aee92634add35a",
+        semantics_sha256: "520fd88bf01a8f537f39d3a25949861366b4a9189a950e446514df7b5621ec8b",
         removed_or_unsupported: false,
     },
     StaticPublicSetNewValueMigration {
@@ -138,7 +138,7 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATIONS: &[StaticPublicSetNewValueMigra
         group1: "IFD0",
         write_group: "IFD0",
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
-        semantics_sha256: "dd9688bc8d3643461543a382c695c7d18486fd073ba54153505f061d9a79228f",
+        semantics_sha256: "5b11cdf0ff756421fd4cd2f2dbe476a178a4a02d024495ef79d51b5ab00215b5",
         removed_or_unsupported: false,
     },
 ];
@@ -151,8 +151,8 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE: StaticPublicSetNewValue
         exif_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
         address_rows_sha256: "4b40a73c2dde50ff9ff94a23d60045f04f564efa4bc2db1cc5060666a268138f",
         address_queries_sha256: "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
-        final_recipes_sha256: "6ed57e6d5b6f830d63490c64823bf08390cb07893e5d2e8092ad8a6196c37ec0",
-        intersection_sha256: "0fd91c4eda8a1b80298cde829944b6a35647d9d12d440d71a80e3d035e557c72",
+        final_recipes_sha256: "58b216fafd2a14b82b0314f25075ee21e72bfda4e9de66f8b73a16000f212596",
+        intersection_sha256: "f210153f354ffe7475455355ae299226e7721f7cc2ac2873c75e2136ff2f3139",
     };
 pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATION_LEDGER_SHA256: &str =
-    "31a8aff07b730b09b6b07ce9248ce9e3dae9b096ccef9d8382454be2c2e9a43c";
+    "2522f2f912ec98134b34b616b2a08921b8b0142cc13caaeff11665d75c848a75";
