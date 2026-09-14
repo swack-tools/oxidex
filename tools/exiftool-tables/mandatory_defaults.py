@@ -63,14 +63,28 @@ class MandatoryRecipe:
     jfif_override: JfifOverride
     selection: MandatorySelection
     encodings: tuple["DefaultEncoding", ...] = ()
+    unencoded_numeric_defaults: tuple["DefaultEncodingOmission", ...] = ()
     write_value_source_sha256: str = ""
 
 @dataclass(frozen=True)
 class DefaultEncoding:
-    """A direct `WriteValue` operand for a generated IFD0 mandatory entry."""
+    """A direct `WriteValue` operand for a generated mandatory entry."""
     tag_id: int
     format_name: str
     tiff_type: int
+
+
+@dataclass(frozen=True)
+class DefaultEncodingOmission:
+    """A numeric lexical default lacking a captured direct scalar entry path.
+
+    The full mandatory map includes directories whose rows are not represented
+    by the captured Exif/Main direct-entry controls.  They remain in the
+    source-derived defaults recipe, but must not acquire a guessed encoder.
+    """
+    directory: str
+    tag_id: int
+    reason: str
 
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping): raise MandatoryMalformed(f"{label} is not an object")
@@ -189,10 +203,22 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
     # The direct new-directory path chooses Format when present, otherwise
     # Writable.  This bounded encoder only implements those two native scalar
     # packing procedures, and rejects every row with another write hook.
-    ids = {item.tag_id for directory in recipe.directories if directory.directory == "IFD0" for item in directory.defaults}
-    ids.update(tag_id for tag_id, _property, _adjustment in recipe.jfif_override.assignments)
+    # Every integer lexical default enters the same `$tagTablePtr->{id}` /
+    # `WriteValue(value, format, 1)` path.  Directory selection chooses the
+    # destination; it does not change the selected table row or its format.
+    # Text operands remain outside this bounded numeric packer.
+    candidates = [(directory.directory, item.tag_id)
+                  for directory in recipe.directories for item in directory.defaults
+                  if item.kind == "Integer"]
+    # JFIF replaces values already assigned through the same direct IFD0 map.
+    # Include those IDs even if a release stops listing their base integer
+    # default, but keep their admission subject to the identical row checks.
+    candidates.extend((recipe.jfif_override.directory, tag_id)
+                      for tag_id, _property, _adjustment in recipe.jfif_override.assignments)
     encodings = []
-    for tag_id in sorted(ids):
+    omissions = []
+    emitted_ids: set[int] = set()
+    for directory, tag_id in sorted(set(candidates), key=lambda item: (item[1], item[0])):
         controls = _mapping(rows.get(str(tag_id)), f"raw_exif_main_row_properties[{tag_id}]")
         props = controls
         def present(name: str) -> Any:
@@ -200,27 +226,55 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
             if item.get("unsupported") is True:
                 raise MandatoryRefused(f"mandatory row {name} is a reference")
             return item.get("value") if item.get("present") is True else None
-        if present("WriteGroup") != "IFD0" or present("Writable") not in {"int16u", "rational64u"}:
-            raise MandatoryRefused("mandatory row Writable/WriteGroup is unsupported")
+        write_group, writable = present("WriteGroup"), present("Writable")
+        # The entry assignment is captured from `$tagTablePtr->{id}`.  A row
+        # explicitly directed to IFD0 is the source representation we can
+        # join to that direct path.  This admits the IFD1 defaults whose Exif
+        # row retains IFD0 as its write destination, but leaves e.g. ExifIFD
+        # defaults with no direct entry identity explicit and unencoded.
+        if write_group != "IFD0":
+            omissions.append(DefaultEncodingOmission(directory, tag_id,
+                                                      "direct_write_group_unrepresented"))
+            continue
+        if writable not in {"int16u", "rational64u"}:
+            omissions.append(DefaultEncodingOmission(directory, tag_id,
+                                                      "direct_writable_unrepresented"))
+            continue
         if _mapping(props.get("Format", {"present": False}), "mandatory row Format").get("present") is True:
-            raise MandatoryRefused("mandatory row Format selection is unsupported")
+            omissions.append(DefaultEncodingOmission(directory, tag_id,
+                                                      "direct_format_selection_unrepresented"))
+            continue
         for name in ("CanCreate", "DelValue", "Deletable", "PrintConvInv", "RawConvInv", "Validate", "ValueConvInv", "WriteAlso", "WriteCheck", "WriteCondition", "WriteHook", "WriteLast", "WritePseudo"):
             if present(name) is not None:
-                raise MandatoryRefused(f"mandatory row {name} changes direct WriteValue semantics")
-        format_name = str(present("Writable"))
-        if format_name not in numeric.formats:
-            raise MandatoryRefused("mandatory numeric WriteValue format is unsupported")
-        type_code = numbers.get(format_name)
-        sizes = registry.get("format_size")
-        if (type(type_code) is not int or not 0 < type_code <= 65535 or not isinstance(sizes, list)
-                or type_code >= len(sizes) or type(sizes[type_code]) is not int
-                or sizes[type_code] != (2 if format_name == "int16u" else 8)
-                or not isinstance(registry.get("format_name"), list)
-                or type_code >= len(registry["format_name"])
-                or registry["format_name"][type_code] != format_name):
-            raise MandatoryRefused("mandatory TIFF format registry entry is unsupported")
-        encodings.append(DefaultEncoding(tag_id, format_name, type_code))
-    return replace(recipe, encodings=tuple(encodings), write_value_source_sha256=str(write_value["source_sha256"]))
+                omissions.append(DefaultEncodingOmission(directory, tag_id,
+                                                          f"direct_{name.lower()}_unrepresented"))
+                break
+        else:
+            format_name = str(writable)
+            if format_name not in numeric.formats:
+                omissions.append(DefaultEncodingOmission(directory, tag_id,
+                                                          "direct_numeric_format_unrepresented"))
+                continue
+            type_code = numbers.get(format_name)
+            sizes = registry.get("format_size")
+            if (type(type_code) is not int or not 0 < type_code <= 65535 or not isinstance(sizes, list)
+                    or type_code >= len(sizes) or type(sizes[type_code]) is not int
+                    or sizes[type_code] != (2 if format_name == "int16u" else 8)
+                    or not isinstance(registry.get("format_name"), list)
+                    or type_code >= len(registry["format_name"])
+                    or registry["format_name"][type_code] != format_name):
+                raise MandatoryRefused("mandatory TIFF format registry entry is unsupported")
+            if tag_id not in emitted_ids:
+                encodings.append(DefaultEncoding(tag_id, format_name, type_code))
+                emitted_ids.add(tag_id)
+            continue
+        # The `for` loop found an unmodeled WriteValue-affecting property.
+        # It is deliberately not a fatal error for unrelated directories, but
+        # remains in the serialized recipe/report as an explicit omission.
+        continue
+    return replace(recipe, encodings=tuple(encodings),
+                   unencoded_numeric_defaults=tuple(omissions),
+                   write_value_source_sha256=str(write_value["source_sha256"]))
 
 
 def recipe_json(recipe: MandatoryRecipe) -> dict[str, Any]:

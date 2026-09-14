@@ -14,7 +14,7 @@ automatic upgrade path is not finished.
 | Source facts and shared writer helpers | PRs #761–#766 merged; #766 is `82f97ae6`, with all five required checks passing at `d505d179` | Integrate and validate the next complete writer operation |
 | Internal generated TIFF/JPEG scalar writes | All nine final recipes passed 432/432 native file comparisons under `generated_tiff_write_matrix.py` at the September 14 frozen source checkpoint | Public operations, new EXIF blocks and additional native-writable rule classes |
 | Full-library final writer compilation | Official 44-artifact regeneration passed; all 153 decoded reader modules identical to control; Python, Rust workspace and Clippy passed | Expand unsupported writer semantics without changing reader behavior |
-| Public generated writing and manual lookup removal | Nine scalar identities use generated descriptors; three manual descriptors and one reverse-name exception removed in `58c0bdcf`. Existing, fresh and mixed public gates passed in the named run below | Repair native mandatory-default batch instrument, complete expanded regeneration, review and merge |
+| Public generated writing and manual lookup removal | Nine scalar identities use generated descriptors; three manual descriptors and one reverse-name exception removed in `58c0bdcf`. Existing, fresh and mixed public gates passed in the named run below | Close 90 IFD1 directory gaps and 72 resolution override/deletion failures; complete expanded regeneration, review and merge |
 | Release upgrades | Random pair 11.78/12.64 selected and sources verified | Generate/build both versions and test each against its own native reader and writer |
 
 The first September 14 regeneration revealed that creating the native writer
@@ -79,8 +79,8 @@ instrument drivers ignored), 432 existing-file public cases, 135 mixed batches,
 workspace all-feature Clippy. The 135 mixed cases include intentional atomic
 refusals, so they are not all successful native writes. The combined gate was
 not green: the fresh mandatory-default batch instrument stopped while checking
-a native operand before comparing generated output. Its repair and rerun remain
-required before this migration is ready to merge.
+a native operand before comparing generated output. The subsequent repaired instrument ran to completion and exposed the public
+writer gaps described below; this migration is not ready to merge.
 
 The repaired `mandatory-batch-gate-r3` ran all 135 native-backed rows and
 passed 45. The other 90 expose missing IFD1 output in mixed public batches:
@@ -88,18 +88,62 @@ OxiDex reports success, but its child directories differ from native ExifTool.
 This is a real remaining gap, not an accepted baseline. Static tracing and a
 separate baseline proof must determine whether it predates the migration.
 The test now also includes 72 IFD0 JFIF-adjusted override/deletion rows, for
-207 declared rows; that expanded run is pending. Candidate selection depends
-on source defaults and native operand acceptance, never on OxiDex passing.
+207 declared rows. Candidate selection depends on source defaults and native
+operand acceptance, never on OxiDex passing.
+
+`ifd1-carrier-gate-r1` at `4874cf2d` executed all 207 rows: 45 passed,
+90 retained the IFD1 child-directory mismatch, 36 IFD0 resolution overrides
+failed public Integer-to-Rational validation, and 36 IFD0 resolution deletions
+were rejected by the legacy writer. All native operations were accepted. The
+new generic IFD1 entry carrier is implemented and structurally tested in both
+byte orders, but public generated directory and numeric admission are still
+needed. Adding a carrier alone did not close these failures.
+
+The same gate passed 4,866 library tests (four explicit drivers ignored),
+432 existing-file public comparisons, 135 mixed cases including intentional
+refusals, 270 fresh cases, 216 JFIF timing cases, 51 instrument tests and
+workspace all-feature Clippy. Overall gate status remains failed because of
+the expanded batch results.
 
 After collision handling was strengthened, the same source build passed
 4,863 library tests (four ignored), 32 instrument tests with canonical native
 environment, and workspace all-feature Clippy. Ambiguous current physical or
 public-name identities now refuse in both generator and runtime composition.
 
-Official 55-artifact regeneration is running in an isolated checkout at
-`8f3266f4`, under the shared lock. Its result and reader projection review are
-pending. This does not certify the runtime or the broader version objective. Broader writer rules and the persisted
-11.78/12.64 read/write upgrade rehearsal remain open. No new overall
+Official `full-55-regen-r1` at `8f3266f4` failed during source admission.
+Loading XMP changes B::Deparse spelling of one `FindTagInfo` call; the compiler
+now accepts exactly the two verified full-body spellings, while other changes
+remain refusals. The failed run and its 13 changed generated artifacts are
+preserved. The first retry stopped before regeneration because its controller supplied
+the checkout root where native tests require the library directory. After
+correcting that environment value, `full-55-regen-r3` at `89ce5020` passed
+32 canonical native/source-compiler tests, then failed in the independent
+SetNewValue probe: `FindTagInfo identity differs from supplied dump capture`.
+The compiler accepts both observed deparse spellings, but the native probe
+still needs to replay the recorded load context. The probe now replays and verifies the entire recorded selected-library
+module closure before deparsing. The focused saved-capture path passed from
+address input through native lookup and Rust codegen: 191 rows, 561 query
+names, 1,261 lookup candidates and 179 authenticated modules. Six native and
+21 portable tests passed. Another complete regeneration is still required.
+Full55, reader projection review and compiled parity remain pending.
+
+Source-derived numeric mandatory encoding now includes representable IFD1
+defaults. Unrepresented numeric defaults, including ExifIFD ColorSpace, remain
+explicit omissions; they do not get a guessed encoder. Public numeric writing
+is a separate remaining task. `mandatory-encoder-gate-r1` at `89ce5020`
+passed all library tests and Clippy. The two generated mandatory outputs
+from the completed producer stage of the failed full run were integrated
+separately. `mandatory-native-acceptance-r2` passed 17 native-backed tests,
+including all four source-derived IFD1 defaults in both byte orders (eight
+exact native/Rust byte comparisons), and workspace Clippy. This selective recovery does not turn the failed full run green.
+
+The separate version-rehearsal integration has historical raw-JFIF profiles
+for 11.78 and 12.64: eight native tests include 44 raw-value/endian cases;
+13.59 generated output remained byte-identical. This is one compiler component,
+not a complete release rehearsal. The adapter now builds and records both CLI
+and library-test executables; implementing its actual write stage is in
+progress. Broader writer rules and the persisted 11.78/12.64 read/write upgrade
+rehearsal remain open. No new overall
 generated-output percentage is claimed by this work.
 
 Global generated-source validation failure is now terminal for the retained

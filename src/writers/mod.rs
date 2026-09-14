@@ -21,15 +21,15 @@ pub(crate) mod generated_convinv_rules;
 pub(crate) mod generated_sanitize;
 pub(crate) mod generated_sanitize_rules;
 // Source-derived new-directory defaults remain inactive until public creation routing lands.
-pub(crate) mod generated_mandatory_defaults;
 pub(crate) mod generated_fresh_jpeg_byte_order;
+pub(crate) mod generated_mandatory_defaults;
 // Raw source properties are separate from displayed metadata values.
 pub(crate) mod generated_raw_jfif;
-pub(crate) mod raw_segment_properties;
 #[allow(dead_code)]
 pub(crate) mod generated_scalar;
 pub(crate) mod generated_scalar_rules;
 pub(crate) mod mandatory_defaults_runtime;
+pub(crate) mod raw_segment_properties;
 // Table validation composition remains inactive until the public write route lands.
 pub(crate) mod generated_checkexif;
 pub(crate) mod generated_checkexif_rules;

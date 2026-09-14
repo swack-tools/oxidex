@@ -146,8 +146,7 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE: StaticPublicSetNewValue
     StaticPublicSetNewValueMigrationCapture {
         exiftool_version: "13.59",
         main_source_sha256: "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
-        write_exif_source_sha256:
-            "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        write_exif_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
         writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
         exif_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
         address_rows_sha256: "4b40a73c2dde50ff9ff94a23d60045f04f564efa4bc2db1cc5060666a268138f",

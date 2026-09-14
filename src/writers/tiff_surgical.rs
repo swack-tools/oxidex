@@ -1257,7 +1257,7 @@ mod tests {
         let valid = raw_string_edit(IfdKind::Ifd0, 0x013c, b"ok\0");
         assert!(apply_entry_edits(&file, &[valid.clone(), valid]).is_err());
         for edit in [
-            raw_string_edit(IfdKind::Ifd1, 0x013c, b"no\0"),
+            raw_string_edit(IfdKind::Interop, 0x013c, b"no\0"),
             raw_string_edit(IfdKind::Ifd0, EXIF_IFD_POINTER, b"no\0"),
             ScopedEntryEdit {
                 ifd: IfdKind::Ifd0,

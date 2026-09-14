@@ -4,7 +4,8 @@
 //! encoded bytes in the file's byte order. This layer never consults tag names
 //! or the tag registry. It copies changed directories to the end of the file,
 //! retaining every untouched record, value offset and next-directory pointer.
-//! Production writers do not call this primitive yet.
+//! Public generated writers use this primitive for their admitted directories.
+//! IFD1 carrier support awaits source-derived public operation admission.
 
 use super::*;
 use crate::parsers::common::exif_types::ExifType;
@@ -36,11 +37,14 @@ fn invalid(message: &str) -> ExifToolError {
 pub(crate) fn apply_entry_edits(file: &[u8], edits: &[ScopedEntryEdit]) -> Result<Vec<u8>> {
     let scan = scan_tiff(file)?;
     let bo = scan.byte_order;
-    validate_directory_layout(file, &scan)?;
+    let directories = validate_directory_layout(file, &scan)?;
     checked_append_bounds(file.len(), 0)?;
     for (index, edit) in edits.iter().enumerate() {
-        if !matches!(edit.ifd, IfdKind::Ifd0 | IfdKind::ExifIfd | IfdKind::Gps) {
-            return Err(invalid("Raw edits require IFD0, ExifIFD or GPS"));
+        if !matches!(
+            edit.ifd,
+            IfdKind::Ifd0 | IfdKind::ExifIfd | IfdKind::Gps | IfdKind::Ifd1
+        ) {
+            return Err(invalid("Raw edits require IFD0, ExifIFD, GPS or IFD1"));
         }
         if matches!(edit.tag_id, EXIF_IFD_POINTER | GPS_IFD_POINTER) {
             return Err(invalid("Directory links are managed by the carrier"));
@@ -84,7 +88,7 @@ pub(crate) fn apply_entry_edits(file: &[u8], edits: &[ScopedEntryEdit]) -> Resul
         if changes.is_empty() {
             continue;
         }
-        if let Some(new_at) = rewrite_directory(&mut out, offset, &changes, bo)? {
+        if let Some(new_at) = rewrite_directory(&mut out, offset, &changes, bo, None)? {
             let new_at = u32::try_from(new_at).map_err(too_big)?;
             let mut encoded = vec![0; 4];
             put_u32(&mut encoded, new_at, bo);
@@ -99,7 +103,22 @@ pub(crate) fn apply_entry_edits(file: &[u8], edits: &[ScopedEntryEdit]) -> Resul
             });
         }
     }
-    if let Some(new_at) = rewrite_directory(&mut out, Some(scan.ifd0_offset), &root_edits, bo)? {
+    let ifd1_changes: Vec<_> = edits
+        .iter()
+        .filter(|edit| edit.ifd == IfdKind::Ifd1)
+        .cloned()
+        .collect();
+    let ifd1_next = if ifd1_changes.is_empty() {
+        None
+    } else {
+        rewrite_directory(&mut out, directories.ifd1_offset, &ifd1_changes, bo, None)?
+            .map(|offset| u32::try_from(offset).map_err(too_big))
+            .transpose()?
+    };
+
+    if let Some(new_at) =
+        rewrite_directory(&mut out, Some(scan.ifd0_offset), &root_edits, bo, ifd1_next)?
+    {
         let new_at = u32::try_from(new_at).map_err(too_big)?;
         put_u32(&mut out[4..8], new_at, bo);
     }
@@ -108,10 +127,20 @@ pub(crate) fn apply_entry_edits(file: &[u8], edits: &[ScopedEntryEdit]) -> Resul
 
 /// Validate every directory this primitive may rewrite, including children
 /// without edits. A present link with offset zero is malformed, not absent.
-pub(super) fn validate_directory_layout(file: &[u8], scan: &TiffScan) -> Result<()> {
+pub(super) struct DirectoryLayout {
+    /// First directory reached by IFD0's next-IFD link. Any later directory
+    /// in that chain is preserved by copying the first IFD1 record's link.
+    ifd1_offset: Option<usize>,
+}
+
+/// Validate every directory link this carrier retains or may repoint. This is
+/// intentionally structural: tag identity and serialization belong to the
+/// caller's source-derived operation, while malformed aliases or a cycle make
+/// every scoped mutation unsafe.
+pub(super) fn validate_directory_layout(file: &[u8], scan: &TiffScan) -> Result<DirectoryLayout> {
     let bo = scan.byte_order;
     let mut spans = vec![directory_span(file, scan.ifd0_offset, bo)?];
-    let (records, _) = directory_records(file, scan.ifd0_offset, bo)?;
+    let (records, next) = directory_records(file, scan.ifd0_offset, bo)?;
     for pointer_tag in [EXIF_IFD_POINTER, GPS_IFD_POINTER] {
         let mut links = records
             .iter()
@@ -125,7 +154,31 @@ pub(super) fn validate_directory_layout(file: &[u8], scan: &TiffScan) -> Result<
         {
             return Err(invalid("Ambiguous or malformed subdirectory link"));
         }
-        let span = directory_span(file, read_u32(&record[8..12], bo) as usize, bo)?;
+        let child_at = read_u32(&record[8..12], bo) as usize;
+        add_directory_chain(file, child_at, bo, &mut spans)?;
+    }
+    let ifd1_offset = nonzero_offset(&next, bo);
+    if let Some(ifd1_at) = ifd1_offset {
+        add_directory_chain(file, ifd1_at, bo, &mut spans)?;
+    }
+    Ok(DirectoryLayout { ifd1_offset })
+}
+
+fn nonzero_offset(next: &[u8; 4], bo: ByteOrder) -> Option<usize> {
+    let offset = read_u32(next, bo) as usize;
+    (offset != 0).then_some(offset)
+}
+
+/// Add a complete next-IFD chain. A repeated directory is necessarily an
+/// alias or cycle, and any partial range is rejected before an output exists.
+fn add_directory_chain(
+    file: &[u8],
+    mut at: usize,
+    bo: ByteOrder,
+    spans: &mut Vec<std::ops::Range<usize>>,
+) -> Result<()> {
+    loop {
+        let span = directory_span(file, at, bo)?;
         if spans
             .iter()
             .any(|prior| span.start < prior.end && prior.start < span.end)
@@ -133,8 +186,12 @@ pub(super) fn validate_directory_layout(file: &[u8], scan: &TiffScan) -> Result<
             return Err(invalid("IFD record spans alias or overlap"));
         }
         spans.push(span);
+        let (_, next) = directory_records(file, at, bo)?;
+        let Some(next_at) = nonzero_offset(&next, bo) else {
+            return Ok(());
+        };
+        at = next_at;
     }
-    Ok(())
 }
 
 fn directory_span(file: &[u8], at: usize, bo: ByteOrder) -> Result<std::ops::Range<usize>> {
@@ -195,15 +252,20 @@ fn rewrite_directory(
     at: Option<usize>,
     changes: &[ScopedEntryEdit],
     bo: ByteOrder,
+    next_override: Option<u32>,
 ) -> Result<Option<usize>> {
-    if changes.is_empty() {
+    if changes.is_empty() && next_override.is_none() {
         return Ok(None);
     }
-    let (mut records, next) = match at {
+    let (mut records, original_next) = match at {
         Some(at) => directory_records(out, at, bo)?,
         None => (Vec::new(), [0; 4]),
     };
-    let mut changed = false;
+    let mut next = original_next;
+    if let Some(next_at) = next_override {
+        put_u32(&mut next, next_at, bo);
+    }
+    let mut changed = next != original_next;
     for edit in changes {
         let matching: Vec<_> = records
             .iter()
@@ -310,6 +372,7 @@ mod tests {
                 "IFD0" => IfdKind::Ifd0,
                 "ExifIFD" => IfdKind::ExifIfd,
                 "GPS" => IfdKind::Gps,
+                "IFD1" => IfdKind::Ifd1,
                 _ => return Err("unsupported scope".into()),
             };
             let mutation = match request.op.as_deref().unwrap_or("set") {
@@ -401,5 +464,399 @@ mod tests {
         assert!(checked_append_bounds(limit, 0).is_err());
         assert!(checked_append_bounds(usize::MAX, 0).is_err());
         assert!(checked_append_bounds(usize::MAX - 1, 2).is_err());
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct PhysicalEntry {
+        tag_id: u16,
+        field_type: u16,
+        count: u32,
+        storage: [u8; 4],
+    }
+
+    struct Ifd1Fixture {
+        file: Vec<u8>,
+        root_next_at: usize,
+        original_ifd1_at: Option<usize>,
+        downstream_at: Option<usize>,
+        image: std::ops::Range<usize>,
+        thumbnail: std::ops::Range<usize>,
+    }
+
+    // These small test-only readers deliberately do not call scan_tiff or the
+    // carrier's directory helpers. They inspect the returned TIFF bytes as a
+    // consumer of the directory wire format would.
+    fn test_u16(bytes: &[u8], bo: ByteOrder) -> u16 {
+        match bo {
+            ByteOrder::LittleEndian => u16::from_le_bytes(bytes.try_into().unwrap()),
+            ByteOrder::BigEndian => u16::from_be_bytes(bytes.try_into().unwrap()),
+        }
+    }
+
+    fn test_u32(bytes: &[u8], bo: ByteOrder) -> u32 {
+        match bo {
+            ByteOrder::LittleEndian => u32::from_le_bytes(bytes.try_into().unwrap()),
+            ByteOrder::BigEndian => u32::from_be_bytes(bytes.try_into().unwrap()),
+        }
+    }
+
+    fn push_test_u16(out: &mut Vec<u8>, value: u16, bo: ByteOrder) {
+        out.extend_from_slice(&match bo {
+            ByteOrder::LittleEndian => value.to_le_bytes(),
+            ByteOrder::BigEndian => value.to_be_bytes(),
+        });
+    }
+
+    fn push_test_u32(out: &mut Vec<u8>, value: u32, bo: ByteOrder) {
+        out.extend_from_slice(&match bo {
+            ByteOrder::LittleEndian => value.to_le_bytes(),
+            ByteOrder::BigEndian => value.to_be_bytes(),
+        });
+    }
+
+    fn write_test_u32(out: &mut [u8], value: u32, bo: ByteOrder) {
+        out.copy_from_slice(&match bo {
+            ByteOrder::LittleEndian => value.to_le_bytes(),
+            ByteOrder::BigEndian => value.to_be_bytes(),
+        });
+    }
+
+    fn append_test_payload(out: &mut Vec<u8>, payload: &[u8]) -> usize {
+        if out.len() % 2 == 1 {
+            out.push(0);
+        }
+        let at = out.len();
+        out.extend_from_slice(payload);
+        at
+    }
+
+    fn append_test_directory(
+        out: &mut Vec<u8>,
+        entries: &[PhysicalEntry],
+        next: u32,
+        bo: ByteOrder,
+    ) -> usize {
+        if out.len() % 2 == 1 {
+            out.push(0);
+        }
+        let at = out.len();
+        push_test_u16(out, entries.len() as u16, bo);
+        for entry in entries {
+            push_test_u16(out, entry.tag_id, bo);
+            push_test_u16(out, entry.field_type, bo);
+            push_test_u32(out, entry.count, bo);
+            out.extend_from_slice(&entry.storage);
+        }
+        push_test_u32(out, next, bo);
+        at
+    }
+
+    fn read_test_directory(file: &[u8], at: usize, bo: ByteOrder) -> (Vec<PhysicalEntry>, usize) {
+        let count = test_u16(&file[at..at + 2], bo) as usize;
+        let mut entries = Vec::with_capacity(count);
+        for index in 0..count {
+            let record = at + 2 + index * 12;
+            entries.push(PhysicalEntry {
+                tag_id: test_u16(&file[record..record + 2], bo),
+                field_type: test_u16(&file[record + 2..record + 4], bo),
+                count: test_u32(&file[record + 4..record + 8], bo),
+                storage: file[record + 8..record + 12].try_into().unwrap(),
+            });
+        }
+        let next_at = at + 2 + count * 12;
+        (entries, test_u32(&file[next_at..next_at + 4], bo) as usize)
+    }
+
+    fn test_entry_value(file: &[u8], entry: &PhysicalEntry, bo: ByteOrder) -> Vec<u8> {
+        let width = match entry.field_type {
+            2 => 1,
+            3 => 2,
+            4 => 4,
+            5 => 8,
+            _ => panic!("fixture uses only ASCII, SHORT, LONG and RATIONAL"),
+        };
+        let size = width * entry.count as usize;
+        if size <= 4 {
+            entry.storage[..size].to_vec()
+        } else {
+            let at = test_u32(&entry.storage, bo) as usize;
+            file[at..at + size].to_vec()
+        }
+    }
+
+    fn entry(entries: &[PhysicalEntry], tag_id: u16) -> &PhysicalEntry {
+        entries
+            .iter()
+            .find(|entry| entry.tag_id == tag_id)
+            .unwrap_or_else(|| panic!("missing fixture tag {tag_id:#06x}"))
+    }
+
+    fn raw_ascii(tag_id: u16, bytes: &[u8]) -> ScopedEntryEdit {
+        ScopedEntryEdit {
+            ifd: IfdKind::Ifd1,
+            tag_id,
+            mutation: EntryMutation::Set {
+                field_type: 2,
+                count: bytes.len() as u32,
+                bytes: bytes.to_vec(),
+            },
+        }
+    }
+
+    fn ifd1_fixture(bo: ByteOrder, with_ifd1: bool) -> Ifd1Fixture {
+        let mut file = Vec::new();
+        file.extend_from_slice(match bo {
+            ByteOrder::LittleEndian => b"II",
+            ByteOrder::BigEndian => b"MM",
+        });
+        push_test_u16(&mut file, 42, bo);
+        push_test_u32(&mut file, 8, bo);
+        push_test_u16(&mut file, 3, bo);
+        // Make ASCII@62, StripOffsets LONG=80, Orientation SHORT inline.
+        for entry in [
+            PhysicalEntry {
+                tag_id: 0x010f,
+                field_type: 2,
+                count: 6,
+                storage: match bo {
+                    ByteOrder::LittleEndian => 62u32.to_le_bytes(),
+                    ByteOrder::BigEndian => 62u32.to_be_bytes(),
+                },
+            },
+            PhysicalEntry {
+                tag_id: 0x0111,
+                field_type: 4,
+                count: 1,
+                storage: match bo {
+                    ByteOrder::LittleEndian => 80u32.to_le_bytes(),
+                    ByteOrder::BigEndian => 80u32.to_be_bytes(),
+                },
+            },
+            PhysicalEntry {
+                tag_id: 0x0112,
+                field_type: 3,
+                count: 1,
+                storage: match bo {
+                    ByteOrder::LittleEndian => 1u32.to_le_bytes(),
+                    ByteOrder::BigEndian => 1u32.to_be_bytes(),
+                },
+            },
+        ] {
+            push_test_u16(&mut file, entry.tag_id, bo);
+            push_test_u16(&mut file, entry.field_type, bo);
+            push_test_u32(&mut file, entry.count, bo);
+            file.extend_from_slice(&entry.storage);
+        }
+        let root_next_at = file.len();
+        push_test_u32(&mut file, 0, bo);
+        file.resize(62, 0);
+        file.extend_from_slice(b"Canon\0");
+        file.resize(80, 0);
+        let image = file.len()..file.len() + 8;
+        file.extend_from_slice(&[0xa5; 8]);
+        let thumbnail = file.len()..file.len() + 6;
+        file.extend_from_slice(&[0x5a; 6]);
+        if !with_ifd1 {
+            return Ifd1Fixture {
+                file,
+                root_next_at,
+                original_ifd1_at: None,
+                downstream_at: None,
+                image,
+                thumbnail,
+            };
+        }
+
+        let artist_at = append_test_payload(&mut file, b"old!!\0");
+        let description_at = append_test_payload(&mut file, b"desc!\0");
+        let downstream_at = append_test_directory(
+            &mut file,
+            &[PhysicalEntry {
+                tag_id: 0x0201,
+                field_type: 4,
+                count: 1,
+                storage: match bo {
+                    ByteOrder::LittleEndian => 80u32.to_le_bytes(),
+                    ByteOrder::BigEndian => 80u32.to_be_bytes(),
+                },
+            }],
+            0,
+            bo,
+        );
+        let original_ifd1_at = append_test_directory(
+            &mut file,
+            &[
+                PhysicalEntry {
+                    tag_id: 0x010e,
+                    field_type: 2,
+                    count: 6,
+                    storage: match bo {
+                        ByteOrder::LittleEndian => (description_at as u32).to_le_bytes(),
+                        ByteOrder::BigEndian => (description_at as u32).to_be_bytes(),
+                    },
+                },
+                PhysicalEntry {
+                    tag_id: 0x013b,
+                    field_type: 2,
+                    count: 6,
+                    storage: match bo {
+                        ByteOrder::LittleEndian => (artist_at as u32).to_le_bytes(),
+                        ByteOrder::BigEndian => (artist_at as u32).to_be_bytes(),
+                    },
+                },
+                PhysicalEntry {
+                    tag_id: 0x0201,
+                    field_type: 4,
+                    count: 1,
+                    storage: match bo {
+                        ByteOrder::LittleEndian => (thumbnail.start as u32).to_le_bytes(),
+                        ByteOrder::BigEndian => (thumbnail.start as u32).to_be_bytes(),
+                    },
+                },
+                PhysicalEntry {
+                    tag_id: 0x0202,
+                    field_type: 4,
+                    count: 1,
+                    storage: match bo {
+                        ByteOrder::LittleEndian => (thumbnail.len() as u32).to_le_bytes(),
+                        ByteOrder::BigEndian => (thumbnail.len() as u32).to_be_bytes(),
+                    },
+                },
+            ],
+            downstream_at as u32,
+            bo,
+        );
+        write_test_u32(
+            &mut file[root_next_at..root_next_at + 4],
+            original_ifd1_at as u32,
+            bo,
+        );
+        Ifd1Fixture {
+            file,
+            root_next_at,
+            original_ifd1_at: Some(original_ifd1_at),
+            downstream_at: Some(downstream_at),
+            image,
+            thumbnail,
+        }
+    }
+
+    #[test]
+    fn raw_scoped_ifd1_creation_repoints_a_copied_root_and_preserves_image_bytes() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let fixture = ifd1_fixture(bo, false);
+            let (original_root, original_next) = read_test_directory(&fixture.file, 8, bo);
+            assert_eq!(original_next, 0);
+            let out = apply_entry_edits(&fixture.file, &[raw_ascii(0x013b, b"created\0")]).unwrap();
+            let root_at = test_u32(&out[4..8], bo) as usize;
+            assert!(root_at >= fixture.file.len());
+            let (root, ifd1_at) = read_test_directory(&out, root_at, bo);
+            assert_eq!(root, original_root);
+            assert!(ifd1_at >= fixture.file.len());
+            let (ifd1, next) = read_test_directory(&out, ifd1_at, bo);
+            assert_eq!(next, 0);
+            assert_eq!(ifd1.len(), 1);
+            assert_eq!(
+                test_entry_value(&out, entry(&ifd1, 0x013b), bo),
+                b"created\0"
+            );
+            assert_eq!(&out[8..fixture.file.len()], &fixture.file[8..]);
+            assert_eq!(&out[fixture.image], &[0xa5; 8]);
+            assert_eq!(&out[fixture.thumbnail], &[0x5a; 6]);
+        }
+    }
+
+    #[test]
+    fn raw_scoped_ifd1_update_delete_and_add_keep_downstream_chain_byte_identical() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let fixture = ifd1_fixture(bo, true);
+            let downstream_at = fixture.downstream_at.unwrap();
+            let rational = match bo {
+                ByteOrder::LittleEndian => [72u32.to_le_bytes(), 1u32.to_le_bytes()].concat(),
+                ByteOrder::BigEndian => [72u32.to_be_bytes(), 1u32.to_be_bytes()].concat(),
+            };
+            let out = apply_entry_edits(
+                &fixture.file,
+                &[
+                    raw_ascii(0x013b, b"replacement\0"),
+                    ScopedEntryEdit {
+                        ifd: IfdKind::Ifd1,
+                        tag_id: 0x010e,
+                        mutation: EntryMutation::Delete,
+                    },
+                    ScopedEntryEdit {
+                        ifd: IfdKind::Ifd1,
+                        tag_id: 0x011a,
+                        mutation: EntryMutation::Set {
+                            field_type: 5,
+                            count: 1,
+                            bytes: rational.clone(),
+                        },
+                    },
+                ],
+            )
+            .unwrap();
+            let root_at = test_u32(&out[4..8], bo) as usize;
+            let (_, new_ifd1_at) = read_test_directory(&out, root_at, bo);
+            assert!(root_at >= fixture.file.len());
+            assert!(new_ifd1_at >= fixture.file.len());
+            let (ifd1, next) = read_test_directory(&out, new_ifd1_at, bo);
+            assert_eq!(next, downstream_at);
+            assert!(!ifd1.iter().any(|entry| entry.tag_id == 0x010e));
+            assert_eq!(
+                test_entry_value(&out, entry(&ifd1, 0x013b), bo),
+                b"replacement\0"
+            );
+            assert_eq!(test_entry_value(&out, entry(&ifd1, 0x011a), bo), rational);
+            let (downstream, downstream_next) = read_test_directory(&out, downstream_at, bo);
+            assert_eq!(downstream_next, 0);
+            assert_eq!(downstream.len(), 1);
+            assert_eq!(downstream[0].tag_id, 0x0201);
+            assert_eq!(&out[8..fixture.file.len()], &fixture.file[8..]);
+            assert_eq!(&out[fixture.image], &[0xa5; 8]);
+            assert_eq!(&out[fixture.thumbnail], &[0x5a; 6]);
+        }
+    }
+
+    #[test]
+    fn raw_scoped_ifd1_rejects_malformed_overlapping_and_cyclic_links_atomically() {
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let fixture = ifd1_fixture(bo, true);
+            let ifd1_at = fixture.original_ifd1_at.unwrap();
+            let (original_ifd1_entries, _) = read_test_directory(&fixture.file, ifd1_at, bo);
+            let ifd1_next_at = ifd1_at + 2 + original_ifd1_entries.len() * 12;
+            let mut cases = Vec::new();
+            for (label, offset) in [
+                ("root next inside header", 4),
+                ("root next aliases root", 8),
+                ("root next overlaps an IFD", ifd1_at + 2),
+                ("root next is truncated", fixture.file.len() - 2),
+            ] {
+                let mut file = fixture.file.clone();
+                write_test_u32(
+                    &mut file[fixture.root_next_at..fixture.root_next_at + 4],
+                    offset as u32,
+                    bo,
+                );
+                cases.push((label, file));
+            }
+            for (label, offset) in [
+                ("IFD1 next is a cycle", ifd1_at),
+                ("IFD1 next aliases root", 8),
+                ("IFD1 next overlaps itself", ifd1_at + 2),
+            ] {
+                let mut file = fixture.file.clone();
+                write_test_u32(&mut file[ifd1_next_at..ifd1_next_at + 4], offset as u32, bo);
+                cases.push((label, file));
+            }
+            for (label, file) in cases {
+                let before = file.clone();
+                assert!(
+                    apply_entry_edits(&file, &[raw_ascii(0x013b, b"safe\0")]).is_err(),
+                    "must reject {label} in {bo:?}"
+                );
+                assert_eq!(file, before, "failed {label} must leave input untouched");
+            }
+        }
     }
 }
