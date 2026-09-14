@@ -88,6 +88,11 @@ const JFIF_ASSIGNMENTS: &[JfifAssignment] = &[
 ];
 const ENCODINGS: &[DefaultEncoding] = &[
     DefaultEncoding {
+        tag_id: 0x0103,
+        format_name: "int16u",
+        tiff_type: 3,
+    },
+    DefaultEncoding {
         tag_id: 0x011a,
         format_name: "rational64u",
         tiff_type: 5,

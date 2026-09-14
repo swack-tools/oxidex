@@ -197,6 +197,60 @@ class MandatoryNumericEncodingTests(unittest.TestCase):
                         tuple(sorted(fact['loaded_exiftool_closure'].items()))))
 
     @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
+    def test_ifd1_generated_defaults_match_native_bytes_in_both_orders(self):
+        from mandatory_defaults_codegen import generate
+        assert NATIVE is not None
+        fact = capture(NATIVE[1])
+        rendered, report = generate(fact, self._document(fact), str(NATIVE[0]))
+        directory = next(row for row in report['recipe']['directories'] if row['directory'] == 'IFD1')
+        encodings = {row['tag_id']: row for row in report['recipe']['encodings']}
+        operands = [{**encodings[row['tag_id']], 'value': row['value']}
+                    for row in directory['defaults']]
+        self.assertTrue(operands, 'native directory must exercise actual defaults')
+        env = {key: value for key, value in os.environ.items()
+               if key not in {'PERL5LIB', 'PERLLIB', 'PERL5OPT'}}
+        program = r"""
+require Image::ExifTool; require q(Image/ExifTool/Writer.pl); require JSON::PP;
+my $rows = JSON::PP::decode_json(do { local $/; <STDIN> });
+for my $order ('MM', 'II') {
+    Image::ExifTool::SetByteOrder($order);
+    for my $row (@$rows) {
+        my $bytes = Image::ExifTool::WriteValue($row->{value}, $row->{format_name}, 1);
+        die 'native default was not encoded' unless defined $bytes;
+        printf "%s:%04x:%d=%s\n", $order, $row->{tag_id}, $row->{tiff_type}, unpack('H*', $bytes);
+    }
+}
+"""
+        expected = subprocess.run([str(NATIVE[0]), '-I' + str(NATIVE[1]), '-e', program],
+                                  input=json.dumps(operands), env=env, check=True,
+                                  capture_output=True, text=True).stdout.splitlines()
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            generated = temporary / 'generated.rs'; generated.write_text(rendered)
+            runtime = ROOT / 'src/writers/mandatory_defaults_runtime.rs'
+            driver = temporary / 'driver.rs'; binary = temporary / 'driver'
+            driver.write_text(f"""mod writers {{
+#[path = "{runtime}"] pub mod mandatory_defaults_runtime;
+#[path = "{generated}"] pub mod generated;
+}}
+use writers::mandatory_defaults_runtime::*;
+fn main() {{
+ let recipe=&writers::generated::MANDATORY_DEFAULTS;
+ let defaults=defaults_for_new_directory(recipe,"IFD1",false,0,None).unwrap();
+ for (label,order) in [("MM",TiffByteOrder::Big),("II",TiffByteOrder::Little)] {{
+  for value in encode_mandatory_defaults(recipe,&defaults,order).unwrap() {{
+   print!("{{}}:{{:04x}}:{{}}=",label,value.tag_id,value.tiff_type);
+   for b in value.bytes {{ print!("{{:02x}}",b); }} println!();
+  }}
+ }}
+}}""")
+            subprocess.run(['rustc', '--edition=2021', str(driver), '-o', str(binary)],
+                           check=True, capture_output=True, text=True)
+            actual = subprocess.run([str(binary)], check=True, capture_output=True, text=True).stdout.splitlines()
+        self.assertEqual(len(actual), 2 * len(operands))
+        self.assertEqual(sorted(actual), sorted(expected))
+
+    @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
     def test_actual_writevalue_bytes_match_generated_ifd0_encoder_and_type_mutation_propagates(self):
         from mandatory_defaults_codegen import generate
         assert NATIVE is not None
