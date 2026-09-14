@@ -43,6 +43,33 @@ print JSON::PP->new->utf8->canonical->encode({ protocol => $p, processor => $pro
     def test_actual_native_capture_admits_complete_class(self):
         self.assertEqual(self.capture()['identity_counts']['generated'],17)
 
+    def test_hydrated_catalog_keeps_detached_userdata_protocol_bounded(self):
+        # GetTagTable during hydrated catalog capture attaches live Table
+        # back-pointers. The protocol must be captured before that operation,
+        # preserving the exact detached source edge used by the compiler.
+        dump = compiler.ROOT / 'tools/exiftool-tables/dump_tables.pl'
+        run = subprocess.run([
+            PERL, str(dump), '--reader-only', '--hydrated-layouts',
+            '--hydrated-layout-table', 'Image::ExifTool::QuickTime::UserData',
+            str(LIB), 'QuickTime',
+        ], capture_output=True, check=True, timeout=20)
+        fact = json.loads(run.stdout)['quicktime_userdata_reader_protocol']
+        self.assertEqual(fact['caller_meta'], {
+            'Main': {'GROUPS': {'2': 'Video'}},
+            'Movie': {'GROUPS': {'2': 'Video'}},
+        })
+        self.assertEqual(fact['main_movie_edge'], {
+            'Name': 'Movie',
+            'SubDirectory': {'TagTable': 'Image::ExifTool::QuickTime::Movie'},
+        })
+        self.assertEqual(fact['movie_userdata_edge'], {
+            'Name': 'UserData',
+            'SubDirectory': {'TagTable': 'Image::ExifTool::QuickTime::UserData'},
+        })
+        document = copy.deepcopy(self.document)
+        document['quicktime_userdata_reader_protocol'] = fact
+        self.assertEqual(compiler.compile_document(document)['identity_counts']['generated'], 17)
+
     def test_inserted_native_dispatch_assignment_refuses(self):
         p=self.lib/'Image/ExifTool/QuickTime.pm';s=p.read_text();needle="my $charsetQuickTime = $et->Options('CharsetQuickTime');"
         self.assertEqual(s.count(needle),1);p.write_text(s.replace(needle,needle+"\n    $charsetQuickTime = 'UTF16';"))

@@ -1965,13 +1965,11 @@ for my $entry (@subdirectory_processors) {
 }
 
 # The legacy read projection above is now detached: all requested modules have
-# been walked and their late-bound reader facts have been resolved.  Hydrating
-# the catalog below loads additional native modules, so it must precede every
-# final execution-state contract and writer-side capture.
-my $hydrated_layouts = $HYDRATED_LAYOUTS
-    ? dump_hydrated_layout_projection()
-    : undef;
-
+# been walked and their late-bound reader facts have been resolved.  Capture
+# QuickTime's source edges while that detached state still holds.  GetTagTable
+# installs live `Table` back-pointers; those are runtime links, not operands of
+# the bounded ProcessMOV contract, and recursively walking them would turn this
+# small source fact into a cyclic catalog traversal.
 my ($quicktime_itemlist_reader_protocol, $quicktime_userdata_reader_protocol);
 if (exists $out{QuickTime}
     && exists $out{QuickTime}{tables}{ItemList}) {
@@ -1982,6 +1980,13 @@ if (exists $out{QuickTime}
 if (exists $out{QuickTime} && exists $out{QuickTime}{tables}{UserData}) {
     $quicktime_userdata_reader_protocol = quicktime_userdata_reader_protocol_fact($EXIFTOOL_LIB_ABS);
 }
+
+# Hydration deliberately follows every detached reader contract.  It may load
+# the catalog and attach native back-pointers, but must not change the source
+# facts already recorded above.
+my $hydrated_layouts = $HYDRATED_LAYOUTS
+    ? dump_hydrated_layout_projection()
+    : undef;
 
 my ($write_autoload_router_status, $native_write_capture_context,
     $native_write_helpers, $native_write_format_registry,
