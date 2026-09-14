@@ -17,6 +17,7 @@ from generated_tiff_write_matrix import (
     predecessor_public_targets,
     native_requested_insert_is_noop,
     observed_operation,
+    native_survivor_value,
     selected_rehearsal_contract,
 )
 from native_write_matrix import parse_tiff
@@ -273,6 +274,28 @@ class GeneratedTiffComparison(unittest.TestCase):
         native_pruned["tags"]["315"]["value_hex"] = "6300"
         with self.assertRaisesRegex(AssertionError, "unrelated tag"):
             compare(seed, native_pruned, native_pruned, 315, target_directory=("NextIFD",), allow_directory_removal=True)
+
+    def test_fixed_width_ifd1_survivor_carriers_require_exact_count_one_bytes(self):
+        # Pinned WriteValue probe: each of these forms packs 6 at count 0/1,
+        # but count 2 is undef. The raw count-zero record cannot expose the
+        # inferred native byte span, so it is deliberately a visible non-match.
+        forms = ((1, "int8u", 1), (6, "int8s", 1), (8, "int16s", 2), (9, "int32s", 4))
+        for order in ("little", "big"):
+            for field_type, name, width in forms:
+                capability = [{"format_name": name, "tiff_type": field_type,
+                               "width": width, "operation": "write_value_scalar"}]
+                expected = (6 & ((1 << (width * 8)) - 1)).to_bytes(width, order).hex()
+                entry = {"type": field_type, "count": 1, "value_hex": expected}
+                with self.subTest(order=order, field_type=field_type):
+                    self.assertEqual(native_survivor_value({"value": 6}, entry, order, capability), expected)
+                    self.assertIsNone(native_survivor_value(
+                        {"value": 6}, {"type": field_type, "count": 0, "value_hex": ""}, order, capability))
+                    self.assertIsNone(native_survivor_value(
+                        {"value": 6}, {"type": field_type, "count": 2,
+                                        "value_hex": expected * 2}, order, capability))
+                    wrong = dict(entry); wrong["value_hex"] = (7).to_bytes(width, order).hex()
+                    self.assertEqual(native_survivor_value({"value": 6}, wrong, order, capability), expected)
+                    self.assertNotEqual(wrong["value_hex"], expected)
 
     def test_mandatory_ifd1_cleanup_rejects_mismatched_capture_hashes(self):
         with tempfile.TemporaryDirectory() as temporary:
