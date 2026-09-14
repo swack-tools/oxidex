@@ -101,6 +101,12 @@ def compile_mandatory(fact: Mapping[str, Any]) -> MandatoryRecipe:
     closure = _mapping(fact.get("loaded_exiftool_closure"), "loaded_exiftool_closure")
     if not closure or closure.get(source) != digest or any(not isinstance(k, str) or not k.startswith("Image/ExifTool") or not isinstance(v, str) or not _SHA.fullmatch(v) for k, v in closure.items()):
         raise MandatoryMalformed("selected native module closure is unavailable")
+    # The CV, lexical binding, format table and writer helper must all come
+    # from the selected final-loaded native closure.  This prevents a sidecar
+    # from combining a valid WriteExif map with ambient core/helper modules.
+    required = {"Image/ExifTool.pm", "Image/ExifTool/Writer.pl", "Image/ExifTool/Exif.pm", source}
+    if not required.issubset(closure):
+        raise MandatoryMalformed("selected native helper/source closure is incomplete")
     lexical = _mapping(fact.get("lexical"), "lexical")
     if lexical.get("name") != "%mandatory" or lexical.get("resolved") is not True:
         raise MandatoryRefused("mandatory lexical map is unresolved")

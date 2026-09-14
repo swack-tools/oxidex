@@ -97,3 +97,75 @@ class MandatoryTests(unittest.TestCase):
             compile_mandatory_joined(fact, document)
 
 if __name__ == '__main__': unittest.main()
+
+class MandatoryCodegenTests(unittest.TestCase):
+    @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
+    def test_fresh_three_release_facts_render_and_rust_match_python(self):
+        """Fresh canonical/11.78/12.64 captures drive actual rendered Rust."""
+        from mandatory_defaults_codegen import evaluate, generate
+        runtime = ROOT / 'src/writers/mandatory_defaults_runtime.rs'
+        roots = [NATIVE[1]]
+        evidence = Path(Path('/tmp/oxidex-sony-plain-current.txt').read_text().strip()) / 'shared-pilot/write-upgrade-integration-20260913/first-random-pair-20260913/source-attempt-01/sources'
+        roots += [next(evidence.glob(f'exiftool-{version}-*/lib')) for version in ('11.78', '12.64')]
+        for library in roots:
+            with self.subTest(library=library):
+                fact = capture(library)
+                rendered, report = generate(fact)
+                self.assertFalse(report['writer_tables_joined'])
+                recipe = compile_mandatory(fact)
+                expected = evaluate(recipe, 'IFD0', False, 0, (72, 72, 1))
+                self.assertTrue(expected)
+                with tempfile.TemporaryDirectory() as temporary:
+                    temporary = Path(temporary); generated = temporary / 'generated.rs'; generated.write_text(rendered)
+                    driver, binary = temporary / 'driver.rs', temporary / 'driver'
+                    driver.write_text(f'''mod writers {{
+#[path = "{runtime}"] pub mod mandatory_defaults_runtime;
+#[path = "{generated}"] pub mod generated;
+}}
+use writers::mandatory_defaults_runtime::*;
+fn main() {{
+ let values=defaults_for_new_directory(&writers::generated::MANDATORY_DEFAULTS,"IFD0",false,0,Some(JfifValues{{x:72,y:72,resolution_unit:1}})).unwrap();
+ for item in values {{ match item.value {{ MandatoryValue::Integer(value)=>println!("{{}}=i:{{}}",item.tag_id,value), MandatoryValue::Text(value)=>println!("{{}}=s:{{}}",item.tag_id,value) }} }}
+}}''')
+                    subprocess.run(['rustc', '--edition=2021', str(driver), '-o', str(binary)], check=True, capture_output=True, text=True)
+                    actual = tuple(sorted((int(key), int(value[2:]) if value.startswith('i:') else value[2:])
+                                          for key, value in (line.split('=', 1) for line in subprocess.run([str(binary)], check=True, capture_output=True, text=True).stdout.splitlines())))
+                self.assertEqual(actual, expected)
+
+    @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
+    def test_codegen_requires_same_selected_writeexif_when_general_sidecar_is_supplied(self):
+        from mandatory_defaults_codegen import generate
+        assert NATIVE is not None
+        fact = capture(NATIVE[1])
+        effective = {"__name": fact["writer"]["actual_name"], "source_file": fact["writer"]["source_file"],
+                     "source_sha256": fact["writer"]["source_sha256"]}
+        document = {"native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}}
+        source, report = generate(fact, document)
+        self.assertTrue(report['writer_tables_joined'])
+        self.assertIn(fact['writer']['source_sha256'], source)
+        effective["source_sha256"] = '0' * 64
+        with self.assertRaisesRegex(MandatoryRefused, 'do not join'):
+            generate(fact, document)
+        for missing in ('Image/ExifTool.pm', 'Image/ExifTool/Writer.pl', 'Image/ExifTool/Exif.pm'):
+            broken = deepcopy(fact); broken['loaded_exiftool_closure'].pop(missing)
+            with self.subTest(missing=missing), self.assertRaisesRegex(Exception, 'closure'):
+                generate(broken)
+
+    @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
+    def test_copied_native_default_mutation_reaches_rendered_rust_operands(self):
+        from mandatory_defaults_codegen import generate
+        assert NATIVE is not None
+        with tempfile.TemporaryDirectory() as temporary:
+            copied = Path(temporary) / 'lib'; shutil.copytree(NATIVE[1], copied)
+            source = copied / 'Image/ExifTool/WriteExif.pl'; body = source.read_text()
+            self.assertEqual(body.count('0x0213 => 1'), 1)
+            source.write_text(body.replace('0x0213 => 1', '0x0213 => 9'))
+            rendered, report = generate(capture(copied))
+            self.assertIn('tag_id: 0x0213, value: MandatoryValue::Integer(9)', rendered)
+            self.assertNotEqual(report['recipe']['recipe_sha256'], generate(capture(NATIVE[1]))[1]['recipe']['recipe_sha256'])
+
+    def test_codegen_refuses_bad_join_and_does_not_register_artifact(self):
+        from mandatory_defaults_codegen import generate
+        fact = {"schema": 1, "kind": "oxidex_exif_mandatory_defaults_fact"}
+        with self.assertRaises(Exception): generate(fact)
+        self.assertNotIn('mandatory-default', (ROOT / 'tools/exiftool-tables/artifacts.py').read_text())
