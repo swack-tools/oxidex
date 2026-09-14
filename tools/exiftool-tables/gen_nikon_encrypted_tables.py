@@ -114,7 +114,52 @@ def low_priority(v):
  fail(f'noncanonical Priority: {v!r}')
 def rs(v):
  if not isinstance(v,str) or any(0xd800<=ord(c)<=0xdfff for c in v): fail(f'invalid Rust string: {v!r}')
- return json.dumps(v,ensure_ascii=False).replace('\\n','\\u{a}').replace('\\t','\\u{9}').replace('\\r','\\u{d}')
+ # Escape source characters, rather than rewriting JSON's escaped output:
+ # source ``\\n`` must remain two literal characters, while a source newline
+ # must become the Rust newline escape.
+ escaped=[]
+ for char in v:
+  if char=='\\': escaped.append('\\\\')
+  elif char=='"': escaped.append('\\"')
+  elif char=='\n': escaped.append('\\u{a}')
+  elif char=='\r': escaped.append('\\u{d}')
+  elif char=='\t': escaped.append('\\u{9}')
+  elif ord(char)<0x20 or ord(char)==0x7f: escaped.append(f'\\u{{{ord(char):x}}}')
+  else: escaped.append(char)
+ return '"'+''.join(escaped)+'"'
+
+def rust_regex(pattern):
+ """Admit only the Perl regex subset consumed by Rust's ``regex`` crate.
+
+ The runtime fails closed if compilation fails, but that is too late for a
+ generator: a new Perl-only construct would silently make its tag unreachable.
+ Keep this grammar deliberately narrower than either engine and refuse every
+ unsupported assertion, backreference, named construct, and control byte.
+ """
+ if not isinstance(pattern,str) or any(ord(char)<0x20 or 0xd800<=ord(char)<=0xdfff for char in pattern):
+  fail(f'invalid Rust regex: {pattern!r}')
+ index=0; in_class=False; depth=0
+ while index<len(pattern):
+  char=pattern[index]
+  if char=='\\':
+   if index+1>=len(pattern): fail(f'invalid Rust regex escape: {pattern!r}')
+   escaped=pattern[index+1]
+   if escaped.isdigit() or escaped in 'gkCKQEN':
+    fail(f'Perl-only regex escape: {pattern!r}')
+   index+=2; continue
+  if char=='[' and not in_class: in_class=True
+  elif char==']' and in_class: in_class=False
+  elif not in_class and char=='(':
+   if pattern.startswith('(?', index) and not pattern.startswith('(?:', index):
+    fail(f'Perl-only regex group: {pattern!r}')
+   depth+=1
+  elif not in_class and char==')':
+   depth-=1
+   if depth<0: fail(f'unbalanced Rust regex: {pattern!r}')
+  index+=1
+ if in_class or depth:
+  fail(f'unbalanced Rust regex: {pattern!r}')
+ return pattern
 def code(v):
  base={'__perl','__opaque','__name','__deparse'}
  provenance={'resolved','source_file','source_sha256'}
@@ -190,7 +235,7 @@ def cond(s):
   member,op,value=re.fullmatch(r'\$\$self\{(\w+)\}\s+(==|!=) (\d+)',s).groups()
   return f'Cond::Num({dm(member)}, NumCmp::{"Eq" if op=="==" else "Ne"}, {num(value)})'
  m=re.fullmatch(r'\$\$self\{Model\} ([=!])~ /(.+)/([i]?)',s)
- if m:return f'Cond::Model({str(m.group(1)=="=").lower()}, {rs(m.group(2))}, {str(bool(m.group(3))).lower()})'
+ if m:return f'Cond::Model({str(m.group(1)=="=").lower()}, {rs(rust_regex(m.group(2)))}, {str(bool(m.group(3))).lower()})'
  m=re.fullmatch(r'\$\$self\{FILE_TYPE\} (eq|ne) "([^"]+)"',s)
  if m:return f'Cond::FileType({str(m.group(1)=="eq").lower()}, {rs(m.group(2))})'
  m=re.fullmatch(r'\$\$self\{(\w+)\} (==|!=|>=|>|<) (-?\d+)',s)
@@ -210,7 +255,7 @@ def cond(s):
  if m:
   if m.group(1)=='ge':return f'Cond::FirmwareCmp(StrCmp::Ge, {rs(m.group(2))}, false)'
   if m.group(1)=='eq':return f'Cond::FirmwareEq({rs(m.group(2))}, true)'
-  return f'Cond::FirmwareRe({rs(m.group(3))}, {str(m.group(1)=="=~").lower()})'
+  return f'Cond::FirmwareRe({rs(rust_regex(m.group(3)))}, {str(m.group(1)=="=~").lower()})'
  m=re.fullmatch(r'\$\$self\{ShotInfoVersion\} eq "([^"]+)"',s)
  if m:return f'Cond::StrEq(Dm::ShotInfoVersion, {rs(m.group(1))}, true)'
  if s=='$$self{LensID} and $$self{LensID} != 0 and $$self{FocusMode} ne "Manual"':return 'Cond::TruthyNumAndStrNe(Dm::LensID, NumCmp::Ne, 0.0, Dm::FocusMode, "Manual")'
@@ -274,9 +319,17 @@ def render(data):
  def table(full):
   m=re.fullmatch(r'Image::ExifTool::(Nikon|NikonCustom)::(\w+)',full or '')
   if not m:fail(f'bad TagTable {full!r}')
-  t=(nik if m.group(1)=='Nikon' else custom).get(m.group(2))
+  identity=(m.group(1),m.group(2)); t=(nik if identity[0]=='Nikon' else custom).get(identity[1])
   if not t:fail(f'missing native table {full}')
-  return m.group(2),t
+  return identity,t
+ def selected(identity):
+  return (nik if identity[0]=='Nikon' else custom)[identity[1]]
+ def static_name(identity):
+  # Keep established identifiers byte-for-byte when a table name is unique.
+  # Namespace it only when the reachable graph contains a real collision.
+  if sum(name==identity[1] for _,name in names)==1:
+   return identity[1].upper()
+  return '_'.join(identity).upper()
  roots=[]; queue=[]; decrypt_lookup=None
  for tag,which in [('145','SHOT_INFO_ROOTS'),('151','COLOR_BALANCE_ROOTS'),('152','LENS_DATA_ROOTS')]:
   group=nik.get('Main',{}).get('tags',{}).get(tag)
@@ -310,15 +363,14 @@ def render(data):
     queue.append(tname)
     order=sd.get('ByteOrder'); bo={'BigEndian':'Some(true)','LittleEndian':'Some(false)',None:'None'}.get(order)
     if bo is None:fail(f'bad root ByteOrder {order!r}')
-    encrypted=f'Some(Encrypted {{ table: {{TABLE:{tname}}}, decrypt_start: {u(sd.get("DecryptStart",0))}, dir_offset: {u(sd.get("DirOffset",0))}, byte_order: {bo} }})'
+    encrypted=f'Some(Encrypted {{ table: {{TABLE:{tname[0]}:{tname[1]}}}, decrypt_start: {u(sd.get("DecryptStart",0))}, dir_offset: {u(sd.get("DirOffset",0))}, byte_order: {bo} }})'
    out.append((name,ver,cap,counts,encrypted))
   roots.append((tag,which,out))
  seen=set()
  while queue:
   n=queue.pop()
   if n in seen:continue
-  seen.add(n); t=nik.get(n) or custom.get(n)
-  if not t:fail(f'missing selected table {n}')
+  seen.add(n); t=selected(n)
   for _,g in sorted(t.get('tags',{}).items(),key=lambda x: float(x[0])):
    for row in g.get('_variants',[g]):
     sd=row.get('SubDirectory')
@@ -328,12 +380,12 @@ def render(data):
  # Enum declaration order follows the loaded native hashes.  Tags themselves
  # are emitted in ProcessBinaryData numeric order below.
  for n in names:
-  t=nik.get(n) or custom[n]
+  t=selected(n)
   for _,g in sorted(t.get('tags',{}).items(),key=lambda x: float(x[0])):
    for row in g.get('_variants',[g]):
     if not omitted(row) and 'PrintConv' in row: pc(row,maps)
  for n in names:
-  t=nik.get(n) or custom[n]; meta=t.get('meta',{})
+  t=selected(n); meta=t.get('meta',{})
   for k in ('CHECK_PROC','PROCESS_PROC','WRITE_PROC'):
    if k in meta:code(meta[k])
   proc=meta.get('PROCESS_PROC')
@@ -345,6 +397,7 @@ def render(data):
    if not m:fail(f'{n}: invalid index {key!r}')
    for row in g.get('_variants',[g]):
     if set(row)-ALLOWED:fail(f'{n}[{key}]: unsupported fields {set(row)-ALLOWED}')
+    if row.get('_extra_keys',[]) != []:fail(f'{n}[{key}]: unrecognized dumped fields {row.get("_extra_keys")!r}')
     # These declarations need runtime operations absent from binary_data.rs.
     # They are intentionally omitted by the checked-in projection; every
     # other unregistered executable fact remains a hard refusal.
@@ -371,8 +424,8 @@ def render(data):
     if h is not None:
      q=re.fullmatch(r'\$varSize \+= (\d+) if \$\$self\{FirmwareVersion\} and \$\$self\{FirmwareVersion\} ge "([^"]+)"',h)
      if q:hook=f'Hook::AddIfFirmwareGe({u(q.group(1))}, {rs(q.group(2))})'
-     elif (q:=re.fullmatch(r'\$varSize \+= (\d+) if \$\$self\{Model\} =~ /(.+)/ and \$\$self\{FirmwareVersion\} and \$\$self\{FirmwareVersion\} ge "([^"]+)"',h)):hook=f'Hook::AddIfModelAndFirmwareGe({u(q.group(1))}, {rs(q.group(2))}, {rs(q.group(3))})'
-     elif n=='MenuSettingsZ8v2' and key=='0' and h==MENU_SETTINGS_Z8V2_HOOK:hook='Hook::MenuSettingsZ8v2'
+     elif (q:=re.fullmatch(r'\$varSize \+= (\d+) if \$\$self\{Model\} =~ /(.+)/ and \$\$self\{FirmwareVersion\} and \$\$self\{FirmwareVersion\} ge "([^"]+)"',h)):hook=f'Hook::AddIfModelAndFirmwareGe({u(q.group(1))}, {rs(rust_regex(q.group(2)))}, {rs(q.group(3))})'
+     elif n==('Nikon','MenuSettingsZ8v2') and key=='0' and h==MENU_SETTINGS_Z8V2_HOOK:hook='Hook::MenuSettingsZ8v2'
      else:fail(f'{n}[{key}]: unsupported Hook')
     rawv,filterv=raw(expr(row,'RawConv')); unknown=flag(row.get('Unknown',False),'Unknown'); low=low_priority(row.get('Priority'))
     out.append(f'    BinTag {{ index: {m.group(1)}, frac: {m.group(2) or 0}, name: {rs(name)}, cond: {cond(row.get("Condition"))}, fmt: Fmt::{rf}, count: {count}, mask: 0x{mask:x}, shift: {shift}, raw: {rawv}, filter: {filterv}, vc: {vc(expr(row,"ValueConv"))}, pc: {pc(row,maps)}, hook: {hook}, print_hex: {flag(row.get("PrintHex",False),"PrintHex")}, unknown: {unknown}, low_priority: {low}, subdir: {sub} }},')
@@ -391,18 +444,18 @@ def render(data):
    pairs,bits=key[1],key[2]; body=', '.join('('+rs(a)+', '+rs(b)+')' for a,b in pairs)
    text += ['#[rustfmt::skip]',f'static M{i}: &[(&str, &str)] = &[{body}{"," if body else ""}];','#[rustfmt::skip]',f'static B{i}: &[(u32, &str)] = &[{", ".join("("+str(a)+", "+rs(b)+")" for a,b in bits)},];']
  text.append('')
- for n in names:text += ['#[rustfmt::skip]',f'static TAGS_{n.upper()}: &[BinTag] = &[',*rows[n],'];']
+ for n in names:text += ['#[rustfmt::skip]',f'static TAGS_{static_name(n)}: &[BinTag] = &[',*rows[n],'];']
  text += ['', '/// Every reachable encrypted table, indexed by [`SubDir::table`].','#[rustfmt::skip]','pub static TABLES: &[BinTable] = &[']
  for n in names:
-  t=nik.get(n) or custom[n];fmt=t['meta'].get('FORMAT','int8u'); inc={'int8u':1,'int16u':2}.get(fmt)
+  t=selected(n);fmt=t['meta'].get('FORMAT','int8u'); inc={'int8u':1,'int16u':2}.get(fmt)
   if inc is None:fail(f'{n}: unsupported table FORMAT')
   no=t['meta'].get('VARS',{}).get('NIKON_OFFSETS'); no='None' if no is None else f'Some({u(no)})'
-  text.append(f'    BinTable {{ name: {rs(n)}, increment: {inc}, nikon_offsets: {no}, tags: TAGS_{n.upper()} }},')
+  text.append(f'    BinTable {{ name: {rs(n[1])}, increment: {inc}, nikon_offsets: {no}, tags: TAGS_{static_name(n)} }},')
  text.append('];')
  for tag,which,out in roots:
   text += ['',f'/// `Nikon::Main` 0x{int(tag):04x}, in ExifTool\'s Condition order.','#[rustfmt::skip]',f'pub static {which}: &[Root] = &[']
   for name,ver,cap,counts,e in out:
-   en='None' if e is None else re.sub(r'\{TABLE:(\w+)\}',lambda m:str(idx[m.group(1)]),e)
+   en='None' if e is None else re.sub(r'\{TABLE:(Nikon|NikonCustom):(\w+)\}',lambda m:str(idx[(m.group(1),m.group(2))]),e)
    text.append(f'    Root {{ name: {rs(name)}, version_re: {rs("^"+ver)}, cap_lt: {cap}, counts: {counts}, encrypted: {en} }},')
   text.append('];')
  return '\n'.join(text)+'\n',{'tables':len(names),'rows':sum(len(x) for x in rows.values()),'maps':len(maps)}
