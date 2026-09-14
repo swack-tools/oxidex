@@ -564,6 +564,21 @@ def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
     return _text_output(stdout), _text_output(stderr)
 
 
+def _emergency_reap_group(child: subprocess.Popen[str]) -> tuple[str, str]:
+    """Kill and reap an owned group after ordinary cleanup itself faults."""
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = exc.output, exc.stderr
+    except OSError:
+        stdout, stderr = "", ""
+    return _text_output(stdout), _text_output(stderr)
+
+
 def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]],
                 started: Callable[[int, int], None] | None = None) -> dict[str, Any]:
     """Run one bounded command and retain its actual output for the journal log.
@@ -586,6 +601,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             try:
                 stdout, stderr = child.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired as exc:
+                partial_stdout, partial_stderr = _text_output(exc.output), _text_output(exc.stderr)
                 try:
                     stdout, stderr = _bounded_timeout_cleanup(child)
                     cleanup_error = None
@@ -593,15 +609,12 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                     # The timeout is already an established execution fact.
                     # Preserve its process identity and surface cleanup failure
                     # rather than misclassifying it as a failed spawn.
-                    stdout, stderr, cleanup_error = "", "", str(cleanup)
-                    try:
-                        os.killpg(child.pid, signal.SIGKILL)
-                    except OSError:
-                        pass
-                    try:
-                        stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-                    except (OSError, subprocess.TimeoutExpired):
-                        pass
+                    stdout, stderr = _emergency_reap_group(child)
+                    cleanup_error = str(cleanup)
+                    if not stdout:
+                        stdout = partial_stdout
+                    if not stderr:
+                        stderr = partial_stderr
                 record = {"argv": argv, "exit": None, "stdout": stdout,
                           "stderr": stderr + str(exc), "state": "timeout",
                           "pid": child.pid, "pgid": child.pid}
@@ -611,8 +624,17 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
         except OSError as exc:
-            return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc),
-                    "state": "execution_failed", "operation": "post_spawn", "pid": child.pid, "pgid": child.pid}
+            try:
+                stdout, stderr = _bounded_timeout_cleanup(child)
+                cleanup_error = None
+            except OSError as cleanup:
+                stdout, stderr = _emergency_reap_group(child)
+                cleanup_error = str(cleanup)
+            record = {"argv": argv, "exit": None, "stdout": stdout, "stderr": stderr + str(exc),
+                      "state": "execution_failed", "operation": "post_spawn", "pid": child.pid, "pgid": child.pid}
+            if cleanup_error is not None:
+                record.update(cleanup_error=cleanup_error, cleanup_operation="post_spawn_cleanup")
+            return record
     else:
         try:
             result = run(argv, cwd=str(cwd), env=env, text=True, capture_output=True, timeout=COMMAND_TIMEOUT_SECONDS,

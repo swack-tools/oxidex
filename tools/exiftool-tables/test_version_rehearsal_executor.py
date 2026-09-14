@@ -60,6 +60,21 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(record["cleanup_operation"], "timeout_cleanup")
         self.assertIn("cleanup bridge failed", record["cleanup_error"])
 
+    def test_postspawn_callback_oserror_reaps_owned_child(self):
+        """A callback failure follows spawn, so it must not orphan the child."""
+        def fail_after_start(_pid, _pgid):
+            raise OSError("journal callback failed")
+        record = executor._run_record(
+            [sys.executable, "-c", "import time; time.sleep(30)"], cwd=self.root,
+            env=dict(os.environ), run=subprocess.run, started=fail_after_start,
+        )
+        self.assertEqual(record["state"], "execution_failed")
+        self.assertEqual(record["operation"], "post_spawn")
+        self.assertIn("journal callback failed", record["stderr"])
+        self.assertEqual(record["pgid"], record["pid"])
+        with self.assertRaises(ProcessLookupError):
+            os.kill(record["pid"], 0)
+
     def config(self, *, write=True):
         commands = {stage: {"argv": [stage]} for stage in ("generate", "build", "read")}
         if write:
