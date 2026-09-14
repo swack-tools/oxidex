@@ -449,7 +449,8 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
                             Ok(()) => {
                                 // Convert HashMap<String, String> to IfdEntries format
                                 // Tag ID 0x927C, Type 7 (UNDEFINED), count = data length
-                                for (key, val) in makernote_tags {
+                                // (in `in_record_order`, not the HashMap's random order)
+                                for (key, val) in crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags) {
                                     // Create synthetic tag entries for MakerNote tags
                                     // We use a synthetic tag ID and store the key:value as a string
                                     let synthetic_value = format!("{}: {}", key, val);

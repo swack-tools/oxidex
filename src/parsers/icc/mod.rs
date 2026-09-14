@@ -194,7 +194,9 @@ fn parse_icc_profile(data: &[u8]) -> Result<Vec<IccTag>> {
     let mut out = header_tags(&data[..128]);
 
     if data.len() > 128 {
-        let mut tag_map = HashMap::new();
+        // Table order, which ExifTool reads the entries in; a `HashMap` here
+        // handed them to `insert_icc_tags` in a different order every run.
+        let mut tag_map = crate::core::OrderedTags::new();
         tags::parse_tags_registry(data, &mut tag_map)?;
         out.extend(tag_map.into_iter().map(|(name, value)| {
             let group1 = tags::icc_output_group1(&name);
@@ -315,6 +317,74 @@ mod tests {
             TagValue::String(s) => s.clone(),
             TagValue::Integer(i) => i.to_string(),
             other => panic!("{name}: unexpected value shape {other:?}"),
+        }
+    }
+
+    /// The tag table decodes in table order on every run. `ProcessICC_Profile`
+    /// walks `$index` 0..$numEntries and handles a `view`/`meas` sub-structure
+    /// inline (ICC_Profile.pm:1302-1403), so that is ExifTool's file order;
+    /// the table used to pass through a `HashMap`, whose order std seeds
+    /// afresh per map, and `-a` listed ICC tags differently every time.
+    #[test]
+    fn tag_table_decodes_in_table_order_on_every_run() {
+        let header = fixture(b"\0\0\0\0", b"SEC\0", b"\0\0\0\0", 0, 0, [0; 16])[..128].to_vec();
+        let mut xyz = b"XYZ \0\0\0\0".to_vec();
+        for v in [63190i32, 65536, 54061] {
+            xyz.extend_from_slice(&v.to_be_bytes());
+        }
+        let view = [b"view\0\0\0\0".as_slice(), &[0u8; 24], &1u32.to_be_bytes()].concat();
+        let meas = [
+            b"meas\0\0\0\0".as_slice(),
+            &1u32.to_be_bytes(),
+            &[0u8; 12],
+            &1u32.to_be_bytes(),
+            &0u32.to_be_bytes(),
+            &1u32.to_be_bytes(),
+        ]
+        .concat();
+        let entries: [(&[u8; 4], &[u8]); 6] = [
+            (b"wtpt", &xyz),
+            (b"cprt", b"text\0\0\0\0test\0\0\0\0"),
+            (b"view", &view),
+            (b"bXYZ", &xyz),
+            (b"meas", &meas),
+            (b"rXYZ", &xyz),
+        ];
+        let table_len = 4 + entries.len() * 12;
+        let mut table = (entries.len() as u32).to_be_bytes().to_vec();
+        let mut data = Vec::new();
+        for (signature, payload) in entries {
+            table.extend_from_slice(signature);
+            table.extend_from_slice(&((128 + table_len + data.len()) as u32).to_be_bytes());
+            table.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            data.extend_from_slice(payload);
+        }
+        let mut profile = [header, table, data].concat();
+        let size = profile.len() as u32;
+        profile[0..4].copy_from_slice(&size.to_be_bytes());
+
+        let expected = [
+            "MediaWhitePoint",
+            "ProfileCopyright",
+            "ViewingCondIlluminant",
+            "ViewingCondSurround",
+            "ViewingCondIlluminantType",
+            "BlueMatrixColumn",
+            "MeasurementObserver",
+            "MeasurementBacking",
+            "MeasurementGeometry",
+            "MeasurementFlare",
+            "MeasurementIlluminant",
+            "RedMatrixColumn",
+        ];
+        for run in 0..32 {
+            let tags = parse_icc_profile(&profile).unwrap();
+            let table_tags: Vec<&str> = tags
+                .iter()
+                .filter(|t| t.group1 != "ICC-header")
+                .map(|t| t.name.as_str())
+                .collect();
+            assert_eq!(table_tags, expected, "run {run}");
         }
     }
 

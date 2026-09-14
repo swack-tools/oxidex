@@ -27,10 +27,9 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::Result;
+use std::collections::HashMap;
 
 /// How many bytes ExifTool validates the header against, and the window it
 /// determines the input record separator from (`ProcessHTML`).
@@ -1081,48 +1080,73 @@ fn xml_tag_name(raw: &str) -> String {
 
 #[derive(Default)]
 struct Collected {
-    // Each key remembers whether it is a `List`-type tag alongside its
-    // values, in file order. A `list` key's repeats really are multiple
-    // values of *one* occurrence (joined into a `TagValue::Array` below,
-    // matching ExifTool's List semantics); a non-`list` key's repeats are
-    // ordinary duplicate *occurrences* of a scalar tag -- e.g. `o:Revision`
-    // and `o:Version` both resolve to `RevisionNumber`
-    // (`static OFFICE`, above) -- which need to reach `MetadataMap::insert`
-    // once per repeat so `TagSink::record` can retain every one (visible
-    // under `-a`) while still projecting the last as the winner. This used
-    // to `entry.clear()` before every non-list push, which discarded every
-    // earlier occurrence outright rather than merely not-yet-deciding a
-    // winner -- `duplicate_loss_scan.py` scored HTML.html's
-    // `HTML-office:RevisionNumber` PARTIAL because of it: two real oracle
-    // occurrences, one oxidex occurrence.
-    values: HashMap<String, (bool, Vec<String>)>,
+    // Scalars replay in the walk's global source order: Author=A,
+    // Description=B, Author=C reaches the sink as A, B, C. A `List` tag is
+    // one occurrence at its first value, with later values appended to it.
+    // Its identity includes the source table, because Main:Keywords (a list)
+    // and Office:Keywords (a scalar) remain distinct ExifTool tags even when
+    // the family-0 alias gives both the key HTML:Keywords.
+    entries: Vec<CollectedEntry>,
+    lists: HashMap<(String, String), usize>,
+}
+
+enum CollectedEntry {
+    Scalar { key: String, value: String },
+    List { key: String, values: Vec<String> },
 }
 
 impl Collected {
-    fn add(&mut self, key: String, value: String, list: bool) {
-        let entry = self.values.entry(key).or_insert_with(|| (list, Vec::new()));
-        entry.0 = list;
-        entry.1.push(value);
+    fn add(&mut self, key: String, value: String, list: bool, list_identity: Option<String>) {
+        if !list {
+            self.entries.push(CollectedEntry::Scalar { key, value });
+            return;
+        }
+
+        let list_key = (
+            key.clone(),
+            list_identity.expect("list tags must carry their source-table identity"),
+        );
+        if let Some(&index) = self.lists.get(&list_key) {
+            let CollectedEntry::List { values, .. } = &mut self.entries[index] else {
+                unreachable!("list index must point to a list entry");
+            };
+            values.push(value);
+            return;
+        }
+
+        let index = self.entries.len();
+        self.entries.push(CollectedEntry::List {
+            key,
+            values: vec![value],
+        });
+        self.lists.insert(list_key, index);
     }
 
     fn into_metadata(self) -> MetadataMap {
         let mut metadata = MetadataMap::new();
-        for (key, (list, mut values)) in self.values {
-            if !list {
-                for value in values {
-                    metadata.insert(key.clone(), TagValue::String(value));
+        for entry in self.entries {
+            match entry {
+                CollectedEntry::Scalar { key, value } => {
+                    metadata.insert(key, TagValue::String(value));
                 }
-                continue;
+                CollectedEntry::List { key, mut values } => {
+                    let value = if values.len() == 1 {
+                        TagValue::String(values.pop().unwrap_or_default())
+                    } else {
+                        TagValue::Array(values.into_iter().map(TagValue::String).collect())
+                    };
+                    metadata.insert(key, value);
+                }
             }
-            let value = if values.len() == 1 {
-                TagValue::String(values.pop().unwrap_or_default())
-            } else {
-                TagValue::Array(values.into_iter().map(TagValue::String).collect())
-            };
-            metadata.insert(key, value);
         }
         metadata
     }
+}
+
+fn list_identity(group: &str, definition: &TagDef) -> Option<String> {
+    definition
+        .list
+        .then(|| format!("{group}:{}", definition.key))
 }
 
 struct Walker {
@@ -1133,16 +1157,21 @@ struct Walker {
 
 impl Walker {
     /// Resolved HTML tables retain ExifTool's family-0 HTML group.
-    fn add_known_family_zero_alias(&mut self, group: &str, name: &str, value: String, list: bool) {
+    fn add_known_family_zero_alias(&mut self, group: &str, definition: &TagDef, value: String) {
         if group.starts_with("HTML-") || group == "HTTP-equiv" {
-            self.out.add(format!("HTML:{name}"), value, list);
+            self.out.add(
+                format!("HTML:{}", definition.name),
+                value,
+                definition.list,
+                list_identity(group, definition),
+            );
         }
     }
 
     /// Only dynamically added Office tags belong to HTML's family-0 group.
     fn add_dynamic_family_zero_alias(&mut self, group: &str, name: &str, value: String) {
         if group == "HTML-office" {
-            self.out.add(format!("HTML:{name}"), value, false);
+            self.out.add(format!("HTML:{name}"), value, false, None);
         }
     }
 
@@ -1165,16 +1194,12 @@ impl Walker {
             // their family-0 group remains HTML. Keep the more specific key
             // used by this parser and also expose the family-0 key expected
             // when metadata is requested by format group.
-            self.add_known_family_zero_alias(
-                group,
-                definition.name,
-                converted.clone(),
-                definition.list,
-            );
+            self.add_known_family_zero_alias(group, definition, converted.clone());
             self.out.add(
                 format!("{}:{}", group, definition.name),
                 converted,
                 definition.list,
+                list_identity(group, definition),
             );
         }
     }
@@ -1184,7 +1209,7 @@ impl Walker {
         let name = normalize_added_tag_name(name);
         self.add_dynamic_family_zero_alias(group, &name, value.to_string());
         self.out
-            .add(format!("{}:{name}", group), value.to_string(), false);
+            .add(format!("{}:{name}", group), value.to_string(), false, None);
     }
 
     /// The non-XML value pipeline: recode, collapse record separators, then
@@ -1844,6 +1869,65 @@ mod tests {
             Some("value")
         );
         assert_eq!(metadata.get("HTML:CustomUnlistedTag"), None);
+    }
+
+    #[test]
+    fn interleaved_scalars_keep_source_order_while_lists_stay_at_first_value() {
+        // Pinned ExifTool 13.59's HTML.pm calls HandleTag once per scalar,
+        // but stores Main:Keywords through LIST_TAGS at its first position.
+        // Office:Keywords is deliberately scalar, even though its family-0
+        // alias shares HTML:Keywords with the Main-table list.
+        let doc = b"<!DOCTYPE html>\n<html><head>\n\
+            <meta name=\"author\" content=\"A\">\n\
+            <meta name=\"description\" content=\"B\">\n\
+            <meta name=\"author\" content=\"C\">\n\
+            <meta name=\"keywords\" content=\"main-one\">\n\
+            <xml><o:DocumentProperties><o:Keywords>office</o:Keywords></o:DocumentProperties></xml>\n\
+            <meta name=\"keywords\" content=\"main-two\">\n\
+            <meta name=\"title\" content=\"meta-title\">\n\
+            <title>element-title</title>\n\
+            </head></html>\n";
+
+        let metadata = HTMLParser::parse_bytes(doc);
+        let occurrences: Vec<(String, TagValue)> = metadata
+            .all_occurrences()
+            .map(|(key, occurrence)| (key, occurrence.raw.clone()))
+            .collect();
+        assert_eq!(
+            occurrences,
+            vec![
+                ("HTML:Author".into(), TagValue::String("A".into())),
+                ("HTML:Description".into(), TagValue::String("B".into())),
+                ("HTML:Author".into(), TagValue::String("C".into())),
+                (
+                    "HTML:Keywords".into(),
+                    TagValue::Array(vec![
+                        TagValue::String("main-one".into()),
+                        TagValue::String("main-two".into()),
+                    ]),
+                ),
+                ("HTML:Keywords".into(), TagValue::String("office".into())),
+                (
+                    "HTML-office:Keywords".into(),
+                    TagValue::String("office".into()),
+                ),
+                ("HTML:Title".into(), TagValue::String("meta-title".into()),),
+                (
+                    "HTML:Title".into(),
+                    TagValue::String("element-title".into()),
+                ),
+            ]
+        );
+        assert_eq!(
+            value(&metadata, "HTML:Keywords").as_deref(),
+            Some("office"),
+            "the later scalar alias wins the default view"
+        );
+        assert_eq!(
+            value(&metadata, "HTML:Title").as_deref(),
+            Some("element-title"),
+            "the later scalar occurrence remains the winner"
+        );
     }
 
     #[test]

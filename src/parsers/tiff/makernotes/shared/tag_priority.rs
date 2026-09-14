@@ -100,6 +100,45 @@ pub(crate) fn insert_low_priority_retained(
     tags.insert(format!("{key} ({n})"), value);
 }
 
+/// A `MakerNoteParser`'s `HashMap<String, String>` output, in the order the
+/// merge must record it into a `MetadataMap`.
+///
+/// Every recorded occurrence takes the next file-order value, and `-a`
+/// output renders occurrences in that order (`cli::tag_resolution` sorts by
+/// it; `-j` numbers a key's second copy `" (2)"` by it). Iterating the
+/// `HashMap` itself hands those values out in its per-instance random order,
+/// so one binary printed PentaxOptioL20.jpg's two `PentaxModelID` copies in
+/// either order from run to run, and text `-G1 -a -s` shuffled every
+/// MakerNote tag of every file.
+///
+/// Keys are ordered by name, with each synthetic `"<key> (N)"` duplicate
+/// right after its bare `<key>`, in `N` order. [`insert_low_priority_retained`]
+/// keeps the first arrival at the bare key and numbers each later one, so
+/// that places a tag's copies in the order the parser met them -- ExifTool's
+/// file order: the pinned oracle's `-G1 -a -s` prints PentaxOptioSVi.jpg's
+/// 0x0005 `PentaxModelID` (`Optio SVi`) before its 0x0215 `CameraInfo` copy
+/// (`Optio SV`). Distinct tags cannot get their IFD order back from a
+/// `HashMap`, so they follow name order, which is at least the same every
+/// run.
+pub(crate) fn in_record_order(tags: HashMap<String, String>) -> Vec<(String, String)> {
+    let mut tags: Vec<(String, String)> = tags.into_iter().collect();
+    tags.sort_by(|(a, _), (b, _)| record_order_key(a).cmp(&record_order_key(b)));
+    tags
+}
+
+/// `(base, 0)` for a bare key and `(base, N)` for its `"<base> (N)"`
+/// duplicate marker; [`insert_low_priority_retained`] numbers from 1, so the
+/// bare key always sorts first.
+fn record_order_key(tag_name: &str) -> (&str, u64) {
+    match strip_duplicate_marker(tag_name) {
+        Some(base) => {
+            let digits = &tag_name[base.len() + 2..tag_name.len() - 1];
+            (base, digits.parse().unwrap_or(u64::MAX))
+        }
+        None => (tag_name, 0),
+    }
+}
+
 /// The other half of [`insert_low_priority_retained`]: records one
 /// `MakerNoteParser`-produced `(tag_name, value)` pair into a real
 /// `MetadataMap`, recognizing the `"<key> (N)"` synthetic duplicate marker
@@ -510,6 +549,32 @@ mod tests {
         assert_eq!(
             tags.get("Pentax:PentaxModelID (1)").map(String::as_str),
             Some("K10D")
+        );
+    }
+
+    #[test]
+    fn in_record_order_puts_each_duplicate_after_its_bare_key_in_number_order() {
+        let tags = map(&[
+            ("Pentax:PentaxModelID (1)", "Optio SV"),
+            ("Pentax:LensType (10)", "eleventh"),
+            ("Pentax:LensType (2)", "third"),
+            ("Pentax:PentaxModelID", "Optio SVi"),
+            ("Pentax:LensTypeX", "unrelated"),
+            ("Pentax:LensType", "first"),
+            ("Pentax:LensType (1)", "second"),
+        ]);
+        let keys: Vec<String> = in_record_order(tags).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            keys,
+            [
+                "Pentax:LensType",
+                "Pentax:LensType (1)",
+                "Pentax:LensType (2)",
+                "Pentax:LensType (10)",
+                "Pentax:LensTypeX",
+                "Pentax:PentaxModelID",
+                "Pentax:PentaxModelID (1)",
+            ]
         );
     }
 

@@ -30,7 +30,7 @@
 //! endobj
 //! ```
 
-use crate::core::{FileReader, MetadataMap, TagValue};
+use crate::core::{FileReader, MetadataMap, OrderedTags, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use nom::{
@@ -180,7 +180,7 @@ impl PdfContext {
 
 /// Converts a raw Info dictionary to a MetadataMap with proper formatting.
 /// Handles special cases like date formatting and keyword parsing.
-fn convert_info_dict_to_metadata(info_dict: HashMap<String, String>) -> MetadataMap {
+fn convert_info_dict_to_metadata(info_dict: OrderedTags<String>) -> MetadataMap {
     let mut metadata = MetadataMap::with_capacity(info_dict.len() + 1);
 
     for (key, value) in info_dict {
@@ -602,7 +602,7 @@ fn skip_to_next_line(input: &[u8]) -> &[u8] {
 /// Producer/Creator/CreateDate/ModifyDate that way), even though the
 /// dictionary itself is plain ASCII. Scan for the delimiters over bytes and
 /// hand only the dictionary body to the entry parser.
-fn parse_info_object(input: &[u8]) -> Result<HashMap<String, String>> {
+fn parse_info_object(input: &[u8]) -> Result<OrderedTags<String>> {
     let dict_start = find_bytes(input, b"<<")
         .ok_or_else(|| ExifToolError::parse_error("Info dictionary start << not found"))?;
 
@@ -642,7 +642,7 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// Parses dictionary entries (key-value pairs)
-fn parse_dict_entries(input: &[u8]) -> IResult<&[u8], HashMap<String, String>> {
+fn parse_dict_entries(input: &[u8]) -> IResult<&[u8], OrderedTags<String>> {
     use nom::Parser;
     let (input, pairs) = many0(parse_dict_entry).parse(input)?;
     let dict = pairs.into_iter().collect();
@@ -990,9 +990,35 @@ mod tests {
         assert_eq!(metadata.get_string("PDF:Trapped"), Some("False"));
     }
 
+    /// The Info dictionary's entries are recorded in dictionary order -- the
+    /// order ExifTool reads them in -- on every run. They were collected into
+    /// a `HashMap`, whose order std seeds afresh per map, so `-a` listed the
+    /// PDF group differently each time.
+    #[test]
+    fn info_entries_keep_dictionary_order_on_every_run() {
+        let object =
+            b"7 0 obj\n<< /Title (T) /Author (A) /Subject (S) /Creator (C) /Producer (P) /Company (X) >>\nendobj";
+        for run in 0..32 {
+            let metadata = convert_info_dict_to_metadata(parse_info_object(object).unwrap());
+            let keys: Vec<String> = metadata.all_occurrences().map(|(key, _)| key).collect();
+            assert_eq!(
+                keys,
+                [
+                    "PDF:Title",
+                    "PDF:Author",
+                    "PDF:Subject",
+                    "PDF:Creator",
+                    "PDF:Producer",
+                    "PDF:Company"
+                ],
+                "run {run}"
+            );
+        }
+    }
+
     #[test]
     fn test_source_modified_date_formatting() {
-        let mut info_dict = HashMap::new();
+        let mut info_dict = OrderedTags::new();
         info_dict.insert(
             "SourceModified".to_string(),
             "D:20240315143000Z".to_string(),

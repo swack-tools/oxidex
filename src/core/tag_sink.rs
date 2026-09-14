@@ -165,12 +165,28 @@ impl TagSink {
         self.winners.get(key).map(|&idx| &self.occurrences[idx])
     }
 
-    /// Every key's current winner, paired with its full occurrence. The
-    /// occurrence-aware counterpart to [`TagSink::iter`].
+    /// Every key's current winner, paired with its full occurrence, in file
+    /// order. The occurrence-aware counterpart to [`TagSink::iter`].
     pub fn winner_occurrences(&self) -> impl Iterator<Item = (&String, &TagOccurrence)> {
-        self.winners
-            .iter()
-            .map(move |(k, &idx)| (k, &self.occurrences[idx]))
+        self.winners_in_file_order()
+            .into_iter()
+            .map(move |(k, idx)| (k, &self.occurrences[idx]))
+    }
+
+    /// Each key with the index of the occurrence that holds it, sorted by
+    /// that index -- the file order every winner projection hands out.
+    ///
+    /// `winners` is a `HashMap`, and std seeds its iteration order afresh for
+    /// every sink. Handing that order out made each sub-map a parser copied
+    /// into the file's map with `iter()` land there in a different order on
+    /// every run, and `-a` renders occurrences in the order they were
+    /// recorded: text `-G1 -a -s` shuffled ICC, IPTC, Photoshop and dozens of
+    /// other groups from run to run of one binary.
+    fn winners_in_file_order(&self) -> Vec<(&String, usize)> {
+        let mut winners: Vec<(&String, usize)> =
+            self.winners.iter().map(|(k, &idx)| (k, idx)).collect();
+        winners.sort_unstable_by_key(|&(_, idx)| idx);
+        winners
     }
 
     pub fn get_mut(&mut self, key: &str) -> Option<&mut TagValue> {
@@ -268,20 +284,23 @@ impl TagSink {
         self.winners.clear();
     }
 
+    /// Every key's current winner value, in file order.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &TagValue)> {
-        self.winners
-            .iter()
-            .map(move |(k, &idx)| (k, &self.occurrences[idx].raw))
+        self.winners_in_file_order()
+            .into_iter()
+            .map(move |(k, idx)| (k, &self.occurrences[idx].raw))
     }
 
+    /// Every key with a winner, in file order.
     pub fn keys(&self) -> impl Iterator<Item = &String> {
-        self.winners.keys()
+        self.winners_in_file_order().into_iter().map(|(k, _)| k)
     }
 
+    /// Every key's current winner value, in file order.
     pub fn values(&self) -> impl Iterator<Item = &TagValue> {
-        self.winners
-            .values()
-            .map(move |&idx| &self.occurrences[idx].raw)
+        self.winners_in_file_order()
+            .into_iter()
+            .map(move |(_, idx)| &self.occurrences[idx].raw)
     }
 
     /// Consumes the sink, returning only the winner projection as a plain
@@ -303,6 +322,29 @@ impl TagSink {
             out.insert(key, value);
         }
         out
+    }
+
+    /// Consumes the sink, returning the winner projection in file order --
+    /// what `MetadataMap::into_iter()` yields. [`TagSink::into_winner_map`]
+    /// holds the same pairs with no order at all.
+    pub fn into_winners(self) -> Vec<(String, TagValue)> {
+        let TagSink {
+            mut occurrences,
+            winners,
+            ..
+        } = self;
+        let mut winners: Vec<(String, usize)> = winners.into_iter().collect();
+        winners.sort_unstable_by_key(|&(_, idx)| idx);
+        winners
+            .into_iter()
+            .map(|(key, idx)| {
+                let value = std::mem::replace(
+                    &mut occurrences[idx].raw,
+                    TagValue::new_string(String::new()),
+                );
+                (key, value)
+            })
+            .collect()
     }
 
     /// Every **active** occurrence recorded so far, winners and losers
@@ -388,6 +430,73 @@ mod tests {
         TagOccurrence {
             instance,
             ..occ(value, priority, order)
+        }
+    }
+
+    /// Every winner projection yields keys in the file order of the
+    /// occurrence that holds each one -- never the winner `HashMap`'s own
+    /// order, which std seeds afresh for every sink. Parsers build a sub-map in
+    /// file order and copy it with `iter()`; `-a` then renders the copies in
+    /// the order that copy handed out. A key whose winner was displaced sits
+    /// at the displacing occurrence's position; a removed key is gone.
+    #[test]
+    fn winner_projections_iterate_in_file_order_on_every_sink() {
+        let keys = [
+            "IFD0:Make",
+            "IFD0:Model",
+            "IFD0:Orientation",
+            "ExifIFD:ISO",
+            "ExifIFD:FNumber",
+            "GPS:GPSLatitude",
+            "File:Comment",
+            "XMP-dc:Title",
+            "IPTC:Keywords",
+            "ICC_Profile:ProfileClass",
+        ];
+        let expected = [
+            "IFD0:Model",
+            "IFD0:Orientation",
+            "ExifIFD:ISO",
+            "ExifIFD:FNumber",
+            "File:Comment",
+            "XMP-dc:Title",
+            "IPTC:Keywords",
+            "ICC_Profile:ProfileClass",
+            "IFD0:Make",
+        ];
+        for run in 0..32 {
+            let mut sink = TagSink::new();
+            for (order, key) in keys.iter().enumerate() {
+                let value = TagValue::new_string(*key);
+                let occurrence = TagOccurrence::from_insert_shim(key, value, order as u32);
+                sink.record(key.to_string(), occurrence);
+            }
+            let make =
+                TagOccurrence::from_insert_shim("IFD0:Make", TagValue::new_string("Canon"), 10);
+            sink.record("IFD0:Make".to_string(), make);
+            sink.remove("GPS:GPSLatitude");
+
+            fn keys_of<'a>(keys: impl Iterator<Item = &'a String>) -> Vec<&'a str> {
+                keys.map(String::as_str).collect()
+            }
+            assert_eq!(keys_of(sink.keys()), expected, "keys(), sink {run}");
+            assert_eq!(
+                keys_of(sink.iter().map(|(k, _)| k)),
+                expected,
+                "iter(), sink {run}"
+            );
+            assert_eq!(
+                keys_of(sink.winner_occurrences().map(|(k, _)| k)),
+                expected,
+                "winner_occurrences(), sink {run}"
+            );
+            assert_eq!(
+                sink.values().last(),
+                Some(&TagValue::new_string("Canon")),
+                "values(), sink {run}"
+            );
+            let owned: Vec<String> = sink.into_winners().into_iter().map(|(k, _)| k).collect();
+            assert_eq!(owned, expected, "into_winners(), sink {run}");
         }
     }
 

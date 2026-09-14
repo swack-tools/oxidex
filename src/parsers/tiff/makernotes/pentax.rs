@@ -6275,6 +6275,56 @@ mod tests {
         assert!(metadata.get_string("Pentax:PentaxModelID (1)").is_none());
     }
 
+    /// The two corpus files an inertness check caught printing different
+    /// bytes from run to run of one binary: their `PentaxModelID` copies
+    /// differ in value, so the MakerNote merge's HashMap order showed up as
+    /// a swap. The pinned 13.59 oracle's `-G1 -a -s` prints the 0x0005 copy
+    /// first (`Optio L20` / `Optio SVi`) and the 0x0215 CameraInfo copy
+    /// second (`Optio S7` / `Optio SV`); its `-j -G1 -a` keeps the first.
+    #[test]
+    fn pentax_optio_duplicates_read_identically_on_every_run() {
+        if !crate::test_support::pinned_corpus_available() {
+            return;
+        }
+        for (file, model_ids) in [
+            ("PentaxOptioL20.jpg", ["Optio L20", "Optio S7"]),
+            ("PentaxOptioSVi.jpg", ["Optio SVi", "Optio SV"]),
+        ] {
+            let path = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT)
+                .join("Pentax")
+                .join(file);
+            // Every occurrence in `order`, as `-a` renders them; the access
+            // time is the clock (each read moves it), not the parser.
+            let read = || -> Vec<(String, String)> {
+                let report = crate::core::operations::read_metadata_report(&path)
+                    .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+                report
+                    .metadata
+                    .all_occurrences()
+                    .filter(|(key, _)| key != "File:FileAccessDate")
+                    .map(|(key, o)| (key, format!("{:?}", o.raw)))
+                    .collect()
+            };
+            let first = read();
+            for run in 1..16 {
+                assert_eq!(read(), first, "{file}: run {run} read differently");
+            }
+            let copies: Vec<String> = first
+                .iter()
+                .filter(|(key, _)| key == "Pentax:PentaxModelID")
+                .map(|(_, value)| value.clone())
+                .collect();
+            let expected: Vec<String> = model_ids
+                .iter()
+                .map(|v| format!("{:?}", crate::core::TagValue::new_string(*v)))
+                .collect();
+            assert_eq!(
+                copies, expected,
+                "{file}: PentaxModelID copies in file order"
+            );
+        }
+    }
+
     /// Controlled, corpus-independent end-to-end proof: when both of
     /// `LensType`'s `Priority => 0` writer sites fire (0x003f `LensRec` and
     /// 0x0207 `LensInfo`, the exact bytes `exiftool -v3` prints for
@@ -6310,7 +6360,9 @@ mod tests {
             .expect("Pentax MakerNote should parse");
 
         let mut metadata = crate::core::MetadataMap::new();
-        for (tag_name, tag_value) in tags {
+        for (tag_name, tag_value) in
+            crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(tags)
+        {
             crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
                 &mut metadata,
                 tag_name,
@@ -6326,36 +6378,34 @@ mod tests {
              the shadowed copy's priority 0 whichever arrives first"
         );
         // `tags: HashMap<String, String>` -- the `MakerNoteParser` trait's
-        // output shape -- has no defined iteration order, so which of the
-        // two keys the merge loop visits first (and therefore which ends up
-        // at `occurrences()[0]` vs `[1]`) is not deterministic; only the
-        // *set* of retained values and the winner (asserted above) are.
-        let lens_type_occurrences = metadata.occurrences_for("Pentax:LensType");
-        assert_eq!(
-            lens_type_occurrences.len(),
-            2,
-            "both LensType copies must be retained"
-        );
-        let lens_type_values: Vec<&str> = lens_type_occurrences
+        // output shape -- has no defined iteration order; `in_record_order`
+        // gives the copies file order (0x003f before 0x0207), the order `-a`
+        // renders them in.
+        let lens_type_values: Vec<&str> = metadata
+            .occurrences_for("Pentax:LensType")
             .iter()
             .filter_map(|o| o.raw.as_string())
             .collect();
-        for expected in ["smc PENTAX-DA 21mm F3.2 AL Limited", "M-42 or No Lens"] {
-            assert!(
-                lens_type_values.contains(&expected),
-                "expected {expected:?} among retained LensType values, got {lens_type_values:?}"
-            );
-        }
+        assert_eq!(
+            lens_type_values,
+            ["smc PENTAX-DA 21mm F3.2 AL Limited", "M-42 or No Lens"],
+            "both LensType copies must be retained, in file order"
+        );
 
         assert_eq!(
             metadata.get_string("Pentax:PentaxModelID"),
             Some("Optio SVi"),
             "0x0005 Main must still be the default winner"
         );
+        let model_id_values: Vec<&str> = metadata
+            .occurrences_for("Pentax:PentaxModelID")
+            .iter()
+            .filter_map(|o| o.raw.as_string())
+            .collect();
         assert_eq!(
-            metadata.occurrences_for("Pentax:PentaxModelID").len(),
-            2,
-            "both PentaxModelID copies must be retained"
+            model_id_values,
+            ["Optio SVi", "Optio SV"],
+            "both PentaxModelID copies must be retained, 0x0005 before 0x0215"
         );
 
         // The synthetic "(N)" marker key must never leak out as a real tag.
