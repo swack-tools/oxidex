@@ -86,6 +86,21 @@ class BaselineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             baseline.projection([{}, {}])
 
+    def test_hydrated_capture_uses_effective_rows_and_resolves_groups(self):
+        tables = {}
+        for name in selector.TABLES:
+            full = "Image::ExifTool::QuickTime::" + name
+            tables[full] = {"full_name": full, "meta": {"GROUPS": {"__ref": "HASH", "object_id": "groups"}},
+                            "tags": {}}
+        tables["Image::ExifTool::QuickTime::Keys"]["tags"]["artist"] = {
+            "TagID": "artist", "Table": {"__ref": "tag_table", "table_full_names": ["Image::ExifTool::QuickTime::Keys"]},
+            "Groups": {"__ref": "HASH", "object_id": "groups"}, "Name": "Artist",
+            "_extra_properties": {"GotGroups": "1"}}
+        document = {"hydrated_layouts": {"tables": tables,
+                    "shared_reference_objects": {"groups": {"kind": "HASH", "properties": {"0": "QuickTime", "1": "Keys"}}}}}
+        projected = capture.hydrated_tables(document)
+        self.assertEqual(projected["Keys"]["tags"]["artist"], {"Name": "Artist"})
+
     def test_reading_check_detects_changed_values_and_pin(self):
         before = {"pin": "13.59", "fixtures": [{"actual": {"ItemList:AlbumID": 1}}]}
         baseline.check_reading_baseline(before, before)
@@ -100,15 +115,9 @@ class BaselineTests(unittest.TestCase):
         module = full["modules"]["QuickTime"]
         module["tables"]["Other"] = {"sentinel": True}
         module["table_count"] = len(module["tables"])
-        result = capture.extract(full, full_hash="0" * 64, source_commit="1" * 40,
-                                 perl_version="5.38.2", tool_hash="2" * 64)
-        self.assertEqual(result["capture_scope"]["source_module_table_count"], 4)
-        self.assertEqual(result["modules"]["QuickTime"]["table_count"], 3)
-        self.assertNotIn("Other", result["modules"]["QuickTime"]["tables"])
-        self.assertEqual(result["quicktime_itemlist_reader_protocol"],
-                         full["quicktime_itemlist_reader_protocol"])
-        for name in selector.TABLES:
-            self.assertEqual(result["modules"]["QuickTime"]["tables"][name], module["tables"][name])
+        with self.assertRaisesRegex(ValueError, "hydrated QuickTime"):
+            capture.extract(full, full_hash="0" * 64, source_commit="1" * 40,
+                            perl_version="5.38.2", tool_hash="2" * 64)
 
     def test_capture_provenance_cannot_be_removed_or_reassigned(self):
         document = json.loads((HERE / "fixtures/quicktime_source_13_59.json").read_text())
