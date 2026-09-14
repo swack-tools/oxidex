@@ -176,6 +176,16 @@ python3 "$HERE/setnewvalue_public_migration_ledger.py" "$JSON" \
     --write-ledger "$PUBLIC_MIGRATION_LEDGER" "${PUBLIC_MIGRATION_ARGS[@]}"
 
 echo
+echo ">> generating authenticated fresh-JPEG byte-order operands"
+BYTE_ORDER_OBSERVATIONS="$CACHE/fresh-jpeg-byte-order-$VERSION.json"
+python3 "$HERE/fresh_jpeg_byte_order_native.py" \
+    --perl "$PERL" --exiftool-dir "$LIB" --output "$BYTE_ORDER_OBSERVATIONS"
+python3 "$HERE/fresh_jpeg_byte_order_codegen.py" "$BYTE_ORDER_OBSERVATIONS" \
+    --writer-tables "$JSON" \
+    --output "$(artifact_path fresh-jpeg-byte-order-rules)" \
+    --report "$(artifact_path fresh-jpeg-byte-order-ledger)"
+
+echo
 echo ">> extracting file-identification tables"
 "$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \

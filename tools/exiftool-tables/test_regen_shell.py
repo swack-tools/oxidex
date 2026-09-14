@@ -113,6 +113,16 @@ else:
         else:
             assert '--bootstrap' in args
         output(flag('--output'),name); output(flag('--report'),name+'-report'); output(flag('--write-ledger'),name+'-ledger')
+    elif name=='fresh_jpeg_byte_order_native.py':
+        assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        assert flag('--exiftool-dir')==lib
+        flag('--output').write_text(json.dumps({'marker':'explicit-A'}))
+    elif name=='fresh_jpeg_byte_order_codegen.py':
+        assert json.loads(pathlib.Path(args[0]).read_text())['marker']=='explicit-A'
+        dump(flag('--writer-tables'))
+        selected={root/item.path for item in artifacts.select(producer='fresh_jpeg_byte_order_codegen')}
+        assert {flag('--output'),flag('--report')}==selected
+        output(flag('--output'),name); output(flag('--report'),name+'-ledger')
     elif name=='verify_serial_directory.py':
         assert pathlib.Path(args[0]).resolve()==artifact('serial_directory')
         assert pathlib.Path(args[0]).read_text()=='generated explicit-A serial\n'

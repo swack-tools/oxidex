@@ -13,6 +13,8 @@ pub(crate) struct FreshJpegByteOrderRecipe {
     pub caller_source_sha256: &'static str,
     pub caller_body_sha256: &'static str,
     pub closure_sha256: &'static str,
+    pub writer_capture_closure_sha256: &'static str,
+    pub writer_read_capture_closure_sha256: &'static str,
     pub exiftool_version: &'static str,
     pub perl_version: &'static str,
 }
@@ -30,6 +32,10 @@ pub(crate) const FRESH_JPEG_BYTE_ORDER: FreshJpegByteOrderRecipe = FreshJpegByte
     caller_source_sha256: "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
     caller_body_sha256: "c6766768697bfb125e34269852979e9c697b0ab64476c4e2359528cca28a3692",
     closure_sha256: "e16edd3a6040e869351d13ca1239eca9f171a87573191146645bd3fbb8be6620",
+    writer_capture_closure_sha256:
+        "31b7505048d163e716b258da6a680183927291cc40708b74a32619def62944fc",
+    writer_read_capture_closure_sha256:
+        "44e1835bb0f8ec909831cd79487298b43f71f65132ec8e16e41891e9e5f846ac",
     exiftool_version: "13.59",
     perl_version: "5.038002",
 };

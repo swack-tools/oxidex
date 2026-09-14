@@ -140,16 +140,64 @@ class FreshJpegByteOrderRecipe:
     caller_source_sha256: str
     caller_body_sha256: str
     closure_sha256: str
+    writer_capture_closure_sha256: str
+    writer_read_capture_closure_sha256: str
     exiftool_version: str
     perl_version: str
 
 
-def compile_recipe(document: Mapping[str, Any]) -> FreshJpegByteOrderRecipe:
+def _writer_capture_join(probe: Mapping[str, Any], writer_document: Mapping[str, Any]) -> tuple[str, str]:
+    """Join the small executable probe to the full selected writer/read capture.
+
+    The byte-order probe has the actual helper and caller bodies.  The full
+    dump proves those source files belong to the same post-load writer context
+    and to the reader-side selected-library closure used by all writer rules.
+    """
+    writer_document = _mapping(writer_document, "writer tables document")
+    write_context = _mapping(writer_document.get("native_write_capture_context"), "writer capture context")
+    if (write_context.get("kind") != "write_exif_postload_context_v1"
+            or write_context.get("resolved") is not True
+            or write_context.get("deparse_options") != ["-p", "-sC"]
+            or write_context.get("load_errors") != []):
+        raise FreshByteOrderRefused("full writer capture context is unresolved")
+    write_loaded = _mapping(write_context.get("loaded_modules"), "full writer capture loaded modules")
+    probe_loaded = _mapping(_mapping(probe.get("capture_context"), "capture_context").get("loaded_modules"), "probe loaded modules")
+    for file in ("Image/ExifTool.pm", "Image/ExifTool/Writer.pl"):
+        if write_loaded.get(file) != probe_loaded.get(file):
+            raise FreshByteOrderRefused("full writer capture does not join preferred-byte-order closure")
+        _sha(write_loaded.get(file), "full writer capture source")
+    read_context = _mapping(writer_document.get("native_capture_context"), "reader capture context")
+    closure = _mapping(read_context.get("loaded_closure"), "reader capture closure")
+    if read_context.get("schema") != "native_exiftool_capture_context_v1":
+        raise FreshByteOrderRefused("reader capture context is unresolved")
+    read_digest = _sha(closure.get("sha256"), "reader capture closure digest")
+    modules = closure.get("modules")
+    if not isinstance(modules, list):
+        raise FreshByteOrderRefused("reader capture closure modules are unavailable")
+    read_loaded: dict[str, str] = {}
+    for item in modules:
+        item = _mapping(item, "reader capture closure module")
+        inc = item.get("inc")
+        source_file = item.get("source_file")
+        source_sha = item.get("source_sha256")
+        if inc != source_file:
+            continue
+        read_loaded[_path(inc, "reader capture closure module path")] = _sha(source_sha, "reader capture closure source")
+    for file in ("Image/ExifTool.pm", "Image/ExifTool/Writer.pl"):
+        if read_loaded.get(file) != probe_loaded.get(file):
+            raise FreshByteOrderRefused("reader capture does not join preferred-byte-order closure")
+    writer_payload = [{"file": file, "sha256": sha} for file, sha in sorted(write_loaded.items())]
+    writer_digest = hashlib.sha256(json.dumps(writer_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return writer_digest, read_digest
+
+
+def compile_recipe(document: Mapping[str, Any], writer_document: Mapping[str, Any]) -> FreshJpegByteOrderRecipe:
     method = _fact(document, "set_preferred_byte_order", "Image::ExifTool::SetPreferredByteOrder", "Image/ExifTool/Writer.pl")
     caller = _fact(document, "new_jpeg_caller", "Image::ExifTool::DoProcessTIFF", "Image/ExifTool.pm")
     method_source = _sha(method["source_sha256"], "SetPreferredByteOrder source")
     caller_source = _sha(caller["source_sha256"], "DoProcessTIFF source")
     _capture_context(document, method_source, caller_source)
+    writer_capture_closure_sha256, writer_read_capture_closure_sha256 = _writer_capture_join(document, writer_document)
     fallback = _method_default(method["__deparse"])
     _caller_new_ifd0(caller["__deparse"])
     observations = _mapping(document.get("observations"), "observations")
@@ -169,6 +217,8 @@ def compile_recipe(document: Mapping[str, Any]) -> FreshJpegByteOrderRecipe:
         caller_source_sha256=caller_source,
         caller_body_sha256=hashlib.sha256(caller["__deparse"].encode()).hexdigest(),
         closure_sha256=_sha(_mapping(document["capture_context"], "capture_context")["loaded_closure_sha256"], "closure digest"),
+        writer_capture_closure_sha256=writer_capture_closure_sha256,
+        writer_read_capture_closure_sha256=writer_read_capture_closure_sha256,
         exiftool_version=str(_mapping(document["capture_context"], "capture_context").get("exiftool_version")),
         perl_version=str(_mapping(document["capture_context"], "capture_context").get("perl_version")),
     )
@@ -176,12 +226,13 @@ def compile_recipe(document: Mapping[str, Any]) -> FreshJpegByteOrderRecipe:
 
 def render_rust(recipe: FreshJpegByteOrderRecipe) -> str:
     variant = "LittleEndian" if recipe.order == "II" else "BigEndian"
-    return f'''// @generated by fresh_jpeg_byte_order_codegen.py; selected native executable operands only.\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub(crate) enum FreshJpegExifByteOrder {{ LittleEndian, BigEndian }}\n\npub(crate) struct FreshJpegByteOrderRecipe {{\n    pub selected: FreshJpegExifByteOrder,\n    pub set_preferred_source_sha256: &'static str,\n    pub set_preferred_body_sha256: &'static str,\n    pub caller_source_sha256: &'static str,\n    pub caller_body_sha256: &'static str,\n    pub closure_sha256: &'static str,\n    pub exiftool_version: &'static str,\n    pub perl_version: &'static str,\n}}\n\npub(crate) struct FreshJpegByteOrderInputs<'a> {{\n    pub byte_order_option: Option<&'a str>,\n    pub exif_byte_order: Option<&'a str>,\n    pub maker_note_byte_order: Option<&'a str>,\n}}\n\npub(crate) const FRESH_JPEG_BYTE_ORDER: FreshJpegByteOrderRecipe = FreshJpegByteOrderRecipe {{\n    selected: FreshJpegExifByteOrder::{variant},\n    set_preferred_source_sha256: "{recipe.set_preferred_source_sha256}",\n    set_preferred_body_sha256: "{recipe.set_preferred_body_sha256}",\n    caller_source_sha256: "{recipe.caller_source_sha256}",\n    caller_body_sha256: "{recipe.caller_body_sha256}",\n    closure_sha256: "{recipe.closure_sha256}",\n    exiftool_version: "{recipe.exiftool_version}",\n    perl_version: "{recipe.perl_version}",\n}};\n\npub(crate) fn fresh_jpeg_byte_order(\n    recipe: &FreshJpegByteOrderRecipe,\n    inputs: FreshJpegByteOrderInputs<'_>,\n) -> Result<FreshJpegExifByteOrder, &'static str> {{\n    if inputs.byte_order_option.is_some() || inputs.exif_byte_order.is_some() || inputs.maker_note_byte_order.is_some() {{\n        return Err("fresh JPEG byte-order override is outside the generated native branch");\n    }}\n    Ok(recipe.selected)\n}}\n'''
+    return f'''// @generated by fresh_jpeg_byte_order_codegen.py; selected native executable operands only.\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub(crate) enum FreshJpegExifByteOrder {{ LittleEndian, BigEndian }}\n\npub(crate) struct FreshJpegByteOrderRecipe {{\n    pub selected: FreshJpegExifByteOrder,\n    pub set_preferred_source_sha256: &'static str,\n    pub set_preferred_body_sha256: &'static str,\n    pub caller_source_sha256: &'static str,\n    pub caller_body_sha256: &'static str,\n    pub closure_sha256: &'static str,\n    pub writer_capture_closure_sha256: &'static str,\n    pub writer_read_capture_closure_sha256: &'static str,\n    pub exiftool_version: &'static str,\n    pub perl_version: &'static str,\n}}\n\npub(crate) struct FreshJpegByteOrderInputs<'a> {{\n    pub byte_order_option: Option<&'a str>,\n    pub exif_byte_order: Option<&'a str>,\n    pub maker_note_byte_order: Option<&'a str>,\n}}\n\npub(crate) const FRESH_JPEG_BYTE_ORDER: FreshJpegByteOrderRecipe = FreshJpegByteOrderRecipe {{\n    selected: FreshJpegExifByteOrder::{variant},\n    set_preferred_source_sha256: "{recipe.set_preferred_source_sha256}",\n    set_preferred_body_sha256: "{recipe.set_preferred_body_sha256}",\n    caller_source_sha256: "{recipe.caller_source_sha256}",\n    caller_body_sha256: "{recipe.caller_body_sha256}",\n    closure_sha256: "{recipe.closure_sha256}",\n    writer_capture_closure_sha256: "{recipe.writer_capture_closure_sha256}",\n    writer_read_capture_closure_sha256: "{recipe.writer_read_capture_closure_sha256}",\n    exiftool_version: "{recipe.exiftool_version}",\n    perl_version: "{recipe.perl_version}",\n}};\n\npub(crate) fn fresh_jpeg_byte_order(\n    recipe: &FreshJpegByteOrderRecipe,\n    inputs: FreshJpegByteOrderInputs<'_>,\n) -> Result<FreshJpegExifByteOrder, &'static str> {{\n    if inputs.byte_order_option.is_some() || inputs.exif_byte_order.is_some() || inputs.maker_note_byte_order.is_some() {{\n        return Err("fresh JPEG byte-order override is outside the generated native branch");\n    }}\n    Ok(recipe.selected)\n}}\n'''
 
 
-def generate(document: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
-    recipe = compile_recipe(document)
-    report = {"state": "resolved", "order": recipe.order, "recipe": recipe.__dict__}
+def generate(document: Mapping[str, Any], writer_document: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    recipe = compile_recipe(document, writer_document)
+    report = {"state": "resolved", "order": recipe.order, "recipe": recipe.__dict__,
+              "writer_capture_joined": True}
     return render_rust(recipe), report
 
 
@@ -191,9 +242,11 @@ def main() -> int:
     parser.add_argument("input", type=Path, help="native preferred-byte-order probe JSON")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--writer-tables", type=Path, required=True)
     args = parser.parse_args()
     document = json.loads(args.input.read_text(encoding="utf-8"))
-    source, report = generate(document)
+    writer_document = json.loads(args.writer_tables.read_text(encoding="utf-8"))
+    source, report = generate(document, writer_document)
     args.output.write_text(source, encoding="utf-8")
     if args.report is not None:
         args.report.write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8")

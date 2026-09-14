@@ -20,6 +20,8 @@ LIB = Path(os.environ.get("OXIDEX_PINNED_EXIFTOOL", "/tmp/oxidex-exiftool-cache/
 if (LIB / "lib").is_dir():
     LIB = LIB / "lib"
 NATIVE_READY = PERL.is_file() and LIB.is_dir()
+ROOT = Path(__file__).resolve().parents[2]
+DUMP = ROOT / "tools/exiftool-tables/dump_tables.pl"
 
 from fresh_jpeg_byte_order_native import capture
 
@@ -32,18 +34,27 @@ def native_document(library: Path = LIB) -> dict[str, object]:
         raise AssertionError(str(error)) from error
 
 
+def native_writer_document(library: Path = LIB) -> dict[str, object]:
+    result = subprocess.run([str(PERL), str(DUMP), str(library), "Exif"],
+                            text=True, capture_output=True, check=False, timeout=30)
+    if result.returncode:
+        raise AssertionError(f"bounded writer capture failed: {result.stderr}")
+    return json.loads(result.stdout)
+
+
 
 @unittest.skipUnless(NATIVE_READY, "requires canonical EXIFTOOL_PERL and OXIDEX_PINNED_EXIFTOOL")
 class FreshJpegByteOrderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.document = native_document()
+        cls.writer_document = native_writer_document()
 
     def test_native_default_is_compiled_from_executable_not_hardcoded(self) -> None:
-        recipe = compile_recipe(self.document)
+        recipe = compile_recipe(self.document, self.writer_document)
         self.assertEqual(recipe.order, self.document["observations"]["fresh_ifd0_no_overrides"]["selected"])
         self.assertEqual(recipe.order, "MM")
-        source, report = generate(self.document)
+        source, report = generate(self.document, self.writer_document)
         self.assertEqual(report["state"], "resolved")
         self.assertIn("selected: FreshJpegExifByteOrder::BigEndian", source)
         self.assertIn(recipe.set_preferred_source_sha256, source)
@@ -80,10 +91,11 @@ class FreshJpegByteOrderTests(unittest.TestCase):
             self.assertEqual(source.count("|| 'MM'"), 2)
             writer.write_text(source.replace("|| 'MM'", "|| 'II'"), encoding="utf-8")
             changed = native_document(copied)
+            changed_writer = native_writer_document(copied)
             self.assertEqual(changed["set_preferred_byte_order"]["source_file"], "Image/ExifTool/Writer.pl")
             self.assertNotEqual(changed["set_preferred_byte_order"]["source_sha256"], self.document["set_preferred_byte_order"]["source_sha256"])
             self.assertEqual(changed["observations"]["fresh_ifd0_no_overrides"]["selected"], "II")
-            rendered, report = generate(changed)
+            rendered, report = generate(changed, changed_writer)
             self.assertEqual(report["order"], "II")
             self.assertIn("selected: FreshJpegExifByteOrder::LittleEndian", rendered)
 
@@ -96,7 +108,7 @@ class FreshJpegByteOrderTests(unittest.TestCase):
             self.assertIn("my ($self, $default) = @_;", source)
             writer.write_text(source.replace("my ($self, $default) = @_;", "my ($self, $default) = @_; my $injected = 1;", 1), encoding="utf-8")
             with self.assertRaisesRegex(FreshByteOrderRefused, "admitted grammar"):
-                compile_recipe(native_document(copied))
+                compile_recipe(native_document(copied), native_writer_document(copied))
 
     def test_copied_caller_block_change_refuses(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -108,20 +120,34 @@ class FreshJpegByteOrderTests(unittest.TestCase):
             self.assertIn(needle, source)
             core.write_text(source.replace(needle, "my $defaultByteOrder;\n        my $injected = 1;\n        if ($$dirInfo{DirName}", 1), encoding="utf-8")
             with self.assertRaisesRegex(FreshByteOrderRefused, "new-header caller block"):
-                compile_recipe(native_document(copied))
+                compile_recipe(native_document(copied), native_writer_document(copied))
+
+    def test_full_writer_or_reader_capture_mismatch_refuses(self) -> None:
+        changed = copy.deepcopy(self.writer_document)
+        changed["native_write_capture_context"]["loaded_modules"]["Image/ExifTool/Writer.pl"] = "0" * 64
+        with self.assertRaisesRegex(FreshByteOrderRefused, "full writer capture"):
+            compile_recipe(self.document, changed)
+        changed = copy.deepcopy(self.writer_document)
+        modules = changed["native_capture_context"]["loaded_closure"]["modules"]
+        for item in modules:
+            if item["inc"] == "Image/ExifTool.pm":
+                item["source_sha256"] = "0" * 64
+                break
+        with self.assertRaisesRegex(FreshByteOrderRefused, "reader capture"):
+            compile_recipe(self.document, changed)
 
     def test_tampered_closure_or_observation_refuses(self) -> None:
         changed = copy.deepcopy(self.document)
         changed["capture_context"]["loaded_modules"]["Image/ExifTool.pm"] = "0" * 64
         with self.assertRaisesRegex(FreshByteOrderRefused, "closure"):
-            compile_recipe(changed)
+            compile_recipe(changed, self.writer_document)
         changed = copy.deepcopy(self.document)
         changed["observations"]["fresh_ifd0_no_overrides"]["selected"] = "II"
         with self.assertRaisesRegex(FreshByteOrderRefused, "does not match"):
-            compile_recipe(changed)
+            compile_recipe(changed, self.writer_document)
 
     def test_rendered_rule_refuses_override_at_runtime(self) -> None:
-        source, _ = generate(self.document)
+        source, _ = generate(self.document, self.writer_document)
         with tempfile.TemporaryDirectory() as temp:
             temp = Path(temp)
             rule = temp / "rule.rs"
