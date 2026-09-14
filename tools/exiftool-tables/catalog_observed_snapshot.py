@@ -168,12 +168,19 @@ def render_report(snapshot: dict, current_source: dict | None = None) -> str:
     return "\n".join([
         "# Authenticated catalog observations", "",
         "This is a historical native receipt. It does not assert that a later source or runtime has the same observations.", "",
-        f"- Historical source commit: `{snapshot['native_evidence']['source_commit']}`",
+        f"- Observed runtime commit: `{snapshot['native_evidence']['source_commit']}`",
         f"- Runtime input manifest: `{snapshot['native_evidence']['runtime_input_manifest_sha256']}`",
         f"- Historical source join SHA-256: `{snapshot['source_join_sha256']}`",
         f"- Current source applicability: {current}",
         f"- Source denominator: `{observed['counts']['joined_records']}`",
-        f"- Source tables retained: `{len(snapshot['source_table_observations'])}`", "",
+        f"- Catalog entries with observed reads: `{observed['counts'].get('observed_read', {}).get('observed_matched_read', 0)}`",
+        f"- Catalog entries with observed writes: `{observed['counts'].get('observed_write', {}).get('observed_matched_write', 0)}`",
+        f"- Source tables retained: `{len(snapshot['source_table_observations'])}`",
+        f"- Source tables with observations: `{sum(any(bucket[axis].get(state, 0) for axis, state in [('observed_read', 'observed_matched_read'), ('observed_write', 'observed_matched_write')]) for bucket in snapshot['source_table_observations'].values())}`",
+        "",
+        "Read/write entry counts use catalog table coordinates. Native Group1 names, fixture occurrences and write operations are separate denominators in the machine-readable receipt.",
+        "",
+        "Historical integrity checks compare the stored ledger and receipt bindings. They do not rerun the native tools or prove current runtime behavior.", "",
     ])
 
 

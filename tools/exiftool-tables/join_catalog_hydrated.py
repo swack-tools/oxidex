@@ -964,6 +964,7 @@ def main() -> int:
                               args.quicktime_bounded_source, args.quicktime_itemlist_ledger,
                               args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
                               args.quicktime_keys_ledger, args.quicktime_keys_rust,
+                              *(userdata_paths if all(path is not None for path in userdata_paths) else ()),
                               *(writer_paths if all(path is not None for path in writer_paths) else ()),
                               *(ifd_expr_paths if all(path is not None for path in ifd_paths) else ()),
                               *(path for path in evidence_paths if path is not None))
