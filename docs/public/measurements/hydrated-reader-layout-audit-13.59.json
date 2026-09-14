@@ -1,8 +1,8 @@
 {
   "catalog_native_entries": 33487,
   "catalog_native_legacy_unique_counter": 21437,
-  "dump_bytes": 99146085,
-  "dump_sha256": "716f6a295e83711c60ef672762734c9e6034324b8a9f4f03289856713c86185e",
+  "dump_bytes": 102565197,
+  "dump_sha256": "b5260651673610c61040343a107a62fe1ea18ec1803a192a946fb09b696adc4d",
   "exiftool_version": "13.59",
   "instrument_sha256": "187e9de886f70897d2f2ea2da225eb6e0654b7d5adda86241c9f8deb226a2ab6",
   "raw_keys": 34897,
@@ -17,7 +17,7 @@
   "shortcuts": 11,
   "source_provenance": {
     "perl_version": "v5.38.2",
-    "producer_sha256": "a6efcbcbe12b13d5651a7c6d84f02cffa843f8e1afafe59c874c5cb0bc2b1d28",
+    "producer_sha256": "a2c0cd1d20dcc5773f8f975587081f753af0472a08f50606966cdb7ffaf7fe3e",
     "sources": {
       "Image/ExifTool.pm": {
         "library_relative_path": "Image/ExifTool.pm",

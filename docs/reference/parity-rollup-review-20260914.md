@@ -20,7 +20,7 @@ PRs #682 and #683 are excluded and remain independent.
 - Regenerate the hydrated capture, source-bound QuickTime snapshot and all combined reader/writer ledgers from one pinned canonical source capture. Older numeric artifacts must not replace the later authenticated source closure.
 - Run the full combined Rust and Python gates and pinned read/write matrices. Historical passes apply only to their recorded commits and scopes.
 - Review and resolve every carried-forward item below before merging #779.
-- Incorporate and independently review the pending writer fixes from `318d8c97`; their focused tests passed on the writer branch, but the full native/public matrix remains unrun.
+- Validate the integrated writer, Nikon, and rehearsal corrections against the complete regenerated artifacts. The native/public matrix remains unrun on the combined tree.
 
 Integration checks so far: every original PR head is an ancestor; no unresolved Git conflicts; Perl syntax, Python syntax and the 14 merged matrix unit tests pass. These checks do not prove combined runtime parity.
 
@@ -119,3 +119,15 @@ These were unresolved on the original PRs when consolidation began. Closing the 
   **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Prefer a current reverse name over a retired identity**
 
   When an upgraded ExifTool release renames a migrated scalar while retaining its numeric ID and physical IFD, the migration ledger deliberately keeps the old name terminal and publishes the new name as current. Because `terminal_reverse` matches only the ID and physical group, the retired row triggers this early return and prevents the current `reverse_name` from ever being consulted; reads then expose `IFD0:0xNNNN` even though the newly named descriptor is writable. Check for a current generated reverse match first, or exclude IDs that have a current fact from the terminal reverse projection.
+
+## Integration checkpoint after review corrections
+
+Writer corrections, Nikon generator hardening, and rehearsal timeout/journal fixes were integrated and pushed in `2168208a`. Focused macOS validation: 12 batch-report tests, 33 Nikon/artifact tests, and 39 rehearsal tests passed. The writer checkpoint passed `cargo clippy --lib -- -D warnings`; its writer suite reported 214 passed, 2 ignored, and 2 Artist/IFD1 address refusals. These are incomplete combined-gate results.
+
+The first canonical regeneration used Perl 5.38.2 and pinned ExifTool 13.59. `verify_exprs.py` passed all 607 translated expressions: 16,789 matching comparisons, zero disagreements, and 14 probes skipped because Perl rejected the input. Regeneration then stopped because the merged mandatory-default compiler lacked the cleanup field expected by its generator. `3c175a53` restores that source-authenticated grammar while retaining the later numeric omission handling; the native cleanup mutation test and generation against the fresh full dump passed. A complete regeneration is still required.
+
+The Artist/IFD1 native-table filter is integrated in `8ff6d4ef`. Pinned `SetNewValue` can queue the same name from multiple source tables; `WriteExif` selects the concrete directory table when applying the queued value. The filter preserves full table identity and refuses unknown or unmapped same-table candidates. Rust validation awaits the freshly generated candidate fields.
+
+The separate fresh hydrated capture passes the independent catalog audit: 1,512 tables, 35,886 variants, zero unresolved references, and all 33,487 catalog/source records retain identical semantic joins. Only the dump digest/size and dump-producer digest changed in the audit profile. These are inventory results, not additional observed read/write support.
+
+Remaining carried review checkboxes are intentionally open pending complete regeneration, combined gates, and native evidence. Linux timeout/zombie behavior remains unverified. The registry distribution regression is being updated to count authenticated generated replacements alongside the manual registry, without using YAML fallback or duplicate directory aliases to inflate the count.

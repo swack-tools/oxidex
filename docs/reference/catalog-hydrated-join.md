@@ -4,7 +4,7 @@ This report is source inventory only. It makes no generated reader/writer or obs
 
 - ExifTool: `13.59`
 - Catalog SHA-256: `a1e4db23b9da36a63cb9aad7e3cbd4158d43cafc374bf99b5dabc4f76d205e05`
-- Hydrated SHA-256: `34f6bc9efc38be6a04d2f8710a522d26e941a945c967a777020e886879072164`
+- Hydrated SHA-256: `b5260651673610c61040343a107a62fe1ea18ec1803a192a946fb09b696adc4d`
 
 | Measurement | Count |
 | --- | ---: |
