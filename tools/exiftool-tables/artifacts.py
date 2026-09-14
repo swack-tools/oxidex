@@ -43,6 +43,8 @@ ARTIFACTS = (
     Artifact("checkexif-ledger", 1, "checkexif_rust_codegen", "tools/exiftool-tables/checkexif_ledger.json"),
     Artifact("sanitize-rules", 1, "sanitize_rust_codegen", "src/writers/generated_sanitize_rules.rs"),
     Artifact("sanitize-ledger", 1, "sanitize_rust_codegen", "tools/exiftool-tables/sanitize_ledger.json"),
+    Artifact("convinv-rules", 1, "convinv_rust_codegen", "src/writers/generated_convinv_rules.rs"),
+    Artifact("convinv-ledger", 1, "convinv_rust_codegen", "tools/exiftool-tables/convinv_ledger.json"),
     Artifact("filetypes", 1, "codegen_filetypes", "src/filetype/tables.rs"),
     Artifact("composite", 1, "codegen_composite", "src/composite/tables.rs"),
     Artifact("composite-compute", 1, "codegen_composite", "src/composite/generated_compute.rs"),

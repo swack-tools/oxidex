@@ -761,3 +761,14 @@ source. Its original row inputs are still hand-constructed. A source-derived
 static row emitter and exact CHECK_PROC identity join remain in progress.
 Official registration/regeneration and full gates for this checkpoint are
 unfinished; no new PR, public writer or manual-rule retirement is claimed.
+
+ConvInv helper registration is now implemented: official generation owns its
+optional Rust recipe and ledger, for 40 registered artifacts total. Unsupported
+source emits an explicit absent recipe; malformed capture envelopes fail.
+Fresh full capture and generation passed, with only `native_write_helpers`
+changed versus the sanitizer capture: all 153 reader projections and reader
+contracts remain identical. Nine ConvInv tests (including actual generated-Rust
+proof and registered-artifact freshness), 19 manifest tests, regeneration-shell
+controls, formatting and Clippy passed. This is producer registration and
+focused validation; official full regeneration of all artifacts and final gates
+are still pending, including the expression ledger's new dump identity.

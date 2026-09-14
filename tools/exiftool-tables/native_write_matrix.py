@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Exercise a bounded, native ExifTool scalar-write matrix.
 
-This is a ground-truth acceptance instrument for default-option scalar writes.
-It deliberately records the bytes ExifTool wrote instead of predicting its
-terminator, encoding, relocation, or alias behavior.  It is not an OxiDex
-writer, nor a parity claim.
+This is a versioned acceptance instrument for default-option scalar writes.
+It records actual native output and checks the explicit ExifTool 13.59 byte
+contract, relocation and preservation. A different release requires separately
+captured expectations. This is not an OxiDex writer or a parity claim.
 """
 from __future__ import annotations
 
