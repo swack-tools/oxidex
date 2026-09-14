@@ -48,6 +48,37 @@ class FreshJpegPublicWriteMatrixTests(unittest.TestCase):
             matrix.compare_jpeg(source, native_output, generated, target, "delete-absent-noop")
             self.assertEqual(matrix.jfif_payloads(generated), (matrix.raw_jfif_payload(case.jfif).hex(),))
 
+    def test_insert_and_empty_reject_native_noop_outputs(self) -> None:
+        case = next(case for case in matrix.CARRIERS if case.label == "fresh-no-jfif")
+        target = matrix.generated_targets(matrix.LEDGER, matrix.RULES)[0]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source, noop = root / "source.jpg", root / "noop.jpg"
+            matrix.write_carrier(source, case)
+            shutil.copyfile(source, noop)
+            source_doc, noop_doc = native.parse_jpeg(source), native.parse_jpeg(noop)
+            for operation in ("fresh-insert", "defined-empty"):
+                with self.subTest(operation=operation):
+                    with self.assertRaisesRegex(AssertionError, "absent-to-present"):
+                        matrix._assert_native_target_transition(source_doc, noop_doc, target, operation)
+
+    def test_delete_noop_rejects_retained_empty_ifd0(self) -> None:
+        case = next(case for case in matrix.CARRIERS if case.label == "empty-ifd0-little")
+        target = matrix.generated_targets(matrix.LEDGER, matrix.RULES)[0]
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "empty.jpg"
+            matrix.write_carrier(path, case)
+            document = native.parse_jpeg(path)
+            with self.assertRaisesRegex(AssertionError, "retained or created"):
+                matrix._assert_native_target_transition(document, document, target, "delete-absent-noop")
+
+    def test_exact_target_count_is_compared_against_native(self) -> None:
+        target = matrix.generated_targets(matrix.LEDGER, matrix.RULES)[0]
+        expected = {"byte_order": "big", "tags": {str(target.raw_tag_id): {"type": 2, "count": 1, "value_hex": "00"}}, "children": {}}
+        changed = {"byte_order": "big", "tags": {str(target.raw_tag_id): {"type": 2, "count": 2, "value_hex": "0000"}}, "children": {}}
+        with self.assertRaisesRegex(AssertionError, "type/count/value"):
+            matrix._compare_tiff(expected, changed)
+
     def test_request_preserves_existing_public_driver_schema(self) -> None:
         target = matrix.generated_targets(matrix.LEDGER, matrix.RULES)[0]
         request = matrix._request(Path("input.jpg"), Path("output.jpg"), target, target.qualifiers[0], "utf8", "value")

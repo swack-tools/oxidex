@@ -167,9 +167,35 @@ def _compare_tiff(expected: dict[str, Any], actual: dict[str, Any]) -> None:
         _compare_tiff(child, actual["children"][name])
 
 
+def _target_entry(document: dict[str, Any], target: GeneratedTarget) -> dict[str, Any] | None:
+    exif = document["exif"]
+    return None if exif is None else exif["tags"].get(str(target.raw_tag_id))
+
+
+def _assert_native_target_transition(source_doc: dict[str, Any], native_doc: dict[str, Any],
+                                     target: GeneratedTarget, operation: str) -> None:
+    before, after = _target_entry(source_doc, target), _target_entry(native_doc, target)
+    if operation in {"fresh-insert", "defined-empty"}:
+        if before is not None or after is None:
+            raise AssertionError("native defined write did not transition the ledger target absent-to-present")
+        return
+    if operation == "delete-absent-noop":
+        if after is not None:
+            raise AssertionError("native delete retained the requested ledger target")
+        # Both contract fixtures have no target initially.  Fresh delete is a
+        # WriteInfo=2 no-op; empty-IFD delete removes its otherwise empty APP1.
+        if before is not None:
+            raise AssertionError("delete/no-op fixture unexpectedly began with the ledger target")
+        if native_doc["exif"] is not None:
+            raise AssertionError("native delete/no-op retained or created an EXIF APP1")
+        return
+    raise AssertionError("unknown fresh JPEG public operation")
+
+
 def compare_jpeg(source: Path, native_output: Path, generated_output: Path,
                  target: GeneratedTarget, operation: str) -> None:
     source_doc, native_doc, generated_doc = (native.parse_jpeg(path) for path in (source, native_output, generated_output))
+    _assert_native_target_transition(source_doc, native_doc, target, operation)
     source_jfif, native_jfif, generated_jfif = (jfif_payloads(path) for path in (source, native_output, generated_output))
     if source_jfif != native_jfif or source_jfif != generated_jfif:
         raise AssertionError("raw JFIF APP0 bytes changed")
@@ -189,12 +215,13 @@ def compare_jpeg(source: Path, native_output: Path, generated_output: Path,
         raise AssertionError("requested final-ledger target type/count/value bytes differ")
 
 
-def assert_native_oracle(call: dict[str, Any], label: str) -> None:
+def assert_native_oracle(call: dict[str, Any], label: str, operation: str) -> None:
     if call["returncode"] != 0 or not isinstance(call["result"], dict):
         raise AssertionError(f"{label}: native process failed: {call['stderr'] or call['stdout']}")
     result = call["result"]
-    if result.get("write_return") not in (1, 2) or result.get("error") is not None:
-        raise AssertionError(f"{label}: native write failed: {result}")
+    expected_returns = {1, 2} if operation == "delete-absent-noop" else {1}
+    if result.get("write_return") not in expected_returns or result.get("error") is not None:
+        raise AssertionError(f"{label}: native write failed or became a no-op: {result}")
     if not all(item.get("return") in (1, 2) for item in result.get("set_calls", [])):
         raise AssertionError(f"{label}: native SetNewValue rejected generated identity: {result}")
 
@@ -229,7 +256,7 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
                     stem = f"{case.label}-{target.raw_tag_id:04x}-{qualifier.replace(':', '_')}-{label}"
                     native_output, generated_output = root / f"{stem}-native.jpg", root / f"{stem}-generated.jpg"
                     call = native.run_native(perl, library, source, native_output, native_action, qualifier)
-                    assert_native_oracle(call, stem)
+                    assert_native_oracle(call, stem, label)
                     request = _request(source, generated_output, target, qualifier, scalar, value)
                     requests.append(request)
                     native_rows.append({"id": stem, "carrier": asdict(case), "target": asdict(target),
