@@ -26,8 +26,51 @@ CODE = {
  ('Image::ExifTool::WriteBinaryData','6e141f4f7ef93338d1ccedaa4d66a330f11b5de7695b0789a31fcd87a00521d0'),
  ('Image::ExifTool::ProcessBinaryData','c0046e17e1c2640c5aeec98db114c69ebd301fecb049cecdc50a42398b309019'),
  ('Image::ExifTool::ProcessBinaryData','6bcec56a8e09306bf25044e734e138581153361197ad42f96ca8789b4aea6357'),
+ # Native 13.59, captured with the canonical Perl after Nikon and
+ # NikonCustom hydrate their table graph.  The two historical forms above do
+ # not cover this B::Deparse form; it is still closed by this exact body hash.
+ ('Image::ExifTool::ProcessBinaryData','283954c79e2a9893469d57fd476091c34b57589f8c8f2e8c44cd62c067738fbf'),
  ('Image::ExifTool::Nikon::ProcessNikonEncrypted','2eaf021035b51e5f8f0577a76420d0d217e3d52d14596fd10c8ff8a53532706b'),
  ('Image::ExifTool::Nikon::ProcessNikonEncrypted','4814b522c2940b28240fc0fbcaa6d22e43619d3e604c3d7a65de4b61513c467e'),
+ ('Image::ExifTool::Nikon::Decrypt','b373a90204cb00e317f330a1a8432a75668e027641088a97a7ede89e2c91326d'),
+ ('Image::ExifTool::Nikon::InitEncryptedSubdir','ceecb4b7085857c703fecfd2fa870ac293f9a2d75b67e8572f26dc82af0df6e8'),
+ ('Image::ExifTool::Nikon::PrepareNikonOffsets','437fd2d08043ac213b639560c4a037b4fa0f3950745c07211ae3caa0a381bea5'),
+ ('Image::ExifTool::Nikon::SetByteOrder','ab615336391af90d9ab9b1e146cdcc6fb76bc20e096a3a2afb72d798da5f13d4'),
+ ('Image::ExifTool::SetByteOrder','ab615336391af90d9ab9b1e146cdcc6fb76bc20e096a3a2afb72d798da5f13d4'),
+}
+# The generated root layout delegates decryption to `encrypted.rs`, so this is
+# the native callback closure whose behavior the generated runtime actually
+# consumes. Keep the helper body pinned, not merely its name or source file:
+# an upstream edit to `Decrypt` can otherwise leave ProcessNikonEncrypted's
+# body and every table row unchanged while preserving stale Rust semantics.
+NIKON_ENCRYPTED_CALLBACKS = {
+ ('Image::ExifTool::Nikon::ProcessNikonEncrypted','2eaf021035b51e5f8f0577a76420d0d217e3d52d14596fd10c8ff8a53532706b'): {
+  'source_file':'Image/ExifTool/Nikon.pm',
+  'source_sha256':'9410b783cc5e591ec28d6bff66880adc8d9b056a545244bfd244d995a4422298',
+  'dependencies': {
+   'Image::ExifTool::Nikon::Decrypt': {
+    'body_sha256':'b373a90204cb00e317f330a1a8432a75668e027641088a97a7ede89e2c91326d',
+    'source_file':'Image/ExifTool/Nikon.pm',
+    'source_sha256':'9410b783cc5e591ec28d6bff66880adc8d9b056a545244bfd244d995a4422298',
+   },
+   'Image::ExifTool::Nikon::InitEncryptedSubdir': {
+    'body_sha256':'ceecb4b7085857c703fecfd2fa870ac293f9a2d75b67e8572f26dc82af0df6e8',
+    'source_file':'Image/ExifTool/Nikon.pm',
+    'source_sha256':'9410b783cc5e591ec28d6bff66880adc8d9b056a545244bfd244d995a4422298',
+   },
+   'Image::ExifTool::Nikon::PrepareNikonOffsets': {
+    'body_sha256':'437fd2d08043ac213b639560c4a037b4fa0f3950745c07211ae3caa0a381bea5',
+    'source_file':'Image/ExifTool/Nikon.pm',
+    'source_sha256':'9410b783cc5e591ec28d6bff66880adc8d9b056a545244bfd244d995a4422298',
+   },
+   'Image::ExifTool::Nikon::SetByteOrder': {
+    'name':'Image::ExifTool::SetByteOrder',
+    'body_sha256':'ab615336391af90d9ab9b1e146cdcc6fb76bc20e096a3a2afb72d798da5f13d4',
+    'source_file':'Image/ExifTool.pm',
+    'source_sha256':'95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508',
+   },
+  },
+ },
 }
 SPECIAL_PC = {
  '1e7ef329fc2f1932e8487471a4ca9bb29feba8e0c97bd9d10d2328b6bae8c082':'BlockShotBits',
@@ -80,7 +123,7 @@ def rs(v):
 def code(v):
  base={'__perl','__opaque','__name','__deparse'}
  provenance={'resolved','source_file','source_sha256'}
- allowed=base|provenance|{'dependencies'}
+ allowed=base|provenance|{'dependencies','lexical_arrays'}
  if not isinstance(v,dict) or set(v)-allowed or not base <= set(v) or v.get('__perl')!='CODE' or v.get('__opaque') not in (True,1) or not isinstance(v.get('__name'),str) or not isinstance(v.get('__deparse'),str): fail(f'bad CODE: {v!r}')
  present=set(v)&provenance
  if present and (present != provenance or v['resolved'] is not True or not isinstance(v['source_file'],str) or not re.fullmatch(r'[A-Za-z0-9_./-]+',v['source_file']) or v['source_file'].startswith('/') or '..' in v['source_file'].split('/') or not isinstance(v['source_sha256'],str) or not re.fullmatch(r'[0-9a-f]{64}',v['source_sha256'])): fail(f'bad CODE provenance: {v!r}')
@@ -88,6 +131,48 @@ def code(v):
  pair=(v.get('__name'),hashlib.sha256(v.get('__deparse','').encode()).hexdigest())
  if pair not in CODE: fail(f'unregistered native CODE body: {pair[0]!r} {pair[1]}')
  return pair[0]
+
+def decrypt_xlat(fact):
+ """Return the live two-row byte lookup captured from Nikon::Decrypt's pad."""
+ xlat=fact.get('lexical_arrays')
+ if not isinstance(xlat,dict) or set(xlat)!={'resolved','rows','sha256'} or xlat.get('resolved') is not True:
+  fail('Nikon Decrypt: missing or unresolved @xlat closure')
+ rows=xlat.get('rows')
+ if (not isinstance(rows,list) or len(rows)!=2 or not isinstance(xlat.get('sha256'),str)
+     or not re.fullmatch(r'[0-9a-f]{64}',xlat['sha256'])):
+  fail('Nikon Decrypt: malformed @xlat closure')
+ if any(not isinstance(row,list) or len(row)!=256 for row in rows):
+  fail('Nikon Decrypt: @xlat must contain two 256-byte rows')
+ if any(isinstance(value,bool) or not isinstance(value,int) or not 0<=value<=255 for row in rows for value in row):
+  fail('Nikon Decrypt: @xlat contains non-byte data')
+ raw=bytes(rows[0]+rows[1])
+ if hashlib.sha256(raw).hexdigest()!=xlat['sha256']:
+  fail('Nikon Decrypt: @xlat digest mismatch')
+ return raw
+
+def encrypted_callback(v):
+ name=code(v); pair=(name,hashlib.sha256(v['__deparse'].encode()).hexdigest())
+ expected=NIKON_ENCRYPTED_CALLBACKS.get(pair)
+ if expected is None: fail(f'unregistered encrypted callback: {name!r}')
+ if v['source_file']!=expected['source_file'] or v['source_sha256']!=expected['source_sha256']:
+  fail(f'{name}: source provenance changed')
+ deps=v.get('dependencies')
+ if not isinstance(deps,dict): fail(f'{name}: missing helper dependencies')
+ expected_deps=expected['dependencies']
+ if set(deps)!=set(expected_deps): fail(f'{name}: helper graph changed')
+ decrypt_lookup=None
+ for helper,contract in expected_deps.items():
+  fact=deps.get(helper)
+  if fact is None: fail(f'{name}: missing helper {helper!r}')
+  actual=code(fact)
+  digest=hashlib.sha256(fact['__deparse'].encode()).hexdigest()
+  if (actual!=contract.get('name',helper) or digest!=contract['body_sha256']
+      or fact['source_file']!=contract['source_file']
+      or fact['source_sha256']!=contract['source_sha256']):
+   fail(f'{name}: unregistered helper body or source {helper!r} {digest}')
+  if helper=='Image::ExifTool::Nikon::Decrypt': decrypt_lookup=decrypt_xlat(fact)
+ if decrypt_lookup is None: fail(f'{name}: missing Decrypt lookup closure')
+ return name,decrypt_lookup
 def expr(row,k):
  if k not in row:return None
  v=row[k]
@@ -196,7 +281,7 @@ def render(data):
   t=(nik if m.group(1)=='Nikon' else custom).get(m.group(2))
   if not t:fail(f'missing native table {full}')
   return m.group(2),t
- roots=[]; queue=[]
+ roots=[]; queue=[]; decrypt_lookup=None
  for tag,which in [('145','SHOT_INFO_ROOTS'),('151','COLOR_BALANCE_ROOTS'),('152','LENS_DATA_ROOTS')]:
   group=nik.get('Main',{}).get('tags',{}).get(tag)
   if not group:fail(f'missing Nikon::Main[{tag}]')
@@ -221,7 +306,11 @@ def render(data):
    full=sd.get('TagTable'); tname,t=table(full)
    encrypted=None
    if 'ProcessProc' in sd or 'DecryptStart' in sd:
-    if 'ProcessProc' in sd and code(sd['ProcessProc'])!='Image::ExifTool::Nikon::ProcessNikonEncrypted':fail('unexpected root process')
+    if 'ProcessProc' in sd:
+     callback,lookup=encrypted_callback(sd['ProcessProc'])
+     if callback!='Image::ExifTool::Nikon::ProcessNikonEncrypted':fail('unexpected root process')
+     if decrypt_lookup is None: decrypt_lookup=lookup
+     elif decrypt_lookup!=lookup: fail('Nikon roots disagree about Decrypt @xlat')
     queue.append(tname)
     order=sd.get('ByteOrder'); bo={'BigEndian':'Some(true)','LittleEndian':'Some(false)',None:'None'}.get(order)
     if bo is None:fail(f'bad root ByteOrder {order!r}')
@@ -294,6 +383,10 @@ def render(data):
   rows[n]=out
  # Root tables refer to numeric indices after the graph is fixed.
  text=[HEADER]
+ if decrypt_lookup is not None:
+  for name,offset in (('XLAT0',0),('XLAT1',256)):
+   values=', '.join(f'0x{value:02x}' for value in decrypt_lookup[offset:offset+256])
+   text += ['#[rustfmt::skip]',f'pub static {name}: [u8; 256] = [{values}];']
  for key,i in maps.items():
   if key[0]=='map':
    pairs=key[1]; body=', '.join('('+rs(a)+', '+rs(b)+')' for a,b in pairs)

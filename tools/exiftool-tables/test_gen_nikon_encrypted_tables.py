@@ -1,5 +1,6 @@
 """Controls for the native Nikon encrypted-table projection."""
 import copy
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -54,7 +55,90 @@ def add_menu_settings_z8v2(data, hook=generator.MENU_SETTINGS_Z8V2_HOOK):
     tables["MenuSettingsZ8"] = {"meta": {"FORMAT": "int8u"}, "tags": {}}
 
 
+def encrypted_callback(data, decrypt_body="canonical decrypt body"):
+    """Attach a captured-style callback fact to the encrypted ShotInfo root."""
+    callback_body = "canonical ProcessNikonEncrypted body"
+    callback_pair = ("Image::ExifTool::Nikon::ProcessNikonEncrypted",
+                     generator.hashlib.sha256(callback_body.encode()).hexdigest())
+    decrypt_pair = ("Image::ExifTool::Nikon::Decrypt",
+                    generator.hashlib.sha256(decrypt_body.encode()).hexdigest())
+    xlat_bytes = bytes(range(256)) + bytes(reversed(range(256)))
+    callback = {
+        "__perl": "CODE", "__opaque": True, "__name": callback_pair[0],
+        "__deparse": callback_body, "resolved": True,
+        "source_file": "Image/ExifTool/Nikon.pm", "source_sha256": "1" * 64,
+        "dependencies": {
+            decrypt_pair[0]: {
+                "__perl": "CODE", "__opaque": True, "__name": decrypt_pair[0],
+                "__deparse": decrypt_body, "resolved": True,
+                "source_file": "Image/ExifTool/Nikon.pm", "source_sha256": "1" * 64,
+                "lexical_arrays": {
+                    "resolved": True,
+                    "rows": [list(range(256)), list(reversed(range(256)))],
+                    "sha256": hashlib.sha256(xlat_bytes).hexdigest(),
+                },
+            },
+        },
+    }
+    data["modules"]["Nikon"]["tables"]["Main"]["tags"]["145"]["SubDirectory"]["ProcessProc"] = callback
+    return callback_pair, decrypt_pair, callback
+
+
 class NikonEncryptedGeneratorTests(unittest.TestCase):
+    def test_rebound_decrypt_helper_refuses_unchanged_callback(self):
+        data = fixture()
+        callback_pair, decrypt_pair, callback = encrypted_callback(data)
+        generator.CODE.add(callback_pair)
+        self.addCleanup(generator.CODE.remove, callback_pair)
+        generator.CODE.add(decrypt_pair)
+        self.addCleanup(generator.CODE.remove, decrypt_pair)
+        previous = getattr(generator, "NIKON_ENCRYPTED_CALLBACKS", None)
+        generator.NIKON_ENCRYPTED_CALLBACKS = {
+            callback_pair: {
+                "source_file": "Image/ExifTool/Nikon.pm", "source_sha256": "1" * 64,
+                "dependencies": {
+                    decrypt_pair[0]: {
+                        "body_sha256": decrypt_pair[1],
+                        "source_file": "Image/ExifTool/Nikon.pm", "source_sha256": "1" * 64,
+                    },
+                },
+            },
+        }
+        self.addCleanup(
+            lambda: (delattr(generator, "NIKON_ENCRYPTED_CALLBACKS")
+                     if previous is None else setattr(generator, "NIKON_ENCRYPTED_CALLBACKS", previous))
+        )
+        canonical_text, _ = generator.render(data)
+        self.assertIn("pub static XLAT0: [u8; 256]", canonical_text)
+
+        changed = copy.deepcopy(data)
+        helper = changed["modules"]["Nikon"]["tables"]["Main"]["tags"]["145"]["SubDirectory"]["ProcessProc"]["dependencies"][decrypt_pair[0]]
+        helper["__deparse"] = "changed native decrypt body"
+        helper["source_sha256"] = "2" * 64
+        self.assertEqual(
+            changed["modules"]["Nikon"]["tables"]["Main"]["tags"]["145"]["SubDirectory"]["ProcessProc"]["__deparse"],
+            callback["__deparse"],
+        )
+        with self.assertRaises(generator.Unsupported):
+            generator.render(changed)
+
+        rebound = copy.deepcopy(data)
+        helper = rebound["modules"]["Nikon"]["tables"]["Main"]["tags"]["145"]["SubDirectory"]["ProcessProc"]["dependencies"][decrypt_pair[0]]
+        helper["source_sha256"] = "3" * 64
+        with self.assertRaises(generator.Unsupported):
+            generator.render(rebound)
+
+        changed_lookup = copy.deepcopy(data)
+        lookup = changed_lookup["modules"]["Nikon"]["tables"]["Main"]["tags"]["145"]["SubDirectory"]["ProcessProc"]["dependencies"][decrypt_pair[0]]["lexical_arrays"]
+        lookup["rows"][0][17] ^= 1
+        lookup["sha256"] = hashlib.sha256(bytes(lookup["rows"][0]) + bytes(lookup["rows"][1])).hexdigest()
+        # Root and Decrypt bodies, plus their provenance, remain bound.  A
+        # changed closed-over lookup byte must still reject stale Rust crypto.
+        changed_text, _ = generator.render(changed_lookup)
+        self.assertNotEqual(changed_text, canonical_text)
+        self.assertIn("0x10, 0x11, 0x12", canonical_text)
+        self.assertIn("0x10, 0x10, 0x12", changed_text)
+
     def test_current_dump_code_provenance_is_accepted_but_unknown_fields_refuse(self):
         body = "registered test body"
         pair = ("Image::ExifTool::Test", generator.hashlib.sha256(body.encode()).hexdigest())
