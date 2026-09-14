@@ -301,16 +301,29 @@ sub to_text {
 # omitting the write sidecar there keeps the ordinary full dump available to
 # the writer codegens without making an unused writer graph a CI requirement.
 my $READER_ONLY = 0;
+my $HYDRATED_LAYOUTS = 0;
+my @HYDRATED_LAYOUT_FILTERS;
 while (@ARGV && $ARGV[0] =~ /^--/) {
     my $option = shift @ARGV;
     if ($option eq '--reader-only' && !$READER_ONLY) {
         $READER_ONLY = 1;
         next;
     }
+    if ($option eq '--hydrated-layouts' && !$HYDRATED_LAYOUTS) {
+        $HYDRATED_LAYOUTS = 1;
+        next;
+    }
+    if ($option eq '--hydrated-layout-table' && $HYDRATED_LAYOUTS) {
+        my $full_name = shift @ARGV;
+        die "--hydrated-layout-table requires a full table name\n"
+            unless defined $full_name && $full_name =~ /^Image::ExifTool::/;
+        push @HYDRATED_LAYOUT_FILTERS, $full_name;
+        next;
+    }
     die "unknown dump_tables.pl option: $option\n";
 }
 my $EXIFTOOL_LIB = shift @ARGV
-    or die "usage: $0 [--reader-only] <exiftool-lib-dir> [module...]\n";
+    or die "usage: $0 [--reader-only] [--hydrated-layouts [--hydrated-layout-table <full-name>]...] <exiftool-lib-dir> [module...]\n";
 unshift @INC, $EXIFTOOL_LIB;
 
 my $EXIFTOOL_LIB_ABS = abs_path($EXIFTOOL_LIB) or die "invalid exiftool lib: $EXIFTOOL_LIB\n";
@@ -1327,6 +1340,268 @@ sub dump_module {
     };
 }
 
+# The ordinary ``modules`` projection intentionally remains a walk of the
+# requested package stashes.  It is a long-standing, module/table-keyed input
+# contract for existing generators.  Hydrated layouts are a separate opt-in
+# projection: LoadAllTables is the native authority for tables assembled in
+# nested packages, inheritance copies, and runtime aggregates, while
+# GetTagTable supplies their native effective table hash.
+sub hydrated_layout_kind {
+    my ($full_name) = @_;
+    return 'extra_generated' if $full_name eq 'Image::ExifTool::Extra';
+    return 'composite_aggregate' if $full_name eq 'Image::ExifTool::Composite';
+    return 'hydrated_table';
+}
+
+# GetTagTable returns an effective runtime graph. Unlike the legacy shallow
+# module projection, hydrated rows can contain Table/TagTable back-references
+# and shared structures. The opt-in projection interns every non-CODE runtime
+# reference. Catalog-table references use their stable full Perl name(s), and
+# other structures have deterministic object IDs with definitions in the
+# projection's shared object table. This retains the binding without expanding
+# a cyclic graph, while leaving the legacy ``scrub`` contract unchanged.
+sub hydrated_reference {
+    my ($value, $context) = @_;
+    my $kind = ref($value);
+    my $address = refaddr($value);
+    if (defined $address && exists $context->{table_names_by_ref}{$address}) {
+        return {
+            __ref => 'tag_table',
+            table_full_names => $context->{table_names_by_ref}{$address},
+        };
+    }
+    my $object_id = $context->{object_id_by_ref}{$address};
+    if (!defined $object_id) {
+        $object_id = sprintf('structure_%06d', ++$context->{next_object_id});
+        $context->{object_id_by_ref}{$address} = $object_id;
+        # Register before expansion so an immediate cycle has a target.
+        $context->{objects}{$object_id} = { kind => $kind };
+        if ($kind eq 'SCALAR') {
+            $context->{objects}{$object_id}{value} = hydrated_scrub($$value, $context);
+        } elsif ($kind eq 'ARRAY') {
+            $context->{objects}{$object_id}{items} = [ map { hydrated_scrub($_, $context) } @$value ];
+        } elsif ($kind eq 'HASH') {
+            my %properties;
+            for my $key (sort keys %$value) {
+                $properties{to_text($key)} = hydrated_scrub($value->{$key}, $context);
+            }
+            $context->{objects}{$object_id}{properties} = \%properties;
+        }
+    }
+    return { __ref => $kind, object_id => $object_id };
+}
+
+sub hydrated_scrub {
+    my ($value, $context) = @_;
+    return undef unless defined $value;
+    my $kind = ref($value);
+    return to_text($value) unless $kind;
+    if ($kind eq 'CODE') {
+        my $name = code_name($value);
+        my $source = deparse($value);
+        return {
+            __perl => 'CODE', __opaque => JSON::PP::true,
+            (defined $name ? (__name => $name) : ()),
+            (defined $source ? (__deparse => $source) : ()),
+        };
+    }
+    return hydrated_reference($value, $context);
+}
+
+sub hydrated_classify_conv {
+    my ($value, $context) = @_;
+    return undef unless defined $value;
+    my $kind = ref($value);
+    if ($kind eq 'HASH') {
+        my (%map, %directive);
+        for my $key (keys %$value) {
+            if ($key =~ /^(BITMASK|OTHER|Notes|PrintHex|SeparateTable)$/) {
+                $directive{$key} = hydrated_scrub($value->{$key}, $context);
+                next;
+            }
+            my $item = $value->{$key};
+            if (ref($item)) { $directive{$key} = hydrated_scrub($item, $context); next }
+            $map{to_text($key)} = to_text($item);
+        }
+        return { kind => (%directive ? 'enum_partial' : 'enum'), map => \%map,
+            directives => (%directive ? \%directive : undef) };
+    }
+    return { kind => 'code', expr => undef, deparse => deparse($value) } if $kind eq 'CODE';
+    return { kind => 'list', items => hydrated_scrub($value, $context) } if $kind eq 'ARRAY';
+    return { kind => 'expr', expr => to_text($value) } unless $kind;
+    return { kind => 'other', dump => hydrated_scrub($value, $context) };
+}
+
+sub dump_hydrated_tag_entry {
+    my ($entry, $context) = @_;
+    my $kind = ref($entry);
+    return { Name => to_text($entry), _shorthand => JSON::PP::true } if !$kind;
+    if ($kind eq 'ARRAY') {
+        return { _variants => [ map { dump_hydrated_tag_entry($_, $context) } @$entry ] };
+    }
+    return { _unhandled => $kind } unless $kind eq 'HASH';
+    my %out;
+    for my $key (@TAG_KEYS, qw(Table TagID)) {
+        next unless exists $entry->{$key};
+        my $value = $entry->{$key};
+        if ($key =~ /^(PrintConv|ValueConv|RawConv|PrintConvInv|ValueConvInv)$/) {
+            $out{$key} = hydrated_classify_conv($value, $context);
+        } else {
+            $out{$key} = hydrated_scrub($value, $context);
+        }
+    }
+    # Hydration installs runtime fields beyond the declarative reader grammar.
+    # Keep their values as a separate closed set: names alone would silently
+    # discard bindings such as Table/TagID and make later consumers guess.
+    my %extra;
+    for my $key (sort keys %$entry) {
+        next if exists $out{$key} || $TABLE_META{$key};
+        $extra{to_text($key)} = hydrated_scrub($entry->{$key}, $context);
+    }
+    $out{_extra_properties} = \%extra if %extra;
+    return \%out;
+}
+
+sub dump_hydrated_layout_table {
+    my ($full_name, $validate_function_names, $processor_tables, $context) = @_;
+    my $hash = Image::ExifTool::GetTagTable($full_name);
+    die "hydrated table $full_name did not resolve to a hash\n"
+        unless ref($hash) eq 'HASH' && keys %$hash;
+
+    my %meta;
+    for my $key (sort grep { $TABLE_META{$_} } keys %$hash) {
+        $meta{$key} = hydrated_scrub($hash->{$key}, $context);
+    }
+    my %tags;
+    for my $key (sort grep { !is_table_property($_) } keys %$hash) {
+        collect_subdirectory_validate_function_names(
+            $hash->{$key}, $validate_function_names, {}, 0);
+        $tags{to_text($key)} = dump_hydrated_tag_entry($hash->{$key}, $context);
+    }
+    if (ref($hash->{PROCESS_PROC}) eq 'CODE') {
+        $processor_tables->{$full_name} = { cv => $hash->{PROCESS_PROC} };
+    }
+    return {
+        full_name => $full_name,
+        kind => hydrated_layout_kind($full_name),
+        meta => \%meta,
+        tags => \%tags,
+        tag_count => scalar(keys %tags),
+    };
+}
+
+# Bind the hydrated data to the loaded pinned library, not just its version.
+sub hydrated_source_files {
+    my %sources;
+    for my $file (sort keys %INC) {
+        next unless $file eq 'Image/ExifTool.pm' || index($file, 'Image/ExifTool/') == 0;
+        my $selected = abs_path(File::Spec->catfile($EXIFTOOL_LIB_ABS, $file));
+        my $actual = abs_path($INC{$file});
+        die "hydrated source outside selected library: $file\n"
+            unless defined($selected) && defined($actual) && $actual eq $selected
+                && index($actual, "$EXIFTOOL_LIB_ABS/") == 0;
+        open(my $fh, '<:raw', $actual) or die "cannot read hydrated source: $file\n";
+        local $/;
+        $sources{$file} = { library_relative_path => $file, sha256 => sha256_hex(<$fh>) };
+        close($fh) or die "cannot close hydrated source: $file\n";
+    }
+    return \%sources;
+}
+
+sub dump_hydrated_layout_projection {
+    my %validate_function_names;
+    my %processor_tables;
+    my %layouts;
+
+    # BuildTagLookup owns the Shortcuts pseudo-table.  It is deliberately not
+    # an allTables row and therefore remains a separately-marked helper rather
+    # than a fabricated tag-table layout.
+    require Image::ExifTool::BuildTagLookup;
+    Image::ExifTool::LoadAllTables();
+    my $builder = Image::ExifTool::BuildTagLookup->new;
+    no warnings 'once';
+    my $source_before = hydrated_source_files();
+    my @available = sort keys %Image::ExifTool::allTables;
+    die "hydrated table registry is empty\n" unless @available;
+    my %available = map { $_ => 1 } @available;
+    my %table_names_by_ref;
+    for my $full_name (@available) {
+        my $hash = Image::ExifTool::GetTagTable($full_name);
+        next unless ref($hash) eq 'HASH';
+        push @{$table_names_by_ref{refaddr($hash)}}, $full_name;
+    }
+    $_ = [ sort @$_ ] for values %table_names_by_ref;
+    my $reference_context = {
+        table_names_by_ref => \%table_names_by_ref,
+        object_id_by_ref => {},
+        objects => {},
+        next_object_id => 0,
+    };
+
+    my @selected = @HYDRATED_LAYOUT_FILTERS ? sort @HYDRATED_LAYOUT_FILTERS : @available;
+    my %selected;
+    for my $full_name (@selected) {
+        die "hydrated layout filter is not a catalog identity: $full_name\n"
+            unless $available{$full_name};
+        die "duplicate hydrated layout filter: $full_name\n" if $selected{$full_name}++;
+        $layouts{$full_name} = dump_hydrated_layout_table(
+            $full_name, \%validate_function_names, \%processor_tables, $reference_context);
+    }
+    for my $name (sort keys %validate_function_names) {
+        $validate_function_names{$name} = validate_function_fact(
+            $name, $EXIFTOOL_LIB_ABS);
+    }
+    for my $full_name (sort keys %processor_tables) {
+        $layouts{$full_name}{meta}{PROCESS_PROC} = code_ref_fact(
+            $processor_tables{$full_name}{cv}, "${full_name}::PROCESS_PROC",
+            $EXIFTOOL_LIB_ABS, undef, undef, 0);
+    }
+
+    die "hydrated layout serialization did not conserve requested identities\n"
+        unless scalar(keys %layouts) == scalar(@selected);
+    die "full hydrated layout serialization did not conserve the catalog\n"
+        if !@HYDRATED_LAYOUT_FILTERS && scalar(keys %layouts) != scalar(@available);
+    my %kind_counts;
+    ++$kind_counts{$layouts{$_}{kind}} for keys %layouts;
+    my $shortcut_count = scalar keys %Image::ExifTool::Shortcuts::Main;
+    die "hydrated shortcut catalog was not loaded\n" unless $shortcut_count;
+    my $source_after = hydrated_source_files();
+    for my $file (keys %$source_before) {
+        die "hydrated source changed during capture: $file\n"
+            unless exists $source_after->{$file}
+                && $source_before->{$file}{sha256} eq $source_after->{$file}{sha256};
+    }
+    open(my $producer_fh, '<:raw', __FILE__) or die "cannot read hydrated producer\n";
+    my $producer_sha = do { local $/; sha256_hex(<$producer_fh>) };
+    close($producer_fh) or die "cannot close hydrated producer\n";
+    return {
+        source_provenance => {
+            perl_version => "$^V", producer_sha256 => $producer_sha, sources => $source_after,
+        },
+        schema => 'oxidex_hydrated_layout_projection_v1',
+        identity_source => 'Image::ExifTool::allTables_after_LoadAllTables',
+        selection => @HYDRATED_LAYOUT_FILTERS ? 'explicit_full_name_subset' : 'full_hydrated_catalog',
+        available_table_count => scalar(@available),
+        requested_table_count => scalar(@selected),
+        table_count => scalar(keys %layouts),
+        table_kinds => \%kind_counts,
+        tables => \%layouts,
+        subdirectory_validate_functions => \%validate_function_names,
+        shared_reference_objects => $reference_context->{objects},
+        helpers => {
+            shortcuts => {
+                full_name => 'Image::ExifTool::Shortcuts::Main',
+                kind => 'shortcut_macro_table',
+                entry_count => $shortcut_count,
+            },
+        },
+        catalog_counts => {
+            unique_tag_names => 0 + $builder->{COUNT}{'unique tag names'},
+            total_tag_entries => 0 + $builder->{COUNT}{'total tags'},
+        },
+    };
+}
+
 # ---------------------------------------------------------------------------
 
 my @modules = @ARGV;
@@ -1379,6 +1654,14 @@ for my $full_name (sort keys %processor_tables) {
     my $fact = code_ref_fact($entry->{cv}, "${full_name}::PROCESS_PROC", $EXIFTOOL_LIB_ABS, undef, undef, 0);
     $out{$entry->{module}}{tables}{$entry->{table}}{meta}{PROCESS_PROC} = $fact;
 }
+
+# The legacy read projection above is now detached: all requested modules have
+# been walked and their late-bound reader facts have been resolved.  Hydrating
+# the catalog below loads additional native modules, so it must precede every
+# final execution-state contract and writer-side capture.
+my $hydrated_layouts = $HYDRATED_LAYOUTS
+    ? dump_hydrated_layout_projection()
+    : undef;
 
 my ($write_autoload_router_status, $native_write_capture_context,
     $native_write_helpers, $native_write_format_registry);
@@ -1452,6 +1735,7 @@ my %document = (
         kind => 'utf8_primitive_join_v1', pristine => $pristine_utf8, final => $final_utf8,
     } },
 );
+$document{hydrated_layouts} = $hydrated_layouts if $HYDRATED_LAYOUTS;
 unless ($READER_ONLY) {
     # Facts only: no reader or writer consumes this sidecar yet.  Keeping it
     # separate prevents write-only properties from becoming accidental read

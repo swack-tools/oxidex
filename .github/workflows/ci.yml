@@ -508,6 +508,16 @@ jobs:
           python3 tools/exiftool-tables/catalog_snapshot.py \
             --exiftool-dir "$EXIFTOOL_SOURCE" --perl perl \
             --output "docs/public/measurements/catalog-source-$(cat .exiftool-version).json" --check
+      - name: Capture and audit hydrated reader table graph
+        run: |
+          set -euo pipefail
+          export EXIFTOOL_PERL=perl OXIDEX_PINNED_EXIFTOOL="$EXIFTOOL_SOURCE"
+          python3 -m unittest discover -s tools/exiftool-tables -p 'test_hydrated_layout_projection.py'
+          python3 -m unittest discover -s tools/exiftool-tables -p 'test_audit_hydrated_layouts.py'
+          perl tools/exiftool-tables/dump_tables.pl --reader-only --hydrated-layouts \
+            "$EXIFTOOL_SOURCE/lib" > "$RUNNER_TEMP/hydrated-reader.json"
+          python3 tools/exiftool-tables/audit_hydrated_layouts.py \
+            --dump "$RUNNER_TEMP/hydrated-reader.json" --output "$RUNNER_TEMP/hydrated-reader-audit.json"
       - name: Verify committed tables against ExifTool
         env:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
