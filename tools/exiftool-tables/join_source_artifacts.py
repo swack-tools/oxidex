@@ -36,9 +36,9 @@ ARTIFACT_TYPES = {
     "keyed": ("KeyedDirectoryTable", "ALL_KEYED_TABLES", "OmittedKeyedNativeRow"),
 }
 ENABLEMENT_PATHS = {"binary": ("src/exiftool_tables/enabled.rs", "ENABLED"), "ifd": ("src/exiftool_tables/enabled_ifd.rs", "ENABLED_IFD")}
-# These are protocol/artifact routes, deliberately not source tag-name lists.
-# A route proves only that a registry is consumed by a generic executor; dynamic
-# dispatch and observed reads/writes remain separate, unmeasured facts.
+# Candidate executor locations, not proof of a registry call or file-format
+# dispatch. Immutable snapshots prove only source presence; observations and
+# verified caller evidence remain separate.
 RUNTIME_CONSUMERS = {
     "binary": {"kind": "generic_binary_engine", "refs": ["src/exiftool_tables/engine.rs"]},
     "ifd": {"kind": "generic_ifd_engine", "refs": ["src/core/exif_dir_engine.rs"]},
@@ -58,36 +58,87 @@ def consumer_snapshot(repo: Path, commit: str) -> dict[str, Any]:
             result[kind] = {"state": "present_static_ref", "refs": blobs}
     return result
 
+def policy_source(text: str) -> tuple[str, str]:
+    """Blank comments and separately mask literals when locating declarations."""
+    import re
+
+    code, declarations = list(text), list(text)
+    at = 0
+    while at < len(text):
+        end = at
+        comment = False
+        if text.startswith("//", at):
+            end = text.find("\n", at)
+            end = len(text) if end < 0 else end
+            comment = True
+        elif text.startswith("/*", at):
+            depth, end = 1, at + 2
+            while end < len(text) and depth:
+                if text.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif text.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            if depth:
+                raise ValueError("unterminated block comment")
+            comment = True
+        elif re.match(r'r#*"', text[at:]):
+            raise ValueError("raw Rust literals are unsupported in enablement policy")
+        elif text[at] == '"':
+            end = at + 1
+            while end < len(text) and text[end] != '"':
+                end += 2 if text[end] == "\\" else 1
+            if end >= len(text):
+                raise ValueError("unterminated string")
+            end += 1
+        elif (char := re.match(r"'(?:\\.|[^'\\])'", text[at:])):
+            end = at + len(char.group())
+        if end > at:
+            for index in range(at, end):
+                if text[index] != "\n":
+                    declarations[index] = " "
+                    if comment:
+                        code[index] = " "
+            at = end
+        else:
+            at += 1
+    return "".join(code), "".join(declarations)
+
+
 def parse_enabled(text: str, symbol: str) -> set[tuple[str, str]]:
     import re
-    # Preserve strings while blanking comments before locating the array.
-    out=[]; i=0; quote=False; block=0
-    while i < len(text):
-        if quote:
-            out.append(text[i]);
-            if text[i] == "\\" and i + 1 < len(text): out.append(text[i+1]); i += 2; continue
-            if text[i] == '"': quote=False
-            i += 1; continue
-        if text.startswith('//', i):
-            j=text.find('\n',i); j=len(text) if j<0 else j; out.extend(' '*(j-i)); i=j; continue
-        if text.startswith('/*', i):
-            depth=1; j=i+2
-            while j < len(text) and depth:
-                depth += 1 if text.startswith('/*',j) else -1 if text.startswith('*/',j) else 0; j += 2 if text.startswith(('/*','*/'),j) else 1
-            if depth: raise ValueError('unterminated block comment')
-            out.extend(' '*(j-i)); i=j; continue
-        quote = text[i] == '"'; out.append(text[i]); i += 1
-    if quote: raise ValueError('unterminated string')
-    code=''.join(out)
-    marker = re.search(rf"pub static {symbol}: &\[\(&str, &str\)\] = &\[", code)
-    if marker is None: raise ValueError(f"missing {symbol}")
-    start, end = brace_span(code, marker.end() - 1, "[", "]")
+
+    code, declarations = policy_source(text)
+    pattern = (rf"\bpub\s+static\s+{re.escape(symbol)}\s*:\s*"
+               r"&\s*\[\s*\(\s*&str\s*,\s*&str\s*\)\s*\]\s*=\s*&\s*\[")
+    markers = list(re.finditer(pattern, declarations))
+    if len(markers) != 1:
+        raise ValueError(f"expected exactly one {symbol} declaration")
+    start, end = brace_span(code, markers[0].end() - 1, "[", "]")
+    if not code[end:].lstrip().startswith(";"):
+        raise ValueError(f"unterminated {symbol} declaration")
     body = code[start + 1:end - 1]
-    entries = re.findall(r'\s*\("([^"\\]+)",\s*"([^"\\]+)"\)\s*,?', body)
-    remainder = re.sub(r'\s*\("[^"\\]+",\s*"[^"\\]+"\)\s*,?', '', body)
-    if remainder.strip(): raise ValueError(f"unrecognised {symbol} entry syntax")
-    if len(entries) != len(set(entries)): raise ValueError(f"duplicate {symbol} entry")
-    return set(entries)
+    entry = re.compile(r'\s*\(\s*"([^"\\\r\n]+)"\s*,\s*"([^"\\\r\n]+)"\s*\)\s*')
+    result, at = set(), 0
+    while body[at:].strip():
+        match = entry.match(body, at)
+        if match is None:
+            raise ValueError(f"unrecognised {symbol} entry syntax")
+        identity = match.group(1), match.group(2)
+        if identity in result:
+            raise ValueError(f"duplicate {symbol} entry")
+        result.add(identity)
+        at = match.end()
+        if not body[at:].strip():
+            break
+        if body[at] != ",":
+            raise ValueError(f"unrecognised {symbol} entry separator")
+        at += 1
+    return result
+
 
 def runtime_evidence(selection: str, artifact: dict[str, Any], enabled: set[tuple[str, str]] | None = None, identity: tuple[str, str] | None = None, consumer_verified: bool = False) -> dict[str, Any]:
     """Classify static route evidence without inventing dynamic reachability."""
@@ -104,7 +155,7 @@ def runtime_evidence(selection: str, artifact: dict[str, Any], enabled: set[tupl
     if identity not in enabled:
         return {"state": "not_enabled", "reason": "not_in_commit_pinned_enablement_allowlist", "refs": [], "observed": {"read": None, "write": None}}
     if not consumer_verified:
-        return {"state": "unverified", "reason": "consumer_blob_missing_or_drifted", "refs": [], "observed": {"read": None, "write": None}}
+        return {"state": "unverified", "reason": "executor_dispatch_not_proven", "refs": [], "observed": {"read": None, "write": None}}
     route = RUNTIME_CONSUMERS[selection]
     return {"state": "known_generic_route", "reason": "static_protocol_registry_route", "kind": route["kind"], "refs": route["refs"], "observed": {"read": None, "write": None}}
 
@@ -355,7 +406,7 @@ def source_rows(out: Path, repo: Path, selector_commit: str, entries: list[tuple
     for (module, table, data, meta, tags), result in zip(entries, selected):
         selection = (
             "binary" if result.get("binary") else
-            "keyed" if result.get("keyed_profile") else
+            "keyed" if result.get("keyed_profile") or result.get("keyed_word_candidate") else
             "ifd" if result.get("ifd") else
             "other_unclassified"
         )
@@ -367,6 +418,7 @@ def source_rows(out: Path, repo: Path, selector_commit: str, entries: list[tuple
             "processor_identity": processor_identity,
             "processor_shape": processor_shape,
             "selection": selection,
+            "selection_evidence": result,
             "declared_tag_count": data["tag_count"],
             "counts": dict(sorted(source_inventory.count_rows(tags).items())),
         })
@@ -381,8 +433,8 @@ def join_rows(rows: list[dict[str, Any]], parsed: dict[str, dict[tuple[str, str]
         orphan = sorted(set(tables) - source_keys)
         if orphan:
             raise ValueError(f"{kind} artifact has generated table identities absent from source: {orphan[:5]}")
-        expected_selection = "keyed" if kind == "keyed" else kind
-        wrong_family = sorted(key for key in tables if next(row["selection"] for row in rows if (row["module"], row["table"]) == key) not in ({expected_selection, "other_unclassified"} if kind == "keyed" else {expected_selection}))
+        selection_by_identity = {(row["module"], row["table"]): row["selection"] for row in rows}
+        wrong_family = sorted(key for key in tables if selection_by_identity[key] != kind)
         if wrong_family:
             raise ValueError(f"{kind} artifact table identities disagree with source selection: {wrong_family[:5]}")
         sidecar_orphan = sorted(set(sidecars[kind]) - source_keys)
@@ -436,6 +488,7 @@ def join_rows(rows: list[dict[str, Any]], parsed: dict[str, dict[tuple[str, str]
         selected_artifact = present.get(row["selection"], {})
         enabled = None if not enablement or enablement.get(row["selection"], {}).get("state") != "present" else set(map(tuple, enablement[row["selection"]]["tables"]))
         joined.append({**row, "artifacts": present,
+                       "candidate_executor_source": (consumers or {}).get(row["selection"], {"state": "not_in_manifest"}),
                        "runtime_consumer": runtime_evidence(row["selection"], selected_artifact, enabled, (row["module"], row["table"]), False)})
     source_inventory.require(len(joined) == len(rows), "join does not conserve source rows")
     return joined, {kind: dict(sorted(counts.items())) for kind, counts in sorted(totals.items())}
@@ -514,6 +567,7 @@ def main() -> None:
     gate_a_blockers = gate_a_blocker_counts(joined)
     summary = {
         "runner_sha256": runner_sha,
+        "source_inventory_helper_sha256": source_inventory.sha_file(Path(source_inventory.__file__).resolve()),
         "scope": "one recorded dump plus immutable generated artifact shapes; not generated acceptance, runtime reachability, manual maintenance, output parity, or an automation percentage",
         "dump": {"sha256": dump_sha, "exiftool_version": document.get("exiftool_version"), "table_records": len(rows)},
         "selector_snapshot": selector_snapshot,

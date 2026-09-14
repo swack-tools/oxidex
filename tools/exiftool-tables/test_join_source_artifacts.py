@@ -36,6 +36,24 @@ def artifact(kind, *, module="Any", table="Main", gate='&[]', rows="", registry=
 
 
 class ArtifactParserTests(unittest.TestCase):
+    def test_policy_comments_cannot_supply_declarations_or_terminators(self):
+        text = '''// pub static ENABLED: &[(&str, &str)] = &[("Ghost", "Table")];
+pub static ENABLED: &[(&str, &str)] = &[
+    /* ] ; /* nested comment */ ("Ghost", "Table"), */
+    ("Good//Module", "Table/*literal*/"), // ];
+];'''
+        self.assertEqual(join.parse_enabled(text, "ENABLED"),
+                         {("Good//Module", "Table/*literal*/")})
+
+    def test_policy_refuses_missing_separators_and_ambiguous_source(self):
+        prefix = "pub static ENABLED: &[(&str, &str)] = &["
+        for bad in ('("A", "B") ("C", "D")', '("A", "B"), ("A", "B")',
+                    'include!("policy")', '/* unterminated', '("A", "unterminated'):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                join.parse_enabled(prefix + bad + "];", "ENABLED")
+        with self.assertRaises(ValueError):
+            join.parse_enabled(prefix + "];" + prefix + "];", "ENABLED")
+
     def test_enabled_parser_ignores_comments_and_refuses_unknown_syntax(self):
         text = 'pub static ENABLED: &[(&str, &str)] = &[\n// ("Bad", "Row"),\n("Good", "Row"),\n];'
         self.assertEqual(join.parse_enabled(text, "ENABLED"), {("Good", "Row")})
@@ -105,6 +123,13 @@ class GitBlobTests(unittest.TestCase):
 
 
 class JoinConservationTests(unittest.TestCase):
+    def test_missing_policy_is_unknown_and_gate_a_is_explicit(self):
+        artifact = {"definition": "present", "registry_listed": True}
+        self.assertEqual(join.runtime_evidence("binary", artifact)["reason"], "enablement_policy_missing")
+        blocked = {**artifact, "gate_a_blocked_by": [["unknown_conversion", 1]]}
+        result = join.runtime_evidence("binary", blocked, {("A", "B")}, ("A", "B"))
+        self.assertEqual((result["state"], result["reason"]), ("not_enabled", "gate_a_blocked"))
+
     def test_runtime_evidence_distinguishes_absent_unenabled_and_unknown(self):
         self.assertEqual(join.runtime_evidence("binary", {"definition": "absent"})["state"], "unknown")
         self.assertEqual(join.runtime_evidence("binary", {"definition": "present", "registry_listed": False})["state"], "not_enabled")
@@ -152,6 +177,12 @@ class JoinConservationTests(unittest.TestCase):
         parsed = {"binary": {("Any", "Main"): {}}, "ifd": {}, "keyed": {}}
         with self.assertRaisesRegex(ValueError, "disagree with source selection"):
             join.join_rows(rows, parsed, {"binary": Counter(), "ifd": Counter(), "keyed": Counter()})
+
+    def test_keyed_artifact_does_not_reclassify_an_unknown_source_family(self):
+        rows = [{"module": "Any", "table": "Main", "selection": "other_unclassified"}]
+        parsed = {"binary": {}, "ifd": {}, "keyed": {("Any", "Main"): {}}}
+        with self.assertRaisesRegex(ValueError, "disagree with source selection"):
+            join.join_rows(rows, parsed, {kind: Counter() for kind in parsed})
 
     def test_cli_requires_both_immutable_commit_expectations(self):
         with tempfile.TemporaryDirectory() as directory:

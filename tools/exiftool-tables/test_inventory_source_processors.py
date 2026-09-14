@@ -29,6 +29,17 @@ def document(*, modules=None, modules_ok=1, modules_failed=0):
 
 
 class StructuralInputTests(unittest.TestCase):
+    def test_keyed_word_candidate_uses_processor_shape_not_table_name(self):
+        from test_word_directory import fixture_processor
+        matched, unrelated = inventory.run_selectors(HERE, [
+            {"PROCESS_PROC": fixture_processor()},
+            {"PROCESS_PROC": {"__perl": "CODE", "__name": "Image::ExifTool::Any::Custom",
+                              "__deparse": "{ return 1; }"}},
+        ])
+        self.assertTrue(matched["keyed_word_candidate"])
+        self.assertFalse(matched["keyed_profile"])
+        self.assertFalse(unrelated["keyed_word_candidate"])
+
     def test_empty_or_failed_module_sets_cannot_define_a_denominator(self):
         with self.assertRaisesRegex(ValueError, "non-empty"):
             inventory.validate_document(document(modules={}, modules_ok=0))
