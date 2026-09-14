@@ -14,7 +14,7 @@ automatic upgrade path is not finished.
 | Source facts and shared writer helpers | PRs #761–#766 merged; #766 is `82f97ae6`, with all five required checks passing at `d505d179` | Integrate and validate the next complete writer operation |
 | Internal generated TIFF/JPEG scalar writes | All nine final recipes passed 432/432 native file comparisons under `generated_tiff_write_matrix.py` at the September 14 frozen source checkpoint | Public operations, new EXIF blocks and additional native-writable rule classes |
 | Full-library final writer compilation | Official 44-artifact regeneration passed; all 153 decoded reader modules identical to control; Python, Rust workspace and Clippy passed | Expand unsupported writer semantics without changing reader behavior |
-| Public generated writing and manual lookup removal | Development public modify/remove route passed 432 native file cases for nine scalar identities; not merged | Fresh/empty EXIF creation, native mixed batches and retirement of replaced manual rules |
+| Public generated writing and manual lookup removal | Nine scalar identities use generated descriptors; three manual descriptors and one reverse-name exception removed in `58c0bdcf`. Existing, fresh and mixed public gates passed in the named run below | Repair native mandatory-default batch instrument, complete expanded regeneration, review and merge |
 | Release upgrades | Random pair 11.78/12.64 selected and sources verified | Generate/build both versions and test each against its own native reader and writer |
 
 The first September 14 regeneration revealed that creating the native writer
@@ -59,19 +59,43 @@ writer dispatch and table definitions. This does not mean 55 tag families or
 55 percent coverage. Full real regeneration of the expanded inventory remains
 outstanding; the last full local regeneration covered 44 artifacts.
 
-Fresh JPEG integration is being validated. The implementation compiles the
-requested scalar operation before deciding whether defaults are needed, keeps
-existing empty-directory byte order, and prepares all output before one atomic
-file write. Native acceptance must still prove these changes. Independent
-review found two items being corrected before acceptance: late JFIF properties
-must not affect earlier EXIF creation, and insertion tests must reject native
-no-op results rather than accepting two equally empty outputs.
+Fresh JPEG creation now consumes raw JFIF properties only before the creation
+boundary selected by the native writer. Native fixtures cover multiple APP0
+segments, intervening APP2 segments, existing empty EXIF, zero values and
+partial JFIF records. The public API performs the generated and legacy edits
+in memory before one atomic file commit.
 
-The next measurable completion is passing existing public, mixed-batch and
-fresh/empty JPEG comparisons with these controls, then removing the replaced
-manual lookup entries. Broader writer rules and the persisted 11.78/12.64
-read/write upgrade rehearsal remain open. No new overall generated-output
-percentage is claimed by this work.
+At commit `58c0bdcf`, the three remaining manual scalar descriptors
+(DocumentName, PageName and TargetPrinter) and the handwritten TargetPrinter
+reverse-name exception were removed. The nine migrated scalar identities now
+obtain writable descriptors from joined generated address, final-writer and
+public-migration facts. Existing YAML definitions cannot override these facts.
+Removal or unsupported source changes remain terminal for migrated identities;
+they must not reactivate stale manual behavior.
+
+The named `manual-retirement-gate-r2` completed 4,861 library tests (four explicit
+instrument drivers ignored), 432 existing-file public cases, 135 mixed batches,
+270 fresh/empty JPEG cases, 216 JFIF timing cases, 49 instrument tests and
+workspace all-feature Clippy. The 135 mixed cases include intentional atomic
+refusals, so they are not all successful native writes. The combined gate was
+not green: the fresh mandatory-default batch instrument stopped while checking
+a native operand before comparing generated output. Its repair and rerun remain
+required before this migration is ready to merge.
+
+The next measurable completion is the repaired mandatory-default batch proof,
+then official full regeneration of all 55 registered artifacts with an explicit
+reader projection comparison. Broader writer rules and the persisted
+11.78/12.64 read/write upgrade rehearsal remain open. No new overall
+generated-output percentage is claimed by this work.
+
+Global generated-source validation failure is now terminal for the retained
+migration identities as well. `descriptor-terminal-gate-r2` passed all 4,862
+library tests (four ignored) and workspace all-feature Clippy after integrating
+the failure-path fix. Unrelated legacy identities remain available.
+
+The sections below are historical checkpoints, not current open-work status.
+Their gate results retain their original scope; the table and integration
+checkpoint above supersede their pending-work statements.
 
 ## Address-to-file checkpoint, September 14
 
@@ -119,7 +143,7 @@ executable grammar still needs compilation; a source hash and nonempty body
 are not proof of automatic behavior adoption. New JPEG EXIF creation stays
 unfinished until this is repaired and tested through native file operations.
 
-PR #768 remains open at `7ff727aa`. Earlier table-check attempts ended in
+At this historical checkpoint, PR #768 was open at `7ff727aa` (it subsequently merged as recorded above). Earlier table-check attempts ended in
 runner shutdown during the tier-2 dump. The explicit reader-only tier-2
 capture now passes regeneration and drift checks in 40 seconds; its separate
 cache leaves normal writer-complete capture intact. A later verification
@@ -160,10 +184,10 @@ Manual rule removal is still pending. Unsupported or removed migrated source
 identities must remain explicit refusals instead of silently reverting to old
 handwritten semantics.
 
-PR #768 is separate from this public wiring. Its current head `8b8be088` keeps
+PR #768 is separate from this public wiring. At that checkpoint its head `8b8be088` kept
 the full module-complete writer capture and moves table verification to the
-existing larger runner after SIGTERM on the previous runner. The fresh hosted
-run is pending; the termination cause has not been established.
+existing larger runner after SIGTERM on the previous runner. That hosted
+run was then pending; the termination cause has not been established.
 
 ## Integrated source contracts after the public checkpoint
 

@@ -395,11 +395,12 @@ mod tests {
     fn global_capture_failure_keeps_only_migrated_identities_terminal() {
         let live = with_state(&PUBLIC_SET_NEW_VALUE_MIGRATIONS[0], false);
         let retired = with_state(&PUBLIC_SET_NEW_VALUE_MIGRATIONS[1], true);
-        let result = compose_with_capture(false, None, &[live, retired], &[], None)
+        let migrations = [live, retired];
+        let result = compose_with_capture(false, None, &migrations, &[], None)
             .expect("migration ownership must survive a global capture failure");
 
         assert!(result.current.is_empty());
-        for migration in [live, retired] {
+        for migration in &migrations {
             let descriptor_name = format!("{}:{}", migration.group0, migration.name);
             assert!(terminal_descriptor_name_in(&result, &descriptor_name));
             assert!(terminal_reverse_in(
