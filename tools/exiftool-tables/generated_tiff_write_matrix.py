@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Compare the internal generated TIFF writer with actual pinned native writes.
+"""Compare generated TIFF/JPEG writes with actual pinned native writes.
 
-Supply the lib-test executable built from this checkout. This does not certify
-public writer routing, creation of a new JPEG EXIF block, other tags, or other releases.
+Supply the lib-test executable built from this checkout. Select --route public-api to exercise public modify/remove operations.
+This does not certify new JPEG EXIF blocks, other tags, or other releases.
 """
 import argparse
 import hashlib
@@ -148,8 +148,8 @@ def main():
     parser.add_argument("--jpeg-base", type=Path, help="also exercise generated JPEG cohort operations")
     parser.add_argument("--ledger", type=Path, default=LEDGER, help="emitted final-stage ledger")
     parser.add_argument("--rules", type=Path, default=RULES, help="rendered final-stage Rust rules")
-    parser.add_argument("--route", choices=("final-key", "resolved-address"), default="final-key",
-                        help="internal dispatch path exercised; neither is public API proof")
+    parser.add_argument("--route", choices=("final-key", "resolved-address", "public-api"), default="final-key",
+                        help="dispatch path exercised; public-api calls public modify_tag/remove_tag")
     args = parser.parse_args()
     carriers = ("tiff_little", "tiff_big") + (("jpeg",) if args.jpeg_base else ())
     targets = generated_targets(args.ledger, args.rules)
@@ -166,7 +166,7 @@ def main():
     native.assert_contract_version(identity)
     print_header(tool="generated_scalar_write_matrix_v2", git=state, binary=binary,
                  dirty_overridden=overridden,
-                 extra=[f"native: {identity}", f"{declared} internal TIFF/JPEG operations via {args.route}; public routing not covered"])
+                 extra=[f"native: {identity}", f"{declared} TIFF/JPEG operations via {args.route}; existing EXIF blocks"])
     root = args.output.parent / "generated-tiff-matrix-files"
     root.mkdir(parents=True, exist_ok=False)
     rows, requests = [], []
@@ -204,7 +204,7 @@ def main():
                           "table_group0": target.table_group0, "physical_write_group": target.physical_write_group,
                           "qualifiers": list(target.qualifiers)} for target in targets],
               "declared": declared, "passed": 0, "rows": rows,
-              "limitations": ["Internal composition only; public writer routing and new JPEG EXIF blocks remain untested.", "Generated final-scalar ledger cohort only, selected 13.59 only; this does not establish public SetNewValue admission."]}
+              "limitations": ["New JPEG EXIF blocks and empty existing IFDs remain untested; public modify/remove covered only with route public-api.", "Generated final-scalar ledger cohort only, selected 13.59 only; this does not establish public SetNewValue admission."]}
     if len(results) != len(requests) or len(requests) != declared:
         raise AssertionError("fixture driver result population differs")
     for row, result in zip(rows, results, strict=True):
@@ -220,7 +220,7 @@ def main():
         except (AssertionError, ValueError, OSError) as error:
             row.update(state="failed", error=str(error))
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    print(f"Internal scalar write operations matched: {report['passed']}/{declared}")
+    print(f"Scalar write operations matched via {args.route}: {report['passed']}/{declared}")
     return 0 if report["passed"] == declared else 1
 
 

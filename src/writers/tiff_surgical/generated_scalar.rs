@@ -345,6 +345,27 @@ mod tests {
                 }
                 _ => return Err("invalid typed scalar request".into()),
             };
+            if request.route.as_deref() == Some("public-api") {
+                // Fixture copy is preparation; the public operation itself must
+                // make exactly one atomic commit after the complete plan passes.
+                std::fs::copy(&request.input, &request.output).map_err(|e| e.to_string())?;
+                use crate::core::{operations, tag_value::TagValue};
+                match value {
+                    Scalar::Undefined => operations::remove_tag(&request.output, &request.key),
+                    Scalar::Utf8(text) => operations::modify_tag(
+                        &request.output,
+                        &request.key,
+                        TagValue::String(text),
+                    ),
+                    Scalar::Bytes(bytes) => operations::modify_tag(
+                        &request.output,
+                        &request.key,
+                        TagValue::Binary(bytes),
+                    ),
+                }
+                .map_err(|e| e.to_string())?;
+                return Ok(Vec::new());
+            }
             let input = std::fs::read(&request.input).map_err(|error| error.to_string())?;
             let result = if request.route.as_deref() == Some("resolved-address") {
                 use crate::writers::generated_write_address::{self, Resolution};
@@ -356,11 +377,9 @@ mod tests {
                     }
                     Resolution::Unsupported(reason) => return Err(reason.into()),
                 };
-                let resolved = crate::writers::generated_write_dispatch::resolved_scalar_request(
-                    row,
-                    value,
-                )
-                .map_err(|error| error.to_string())?;
+                let resolved =
+                    crate::writers::generated_write_dispatch::resolved_scalar_request(row, value)
+                        .map_err(|error| error.to_string())?;
                 match request.carrier.as_deref() {
                     None | Some("tiff_little" | "tiff_big") => rewrite_resolved_generated_scalars(
                         &input,

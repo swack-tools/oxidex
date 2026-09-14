@@ -204,6 +204,34 @@ pub(crate) fn plan_public_write(
     })
 }
 
+/// Execute a prepared transaction entirely in memory. Container callers commit
+/// the resulting bytes once, after both legacy and generated operations succeed.
+pub(crate) fn rewrite_tiff_transaction(
+    bytes: &[u8],
+    baseline: &MetadataMap,
+    plan: PublicWritePlan,
+) -> Result<Vec<u8>> {
+    let legacy = if plan.has_legacy_changes {
+        super::tiff_surgical::rewrite_tiff_file_with_removals(
+            bytes,
+            baseline,
+            &plan.legacy_metadata,
+            &plan.legacy_removed,
+        )?
+    } else {
+        bytes.to_vec()
+    };
+    if plan.generated.is_empty() {
+        return Ok(legacy);
+    }
+    let result = super::tiff_surgical::generated_scalar::rewrite_resolved_generated_scalars(
+        &legacy,
+        plan.generated,
+        &super::tiff_surgical::generated_scalar::generated_rules(),
+    )?;
+    Ok(result.bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

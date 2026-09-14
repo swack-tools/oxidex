@@ -8,11 +8,11 @@ pub mod atomic_writer;
 pub mod exif_inplace;
 pub mod exif_surgical;
 // Source-selected addresses remain internal until public file parity is proved.
+pub(crate) mod generated_public_write;
 pub(crate) mod generated_setnewvalue_address_rules;
+pub(crate) mod generated_setnewvalue_public_migration_rules;
 pub(crate) mod generated_write_address;
 pub(crate) mod generated_write_dispatch;
-pub(crate) mod generated_setnewvalue_public_migration_rules;
-pub(crate) mod generated_public_write;
 // Shared source-derived helpers are not yet connected to public writes.
 pub(crate) mod generated_convinv;
 // Static source rows remain inactive until complete file parity is proved.

@@ -109,6 +109,36 @@ avoid this failure.
 
 
 
+## Public API file checkpoint, September 14
+
+The development branch now routes the nine composed scalar identities through
+public `modify_tag` and `remove_tag` operations. Generated changes are masked
+from the legacy planner; both phases work in memory, and only the successful
+complete transaction reaches the atomic file commit.
+
+`generated_tiff_write_matrix.py --route public-api` passed **432/432** native
+comparisons against selected ExifTool 13.59: nine identities, eight operations,
+two spellings, and little-endian TIFF, big-endian TIFF and JPEG carriers with
+existing EXIF. This is new public API evidence, distinct from the earlier
+internal dispatch run. The exact source build passed 200 writer tests, then the
+complete library test executable passed **4,852 tests, four ignored**.
+Workspace/all-features Clippy with warnings denied passed.
+
+This development checkpoint is not ready to merge: creating fresh or empty
+JPEG EXIF currently refuses while mandatory numeric and byte-order executable
+source checks are repaired. These refusals can reject writes supported by the
+old route, so they must be closed before public migration lands. The 432-case
+matrix does not cover fresh/empty EXIF or mixed generated/legacy batches;
+whole-map mixed-batch native tests and atomic failure controls remain required.
+Manual rule removal is still pending. Unsupported or removed migrated source
+identities must remain explicit refusals instead of silently reverting to old
+handwritten semantics.
+
+PR #768 is separate from this public wiring. Its current head `8b8be088` keeps
+the full module-complete writer capture and moves table verification to the
+existing larger runner after SIGTERM on the previous runner. The fresh hosted
+run is pending; the termination cause has not been established.
+
 ## Finish line
 
 OxiDex should derive all tag-specific reading and native-writable tag behavior

@@ -237,6 +237,40 @@ pub(crate) fn rewrite_resolved_generated_exif_scalars(
     Ok(ScalarWriteOutput { bytes, warnings })
 }
 
+/// Execute a mixed public transaction without exposing intermediate file writes.
+/// Fresh/empty EXIF creation is pending the reviewed mandatory source compiler.
+pub(crate) fn write_public_exif_transaction(
+    reader: &dyn FileReader,
+    baseline: &MetadataMap,
+    plan: crate::writers::generated_public_write::PublicWritePlan,
+) -> Result<Vec<u8>> {
+    if plan.generated.is_empty() {
+        return write_exif_to_jpeg_with_removals(
+            reader,
+            &plan.legacy_metadata,
+            &plan.legacy_removed,
+        );
+    }
+    replace_existing_exif(reader, |tiff| {
+        let scan = crate::writers::exif_surgical::scan_exif_entries(tiff)?;
+        if scan.entries.is_empty() {
+            return Err(ExifToolError::unsupported_format(
+                "Generated public writing to empty EXIF awaits mandatory source compilation",
+            ));
+        }
+        let output =
+            crate::writers::generated_public_write::rewrite_tiff_transaction(tiff, baseline, plan)?;
+        let after = crate::writers::exif_surgical::scan_exif_entries(&output)?;
+        let output = if after.entries.is_empty() && after.thumbnail.is_none() {
+            Vec::new()
+        } else {
+            output
+        };
+        Ok((output, ()))
+    })
+    .map(|(bytes, ())| bytes)
+}
+
 /// Replace exactly one existing EXIF payload and preserve every other byte,
 /// including non-EXIF APP1 blocks, scan data and the trailer.
 fn replace_existing_exif<T>(
@@ -284,10 +318,12 @@ fn replace_existing_exif<T>(
         .filter(|end| *end <= bytes.len())
         .ok_or_else(|| ExifToolError::parse_error("Truncated JPEG EXIF segment"))?;
     let mut out = bytes[..start].to_vec();
-    out.extend_from_slice(&APP1_MARKER.to_be_bytes());
-    out.extend_from_slice(&length.to_be_bytes());
-    out.extend_from_slice(EXIF_IDENTIFIER);
-    out.extend_from_slice(&tiff);
+    if !tiff.is_empty() {
+        out.extend_from_slice(&APP1_MARKER.to_be_bytes());
+        out.extend_from_slice(&length.to_be_bytes());
+        out.extend_from_slice(EXIF_IDENTIFIER);
+        out.extend_from_slice(&tiff);
+    }
     out.extend_from_slice(&bytes[end..]);
     Ok((out, outcome))
 }
