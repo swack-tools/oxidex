@@ -53,17 +53,63 @@ EXIFTOOL_PERL="$perl" OXIDEX_PINNED_EXIFTOOL_LIB="$lib" \
 python3 tools/exiftool-tables/quicktime_userdata_specs.py --check
 ```
 
-After the parent builds a fresh `oxidex` CLI from the integrated runtime inputs,
-run the real public parser comparison (explicit binary path from that build):
+Public evidence requires an immutable build receipt. From a clean committed
+checkout, run the explicit build wrapper in an allocated build slot. It runs
+`cargo build --bin oxidex --all-features --message-format=json --jobs 4`, records
+the actual Cargo executable, and checks source inputs before and after the build.
+It does not infer build provenance from timestamps. The comparison never builds
+implicitly. Keep the shared target and lock allocation supplied by the controller.
 
 ```sh
 python3 tools/exiftool-tables/verify_quicktime_userdata_reader.py \
+  --build-proof-dir ../evidence/userdata-build
+build_proof=../evidence/userdata-build/build-proof.json
+fresh_oxidex=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["binary"]["path"])' "$build_proof")
+python3 tools/exiftool-tables/verify_quicktime_userdata_reader.py \
   --perl "$perl" --lib "$lib" --lock "$validation_lock" \
-  --oxidex "$fresh_oxidex" --output ../evidence/userdata-public
+  --oxidex "$fresh_oxidex" --build-proof "$build_proof" \
+  --output ../evidence/userdata-public
 ```
 
-Omitting `--oxidex` runs only the bounded native fixture capture. The evidence
-records whether Rust was checked, source/native/binary hashes, full native
-transcripts, fixture hashes and a before/after runtime input manifest for the
-public route. Keep native-only and public-route verdicts distinct. These files
-do not import observed-read credit into the catalog.
+Use `--source`, `--ledger` and `--rust` to select regenerated artifacts. The
+verifier recompiles the source and requires the ledger and Rust to replay; for
+public observations, the Rust must also equal the artifact in the built checkout.
+The clean commit, runtime input manifest, instrument inputs, Cargo transcript,
+binary and pinned native files are rechecked after observation. A dirty override
+cannot grant observed-read credit.
+
+Omitting both `--oxidex` and `--build-proof` runs only the bounded native fixture
+capture. It preserves the `quicktime_userdata_native_fixtures_v1` output used by
+the Rust fixture test and reports zero public observations.
+
+`comparison.json` retains fixture bytes hashes, full native and OxiDex stdout and
+stderr bytes and hashes, exact commands, pinned native identity, regenerated
+input identities and the build receipt. The validator requires every generated
+fixture in both print and raw modes. It compares JSON values without coercing
+strings or booleans to numbers. Missing targets or wrong Group1 identities cannot
+receive credit. Raw partial receipts survive parsing or admission failures.
+
+The canonical grid has 63 fixtures and 126 mode operations. Successful public
+mode observations, fixture occurrences, fully matched fixture occurrences,
+distinct source coordinates and distinct Group1 names are separate counts. A
+Group1 name receives credit only when at least one fixture for it matches in
+both modes. The 17 declarations represent 15 distinct Group1 names; declarations
+alone do not contribute observations.
+
+For evidence consumers, `validate_evidence(report, source, ledger, rust)` is the
+live import boundary: it authenticates generated artifacts, native files,
+producer inputs, binary, transcripts and persisted fixtures before replaying the
+claims. `validate_report(report, ledger)` checks the complete grid, typed
+transcripts and derived counts, but its caller must separately authenticate the
+source and producer context. For cross-host receipt replay,
+`validate_build_receipt(proof, expected_snapshot)` verifies embedded Cargo logs
+against an independently authenticated expected snapshot without requiring the
+producer host's files. It does not establish that expected snapshot itself.
+Catalog import is a separate consumer; this verifier does not modify the catalog.
+
+Focused portable evidence-forgery tests (no native processes or Cargo build):
+
+```sh
+python3 -m unittest discover -s tools/exiftool-tables \
+  -p 'test_verify_quicktime_userdata_reader.py'
+```
