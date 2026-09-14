@@ -243,9 +243,15 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
     };
 
     // A removed/unsupported generated public identity is terminal for its
-    // physical source group. Do not resurrect its old YAML/manual reverse
-    // spelling during a source upgrade.
+    // physical source group, unless a current descriptor has reused the
+    // numeric address in that group. Do not resurrect its old YAML/manual
+    // reverse spelling during a source upgrade.
     if generated_scalar_descriptor_fallback::terminal_reverse(tag_id, format_family, ifd_name) {
+        if let Some(name) =
+            generated_scalar_descriptor_fallback::reverse_name(tag_id, format_family, ifd_name)
+        {
+            return format!("{ifd_name}:{name}");
+        }
         return format!("{}:0x{:04X}", ifd_name, tag_id);
     }
 

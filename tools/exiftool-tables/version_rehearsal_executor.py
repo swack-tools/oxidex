@@ -34,6 +34,7 @@ STAGES = ("native", "generate", "build", "read", "write")
 REQUIRED_COMMANDS = ("generate", "build", "read")
 _SAFE_RELEASE = __import__("re").compile(r"^[0-9]+\.[0-9]+$")
 COMMAND_TIMEOUT_SECONDS = 3600
+_TERMINATION_GRACE_SECONDS = 2
 _PLACEHOLDERS = {
     "release", "checkout", "target", "report", "native_source", "native_lib",
     "native_program", "native_perl", "native_probe", "native_probe_sha256", "source_commit",
@@ -455,6 +456,68 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
     return result
 
 
+def _descendants(pid: int) -> list[int]:
+    """Return live descendants; Linux uses procfs and other hosts use PID/PPID."""
+    children: dict[int, list[int]] = {}
+    if sys.platform == "linux":
+        pending = [pid]
+        while pending:
+            parent = pending.pop()
+            try:
+                raw = Path(f"/proc/{parent}/task/{parent}/children").read_text(encoding="ascii")
+            except OSError:
+                continue
+            children[parent] = [int(value) for value in raw.split() if value.isdigit() and int(value) > 0]
+            pending.extend(children[parent])
+    else:
+        try:
+            listing = subprocess.run(["ps", "-axo", "pid=,ppid="], text=True, capture_output=True,
+                                     timeout=2, check=False).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            listing = ""
+        for row in listing.splitlines():
+            fields = row.split()
+            if len(fields) == 2 and all(value.isdigit() for value in fields):
+                children.setdefault(int(fields[1]), []).append(int(fields[0]))
+    pending, found = [pid], []
+    while pending:
+        parent = pending.pop()
+        for child in children.get(parent, []):
+            if child not in found:
+                found.append(child)
+                pending.append(child)
+    return found
+
+
+def _signal_pid(pid: int, signal_value: signal.Signals) -> None:
+    try:
+        os.kill(pid, signal_value)
+    except ProcessLookupError:
+        pass
+
+
+def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
+    """Terminate descendants first so an adapter can reap them before it exits."""
+    descendants = _descendants(child.pid)
+    for pid in reversed(descendants):
+        _signal_pid(pid, signal.SIGTERM)
+    try:
+        return child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        _signal_pid(child.pid, signal.SIGTERM)
+    try:
+        return child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        for pid in reversed(descendants):
+            _signal_pid(pid, signal.SIGKILL)
+        _signal_pid(child.pid, signal.SIGKILL)
+    try:
+        return child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        # Never turn timeout cleanup into an unbounded wait.
+        return (exc.output or "", exc.stderr or "")
+
+
 def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]],
                 started: Callable[[int, int], None] | None = None) -> dict[str, Any]:
     """Run one bounded command and retain its actual output for the journal log.
@@ -473,12 +536,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             try:
                 stdout, stderr = child.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired as exc:
-                os.killpg(child.pid, signal.SIGTERM)
-                try:
-                    stdout, stderr = child.communicate(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
-                    stdout, stderr = child.communicate()
+                stdout, stderr = _bounded_timeout_cleanup(child)
                 return {"argv": argv, "exit": None, "stdout": stdout or "", "stderr": (stderr or "") + str(exc), "state": "timeout", "pid": child.pid, "pgid": child.pid}
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
@@ -618,6 +676,7 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                 raise Refused("write result did not use the immutable selected JPEG fixture manifest")
     except Refused as exc:
         journal["releases"][release]["stages"][stage] = "failed"
+        journal["releases"][release]["state"] = "failed"
         journal["releases"][release]["failure"] = {"stage": stage, "detail": str(exc), "command": command_log}
         journal["phase"], journal["active"] = "failed", None
         _event(journal, "stage_failed", release=release, stage=stage, detail=str(exc))
@@ -658,8 +717,7 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
         try:
             stdout, stderr = child.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
-            os.killpg(child.pid, signal.SIGTERM)
-            stdout, stderr = child.communicate()
+            stdout, stderr = _bounded_timeout_cleanup(child)
             exc.output, exc.stderr = stdout, stderr
             raise
         return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
@@ -670,8 +728,10 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
         native_oracle.write_probe_report(output, report)
         if report.get("state") != "ready" or not report.get("cases"):
             raise Refused("native oracle did not provide ready cases")
-    except (Refused, native_oracle.Refused, catalog_stage.Refused, rehearsal.Refused, OSError) as exc:
+    except (Refused, native_oracle.Refused, catalog_stage.Refused, rehearsal.Refused, OSError,
+            subprocess.TimeoutExpired) as exc:
         journal["releases"][release]["stages"]["native"] = "failed"
+        journal["releases"][release]["state"] = "failed"
         journal["releases"][release]["failure"] = {"stage": "native", "detail": str(exc)}
         journal["phase"], journal["active"] = "failed", None
         _event(journal, "stage_failed", release=release, stage="native", detail=str(exc))

@@ -170,8 +170,22 @@ class ExecutorTests(unittest.TestCase):
         journal = self.execute()
         self.assertEqual(journal["phase"], "failed")
         failed = next(row for row in journal["releases"].values() if row["failure"])
+        self.assertEqual(failed["state"], "failed")
         self.assertEqual(failed["failure"]["stage"], "read")
         self.assertIn("positive denominator", failed["failure"]["detail"])
+
+    def test_native_timeout_persists_terminal_release_failure(self):
+        self.initialize(self.config())
+        timeout = subprocess.TimeoutExpired(["native"], 1)
+        with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=timeout):
+            journal = executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                       run=self.command, checkout=self.checkout)
+        release = self.releases[0]
+        self.assertEqual(journal["phase"], "failed")
+        self.assertEqual(journal["releases"][release]["state"], "failed")
+        self.assertEqual(journal["releases"][release]["stages"]["native"], "failed")
+        persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+        self.assertEqual(persisted["releases"][release]["state"], "failed")
 
     def test_mismatches_and_boolean_counts_refuse_pass_results(self):
         path = self.root / "result.json"
