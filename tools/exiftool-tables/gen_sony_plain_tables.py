@@ -91,7 +91,8 @@ FORMATS = {"int8u": "Fmt::U8", "int8s": "Fmt::I8", "int16u": "Fmt::U16",
 FIELDS = {"Name", "Description", "Notes", "Format", "Condition", "RawConv",
           "ValueConv", "PrintConv", "ValueConvInv", "PrintConvInv", "Writable",
           "Mask", "BitShift", "PrintHex", "Priority", "DataMember", "Groups",
-          "SeparateTable", "_extra_keys", "_shorthand", "SubDirectory", "Unknown"}
+          "SeparateTable", "PrintConvColumns", "_extra_keys", "_shorthand",
+          "SubDirectory", "Unknown"}
 
 
 def uint(value, bits=32):
@@ -339,6 +340,14 @@ def render(data):
                     extras = row.get("_extra_keys", [])
                     if not isinstance(extras, list) or len(set(extras)) != len(extras) or set(extras) - {"PrintConvColumns", "PrintInt", "Shift"}:
                         raise Unsupported("unregistered _extra_keys")
+                    # ExifTool uses this only to arrange its human-readable
+                    # PrintConv table. Scalar lookup applies the same map
+                    # independently of the display width, which the Rust
+                    # metadata API does not expose. Keep the captured fact
+                    # closed so an executable or malformed replacement is
+                    # not silently classified as presentation-only.
+                    if "PrintConvColumns" in row and uint(row["PrintConvColumns"]) < 1:
+                        raise Unsupported("PrintConvColumns must be a positive integer")
                     if "PrintInt" in extras:
                         if (name, key, row["Name"]) != ("CameraSettings3", "1015", "LensType2"):
                             raise Unsupported("new PrintInt requires native review")
