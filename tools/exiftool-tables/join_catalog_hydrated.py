@@ -444,6 +444,38 @@ def quicktime_keys_observed_reads(evidence: dict | None, source: bytes | None, l
     return {(row["source_identity"]["raw_key"], tuple(row["source_identity"]["variant_path"]), row["tag_name"]) for row in credited}
 
 
+def table_coverage(records: list[dict], source_rows: dict, table_identities=()) -> dict:
+    """Aggregate already-authenticated row classifications by source table.
+
+    A source variant outside BuildTagLookup stays in the source denominator.
+    A missing declaration in this join says nothing about an unindexed runtime
+    consumer, and neither declarations nor source counts grant observations.
+    """
+    tables = defaultdict(list)
+    for row in records:
+        tables[row["identity"]["table"]].append(row)
+    source_counts = Counter(identity[0] for identity in source_rows)
+    result = {}
+    for table in sorted(set(tables) | set(source_counts) | set(table_identities)):
+        rows = tables[table]
+        reasons = Counter(reason for row in rows for reason in (row["implementation_refusal_reasons"] or []))
+        result[table] = {
+            "source_variant_rows": source_counts[table],
+            "catalog_entries": len(rows),
+            "catalog_unique_case_insensitive_names": len({row["catalog"]["normalized_name"] for row in rows}),
+            "reader_implementation": dict(sorted(Counter(row["reader_implementation"] for row in rows).items())),
+            "writer_implementation": dict(sorted(Counter(row["writer_implementation"] for row in rows).items())),
+            "reader_refusal_reasons": dict(sorted(reasons.items())),
+            "observed_read_catalog_entries": sum(row["observed_read"] == "observed_matched_read" for row in rows),
+            "observed_write_catalog_entries": sum(row["observed_write"] == "observed_matched_write" for row in rows),
+        }
+    if sum(row["catalog_entries"] for row in result.values()) != len(records):
+        raise ValueError("source-table catalog conservation failed")
+    if sum(row["source_variant_rows"] for row in result.values()) != len(source_rows):
+        raise ValueError("source-table variant conservation failed")
+    return result
+
+
 def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           itemlist_ledger: dict | None = None, quicktime_capabilities: dict | None = None,
           quicktime_bounded_source: bytes | None = None, quicktime_rust: str | None = None,
@@ -629,6 +661,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         result["counts"]["write_readback"].update(
             catalog_matched_write_operations=matching_operations,
             alternate_context_write_operations=len(observed_writes) - matching_operations)
+    result["source_tables"] = table_coverage(records, hydrated_by_id, table_hashes)
     return result
 
 
@@ -649,7 +682,17 @@ def report(join: dict) -> str:
         lines += ["", "## Observed public writes", "",
                   f"Successful mutating write/readback operations: {writes['successful_write_operations']}",
                   f"Distinct observed Group1 names: {writes['distinct_group1_names']}"]
-    lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observed reads additionally require a clean, artifact-bound verifier report and exact source identity; writes remain unobserved.", "",
+    lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observations additionally require authenticated native comparisons in the exact Group1 context. Entries without imported evidence remain unobserved.", "",
+              "## Source-table progress", "",
+              "Declarations below are authenticated implementation facts, not observed coverage. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.", "",
+              "| Source table | Source variants | Catalog entries | Reader declarations | Writer declarations | Observed read entries | Observed write entries | Refusal reasons |",
+              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+    for table, value in join.get("source_tables", {}).items():
+        reader = sum(count for state, count in value["reader_implementation"].items() if state.startswith("generated_"))
+        writer = sum(count for state, count in value["writer_implementation"].items() if state.startswith("generated_"))
+        reasons = "; ".join(f"{reason}: {count}" for reason, count in value["reader_refusal_reasons"].items()) or "—"
+        lines.append(f"| {table} | {value['source_variant_rows']} | {value['catalog_entries']} | {reader} | {writer} | {value['observed_read_catalog_entries']} | {value['observed_write_catalog_entries']} | {reasons} |")
+    lines += ["",
               "## Families", "", "| Family | Status counts |", "| --- | --- |"]
     lines.extend(f"| {key} | " + ", ".join(f"{name}: {count}" for name, count in value.items()) + " |" for key, value in join["families"].items())
     return "\n".join(lines) + "\n"

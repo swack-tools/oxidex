@@ -56,6 +56,40 @@ def observation_rows(fixture_name, fixture_bytes, expected, actual):
 
 
 class CatalogHydratedJoinTests(unittest.TestCase):
+    def test_table_report_keeps_source_only_variants_and_separate_contexts(self):
+        second = "Image::ExifTool::Other::Main"
+        source_only = "Image::ExifTool::Other::Internal"
+        base = {"identity": {"table": TABLE},
+                "catalog": {"normalized_name": "title"},
+                "reader_implementation": "generated_reader_declaration_unobserved",
+                "writer_implementation": "writer_not_declared",
+                "implementation_refusal_reasons": None,
+                "observed_read": "not_observed_yet", "observed_write": "not_observed_yet"}
+        refused = copy.deepcopy(base)
+        refused.update(reader_implementation="blocked_generated_reader_refusal",
+                       implementation_refusal_reasons=["unsupported_conversion", "perl_callback"])
+        other = copy.deepcopy(base)
+        other["identity"]["table"] = second
+        other.update(writer_implementation="generated_writer_declaration_unobserved",
+                     observed_read="observed_matched_read", observed_write="observed_matched_write")
+        source = {(TABLE, "one", 0): {}, (TABLE, "one", 1): {},
+                  (TABLE, "source-only", 0): {}, (second, "same-name", 0): {},
+                  (source_only, "internal", 0): {}}
+        empty = "Image::ExifTool::Other::Empty"
+        result = join.table_coverage([base, refused, other], source, [empty])
+        self.assertEqual(result[empty]["source_variant_rows"], 0)
+        self.assertEqual(result[empty]["catalog_entries"], 0)
+        self.assertEqual(result[TABLE]["source_variant_rows"], 3)
+        self.assertEqual(result[TABLE]["catalog_entries"], 2)
+        self.assertEqual(result[TABLE]["catalog_unique_case_insensitive_names"], 1)
+        self.assertEqual(result[TABLE]["reader_refusal_reasons"], {"perl_callback": 1, "unsupported_conversion": 1})
+        self.assertEqual(result[TABLE]["observed_read_catalog_entries"], 0)
+        self.assertEqual(result[second]["observed_write_catalog_entries"], 1)
+        self.assertEqual(result[source_only]["catalog_entries"], 0)
+        self.assertEqual(result[source_only]["source_variant_rows"], 1)
+        self.assertEqual(sum(item["catalog_entries"] for item in result.values()), 3)
+        self.assertEqual(sum(item["source_variant_rows"] for item in result.values()), 5)
+
     def test_keys_evidence_import_replays_complete_grid_and_deduplicates_modes(self):
         source = (PATH.parent / "fixtures/quicktime_source_13_59.json").read_bytes()
         ledger = join.quicktime_keys_specs.compile_document(json.loads(source))
