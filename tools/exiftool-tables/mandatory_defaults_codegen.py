@@ -46,7 +46,7 @@ def render(recipe: MandatoryRecipe) -> str:
     lines.extend(f"JfifAssignment {{ tag_id: 0x{tag:04x}, property: {rust_string(prop)}, adjustment: {_integer(adjust)} }},\n" for tag,prop,adjust in recipe.jfif_override.assignments)
     guard="true" if recipe.selection.disabled_when == "noMandatory" else "false"
     lines.append("];\nconst ENCODINGS: &[DefaultEncoding] = &[\n")
-    lines.extend(f"DefaultEncoding {{ tag_id: 0x{item.tag_id:04x}, format_name: {rust_string(item.format_name)} }},\n" for item in recipe.encodings)
+    lines.extend(f"DefaultEncoding {{ tag_id: 0x{item.tag_id:04x}, format_name: {rust_string(item.format_name)}, tiff_type: {item.tiff_type} }},\n" for item in recipe.encodings)
     lines.append("];\n")
     lines.append("pub(crate) const MANDATORY_DEFAULTS: MandatoryRecipe = MandatoryRecipe { "
                  f"writer_source_file: {rust_string(recipe.writer_source_file)}, writer_source_sha256: {rust_string(recipe.writer_source_sha256)}, write_value_source_sha256: {rust_string(recipe.write_value_source_sha256)}, "

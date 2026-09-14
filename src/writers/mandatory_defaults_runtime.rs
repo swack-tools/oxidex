@@ -30,6 +30,7 @@ pub(crate) struct JfifAssignment {
 pub(crate) struct DefaultEncoding {
     pub tag_id: u16,
     pub format_name: &'static str,
+    pub tiff_type: u16,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MandatoryRecipe {
@@ -176,7 +177,7 @@ pub(crate) fn encode_ifd0_defaults(
                     TiffByteOrder::Little => value.to_le_bytes(),
                     TiffByteOrder::Big => value.to_be_bytes(),
                 };
-                (3, 1, bytes.to_vec())
+                (format.tiff_type, 1, bytes.to_vec())
             }
             "rational64u" => {
                 let value = u32::try_from(value).map_err(|_| {
@@ -193,7 +194,7 @@ pub(crate) fn encode_ifd0_defaults(
                         bytes.extend(1u32.to_be_bytes());
                     }
                 }
-                (5, 1, bytes)
+                (format.tiff_type, 1, bytes)
             }
             _ => return Err(refusal("mandatory WriteValue format is unsupported")),
         };

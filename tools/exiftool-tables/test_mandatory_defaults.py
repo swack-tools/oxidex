@@ -181,12 +181,12 @@ class MandatoryNumericEncodingTests(unittest.TestCase):
     def _document(self, fact: dict) -> dict:
         effective = {"__name": fact["writer"]["actual_name"], "source_file": fact["writer"]["source_file"],
                      "source_sha256": fact["writer"]["source_sha256"]}
+        write_value = {"requested_binding": "Image::ExifTool::WriteValue", "resolved": True, "__perl": "CODE", "__deparse": "my($proc) = $writeValueProc{$format}; if ($proc) { split(' ', $val, 0); ($packed .= &$proc($val)); }", "__name": "Image::ExifTool::WriteValue", "source_file": "Image/ExifTool/Writer.pl", "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"], "lexical_hashes": {"bindings": {"%writeValueProc": {"resolved": True, "entries": {"int16u": {"resolved": True, "__perl": "CODE", "__name": "Image::ExifTool::Set16u", "__deparse": "Image::ExifTool::Set16u DoPackStd('S', @_)"}, "rational64u": {"resolved": True, "__perl": "CODE", "__name": "Image::ExifTool::SetRational64u", "__deparse": "Image::ExifTool::SetRational64u Rationalize($_[0], 4294967295) Set32u($numer) . Set32u($denom)"}}}}}}
         return {"exiftool_version": fact["native_identity"]["exiftool_version"],
                 "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}},
-                "native_write_helpers": {"write_value": {"requested_binding": "Image::ExifTool::WriteValue", "resolved": True, "__perl": "CODE", "__deparse": "native WriteValue body", "__name": "Image::ExifTool::WriteValue",
-                    "source_file": "Image/ExifTool/Writer.pl",
-                    "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}},
-                "native_write_capture_context": {"loaded_modules": {"Image/ExifTool/Writer.pl": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}}
+                "native_write_helpers": {"write_value": write_value},
+                "native_write_capture_context": {"loaded_modules": {"Image/ExifTool/Writer.pl": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}},
+                "native_write_format_registry": {"state": "resolved", "format_number": {"int16u": 3, "rational64u": 5}, "format_size": [None,1,1,2,4,8]}}
 
     @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
     def test_actual_writevalue_bytes_match_generated_ifd0_encoder_and_type_mutation_propagates(self):
