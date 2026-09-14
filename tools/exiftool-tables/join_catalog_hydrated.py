@@ -22,6 +22,7 @@ import quicktime_atom_tables as quicktime_selector
 import quicktime_generated_specs as quicktime_specs
 import final_scalar_stage
 import setnewvalue_public_migration_ledger as public_migration
+import quicktime_baseline as baseline
 
 SCHEMA = "oxidex_catalog_hydrated_join_v2"
 CATALOG_SCHEMA = "oxidex_hydrated_catalog_universe_v1"
@@ -344,6 +345,8 @@ def quicktime_observed_reads(evidence: dict | None, input_digests: dict[str, str
             raise ValueError("QuickTime read evidence producer binding is malformed")
     if producer.get("pin") != (quicktime_selector.ROOT / ".exiftool-version").read_text().strip():
         raise ValueError("QuickTime read evidence pin differs from repository pin")
+    if producer["source_fingerprint"] != baseline.source_fingerprint(quicktime_selector.ROOT):
+        raise ValueError("QuickTime read evidence runtime source fingerprint differs from current inputs")
     if evidence.get("inputs") != dict(sorted(input_digests.items())):
         raise ValueError("QuickTime read evidence generated artifact binding differs")
     from verify_quicktime_reader import observation_evidence
