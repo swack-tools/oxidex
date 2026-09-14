@@ -83,6 +83,7 @@ export default defineConfig({
             { text: 'Tag Database', link: '/reference/tag-database' },
             { text: 'MakerNotes', link: '/reference/makernotes' },
             { text: 'ExifTool Coverage', link: '/reference/tag-coverage-analysis' },
+            { text: 'Source Catalog Baseline', link: '/reference/catalog-baseline' },
             { text: 'BinaryData Engine', link: '/reference/binary-data-engine' }
           ]
         },

@@ -31,6 +31,9 @@ $lib = abs_path($lib);
 die "pinned ExifTool lib is unavailable\n" unless defined($lib) && -d $lib;
 unshift @INC, $lib;
 
+# Build the pinned default catalog, independent of a developer's user config.
+# ExifTool consults this global while the module is first required.
+{ no warnings 'once'; $Image::ExifTool::configFile = ''; }
 require Image::ExifTool;
 require Image::ExifTool::BuildTagLookup;
 no warnings 'once'; # These package globals are the documented hydrated registry.
@@ -72,11 +75,53 @@ for my $full_name (sort keys %Image::ExifTool::allTables) {
 }
 die "hydrated table registry is empty\n" unless @tables;
 
+# Preserve every non-hidden, non-subdirectory variant counted by the native
+# BuildTagLookup traversal. Name presence is catalog evidence only. The source
+# row key and variant index remain separate from its public spelling.
+my (@entries, @containers, %public_names);
+my $et = Image::ExifTool->new;
+for my $full_name (sort keys %Image::ExifTool::allTables) {
+    my $table = Image::ExifTool::GetTagTable($full_name);
+    for my $raw_key (sort { "$a" cmp "$b" } Image::ExifTool::TagTableKeys($table)) {
+        my @variants = Image::ExifTool::GetTagInfoList($table, $raw_key);
+        # Native BuildTagLookup hides the whole ID when its first variant is
+        # Hidden, otherwise it hides only individual flagged variants.
+        next if @variants && $variants[0]{Hidden};
+        for my $index (0 .. $#variants) {
+            my $row = $variants[$index];
+            next if $row->{Hidden};
+            my $name = $row->{Name};
+            die "catalog row has no public name\n" unless defined($name) && length($name);
+            my @groups = $et->GetGroup($row);
+            my $entry = {
+                table => $full_name,
+                raw_key => "$raw_key",
+                variant_index => $index,
+                name => "$name",
+                normalized_name => lc($name),
+                groups => { map { ("$_", $groups[$_]) } (0 .. 2) },
+                unknown => $row->{Unknown} ? JSON::PP::true : JSON::PP::false,
+                no_lookup => ($table->{VARS} || {})->{NO_LOOKUP} ? JSON::PP::true : JSON::PP::false,
+            };
+            if ($row->{SubDirectory}) {
+                # These are catalog navigation/container rows, excluded from
+                # BuildTagLookup's total-tags denominator, but never discarded.
+                push @containers, $entry;
+            } else {
+                push @entries, $entry;
+                $public_names{lc($name)} = 1;
+            }
+        }
+    }
+}
+die "catalog entry projection differs from native BuildTagLookup total\n"
+    unless @entries == $builder->{COUNT}{'total tags'};
+
 my $shortcut_count = scalar keys %Image::ExifTool::Shortcuts::Main;
 die "shortcut catalog was not hydrated\n" unless $shortcut_count;
 
 my %provenance;
-for my $key (qw(Image/ExifTool.pm Image/ExifTool/Writer.pl Image/ExifTool/BuildTagLookup.pm Image/ExifTool/Shortcuts.pm)) {
+for my $key (sort grep { m{\AImage/ExifTool(?:\.pm|/)} } keys %INC) {
     $provenance{$key} = source_fact($key);
 }
 
@@ -94,6 +139,16 @@ my $document = {
         shortcut_entries => $shortcut_count,
         catalog_unique_tag_names => 0 + $builder->{COUNT}{'unique tag names'},
         catalog_total_tag_entries => 0 + $builder->{COUNT}{'total tags'},
+        distinct_case_insensitive_entry_names => scalar(keys %public_names),
+        catalog_container_rows_outside_total => scalar(@containers),
+    },
+    entries => \@entries,
+    unique_names => [ sort keys %public_names ],
+    container_rows_outside_total => \@containers,
+    denominator_definitions => {
+        catalog_total_tag_entries => 'Native BuildTagLookup COUNT total tags; includes non-hidden non-SubDirectory variants, excluding shortcuts/plugins.',
+        catalog_unique_tag_names => 'Native BuildTagLookup COUNT unique tag names; retained verbatim, not assumed equal to a distinct-name set.',
+        distinct_case_insensitive_entry_names => 'Cardinality of Perl lc(Name) over the enumerated catalog entries.',
     },
     families => {
         hydrated_tables => \@tables,
