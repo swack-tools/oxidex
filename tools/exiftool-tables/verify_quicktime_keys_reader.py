@@ -2,11 +2,26 @@
 """Evidence instrument for direct QuickTime Keys `meta/keys/ilst` behavior."""
 from __future__ import annotations
 import argparse,hashlib,json,subprocess,tempfile
+import runtime_evidence_inputs
 from pathlib import Path
 import quicktime_keys_specs as specs
 import quicktime_baseline as baseline
 
 SCHEMA='oxidex_quicktime_generated_keys_read_evidence_v1'
+def projection(value):
+ if isinstance(value,list) and len(value)==1:value=value[0]
+ if not isinstance(value,dict):raise ValueError('expected one metadata object')
+ return {k:v for k,v in value.items() if k.startswith('Keys:') or k.startswith('QuickTime:GPS') or k=='QuickTime:ContentCreateDate'}
+def fixture_identity(data):
+ def atoms(x):
+  p=0
+  while p<len(x):
+   n=int.from_bytes(x[p:p+4],'big');yield x[p+4:p+8],x[p+8:p+n];p+=n
+ for n in (b'moov',b'udta',b'meta'):
+  data=next(v for k,v in atoms(data) if k==n);data=data[4:] if n==b'meta' else data
+ keys=next(v for k,v in atoms(data) if k==b'keys'); pos=8; n=int.from_bytes(keys[pos:pos+4],'big'); ns=keys[pos+4:pos+8]; raw=keys[pos+8:pos+n].split(b'\0')[0]
+ return {'namespace':ns.decode('latin1'),'key':raw.decode('latin1'),'ordinal':1}
+
 def atom(name,payload): return (len(payload)+8).to_bytes(4,'big')+name+payload
 def fixture(name,namespace=b'mdta',key=b'com.apple.quicktime.artist',index=1,flags=1,value=b'Ada',count=1):
  keys=b'\0'*4+count.to_bytes(4,'big')+(8+len(key)).to_bytes(4,'big')+namespace+key
@@ -30,29 +45,36 @@ def authenticated(source,ledger,rust):
 def validate_report(report, ledger):
  by_name={x['name']:x['source_identity'] for x in ledger['specs']}
  credited=[]
+ seen=set()
  for row in report['observations']:
+  if row['fixture'] in seen or row['fixture'] not in cases(): raise ValueError('fixture grid is incomplete or duplicated')
+  seen.add(row['fixture'])
+  if row['fixture_sha256'] != hashlib.sha256(cases()[row['fixture']]).hexdigest() or row.get('fixture_identity') != fixture_identity(cases()[row['fixture']]): raise ValueError('fixture bytes or identity differ')
   for side in ('native_json','oxidex_json'):
    if hashlib.sha256(row[side].encode()).hexdigest()!=row[side+'_sha256']: raise ValueError('transcript hash differs')
-  native=baseline.projection(json.loads(row['native_json'])); actual=baseline.projection(json.loads(row['oxidex_json']))
+  native=projection(json.loads(row['native_json'])); actual=projection(json.loads(row['oxidex_json']))
   if native!=row['expected'] or actual!=row['actual'] or row['matched'] != (native==actual): raise ValueError('transcript projection claim differs')
   if row['matched']:
    for key in actual:
     if key.startswith('Keys:') and key.removeprefix('Keys:') in by_name: credited.append({'fixture':row['fixture'],'source_identity':by_name[key.removeprefix('Keys:')],'group1':'Keys','tag_name':key.removeprefix('Keys:')})
+ if seen != set(cases()): raise ValueError('fixture grid is incomplete')
  return credited
 
 def compare(tree,out,source,ledger,rust):
  inp=authenticated(source,ledger,rust); ledger_doc=json.loads(ledger.read_text()); root=baseline.ROOT; state=baseline.instrument.git_state(root)
  if state.dirty: raise ValueError('clean checkout required')
- oracle=baseline.exiftool_oracle.resolve_tree(tree.resolve()); binary=baseline.instrument.resolve_binary(root/'target/debug/oxidex')
+ oracle=baseline.exiftool_oracle.resolve_tree(tree.resolve()); manifest_path=Path(__file__).parent/'fixtures/quicktime_oracle_sources_13_59.json'; baseline.verify_oracle_sources(tree,json.loads(manifest_path.read_text())); build=subprocess.run(['cargo','build','--bin','oxidex','--message-format=json'],cwd=root,text=True,capture_output=True,check=True); candidates=[json.loads(x)['executable'] for x in build.stdout.splitlines() if json.loads(x).get('reason')=='compiler-artifact' and json.loads(x).get('target',{}).get('name')=='oxidex' and json.loads(x).get('executable')];
+ if len(candidates)!=1: raise ValueError('Cargo did not report exactly one oxidex executable')
+ binary=baseline.instrument.resolve_binary(candidates[0])
  rows=[]; manifest={}
  out.mkdir();
  for name,data in cases().items():
   path=out/(name+'.mp4');path.write_bytes(data); manifest[name]=hashlib.sha256(data).hexdigest()
   native=subprocess.run(oracle.command(['-config','', '-j','-a','-G1','-s',str(path)]),text=True,capture_output=True,check=True)
   ox=subprocess.run([str(binary.path),'-j','-a','-G1',str(path)],text=True,capture_output=True,check=True)
-  expected=baseline.projection(json.loads(native.stdout)); actual=baseline.projection(json.loads(ox.stdout))
-  rows.append({'fixture':name,'fixture_sha256':manifest[name],'native_json':native.stdout,'native_json_sha256':hashlib.sha256(native.stdout.encode()).hexdigest(),'oxidex_json':ox.stdout,'oxidex_json_sha256':hashlib.sha256(ox.stdout.encode()).hexdigest(),'expected':expected,'actual':actual,'matched':expected==actual,'native_emitted':bool(expected),'oxidex_emitted':bool(actual)})
- report={'schema':SCHEMA,'inputs':inp,'source_commit':state.commit,'binary_sha256':hashlib.sha256(Path(binary.path).read_bytes()).hexdigest(),'producer':{'runtime_input_manifest_sha256':__import__('runtime_evidence_inputs').runtime_input_manifest(root),'fixture_manifest_sha256':hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest()},'observations':rows,'matches':[r for r in rows if r['matched'] and r['native_emitted'] and r['oxidex_emitted']],'absence_or_refusals':[r for r in rows if not (r['matched'] and r['native_emitted'] and r['oxidex_emitted'])],'scope':'direct Keys-table meta/keys/ilst fixtures only; unknown and unsupported source rows are recorded separately from matches'}
+  expected=projection(json.loads(native.stdout)); actual=projection(json.loads(ox.stdout))
+  rows.append({'fixture_identity':fixture_identity(data),'fixture':name,'fixture_sha256':manifest[name],'native_json':native.stdout,'native_json_sha256':hashlib.sha256(native.stdout.encode()).hexdigest(),'oxidex_json':ox.stdout,'oxidex_json_sha256':hashlib.sha256(ox.stdout.encode()).hexdigest(),'expected':expected,'actual':actual,'matched':expected==actual,'native_emitted':bool(expected),'oxidex_emitted':bool(actual)})
+ report={'schema':SCHEMA,'inputs':inp,'source_commit':state.commit,'binary_sha256':hashlib.sha256(Path(binary.path).read_bytes()).hexdigest(),'producer':{'runtime_input_manifest_sha256':runtime_evidence_inputs.runtime_input_manifest(root),'fixture_manifest_sha256':hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest()},'observations':rows,'matches':[r for r in rows if r['matched'] and r['native_emitted'] and r['oxidex_emitted']],'absence_or_refusals':[r for r in rows if not (r['matched'] and r['native_emitted'] and r['oxidex_emitted'])],'scope':'direct Keys-table meta/keys/ilst fixtures only; unknown and unsupported source rows are recorded separately from matches'}
  report['matched_identities']=validate_report(report,ledger_doc)
  (out/'comparison.json').write_text(json.dumps(report,indent=2)+'\n');return report
 def main():
