@@ -12,6 +12,9 @@ from generated_tiff_write_matrix import GeneratedTarget
 
 
 class FreshJpegPublicBatchMatrixTests(unittest.TestCase):
+    def test_instrument_identifier_is_single_sourced(self) -> None:
+        self.assertEqual(matrix.INSTRUMENT, "fresh_jpeg_public_batch_matrix_v2")
+
     def test_mandatory_candidates_join_generated_source_artifacts(self) -> None:
         candidates = matrix.mandatory_legacy_candidates()
         self.assertGreater(len(candidates), 0)

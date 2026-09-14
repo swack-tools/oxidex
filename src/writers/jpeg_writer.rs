@@ -253,6 +253,9 @@ pub(crate) fn write_public_exif_transaction(
         );
     }
     transform_exif(reader, |original, head| {
+        if plan.whole_exif_clear {
+            return Ok((Vec::new(), ()));
+        }
         let empty;
         let tiff = match original {
             Some(tiff) => tiff,
@@ -454,6 +457,19 @@ fn transform_exif<T>(
         }
         index
     } else {
+        if policy
+            .creation_wait_for_directories
+            .contains(&"ExtendedEXIF")
+            && head.iter().any(|segment| {
+                segment
+                    .data
+                    .starts_with(b"http://ns.adobe.com/xmp/extension/\0")
+            })
+        {
+            return Err(ExifToolError::unsupported_format(
+                "ExtendedEXIF carrier requires a generated directory barrier",
+            ));
+        }
         validate_creation_sources()?;
         head.iter()
             .enumerate()

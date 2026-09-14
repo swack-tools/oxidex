@@ -113,6 +113,8 @@ pub(crate) struct PublicWritePlan {
     pub legacy_metadata: MetadataMap,
     pub legacy_removed: Vec<String>,
     pub has_legacy_changes: bool,
+    /// Preserve a whole-EXIF clear before generated rows are masked from legacy.
+    pub whole_exif_clear: bool,
 }
 
 pub(crate) fn plan_public_write(
@@ -120,6 +122,12 @@ pub(crate) fn plan_public_write(
     desired: &MetadataMap,
     removed: &[String],
 ) -> Result<PublicWritePlan> {
+    let whole_exif_clear = desired.iter().all(|(key, _)| {
+        matches!(
+            key.split_once(':').map(|(group, _)| group),
+            Some("EXIF" | "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD")
+        ) == false
+    });
     let rules = generated_write_address::generated_rules();
     let baseline_rows: Vec<_> = baseline
         .iter()
@@ -201,6 +209,7 @@ pub(crate) fn plan_public_write(
         legacy_metadata,
         legacy_removed,
         has_legacy_changes: !plan.outside.is_empty(),
+        whole_exif_clear,
     })
 }
 
@@ -298,6 +307,21 @@ mod tests {
         desired.insert("EXIF:HostComputer", TagValue::new_string(""));
         let empty = plan_public_write(&original, &desired, &[]).unwrap();
         assert_eq!(empty.generated[0].value, Scalar::Utf8(String::new()));
+    }
+
+    #[test]
+    fn whole_exif_clear_survives_generated_masking() {
+        let mut original = MetadataMap::new();
+        original.insert("EXIF:HostComputer", TagValue::new_string("old"));
+        original.insert("IFD0:Artist", TagValue::new_string("legacy"));
+        let plan = plan_public_write(
+            &original,
+            &MetadataMap::new(),
+            &["EXIF:HostComputer".into()],
+        )
+        .unwrap();
+        assert!(!plan.generated.is_empty());
+        assert!(plan.whole_exif_clear);
     }
 
     #[test]

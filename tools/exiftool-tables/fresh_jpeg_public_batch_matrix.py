@@ -32,6 +32,8 @@ RULES = ROOT / "src/writers/generated_tiff_scalar_final_rules.rs"
 MANDATORY_LEDGER = ROOT / "tools/exiftool-tables/mandatory_defaults_ledger.json"
 ADDRESS_RULES = ROOT / "src/writers/generated_setnewvalue_address_rules.rs"
 
+INSTRUMENT = "fresh_jpeg_public_batch_matrix_v2"
+
 BATCH_CASES = (
     "generated-delete-legacy-set",
     "generated-set-mandatory-override",
@@ -390,18 +392,33 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
     request_path.write_text(json.dumps(requests, indent=2) + "\n", encoding="utf-8")
     env = os.environ.copy() | {"OXIDEX_SCALAR_WRITE_REQUESTS": str(request_path),
                                "OXIDEX_SCALAR_WRITE_RESULTS": str(result_path)}
-    completed = subprocess.run([str(test_binary), DRIVER, "--exact", "--ignored", "--nocapture"],
-                               env=env, text=True, capture_output=True, timeout=180)
-    (root / "driver.log").write_text(completed.stdout + completed.stderr, encoding="utf-8")
-    completed.check_returncode()
-    results = json.loads(result_path.read_text(encoding="utf-8"))
-    if not isinstance(results, list) or len(results) != len(rows):
-        raise AssertionError("public batch fixture results differ from requests")
-    report: dict[str, Any] = {"instrument": "fresh_jpeg_public_batch_matrix_v2", "declared": len(rows),
+    report: dict[str, Any] = {"instrument": INSTRUMENT, "declared": len(rows),
                               "passed": 0, "mandatory_candidate": asdict(mandatory),
                               "mandatory_selection_probes": mandatory_probes,
                               "jfif_adjusted_candidates": {key: asdict(value) for key, value in jfif_candidates.items()},
-                              "jfif_adjusted_selection_probes": jfif_probes, "rows": rows}
+                              "jfif_adjusted_selection_probes": jfif_probes, "rows": rows,
+                              "state": "driver-pending"}
+    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        completed = subprocess.run([str(test_binary), DRIVER, "--exact", "--ignored", "--nocapture"],
+                                   env=env, text=True, capture_output=True, timeout=180)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        report.update(state="driver-failed", error=str(error))
+        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        raise
+    (root / "driver.log").write_text(completed.stdout + completed.stderr, encoding="utf-8")
+    if completed.returncode:
+        report.update(state="driver-failed", returncode=completed.returncode)
+        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        completed.check_returncode()
+    try:
+        results = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        report.update(state="driver-failed", error=str(error))
+        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        raise
+    if not isinstance(results, list) or len(results) != len(rows):
+        raise AssertionError("public batch fixture results differ from requests")
     for row, result in zip(rows, results, strict=True):
         row["driver_result"] = result
         try:
@@ -440,7 +457,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     declared = len(CARRIERS) * len(targets) * len(BATCH_CASES) + sum(
         2 * len(targets) for carrier in CARRIERS if carrier.jfif.unit is not None
     )
-    print_header(tool="fresh_jpeg_public_batch_matrix_v1", git=state, binary=binary,
+    print_header(tool=INSTRUMENT, git=state, binary=binary,
                  dirty_overridden=overridden,
                  extra=[f"native: {identity}", f"{declared} fresh/empty public batches"])
     report = run_matrix(test_binary=binary.path, perl=perl, library=library, output=args.output,
