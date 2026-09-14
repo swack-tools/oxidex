@@ -74,11 +74,11 @@ else:
         dump(args[0]);output(flag('--rust-output'),'serial')
         assert flag('--rust-output')==artifact('serial_directory')
         output(flag('--output'),'serial-report')
-    elif name=='scalar_helper_codegen.py':
+    elif name in ('scalar_helper_codegen.py', 'checkexif_rust_codegen.py'):
         dump(args[0])
-        selected={root/item.path for item in artifacts.select(producer='scalar_helper_codegen')}
+        selected={root/item.path for item in artifacts.select(producer=name.removesuffix('.py'))}
         assert {flag('--output'),flag('--report')}==selected
-        output(flag('--output'),'scalar-helpers');output(flag('--report'),'scalar-helper-ledger')
+        output(flag('--output'),name);output(flag('--report'),name+'-ledger')
     elif name=='verify_serial_directory.py':
         assert pathlib.Path(args[0]).resolve()==artifact('serial_directory')
         assert pathlib.Path(args[0]).read_text()=='generated explicit-A serial\n'
@@ -219,10 +219,12 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('verify_exprs.py'), int(full))
                 self.assertEqual(names.count('serial_directory.py'), int(full))
                 self.assertEqual(names.count('scalar_helper_codegen.py'), int(full))
+                self.assertEqual(names.count('checkexif_rust_codegen.py'), int(full))
                 self.assertEqual(names.count('verify_serial_directory.py'), int(full))
                 if full:
                     self.assertLess(names.index('serial_directory.py'), names.index('rustfmt'))
                     self.assertLess(names.index('scalar_helper_codegen.py'), names.index('rustfmt'))
+                    self.assertLess(names.index('checkexif_rust_codegen.py'), names.index('rustfmt'))
                     self.assertGreater(names.index('verify_serial_directory.py'), names.index('rustfmt'))
                 self.assertEqual(names.count('rustfmt'), 2 if full else 1)
                 format_calls = [c for c in calls if c['tool'] == 'rustfmt']
@@ -249,7 +251,7 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertNotIn('>> done:', result.stdout)
 
     def test_tier_one_producer_and_verifier_failures_survive_exit_guard(self):
-        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'verify_serial_directory.py'):
+        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'verify_serial_directory.py'):
             with self.subTest(leaf=leaf):
                 result, calls = self.run_regeneration(full=True, env={'CONTROL_FAIL': leaf})
                 self.assertEqual(result.returncode, 47, result.stdout + result.stderr)

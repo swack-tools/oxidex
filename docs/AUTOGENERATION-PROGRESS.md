@@ -1,8 +1,16 @@
 # Autogeneration progress
 
+Latest checkpoint: PR #763 is squash-merged as `5aca29b915eebd5bb9cdf977d2aca179114dabd7`.
+All five required hosted checks passed on `b7b5faeb`; local validation passed
+900 Python tests with zero skips, 6,030 Rust tests with zero failures and 125
+ignored, official 34-artifact regeneration and Clippy. Source-derived scalar
+validation/serialization is merged but remains inactive in public writes.
+The next CheckExif composition candidate is undergoing its full gate.
+
+
 This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
 
-## Current checkpoint — September 13
+## Reader migration record — September 13
 
 Canon AFInfo2/AFInfo3 reader retirement **merged in PR #760** as `4a3eb26c`
 at 16:11:54 UTC (11:11:54 CDT). All five required hosted checks passed on
@@ -607,3 +615,80 @@ been changed.
 
 Update this scoreboard after each validation or landing milestone. Do not
 replace an unfinished check with a count of generated lines or active agents.
+
+
+## CheckExif composition checkpoint (September 13 CDT)
+
+The next working candidate compiles the native table validation callback and
+its called CheckValue helper into one generated Rust recipe. Format precedence,
+missing-format handling, group comparison, error text and count selection come
+from the executable Perl. No tag-specific lookup or public writer is enabled.
+Normal regeneration owns the validation operands and an explicit omission
+ledger, with a fresh-native artifact comparison to reject stale output.
+
+The first direct Rust/native check stopped on mismatched body hashes. Loading
+Writer.pl after capturing CheckExif changed B::Deparse's call spelling. Writer
+facts are now captured after shared helper loading; the already-detached read
+projection remains unchanged. Independent review also found the missing link
+between the callback's callee and the standalone helper. CHECK_PROC now captures
+its dependencies and admission requires matching provenance, including nested
+dependencies. Missing or conflicting observations refuse a recipe.
+
+The direct comparison uses `test_checkexif_rust.py`, freshly capturing and
+executing native Perl for 19 inputs across canonical source and three actual
+source mutations. All 76 Rust/native outcomes match after source and body
+identity checks. The mutations change selector precedence/error text, numeric
+group equality and empty-group equality. This is direct helper proof, not a
+public write or a complete ExifTool version upgrade. Full generation and final
+candidate gates are still pending at this entry.
+
+The input-normalization probe calls actual SetNewValue, Sanitize and CheckValue.
+Its 24 inputs include UTF-8: changing the real Sanitize version guard changes
+nine traces. For `éé` with a count of three, canonical sanitation makes four
+UTF-8 bytes and validation refuses; changed sanitation retains two characters
+and validation pads. This identifies required input ordering, not generated
+support. Source-derived sanitation, inverse conversions, charset conversion,
+identity resolution and carrier activation remain the next writer steps.
+
+The persisted random pair 11.78/12.64 now also passes 512 native/generated
+scalar-helper comparisons per release. Each release was freshly captured and
+checked against its own native helper; their source files differ while the
+captured scalar bodies match. Full OxiDex generation/build/read/write version
+conformance remains unfinished. No new project-wide automation percentage.
+
+
+CheckExif follow-up: the fresh full source inventory records one shared helper
+recipe used by 69 of 1,512 tables. The other 1,443 remain explicitly omitted
+(absent checker, unsupported callback body or unsupported selector structure).
+These counts describe helper recipes, not complete writable tag coverage.
+The final capture changes neither the 153-module read projection nor its
+recorded reader contracts. All 38 focused tests pass with no skips, including
+native-to-Rust source mutations, committed freshness and regeneration controls.
+Both previously selected releases (11.78 and 12.64) independently pass the
+same 76-outcome CheckExif helper probe; full version conformance remains open.
+
+The first official attempt failed its early expression-oracle build because
+the new registered Rust module had not yet been generated. The actual producer
+then created both new artifacts from that run's fresh native capture. Their
+freshness check passes; no placeholder artifact or disabled gate was used.
+The failed attempt is retained and a fresh official/full validation is pending.
+
+
+The CheckExif official retry passed all 36-artifact regeneration (236.299s),
+formatting and native processor checks. Its full Python run completed 913
+tests with one failure: the inventory partition assertion still expected
+34 outputs and 12 tier-one outputs. Those expectations are corrected to 36
+and 14; the 22 tier-two outputs are unchanged. The failure is preserved.
+Focused inventory verification and full Cargo/Clippy are next. The native
+compiler and generated artifacts were not changed by this test repair;
+required hosted full-suite checks remain the final merge gate.
+
+
+The repaired CheckExif checkpoint passed all 19 inventory tests, formatting,
+native processor checks, full workspace/all-features Rust (6,034 passed,
+zero failures, 125 ignored; 139.524s) and Clippy. Ignored tests remain
+unexercised. The full Python result remains the recorded 913-test run with
+one repaired inventory expectation; required hosted full-suite checks must
+pass before merge. Official generation is carried across the exact two-test-
+constant repair only after proving every producer, runtime file and all
+36 artifact hashes unchanged. No public generated writer is enabled.

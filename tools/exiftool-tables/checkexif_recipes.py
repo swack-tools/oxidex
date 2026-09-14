@@ -12,7 +12,7 @@ through the top-level native_write_helpers sidecar.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -203,7 +203,7 @@ class _Body:
         return candidate
 
 
-def _signature(body: _Body) -> tuple[str, str]:
+def _signature(body: _Body) -> tuple[str, str, str]:
     body.take("(", "$", "$", "$", ")", "{", "package")
     if body.at >= len(body.tokens) or _FQ.fullmatch(body.tokens[body.at]) is None:
         raise RecipeRefused("CHECK_PROC has no helper package")
@@ -217,7 +217,7 @@ def _signature(body: _Body) -> tuple[str, str]:
     body.take(")", "=", "@", "_", ")", ";")
     if len({_et, tag, value}) != 3:
         raise RecipeRefused("CHECK_PROC aliases local arguments")
-    return tag, value
+    return _et, tag, value
 
 
 def _format_selectors(body: _Body, tag: str) -> tuple[str, tuple[Selector, ...]]:
@@ -261,6 +261,11 @@ def _parse_missing_format(body: _Body, tag: str, format_name: str) -> MissingFor
 
 def _terminal_call(body: _Body, tag: str, value: str, format_name: str) -> tuple[str, Selector]:
     body.take("(", "return")
+    # B::Deparse uses an ampersand when the final loaded callee prototype was
+    # absent at compilation. Admit only the same explicitly parenthesized
+    # three arguments below, never Perl's implicit @_ forwarding form.
+    if body.tokens[body.at:body.at + 1] == ["&"]:
+        body.at += 1
     if body.at >= len(body.tokens) or _FQ.fullmatch(body.tokens[body.at]) is None:
         raise RecipeRefused("CHECK_PROC CheckValue callee is not fully qualified")
     callee = body.tokens[body.at]
@@ -275,8 +280,10 @@ def _terminal_call(body: _Body, tag: str, value: str, format_name: str) -> tuple
 
 def _compile_body(source: Any) -> tuple[tuple[Selector, ...], MissingFormat, str, Selector]:
     body = _Body(source)
-    tag, value = _signature(body)
+    et, tag, value = _signature(body)
     format_name, selectors = _format_selectors(body, tag)
+    if format_name in {et, tag, value}:
+        raise RecipeRefused("CHECK_PROC format local aliases an argument")
     missing = _parse_missing_format(body, tag, format_name)
     callee, count = _terminal_call(body, tag, value, format_name)
     return selectors, missing, callee, count
@@ -340,6 +347,15 @@ def compile_recipes(document: Mapping[str, Any]) -> tuple[list[CheckExifRecipe],
                 check_value = _fact(helper_fact, "native_write_helpers.check_value", require_binding=True)
                 if check_value.requested_binding != callee:
                     raise RecipeRefused("CHECK_PROC CheckValue binding is stale or unavailable")
+                called = next((dependency.fact for dependency in check_proc.dependencies
+                               if dependency.binding == callee), None)
+                if called is None:
+                    raise RecipeRefused("CHECK_PROC CheckValue dependency was not captured")
+                # A dependency key records the requested glob; the top-level
+                # helper names that glob in requested_binding. Compare every
+                # other provenance field, including its own dependencies.
+                if replace(called, requested_binding=None) != replace(check_value, requested_binding=None):
+                    raise RecipeRefused("CHECK_PROC CheckValue dependency provenance differs")
                 recipe_id = _recipe_identity(check_proc, selectors, missing, count, check_value)
             except RecipeRefused as error:
                 omissions.append({"module": module, "table": name, "full_name": identity[2], "reason": str(error)})

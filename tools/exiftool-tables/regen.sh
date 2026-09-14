@@ -98,6 +98,12 @@ python3 "$HERE/scalar_helper_codegen.py" "$JSON" \
     --report "$(artifact_path scalar-helper-ledger)"
 
 echo
+echo ">> generating source-derived table validation operands"
+python3 "$HERE/checkexif_rust_codegen.py" "$JSON" \
+    --output "$(artifact_path checkexif-rules)" \
+    --report "$(artifact_path checkexif-ledger)"
+
+echo
 echo ">> extracting file-identification tables"
 "$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \

@@ -1,0 +1,19 @@
+[
+  {"name":"format_string_bytes_limit","format":"string","writable":"undef","table_writable":"string","group0":"EXIF","count":3,"scalar":{"kind":"bytes","hex":"616263"}},
+  {"name":"format_empty_falls_to_writable","format":"","writable":"string","table_writable":"undef","group0":"EXIF","count":3,"scalar":{"kind":"bytes","hex":"61"}},
+  {"name":"format_zero_falls_to_writable","format":"0","writable":"string","table_writable":"undef","group0":"EXIF","count":3,"scalar":{"kind":"bytes","hex":"61"}},
+  {"name":"writable_empty_falls_to_table","format":"","writable":"","table_writable":"undef","group0":"EXIF","count":2,"scalar":{"kind":"bytes","hex":"616263"}},
+  {"name":"writable_zero_falls_to_table","format":"","writable":"0","table_writable":"undef","group0":"EXIF","count":2,"scalar":{"kind":"bytes","hex":"616263"}},
+  {"name":"missing_format_makernotes","format":"","writable":"","table_writable":"","group0":"MakerNotes","count":3,"scalar":{"kind":"bytes","hex":"616263"}},
+  {"name":"missing_format_nonmaker_error","format":"","writable":"","table_writable":"","group0":"EXIF","count":3,"scalar":{"kind":"bytes","hex":"616263"}},
+  {"name":"format_one_makernotes","format":"1","writable":"string","table_writable":"undef","group0":"MakerNotes","count":3,"scalar":{"kind":"bytes","hex":"616263"}},
+  {"name":"format_one_nonmaker_error","format":"1","writable":"string","table_writable":"undef","group0":"EXIF","count":3,"scalar":{"kind":"bytes","hex":"616263"}},
+  {"name":"checkvalue_undefined_string","format":"string","writable":"undef","table_writable":"undef","group0":"EXIF","count":3,"scalar":{"kind":"undefined"}},
+  {"name":"checkvalue_bytes_nul_padding","format":"string","writable":"undef","table_writable":"undef","group0":"EXIF","count":3,"scalar":{"kind":"bytes","hex":"610062"}},
+  {"name":"checkvalue_utf8_character_padding","format":"string","writable":"undef","table_writable":"undef","group0":"EXIF","count":3,"scalar":{"kind":"utf8","text":"é"}},
+  {"name":"selector_order_conflict","format":"undef","writable":"string","table_writable":"undef","group0":"EXIF","count":3,"scalar":{"kind":"bytes","hex":"616263"}},
+  {"name":"numeric_writable_one_makernotes","format":{"kind":"undefined"},"writable":{"kind":"integer","value":1},"table_writable":{"kind":"bytes","hex":"756e646566"},"group0":"MakerNotes","count":3,"scalar":{"kind":"bytes","hex":"616263"}},
+  {"name":"byte_writable_one_nonmaker","format":{"kind":"undefined"},"writable":{"kind":"bytes","hex":"31"},"table_writable":{"kind":"bytes","hex":"756e646566"},"group0":"EXIF","count":3,"scalar":{"kind":"bytes","hex":"616263"}},
+  {"name":"byte_writable_string_delegates","format":{"kind":"undefined"},"writable":{"kind":"bytes","hex":"737472696e67"},"table_writable":{"kind":"bytes","hex":"756e646566"},"group0":"EXIF","count":3,"scalar":{"kind":"bytes","hex":"61"}},
+  {"name":"byte_writable_undef_delegates","format":{"kind":"undefined"},"writable":{"kind":"bytes","hex":"756e646566"},"table_writable":{"kind":"bytes","hex":"737472696e67"},"group0":"EXIF","count":3,"scalar":{"kind":"bytes","hex":"616263"}}
+]
