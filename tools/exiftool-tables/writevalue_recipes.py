@@ -483,7 +483,7 @@ def compile_numeric_write(helpers: Mapping[str, Any], closure: Mapping[str, Any]
     if hashes.get('resolved') is not True or dispatch.get('resolved') is not True:
         raise RecipeRefused('numeric WriteValue lexical dispatch is unresolved')
     entries = _numeric_mapping(dispatch.get('entries'), 'dispatch entries')
-    for format_name, name in (('int16u', 'Set16u'), ('rational64u', 'SetRational64u')):
+    for format_name, name in (('int16u', 'Set16u'), ('int32u', 'Set32u'), ('rational64u', 'SetRational64u')):
         _numeric_function(entries.get(format_name), name, closure, generic_closure)
 
     # DoPackStd is not sufficient on its own: its pack template is mutable
@@ -506,4 +506,4 @@ def compile_numeric_write(helpers: Mapping[str, Any], closure: Mapping[str, Any]
         entries = _numeric_mapping(captured.get('entries'), name + ' entries')
         if captured.get('resolved') is not True or any(entries.get(k) != v for k, v in expected.items()):
             raise RecipeRefused('numeric WriteValue byte-order packing templates are unsupported')
-    return NumericWriteRecipe(('int16u', 'rational64u'), (16, 32))
+    return NumericWriteRecipe(('int16u', 'int32u', 'rational64u'), (16, 32))

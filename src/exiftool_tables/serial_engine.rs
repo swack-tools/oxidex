@@ -449,9 +449,9 @@ mod tests {
 
     use super::*;
     use crate::exiftool_tables::{
-        Cond, EffectSource, GateA, IfdFlags, Omitted, PrintConv, RawConvEffect, SerialCondition,
-        SerialCount, SerialEntry, SerialFormat, SerialMissingMember, SerialPrintConv,
-        SerialProcessorFacts, SerialTable, SerialTag, TagGroups,
+        Cond, EffectSource, GateA, IfdFlags, Omitted, RawConvEffect, SerialCondition, SerialCount,
+        SerialEntry, SerialFormat, SerialMissingMember, SerialPrintConv, SerialProcessorFacts,
+        SerialTable, SerialTag, TagGroups,
     };
 
     static PROCESSOR: SerialProcessorFacts = SerialProcessorFacts {

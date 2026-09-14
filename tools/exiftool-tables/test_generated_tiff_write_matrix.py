@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import tempfile
 
+import generated_tiff_write_matrix as matrix
 from generated_tiff_write_matrix import (
     GeneratedTarget,
     RULES,
@@ -245,6 +246,24 @@ class GeneratedTiffComparison(unittest.TestCase):
         mandatory_seed["children"]["NextIFD"]["tags"]["282"] = {
             "type": 5, "count": 1, "value_hex": "4800000001000000"}
         compare(mandatory_seed, native_pruned, native_pruned, 315, target_directory=("NextIFD",), allow_directory_removal=True)
+        # WriteExif compares mandatory values through each survivor's selected
+        # physical format. Compression encoded as LONG is still its captured
+        # scalar value, while a changed count or value must keep the directory.
+        long_survivor = copy.deepcopy(seed)
+        long_survivor["children"]["NextIFD"]["tags"]["259"] = {
+            "type": 4, "count": 1, "value_hex": "06000000"
+        }
+        compare(long_survivor, native_pruned, native_pruned, 315,
+                target_directory=("NextIFD",), allow_directory_removal=True)
+        for changed in (
+            {"type": 4, "count": 2, "value_hex": "0600000006000000"},
+            {"type": 4, "count": 1, "value_hex": "07000000"},
+        ):
+            bad = copy.deepcopy(long_survivor)
+            bad["children"]["NextIFD"]["tags"]["259"] = changed
+            with self.assertRaisesRegex(AssertionError, "pruned IFD1"):
+                compare(bad, native_pruned, native_pruned, 315,
+                        target_directory=("NextIFD",), allow_directory_removal=True)
         # Both outputs dropping another child or changing IFD0's same-name tag
         # must remain failures even when native removes the selected IFD.
         seed["children"]["OtherIFD"] = copy.deepcopy(seed["children"]["NextIFD"])
@@ -254,6 +273,19 @@ class GeneratedTiffComparison(unittest.TestCase):
         native_pruned["tags"]["315"]["value_hex"] = "6300"
         with self.assertRaisesRegex(AssertionError, "unrelated tag"):
             compare(seed, native_pruned, native_pruned, 315, target_directory=("NextIFD",), allow_directory_removal=True)
+
+    def test_mandatory_ifd1_cleanup_rejects_mismatched_capture_hashes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary = Path(temporary)
+            bad = json.loads(matrix.MANDATORY_LEDGER.read_text())
+            bad["recipe"]["write_value_source_sha256"] = "0" * 64
+            ledger = temporary / "mandatory.json"
+            ledger.write_text(json.dumps(bad))
+            from unittest.mock import patch
+            with patch.object(matrix, "MANDATORY_LEDGER", ledger), self.assertRaisesRegex(
+                ValueError, "does not join selected writer artifacts"
+            ):
+                matrix.mandatory_cleanup_recipe()
 
     def test_native_seed_mandatory_ifd1_tag_turns_requested_insert_into_update(self):
         seed = {"exif": {"tags": {}, "children": {"NextIFD": {"tags": {
