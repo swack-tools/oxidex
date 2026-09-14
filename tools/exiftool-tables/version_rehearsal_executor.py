@@ -16,12 +16,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
+import signal
 import subprocess
 import sys
-import tempfile
 import time
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Callable, Mapping
 
 import version_rehearsal as rehearsal
 import version_rehearsal_catalog as catalog_stage
@@ -97,6 +96,12 @@ def _config(value: Any, releases: list[str]) -> dict[str, Any]:
         raise Refused("native Perl binding is malformed")
     if any(not isinstance(cases[row], list) or not cases[row] for row in releases):
         raise Refused("native cases must be a nonempty list for every selected release")
+    lock = value.get("host_lock")
+    if not isinstance(lock, str) or not os.path.isabs(lock) or "\x00" in lock:
+        raise Refused("config must bind one absolute shared host lock path")
+    source_commit = value.get("execution_source_commit")
+    if not isinstance(source_commit, str) or rehearsal.GIT_OID_RE.fullmatch(source_commit) is None:
+        raise Refused("config must bind an immutable execution source commit")
     return value
 
 
@@ -124,6 +129,8 @@ def _journal_payload(plan: dict[str, Any], materialization: dict[str, Any], conf
         "plan_sha256": plan["plan_sha256"],
         "materialization_sha256": materialization["materialization_sha256"],
         "config_sha256": _sha_json(config),
+        "execution_source_commit": config["execution_source_commit"],
+        "host_lock": config["host_lock"],
         "promotion": "forbidden",
         "phase": "planned",
         "active": None,
@@ -184,7 +191,9 @@ def _load_journal(run_dir: Path, archive_cache: Path, source_root: Path) -> tupl
     if (journal.get("schema") != SCHEMA or journal.get("kind") != KIND
             or journal.get("plan_sha256") != plan["plan_sha256"]
             or journal.get("materialization_sha256") != materialization["materialization_sha256"]
-            or journal.get("config_sha256") != _sha_json(config) or journal.get("promotion") != "forbidden"):
+            or journal.get("config_sha256") != _sha_json(config)
+            or journal.get("execution_source_commit") != config["execution_source_commit"]
+            or journal.get("host_lock") != config["host_lock"] or journal.get("promotion") != "forbidden"):
         raise Refused("execution journal is not bound to immutable inputs")
     if journal.get("phase") not in {"planned", "running", "failed", "interrupted", "complete"}:
         raise Refused("execution journal phase is unsupported")
@@ -215,7 +224,7 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
     result = _read(_regular(path, f"{stage} result"))
     if (result.get("schema") != SCHEMA or result.get("kind") != RESULT_KIND or result.get("stage") != stage
             or result.get("release") != release or result.get("state") != "passed"
-            or not isinstance(result.get("denominator"), int) or result["denominator"] < 1):
+            or type(result.get("denominator")) is not int or result["denominator"] < 1):
         raise Refused(f"{stage} result lacks a passed state or positive denominator")
     if native_probe_sha is not None and (result.get("native_release") != release
                                          or result.get("native_probe_sha256") != native_probe_sha):
@@ -224,23 +233,60 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
         comparison = result.get("comparison")
         if (not isinstance(comparison, dict) or comparison.get("kind") != "oxidex_vs_native"
                 or comparison.get("native_release") != release
-                or not isinstance(comparison.get("matched"), int) or comparison["matched"] < 0
-                or not isinstance(comparison.get("mismatched"), int) or comparison["mismatched"] < 0
+                or type(comparison.get("matched")) is not int or comparison["matched"] < 0
+                or type(comparison.get("mismatched")) is not int or comparison["mismatched"] != 0
                 or comparison["matched"] + comparison["mismatched"] != result["denominator"]):
             raise Refused(f"{stage} result lacks attributable OxiDex/native outcomes")
     return result
 
 
-def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
+def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]],
+                started: Callable[[int, int], None] | None = None) -> dict[str, Any]:
+    """Run one bounded command and retain its actual output for the journal log.
+
+    The production branch deliberately leaves inherited descriptors open. The
+    host-lock descriptor is inheritable, so a supervisor dying while this child
+    is live cannot let another rehearsal acquire the shared lock prematurely.
+    """
     try:
-        result = run(argv, cwd=str(cwd), env=env, text=True, capture_output=True, timeout=3600)
+        if run is subprocess.run:
+            child = subprocess.Popen(argv, cwd=str(cwd), env=env, text=True, errors="replace",
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     start_new_session=True, close_fds=False)
+            if started is not None:
+                started(child.pid, child.pid)
+            try:
+                stdout, stderr = child.communicate(timeout=3600)
+            except subprocess.TimeoutExpired as exc:
+                os.killpg(child.pid, signal.SIGTERM)
+                try:
+                    stdout, stderr = child.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    stdout, stderr = child.communicate()
+                return {"argv": argv, "exit": None, "stdout": stdout or "", "stderr": (stderr or "") + str(exc), "state": "timeout", "pid": child.pid, "pgid": child.pid}
+            result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
+            process_identity = {"pid": child.pid, "pgid": child.pid}
+        else:
+            result = run(argv, cwd=str(cwd), env=env, text=True, capture_output=True, timeout=3600,
+                         start_new_session=True, close_fds=False)
+            process_identity = {}
         stdout, stderr = result.stdout or "", result.stderr or ""
-        return {"argv": argv, "exit": result.returncode, "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
-                "stderr_sha256": hashlib.sha256(stderr.encode()).hexdigest(), "state": "ok" if result.returncode == 0 else "exit_failed"}
+        return {"argv": argv, "exit": result.returncode, "stdout": stdout, "stderr": stderr,
+                "state": "ok" if result.returncode == 0 else "exit_failed", **process_identity}
     except subprocess.TimeoutExpired as exc:
-        return {"argv": argv, "exit": None, "state": "timeout", "detail": str(exc)}
+        return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc), "state": "timeout"}
     except OSError as exc:
-        return {"argv": argv, "exit": None, "state": "spawn_failed", "detail": str(exc)}
+        return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc), "state": "spawn_failed"}
+
+
+def _command_log(run_dir: Path, release: str, stage: str, record: dict[str, Any]) -> dict[str, Any]:
+    path = run_dir / "command-logs" / _safe_name(release) / f"{stage}.json"
+    if path.exists() or path.is_symlink():
+        raise Refused("command log already exists")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic(path, record)
+    return {"path": str(path.relative_to(run_dir)), "sha256": _sha_json(record), "state": record["state"], "exit": record["exit"]}
 
 
 def _expand(spec: Mapping[str, Any], values: Mapping[str, str]) -> list[str]:
@@ -271,6 +317,17 @@ def _native_identity(materialization: Mapping[str, Any], source_root: Path, rele
         raise Refused("selected native release is not materialized")
     source = (source_root / row["source_directory"]).resolve()
     return source, source / "lib", source / "exiftool"
+
+
+def _verify_checkout_head(checkout: Path, expected_commit: str,
+                          run: Callable[..., subprocess.CompletedProcess[str]]) -> None:
+    try:
+        result = run(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=str(checkout), env=dict(os.environ),
+                     text=True, capture_output=True, timeout=30, start_new_session=True, close_fds=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Refused("cannot verify owned checkout HEAD") from exc
+    if result.returncode != 0 or (result.stdout or "").strip() != expected_commit:
+        raise Refused("owned checkout HEAD differs from immutable execution source commit")
 
 
 def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str, checkout: Path, target: Path,
@@ -304,7 +361,11 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                OXIDEX_REHEARSAL_NATIVE_SOURCE=str(source), OXIDEX_REHEARSAL_NATIVE_LIB=str(lib),
                OXIDEX_REHEARSAL_NATIVE_PROGRAM=str(program), OXIDEX_REHEARSAL_NATIVE_PERL=perl,
                OXIDEX_REHEARSAL_NATIVE_PROBE=values["native_probe"], OXIDEX_REHEARSAL_REPORT=str(output))
-    record = _run_record(_expand(config["commands"][stage], values), cwd=checkout, env=env, run=run)
+    def started(pid: int, pgid: int) -> None:
+        journal["active"]["child"] = {"pid": pid, "pgid": pgid}
+        _store_journal(run_dir, journal)
+    record = _run_record(_expand(config["commands"][stage], values), cwd=checkout, env=env, run=run, started=started)
+    command_log = _command_log(run_dir, release, stage, record)
     try:
         if record["state"] != "ok":
             raise Refused(f"{stage} command {record['state']}")
@@ -312,13 +373,13 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                                native_probe.get("probe_sha256") if stage in {"read", "write"} else None)
     except Refused as exc:
         journal["releases"][release]["stages"][stage] = "failed"
-        journal["releases"][release]["failure"] = {"stage": stage, "detail": str(exc), "command": record}
+        journal["releases"][release]["failure"] = {"stage": stage, "detail": str(exc), "command": command_log}
         journal["phase"], journal["active"] = "failed", None
         _event(journal, "stage_failed", release=release, stage=stage, detail=str(exc))
         _store_journal(run_dir, journal)
         return False
     journal["releases"][release]["stages"][stage] = "passed"
-    journal["releases"][release]["reports"][stage] = {"path": str(output.relative_to(run_dir)), "sha256": _sha_json(result), "denominator": result["denominator"], "command": record}
+    journal["releases"][release]["reports"][stage] = {"path": str(output.relative_to(run_dir)), "sha256": _sha_json(result), "denominator": result["denominator"], "command": command_log}
     journal["active"] = None
     _event(journal, "stage_passed", release=release, stage=stage, denominator=result["denominator"])
     _store_journal(run_dir, journal)
@@ -339,10 +400,27 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
     _event(journal, "stage_started", release=release, stage="native")
     _store_journal(run_dir, journal)
     capture, catalog, plan, resolution, materialization = docs
+    def native_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if run is not subprocess.run:
+            return run(argv, **kwargs)
+        timeout = kwargs.pop("timeout", None)
+        kwargs.pop("capture_output", None)
+        child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 start_new_session=True, close_fds=False, **kwargs)
+        journal["active"]["child"] = {"pid": child.pid, "pgid": child.pid}
+        _store_journal(run_dir, journal)
+        try:
+            stdout, stderr = child.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            os.killpg(child.pid, signal.SIGTERM)
+            stdout, stderr = child.communicate()
+            exc.output, exc.stderr = stdout, stderr
+            raise
+        return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
     try:
         report = native_oracle.probe_materialized_native(materialization, plan, catalog, capture, resolution,
                                                          archive_cache, source_root, release, config["perls"][release],
-                                                         config["native_cases"][release], run=run)
+                                                         config["native_cases"][release], run=native_run)
         native_oracle.write_probe_report(output, report)
         if report.get("state") != "ready" or not report.get("cases"):
             raise Refused("native oracle did not provide ready cases")
@@ -364,8 +442,11 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
 class _HostLock:
     def __init__(self, path: Path): self.path, self.file = path, None
     def __enter__(self):
+        if self.path.is_symlink():
+            raise Refused("version rehearsal host lock must not be a symbolic link")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.file = self.path.open("a+")
+        os.set_inheritable(self.file.fileno(), True)
         try: fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc: self.file.close(); raise Refused("version rehearsal host lock is already held") from exc
         return self
@@ -377,8 +458,8 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
             run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
             checkout: Callable[[Path, str, Path, Callable[..., subprocess.CompletedProcess[str]]], Path] = _default_checkout) -> dict[str, Any]:
     """Run each selected release once. Failed or interrupted stages are never retried."""
-    with _HostLock(run_dir.parent / ".oxidex-version-rehearsal.lock"):
-        journal, docs, config = _load_journal(run_dir, archive_cache, source_root)
+    journal, docs, config = _load_journal(run_dir, archive_cache, source_root)
+    with _HostLock(Path(config["host_lock"])):
         if journal["phase"] == "running":
             raise Refused("execution is interrupted; recover it before any later run")
         if journal["phase"] in {"failed", "interrupted", "complete"}:
@@ -394,9 +475,10 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                 journal["phase"], journal["active"] = "running", {"release": release, "stage": "checkout"}
                 _event(journal, "checkout_started", release=release)
                 _store_journal(run_dir, journal)
-                owned = checkout(repository, plan["repository_commit"], checkout_path, run)
+                owned = checkout(repository, config["execution_source_commit"], checkout_path, run)
                 if owned.resolve() != checkout_path.resolve() or owned.is_symlink() or not owned.is_dir():
                     raise Refused("checkout provider did not return the owned release checkout")
+                _verify_checkout_head(owned, config["execution_source_commit"], run)
                 target.mkdir(parents=True, exist_ok=True)
                 journal["active"] = None
                 _event(journal, "checkout_completed", release=release)
@@ -412,8 +494,13 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                 _store_journal(run_dir, journal)
             except (Refused, OSError) as exc:
                 if journal.get("active") is not None:
+                    active = journal["active"]
+                    stage = active.get("stage", "checkout") if isinstance(active, dict) else "checkout"
+                    if stage in STAGES:
+                        journal["releases"][release]["stages"][stage] = "failed"
                     journal["phase"], journal["active"] = "failed", None
-                    journal["releases"][release]["failure"] = {"stage": journal.get("active", {}).get("stage", "checkout"), "detail": str(exc)}
+                    journal["releases"][release]["state"] = "failed"
+                    journal["releases"][release]["failure"] = {"stage": stage, "detail": str(exc)}
                     _event(journal, "release_failed", release=release, detail=str(exc))
                     _store_journal(run_dir, journal)
                 raise
@@ -429,11 +516,21 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
 
 def recover(run_dir: Path, archive_cache: Path, source_root: Path) -> dict[str, Any]:
     """Record interruption without guessing whether an active command completed."""
-    with _HostLock(run_dir.parent / ".oxidex-version-rehearsal.lock"):
-        journal, _, _ = _load_journal(run_dir, archive_cache, source_root)
+    journal, _, config = _load_journal(run_dir, archive_cache, source_root)
+    with _HostLock(Path(config["host_lock"])):
         if journal.get("phase") != "running" or not isinstance(journal.get("active"), dict):
             raise Refused("only a running execution can be recovered as interrupted")
         active = journal["active"]
+        child = active.get("child")
+        if isinstance(child, dict) and type(child.get("pid")) is int and child["pid"] > 0:
+            try:
+                os.kill(child["pid"], 0)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                raise Refused("active child process cannot be inspected; refusing interruption recovery")
+            else:
+                raise Refused("active child process is still live; refusing interruption recovery")
         if active.get("stage") in STAGES:
             journal["releases"][active["release"]]["stages"][active["stage"]] = "interrupted"
         journal["phase"], journal["active"] = "interrupted", None
@@ -465,7 +562,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result = recover(Path(args.run_dir), Path(args.archive_cache), Path(args.source_root))
         print(json.dumps({"phase": result["phase"], "promotion": result["promotion"], "parity": result["scope"]["parity"]}, sort_keys=True))
-        return 0
+        return 2 if args.command == "execute" and result["phase"] != "complete" else 0
     except (Refused, rehearsal.Refused, catalog_stage.Refused, native_oracle.Refused, OSError) as exc:
         print(f"version rehearsal execution refused: {exc}", file=sys.stderr)
         return 2

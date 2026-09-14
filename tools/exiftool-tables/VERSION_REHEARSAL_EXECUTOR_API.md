@@ -11,6 +11,8 @@ The config supplied to `init` is JSON with this shape:
 ```json
 {
   "schema": 1,
+  "host_lock": "/absolute/shared/oxidex-version-rehearsal.lock",
+  "execution_source_commit": "full OxiDex commit object id",
   "perls": { "11.78": "/absolute/perl", "12.64": "/absolute/perl" },
   "native_cases": { "11.78": [{ "name": "case", "fixture": "/fixture.jpg", "read": { "query": "FileType", "expectation": "value", "value": "JPEG" }, "write": { "operation": "set", "tag": "Comment", "value": "probe", "readback": "probe" } }], "12.64": [{ "name": "case", "fixture": "/fixture.jpg", "read": { "query": "FileType", "expectation": "value", "value": "JPEG" }, "write": { "operation": "set", "tag": "Comment", "value": "probe", "readback": "probe" } }] },
   "commands": {
@@ -25,8 +27,10 @@ The config supplied to `init` is JSON with this shape:
 `generate`, `build`, and `read` are required. `write` is optional only so an
 unimplemented generated writer remains a visible `unsupported` state; its
 absence cannot yield parity. Each selected release gets a private Git worktree
-at the plan's repository commit and a separate `CARGO_TARGET_DIR` under the
-run directory. The runner supplies `{release}`, `{checkout}`, `{target}`,
+at `execution_source_commit` and a separate `CARGO_TARGET_DIR` under the run
+directory. This source commit is immutable config evidence; it is deliberately
+separate from the preserved release-selection plan commit and the executor
+checks the actual checkout `HEAD`. The runner supplies `{release}`, `{checkout}`, `{target}`,
 `{report}`, `{native_source}`, `{native_lib}`, `{native_program}`,
 `{native_perl}`, and `{native_probe}` and equivalent `OXIDEX_REHEARSAL_*`
 environment variables.
@@ -34,6 +38,12 @@ environment variables.
 The example commands are wrappers: a raw `cargo build` does not itself write
 the required stage result. `native_cases` use the constrained case schema from
 `version_rehearsal_native_oracle.py` and are bound per release.
+
+Wrappers remain responsible for proving their own inputs: they must pin the
+checkout's `.exiftool-version`, pass the selected native Perl and materialized
+library to generation, and record the generated binary plus fixture-source
+identity in their result. The executor supplies those bindings and checks
+release-specific native readiness; it cannot infer them from a build exit code.
 
 Every command must write its own result JSON at `{report}`. The common fields
 are `schema: 1`, `kind: "oxidex_version_rehearsal_stage_result"`, `stage`,
@@ -50,13 +60,14 @@ probe digest, and:
 }
 ```
 
-`matched + mismatched` must equal `denominator`. A return code of zero, a build
-report, or a native readiness report is not a read/write comparison result.
+`matched + mismatched` must equal `denominator`, and `mismatched` must be zero
+for a passed result. A return code of zero, a build report, or a native
+readiness report is not a read/write comparison result.
 The native stage itself calls `version_rehearsal_native_oracle` with the
 release's own explicit Perl, materialized `lib`, and program before either
 comparison command can run.
 
-One nonblocking host lock covers checkout, native probe, generation, build and
+One explicit absolute host lock from immutable config covers checkout, native probe, generation, build and
 both comparisons. An interruption leaves the active stage `running`; `recover`
 changes it to `interrupted` and records the unknown completion state. The run is
 terminal afterward, so the executor never reselects or duplicates an
