@@ -115,7 +115,7 @@ mod tests {
                     row["case"]
                 );
                 assert_eq!(
-                    format!("{:x}", Sha256::digest(text.as_bytes())),
+                    hex::encode(Sha256::digest(text.as_bytes())),
                     row["expected"][mode]["utf8_sha256"].as_str().unwrap(),
                     "{} {mode}",
                     row["case"]
