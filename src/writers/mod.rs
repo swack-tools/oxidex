@@ -8,6 +8,8 @@ pub mod atomic_writer;
 pub mod exif_inplace;
 pub mod exif_surgical;
 // Shared source-derived helpers are not yet connected to public writes.
+pub(crate) mod generated_convinv;
+pub(crate) mod generated_convinv_rules;
 pub(crate) mod generated_sanitize;
 pub(crate) mod generated_sanitize_rules;
 #[allow(dead_code)]

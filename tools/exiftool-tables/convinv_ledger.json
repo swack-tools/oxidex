@@ -1,0 +1,33 @@
+{
+  "emitted": true,
+  "error_separator": " for ",
+  "exiftool_version": "13.59",
+  "provenance": {
+    "actual_name": "Image::ExifTool::ConvInv",
+    "body_sha256": "b4aeb1bb75f14124cce496c834fd91bd323b6193924e081fdf14685d7d00f355",
+    "dependencies": [],
+    "requested_binding": "Image::ExifTool::ConvInv",
+    "source_file": "Image/ExifTool/Writer.pl",
+    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+  },
+  "recipe": {
+    "default_type": "PrintConv",
+    "error_separator": " for ",
+    "provenance": {
+      "actual_name": "Image::ExifTool::ConvInv",
+      "body_sha256": "b4aeb1bb75f14124cce496c834fd91bd323b6193924e081fdf14685d7d00f355",
+      "dependencies": [],
+      "requested_binding": "Image::ExifTool::ConvInv",
+      "source_file": "Image/ExifTool/Writer.pl",
+      "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    }
+  },
+  "runtime_status": "inactive source-derived ConvInv scalar helper",
+  "unsupported_branches": [
+    "active conversions",
+    "List splitting",
+    "RawJoin",
+    "WriteCheck",
+    "unmodeled conversion type"
+  ]
+}

@@ -110,6 +110,12 @@ python3 "$HERE/sanitize_rust_codegen.py" "$JSON" \
     --report "$(artifact_path sanitize-ledger)"
 
 echo
+echo ">> generating source-derived inverse-conversion operands"
+python3 "$HERE/convinv_rust_codegen.py" "$JSON" \
+    --output "$(artifact_path convinv-rules)" \
+    --report "$(artifact_path convinv-ledger)"
+
+echo
 echo ">> extracting file-identification tables"
 "$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \
