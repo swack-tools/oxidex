@@ -115,3 +115,7 @@ prints its instrument header and enforces the standard dirty-tree policy.
 
 The baseline above is historical. Current ItemList integration and remaining
 work are recorded in [generated ItemList progress](quicktime-generated-reader.md).
+
+The earlier writer checkpoint is preserved separately in
+[writer checkpoint](writer-checkpoint-20260914.md). Its stop instruction describes
+the historical session, not the active full-parity goal.

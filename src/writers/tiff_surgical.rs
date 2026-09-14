@@ -151,6 +151,22 @@ fn scan_tiff(bytes: &[u8]) -> Result<TiffScan> {
     Ok(scan)
 }
 
+/// Physical IFD0 count and presence of a following directory. This does not
+/// infer emptiness from only the fields the metadata reader happened to emit.
+pub(crate) fn ifd0_state(bytes: &[u8]) -> Result<(u16, bool)> {
+    let scan = scan_tiff(bytes)?;
+    entry_edits::validate_directory_layout(bytes, &scan)?;
+    let count = read_u16(
+        &bytes[scan.ifd0_offset..scan.ifd0_offset + 2],
+        scan.byte_order,
+    );
+    let next_at = scan.ifd0_offset + 2 + usize::from(count) * 12;
+    Ok((
+        count,
+        read_u32(&bytes[next_at..next_at + 4], scan.byte_order) != 0,
+    ))
+}
+
 /// Walks one IFD table, appending its entries to `scan`.
 ///
 /// A truncated or out-of-bounds table stops the walk instead of erroring:
@@ -276,10 +292,22 @@ pub(crate) fn rewrite_tiff_file_with_removals(
     desired: &MetadataMap,
     removed: &[String],
 ) -> Result<Vec<u8>> {
+    rewrite_tiff_payload_with_removals(file_bytes, original, desired, removed, false)
+}
+
+/// Embedded EXIF has no TIFF image payload to protect from whole-map clearing.
+/// The JPEG transaction owns whether the resulting empty APP1 is removed.
+pub(crate) fn rewrite_tiff_payload_with_removals(
+    file_bytes: &[u8],
+    original: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+    embedded_exif: bool,
+) -> Result<Vec<u8>> {
     let scan = scan_tiff(file_bytes)?;
     let bo = scan.byte_order;
 
-    if !desired.iter().any(|(k, _)| is_exif_family(k)) {
+    if !embedded_exif && !desired.iter().any(|(k, _)| is_exif_family(k)) {
         return Err(ExifToolError::unsupported_format(
             "Clearing all metadata from a TIFF-structured file is not supported: \
              this writer only edits in place and never rebuilds the file",
@@ -1229,7 +1257,7 @@ mod tests {
         let valid = raw_string_edit(IfdKind::Ifd0, 0x013c, b"ok\0");
         assert!(apply_entry_edits(&file, &[valid.clone(), valid]).is_err());
         for edit in [
-            raw_string_edit(IfdKind::Ifd1, 0x013c, b"no\0"),
+            raw_string_edit(IfdKind::Interop, 0x013c, b"no\0"),
             raw_string_edit(IfdKind::Ifd0, EXIF_IFD_POINTER, b"no\0"),
             ScopedEntryEdit {
                 ifd: IfdKind::Ifd0,

@@ -2577,7 +2577,8 @@
       "table_group0": "EXIF",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
-      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
     },
     {
       "conversion_format": "string",
@@ -2593,7 +2594,8 @@
       "table_group0": "EXIF",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
-      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
     },
     {
       "conversion_format": "string",
@@ -2609,7 +2611,8 @@
       "table_group0": "EXIF",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
-      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
     },
     {
       "conversion_format": "string",
@@ -2625,7 +2628,8 @@
       "table_group0": "EXIF",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
-      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
     },
     {
       "conversion_format": "string",
@@ -2641,7 +2645,8 @@
       "table_group0": "EXIF",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
-      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
     },
     {
       "conversion_format": "string",
@@ -2657,7 +2662,8 @@
       "table_group0": "EXIF",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
-      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
     },
     {
       "conversion_format": "string",
@@ -2673,7 +2679,8 @@
       "table_group0": "EXIF",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
-      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
     },
     {
       "conversion_format": "string",
@@ -2689,7 +2696,8 @@
       "table_group0": "EXIF",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
-      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
     },
     {
       "conversion_format": "string",
@@ -2705,7 +2713,8 @@
       "table_group0": "EXIF",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
-      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
     }
   ],
   "registry": {

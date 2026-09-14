@@ -78,6 +78,7 @@ class FinalScalarRecipe:
     write_proc_body_sha256: str
     write_proc_source_sha256: str
     registry_source_sha256: str
+    writer_source_sha256: str
 
 
 @dataclass(frozen=True)
@@ -283,7 +284,7 @@ def compile_final_scalar_stage(document: Mapping[str, Any]) -> tuple[list[FinalS
             continue
         recipes.append(FinalScalarRecipe("Exif", "Main", "Image::ExifTool::Exif::Main", tag_id, name, "EXIF", group,
                                          candidate["properties"]["Writable"]["value"], candidate["properties"]["Writable"]["value"], "CeilDivision", control_sha, write_body_sha,
-                                         write_source_sha, registry.source_sha256))
+                                         write_source_sha, registry.source_sha256, scalar_write.provenance.source_sha256))
     return recipes, omissions, registry
 
 
@@ -313,7 +314,7 @@ def render_rust(recipes: list[FinalScalarRecipe], registry: NativeFormatRegistry
     lines.extend(["];\n", "pub(crate) const TIFF_SCALAR_FINAL_FORMAT_REGISTRY: Option<NativeTiffFormatRegistry> = %s;\n" % registry_literal,
              "pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[\n"])
     for recipe in recipes:
-        lines.append("TiffScalarFinalStageRecipe { module: %s, table: %s, full_name: %s, raw_tag_id: 0x%04x, tag_name: %s, table_group0: %s, physical_write_group: %s, conversion_format: %s, wire_format: %s, write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(), count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::%s, source_control_sha256: %s },\n" % (esc(recipe.module), esc(recipe.table), esc(recipe.full_name), recipe.raw_tag_id, esc(recipe.name), esc(recipe.table_group0), esc(recipe.physical_write_group), esc(recipe.conversion_format), esc(recipe.wire_format), recipe.count_rule, esc(recipe.source_control_sha256)))
+        lines.append("TiffScalarFinalStageRecipe { module: %s, table: %s, full_name: %s, raw_tag_id: 0x%04x, tag_name: %s, table_group0: %s, physical_write_group: %s, conversion_format: %s, wire_format: %s, write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(), count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::%s, source_control_sha256: %s, write_proc_source_sha256: %s, registry_source_sha256: %s, writer_source_sha256: %s },\n" % (esc(recipe.module), esc(recipe.table), esc(recipe.full_name), recipe.raw_tag_id, esc(recipe.name), esc(recipe.table_group0), esc(recipe.physical_write_group), esc(recipe.conversion_format), esc(recipe.wire_format), recipe.count_rule, esc(recipe.source_control_sha256), esc(recipe.write_proc_source_sha256), esc(recipe.registry_source_sha256), esc(recipe.writer_source_sha256)))
     lines.append("];\n")
     return "".join(lines)
 

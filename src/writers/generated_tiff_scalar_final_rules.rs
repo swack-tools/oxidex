@@ -203,6 +203,9 @@ pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[
         write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(),
         count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::CeilDivision,
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+        write_proc_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        registry_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     },
     TiffScalarFinalStageRecipe {
         module: "Exif",
@@ -217,6 +220,9 @@ pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[
         write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(),
         count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::CeilDivision,
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+        write_proc_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        registry_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     },
     TiffScalarFinalStageRecipe {
         module: "Exif",
@@ -231,6 +237,9 @@ pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[
         write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(),
         count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::CeilDivision,
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+        write_proc_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        registry_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     },
     TiffScalarFinalStageRecipe {
         module: "Exif",
@@ -245,6 +254,9 @@ pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[
         write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(),
         count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::CeilDivision,
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+        write_proc_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        registry_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     },
     TiffScalarFinalStageRecipe {
         module: "Exif",
@@ -259,6 +271,9 @@ pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[
         write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(),
         count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::CeilDivision,
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+        write_proc_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        registry_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     },
     TiffScalarFinalStageRecipe {
         module: "Exif",
@@ -273,6 +288,9 @@ pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[
         write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(),
         count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::CeilDivision,
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+        write_proc_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        registry_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     },
     TiffScalarFinalStageRecipe {
         module: "Exif",
@@ -287,6 +305,9 @@ pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[
         write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(),
         count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::CeilDivision,
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+        write_proc_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        registry_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     },
     TiffScalarFinalStageRecipe {
         module: "Exif",
@@ -301,6 +322,9 @@ pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[
         write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(),
         count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::CeilDivision,
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+        write_proc_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        registry_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     },
     TiffScalarFinalStageRecipe {
         module: "Exif",
@@ -315,5 +339,8 @@ pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[
         write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(),
         count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::CeilDivision,
         source_control_sha256: "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+        write_proc_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+        registry_source_sha256: "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+        writer_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
     },
 ];

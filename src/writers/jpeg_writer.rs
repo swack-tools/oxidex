@@ -221,11 +221,201 @@ pub(crate) fn rewrite_generated_exif_scalars(
     Ok(ScalarWriteOutput { bytes, warnings })
 }
 
+/// Apply an address-resolved generated batch without reducing its identity to a name.
+pub(crate) fn rewrite_resolved_generated_exif_scalars(
+    reader: &dyn FileReader,
+    requests: Vec<crate::writers::tiff_surgical::generated_scalar::ResolvedScalarWriteRequest<'_>>,
+    rules: &crate::writers::tiff_surgical::generated_scalar::ScalarWriteRules<'_>,
+) -> Result<crate::writers::tiff_surgical::generated_scalar::ScalarWriteOutput> {
+    use crate::writers::tiff_surgical::generated_scalar::{
+        ScalarWriteOutput, rewrite_resolved_generated_scalars,
+    };
+    let (bytes, warnings) = replace_existing_exif(reader, |tiff| {
+        rewrite_resolved_generated_scalars(tiff, requests, rules)
+            .map(|output| (output.bytes, output.warnings))
+    })?;
+    Ok(ScalarWriteOutput { bytes, warnings })
+}
+
+/// Execute a mixed public transaction without exposing intermediate file writes.
+pub(crate) fn write_public_exif_transaction(
+    reader: &dyn FileReader,
+    baseline: &MetadataMap,
+    plan: crate::writers::generated_public_write::PublicWritePlan,
+) -> Result<Vec<u8>> {
+    use crate::writers::mandatory_defaults_runtime as mandatory;
+    use crate::writers::tiff_surgical::{self, entry_edits, generated_scalar};
+    if plan.generated.is_empty() {
+        return write_exif_to_jpeg_with_removals(
+            reader,
+            &plan.legacy_metadata,
+            &plan.legacy_removed,
+        );
+    }
+    transform_exif(reader, |original, head| {
+        let empty;
+        let tiff = match original {
+            Some(tiff) => tiff,
+            None => {
+                let order = source_fresh_byte_order()?;
+                empty = mandatory::serialize_ifd0_defaults(Vec::new(), order)
+                    .map_err(ExifToolError::unsupported_format)?;
+                &empty
+            }
+        };
+        let scan = crate::writers::exif_surgical::scan_exif_entries(tiff)?;
+        let (original_count, _) = tiff_surgical::ifd0_state(tiff)?;
+        let order = match scan.byte_order {
+            crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
+                mandatory::TiffByteOrder::Little
+            }
+            crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => mandatory::TiffByteOrder::Big,
+        };
+        let prepare_legacy = |bytes: &[u8]| {
+            if plan.has_legacy_changes {
+                tiff_surgical::rewrite_tiff_payload_with_removals(
+                    bytes,
+                    baseline,
+                    &plan.legacy_metadata,
+                    &plan.legacy_removed,
+                    true,
+                )
+            } else {
+                Ok(bytes.to_vec())
+            }
+        };
+        let legacy = prepare_legacy(tiff)?;
+        // Resolve conversions first. A defined input can still be rejected or
+        // become NoEdit; only an actual set can trigger directory creation.
+        let generated = generated_scalar::plan_resolved_generated_scalars(
+            &legacy,
+            plan.generated,
+            &generated_scalar::generated_rules(),
+        )?;
+        let legacy = if original_count == 0
+            && (generated.has_set() || tiff_surgical::ifd0_state(&legacy)?.0 != 0)
+        {
+            validate_creation_sources()?;
+            let properties = source_raw_properties(head)?;
+            let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+            let defaults =
+                mandatory::defaults_with_properties(recipe, "IFD0", false, 0, &properties)
+                    .map_err(ExifToolError::unsupported_format)?;
+            let encoded = mandatory::encode_ifd0_defaults(recipe, &defaults, order)
+                .map_err(ExifToolError::unsupported_format)?;
+            let edits: Vec<_> = encoded
+                .into_iter()
+                .map(|field| entry_edits::ScopedEntryEdit {
+                    ifd: crate::writers::exif_surgical::IfdKind::Ifd0,
+                    tag_id: field.tag_id,
+                    mutation: entry_edits::EntryMutation::Set {
+                        field_type: field.tiff_type,
+                        count: field.count,
+                        bytes: field.bytes,
+                    },
+                })
+                .collect();
+            let seeded = entry_edits::apply_entry_edits(tiff, &edits)?;
+            // Reapply the authored legacy delta against the original baseline:
+            // explicit user overrides/removals take precedence over defaults.
+            prepare_legacy(&seeded)?
+        } else {
+            legacy
+        };
+        let output = generated.apply(&legacy)?.bytes;
+        let (count, next) = tiff_surgical::ifd0_state(&output)?;
+        Ok((
+            if count == 0 && !next {
+                Vec::new()
+            } else {
+                output
+            },
+            (),
+        ))
+    })
+    .map(|(bytes, ())| bytes)
+}
+
+fn validate_creation_sources() -> Result<()> {
+    let address =
+        crate::writers::generated_setnewvalue_address_rules::SET_NEW_VALUE_ADDRESS_CAPTURE
+            .ok_or_else(|| {
+                ExifToolError::unsupported_format("generated address source is absent")
+            })?;
+    let order = &crate::writers::generated_fresh_jpeg_byte_order::FRESH_JPEG_BYTE_ORDER;
+    let mandatory = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+    let raw = &crate::writers::generated_raw_jfif::RAW_JFIF;
+    if order.exiftool_version != address.exiftool_version
+        || order.caller_source_sha256 != address.main_source_sha256
+        || order.set_preferred_source_sha256 != address.writer_source_sha256
+        || order.set_byte_order_source_sha256 != address.main_source_sha256
+        || order.get_byte_order_source_sha256 != address.main_source_sha256
+        || mandatory.writer_source_sha256 != address.write_exif_source_sha256
+        || mandatory.write_value_source_sha256 != address.writer_source_sha256
+        || raw.source_core_sha256 != address.main_source_sha256
+        || raw.source_writer_sha256 != address.writer_source_sha256
+    {
+        return Err(ExifToolError::unsupported_format(
+            "generated EXIF creation sources differ",
+        ));
+    }
+    Ok(())
+}
+
+fn source_fresh_byte_order() -> Result<crate::writers::mandatory_defaults_runtime::TiffByteOrder> {
+    use crate::writers::generated_fresh_jpeg_byte_order::*;
+    use crate::writers::mandatory_defaults_runtime::TiffByteOrder;
+    validate_creation_sources()?;
+    let selected = fresh_jpeg_byte_order(
+        &FRESH_JPEG_BYTE_ORDER,
+        FreshJpegByteOrderInputs {
+            byte_order_option: None,
+            exif_byte_order: None,
+            maker_note_byte_order: None,
+        },
+    )
+    .map_err(ExifToolError::unsupported_format)?;
+    Ok(match selected {
+        FreshJpegExifByteOrder::LittleEndian => TiffByteOrder::Little,
+        FreshJpegExifByteOrder::BigEndian => TiffByteOrder::Big,
+    })
+}
+
+fn source_raw_properties(head: &[Segment<'_>]) -> Result<std::collections::BTreeMap<String, i64>> {
+    let mut properties = std::collections::BTreeMap::new();
+    for segment in head {
+        if let Some(found) = crate::writers::raw_segment_properties::decode_raw_segment(
+            &crate::writers::generated_raw_jfif::RAW_JFIF,
+            segment.marker as u8,
+            segment.data,
+        )
+        .map_err(ExifToolError::unsupported_format)?
+        {
+            properties.extend(found);
+        }
+    }
+    Ok(properties)
+}
+
 /// Replace exactly one existing EXIF payload and preserve every other byte,
 /// including non-EXIF APP1 blocks, scan data and the trailer.
 fn replace_existing_exif<T>(
     reader: &dyn FileReader,
     transform: impl FnOnce(&[u8]) -> Result<(Vec<u8>, T)>,
+) -> Result<(Vec<u8>, T)> {
+    transform_exif(reader, |tiff, _head| {
+        let tiff = tiff.ok_or_else(|| {
+            ExifToolError::unsupported_format("Raw JPEG edits require an existing EXIF block")
+        })?;
+        transform(tiff)
+    })
+}
+
+/// Replace or insert one EXIF payload while preserving original framing and
+/// scan bytes. All format/tag semantics are supplied by the caller.
+fn transform_exif<T>(
+    reader: &dyn FileReader,
+    transform: impl FnOnce(Option<&[u8]>, &[Segment<'_>]) -> Result<(Vec<u8>, T)>,
 ) -> Result<(Vec<u8>, T)> {
     let segments = parse_segments(reader)?;
     let end_index = segments
@@ -245,33 +435,72 @@ fn replace_existing_exif<T>(
     }) {
         return Err(ExifToolError::parse_error("Invalid JPEG header marker"));
     }
-    let mut exif = head.iter().filter(|seg| is_exif_segment(seg));
-    let block = exif.next().ok_or_else(|| {
-        ExifToolError::unsupported_format("Raw JPEG edits require an existing EXIF block")
-    })?;
+    let mut exif = head
+        .iter()
+        .enumerate()
+        .filter(|(_, seg)| is_exif_segment(seg));
+    let existing = exif.next();
     if exif.next().is_some() {
         return Err(ExifToolError::parse_error(
             "Ambiguous multiple JPEG EXIF blocks",
         ));
     }
-    let (tiff, outcome) = transform(&block.data[EXIF_IDENTIFIER.len()..])?;
+    let policy = &crate::writers::generated_raw_jfif::RAW_JFIF;
+    let target_index = if let Some((index, _)) = existing {
+        if !policy.creation_wait_for_directories.contains(&"IFD0") {
+            return Err(ExifToolError::unsupported_format(
+                "source creation policy does not support existing IFD0 placement",
+            ));
+        }
+        index
+    } else {
+        validate_creation_sources()?;
+        head.iter()
+            .enumerate()
+            .skip(1) // SOI framing precedes all metadata.
+            .find(|(_, segment)| {
+                !policy
+                    .creation_skip_markers
+                    .contains(&(segment.marker as u8))
+            })
+            .map(|(index, _)| index)
+            .ok_or_else(|| ExifToolError::parse_error("Missing JPEG creation boundary"))?
+    };
+    let property_prefix = match policy.creation_timing {
+        crate::writers::raw_segment_properties::RawCreationTiming::BeforeCurrentSegment => {
+            &head[..target_index]
+        }
+    };
+    let (tiff, outcome) = transform(
+        existing.map(|(_, block)| &block.data[EXIF_IDENTIFIER.len()..]),
+        property_prefix,
+    )?;
     let length = tiff
         .len()
         .checked_add(EXIF_IDENTIFIER.len() + 2)
         .and_then(|len| u16::try_from(len).ok())
         .ok_or_else(|| ExifToolError::parse_error("Edited EXIF exceeds JPEG APP1 size limit"))?;
     let bytes = reader.read(0, reader.size() as usize)?;
-    let start = usize::try_from(block.offset)
+    let start = usize::try_from(head[target_index].offset)
         .map_err(|_| ExifToolError::parse_error("JPEG segment offset exceeds address space"))?;
-    let end = start
-        .checked_add(4 + block.data.len())
-        .filter(|end| *end <= bytes.len())
-        .ok_or_else(|| ExifToolError::parse_error("Truncated JPEG EXIF segment"))?;
+    let end = if let Some((_, block)) = existing {
+        start
+            .checked_add(4 + block.data.len())
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| ExifToolError::parse_error("Truncated JPEG EXIF segment"))?
+    } else {
+        if start > bytes.len() {
+            return Err(ExifToolError::parse_error("Truncated JPEG insertion point"));
+        }
+        start
+    };
     let mut out = bytes[..start].to_vec();
-    out.extend_from_slice(&APP1_MARKER.to_be_bytes());
-    out.extend_from_slice(&length.to_be_bytes());
-    out.extend_from_slice(EXIF_IDENTIFIER);
-    out.extend_from_slice(&tiff);
+    if !tiff.is_empty() {
+        out.extend_from_slice(&APP1_MARKER.to_be_bytes());
+        out.extend_from_slice(&length.to_be_bytes());
+        out.extend_from_slice(EXIF_IDENTIFIER);
+        out.extend_from_slice(&tiff);
+    }
     out.extend_from_slice(&bytes[end..]);
     Ok((out, outcome))
 }

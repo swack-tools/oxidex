@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Compare the internal generated TIFF writer with actual pinned native writes.
+"""Compare generated TIFF/JPEG writes with actual pinned native writes.
 
-Supply the lib-test executable built from this checkout. This does not certify
-public writer routing, creation of a new JPEG EXIF block, other tags, or other releases.
+Supply the lib-test executable built from this checkout. Select --route public-api to exercise public modify/remove operations.
+This does not certify new JPEG EXIF blocks, other tags, or other releases.
 """
 import argparse
 import hashlib
@@ -95,7 +95,19 @@ def generated_targets(ledger_path: Path = LEDGER, rules_path: Path = RULES) -> t
     return result
 
 
-def compare(seed, expected, actual, target_tag_id: int | None):
+def changed_tag_ids(target_tag_id: int | set[int] | frozenset[int] | None) -> set[str]:
+    """Normalize a source-derived changed physical identity set for comparison."""
+    if target_tag_id is None:
+        return set()
+    if isinstance(target_tag_id, int):
+        return {str(target_tag_id)}
+    if isinstance(target_tag_id, (set, frozenset)) and all(type(value) is int and value >= 0 for value in target_tag_id):
+        return {str(value) for value in target_tag_id}
+    raise ValueError("changed target identities are malformed")
+
+
+def compare(seed, expected, actual, target_tag_id: int | set[int] | frozenset[int] | None):
+    changed = changed_tag_ids(target_tag_id)
     if seed["image_payload_hex"] != actual["image_payload_hex"]:
         raise AssertionError("generated write changed image payload")
     if expected["image_payload_hex"] != actual["image_payload_hex"]:
@@ -120,13 +132,13 @@ def compare(seed, expected, actual, target_tag_id: int | None):
         if tag != "273" and native.entry_storage(value) != native.entry_storage(actual["tags"][tag]):
             raise AssertionError(f"native/generated unrelated tag type/count/value differs for {tag}")
     for tag, value in seed["tags"].items():
-        if (target_tag_id is None or tag != str(target_tag_id)) and native.entry_storage(value) != native.entry_storage(actual["tags"].get(tag)):
+        if tag not in changed and native.entry_storage(value) != native.entry_storage(actual["tags"].get(tag)):
             raise AssertionError(f"generated write changed unrelated tag {tag}")
     for name, child in expected_children.items():
         compare(seed["children"][name], child, actual_children[name], None)
 
 
-def compare_carrier(seed, expected, actual, carrier, target_tag_id: int):
+def compare_carrier(seed, expected, actual, carrier, target_tag_id: int | set[int] | frozenset[int] | None):
     if carrier != "jpeg":
         return compare(seed, expected, actual, target_tag_id)
     for key in ("sos_to_end_sha256", "non_exif_sha256"):
@@ -148,6 +160,8 @@ def main():
     parser.add_argument("--jpeg-base", type=Path, help="also exercise generated JPEG cohort operations")
     parser.add_argument("--ledger", type=Path, default=LEDGER, help="emitted final-stage ledger")
     parser.add_argument("--rules", type=Path, default=RULES, help="rendered final-stage Rust rules")
+    parser.add_argument("--route", choices=("final-key", "resolved-address", "public-api"), default="final-key",
+                        help="dispatch path exercised; public-api calls public modify_tag/remove_tag")
     args = parser.parse_args()
     carriers = ("tiff_little", "tiff_big") + (("jpeg",) if args.jpeg_base else ())
     targets = generated_targets(args.ledger, args.rules)
@@ -164,7 +178,7 @@ def main():
     native.assert_contract_version(identity)
     print_header(tool="generated_scalar_write_matrix_v2", git=state, binary=binary,
                  dirty_overridden=overridden,
-                 extra=[f"native: {identity}", f"{declared} internal TIFF/JPEG operations; public routing not covered"])
+                 extra=[f"native: {identity}", f"{declared} TIFF/JPEG operations via {args.route}; existing EXIF blocks"])
     root = args.output.parent / "generated-tiff-matrix-files"
     root.mkdir(parents=True, exist_ok=False)
     rows, requests = [], []
@@ -183,7 +197,7 @@ def main():
                     native.assert_native(operation_call, stem + " operation")
                     scalar = "undefined" if operation == "delete" else "utf8" if operation == "utf8" else "bytes"
                     value = None if operation == "delete" else native.CASE_INPUT_BYTES[operation].decode("utf-8") if scalar == "utf8" else native.CASE_INPUT_BYTES[operation].hex()
-                    requests.append({"carrier": carrier, "input": str(seeded), "output": str(output), "key": name, "scalar": scalar, "value": value})
+                    requests.append({"route": args.route, "carrier": carrier, "input": str(seeded), "output": str(output), "key": name, "scalar": scalar, "value": value})
                     rows.append({"carrier": carrier, "id": stem, "target": {"raw_tag_id": target.raw_tag_id, "name": target.name, "table_group0": target.table_group0, "physical_write_group": target.physical_write_group}, "requested_name": name, "operation": operation, "seeded": str(seeded), "native_output": str(expected), "output": str(output), "native_call": operation_call})
     request_path, result_path = root / "requests.json", root / "results.json"
     request_path.write_text(json.dumps(requests, indent=2) + "\n")
@@ -193,7 +207,7 @@ def main():
     (root / "driver.log").write_text(result.stdout + result.stderr)
     result.check_returncode()
     results = json.loads(result_path.read_text())
-    report = {"instrument": "generated_scalar_write_matrix_v2", "native_identity": identity,
+    report = {"instrument": "generated_scalar_write_matrix_v2", "route": args.route, "native_identity": identity,
               "source_commit": state.commit, "dirty_files": state.dirty_files,
               "test_binary_sha256": hashlib.sha256(binary.path.read_bytes()).hexdigest(),
               "ledger_sha256": hashlib.sha256(args.ledger.read_bytes()).hexdigest(),
@@ -202,7 +216,7 @@ def main():
                           "table_group0": target.table_group0, "physical_write_group": target.physical_write_group,
                           "qualifiers": list(target.qualifiers)} for target in targets],
               "declared": declared, "passed": 0, "rows": rows,
-              "limitations": ["Internal composition only; public writer routing and new JPEG EXIF blocks remain untested.", "Generated final-scalar ledger cohort only, selected 13.59 only; this does not establish public SetNewValue admission."]}
+              "limitations": ["New JPEG EXIF blocks and empty existing IFDs remain untested; public modify/remove covered only with route public-api.", "Generated final-scalar ledger cohort only, selected 13.59 only; this does not establish public SetNewValue admission."]}
     if len(results) != len(requests) or len(requests) != declared:
         raise AssertionError("fixture driver result population differs")
     for row, result in zip(rows, results, strict=True):
@@ -218,7 +232,7 @@ def main():
         except (AssertionError, ValueError, OSError) as error:
             row.update(state="failed", error=str(error))
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    print(f"Internal scalar write operations matched: {report['passed']}/{declared}")
+    print(f"Scalar write operations matched via {args.route}: {report['passed']}/{declared}")
     return 0 if report["passed"] == declared else 1
 
 

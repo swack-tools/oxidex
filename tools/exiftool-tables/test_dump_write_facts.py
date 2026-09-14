@@ -16,6 +16,8 @@ import unittest
 
 import write_descriptors
 from sanitize_recipes import _CANONICAL as SANITIZE_BODY, compile_sanitize
+from checkexif_recipes import RecipeRefused
+from setnewvalue_convinv_recipes import compile_setnewvalue_convinv
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -77,9 +79,11 @@ class NativeWriteFacts(unittest.TestCase):
         self.exif = package / "Exif.pm"
         self.writer = package / "WriteExif.pl"
         self.writer_helpers = package / "Writer.pl"
+        self.tag_lookup = package / "TagLookup.pm"
         self.later = package / "Later.pm"
         self.write_exif("IFD0")
         self.write_writer("return 1;")
+        self.write_tag_lookup()
         self.write_writer_helpers()
         self.write_later("return 'late';")
 
@@ -132,14 +136,25 @@ class NativeWriteFacts(unittest.TestCase):
 
     def write_writer_helpers(self, *, write_body="return Image::ExifTool::WriterHelper($_[0]);",
                              check_body="return Image::ExifTool::CheckHelper($_[0]);",
-                             sanitize_body="return Encode::encode('utf8', $_[1]);"):
+                             sanitize_body="return Encode::encode('utf8', $_[1]);",
+                             set_new_value_body="return 1;"):
         self.writer_helpers.write_text(textwrap.dedent(f"""\
             package Image::ExifTool;
+            require 'Image/ExifTool/TagLookup.pm';
             sub WriterHelper($) {{ return $_[0]; }}
             sub CheckHelper($) {{ return $_[0]; }}
             sub WriteValue($$) {{ {write_body} }}
             sub CheckValue($$) {{ {check_body} }}
             sub Sanitize($$) {{ {sanitize_body} }}
+            sub ConvInv($$$$$$) {{ return; }}
+            sub SetNewValue($;$$%) {{ {set_new_value_body} }}
+            1;
+        """), encoding="utf-8")
+
+    def write_tag_lookup(self, *, body="return;"):
+        self.tag_lookup.write_text(textwrap.dedent(f"""\
+            package Image::ExifTool::TagLookup;
+            sub FindTagInfo($) {{ {body} }}
             1;
         """), encoding="utf-8")
 
@@ -176,7 +191,8 @@ class NativeWriteFacts(unittest.TestCase):
         reader_only = self.dump(reader_only=True)
         writer_keys = ("native_write_autoload", "native_write_capture_context",
                        "native_write_tables", "native_write_helpers",
-                       "native_write_format_registry")
+                       "native_write_format_registry", "native_capture_context",
+                       "native_find_tag_info_warmup")
         self.assertEqual(reader_only,
                          {key: value for key, value in full.items() if key not in writer_keys})
         for key in writer_keys:
@@ -225,6 +241,16 @@ class NativeWriteFacts(unittest.TestCase):
 
     def test_preserves_complete_controls_variants_and_unknown_values(self):
         doc = self.dump()
+        context = doc["native_capture_context"]
+        self.assertEqual(context["schema"], "native_exiftool_capture_context_v1")
+        self.assertEqual(Path(context["selected_library"]), self.lib.resolve())
+        self.assertRegex(context["loaded_closure"]["sha256"], r"^[0-9a-f]{64}$")
+        self.assertTrue(context["loaded_closure"]["modules"])
+        self.assertIn("Image/ExifTool.pm", {item["inc"] for item in context["loaded_closure"]["modules"]})
+        self.assertEqual(doc["native_find_tag_info_warmup"], {
+            "warmed": True, "query_name_count": 1,
+            "query_names_sha256": hashlib.sha256(b'["hostcomputer"]').hexdigest(),
+        })
         table = self.sidecar(doc)
         host = table["rows"]["316"]
         controls = host["write_controls"]
@@ -433,6 +459,40 @@ class NativeWriteFacts(unittest.TestCase):
                              hashlib.sha256(self.writer_helpers.read_bytes()).hexdigest())
             self.assertIn("Image::ExifTool::SetWarning", recipe.callback_references)
 
+    def test_captures_final_setnewvalue_binding(self):
+        fact = self.dump()["native_write_helpers"]["set_new_value"]
+        self.assertTrue(fact["resolved"])
+        self.assertEqual(fact["requested_binding"], "Image::ExifTool::SetNewValue")
+        self.assertEqual(fact["__name"], "Image::ExifTool::SetNewValue")
+        self.assertEqual(fact["source_file"], "Image/ExifTool/Writer.pl")
+        self.assertEqual(fact["source_sha256"], hashlib.sha256(self.writer_helpers.read_bytes()).hexdigest())
+
+    def test_captures_final_findtaginfo_binding(self):
+        fact = self.dump()["native_write_helpers"]["find_tag_info"]
+        self.assertTrue(fact["resolved"])
+        self.assertEqual(fact["requested_binding"], "Image::ExifTool::TagLookup::FindTagInfo")
+        self.assertEqual(fact["__name"], "Image::ExifTool::TagLookup::FindTagInfo")
+        self.assertEqual(fact["source_file"], "Image/ExifTool/TagLookup.pm")
+        self.assertEqual(fact["source_sha256"], hashlib.sha256(self.tag_lookup.read_bytes()).hexdigest())
+
+    def test_setnewvalue_defined_false_source_mutation_is_captured_and_refused(self):
+        self.write_writer_helpers(set_new_value_body=textwrap.dedent("""\
+            my ($val, $e) = $self->ConvInv($val, $tagInfo, $tag, $wgrp1, $convType, $wantGroup);
+            if (defined $e) { $e or return; }
+            return;
+        """))
+        before = self.dump()["native_write_helpers"]["set_new_value"]
+        self.write_writer_helpers(set_new_value_body=textwrap.dedent("""\
+            my ($val, $e) = $self->ConvInv($val, $tagInfo, $tag, $wgrp1, $convType, $wantGroup);
+            if ($e) { return; }
+            return;
+        """))
+        after = self.dump()["native_write_helpers"]["set_new_value"]
+        self.assertNotEqual(before["source_sha256"], after["source_sha256"])
+        self.assertNotEqual(before["__deparse"], after["__deparse"])
+        with self.assertRaisesRegex(RecipeRefused, "caller control flow"):
+            compile_setnewvalue_convinv(after)
+
     def test_helper_rebinding_and_body_mutation_are_captured_after_writer_autoload(self):
         before = self.dump()
         self.write_writer("return 1;", extra=textwrap.dedent("""\
@@ -562,9 +622,12 @@ class NativeWriteFacts(unittest.TestCase):
             self.assertEqual(
                 fact["requested_binding"],
                 {"write_value": "Image::ExifTool::WriteValue",
+                 "set_byte_order": "Image::ExifTool::SetByteOrder",
                  "check_value": "Image::ExifTool::CheckValue",
                  "sanitize": "Image::ExifTool::Sanitize",
-                 "conv_inv": "Image::ExifTool::ConvInv"}[key],
+                 "conv_inv": "Image::ExifTool::ConvInv",
+                 "set_new_value": "Image::ExifTool::SetNewValue",
+                 "find_tag_info": "Image::ExifTool::TagLookup::FindTagInfo"}[key],
             )
 
     def test_write_only_source_mutation_changes_sidecar_not_read_projection(self):

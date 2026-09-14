@@ -138,6 +138,62 @@ sub source_file_fact {
     return (File::Spec->abs2rel($abs, $lib_abs), sha256_hex($bytes), undef);
 }
 
+# Bind write-side source projections to the Perl executable, selected library,
+# release, and every Image::ExifTool file actually loaded in this process.
+# Consumers compare their native lookup probe to this envelope and separately
+# re-prove the relevant helper bodies.  A path outside $lib_abs is a refusal:
+# @INC ordering alone cannot authenticate an already loaded package.
+sub native_capture_context {
+    my ($lib_abs) = @_;
+    my @modules;
+    for my $inc (sort keys %INC) {
+        next unless $inc eq 'Image/ExifTool.pm' || $inc =~ m{^Image/ExifTool/};
+        my $path = $INC{$inc};
+        if (!defined($path) || !length($path)) {
+            # A failed require leaves an %INC key with an undefined value.
+            # Preserve it as unavailable instead of turning an intentionally
+            # unresolved writer helper into a dump-wide failure.
+            push @modules, { inc => $inc, source_file => undef, source_sha256 => undef };
+            next;
+        }
+        my $abs = abs_path($path);
+        $abs = File::Spec->rel2abs($path) unless defined $abs;
+        my $prefix = $lib_abs . '/';
+        # Keep the dump inspectable if a transitive require escaped the selected
+        # library.  The source-address compiler rejects this explicit malformed
+        # closure; dying here would hide the independent post-load writer
+        # refusal and turn a source mismatch into a capture failure.
+        if (index($abs, $prefix) != 0) {
+            push @modules, { inc => $inc, source_file => undef, source_sha256 => undef,
+                             reason => 'loaded_context_module_outside_selected_library' };
+            next;
+        }
+        my %module = (inc => $inc, source_file => File::Spec->abs2rel($abs, $lib_abs));
+        if (-f $abs) {
+            open(my $fh, '<:raw', $abs) or die "read $abs: $!\n";
+            local $/;
+            my $bytes = <$fh>;
+            close($fh) or die "close $abs: $!\n";
+            $module{source_sha256} = sha256_hex($bytes);
+        } else {
+            # A deliberately removed Writer.pl must still leave the sidecar
+            # inspectable with explicit unresolved helper facts.
+            $module{source_sha256} = undef;
+        }
+        push @modules, \%module;
+    }
+    die "selected ExifTool closure is empty\n" unless @modules;
+    my $closure = JSON::PP->new->canonical->utf8->encode(\@modules);
+    return {
+        schema => 'native_exiftool_capture_context_v1',
+        selected_library => $lib_abs,
+        perl_path => abs_path($^X) // $^X,
+        perl_version => "$]",
+        exiftool_version => "$Image::ExifTool::VERSION",
+        loaded_closure => { sha256 => sha256_hex($closure), modules => \@modules },
+    };
+}
+
 sub unresolved_code_fact {
     my ($name, $reason) = @_;
     return {
@@ -1079,11 +1135,11 @@ sub effective_write_code_fact {
     };
 }
 
-# These helpers supply the first UTF-8 scalar writer's value validation and
-# serialization path.  Capture their *final loaded* bindings separately from
-# table WRITE_PROC/CHECK_PROC provenance: a later mechanism compiler must
-# recognize their bodies before it can execute them.  code_source_fact keeps
-# the established depth/cycle limits and makes a missing helper explicit.
+# These helpers supply source-selected writer composition facts. Capture their
+# *final loaded* bindings separately from table WRITE_PROC/CHECK_PROC
+# provenance: a later mechanism compiler must recognize their bodies before it
+# can execute them. code_source_fact keeps the established depth/cycle limits
+# and makes a missing helper explicit.
 sub hydrate_write_helpers {
     # Writer.pl defines the shared WriteValue/CheckValue helpers but is not
     # necessarily loaded by a table's WriteExif implementation.  This is a
@@ -1141,9 +1197,14 @@ sub native_write_helper_facts {
     my ($lib_abs, $status) = @_;
     my %bindings = (
         write_value => 'Image::ExifTool::WriteValue',
+        # Numeric WriteValue's DoPackStd reads the map selected by this
+        # helper. Capture its final CV and lexical endian maps together.
+        set_byte_order => 'Image::ExifTool::SetByteOrder',
         check_value => 'Image::ExifTool::CheckValue',
         sanitize => 'Image::ExifTool::Sanitize',
         conv_inv => 'Image::ExifTool::ConvInv',
+        set_new_value => 'Image::ExifTool::SetNewValue',
+        find_tag_info => 'Image::ExifTool::TagLookup::FindTagInfo',
     );
     if (!$status->{loaded}) {
         my $reason = $status->{reason} // 'write_helper_load_failed';
@@ -1287,6 +1348,36 @@ sub final_native_write_format_registry {
         format_name => \@format_name, format_size => \@format_size,
         format_number => \%format_number,
     };
+}
+
+# FindTagInfo lazily loads parts of TagLookup's registry for queried names.
+# Seal the capture closure only after exercising the exact, source-derived
+# Exif/Main ownership spelling set that the addressing probe will query.  This
+# does not touch the detached read projection and has no name allowlist: names
+# come from the already captured native row facts.
+sub warm_find_tag_info_closure {
+    my ($tables, $helpers) = @_;
+    my $find = $helpers->{find_tag_info};
+    return { warmed => JSON::PP::false, reason => 'find_tag_info_unavailable' }
+        unless ref($find) eq 'HASH' && $find->{resolved};
+    my $main = eval { $tables->{Exif}{Main} };
+    return { warmed => JSON::PP::false, reason => 'exif_main_unavailable' }
+        unless ref($main) eq 'HASH' && ref($main->{rows}) eq 'HASH';
+    my %names;
+    for my $row (values %{$main->{rows}}) {
+        next unless ref($row) eq 'HASH';
+        my $properties = $row->{effective_properties} // $row->{properties};
+        next unless ref($properties) eq 'HASH' && ref($properties->{Name}) eq 'HASH';
+        my $name = $properties->{Name};
+        next unless $name->{present} && defined($name->{value}) && !ref($name->{value});
+        next unless $name->{value} =~ /^[A-Za-z0-9_]+$/;
+        $names{lc($name->{value})} = 1;
+    }
+    for my $name (sort keys %names) {
+        Image::ExifTool::TagLookup::FindTagInfo($name);
+    }
+    return { warmed => JSON::PP::true, query_name_count => scalar(keys %names),
+             query_names_sha256 => sha256_hex(JSON::PP->new->canonical->utf8->encode([ sort keys %names ])) };
 }
 
 sub dump_tag_entry {
@@ -1765,7 +1856,8 @@ if (exists $out{QuickTime}
 }
 
 my ($write_autoload_router_status, $native_write_capture_context,
-    $native_write_helpers, $native_write_format_registry);
+    $native_write_helpers, $native_write_format_registry,
+    $find_tag_info_warmup, $native_capture_context);
 unless ($READER_ONLY) {
     # Resolve prototype-only writer declarations after every selected module is
     # loaded.  This is intentionally after the read dump was built: writer module
@@ -1802,8 +1894,9 @@ unless ($READER_ONLY) {
     }
 
     # Capture helper facts in the same settled state as the table callbacks above.
-    # This does not alter the read projection or route a native writer.
     $native_write_helpers = native_write_helper_facts($EXIFTOOL_LIB_ABS, $write_helper_status);
+    $find_tag_info_warmup = warm_find_tag_info_closure(\%native_write_tables, $native_write_helpers);
+    $native_capture_context = native_capture_context($EXIFTOOL_LIB_ABS);
 
     # The registry is intentionally captured after the writer helpers have settled
     # and before JSON emission.  It has no effect on the detached read projection.
@@ -1848,5 +1941,7 @@ unless ($READER_ONLY) {
     $document{native_write_tables} = \%native_write_tables;
     $document{native_write_helpers} = $native_write_helpers;
     $document{native_write_format_registry} = $native_write_format_registry;
+    $document{native_capture_context} = $native_capture_context;
+    $document{native_find_tag_info_warmup} = $find_tag_info_warmup;
 }
 print $json->encode(\%document);

@@ -136,6 +136,73 @@ python3 "$HERE/final_scalar_stage.py" "$JSON" \
     --report "$(artifact_path tiff-scalar-final-ledger)"
 
 echo
+echo ">> capturing and generating source-derived mandatory directory defaults"
+MANDATORY_FACT="$CACHE/mandatory-defaults-$VERSION.json"
+"$PERL" "$HERE/capture_exif_mandatory_fact.pl" "$LIB" > "$MANDATORY_FACT"
+python3 "$HERE/mandatory_defaults_codegen.py" "$MANDATORY_FACT" \
+    --writer-tables "$JSON" --selected-perl "$PERL" \
+    --output "$(artifact_path mandatory-default-rules)" \
+    --report "$(artifact_path mandatory-default-ledger)"
+
+echo
+echo ">> capturing and generating source-derived raw JFIF property operands"
+RAW_JFIF_FACT="$CACHE/raw-jfif-$VERSION.json"
+"$PERL" "$HERE/capture_raw_jfif_fact.pl" "$LIB" > "$RAW_JFIF_FACT"
+python3 "$HERE/raw_jfif_codegen.py" "$RAW_JFIF_FACT" \
+    --selected-perl "$PERL" \
+    --output "$(artifact_path raw-jfif-rules)" \
+    --report "$(artifact_path raw-jfif-ledger)"
+
+echo
+echo ">> generating authenticated SetNewValue address operands"
+ADDRESS_ROWS="$CACHE/setnewvalue-address-rows-$VERSION.json"
+ADDRESS_REPORT="$CACHE/setnewvalue-address-report-$VERSION.json"
+ADDRESS_OBSERVATIONS="$CACHE/setnewvalue-address-observations-$VERSION.json"
+ADDRESS_OWNERSHIP="$(artifact_path setnewvalue-ownership-ledger)"
+python3 "$HERE/setnewvalue_addressing.py" "$JSON" \
+    --rows "$ADDRESS_ROWS" --report "$ADDRESS_REPORT"
+"$PERL" "$HERE/setnewvalue_address_probe.pl" "$LIB" "$ADDRESS_ROWS" > "$ADDRESS_OBSERVATIONS"
+ADDRESS_LEDGER_ARGS=(--ownership-ledger "$ADDRESS_OWNERSHIP")
+if [[ ! -f "$ADDRESS_OWNERSHIP" ]]; then
+    # Bootstrap is an explicit one-time creation path only. Later regenerations
+    # validate and carry forward the committed ownership history.
+    ADDRESS_LEDGER_ARGS=(--bootstrap-ownership-ledger)
+fi
+python3 "$HERE/setnewvalue_address_rust_codegen.py" "$JSON" "$ADDRESS_OBSERVATIONS" \
+    --output "$(artifact_path setnewvalue-address-rules)" \
+    --report "$(artifact_path setnewvalue-address-ledger)" \
+    --write-ownership-ledger "$ADDRESS_OWNERSHIP" "${ADDRESS_LEDGER_ARGS[@]}"
+
+echo
+echo ">> generating composed public SetNewValue migration ownership"
+# This is deliberately a separate public fence.  It consumes the same fresh
+# selected dump as the address and final-scalar stages, but owns only their
+# authenticated intersection.  The larger address inventory remains legacy
+# routing scope until a matching final recipe is generated.
+PUBLIC_MIGRATION_REPORT="$CACHE/setnewvalue-public-migration-report-$VERSION.json"
+PUBLIC_MIGRATION_LEDGER="$(artifact_path setnewvalue-public-migration-ledger)"
+PUBLIC_MIGRATION_ARGS=(--prior-ledger "$PUBLIC_MIGRATION_LEDGER")
+if [[ ! -f "$PUBLIC_MIGRATION_LEDGER" ]]; then
+    # The first public migration boundary is an explicit bootstrap.  Later
+    # source upgrades validate and carry prior migrated identities forward.
+    PUBLIC_MIGRATION_ARGS=(--bootstrap)
+fi
+python3 "$HERE/setnewvalue_public_migration_ledger.py" "$JSON" \
+    --output "$(artifact_path setnewvalue-public-migration-rules)" \
+    --report "$PUBLIC_MIGRATION_REPORT" \
+    --write-ledger "$PUBLIC_MIGRATION_LEDGER" "${PUBLIC_MIGRATION_ARGS[@]}"
+
+echo
+echo ">> generating authenticated fresh-JPEG byte-order operands"
+BYTE_ORDER_OBSERVATIONS="$CACHE/fresh-jpeg-byte-order-$VERSION.json"
+python3 "$HERE/fresh_jpeg_byte_order_native.py" \
+    --perl "$PERL" --exiftool-dir "$LIB" --output "$BYTE_ORDER_OBSERVATIONS"
+python3 "$HERE/fresh_jpeg_byte_order_codegen.py" "$BYTE_ORDER_OBSERVATIONS" \
+    --writer-tables "$JSON" \
+    --output "$(artifact_path fresh-jpeg-byte-order-rules)" \
+    --report "$(artifact_path fresh-jpeg-byte-order-ledger)"
+
+echo
 echo ">> extracting file-identification tables"
 "$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \

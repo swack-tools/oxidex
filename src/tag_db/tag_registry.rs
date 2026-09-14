@@ -7,6 +7,7 @@
 //! `cargo run --bin sync_tags`, not as part of the build).
 
 use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
+use crate::tag_db::generated_scalar_descriptor_fallback::{self, SourceValueClass};
 use oxidex_tags::GENERATED_TAG_REGISTRY;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -1013,32 +1014,6 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     );
 
     registry.insert(
-        "EXIF:DocumentName",
-        TagDescriptor::new(
-            TagId::new_numeric(0x010d),
-            "EXIF:DocumentName".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Name of the scanned document".to_string(),
-            vec!["Document1".to_string(), "Page1".to_string()],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PageName",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011d),
-            "EXIF:PageName".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Name of the page".to_string(),
-            vec!["Page 1".to_string(), "Cover".to_string()],
-        ),
-    );
-
-    registry.insert(
         "EXIF:XPosition",
         TagDescriptor::new(
             TagId::new_numeric(0x011e),
@@ -1282,19 +1257,6 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             ValueType::Integer,
             "Dot gain percentage range".to_string(),
             vec!["0".to_string(), "100".to_string()],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:TargetPrinter",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0151),
-            "EXIF:TargetPrinter".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Target printer description".to_string(),
-            vec!["Epson".to_string(), "Canon".to_string()],
         ),
     );
 
@@ -6945,6 +6907,77 @@ static YAML_TAG_ENTRIES: LazyLock<HashMap<String, YamlTagEntry>> = LazyLock::new
     entries
 });
 
+/// Source-derived generic descriptors for the generated final-scalar public
+/// intersection.  This is built from the current generated address, final and
+/// public-migration operands; it has no handwritten tag names or IDs.
+static GENERATED_SCALAR_DESCRIPTOR_ENTRIES: LazyLock<Option<HashMap<String, TagDescriptor>>> =
+    LazyLock::new(|| {
+        let facts = generated_scalar_descriptor_fallback::facts()?;
+        let mut descriptors = HashMap::with_capacity(facts.len());
+        for fact in facts {
+            let value_type = match fact.value_class {
+                SourceValueClass::String => ValueType::String,
+            };
+            let name = format!("{}:{}", fact.group0, fact.name);
+            if descriptors
+                .insert(
+                    name.clone(),
+                    TagDescriptor::new(
+                        TagId::new_numeric(fact.raw_tag_id),
+                        name,
+                        FormatFamily::EXIF,
+                        true,
+                        value_type,
+                        "Source-derived ordinary EXIF scalar descriptor".to_string(),
+                        Vec::new(),
+                    ),
+                )
+                .is_some()
+            {
+                return None;
+            }
+        }
+        Some(descriptors)
+    });
+
+fn generated_scalar_descriptor(name: &str) -> Option<&'static TagDescriptor> {
+    GENERATED_SCALAR_DESCRIPTOR_ENTRIES.as_ref()?.get(name)
+}
+
+fn generated_scalar_descriptor_terminal(name: &str) -> bool {
+    if generated_scalar_descriptor_fallback::terminal_descriptor_name(name) {
+        return true;
+    }
+    let Some((group, bare_name)) = name.split_once(':') else {
+        return false;
+    };
+    matches!(group, "IFD0" | "IFD1" | "ExifIFD" | "InteropIFD")
+        && generated_scalar_descriptor_fallback::terminal_descriptor_name(&format!(
+            "EXIF:{bare_name}"
+        ))
+}
+
+fn select_descriptor<'a>(
+    manual: Option<&'a TagDescriptor>,
+    generated: Option<&'a TagDescriptor>,
+    source_scalar: Option<&'a TagDescriptor>,
+    yaml: Option<&'a TagDescriptor>,
+) -> Option<&'a TagDescriptor> {
+    manual.or(generated).or(source_scalar).or(yaml)
+}
+
+fn select_descriptor_unless_terminal<'a>(
+    terminal: bool,
+    manual: Option<&'a TagDescriptor>,
+    generated: Option<&'a TagDescriptor>,
+    source_scalar: Option<&'a TagDescriptor>,
+    yaml: Option<&'a TagDescriptor>,
+) -> Option<&'a TagDescriptor> {
+    (!terminal)
+        .then(|| select_descriptor(manual, generated, source_scalar, yaml))
+        .flatten()
+}
+
 /// Retrieves a tag descriptor by its canonical name.
 ///
 /// # Arguments
@@ -6966,19 +6999,18 @@ static YAML_TAG_ENTRIES: LazyLock<HashMap<String, YamlTagEntry>> = LazyLock::new
 /// assert!(unknown.is_none());
 /// ```
 pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
-    // Try direct lookup first in manual registry
-    if let Some(descriptor) = TAG_REGISTRY.get(name) {
+    let terminal = generated_scalar_descriptor_terminal(name);
+    if let Some(descriptor) = select_descriptor_unless_terminal(
+        terminal,
+        TAG_REGISTRY.get(name),
+        GENERATED_TAG_REGISTRY.get(name),
+        generated_scalar_descriptor(name),
+        YAML_TAG_ENTRIES.get(name).map(|entry| &entry.descriptor),
+    ) {
         return Some(descriptor);
     }
-
-    // Try generated registry direct match
-    if let Some(descriptor) = GENERATED_TAG_REGISTRY.get(name) {
-        return Some(descriptor);
-    }
-
-    // Try YAML registry direct match
-    if let Some(entry) = YAML_TAG_ENTRIES.get(name) {
-        return Some(&entry.descriptor);
+    if terminal {
+        return None;
     }
 
     // Handle IFD prefix mapping for validation
@@ -6997,23 +7029,29 @@ pub fn get_tag_descriptor(name: &str) -> Option<&TagDescriptor> {
             return None;
         }
     } else {
-        // GPS and other families stay as-is
-        // Try YAML registry before giving up
+        // GPS and other families stay as-is. The generated scalar source set
+        // is EXIF-only, so there is no normalized fallback to consult here.
         return YAML_TAG_ENTRIES.get(name).map(|entry| &entry.descriptor);
     };
 
-    TAG_REGISTRY
-        .get(normalized_name.as_str())
-        .or_else(|| GENERATED_TAG_REGISTRY.get(normalized_name.as_str()))
-        .or_else(|| {
-            YAML_TAG_ENTRIES
-                .get(normalized_name.as_str())
-                .map(|entry| &entry.descriptor)
-        })
+    select_descriptor(
+        TAG_REGISTRY.get(normalized_name.as_str()),
+        GENERATED_TAG_REGISTRY.get(normalized_name.as_str()),
+        generated_scalar_descriptor(normalized_name.as_str()),
+        YAML_TAG_ENTRIES
+            .get(normalized_name.as_str())
+            .map(|entry| &entry.descriptor),
+    )
 }
 
 pub(crate) fn has_reliable_value_type(name: &str) -> bool {
-    if TAG_REGISTRY.contains_key(name) || GENERATED_TAG_REGISTRY.contains_key(name) {
+    if generated_scalar_descriptor_terminal(name) {
+        return false;
+    }
+    if TAG_REGISTRY.contains_key(name)
+        || GENERATED_TAG_REGISTRY.contains_key(name)
+        || generated_scalar_descriptor(name).is_some()
+    {
         return true;
     }
     if let Some(entry) = YAML_TAG_ENTRIES.get(name) {
@@ -7034,6 +7072,7 @@ pub(crate) fn has_reliable_value_type(name: &str) -> bool {
     normalized_name.is_some_and(|normalized_name| {
         TAG_REGISTRY.contains_key(normalized_name.as_str())
             || GENERATED_TAG_REGISTRY.contains_key(normalized_name.as_str())
+            || generated_scalar_descriptor(normalized_name.as_str()).is_some()
             || YAML_TAG_ENTRIES
                 .get(normalized_name.as_str())
                 .is_some_and(|entry| entry.reliable_value_type)
@@ -7102,6 +7141,8 @@ pub(crate) fn descriptor_has_reliable_value_type(descriptor: &TagDescriptor) -> 
         || GENERATED_TAG_REGISTRY
             .get(name)
             .is_some_and(|registered| std::ptr::eq(registered, descriptor))
+        || generated_scalar_descriptor(name)
+            .is_some_and(|registered| std::ptr::eq(registered, descriptor))
     {
         return true;
     }
@@ -7118,19 +7159,107 @@ pub(crate) fn descriptor_has_reliable_value_type(descriptor: &TagDescriptor) -> 
 /// generated domain registry, and YAML-backed descriptors.
 pub fn tag_count() -> usize {
     let mut tags = HashSet::with_capacity(
-        TAG_REGISTRY.len() + GENERATED_TAG_REGISTRY.len() + YAML_TAG_ENTRIES.len(),
+        TAG_REGISTRY.len()
+            + GENERATED_TAG_REGISTRY.len()
+            + GENERATED_SCALAR_DESCRIPTOR_ENTRIES
+                .as_ref()
+                .map_or(0, HashMap::len)
+            + YAML_TAG_ENTRIES.len(),
     );
 
     tags.extend(TAG_REGISTRY.keys().copied());
     tags.extend(GENERATED_TAG_REGISTRY.keys().map(String::as_str));
+    if let Some(entries) = GENERATED_SCALAR_DESCRIPTOR_ENTRIES.as_ref() {
+        tags.extend(entries.keys().map(String::as_str));
+    }
     tags.extend(YAML_TAG_ENTRIES.keys().map(String::as_str));
 
-    tags.len()
+    tags.into_iter()
+        .filter(|name| get_tag_descriptor(name).is_some())
+        .count()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_scalar_descriptor_replaces_stale_yaml_when_manual_entry_is_absent() {
+        let source = generated_scalar_descriptor("EXIF:DocumentName")
+            .expect("generated final/public/address join supplies DocumentName");
+        let yaml = &YAML_TAG_ENTRIES["EXIF:DocumentName"].descriptor;
+        assert!(source.is_writable());
+        assert_eq!(source.value_type(), ValueType::String);
+        assert!(
+            !yaml.is_writable(),
+            "fixture must retain the stale YAML fact"
+        );
+        assert!(std::ptr::eq(
+            select_descriptor(None, None, Some(source), Some(yaml))
+                .expect("source fallback wins when no manual descriptor remains"),
+            source,
+        ));
+        let page = generated_scalar_descriptor("EXIF:PageName")
+            .expect("generated final/public/address join supplies PageName");
+        assert!(page.is_writable());
+        assert_eq!(page.value_type(), ValueType::String);
+    }
+
+    #[test]
+    fn source_scalar_target_printer_is_available_without_manual_reverse_fallback() {
+        let source = generated_scalar_descriptor("EXIF:TargetPrinter")
+            .expect("generated final/public/address join supplies TargetPrinter");
+        assert!(source.is_writable());
+        assert_eq!(source.value_type(), ValueType::String);
+        assert_eq!(
+            crate::tag_db::generated_scalar_descriptor_fallback::reverse_name(
+                0x0151,
+                FormatFamily::EXIF,
+                "IFD0",
+            ),
+            Some("TargetPrinter")
+        );
+        assert_eq!(
+            crate::tag_db::generated_scalar_descriptor_fallback::reverse_name(
+                0x0151,
+                FormatFamily::EXIF,
+                "IFD1",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn terminal_generated_identity_refuses_manual_and_yaml_descriptor_fallbacks() {
+        let stale_manual = YAML_TAG_ENTRIES["EXIF:DocumentName"].descriptor.clone();
+        let manual = &stale_manual;
+        let yaml = &YAML_TAG_ENTRIES["EXIF:DocumentName"].descriptor;
+        assert!(
+            select_descriptor_unless_terminal(true, Some(manual), None, None, Some(yaml)).is_none()
+        );
+    }
+
+    #[test]
+    fn migrated_scalar_descriptors_remain_writable_without_manual_registry_entries() {
+        for fact in crate::tag_db::generated_scalar_descriptor_fallback::facts()
+            .expect("current generated facts")
+        {
+            let name = format!("{}:{}", fact.group0, fact.name);
+            assert!(
+                !TAG_REGISTRY.contains_key(name.as_str()),
+                "manual entry remains: {name}"
+            );
+            let descriptor =
+                get_tag_descriptor(&name).expect("generated descriptor is publicly reachable");
+            assert!(descriptor.is_writable(), "{name}");
+            assert_eq!(descriptor.value_type(), ValueType::String, "{name}");
+            crate::writers::exif_surgical::validate_changed(
+                &name,
+                &crate::core::TagValue::String("source-backed value".into()),
+            )
+            .expect("legacy surgical validation consumes generated descriptor");
+        }
+    }
 
     #[test]
     fn test_registry_count() {
@@ -7814,47 +7943,4 @@ mod tests {
         assert!(tag.is_writable());
         assert_eq!(tag.value_type(), ValueType::String);
     }
-}
-
-/// Numeric IDs that ExifTool declares, the manual write registry carries, and
-/// the YAML-built read index does NOT — so they write correctly and read back
-/// under their hex spelling (the W8 write/read asymmetry recorded in
-/// `src/bin/jpeg-tag-matrix/report.rs`).
-///
-/// This is deliberately an explicit allowlist rather than a general reverse
-/// view of [`TAG_REGISTRY`], because a general view is provably wrong in two
-/// ways that only surfaced under test:
-///
-/// * It ignores IFD scope. `TAG_REGISTRY` holds `EXIF:ThumbnailLength` at
-///   0x0202, but that tag is IFD1-only; a blanket reverse lookup renamed
-///   `IFD0:0x0202` to `IFD0:ThumbnailLength`, which ExifTool never emits.
-///   `TagDescriptor` carries no `WriteGroup`, so the scope cannot be checked.
-/// * The hex spelling is load-bearing for the writer. `exif_surgical` relies
-///   on MakerNote keys staying hex to detect changed/removed keys instead of
-///   silently dropping them.
-///
-/// Closing W8 generally therefore needs `WriteGroup` in the descriptor, which
-/// is a schema change, not a lookup change. Until then each entry here is
-/// added with its Exif.pm citation and its IFD scope stated.
-const MANUAL_ONLY_NUMERIC_NAMES: &[(u16, FormatFamily, &str, &str)] = &[
-    // Exif.pm:1050-1054 -- `Writable => 'string'`, `WriteGroup => 'IFD0'`.
-    (0x0151, FormatFamily::EXIF, "IFD0", "TargetPrinter"),
-];
-
-/// Looks up a name for a numeric ID that only the manual registry knows.
-///
-/// `ifd_name` is matched against the entry's declared `WriteGroup`, so a tag
-/// scoped to one IFD can never leak into another.
-#[must_use]
-pub fn manual_only_name_for_id(
-    tag_id: u16,
-    format_family: FormatFamily,
-    ifd_name: &str,
-) -> Option<&'static str> {
-    MANUAL_ONLY_NUMERIC_NAMES
-        .iter()
-        .find(|(id, family, scope, _)| {
-            *id == tag_id && *family == format_family && *scope == ifd_name
-        })
-        .map(|(_, _, _, name)| *name)
 }
