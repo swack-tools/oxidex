@@ -1,7 +1,9 @@
 """Generated static EXIF address operands are complete and inactive."""
 from copy import deepcopy
+import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -80,19 +82,26 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertIn('"newname"', rust)
         self.assertIn("removed: true", rust)
 
-    def test_removed_ledger_name_survives_unsupported_next_source(self):
+    def test_added_and_removed_names_survive_later_source_join_refusal(self):
+        from setnewvalue_addressing import compile_addressing
         from setnewvalue_ownership_ledger import build_ledger
         first = build_ledger(source(), None, bootstrap=True)
-        removed = source()
-        del removed["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
-        refresh_find_tag_info_warmup(removed)
-        prior = build_ledger(removed, first, bootstrap=False)
-        unsupported = deepcopy(removed)
-        unsupported["native_write_helpers"]["set_new_value"]["__deparse"] = "sub { return 0; }"
-        rust, report = generate(unsupported, {}, prior_ledger=prior)
+        changed = source()
+        row = changed["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
+        row["properties"]["Name"]["value"] = "NewName"
+        row["effective_properties"]["Name"]["value"] = "NewName"
+        refresh_find_tag_info_warmup(changed)
+        addressing, _ = compile_addressing(changed)
+        # This is checked after the completed ownership ledger has merged the
+        # old/removed and new/current names, so it models a later source-join
+        # refusal without treating an unknown current source as authenticated.
+        changed["native_write_capture_context"]["loaded_modules"]["Image/ExifTool/Exif.pm"] = "e" * 64
+        rust, report = generate(changed, observations(addressing.rows, addressing=addressing),
+                                prior_ledger=first)
         self.assertFalse(report["emitted"])
         self.assertEqual(report["removed_owned_names"], 1)
         self.assertIn('"noallowlist"', rust)
+        self.assertIn('"newname"', rust)
         self.assertIn("removed: true", rust)
         for constant in ("SET_NEW_VALUE_ADDRESS_ROWS", "SET_NEW_VALUE_LOOKUP",
                          "SET_NEW_VALUE_ADMITTED_QUALIFIER_SCOPE",
@@ -104,6 +113,43 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
             subprocess.run(["rustc", "--crate-type", "lib", str(source_file),
                             "-o", str(Path(directory) / "omitted.rlib")], check=True,
                            capture_output=True, text=True)
+
+    def test_unauthenticated_current_ownership_refuses_with_valid_prior(self):
+        from setnewvalue_ownership_ledger import build_ledger
+        prior = build_ledger(source(), None, bootstrap=True)
+        unsupported = source()
+        unsupported["native_write_helpers"]["set_new_value"]["__deparse"] = "sub { return 0; }"
+        with self.assertRaisesRegex(RecipeRefused, "current ownership could not authenticate"):
+            generate(unsupported, {}, prior_ledger=prior)
+
+    def test_cli_build_failure_leaves_existing_artifacts_unchanged(self):
+        from setnewvalue_ownership_ledger import build_ledger
+        prior = build_ledger(source(), None, bootstrap=True)
+        unsupported = source()
+        unsupported["native_write_helpers"]["set_new_value"]["__deparse"] = "sub { return 0; }"
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            tables = directory / "tables.json"
+            observations_path = directory / "observations.json"
+            prior_path = directory / "prior.json"
+            output = directory / "generated.rs"
+            report = directory / "report.json"
+            ledger = directory / "ledger.json"
+            tables.write_text(json.dumps(unsupported), encoding="utf-8")
+            observations_path.write_text(json.dumps({}), encoding="utf-8")
+            prior_path.write_text(json.dumps(prior), encoding="utf-8")
+            before = {output: b"old rust", report: b"old report", ledger: b"old ledger"}
+            for path, contents in before.items():
+                path.write_bytes(contents)
+            result = subprocess.run([
+                sys.executable, str(Path(__file__).with_name("setnewvalue_address_rust_codegen.py")),
+                str(tables), str(observations_path), "--ownership-ledger", str(prior_path),
+                "--write-ownership-ledger", str(ledger), "--output", str(output),
+                "--report", str(report),
+            ], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("SetNewValue", result.stderr)
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
 
     def test_tampered_prior_ledger_refuses_before_omission_render(self):
         from setnewvalue_ownership_ledger import build_ledger

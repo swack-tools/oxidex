@@ -159,6 +159,7 @@ def generate(document: Mapping[str, Any], observations: Mapping[str, Any], *,
     # historical artifact must fail the command before it can overwrite its
     # terminal ownership union with a convenient current-source projection.
     validated_prior = validate_ledger(prior_ledger) if prior_ledger is not None else None
+    ledger: Mapping[str, Any] | None = None
     try:
         ledger = build_ledger(document, validated_prior, bootstrap=bootstrap_ownership_ledger)
         ledger_names = owned_names(ledger)
@@ -184,10 +185,20 @@ def generate(document: Mapping[str, Any], observations: Mapping[str, Any], *,
         # Once a ledger was authenticated, its full historical qualified union
         # remains terminal even if this release's source grammar is unsupported.
         # Without a prior ledger there is no published history to preserve.
+        if ledger is not None:
+            # `build_ledger` authenticated this release's current ownership and
+            # merged it with history before a later execution/probe/source-join
+            # failure. Preserve that completed union, including newly added and
+            # newly removed identities, in the inactive public boundary.
+            return _omitted_source(prelude, owned_names(ledger), qualified_ownership(ledger),
+                                   reason=str(error), ledger=ledger)
         if validated_prior is not None:
-            return _omitted_source(prelude, owned_names(validated_prior),
-                                   qualified_ownership(validated_prior),
-                                   reason=str(error), ledger=validated_prior)
+            # Current source ownership did not authenticate, so neither its
+            # additions nor its removals can safely be inferred. Refuse rather
+            # than publishing a stale prior-only union that would let a new
+            # source-owned name fall through to legacy handling.
+            raise RecipeRefused(
+                "current ownership could not authenticate against validated prior ledger") from error
         try:
             current_owned_names = _owned_names(document)
         except (RecipeMalformed, RecipeRefused):
@@ -244,15 +255,21 @@ def main() -> None:
     args = parser.parse_args()
     document = json.loads(args.tables.read_text(encoding="utf-8"))
     prior = json.loads(args.ownership_ledger.read_text(encoding="utf-8")) if args.ownership_ledger else None
+    # Validate every artifact before modifying any destination. In particular,
+    # a source/ledger failure must not leave a fresh Rust/report pair next to an
+    # old ownership ledger, or overwrite a published ledger after a late error.
+    ledger_text = None
+    if args.write_ownership_ledger:
+        ledger = build_ledger(document, prior, bootstrap=args.bootstrap_ownership_ledger)
+        ledger_text = json.dumps(ledger, sort_keys=True, indent=2) + "\n"
     source, report = generate(document, json.loads(args.observations.read_text(encoding="utf-8")),
                               prior_ledger=prior,
                               bootstrap_ownership_ledger=args.bootstrap_ownership_ledger)
+    report_text = json.dumps(report, sort_keys=True, indent=2) + "\n"
     args.output.write_text(source, encoding="utf-8")
-    args.report.write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    if args.write_ownership_ledger:
-        ledger = build_ledger(document, prior, bootstrap=args.bootstrap_ownership_ledger)
-        args.write_ownership_ledger.write_text(json.dumps(ledger, sort_keys=True, indent=2) + "\n",
-                                                encoding="utf-8")
+    args.report.write_text(report_text, encoding="utf-8")
+    if ledger_text is not None:
+        args.write_ownership_ledger.write_text(ledger_text, encoding="utf-8")
 
 
 if __name__ == "__main__":
