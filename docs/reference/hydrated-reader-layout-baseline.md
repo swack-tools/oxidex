@@ -43,7 +43,9 @@ Choose new output files so previous evidence remains intact.
 "$EXIFTOOL_PERL" tools/exiftool-tables/dump_tables.pl \
   --reader-only --hydrated-layouts "$EXIFTOOL_TREE/lib" > "$HYDRATED_DUMP"
 python3 tools/exiftool-tables/audit_hydrated_layouts.py \
-  --dump "$HYDRATED_DUMP" --output "$HYDRATED_AUDIT"
+  --dump "$HYDRATED_DUMP" --output "$HYDRATED_AUDIT" \
+  --expected-audit "docs/public/measurements/hydrated-reader-layout-audit-13.59.json" \
+  --catalog "docs/public/measurements/catalog-source-13.59.json"
 ```
 
 The opt-in projection preserves runtime `Table`/`TagID` bindings and other row
@@ -55,7 +57,12 @@ facts; their presence is not an executable Rust capability.
 Loaded files must resolve inside the selected library. Hashes of already loaded
 files are checked before and after table serialization; source drift fails.
 The audit rejects partial captures and unresolved or incorrectly typed references.
-Five native projection tests, three graph-audit tests and denied-warning Clippy
+CI also compares semantic totals and complete source/producer/Perl provenance
+against the committed audit, then reconciles every ordinary catalog coordinate
+and exact name. The baseline requires Perl 5.38.2; a different capture environment
+must be reviewed as a baseline update, not silently accepted. This catches
+self-consistent producer row loss as well as source identity drift.
+Five native projection tests, six graph-audit tests and denied-warning Clippy
 pass. Runtime Rust is unchanged by this PR.
 
 Earlier captures exposed recursive expansion and lost bindings/special keys;

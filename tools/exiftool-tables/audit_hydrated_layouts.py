@@ -63,18 +63,66 @@ def audit(document):
     }
 
 
+
+def check_profile(result, expected):
+    """Compare semantic totals and provenance, independent of JSON ordering."""
+    fields = ('schema', 'exiftool_version', 'tables', 'raw_keys', 'variants',
+              'catalog_native_entries', 'catalog_native_legacy_unique_counter',
+              'shared_objects', 'reference_occurrences_by_kind',
+              'unresolved_references', 'shortcuts', 'source_provenance')
+    for field in fields:
+        if result[field] != expected[field]:
+            raise ValueError(f'committed audit profile mismatch: {field}')
+
+
+def check_catalog(document, catalog):
+    """Reconcile the independent native catalog, not producer-owned tag counts."""
+    h = document['hydrated_layouts']
+    entries = catalog['entries']
+    if (catalog['exiftool_version'] != document['exiftool_version'] or
+            len(entries) != catalog['counts']['catalog_total_tag_entries'] or
+            len(entries) != h['catalog_counts']['total_tag_entries']):
+        raise ValueError('catalog denominator mismatch')
+    sources = catalog['producer']['sources']
+    if not sources or any(h['source_provenance']['sources'].get(k) != v
+                          for k, v in sources.items()):
+        raise ValueError('catalog source provenance mismatch')
+    seen = set()
+    for entry in entries:
+        identity = (entry['table'], entry['raw_key'], entry['variant_index'])
+        if identity in seen:
+            raise ValueError('duplicate catalog identity')
+        seen.add(identity)
+        table = h['tables'].get(entry['table'], {})
+        row = table.get('tags', {}).get(entry['raw_key'])
+        variants = row.get('_variants', [row]) if isinstance(row, dict) else [row]
+        index = entry['variant_index']
+        if (not isinstance(index, int) or index < 0 or index >= len(variants) or
+                not isinstance(variants[index], dict) or
+                variants[index].get('Name') != entry['name']):
+            raise ValueError(f'catalog coordinate/name mismatch: {identity!r}')
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dump', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--replace', action='store_true')
+    parser.add_argument('--expected-audit', type=Path)
+    parser.add_argument('--catalog', type=Path)
     args = parser.parse_args()
-    if args.output.resolve() == args.dump.resolve():
-        parser.error('output aliases source dump')
+    inputs = [args.dump, args.expected_audit, args.catalog]
+    if any(path and args.output.resolve() == path.resolve() for path in inputs):
+        parser.error('output aliases an input')
+    if bool(args.expected_audit) != bool(args.catalog):
+        parser.error('--expected-audit and --catalog must be supplied together')
     if args.output.exists() and not args.replace:
         parser.error('output exists; use --replace for intentional regeneration')
     raw = args.dump.read_bytes()
-    result = audit(json.loads(raw))
+    document = json.loads(raw)
+    result = audit(document)
+    if args.expected_audit:
+        check_profile(result, json.loads(args.expected_audit.read_text()))
+        check_catalog(document, json.loads(args.catalog.read_text()))
     result['dump_sha256'] = hashlib.sha256(raw).hexdigest()
     result['dump_bytes'] = len(raw)
     result['instrument_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()

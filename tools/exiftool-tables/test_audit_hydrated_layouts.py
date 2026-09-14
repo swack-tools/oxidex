@@ -1,5 +1,5 @@
 import unittest
-from audit_hydrated_layouts import audit
+from audit_hydrated_layouts import audit, check_profile, check_catalog
 
 
 def document():
@@ -36,6 +36,41 @@ class AuditTests(unittest.TestCase):
             source['hydrated_layouts'][field] = value
             with self.assertRaises(ValueError):
                 audit(source)
+
+    def test_profile_rejects_self_consistent_row_loss(self):
+        source = document()
+        expected = audit(source)
+        source['hydrated_layouts']['tables']['Table'].update(tags={}, tag_count=0)
+        with self.assertRaisesRegex(ValueError, 'profile mismatch: raw_keys'):
+            check_profile(audit(source), expected)
+
+    def test_profile_checks_source_and_perl_provenance(self):
+        expected = audit(document())
+        for key in ['producer_sha256', 'perl_version', 'sources']:
+            actual = audit(document())
+            actual['source_provenance'][key] = 'changed'
+            with self.assertRaisesRegex(ValueError, 'source_provenance'):
+                check_profile(actual, expected)
+
+    def test_catalog_checks_names_coordinates_and_denominator(self):
+        source = document()
+        def catalog():
+            return {'exiftool_version': '13.59',
+                    'counts': {'catalog_total_tag_entries': 1},
+                    'producer': {'sources': {'fixture': {}}},
+                    'entries': [{'table': 'Table', 'raw_key': '_id',
+                                 'variant_index': 0, 'name': 'Name'}]}
+        check_catalog(source, catalog())
+        mutations = [lambda c: c['entries'][0].update(name='name'),
+                     lambda c: c['entries'][0].update(variant_index=-1),
+                     lambda c: c['entries'][0].update(raw_key='missing'),
+                     lambda c: c['entries'].clear(),
+                     lambda c: c['producer']['sources'].clear()]
+        for mutate in mutations:
+            c = catalog()
+            mutate(c)
+            with self.assertRaises(ValueError):
+                check_catalog(source, c)
 
 
 if __name__ == '__main__':

@@ -517,7 +517,9 @@ jobs:
           perl tools/exiftool-tables/dump_tables.pl --reader-only --hydrated-layouts \
             "$EXIFTOOL_SOURCE/lib" > "$RUNNER_TEMP/hydrated-reader.json"
           python3 tools/exiftool-tables/audit_hydrated_layouts.py \
-            --dump "$RUNNER_TEMP/hydrated-reader.json" --output "$RUNNER_TEMP/hydrated-reader-audit.json"
+            --dump "$RUNNER_TEMP/hydrated-reader.json" --output "$RUNNER_TEMP/hydrated-reader-audit.json" \
+            --expected-audit "docs/public/measurements/hydrated-reader-layout-audit-$(cat .exiftool-version).json" \
+            --catalog "docs/public/measurements/catalog-source-$(cat .exiftool-version).json"
       - name: Verify committed tables against ExifTool
         env:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
