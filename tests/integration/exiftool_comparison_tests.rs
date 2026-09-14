@@ -141,7 +141,10 @@ fn get_perl_exiftool_output(file_path: &Path) -> Result<String, String> {
         .map_err(|e| format!("Invalid UTF-8 in Perl ExifTool output: {}", e))
 }
 
-/// Executes OxiDex binary and captures JSON output
+/// Executes OxiDex binary with the Perl oracle's JSON key projection. `-a`
+/// retains duplicate occurrences and `-G1` selects ExifTool's family-1 group
+/// identity, which is part of the comparison key (for example,
+/// `ItemList:Title` rather than the source parser's `QuickTime:Title`).
 fn get_oxidex_output(file_path: &Path) -> Result<String, String> {
     if !file_path.exists() {
         return Err(format!("Test fixture not found: {:?}", file_path));
@@ -151,7 +154,7 @@ fn get_oxidex_output(file_path: &Path) -> Result<String, String> {
     let rust_binary = env!("CARGO_BIN_EXE_oxidex");
 
     let output = Command::new(rust_binary)
-        .arg("--json") // Use double-dash for clap compatibility (--json, not -json)
+        .args(["--json", "-a", "-G1"])
         .arg(file_path)
         .output()
         .map_err(|e| format!("Failed to execute OxiDex: {}", e))?;
@@ -740,6 +743,18 @@ fn test_comparison_mp4() {
     let perl_json =
         get_perl_exiftool_output(test_file).expect("Failed to get Perl ExifTool output");
     let rust_json = get_oxidex_output(test_file).expect("Failed to get OxiDex output");
+
+    let rust_tags: Value =
+        serde_json::from_str(&rust_json).expect("OxiDex comparison output must be valid JSON");
+    let rust_tags = rust_tags
+        .as_array()
+        .and_then(|files| files.first())
+        .and_then(Value::as_object)
+        .expect("OxiDex comparison output must contain one tag object");
+    assert!(
+        rust_tags.contains_key("ItemList:Title"),
+        "comparison harness must request ExifTool family-1 groups; output: {rust_json}"
+    );
 
     let report =
         compare_json_outputs(&perl_json, &rust_json).expect("Failed to compare JSON outputs");
