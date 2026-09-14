@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+pub(crate) mod generated_scalar_descriptor_fallback;
 pub mod generated_tags;
 pub mod tag_registry;
 
@@ -241,6 +242,13 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
         _ => tag_id,
     };
 
+    // A removed/unsupported generated public identity is terminal for its
+    // physical source group. Do not resurrect its old YAML/manual reverse
+    // spelling during a source upgrade.
+    if generated_scalar_descriptor_fallback::terminal_reverse(tag_id, format_family, ifd_name) {
+        return format!("{}:0x{:04X}", ifd_name, tag_id);
+    }
+
     // Look up the tag in the appropriate format family
     if let Some(tag_name) = TAG_ID_TO_NAME_INDEX.get(&(tag_id, format_family)) {
         // Found the tag, now we need to replace the prefix with the correct IFD name
@@ -258,7 +266,16 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
         }
     }
 
-    // The YAML index missed. Before giving up on a name, consult the manual
+    // The YAML index missed. Before giving up on a name, consult the generated
+    // final-scalar descriptor facts. They are scoped to the native physical
+    // group, so an IFD0 name can never leak to IFD1 or a MakerNote.
+    if let Some(name) =
+        generated_scalar_descriptor_fallback::reverse_name(tag_id, format_family, ifd_name)
+    {
+        return format!("{ifd_name}:{name}");
+    }
+
+    // The generated fallback missed. Before giving up on a name, consult the manual
     // registry's numeric view: the write path resolves through it, so a tag
     // present only there would otherwise write correctly and read back as hex
     // (the W8 write/read asymmetry). Consulted only after the generated index,
