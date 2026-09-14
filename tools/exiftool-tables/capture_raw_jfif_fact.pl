@@ -60,7 +60,7 @@ sub hashes {
     return \%result;
 }
 my %functions;
-for my $name (qw(WriteJPEG WriteDirectory WriteBinaryData ProcessDirectory ProcessBinaryData ReadValue FoundTag GetTagInfo GetTagTable SetupTagTable AddTagToTable TagTableKeys SetByteOrder Get8u Get16u DoUnpackStd)) {
+for my $name (qw(WriteJPEG WriteDirectory WriteBinaryData ProcessDirectory ProcessBinaryData ReadValue FoundTag GetTagInfo GetTagTable SetupTagTable AddTagToTable TagTableKeys SetByteOrder Get8u Get16u DoUnpackStd JpegMarkerName)) {
     no strict 'refs'; my $binding="Image::ExifTool::$name";
     my $cv=*{$binding}{CODE} or die "missing native binding $name\n";
     $functions{$name}=code_fact($cv);
@@ -76,5 +76,6 @@ print JSON::PP->new->canonical->utf8->pretty->encode({
  schema=>1,kind=>'raw_jfif_native_fact',
  native_identity=>{perl=>$^X,perl_version=>"$^V",exiftool_version=>"$Image::ExifTool::VERSION"},
  loaded_closure=>\%closure,functions=>\%functions,
+ marker_names=>{binding=>'Image::ExifTool::jpegMarker',source=>source($INC{'Image/ExifTool.pm'}),entries=>plain(\%Image::ExifTool::jpegMarker)},
  table=>{binding=>'Image::ExifTool::JFIF::Main',source=>source($INC{'Image/ExifTool.pm'}),entries=>plain(\%Image::ExifTool::JFIF::Main)},
 });

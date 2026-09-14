@@ -18,6 +18,14 @@
   },
   "recipe": {
     "byte_order": "MM",
+    "creation_skip_markers": [
+      224
+    ],
+    "creation_timing": "BeforeCurrentSegment",
+    "creation_wait_for_directories": [
+      "IFD0",
+      "ExtendedEXIF"
+    ],
     "fields": [
       {
         "offset": 2,
@@ -40,6 +48,6 @@
     "skip": 5
   },
   "schema": 1,
-  "source_grammar_sha256": "5479cf6f9ec52ab65fc1cee6a2695d64c3c6990d9f456bcc83ae19b97178c98b",
+  "source_grammar_sha256": "86eb44ef8e49330d3023f78d65559d5b6c31213ed43056afeaa7ca2f8d800b53",
   "status": "compiled bounded raw DATAMEMBER decoder; public integration separate"
 }

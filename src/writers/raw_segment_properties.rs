@@ -11,6 +11,12 @@ pub(crate) enum RawByteOrder {
     Little,
 }
 
+/// Native creation occurs before processing the current JPEG segment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RawCreationTiming {
+    BeforeCurrentSegment,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RawField {
     pub property: &'static str,
@@ -27,6 +33,11 @@ pub(crate) struct RawSegmentRecipe {
     pub skip: usize,
     pub byte_order: RawByteOrder,
     pub fields: &'static [RawField],
+    /// Every consecutive matching marker delays fresh directory creation.
+    pub creation_skip_markers: &'static [u8],
+    /// Existing native directories postpone creation until they are processed.
+    pub creation_wait_for_directories: &'static [&'static str],
+    pub creation_timing: RawCreationTiming,
 }
 
 /// Execute the generated DATAMEMBER pass on one parser-provided payload.

@@ -82,6 +82,29 @@ fn main() {{ {''.join(lines)} }}''')
         output=subprocess.run([str(binary)],check=True,capture_output=True,text=True).stdout.splitlines()
     return [None if line=='NONE' else {key:int(value) for key,value in (part.split('=',1) for part in line.split(';') if part)} for line in output]
 
+
+CREATION_PROBE=r'''use strict;use warnings;use JSON::PP;BEGIN {no warnings 'once'; $Image::ExifTool::configFile='';} use Image::ExifTool;local $/;my $in=JSON::PP->new->decode(<STDIN>);my @rows;for my $row (@$in) {my $et=Image::ExifTool->new;my $bytes=pack('H*',$row->{jpeg});my $output='';$et->SetNewValue('IFD0:ImageDescription','timing probe');my $r=$et->WriteInfo(\$bytes,\$output);my %raw;for my $key(qw(JFIFResolutionUnit JFIFXResolution JFIFYResolution)) {$raw{$key}=$et->{$key} if exists $et->{$key};}my $rd=Image::ExifTool->new;my $info=$rd->ImageInfo(\$output,{PrintConv=>0,Duplicates=>1});my %density;for my $key(keys %$info) {next unless $key =~ /^(XResolution|YResolution|ResolutionUnit)(?: \(\d+\))?$/;my $name=$1;$density{$name}=$info->{$key} if $rd->GetGroup($key,1) eq 'IFD0';}push @rows,{name=>$row->{name},result=>$r,error=>scalar($et->GetValue('Error')),final_raw=>\%raw,ifd0=>\%density,output=>unpack('H*',$output)};}print JSON::PP->new->canonical->encode(\@rows);'''
+
+def creation_cases():
+    def seg(marker,payload):return bytes([255,marker])+(len(payload)+2).to_bytes(2,'big')+payload
+    def jfif(u,x,y):return seg(224,b'JFIF\0\x01\x02'+bytes([u])+x.to_bytes(2,'big')+y.to_bytes(2,'big')+b'\0\0')
+    a=jfif(1,72,96);b=jfif(2,300,600);p=seg(226,b'unrelated APP2')
+    e=seg(225,b'Exif\0\0'+bytes.fromhex('49492a0008000000000000000000'))
+    z=jfif(0,0,0);short=seg(224,b'JFIF\0\x01\x02\x02\x01\x2c')
+    return {
+        'fresh_a_b':([a,b],(300,600,3)),
+        'fresh_a_p_b':([a,p,b],(72,96,2)),
+        'fresh_p_a':([p,a],None),
+        'existing_e_a':([e,a],None),
+        'existing_a_e_b':([a,e,b],(72,96,2)),
+        'existing_a_b_e':([a,b,e],(300,600,3)),
+        'existing_p_a_e_b':([p,a,e,b],(72,96,2)),
+        'existing_e_p_a':([e,p,a],None),
+        'fresh_a_partial_b':([a,short],(300,96,3)),
+        'fresh_a_zero':([a,z],(0,0,1)),
+        'fresh_nonjfif_app0_a':([seg(224,b'other'),a],(72,96,2)),
+    }
+
 @unittest.skipUnless(NATIVE,'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB select canonical native source')
 class RawJfifTests(unittest.TestCase):
     @classmethod
@@ -145,6 +168,37 @@ class RawJfifTests(unittest.TestCase):
             ('Image/ExifTool.pm','$$self{JFIFYResolution} = $val','$$self{JFIFYResolution} = $val + 1'),
             ('Image/ExifTool.pm','$$self{JFIFYResolution} = $val','$$self{OPTIONS} = $val'),
             ('Image/ExifTool.pm',"Name => 'XResolution',\n        Format => 'int16u'","Name => 'XResolution',\n        Format => 'int32u'"),
+        )
+        for file,before,after in mutations:
+            with self.subTest(mutation=before),tempfile.TemporaryDirectory() as directory:
+                copied=Path(directory)/'lib';shutil.copytree(LIB,copied)
+                source=copied/file;body=source.read_text();self.assertEqual(body.count(before),1)
+                source.write_text(body.replace(before,after))
+                with self.assertRaises(Refused):compile_fact(capture(copied))
+
+    def test_duplicate_jfif_creation_and_existing_empty_exif_property_timing(self):
+        cases=creation_cases();image=base_jpeg()
+        rows=[{'name':name,'jpeg':(image[:2]+b''.join(segments)+image[2:]).hex()} for name,(segments,_) in cases.items()]
+        cp=subprocess.run([PERL,'-I'+str(LIB),'-e',CREATION_PROBE],input=json.dumps(rows),env=env(),check=True,capture_output=True,text=True)
+        for row in json.loads(cp.stdout):
+            with self.subTest(case=row['name']):
+                self.assertEqual(row['result'],1,row)
+                expected=cases[row['name']][1]
+                self.assertEqual({key:int(value) for key,value in row['ifd0'].items()},{} if expected is None else dict(zip(('XResolution','YResolution','ResolutionUnit'),expected)))
+
+    def test_creation_operands_and_unknown_placement_controls_refuse(self):
+        recipe=compile_fact(self.fact)
+        self.assertEqual(recipe.creation_skip_markers,(224,))
+        self.assertEqual(recipe.creation_wait_for_directories,('IFD0','ExtendedEXIF'))
+        self.assertEqual(recipe.creation_timing,'BeforeCurrentSegment')
+        changed=deepcopy(self.fact);changed['marker_names']['entries']['224']='APP2'
+        with self.assertRaises(Refused):compile_fact(changed)
+        changed=deepcopy(self.fact);changed['marker_names']['source']['sha256']='0'*64
+        with self.assertRaises(Refused):compile_fact(changed)
+        mutations=(
+            ('Image/ExifTool/Writer.pl',"last if $markerName eq 'APP0' or $dirCount{IFD0}","last if $markerName eq 'APP2' or $dirCount{IFD0}"),
+            ('Image/ExifTool.pm',"0xe0 => 'APP0',", "0xe0 => 'APP2',"),
+            ('Image/ExifTool.pm','my $markerName = $jpegMarker{$marker};','my $markerName = $jpegMarker{$marker}; $markerName = "APP0";'),
         )
         for file,before,after in mutations:
             with self.subTest(mutation=before),tempfile.TemporaryDirectory() as directory:

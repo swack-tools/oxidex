@@ -1972,11 +1972,48 @@
       "    }",
       "    (return $rtnVal);",
       "}"
+    ],
+    "JpegMarkerName": [
+      "($) {",
+      "    package Image::ExifTool;",
+      "    use strict;",
+      "    (my($marker) = (shift()));",
+      "    (my($markerName) = $Image::ExifTool::jpegMarker{$marker});",
+      "    unless ($markerName) {",
+      "        ($markerName = $Image::ExifTool::jpegMarker{$marker & 240});",
+      "        if (($markerName and ($markerName =~ /^([A-Z]+)\\d+$/))) {",
+      "            ($markerName = ($1 . ($marker & 15)));",
+      "        } else {",
+      "            ($markerName = sprintf('marker 0x%.2x', $marker));",
+      "        }",
+      "    }",
+      "    (return $markerName);",
+      "}"
     ]
   },
   "prescan_dispatch_join": {
     "marker": 224,
     "signature": "JFIF"
   },
-  "scope": "Finite complete-source grammar for unedited JFIF raw DATAMEMBER extraction while creating IFD0. Unsupported executable changes refuse. Placeholders are compiler operands, not source hashes."
+  "scope": "Finite complete-source grammar for unedited JFIF raw DATAMEMBER extraction while creating IFD0. Unsupported executable changes refuse. Placeholders are compiler operands, not source hashes.",
+  "marker_names": {
+    "0": "NULL",
+    "1": "TEM",
+    "192": "SOF0",
+    "196": "DHT",
+    "200": "JPGA",
+    "204": "DAC",
+    "208": "RST0",
+    "216": "SOI",
+    "217": "EOI",
+    "218": "SOS",
+    "219": "DQT",
+    "220": "DNL",
+    "221": "DRI",
+    "222": "DHP",
+    "223": "EXP",
+    "224": "APP0",
+    "240": "JPG0",
+    "254": "COM"
+  }
 }
