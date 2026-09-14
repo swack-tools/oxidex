@@ -236,4 +236,25 @@ fn main() {{ let d=defaults_for_new_directory(&writers::generated::MANDATORY_DEF
                 "require Image::ExifTool; require q(Image/ExifTool/Writer.pl); print unpack('H*',Image::ExifTool::WriteValue(1,'rational64u',1));"],env=env,check=True,capture_output=True,text=True).stdout
             self.assertEqual(changed_native, '0000000100000001')
 
+    @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
+    def test_generated_minimal_ifd0_tiff_is_sorted_and_preserves_byte_order(self):
+        from mandatory_defaults_codegen import generate
+        assert NATIVE is not None
+        fact = capture(NATIVE[1]); rendered, _ = generate(fact, self._document(fact), str(NATIVE[0]))
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary=Path(temporary); generated=temporary/'generated.rs'; generated.write_text(rendered)
+            runtime=ROOT/'src/writers/mandatory_defaults_runtime.rs'; driver=temporary/'driver.rs'; binary=temporary/'driver'
+            driver.write_text(f'''mod writers {{ #[path = "{runtime}"] pub mod mandatory_defaults_runtime; #[path = "{generated}"] pub mod generated; }}
+use writers::mandatory_defaults_runtime::*;
+fn main() {{ for order in [TiffByteOrder::Big,TiffByteOrder::Little] {{ let t=minimal_ifd0_tiff(&writers::generated::MANDATORY_DEFAULTS,order,false,0,Some(JfifValues{{x:72,y:72,resolution_unit:1}})).unwrap(); for b in t {{ print!("{{:02x}}",b); }} println!(); }} }}''')
+            subprocess.run(['rustc','--edition=2021',str(driver),'-o',str(binary)],check=True,capture_output=True,text=True)
+            big,little=subprocess.run([str(binary)],check=True,capture_output=True,text=True).stdout.splitlines()
+        self.assertTrue(big.startswith('4d4d002a000000080004'))
+        self.assertIn('011a0005000000010000003e', big)
+        self.assertIn('011b00050000000100000046', big)
+        self.assertIn('01280003000000010002000002130003000000010001000000000000', big)
+        self.assertTrue(little.startswith('49492a00080000000400'))
+        self.assertIn('1a010500010000003e000000', little)
+        self.assertIn('28010300010000000200000013020300010000000100000000000000', little)
+
 if __name__ == '__main__': unittest.main()

@@ -57,6 +57,61 @@ pub(crate) struct EncodedMandatoryDefault {
     pub bytes: Vec<u8>,
 }
 
+/// Construct the TIFF payload for a newly-created, IFD0-only EXIF block.
+///
+/// The caller supplies only native branch inputs. Tag ids, types, defaults,
+/// and JFIF substitutions all come from the generated recipe. This is an
+/// internal carrier for a future JPEG APP1 insertion and does not write files.
+pub(crate) fn minimal_ifd0_tiff(
+    recipe: &MandatoryRecipe,
+    byte_order: TiffByteOrder,
+    no_mandatory: bool,
+    num_entries: u32,
+    jfif: Option<JfifValues>,
+) -> Result<Vec<u8>, String> {
+    let defaults = defaults_for_new_directory(recipe, "IFD0", no_mandatory, num_entries, jfif)?;
+    let mut entries = encode_ifd0_defaults(recipe, &defaults, byte_order)?;
+    entries.sort_by_key(|entry| entry.tag_id);
+    if entries.windows(2).any(|pair| pair[0].tag_id == pair[1].tag_id) {
+        return Err(refusal("generated mandatory defaults contain duplicate IFD0 ids"));
+    }
+    let count = u16::try_from(entries.len()).map_err(|_| refusal("IFD0 entry count exceeds TIFF limit"))?;
+    let ifd_size = 2usize.checked_add(entries.len().checked_mul(12).ok_or_else(|| refusal("IFD0 size overflow"))?)
+        .and_then(|size| size.checked_add(4)).ok_or_else(|| refusal("IFD0 size overflow"))?;
+    let mut result = Vec::with_capacity(8 + ifd_size + entries.iter().map(|entry| entry.bytes.len()).sum::<usize>());
+    match byte_order {
+        TiffByteOrder::Little => result.extend_from_slice(b"II\x2a\0\x08\0\0\0"),
+        TiffByteOrder::Big => result.extend_from_slice(b"MM\0\x2a\0\0\0\x08"),
+    }
+    push_u16(&mut result, count, byte_order);
+    let data_start = 8usize.checked_add(ifd_size).ok_or_else(|| refusal("TIFF offset overflow"))?;
+    let mut external = Vec::new();
+    for entry in entries {
+        push_u16(&mut result, entry.tag_id, byte_order);
+        push_u16(&mut result, entry.tiff_type, byte_order);
+        push_u32(&mut result, entry.count, byte_order);
+        if entry.bytes.len() <= 4 {
+            result.extend_from_slice(&entry.bytes);
+            result.resize(result.len() + (4 - entry.bytes.len()), 0);
+        } else {
+            let offset = data_start.checked_add(external.len()).ok_or_else(|| refusal("TIFF offset overflow"))?;
+            push_u32(&mut result, u32::try_from(offset).map_err(|_| refusal("TIFF offset exceeds u32"))?, byte_order);
+            external.extend_from_slice(&entry.bytes);
+            if external.len() & 1 != 0 { external.push(0); }
+        }
+    }
+    push_u32(&mut result, 0, byte_order); // no next IFD
+    result.extend_from_slice(&external);
+    Ok(result)
+}
+
+fn push_u16(out: &mut Vec<u8>, value: u16, order: TiffByteOrder) {
+    match order { TiffByteOrder::Little => out.extend_from_slice(&value.to_le_bytes()), TiffByteOrder::Big => out.extend_from_slice(&value.to_be_bytes()) }
+}
+fn push_u32(out: &mut Vec<u8>, value: u32, order: TiffByteOrder) {
+    match order { TiffByteOrder::Little => out.extend_from_slice(&value.to_le_bytes()), TiffByteOrder::Big => out.extend_from_slice(&value.to_be_bytes()) }
+}
+
 /// Execute the admitted direct `WriteValue` packing path for generated IFD0
 /// mandatory operands.  It intentionally has no public writer entry point.
 pub(crate) fn encode_ifd0_defaults(
