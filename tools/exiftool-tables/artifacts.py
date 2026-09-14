@@ -37,6 +37,8 @@ ARTIFACTS = (
     Artifact("serial", 1, "serial_directory", "src/exiftool_tables/serial_tables.rs"),
     Artifact("expr-ledger", 1, "verify_exprs", "tools/exiftool-tables/expr_oracle_ledger.json"),
     Artifact("value-ledger", 1, "codegen", "tools/exiftool-tables/value_conv_ledger.json"),
+    Artifact("scalar-helpers", 1, "scalar_helper_codegen", "src/writers/generated_scalar_rules.rs"),
+    Artifact("scalar-helper-ledger", 1, "scalar_helper_codegen", "tools/exiftool-tables/scalar_helper_ledger.json"),
     Artifact("filetypes", 1, "codegen_filetypes", "src/filetype/tables.rs"),
     Artifact("composite", 1, "codegen_composite", "src/composite/tables.rs"),
     Artifact("composite-compute", 1, "codegen_composite", "src/composite/generated_compute.rs"),

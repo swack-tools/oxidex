@@ -7,6 +7,10 @@
 pub mod atomic_writer;
 pub mod exif_inplace;
 pub mod exif_surgical;
+// Shared source-derived helpers are not yet connected to public writes.
+#[allow(dead_code)]
+pub(crate) mod generated_scalar;
+pub(crate) mod generated_scalar_rules;
 pub mod jpeg_writer;
 pub mod pdf_writer;
 pub mod png_writer;

@@ -27,6 +27,7 @@ my $EXIFTOOL_LIB_ABS = abs_path($EXIFTOOL_LIB)
 # dump regeneration; the caller records this non-zero child as unresolved.
 $SIG{ALRM} = sub { die "native_reader_contract_timeout\n" };
 alarm $timeout;
+BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
 require Image::ExifTool;
 my $contract = capture_in_process($EXIFTOOL_LIB_ABS);
 alarm 0;

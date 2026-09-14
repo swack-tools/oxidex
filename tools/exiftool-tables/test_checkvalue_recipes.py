@@ -121,7 +121,7 @@ class NativeScalarDifferential(unittest.TestCase):
         values += [NativeScalar("utf8", value) for value in ("", "é", "Ā", "😀", "a\0b", "a\n")]
         cases, expected = [], []
         for value in values:
-            for fmt in ("string", "undef"):
+            for fmt in recipe.formats:
                 for count in (None, 0, -1, 1, 2, 3, 4, 8):
                     cases.append({"kind": value.kind, "value": value.value.hex()
                                   if value.kind == "bytes" else value.value,
@@ -135,7 +135,7 @@ class NativeScalarDifferential(unittest.TestCase):
                                      "error": error})
         perl = r'''
 use strict; use warnings; use JSON::PP; use Encode (); use B (); use B::Deparse;
-use Digest::SHA qw(sha256_hex); use Image::ExifTool;
+use Digest::SHA qw(sha256_hex); BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; } use Image::ExifTool;
 require 'Image/ExifTool/Writer.pl';
 local $/; my $rows=JSON::PP->new->utf8->decode(<STDIN>); my @results;
 my $cv=\&Image::ExifTool::CheckValue;

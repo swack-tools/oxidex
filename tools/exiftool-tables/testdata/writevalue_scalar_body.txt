@@ -1,0 +1,31 @@
+($$;$$$$) {
+    package Image::ExifTool;
+    use strict;
+    (my($val, $format, $count, $dataPt, $offset) = @_);
+    (my($proc) = $writeValueProc{$format});
+    my($packed);
+    if ($proc) { die('numeric dispatch must not execute'); }
+    elsif ((($format eq 'string') or ($format eq 'undef'))) {
+        (($format eq 'string') and ($val .= "\000"));
+        if (($count and ($count > 0))) {
+            (my($diff) = ($count - length($val)));
+            if ($diff) {
+                if (($diff < 0)) {
+                    if (($format eq 'string')) {
+                        ($count or (return (undef)));
+                        ($val = substr($val, 0, ($count - 1)) . "\000");
+                    } else {
+                        ($val = substr($val, 0, $count));
+                    }
+                } else {
+                    ($val .= ("\000" x $diff));
+                }
+            }
+        } else {
+            ($count = length($val));
+        }
+        ($dataPt and substr($$dataPt, $offset, $count) = $val);
+        (return $val);
+    } else { return undef; }
+    return $packed;
+}
