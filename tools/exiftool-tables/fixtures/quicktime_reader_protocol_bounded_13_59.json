@@ -1,0 +1,81 @@
+{
+  "charset_loaded": true,
+  "charset_maps": {
+    "ShiftJIS": {
+      "charset": "ShiftJIS",
+      "map_sha256": "819f6b328c761d1369cc79d458a2c68ebdc0cf04064f3238446216e03f5934dc",
+      "resolved": true,
+      "source_file": "Image/ExifTool/Charset/ShiftJIS.pm",
+      "source_sha256": "757bc7e41b0b9f8db6ac31c4e9cb99964dda73a84ec9e10c9f63ac5990502001"
+    }
+  },
+  "charset_types": {
+    "ShiftJIS": 2179,
+    "UTF16": 512,
+    "UTF8": 256
+  },
+  "dependencies": {
+    "charset_decompose": {
+      "__deparse": "($$$;$) {\n    package Image::ExifTool::Charset;\n    use strict;\n    local $_;\n    (my($et, $val, $charset) = @_);\n    (my $type = $Image::ExifTool::Charset::csType{$charset});\n    my(@uni, $conv);\n    if (($type & 1)) {\n        ($conv = LoadCharset($charset));\n        unless ($conv) {\n            ($et and $et->Warn((\"Invalid character set $charset\")));\n            (return (\\@uni));\n        }\n    } elsif (($type == 256)) {\n        if (($] < 5.006001)) {\n            (@uni = &Image::ExifTool::UnpackUTF8($val));\n        } else {\n            undef($Image::ExifTool::evalWarning);\n            (local $SIG{'__WARN__'} = (\\&Image::ExifTool::SetWarning));\n            (@uni = unpack((($] < 5.01) ? 'U0U*' : 'C0U*'), $val));\n            if ((($Image::ExifTool::evalWarning and $et) and not($et->{'WarnBadUTF8'}))) {\n                $et->Warn('Malformed UTF-8 character(s)');\n                ($et->{'WarnBadUTF8'} = 1);\n            }\n        }\n        (return (\\@uni));\n    }\n    if (($type & 256)) {\n        (@uni = unpack('C*', $val));\n        foreach $_ (@uni) {\n            (defined($conv->{$_}) and ($_ = $conv->{$_}));\n        }\n    } elsif (($type & 1536)) {\n        my($unknown);\n        (my $byteOrder = $_[3]);\n        if (not($byteOrder)) {\n            ($byteOrder = GetByteOrder);\n        } elsif (($byteOrder eq 'Unknown')) {\n            ($byteOrder = GetByteOrder);\n            ($unknown = 1);\n        }\n        (my $fmt = (($byteOrder eq 'MM') ? 'n*' : 'v*'));\n        if (($type & 1024)) {\n            ($fmt = uc($fmt));\n            (($val =~ s/^(\\0\\0\\xfe\\xff|\\xff\\xfe\\0\\0)//) and ($fmt = (($1 eq \"\\000\\000\\376\\377\") ? 'N*' : 'V*')));\n            undef($unknown);\n        } elsif (($val =~ s/^(\\xfe\\xff|\\xff\\xfe)//)) {\n            ($fmt = (($1 eq \"\\376\\377\") ? 'n*' : 'v*'));\n            undef($unknown);\n        }\n        (@uni = unpack($fmt, $val));\n        if (not($conv)) {\n            if ($unknown) {\n                my(%bh, %bl);\n                (my($zh, $zl) = (0, 0));\n                foreach $_ (@uni) {\n                    ($bh{$_ >> 8} = 1);\n                    ($bl{$_ & 255} = 1);\n                    (($_ & 65280) or (++$zh));\n                    (($_ & 255) or (++$zl));\n                }\n                (my($bh, $bl) = (scalar(keys(%bh)), scalar(keys(%bl))));\n                if ((($bh > $bl) or (($bh == $bl) and ($zl > $zh)))) {\n                    ($fmt =~ tr/NVnv/VNvn/);\n                    (@uni = unpack($fmt, $val));\n                    ($et->{'WrongByteOrder'} = 1);\n                }\n            }\n            if (($charset eq 'UTF16')) {\n                my($i);\n                for (($i = 0); ($i < $#uni); (++$i)) {\n                    (((($uni[$i] & 64512) == 55296) and (($uni[$i + 1] & 64512) == 56320)) or (next));\n                    (my $cp = ((65536 + (($uni[$i] & 1023) << 10)) + ($uni[$i + 1] & 1023)));\n                    splice(@uni, $i, 2, $cp);\n                }\n            }\n        } elsif ($unknown) {\n            (my $e1 = 0);\n            foreach $_ (@uni) {\n                (defined($conv->{$_}) and (($_ = $conv->{$_}), (next)));\n                (++$e1);\n            }\n            if ($e1) {\n                ($fmt = (($byteOrder eq 'MM') ? 'v*' : 'n*'));\n                (my(@try) = unpack($fmt, $val));\n                (my $e2 = 0);\n                foreach $_ (@try) {\n                    (defined($conv->{$_}) and (($_ = $conv->{$_}), (next)));\n                    (++$e2);\n                }\n                if (($e2 < $e1)) {\n                    ($et->{'WrongByteOrder'} = 1);\n                    (return (\\@try));\n                }\n            }\n        } else {\n            foreach $_ (@uni) {\n                (defined($conv->{$_}) and ($_ = $conv->{$_}));\n            }\n        }\n    } else {\n        (my(@bytes) = unpack('C*', $val));\n        while (@bytes) {\n            (my $ch = shift(@bytes));\n            (my $cv = $conv->{$ch});\n            ($cv or (push(@uni, $ch), (next)));\n            (ref($cv) or (push(@uni, $cv), (next)));\n            ((ref($cv) eq 'ARRAY') and (push(@uni, @$cv), (next)));\n            ($ch = shift(@bytes));\n            if (defined($ch)) {\n                if ($cv->{$ch}) {\n                    ($cv = $cv->{$ch});\n                    (ref($cv) or (push(@uni, $cv), (next)));\n                    push(@uni, @$cv);\n                } else {\n                    push(@uni, 63);\n                    unshift(@bytes, $ch);\n                }\n            } else {\n                push(@uni, 63);\n            }\n        }\n    }\n    (return (\\@uni));\n}",
+      "__name": "Image::ExifTool::Charset::Decompose",
+      "__opaque": true,
+      "__perl": "CODE",
+      "resolved": true,
+      "source_file": "Image/ExifTool/Charset.pm",
+      "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+    },
+    "charset_load": {
+      "__deparse": "($) {\n    package Image::ExifTool::Charset;\n    use strict;\n    (my $charset = (shift()));\n    (my $conv = $charsetTable{$charset});\n    unless ($conv) {\n        (my $module = \"Image::ExifTool::Charset::$charset\");\n        no strict 'refs';\n        if ((%$module or eval((\"require $module\")))) {\n            ($conv = ($charsetTable{$charset} = (\\%$module)));\n        }\n    }\n    (return $conv);\n}",
+      "__name": "Image::ExifTool::Charset::LoadCharset",
+      "__opaque": true,
+      "__perl": "CODE",
+      "resolved": true,
+      "source_file": "Image/ExifTool/Charset.pm",
+      "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+    },
+    "charset_recompose": {
+      "__deparse": "($$;$$) {\n    package Image::ExifTool::Charset;\n    use strict;\n    local $_;\n    (my($et, $uni, $charset) = @_);\n    my($outVal, $conv, $inv);\n    ($charset or ($charset = $et->{'OPTIONS'}{'Charset'}));\n    (my $csType = $Image::ExifTool::Charset::csType{$charset});\n    if (($csType == 256)) {\n        if (($] >= 5.006001)) {\n            ($outVal = pack('C0U*', @$uni));\n        } else {\n            ($outVal = &Image::ExifTool::PackUTF8(@$uni));\n        }\n        ($outVal =~ s/\\0.*//s);\n        (return $outVal);\n    }\n    if (($csType & 2049)) {\n        ($conv = LoadCharset($charset));\n        unless ($conv) {\n            ($et and $et->Warn((\"Missing charset $charset\")));\n            (return '');\n        }\n        ($inv = $unicode2byte{$charset});\n        unless ($inv) {\n            if ((not($csType) or ($csType & 2050))) {\n                ($et and $et->Warn((\"Invalid destination charset $charset\")));\n                (return '');\n            }\n            my($char, %inv);\n            foreach $char (keys(%$conv)) {\n                ($inv{$conv->{$char}} = $char);\n            }\n            ($inv = ($unicode2byte{$charset} = (\\%inv)));\n        }\n    }\n    if (($csType & 256)) {\n        foreach $_ (@$uni) {\n            (($_ < 128) and (next));\n            ($inv->{$_} and (($_ = $inv->{$_}), (next)));\n            ((($_ < 256) and not($conv->{$_})) and (next));\n            ($_ = 63);\n            if (($et and not($et->{'EncodingError'}))) {\n                $et->Warn((\"Some character(s) could not be encoded in $charset\"));\n                ($et->{'EncodingError'} = 1);\n            }\n        }\n        ($outVal = pack('C*', @$uni));\n        ($outVal =~ s/\\0.*//s);\n    } else {\n        if ($inv) {\n            ($inv->{$_} and ($_ = $inv->{$_})) foreach (@$uni);\n        }\n        if (($charset eq 'UTF16')) {\n            my($i);\n            for (($i = 0); ($i < @$uni); (++$i)) {\n                ((($uni->[$i] >= 65536) and ($uni->[$i] < 1114111)) or (next));\n                (my $t = ($uni->[$i] - 65536));\n                (my $w1 = (55296 + (($t >> 10) & 1023)));\n                (my $w2 = (56320 + ($t & 1023)));\n                splice(@$uni, $i, 1, $w1, $w2);\n                (++$i);\n            }\n        }\n        (my $byteOrder = ($_[3] || GetByteOrder));\n        (my $fmt = (($byteOrder eq 'MM') ? 'n*' : 'v*'));\n        (($csType & 1024) and ($fmt = uc($fmt)));\n        ($outVal = pack($fmt, @$uni));\n    }\n    (return $outVal);\n}",
+      "__name": "Image::ExifTool::Charset::Recompose",
+      "__opaque": true,
+      "__perl": "CODE",
+      "resolved": true,
+      "source_file": "Image/ExifTool/Charset.pm",
+      "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+    },
+    "decode": {
+      "__deparse": "($$$;$$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $val, $from, $fromOrder, $to, $toOrder) = @_);\n    ($from or ($from = $self->{'OPTIONS'}{'Charset'}));\n    ($to or ($to = $self->{'OPTIONS'}{'Charset'}));\n    if ((($from ne $to) and length($val))) {\n        (require Image::ExifTool::Charset);\n        (my $cs1 = $Image::ExifTool::Charset::csType{$from});\n        (my $cs2 = $Image::ExifTool::Charset::csType{$to});\n        if ((($cs1 and $cs2) and not(($cs2 & 2)))) {\n            if (((($cs1 | $cs2) & 1664) or ($val =~ /[\\x80-\\xff]/))) {\n                (my $uni = &Image::ExifTool::Charset::Decompose($self, $val, $from, $fromOrder));\n                ($val = &Image::ExifTool::Charset::Recompose($self, $uni, $to, $toOrder));\n            }\n        } elsif ($self) {\n            (my $set = ($cs1 ? $to : $from));\n            unless ($$self{\"DecodeWarn$set\"}) {\n                $self->Warn((\"Unsupported character set ($set)\"));\n                ($$self{\"DecodeWarn$set\"} = 1);\n            }\n        }\n    }\n    (return $val);\n}",
+      "__name": "Image::ExifTool::Decode",
+      "__opaque": true,
+      "__perl": "CODE",
+      "resolved": true,
+      "source_file": "Image/ExifTool.pm",
+      "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+    },
+    "quicktime_format": {
+      "__deparse": "($$) {\n    package Image::ExifTool::QuickTime;\n    use strict;\n    (my($flags, $len) = @_);\n    my($format);\n    if ((($flags == 21) or ($flags == 22))) {\n        ($format = {1, 'int8', 2, 'int16', 4, 'int32', 8, 'int64'}->{$len});\n        ($format and ($format .= (($flags == 21) ? 's' : 'u')));\n    } elsif (($flags == 23)) {\n        ($format = 'float');\n    } elsif (($flags == 24)) {\n        ($format = 'double');\n    } elsif (($flags == 0)) {\n        ($format = {1, 'int8u', 2, 'int16u'}->{$len});\n    }\n    (return $format);\n}",
+      "__name": "Image::ExifTool::QuickTime::QuickTimeFormat",
+      "__opaque": true,
+      "__perl": "CODE",
+      "resolved": true,
+      "source_file": "Image/ExifTool/QuickTime.pm",
+      "source_sha256": "329172a5558d8b75b535d5120d01ed5ce8aaa865b5d5de9ce1b81f3b09cdec5e"
+    },
+    "read_value": {
+      "__deparse": "($$$;$$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($dataPt, $offset, $format, $count, $size, $ratPt) = @_);\n    (my $len = $formatSize{$format});\n    unless ($len) {\n        warn((\"Unknown format $format\"));\n        ($len = 1);\n    }\n    (defined($size) or ($size = (length($$dataPt) - $offset)));\n    unless ($count) {\n        ((defined($count) || ($size < $len)) and (return ''));\n        ($count = int(($size / $len)));\n    }\n    if ((($len * $count) > $size)) {\n        ($count = int(($size / $len)));\n        (($count < 1) and (return (undef)));\n    }\n    my(@vals);\n    (my $proc = $readValueProc{$format});\n    if (not($proc)) {\n        ($vals[0] = substr($$dataPt, $offset, ($count * $len)));\n        (($format eq 'string') and ($vals[0] =~ s/\\0.*//s));\n    } elsif (($isRational{$format} and $ratPt)) {\n        my(@rat);\n        while (1) {\n            push(@vals, &$proc($dataPt, $offset));\n            push(@rat, (\"$ratNumer/$ratDenom\"));\n            (((--$count) <= 0) and (last));\n            ($offset += $len);\n        }\n        ($$ratPt = join(' ', @rat));\n    } else {\n        while (1) {\n            push(@vals, &$proc($dataPt, $offset));\n            (((--$count) <= 0) and (last));\n            ($offset += $len);\n        }\n    }\n    (wantarray and (return @vals));\n    ((@vals > 1) and (return join(' ', @vals)));\n    (return $vals[0]);\n}",
+      "__name": "Image::ExifTool::ReadValue",
+      "__opaque": true,
+      "__perl": "CODE",
+      "resolved": true,
+      "source_file": "Image/ExifTool.pm",
+      "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+    }
+  },
+  "kind": "quicktime_itemlist_reader_protocol_v2",
+  "string_encoding": {
+    "1": "UTF8",
+    "2": "UTF16",
+    "3": "ShiftJIS",
+    "4": "UTF8",
+    "5": "UTF16"
+  }
+}

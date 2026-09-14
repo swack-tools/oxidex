@@ -167,6 +167,9 @@ pub fn normalize_tag_family(tag_key: &str) -> String {
 /// occurrence, so both forms now survive the rename intact.
 pub fn normalize_metadata_map(map: &crate::core::MetadataMap) -> crate::core::MetadataMap {
     let mut normalized = crate::core::MetadataMap::with_capacity(map.len());
+    for block in map.raw_blocks() {
+        normalized.retain_raw_block(block.clone());
+    }
     for (key, occurrence) in map.all_occurrences() {
         let normalized_key = normalize_tag_family(&key);
         normalized.insert_renamed_occurrence(normalized_key, occurrence);

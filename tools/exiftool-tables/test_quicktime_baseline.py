@@ -105,6 +105,8 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(result["capture_scope"]["source_module_table_count"], 4)
         self.assertEqual(result["modules"]["QuickTime"]["table_count"], 3)
         self.assertNotIn("Other", result["modules"]["QuickTime"]["tables"])
+        self.assertEqual(result["quicktime_itemlist_reader_protocol"],
+                         full["quicktime_itemlist_reader_protocol"])
         for name in selector.TABLES:
             self.assertEqual(result["modules"]["QuickTime"]["tables"][name], module["tables"][name])
 

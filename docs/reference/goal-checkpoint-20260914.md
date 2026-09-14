@@ -110,3 +110,8 @@ the manifest hash. Same-version local source edits are refused. The source
 fingerprint covers tracked differences and untracked file contents, detecting
 changes even when the dirty-path list stays the same. Fixture-check mode also
 prints its instrument header and enforces the standard dirty-tree policy.
+
+## Subsequent implementation
+
+The baseline above is historical. Current ItemList integration and remaining
+work are recorded in [generated ItemList progress](quicktime-generated-reader.md).

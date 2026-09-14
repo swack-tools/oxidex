@@ -53,6 +53,8 @@ ARTIFACTS = (
     Artifact("composite", 1, "codegen_composite", "src/composite/tables.rs"),
     Artifact("composite-compute", 1, "codegen_composite", "src/composite/generated_compute.rs"),
     Artifact("fits", 1, "codegen_fits", "src/parsers/specialized/fits/tables.rs"),
+    Artifact("quicktime-itemlist-specs", 1, "quicktime_generated_specs", "src/parsers/quicktime/generated_itemlist_specs.rs"),
+    Artifact("quicktime-itemlist-ledger", 1, "quicktime_generated_specs", "tools/exiftool-tables/quicktime_generated_itemlist_ledger.json"),
     Artifact("fujifilm", 2, "codegen_subdirs", "src/parsers/tiff/makernotes/fujifilm/settings_tables.rs"),
     Artifact("panasonic", 2, "codegen_subdirs", "src/parsers/tiff/makernotes/panasonic/face_tables.rs"),
     Artifact("pentax", 2, "codegen_subdirs", "src/parsers/tiff/makernotes/pentax/subdir_tables.rs"),

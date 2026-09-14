@@ -87,6 +87,14 @@ python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
 echo
+echo ">> generating QuickTime ItemList declarations from the fresh hydrated dump"
+# Unlike the bounded fixture used by its unit tests, this invocation consumes
+# this regeneration's $JSON. Ordinary new source rows therefore enter the
+# declaration artifact without hand-editing the captured fixture.
+OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_generated_specs.py" \
+    --dump "$JSON" --replace
+
+echo
 echo ">> generating inactive serial-directory facts"
 python3 "$HERE/serial_directory.py" "$JSON" \
     --output "$CACHE/serial-$VERSION.json" --rust-output "$SERIAL_OUT"

@@ -262,6 +262,100 @@ sub validate_function_fact {
     return code_source_fact($name, $lib_abs);
 }
 
+# ItemList `data` atom interpretation is a deliberately small protocol, not
+# just ProcessMOV's body: the processor selects QuickTimeFormat and ReadValue,
+# direct text flags read this package's stringEncoding lookup, and Decode
+# delegates character-set conversion to Charset.  Capture each effective
+# binding and the loaded conversion data after hydration so a generator can
+# refuse a changed helper or map without treating an unrelated edit anywhere
+# in QuickTime.pm as eligibility.
+sub quicktime_charset_map_fact {
+    my ($charset, $lib_abs) = @_;
+    no strict 'refs';
+    my $map = eval { Image::ExifTool::Charset::LoadCharset($charset) };
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'load_charset_failed' }
+        unless ref($map) eq 'HASH';
+
+    my $inc_key = 'Image/ExifTool/Charset/' . $charset . '.pm';
+    my $file = $INC{$inc_key};
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'charset_module_not_loaded' }
+        unless defined $file && length $file;
+    my $abs = abs_path($file);
+    my $prefix = $lib_abs . '/';
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'charset_source_outside_selected_lib' }
+        unless defined $abs && -f $abs && index($abs, $prefix) == 0;
+    open(my $fh, '<:raw', $abs) or return {
+        charset => $charset, resolved => JSON::PP::false,
+        reason => 'charset_source_unreadable',
+    };
+    local $/;
+    my $bytes = <$fh>;
+    close($fh) or return { charset => $charset, resolved => JSON::PP::false,
+                            reason => 'charset_source_unreadable' };
+    my $canonical = eval { JSON::PP->new->canonical->utf8->encode($map) };
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'charset_map_not_canonicalizable' }
+        unless defined $canonical;
+    return {
+        charset => $charset,
+        resolved => JSON::PP::true,
+        source_file => File::Spec->abs2rel($abs, $lib_abs),
+        source_sha256 => sha256_hex($bytes),
+        map_sha256 => sha256_hex($canonical),
+    };
+}
+
+sub quicktime_itemlist_reader_protocol_fact {
+    my ($lib_abs) = @_;
+    no strict 'refs';
+    my %string_encoding = map {
+        to_text($_) => to_text($Image::ExifTool::QuickTime::stringEncoding{$_})
+    } sort keys %Image::ExifTool::QuickTime::stringEncoding;
+
+    # Decode loads Charset only on a character-set conversion path.  Its
+    # helper bodies are nevertheless part of the behavior ItemList delegates
+    # to, so hydrate this narrow dependency before recording final bindings.
+    my $charset_loaded = eval { require Image::ExifTool::Charset; 1 } ? JSON::PP::true : JSON::PP::false;
+    my %charset_types;
+    my %charset_maps;
+    if ($charset_loaded) {
+        my %reachable = map { $_ => 1 } values %string_encoding;
+        # Decode converts into ExifTool's UTF8-facing string representation;
+        # retain it even if a future source map no longer mentions it directly.
+        $reachable{UTF8} = 1;
+        for my $charset (sort keys %reachable) {
+            $charset_types{$charset} = $Image::ExifTool::Charset::csType{$charset};
+            if (defined($charset_types{$charset}) && ($charset_types{$charset} & 1)) {
+                $charset_maps{$charset} = quicktime_charset_map_fact($charset, $lib_abs);
+            }
+        }
+    }
+    return {
+        kind => 'quicktime_itemlist_reader_protocol_v2',
+        string_encoding => \%string_encoding,
+        charset_loaded => $charset_loaded,
+        charset_types => \%charset_types,
+        charset_maps => \%charset_maps,
+        dependencies => {
+            quicktime_format => code_source_fact(
+                'Image::ExifTool::QuickTime::QuickTimeFormat', $lib_abs, undef, undef, 0),
+            read_value => code_source_fact(
+                'Image::ExifTool::ReadValue', $lib_abs, undef, undef, 0),
+            decode => code_source_fact(
+                'Image::ExifTool::Decode', $lib_abs, undef, undef, 0),
+            charset_decompose => code_source_fact(
+                'Image::ExifTool::Charset::Decompose', $lib_abs, undef, undef, 0),
+            charset_load => code_source_fact(
+                'Image::ExifTool::Charset::LoadCharset', $lib_abs, undef, undef, 0),
+            charset_recompose => code_source_fact(
+                'Image::ExifTool::Charset::Recompose', $lib_abs, undef, undef, 0),
+        },
+    };
+}
+
 sub collect_subdirectory_validate_function_names {
     my ($value, $names, $seen, $depth) = @_;
     return if !defined $value || $depth > 24;
@@ -1663,6 +1757,13 @@ my $hydrated_layouts = $HYDRATED_LAYOUTS
     ? dump_hydrated_layout_projection()
     : undef;
 
+my $quicktime_itemlist_reader_protocol;
+if (exists $out{QuickTime}
+    && exists $out{QuickTime}{tables}{ItemList}) {
+    $quicktime_itemlist_reader_protocol = quicktime_itemlist_reader_protocol_fact(
+        $EXIFTOOL_LIB_ABS);
+}
+
 my ($write_autoload_router_status, $native_write_capture_context,
     $native_write_helpers, $native_write_format_registry);
 unless ($READER_ONLY) {
@@ -1734,6 +1835,8 @@ my %document = (
     native_runtime_contracts => { utf8 => {
         kind => 'utf8_primitive_join_v1', pristine => $pristine_utf8, final => $final_utf8,
     } },
+    (defined $quicktime_itemlist_reader_protocol
+        ? (quicktime_itemlist_reader_protocol => $quicktime_itemlist_reader_protocol) : ()),
 );
 $document{hydrated_layouts} = $hydrated_layouts if $HYDRATED_LAYOUTS;
 unless ($READER_ONLY) {

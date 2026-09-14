@@ -22,7 +22,7 @@ def extract(document, *, full_hash, source_commit, perl_version, tool_hash):
     tables = {name: module["tables"][name] for name in selector.TABLES}
     if module["table_count"] != len(module["tables"]):
         raise ValueError("QuickTime table count does not conserve captured identities")
-    return {"exiftool_version": pin,
+    result = {"exiftool_version": pin,
             "modules": {"QuickTime": {"module": module["module"],
                                         "package": module["package"],
                                         "table_count": len(tables), "tables": tables}},
@@ -31,6 +31,10 @@ def extract(document, *, full_hash, source_commit, perl_version, tool_hash):
                               "source_module_table_count": module["table_count"],
                               "source_commit": source_commit, "full_dump_sha256": full_hash,
                               "dump_tool_sha256": tool_hash, "perl_version": perl_version}}
+
+    if "quicktime_itemlist_reader_protocol" in document:
+        result["quicktime_itemlist_reader_protocol"] = document["quicktime_itemlist_reader_protocol"]
+    return result
 
 
 def main():
